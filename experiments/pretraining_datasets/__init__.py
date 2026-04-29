@@ -52,6 +52,10 @@ from experiments.pretraining_datasets.common_corpus import (
     common_corpus_download,
     tokenize_common_corpus,
 )
+from experiments.pretraining_datasets.diagnostic_logs import (
+    ghalogs_download,
+    tokenize_ghalogs,
+)
 from experiments.pretraining_datasets.nsf_awards import (
     nsf_awards_download,
     nsf_awards_tokenized,
@@ -78,6 +82,7 @@ __all__ = [
     "tokenize_dolmino",
     "tokenize_dolmino_math",
     "tokenize_dolmino_subset",
+    "tokenize_ghalogs",
     "tokenize_nemotron",
     "tokenize_nemotron_subset",
     "tokenize_nemotron_v2_family",
@@ -125,6 +130,11 @@ DATASETS = {
         "subsets": ["all"],
         "download": common_corpus_download,
         "tokenize_fn": lambda: {"common_corpus/all": tokenize_common_corpus()},
+    },
+    "ghalogs": {
+        "subsets": ["train"],
+        "download": ghalogs_download,
+        "tokenize_fn": lambda: {"ghalogs/train": tokenize_ghalogs()},
     },
     "nsf_awards": {
         "subsets": ["all"],

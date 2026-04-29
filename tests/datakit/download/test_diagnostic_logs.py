@@ -2,17 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from pathlib import Path
 import xml.etree.ElementTree as ET
 import zipfile
 
+import pyarrow.parquet as pq
 from marin.datakit.download.diagnostic_logs import (
+    DiagnosticPartition,
     ExtractedDiagnosticLogs,
     ExtractedPartitionedDiagnosticLogs,
+    MaterializedDiagnosticLogParquet,
     extract_diagnostic_logs,
     extract_ghalogs_step,
     ghalogs_member_to_record,
     logchunks_example_to_record,
     loghub_file_to_record,
+    materialize_ghalogs_partition_to_parquet,
+    materialize_ghalogs_to_parquet,
     sanitize_diagnostic_log_text,
     source_inventory,
 )
@@ -23,6 +29,13 @@ from marin.execution.step_runner import StepRunner
 def _read_jsonl(path: str) -> list[dict[str, object]]:
     with open(path, encoding="utf-8") as handle:
         return [json.loads(line) for line in handle if line.strip()]
+
+
+def _read_parquet_rows(directory: Path) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for path in sorted(directory.glob("*.parquet")):
+        rows.extend(pq.read_table(path).to_pylist())
+    return rows
 
 
 def test_sanitize_diagnostic_log_text_redacts_secrets_and_identifiers():
@@ -105,7 +118,9 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
     output_dir = tmp_path / "output"
     input_dir.mkdir()
 
-    with zipfile.ZipFile(input_dir / "github_run_logs.zip", "w") as archive:
+    ghalogs_dir = input_dir / "ghalogs" / "zenodo-14796970" / "zenodo.org" / "records" / "14796970" / "files"
+    ghalogs_dir.mkdir(parents=True)
+    with zipfile.ZipFile(ghalogs_dir / "github_run_logs.zip", "w") as archive:
         archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
         archive.writestr("repo-b/run-2/job.log", "FAILED alice@example.com /Users/alice/project")
 
@@ -136,8 +151,10 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
     (loghub_dir / "Linux_2k.log_structured.csv").write_text("not ingested", encoding="utf-8")
 
     extracted = extract_diagnostic_logs(
-        str(input_dir),
+        str(input_dir / "ghalogs" / "zenodo-14796970"),
         str(output_dir),
+        logchunks_input_path=str(input_dir),
+        loghub_input_path=str(input_dir),
         max_ghalogs_members=1,
         max_logchunks_examples=1,
         max_loghub_files=1,
@@ -176,11 +193,73 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
     assert loghub_metadata["source_manifest"]["policy"]["eval_only"] is True
 
 
+def test_extract_diagnostic_logs_uses_staged_ghalogs_and_fetches_missing_eval_sources(tmp_path, monkeypatch):
+    ghalogs_input_dir = tmp_path / "ghalogs" / "zenodo-14796970"
+    ghalogs_archive_dir = ghalogs_input_dir / "zenodo.org" / "records" / "14796970" / "files"
+    output_dir = tmp_path / "output"
+    ghalogs_archive_dir.mkdir(parents=True)
+
+    with zipfile.ZipFile(ghalogs_archive_dir / "github_run_logs.zip", "w") as archive:
+        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
+
+    def _fake_fetch_logchunks(destination_dir: str) -> str:
+        destination = Path(destination_dir)
+        destination.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(destination / "LogChunks.zip", "w") as archive:
+            archive.writestr(
+                "LogChunks/build-failure-reason/Python/example@repo.xml",
+                """
+                <Examples>
+                  <Example>
+                    <Log>Python/example@repo/failed/1.log</Log>
+                    <Keywords>Error</Keywords>
+                    <Category>0</Category>
+                    <Chunk>Traceback token=abc123456789</Chunk>
+                  </Example>
+                </Examples>
+                """,
+            )
+        return str(destination)
+
+    def _fake_fetch_loghub(destination_dir: str) -> str:
+        destination_root = Path(destination_dir)
+        destination = destination_root / "loghub"
+        linux_dir = destination / "Linux"
+        linux_dir.mkdir(parents=True, exist_ok=True)
+        (linux_dir / "Linux_2k.log").write_text("FAILED path=/home/alice/project", encoding="utf-8")
+        return str(destination_root)
+
+    monkeypatch.setattr(
+        "marin.datakit.download.diagnostic_logs._stage_logchunks_if_missing",
+        _fake_fetch_logchunks,
+    )
+    monkeypatch.setattr(
+        "marin.datakit.download.diagnostic_logs._stage_loghub_if_missing",
+        _fake_fetch_loghub,
+    )
+
+    extracted = extract_diagnostic_logs(
+        str(ghalogs_input_dir),
+        str(output_dir),
+        logchunks_input_path=str(tmp_path / "auto" / "logchunks"),
+        loghub_input_path=str(tmp_path / "auto" / "loghub"),
+        max_ghalogs_members=1,
+        max_logchunks_examples=1,
+        max_loghub_files=1,
+    )
+
+    assert isinstance(extracted, ExtractedDiagnosticLogs)
+    assert extracted.ghalogs.record_count == 1
+    assert extracted.logchunks.record_count == 1
+    assert extracted.loghub.record_count == 1
+
+
 def test_extract_ghalogs_step_persists_typed_artifact(tmp_path):
     input_dir = tmp_path / "input"
-    input_dir.mkdir()
+    archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
+    archive_dir.mkdir(parents=True)
 
-    with zipfile.ZipFile(input_dir / "github_run_logs.zip", "w") as archive:
+    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
         archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
 
     step = extract_ghalogs_step(
@@ -194,3 +273,66 @@ def test_extract_ghalogs_step_persists_typed_artifact(tmp_path):
     assert loaded.source_label == "ghalogs"
     assert loaded.record_count == 1
     assert loaded.metadata_path.endswith("/metadata.json")
+
+
+def test_materialize_ghalogs_to_parquet_writes_reusable_shards(tmp_path):
+    input_dir = tmp_path / "input" / "ghalogs" / "zenodo-14796970"
+    archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
+    output_dir = tmp_path / "materialized"
+    archive_dir.mkdir(parents=True)
+
+    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
+        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
+        archive.writestr("repo-b/run-2/job.log", "FAILED alice@example.com /Users/alice/project")
+        archive.writestr("repo-c/run-3/job.log", "WARNING path=/home/bob/src")
+
+    materialized = materialize_ghalogs_to_parquet(
+        str(input_dir),
+        str(output_dir),
+        max_members=3,
+        num_shards=2,
+        max_workers=1,
+    )
+
+    assert isinstance(materialized, MaterializedDiagnosticLogParquet)
+    assert materialized.source_label == "ghalogs"
+    assert materialized.record_count == 3
+    rows = _read_parquet_rows(output_dir)
+    assert len(rows) == 3
+    assert {row["source"] for row in rows} == {"ghalogs"}
+    assert {row["partition"] for row in rows} <= {partition.value for partition in DiagnosticPartition}
+    assert all("abc123456789" not in row["text"] for row in rows)
+
+
+def test_materialize_ghalogs_partition_to_parquet_filters_one_partition(tmp_path):
+    input_dir = tmp_path / "input" / "ghalogs" / "zenodo-14796970"
+    archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
+    materialized_dir = tmp_path / "materialized"
+    partition_dir = tmp_path / "train_only"
+    archive_dir.mkdir(parents=True)
+
+    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
+        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
+        archive.writestr("repo-b/run-2/job.log", "FAILED alice@example.com /Users/alice/project")
+        archive.writestr("repo-c/run-3/job.log", "WARNING path=/home/bob/src")
+
+    materialize_ghalogs_to_parquet(
+        str(input_dir),
+        str(materialized_dir),
+        max_members=3,
+        num_shards=2,
+        max_workers=1,
+    )
+    train_partition = materialize_ghalogs_partition_to_parquet(
+        str(materialized_dir),
+        str(partition_dir),
+        partition=DiagnosticPartition.TRAIN,
+        num_shards=1,
+        max_workers=1,
+    )
+
+    train_rows = _read_parquet_rows(partition_dir)
+    assert isinstance(train_partition, MaterializedDiagnosticLogParquet)
+    assert train_partition.source_label == "ghalogs"
+    assert train_partition.record_count == len(train_rows)
+    assert all(row["partition"] == DiagnosticPartition.TRAIN.value for row in train_rows)
