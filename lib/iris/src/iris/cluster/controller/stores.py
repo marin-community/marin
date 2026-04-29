@@ -951,23 +951,31 @@ class TaskStore:
 
     def __init__(self, db: ControllerDB) -> None:
         self._db = db
-        self._status_text: dict[str, str] = {}  # task_id wire → status_text_md
+        self._status_text_detail: dict[str, str] = {}  # task_id wire → detail markdown
+        self._status_text_summary: dict[str, str] = {}  # task_id wire → summary markdown
 
-    def set_status_text(self, task_id: str, status_text_md: str) -> None:
+    def set_status_text(self, task_id: str, detail_md: str, summary_md: str) -> None:
         """Store the latest markdown status text for a task (in memory only)."""
-        self._status_text[task_id] = status_text_md
+        self._status_text_detail[task_id] = detail_md
+        self._status_text_summary[task_id] = summary_md
 
-    def get_status_text(self, task_id: str) -> str:
-        """Return the latest markdown status text for a task, or empty string if none."""
-        return self._status_text.get(task_id, "")
+    def get_status_text_detail(self, task_id: str) -> str:
+        """Return the latest detail markdown for a task, or empty string if none."""
+        return self._status_text_detail.get(task_id, "")
+
+    def get_status_text_summary(self, task_id: str) -> str:
+        """Return the latest summary markdown for a task, or empty string if none."""
+        return self._status_text_summary.get(task_id, "")
 
     def remove_status_text_by_job_ids(self, job_ids: Sequence[JobName]) -> None:
         """Evict status-text cache entries for all tasks owned by any of ``job_ids``."""
         if not job_ids:
             return
         prefixes = tuple(f"{jid.to_wire()}/" for jid in job_ids)
-        for key in [k for k in self._status_text if k.startswith(prefixes)]:
-            del self._status_text[key]
+        for key in [k for k in self._status_text_detail if k.startswith(prefixes)]:
+            del self._status_text_detail[key]
+        for key in [k for k in self._status_text_summary if k.startswith(prefixes)]:
+            del self._status_text_summary[key]
 
     # -- Reads ---------------------------------------------------------------
 

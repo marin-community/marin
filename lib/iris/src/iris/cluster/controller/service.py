@@ -1571,7 +1571,8 @@ class ControllerServiceImpl:
                     row.res_cpu_millicores, row.res_memory_bytes, row.res_disk_bytes, row.res_device_json
                 )
 
-        proto.status_text_md = self._store.tasks.get_status_text(task_id.to_wire())
+        proto.status_text_detail_md = self._store.tasks.get_status_text_detail(task_id.to_wire())
+        proto.status_text_summary_md = self._store.tasks.get_status_text_summary(task_id.to_wire())
 
         return controller_pb2.Controller.GetTaskStatusResponse(task=proto, job_resources=job_resources)
 
@@ -1626,6 +1627,8 @@ class ControllerServiceImpl:
             # Users should check job detail page for scheduling diagnostics
             if task.state == job_pb2.TASK_STATE_PENDING:
                 proto_task_status.can_be_scheduled = task_row_can_be_scheduled(task)
+
+            proto_task_status.status_text_summary_md = self._store.tasks.get_status_text_summary(task.task_id.to_wire())
 
             task_statuses.append(proto_task_status)
 
@@ -2740,5 +2743,5 @@ class ControllerServiceImpl:
         task = _read_task_with_attempts(self._db, task_id)
         if task is None:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
-        self._transitions.record_task_status_text(task_id, request.status_text_md)
+        self._transitions.record_task_status_text(task_id, request.status_text_detail_md, request.status_text_summary_md)
         return job_pb2.SetTaskStatusTextResponse()

@@ -1385,7 +1385,13 @@ def test_set_task_status_text_persists_via_store(service):
     """set_task_status_text persists the supplied markdown via the store."""
     service.launch_job(make_job_request("stats-job"), None)
     task_id = JobName.root("test-user", "stats-job").task(0)
-    status_text = "Physical stages:\n→ 1. Map\n\nShards: 3/10 complete, 2 in-flight, 5 queued"
-    request = job_pb2.SetTaskStatusTextRequest(task_id=task_id.to_wire(), status_text_md=status_text)
+    detail_text = "Physical stages:\n→ 1. Map\n\nShards: 3/10 complete, 2 in-flight, 5 queued"
+    summary_text = "**Map** 30% (3/10) 1.2 MiB/s"
+    request = job_pb2.SetTaskStatusTextRequest(
+        task_id=task_id.to_wire(),
+        status_text_detail_md=detail_text,
+        status_text_summary_md=summary_text,
+    )
     service.set_task_status_text(request, None)
-    assert service._store.tasks.get_status_text(task_id.to_wire()) == status_text
+    assert service._store.tasks.get_status_text_detail(task_id.to_wire()) == detail_text
+    assert service._store.tasks.get_status_text_summary(task_id.to_wire()) == summary_text

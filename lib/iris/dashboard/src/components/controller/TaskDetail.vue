@@ -288,9 +288,9 @@ watch(() => props.taskId, async () => {
       </div>
 
       <!-- Status text -->
-      <InfoCard v-if="task.statusTextMd" title="Status Text" class="mb-6">
+      <InfoCard v-if="task.statusTextDetailMd" title="Status Text" class="mb-6">
         <div class="text-sm text-text">
-          <MarkdownRenderer :content="task.statusTextMd" />
+          <MarkdownRenderer :content="task.statusTextDetailMd" />
         </div>
       </InfoCard>
 

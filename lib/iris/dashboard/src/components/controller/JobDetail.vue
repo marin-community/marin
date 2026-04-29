@@ -17,6 +17,7 @@ import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
+import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 import { useMediaQuery } from '@/composables/useMediaQuery'
 
 // Tailwind's `sm` breakpoint is 640px. Cards on mobile, table on desktop.
@@ -1035,6 +1036,9 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           <div v-if="task.error" class="mt-1 text-xs text-text-muted break-anywhere" :title="task.error">
             {{ task.error }}
           </div>
+          <div v-if="task.statusTextSummaryMd" class="mt-1 text-xs text-text-secondary break-anywhere">
+            <MarkdownRenderer :content="task.statusTextSummaryMd" />
+          </div>
           <div v-if="stateToName(task.state) === 'running'" class="mt-2 flex gap-1">
             <button
               class="px-2 py-0.5 text-[11px] font-semibold rounded bg-status-purple text-white hover:opacity-80 disabled:opacity-50"
@@ -1064,17 +1068,18 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       <div v-else class="overflow-x-auto">
         <table class="w-full border-collapse md:table-fixed">
           <colgroup class="hidden md:table-column-group">
-            <col class="w-[4%]" />  <!-- Task -->
-            <col class="w-[9%]" />  <!-- State -->
-            <col />                 <!-- Worker -->
-            <col class="w-[6%]" />  <!-- Mem -->
-            <col class="w-[6%]" />  <!-- Peak Mem -->
-            <col class="w-[5%]" />  <!-- CPU -->
-            <col class="w-[13%]" /> <!-- Started -->
-            <col class="w-[8%]" />  <!-- Duration -->
-            <col class="w-[4%]" />  <!-- Exit -->
-            <col class="w-[10%]" /> <!-- Error -->
-            <col class="w-[11%]" /> <!-- Profiling -->
+            <col class="w-[4%]" />   <!-- Task -->
+            <col class="w-[9%]" />   <!-- State -->
+            <col />                  <!-- Worker -->
+            <col class="w-[6%]" />   <!-- Mem -->
+            <col class="w-[5%]" />   <!-- Peak Mem -->
+            <col class="w-[5%]" />   <!-- CPU -->
+            <col class="w-[11%]" />  <!-- Started -->
+            <col class="w-[7%]" />   <!-- Duration -->
+            <col class="w-[4%]" />   <!-- Exit -->
+            <col class="w-[9%]" />   <!-- Error -->
+            <col class="w-[12%]" />  <!-- Status -->
+            <col class="w-[9%]" />   <!-- Profiling -->
           </colgroup>
           <thead>
             <tr class="border-b border-surface-border">
@@ -1100,6 +1105,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               </th>
               <th class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Exit</th>
               <th class="hidden lg:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Error</th>
+              <th class="hidden xl:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Status</th>
               <th class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Profiling</th>
             </tr>
           </thead>
@@ -1153,6 +1159,10 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               </td>
               <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-xs text-text-muted max-w-xs truncate" :title="task.error ?? ''">
                 {{ task.error || '-' }}
+              </td>
+              <td class="hidden xl:table-cell px-2 sm:px-3 py-2 text-xs text-text-secondary max-w-xs">
+                <MarkdownRenderer v-if="task.statusTextSummaryMd" :content="task.statusTextSummaryMd" />
+                <span v-else class="text-text-muted">—</span>
               </td>
               <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px]">
                 <div v-if="stateToName(task.state) === 'running'" class="flex gap-1">
