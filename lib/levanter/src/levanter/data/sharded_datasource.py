@@ -70,10 +70,10 @@ class ShardedDataSource(Generic[T_co]):
         path: str,
     ) -> AsyncDataset[T]:
         """
-        Constructs a shard cache version of this dataset using Ray.
+        Constructs a shard cache version of this dataset.
 
         Levanter's preprocessing pipeline offers the following features/guarantees:
-        * distributed, sharded preprocessing using Ray
+        * distributed, sharded preprocessing using Zephyr
         * deterministic ordering of data
         * interruptible and resumable
         * streaming results (no need to wait for everything to finish)
@@ -116,9 +116,9 @@ class ShardedDataSource(Generic[T_co]):
         Args:
             fn:  A function that takes a list of data and returns an iterable of results
             batch_size: The batch size to use
-            num_cpus: passed to ray
-            num_gpus: passed to ray
-            **resources: Resources to pass to Ray
+            num_cpus: CPU resources to request for each batch-map worker
+            num_gpus: GPU resources to request for each batch-map worker
+            **resources: Extra resource hints forwarded to the preprocessing executor
 
         Returns:
             A new ShardedDataset.
@@ -213,8 +213,8 @@ class WrappedHFDataSource(ShardedDataSource[dict]):
             idx += 1
 
     def _load_dataset(self):
-        # obnoxiously, the dataset loading stuff doesn't work with ray because of multiprocessing
-        # so we have to do this hacky thing where we load the dataset in the worker
+        # HF dataset loading has historically not been multiprocessing-safe, so we load
+        # lazily in the worker rather than sharing a dataset handle across processes.
         return datasets.load_dataset(self.id, split=self.split, streaming=self.streaming, **self.kwargs)
 
 

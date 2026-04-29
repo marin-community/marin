@@ -173,6 +173,39 @@ def test_deduplicate_with_num_output_shards(zephyr_ctx):
     assert ids == [0, 1, 2]
 
 
+def test_group_by_num_output_shards_smaller_than_input(zephyr_ctx, tmp_path):
+    """``num_output_shards`` is authoritative even when the input has more shards.
+
+    Regression test for marin#5162: scatter writes records into ``num_output_shards``
+    buckets (``hash(key) % num_output_shards``), but the reduce stage previously
+    spawned ``max(input_shards, num_output_shards)`` tasks. The "extra" reduce
+    tasks ran on a ``shard_idx`` that scatter never wrote to and emitted empty
+    output files.
+    """
+    output_dir = tmp_path / "out"
+    output_pattern = str(output_dir / "data-{shard:05d}-of-{total:05d}.parquet")
+
+    ds = (
+        Dataset.from_list([{"id": i, "val": i} for i in range(60)])
+        .reshard(10)
+        .group_by(
+            key=lambda x: x["id"],
+            reducer=lambda k, items: next(iter(items)),
+            num_output_shards=3,
+        )
+        .write_parquet(output_pattern)
+    )
+
+    output_files = zephyr_ctx.execute(ds).results
+
+    assert len(output_files) == 3, (
+        f"expected 3 output files (= num_output_shards), got {len(output_files)}; "
+        "extra files come from reduce tasks that ran on padding shards"
+    )
+    for p in output_files:
+        assert "of-00003" in p, f"unexpected total in {p}"
+
+
 def test_group_by_with_hash_key_large(zephyr_ctx, large_document_dataset):
     """Test group_by with MD5 hash on larger dataset, counting duplicates."""
 

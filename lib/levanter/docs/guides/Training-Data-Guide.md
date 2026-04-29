@@ -116,8 +116,19 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/tokenizat
 `data.shuffle` controls how training examples are shuffled:
 
 - `true`: full permutation shuffle (best mixing, highest random-access IO pressure)
+- `false`: no shuffle
 - positive integer: era shuffle with that era length
 - object: hierarchical block shuffle (`BlockShuffleConfig`)
+- omitted: hierarchical block shuffle with `io_block_size: 256`, `window_blocks: 512`, and `perm_type: feistel`
+
+```yaml
+data:
+  # Default block shuffle
+  shuffle:
+    io_block_size: 256
+    window_blocks: 512
+    perm_type: feistel
+```
 
 ```yaml
 data:
@@ -201,7 +212,7 @@ Run with:
 python -m levanter.main.train_lm --config_path my_config.yaml
 ```
 
-The cache will build on-the-fly using Ray, and training will begin as soon as data is ready.
+If the configured cache is missing, Levanter will first build it using the Zephyr-backed preprocessing pipeline. Training will use the cache after construction and consolidation complete.
 
 ---
 

@@ -6,7 +6,7 @@
 See https://github.com/marin-community/marin/issues/5005.
 """
 
-from fray.v2.types import ResourceConfig
+from fray.types import ResourceConfig
 
 from experiments.evals.long_tail_ppl_runnable import runnable_long_tail_raw_validation_sets
 from marin.evaluation.perplexity_gap import (
