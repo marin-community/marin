@@ -37,16 +37,13 @@ HF_BUCKET_PATH_PREFIX = "buckets/"
 _HF_AUTH_ERROR_STATUSES = frozenset({401, 403})
 
 
-def _hf_auth_error_status(exc: BaseException) -> int | None:
-    """Return the HTTP status if `exc` is an unrecoverable HF auth failure."""
+def _hf_auth_error(exc: BaseException, file_path: str) -> str | None:
+    """Return an actionable error message if `exc` is an unrecoverable HF auth failure, else None."""
     if not isinstance(exc, HfHubHTTPError) or exc.response is None:
         return None
-    status = exc.response.status_code
-    return status if status in _HF_AUTH_ERROR_STATUSES else None
-
-
-def _hf_auth_error_message(file_path: str, status_code: int) -> str:
-    """Build an actionable error message for a 401/403 from HF."""
+    status_code = exc.response.status_code
+    if status_code not in _HF_AUTH_ERROR_STATUSES:
+        return None
     if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
         hint = (
             "HF_TOKEN is set but lacks access — confirm the token's account has accepted "
@@ -248,9 +245,9 @@ def stream_file_to_fsspec(
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path} ({bytes_written} bytes)")
             return {"file_path": file_path, "status": "success", "size": bytes_written}
         except Exception as e:
-            auth_status = _hf_auth_error_status(e)
-            if auth_status is not None:
-                raise RuntimeError(_hf_auth_error_message(file_path, auth_status)) from e
+            auth_error = _hf_auth_error(e, file_path)
+            if auth_error:
+                raise RuntimeError(auth_error) from e
 
             last_exception = e
             # Base wait: min 5s, then exponential: 5, 10, 20, 40, 80, 160, 320, 600 (capped)
