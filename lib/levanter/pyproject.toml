@@ -124,7 +124,7 @@ test = [
   "pytest-asyncio",
   "soundfile",
   "librosa>=0.11.0",
-  "torchcodec",
+  "torchcodec>=0.10,<0.11",
   "tensorboardX>=2.6",
   "chex>=0.1.86",
   "httpx>=0.28.1",

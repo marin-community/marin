@@ -144,21 +144,25 @@ def _moe_mlp_local(
 def _batch_spec_from_x(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None) -> P:
     sharding = getattr(x, "sharding", None)
     spec = getattr(sharding, "spec", None)
-    if spec is not None and len(spec) > 0:
+    if spec is not None and len(spec) > 0 and spec[0] is not None:
         return P(spec[0])
     return _batch_spec(mesh)
 
 
-def _value_spec_or_replicated(x: jax.Array) -> P:
+def _is_replicated_spec(spec: P) -> bool:
+    return all(axis is None for axis in spec)
+
+
+def _value_spec_or_default(x: jax.Array, default: P, *, replace_replicated: bool = False) -> P:
     sharding = getattr(x, "sharding", None)
     spec = getattr(sharding, "spec", None)
-    if spec is not None:
+    if spec is not None and not (replace_replicated and _is_replicated_spec(spec)):
         return spec
-    return P(*(None for _ in range(x.ndim)))
+    return default
 
 
 def _reshard_for_shard_map(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None, spec: P) -> jax.Array:
-    if isinstance(mesh, Mesh):
+    if mesh is not None and not mesh.empty:
         return reshard(x, NamedSharding(mesh, spec))
     return x
 
@@ -612,11 +616,14 @@ def moe_mlp(
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
 
+        w_up_gate_spec = P("expert", None, None)
+        w_down_spec = P("expert", None, None)
+
         x = _reshard_for_shard_map(x, mesh, batch_spec)
         selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
         combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
-        w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, P("expert", None, None))
-        w_down = _reshard_for_shard_map(w_down, mesh, P("expert", None, None))
+        w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
+        w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
         shard_fn = shard_map(
             partial(
@@ -630,8 +637,8 @@ def moe_mlp(
                 batch_spec,
                 batch_spec,
                 batch_spec,
-                P("expert", None, None),
-                P("expert", None, None),
+                w_up_gate_spec,
+                w_down_spec,
             ),
             out_specs=(batch_spec, P()),
             check_vma=False,
@@ -643,13 +650,19 @@ def moe_mlp(
 
     # Fallback path for no expert axis (or expert axis size 1) keeps routing
     # semantics without EP collectives. JAX 0.9 requires shard_map in_specs to
-    # match the actual input sharding, so use attached value specs when present
-    # and replicated specs otherwise.
-    x_spec = _value_spec_or_replicated(x)
-    selected_experts_spec = _value_spec_or_replicated(selected_experts)
-    combine_weights_spec = _value_spec_or_replicated(combine_weights)
-    w_up_gate_spec = _value_spec_or_replicated(w_up_gate)
-    w_down_spec = _value_spec_or_replicated(w_down)
+    # match the actual input sharding, so reshard ordinary inputs to the mesh
+    # specs that preserve data-axis parallelism.
+    x_spec = _value_spec_or_default(x, batch_spec, replace_replicated=True)
+    selected_experts_spec = _value_spec_or_default(selected_experts, batch_spec, replace_replicated=True)
+    combine_weights_spec = _value_spec_or_default(combine_weights, batch_spec, replace_replicated=True)
+    w_up_gate_spec = _value_spec_or_default(w_up_gate, P(*(None for _ in range(w_up_gate.ndim))))
+    w_down_spec = _value_spec_or_default(w_down, P(*(None for _ in range(w_down.ndim))))
+
+    x = _reshard_for_shard_map(x, mesh, x_spec)
+    selected_experts = _reshard_for_shard_map(selected_experts, mesh, selected_experts_spec)
+    combine_weights = _reshard_for_shard_map(combine_weights, mesh, combine_weights_spec)
+    w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
+    w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
     shard_fn = shard_map(
         partial(

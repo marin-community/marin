@@ -9,6 +9,7 @@ version = "0.99"
 
 requires-python = ">=3.11"
 dependencies = [
+    "backports-zstd>=1.0.0; python_version < '3.14'",
     "braceexpand",
     "cryptography>=46.0.6",
     "datasets<5.0.0",
