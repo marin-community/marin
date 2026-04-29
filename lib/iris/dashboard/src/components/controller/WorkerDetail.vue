@@ -229,14 +229,14 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div class="rounded-lg border border-surface-border bg-surface p-3">
             <div class="text-xs text-text-secondary mb-2">CPU %</div>
-            <Sparkline :data="cpuHistory" :width="200" :height="40" color="var(--color-accent, #2563eb)" />
+            <Sparkline :data="cpuHistory" :height="40" color="var(--color-accent, #2563eb)" />
             <div class="text-xs font-mono text-text-muted mt-1">
               {{ cpuDisplay }}
             </div>
           </div>
           <div class="rounded-lg border border-surface-border bg-surface p-3">
             <div class="text-xs text-text-secondary mb-2">Memory</div>
-            <Sparkline :data="memoryHistory" :width="200" :height="40" color="var(--color-status-purple, #8b5cf6)" />
+            <Sparkline :data="memoryHistory" :height="40" color="var(--color-status-purple, #8b5cf6)" />
             <div class="text-xs font-mono text-text-muted mt-1">
               {{ memoryDisplay }}
             </div>
@@ -248,7 +248,6 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             <div class="text-xs text-text-secondary mb-2">Network Recv</div>
             <Sparkline
               :data="resourceHistory.map((s) => parseInt(s.netRecvBps ?? '0', 10))"
-              :width="200"
               :height="40"
               color="var(--color-status-success, #22c55e)"
             />
@@ -263,7 +262,6 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             <div class="text-xs text-text-secondary mb-2">Network Sent</div>
             <Sparkline
               :data="resourceHistory.map((s) => parseInt(s.netSentBps ?? '0', 10))"
-              :width="200"
               :height="40"
               color="var(--color-status-orange, #f97316)"
             />

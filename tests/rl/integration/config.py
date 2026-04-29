@@ -36,7 +36,7 @@ from levanter.trainer import TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
 from levanter.tokenizers import load_tokenizer
 
-from fray.v2 import current_client
+from fray import current_client
 from marin.rl.curriculum import Curriculum
 from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
 from marin.rl.replay_buffer import ReplayBufferConfig

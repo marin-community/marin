@@ -47,6 +47,35 @@ Per-user budget tracking lives in
 exceeds their budget, INTERACTIVE submissions are silently downgraded to BATCH.
 PRODUCTION is exempt — another reason to reserve it for vetted work.
 
+### Max-band caps and unlisted users
+
+Each user who is listed in the cluster config's `user_budgets` tier list has a
+`budget_limit` and `max_band` recorded in the `user_budgets` table.
+**Unlisted** users don't get a row; they inherit `UserBudgetDefaults` at read
+time — a small INTERACTIVE budget that silently falls through to BATCH once
+exceeded. Submissions at a higher band than `max_band` are **rejected** (not
+downgraded) with `PERMISSION_DENIED`. The tiers reconciled from the cluster
+config at startup are:
+
+- Admins — `PRODUCTION` (and everything below), large budget.
+- Listed researchers — `INTERACTIVE` (plus `BATCH`), large budget.
+- Everyone else (including new/unlisted users) — `INTERACTIVE` with a small
+  default budget; jobs run INTERACTIVE while within budget and degrade to
+  BATCH once exceeded. PRODUCTION submissions are rejected.
+
+If you hit `User <name> cannot submit PRODUCTION jobs (max band: INTERACTIVE)`:
+
+1. **Retry without `--priority production`.** Most research workloads do not
+   need PRODUCTION and run fine at INTERACTIVE (or opportunistically at BATCH).
+2. **Check your username.** The `max_band` cap is keyed on the verified
+   identity the controller sees. If the username in the error message isn't
+   what you expect — e.g. it's an email local-part or an SSO id rather than
+   your GitHub handle — your identity probably doesn't match the `user_id`
+   listed in the cluster config, and you'll land on the default tier.
+3. **Request an uplift.** If your work needs INTERACTIVE budget headroom or
+   PRODUCTION, ping [@Helw150](https://github.com/Helw150) to be added to the
+   appropriate tier in `marin.yaml`.
+
 ## See also
 
 - [`task-states.md`](task-states.md) — how preemption surfaces in task state

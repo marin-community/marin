@@ -198,6 +198,19 @@ def _fetch_all_from_queue(q: queue.Queue, timeout: float) -> List:
     return items
 
 
+def _encode_stop_tokens(stop: Union[str, List[str], None], tokenizer: MarinTokenizer) -> Optional[List[int]]:
+    """Tokenize the OpenAI-style ``stop`` field into a flat list of token ids, or None if unset."""
+    if not stop:
+        return None
+    stop_list = [stop] if isinstance(stop, str) else stop
+    stop_tokens: List[int] = []
+    for s in stop_list:
+        stop_ids = tokenizer.encode(s, add_special_tokens=False)
+        if stop_ids:
+            stop_tokens.extend(stop_ids)
+    return stop_tokens
+
+
 class InferenceContext:
     """Background thread that manages the InferenceEngine and processes requests"""
 
@@ -464,20 +477,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
         else:
             prompts = request.prompt
 
-        # Process stop sequences
-        stop_tokens = None
-        if request.stop:
-            if isinstance(request.stop, str):
-                stop_list = [request.stop]
-            else:
-                stop_list = request.stop
-
-            # Tokenize stop sequences
-            stop_tokens = []
-            for stop in stop_list:
-                stop_ids = ctx.tokenizer.encode(stop, add_special_tokens=False)
-                if stop_ids:
-                    stop_tokens.extend(stop_ids)
+        stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
 
         # Create futures for all prompts
         futures = []
@@ -598,19 +598,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         # Convert Pydantic models to dicts for tokenizer
         prompt_tokens = _compute_tokens(request.messages, ctx.tokenizer)
 
-        # Process stop sequences
-        stop_tokens = None
-        if request.stop:
-            if isinstance(request.stop, str):
-                stop_list = [request.stop]
-            else:
-                stop_list = request.stop
-
-            stop_tokens = []
-            for stop in stop_list:
-                stop_ids = ctx.tokenizer.encode(stop, add_special_tokens=False)
-                if stop_ids:
-                    stop_tokens.extend(stop_ids)
+        stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
 
         # Create future and submit request
         future: asyncio.Future = asyncio.Future()

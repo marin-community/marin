@@ -6,9 +6,9 @@
 import dataclasses
 import os.path
 
-from fray.v2.types import ResourceConfig
+from fray.types import ResourceConfig
 
-from experiments.defaults import DEFAULT_NEW_RUN_DATA_SHUFFLE
+from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from marin.datakit.download.nemotron_v1 import download_nemotron_v1_step
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
@@ -130,7 +130,7 @@ nemotron_mix = lm_mixture_data_config(
     },
 )
 
-nemotron_mix_block_shuffle = dataclasses.replace(nemotron_mix, shuffle=DEFAULT_NEW_RUN_DATA_SHUFFLE)
+nemotron_mix_block_shuffle = dataclasses.replace(nemotron_mix, shuffle=DEFAULT_LM_DATA_SHUFFLE)
 
 
 def tokenize_nemotron_subset(name: str, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:

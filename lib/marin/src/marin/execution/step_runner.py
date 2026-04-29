@@ -31,8 +31,8 @@ from concurrent.futures import ThreadPoolExecutor
 import levanter.utils.fsspec_utils as fsspec_utils
 from rigging.filesystem import open_url, url_to_fs
 
-from fray.v2.client import JobHandle, JobStatus
-from fray.v2.local_backend import LocalJobHandle
+from fray.client import JobHandle, JobStatus
+from fray.local_backend import LocalJobHandle
 from marin.execution.artifact import Artifact
 from marin.execution.executor_step_status import (
     STATUS_DEP_FAILED,
@@ -88,6 +88,34 @@ def _write_executor_info(step: StepSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _expand_unseen(step: StepSpec, seen: set[str]) -> list[StepSpec]:
+    """Return ``step`` and its transitive deps (post-order), excluding any in ``seen``.
+
+    ``seen`` is mutated in place to include every returned step, so subsequent
+    calls skip nodes already scheduled by an earlier terminal. Cycles within
+    this expansion raise ``ValueError`` — by DAG construction they shouldn't
+    exist, but the check guards against silent hangs.
+    """
+    in_stack: set[str] = set()
+    ordered: list[StepSpec] = []
+
+    def visit(s: StepSpec) -> None:
+        path = s.output_path
+        if path in seen:
+            return
+        if path in in_stack:
+            raise ValueError(f"Cycle detected in step graph involving {s.name_with_hash}")
+        in_stack.add(path)
+        for dep in s.deps:
+            visit(dep)
+        in_stack.remove(path)
+        seen.add(path)
+        ordered.append(s)
+
+    visit(step)
+    return ordered
+
+
 class StepRunner:
     """Runs ``StepSpec`` objects respecting their dependencies.
 
@@ -106,10 +134,14 @@ class StepRunner:
     ) -> None:
         """Eagerly run steps, launching each as soon as its deps are satisfied.
 
-        Concurrency is bounded by the thread pool (``max_concurrent`` workers,
-        default 8). If a step's dependencies haven't been seen yet, it is
-        buffered until they complete. Raises if the iterable is exhausted and
-        buffered steps still have unsatisfied dependencies.
+        Steps are pulled from the iterable one at a time, so unbounded
+        generators are supported: the runner never consumes more than it
+        needs to make progress. For each pulled step, its unseen transitive
+        deps are scheduled in post-order before the step itself (deduped by
+        ``output_path`` across the whole run). Already-succeeded deps
+        (``STATUS_SUCCESS`` on disk) resolve via the cache check.
+        Concurrency is bounded by the thread pool (``max_concurrent``
+        workers, default 8).
         """
         max_workers = max_concurrent or 8
         if max_workers < 1:
@@ -118,7 +150,7 @@ class StepRunner:
         # Capture the fray client on the calling thread so worker threads can
         # inherit it explicitly.  This is more robust than contextvars.copy_context()
         # alone because it survives process/thread-pool boundary edge cases.
-        from fray.v2.client import _current_client_var
+        from fray.client import _current_client_var
 
         caller_fray_client = _current_client_var.get()
         if caller_fray_client is not None:
@@ -196,38 +228,24 @@ class StepRunner:
             else:
                 completed.add(path)
 
-        for step in steps:
-            path_to_name[step.output_path] = step.name_with_hash
+        scheduled: set[str] = set()
+        for raw_step in steps:
+            for step in _expand_unseen(raw_step, scheduled):
+                path_to_name[step.output_path] = step.name_with_hash
 
-            _harvest()
-            _flush_waiting()
+                _harvest()
+                _flush_waiting()
 
-            path = step.output_path
-            if any(d in failed for d in step.dep_paths):
-                failed.add(path)
-            elif all(d in completed for d in step.dep_paths):
-                _do_launch(step)
-            else:
-                waiting.append(step)
+                path = step.output_path
+                if any(d in failed for d in step.dep_paths):
+                    failed.add(path)
+                elif all(d in completed for d in step.dep_paths):
+                    _do_launch(step)
+                else:
+                    waiting.append(step)
 
         # Drain remaining running and waiting steps
         while running or waiting:
-            if not running and waiting:
-                _flush_waiting()
-                if not running and waiting:
-                    missing = []
-                    for s in waiting:
-                        unmet = [
-                            _display_name(d.output_path)
-                            for d in s.deps
-                            if d.output_path not in completed and d.output_path not in failed
-                        ]
-                        missing.append(f"  {s.name_with_hash}: needs {unmet}")
-                    raise RuntimeError(
-                        f"Iterable exhausted with {len(waiting)} step(s) with unsatisfied dependencies:\n"
-                        + "\n".join(missing)
-                    )
-
             _harvest(block=True)
             _flush_waiting()
 
@@ -274,7 +292,7 @@ class StepRunner:
 
         def worker_fn():
             if captured_client is not None:
-                from fray.v2.client import set_current_client
+                from fray.client import set_current_client
 
                 with set_current_client(captured_client):
                     run_step(step)

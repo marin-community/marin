@@ -97,7 +97,7 @@ from urllib.parse import urlparse
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray.v2.types import TpuConfig
+from fray.types import TpuConfig
 from iris.cluster.constraints import WellKnownAttribute
 from rigging.filesystem import collect_gcs_paths
 from rigging.filesystem import get_bucket_location, open_url
@@ -304,8 +304,8 @@ def _allowed_regions_for_step(
 
 
 def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
-    from fray.v2.client import current_client
-    from fray.v2.iris_backend import FrayIrisClient
+    from fray.client import current_client
+    from fray.iris_backend import FrayIrisClient
     from iris.rpc import config_pb2
 
     try:
@@ -539,8 +539,8 @@ def _component_tpu_pins(
 
 
 def _iris_backend_is_active() -> bool:
-    from fray.v2.client import current_client
-    from fray.v2.iris_backend import FrayIrisClient
+    from fray.client import current_client
+    from fray.iris_backend import FrayIrisClient
 
     try:
         client = current_client()
@@ -676,9 +676,16 @@ def resolve_executor_step(
     # Short-circuit for StepSpec -> ExecutorStep -> StepSpec round-trip.
     original: StepSpec | None = getattr(step, "_original_step_spec", None)
     if original is not None:
-        return dataclasses.replace(original, deps=deps or [])
-
-    import ray
+        # ``as_executor_step()`` pins ``override_output_path=original.output_path``
+        # on the ExecutorStep so the executor preserves the original placement.
+        # Mirror that pin on the resolved StepSpec — otherwise replacing deps
+        # with executor-built stubs (which lack the originals' ``hash_attrs``)
+        # would change ``name_with_hash`` and silently shift ``output_path``.
+        return dataclasses.replace(
+            original,
+            deps=deps or list(original.deps),
+            override_output_path=original.output_path,
+        )
 
     remote_callable = step.fn if isinstance(step.fn, RemoteCallable) else None
     if remote_callable is not None:
@@ -693,12 +700,6 @@ def resolve_executor_step(
         )
 
     step_fn = remote_callable.fn if remote_callable is not None else step.fn
-    if isinstance(step_fn, ray.remote_function.RemoteFunction):
-        ray_remote_fn = step_fn
-
-        def step_fn(*args, **kw):
-            return ray.get(ray_remote_fn.remote(*args, **kw))
-
     assert step_fn is not None, f"Step {step.name} has no callable"
 
     # Old-style ExecutorStep functions accept the resolved config as their only
@@ -1214,6 +1215,7 @@ class Executor:
         self.is_pseudo_dep: dict[ExecutorStep, bool] = {}
         self.version_strs: dict[ExecutorStep, str] = {}
         self.version_str_to_step: dict[str, ExecutorStep] = {}
+        self.hashed_versions: dict[ExecutorStep, str] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
         self.step_infos: list[ExecutorStepInfo] = []
@@ -1450,6 +1452,7 @@ class Executor:
         self.dependencies[step] = list(map(self.canonicalize, computed_deps.dependencies))
         self.versions[step] = version
         self.version_strs[step] = version_str
+        self.hashed_versions[step] = hashed_version
         self.output_paths[step] = output_path
         self.is_pseudo_dep[step] = is_pseudo_dep
 
@@ -1468,10 +1471,18 @@ class Executor:
         return depth
 
     def _dep_version(self, dep: ExecutorStep) -> dict[str, Any] | str:
-        """Full version dict for shallow deps, output path for deep ones."""
+        """Full version dict for shallow deps, region-stable name+hash for deep ones.
+
+        Using ``output_paths[dep]`` here would bake the bucket prefix
+        (e.g. ``gs://marin-us-central1``) into the hashed version, so the same
+        logical pipeline rehashed under a different ``MARIN_PREFIX`` would
+        produce a different identity. ``{name}-{hashed_version}`` is the
+        region-independent suffix that already encodes the dep's full transitive
+        version.
+        """
         if self._dep_depth(dep) <= self._MAX_INLINE_DEPTH:
             return self.versions[dep]
-        return self.output_paths[dep]
+        return f"{dep.name}-{self.hashed_versions[dep]}"
 
     def canonicalize(self, step: ExecutorStep) -> ExecutorStep:
         """Multiple instances of `ExecutorStep` might have the same version."""
@@ -1559,10 +1570,8 @@ def get_fn_name(fn: ExecutorFunction, short: bool = False):
     """Just for debugging: get the name of the function."""
     if fn is None:
         return "None"
-    import ray
-
-    if isinstance(fn, ray.remote_function.RemoteFunction):
-        return fn._function.__name__
+    if isinstance(fn, RemoteCallable):
+        return fn.fn.__name__
     if short:
         return f"{fn.__name__}"
     else:

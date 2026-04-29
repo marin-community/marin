@@ -8,6 +8,7 @@ version = "0.99"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "marin-rigging",
+    "marin-finelog",
     "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python>=0.9.0",
@@ -63,10 +64,8 @@ dev = [
     "pytest-playwright>=0.6.2",
     "pytest-timeout",
     "pytest-xdist",
-    "pytest>=8.3.2",
+    "pytest>=8.4",
 ]
-
-[tool.hatch.build.hooks.custom]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/iris"]
@@ -89,6 +88,10 @@ markers = [
     "e2e: end-to-end cluster tests (chaos, dashboard, scheduling)",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
+# Cap assertion-diff output even under -v, so a single bad assertion
+# can't dump tens of KB of proto repr into CI logs.
+truncation_limit_lines = 100
+truncation_limit_chars = 10000
 log_level = "INFO"
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"

@@ -14,6 +14,8 @@ import dataclasses
 import math
 import re
 
+from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE
+
 from experiments.defaults import default_sft, default_tokenize
 from experiments.evals.evals import default_sft_eval
 from experiments.llama import llama_8b
@@ -140,7 +142,7 @@ mixture_sft_config = SimpleSFTConfig(
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
-    shuffle=True,
+    shuffle=DEFAULT_LM_DATA_SHUFFLE,
     missing_weights_are_validation=True,
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
 )

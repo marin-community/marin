@@ -185,6 +185,13 @@ def _gcp_instance_metadata(
     return result
 
 
+def _slice_external_ip_enabled(gcp: config_pb2.GcpSliceConfig) -> bool:
+    """Return enable_external_ip from a GcpSliceConfig, defaulting to True for unset/legacy configs."""
+    if not gcp.HasField("enable_external_ip"):
+        return True
+    return gcp.enable_external_ip
+
+
 def _validate_slice_config(config: config_pb2.SliceConfig) -> None:
     """Validate required fields on a SliceConfig before creating a GCP slice.
 
@@ -416,6 +423,7 @@ class GcpWorkerProvider:
             metadata=metadata,
             service_account=gcp.service_account or None,
             network="default",
+            enable_external_ip=_slice_external_ip_enabled(gcp),
         )
 
         logger.info("Creating TPU slice: %s (type=%s, zone=%s)", slice_id, config.accelerator_variant, gcp.zone)
@@ -477,6 +485,7 @@ class GcpWorkerProvider:
             metadata=metadata,
             service_account=gcp.service_account or None,
             network="default",
+            enable_external_ip=_slice_external_ip_enabled(gcp),
         )
 
         logger.info(
@@ -648,15 +657,20 @@ class GcpWorkerProvider:
         return handles
 
     def list_all_slices(self) -> list[GcpSliceHandle | GcpVmSliceHandle]:
-        """List all slices managed by this cluster.
+        """List all autoscaler-managed slices for this cluster.
 
         Uses project-wide queries (empty zones = all zones) via GcpService,
-        filtered by iris-{prefix}-managed=true.
+        filtered by iris-{prefix}-managed=true. Slices tagged
+        iris-{prefix}-manual=true (operator-created via `iris cluster
+        create-slice`) are excluded: the autoscaler and `cluster stop` must
+        not see or terminate them.
         """
         managed_labels = {self._iris_labels.iris_managed: "true"}
+        manual_label = self._iris_labels.iris_manual
 
         if self._gcp.mode == ServiceMode.LOCAL:
-            return self._gcp.get_local_slices(managed_labels)  # type: ignore[return-value]
+            local_handles = self._gcp.get_local_slices(managed_labels)
+            return [h for h in local_handles if h.labels.get(manual_label) != "true"]  # type: ignore[return-value]
 
         tpu_infos = self._gcp.tpu_list(zones=[], labels=managed_labels)
         vm_infos = self._gcp.vm_list(zones=[], labels=managed_labels)
@@ -665,6 +679,8 @@ class GcpWorkerProvider:
 
         for tpu in tpu_infos:
             if tpu.state not in ("READY", "CREATING"):
+                continue
+            if tpu.labels.get(manual_label) == "true":
                 continue
             handles.append(
                 GcpSliceHandle(
@@ -693,6 +709,8 @@ class GcpWorkerProvider:
                 continue
             if qr.state in ("FAILED", "SUSPENDED", "DELETING"):
                 continue
+            if qr.labels.get(manual_label) == "true":
+                continue
             handles.append(
                 GcpSliceHandle(
                     _slice_id=qr.name,
@@ -714,6 +732,8 @@ class GcpWorkerProvider:
                 continue
             slice_id = vm.labels.get(self._iris_labels.iris_slice_id, "")
             if not slice_id:
+                continue
+            if vm.labels.get(manual_label) == "true":
                 continue
             handles.append(
                 GcpVmSliceHandle(

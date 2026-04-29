@@ -17,4 +17,4 @@ Each file in that directory (e.g., [exp934_hq_vs_pt.py](https://github.com/marin
 Running each experiment produces an experiment JSON file (see the
 [executor documentation](../references/executor-api.md)), which can be visualized specially
 in the data browser.  From this experiments page in the data browser,
-you can follow links to the Ray dashboard and wandb (for training steps).
+you can follow links to the Iris dashboard and wandb (for training steps).

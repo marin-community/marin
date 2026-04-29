@@ -157,11 +157,18 @@ def marin_region() -> str | None:
     return region_from_metadata() or region_from_prefix(os.environ.get("MARIN_PREFIX", ""))
 
 
-def marin_temp_bucket(ttl_days: int, prefix: str = "") -> str:
+def _append_path_prefix(path: str, prefix: str) -> str:
+    if prefix:
+        return f"{path}/{prefix.strip('/')}"
+    return path
+
+
+def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | None = None) -> str:
     """Return a path on region-local temp storage. Never returns ``None``.
 
-    For a GCS marin prefix with a known region, returns a path on the
-    dedicated temp bucket::
+    For a GCS marin prefix with a known region, or an explicitly provided
+    ``source_prefix`` with a known region, returns a path on the dedicated temp
+    bucket::
 
         gs://marin-tmp-{region}/ttl={N}d/{prefix}
 
@@ -177,25 +184,26 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "") -> str:
         ttl_days: Lifecycle TTL in days.  Should match one of the configured
             values (1-7, 14, 30) in ``infra/configure_temp_buckets.py``.
         prefix: Optional sub-path appended after the TTL directory.
+        source_prefix: Optional path used to choose the temp bucket region.
+            Useful when configuring a remote job from a launcher that may be in
+            a different region than the job output path.
     """
     mp = marin_prefix()
 
-    if mp.startswith("gs://"):
+    region = region_from_prefix(source_prefix) if source_prefix is not None else None
+    if region is None and mp.startswith("gs://"):
         region = marin_region()
-        if region:
-            bucket = REGION_TO_TMP_BUCKET.get(region)
-            if bucket:
-                path = f"gs://{bucket}/ttl={ttl_days}d"
-                if prefix:
-                    path = f"{path}/{prefix.strip('/')}"
-                return path
+
+    if region:
+        bucket = REGION_TO_TMP_BUCKET.get(region)
+        if bucket:
+            path = f"gs://{bucket}/ttl={ttl_days}d"
+            return _append_path_prefix(path, prefix)
 
     if "://" not in mp:
         mp = f"file://{mp}"
     path = f"{mp}/tmp"
-    if prefix:
-        path = f"{path}/{prefix.strip('/')}"
-    return path
+    return _append_path_prefix(path, prefix)
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +546,57 @@ def _is_gcs_url(url: str) -> bool:
 def _is_gcs_protocol(protocol: str) -> bool:
     """Return True if *protocol* names a GCS filesystem."""
     return protocol in ("gs", "gcs")
+
+
+def _bucket_from_gcs_url(url: str) -> str | None:
+    """Return the bucket name from a ``gs://``/``gcs://`` URL, or ``None``."""
+    for scheme in ("gs://", "gcs://"):
+        if url.startswith(scheme):
+            return url[len(scheme) :].split("/", 1)[0]
+    return None
+
+
+def _is_cross_region_url(url: str) -> bool:
+    """Return True if *url* points to a GCS bucket in a different region than the VM."""
+    if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+        return False
+    bucket = _bucket_from_gcs_url(url)
+    if bucket is None:
+        return False
+    vm_region = _cached_marin_region()
+    if vm_region is None:
+        return False
+    bucket_location = _cached_bucket_location(bucket)
+    if bucket_location is None:
+        return False
+    return not _regions_match(vm_region, bucket_location)
+
+
+def record_transfer(size: int, url: str, *, budget: TransferBudget | None = None) -> None:
+    """Charge *size* bytes against the cross-region transfer budget.
+
+    Always safe to call: no-op for non-GCS URLs, same-region buckets, when the
+    VM region is unknown, or when the override env var is set.  Raises
+    :class:`TransferBudgetExceeded` if the recorded transfer would push the
+    cumulative total past the budget.
+
+    Used by callers (e.g. tensorstore-based code) that bypass fsspec but still
+    want to charge against the shared cross-region transfer budget.
+
+    Args:
+        size: Number of bytes to charge.
+        url: GCS URL (``gs://bucket/key``) being read or written.  Used both
+            to decide whether the transfer is cross-region and as the path
+            string in any raised :class:`TransferBudgetExceeded`.
+        budget: Budget to charge against.  Defaults to the process-global
+            singleton shared with :class:`CrossRegionGuardedFS` and
+            :class:`MirrorFileSystem`.
+    """
+    if size <= 0:
+        return
+    if not _is_cross_region_url(url):
+        return
+    (budget if budget is not None else _global_transfer_budget).record(size, url)
 
 
 class CrossRegionGuardedFS:
