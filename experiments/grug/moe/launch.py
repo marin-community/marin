@@ -77,6 +77,26 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
     return tracker
 
 
+_V5P_REGIONS: tuple[str, ...] = ("us-east5", "us-central1")
+
+
+def _resources_with_pinned_regions(resources: ResourceConfig) -> ResourceConfig:
+    """Pin TPU resources to v5p-bearing regions to avoid Iris parent-region inheritance.
+
+    The Iris controller copies the parent CPU worker's region onto child TPU
+    submissions when the child has no explicit region constraint. Parents land
+    on whichever CPU pool has capacity (e.g. us-central2), where v5p-8 isn't
+    available, so the child fails with `unschedulable: no groups in region ...`.
+    Pre-setting `resources.regions` adds a region constraint at submission time
+    and short-circuits the inheritance.
+    """
+    from fray.types import TpuConfig
+
+    if isinstance(resources.device, TpuConfig) and not resources.regions:
+        return dataclasses.replace(resources, regions=_V5P_REGIONS)
+    return resources
+
+
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     # Map template launch knobs onto full Levanter TrainerConfig.
     trainer = TrainerConfig(
@@ -105,7 +125,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     run_config = GrugRunConfig(
         model=config.model,
         data=config.data,
-        resources=config.resources,
+        resources=_resources_with_pinned_regions(config.resources),
         optimizer=config.optimizer,
         trainer=grug_trainer,
         eval=config.eval,
