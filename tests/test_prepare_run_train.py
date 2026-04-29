@@ -228,6 +228,46 @@ def test_run_train_submits_one_job(monkeypatch, tmp_path):
     assert env.get("USER_KEY") == "user-value"
 
 
+def test_run_train_passes_tpu_extras_for_tpu_resources(monkeypatch, tmp_path):
+    """TPU plans must request the ``tpu`` uv extra so jax[tpu] is installed."""
+    monkeypatch.setenv("WANDB_API_KEY", "fake-key-for-tpu-resolve")
+
+    plan = TrainingPlan(
+        name="tpu-extras",
+        output_path=str(tmp_path / "out"),
+        train_config=_LeafCfg(output_path=str(tmp_path / "out")),
+        worker_fn=_trivial_worker,
+        resources=ResourceConfig.with_tpu("v4-8"),
+        env_vars={},
+    )
+
+    fake = _RecordingClient()
+    monkeypatch.setattr(fray_client_module, "current_client", lambda: fake)
+
+    run_train(plan)
+
+    assert list(fake.requests[0].environment.extras) == ["tpu"]
+
+
+def test_run_train_passes_no_extras_for_cpu_resources(monkeypatch, tmp_path):
+    """CPU plans must not request accelerator extras."""
+    plan = TrainingPlan(
+        name="cpu-extras",
+        output_path=str(tmp_path / "out"),
+        train_config=_LeafCfg(output_path=str(tmp_path / "out")),
+        worker_fn=_trivial_worker,
+        resources=ResourceConfig.with_cpu(),
+        env_vars={},
+    )
+
+    fake = _RecordingClient()
+    monkeypatch.setattr(fray_client_module, "current_client", lambda: fake)
+
+    run_train(plan)
+
+    assert list(fake.requests[0].environment.extras) == []
+
+
 def test_run_train_worker_entrypoint_calls_materialize_then_worker_fn(monkeypatch, tmp_path):
     """The worker's captured callable runs `materialize` followed by
     `worker_fn(materialised_config)`."""

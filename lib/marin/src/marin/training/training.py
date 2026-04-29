@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from typing import TypeVar
 
 import draccus
-from fray import CpuConfig, ResourceConfig, TpuConfig
+from fray import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
 from mergedeep import mergedeep
 from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
 
@@ -248,6 +248,21 @@ def resolve_training_env(
     _disable_xla_autotune_subcache(env)
 
     return env
+
+
+def extras_for_resources(resources: ResourceConfig) -> list[str]:
+    """Return the uv extras (``["tpu"]`` / ``["gpu"]`` / ``[]``) for a device config.
+
+    Worker JobRequests must declare the matching uv extras so accelerator-only
+    Python dependencies (e.g. ``jax[tpu]``, ``jax[cuda]``) are installed in the
+    runtime environment. CPU jobs need no extras.
+    """
+    device = resources.device
+    if isinstance(device, TpuConfig):
+        return ["tpu"]
+    if isinstance(device, GpuConfig):
+        return ["gpu"]
+    return []
 
 
 def _prepare_training_run(

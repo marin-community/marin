@@ -100,9 +100,16 @@ def _run_one(target: SweepTarget) -> None:
     run_train(target.config)
 
 
-def _sweep_worker_entrypoint() -> None:
-    """One CPU sweep coordinator: loop, claim a target, dispatch a child TPU job."""
-    sweep_root = os.path.join(marin_prefix(), "sweeps", SWEEP_NAME)
+def _sweep_worker_entrypoint(sweep_root: str) -> None:
+    """One CPU sweep coordinator: loop, claim a target, dispatch a child TPU job.
+
+    ``sweep_root`` is resolved once in the submitter (where ``marin_prefix()``
+    reflects the user's region) and baked into the entrypoint args. All N CPU
+    replicas thus contend on the same lock namespace regardless of where Iris
+    schedules them — without this, replicas in different regions would resolve
+    different ``gs://marin-{region}/sweeps/...`` paths and could race-claim
+    the same target twice.
+    """
     claim_and_run(sweep_root, targets, _run_one)
 
 
@@ -110,11 +117,12 @@ if __name__ == "__main__":
     # Single Iris submission, NUM_WORKERS gang-scheduled CPU replicas. Each
     # replica runs `_sweep_worker_entrypoint` and competes with its peers via
     # `step_lock` for the next unclaimed sweep target.
+    sweep_root = os.path.join(marin_prefix(), "sweeps", SWEEP_NAME)
     client = fray_client.current_client()
     handle = client.submit(
         JobRequest(
             name=SWEEP_NAME,
-            entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint),
+            entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[sweep_root]),
             resources=ResourceConfig.with_cpu(replicas=NUM_WORKERS),
             environment=create_environment(),
         )
