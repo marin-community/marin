@@ -60,7 +60,9 @@ llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 LONG_TAIL_PPL_EPIC_ISSUE = 5005
 STRUCTURED_TEXT_ISSUE = 5059
 
+TOTTO_DATASET_ID = "GEM/totto"
 TOTTO_REVISION = "5e745cedfd0050cc18aa143e5325d03061941d7d"
+WIKITABLEQUESTIONS_DATASET_ID = "Stanford/wikitablequestions"
 WIKITABLEQUESTIONS_REVISION = "fac45b3184e0ce9b79eecac454acf17e0a51f94e"
 GITTABLES_DATASET_ID = "target-benchmark/gittables-corpus"
 GITTABLES_REVISION = "401ebb35a14b2d6aa1135bce5d81d55e1f3cbf51"
@@ -84,7 +86,7 @@ totto_raw = ExecutorStep(
     name="raw/gem/totto",
     fn=download_hf,
     config=HfDownloadConfig(
-        hf_dataset_id=versioned("GEM/totto"),
+        hf_dataset_id=versioned(TOTTO_DATASET_ID),
         revision=versioned(TOTTO_REVISION),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
@@ -96,7 +98,7 @@ wikitablequestions_raw = ExecutorStep(
     name="raw/stanford/wikitablequestions",
     fn=download_hf,
     config=HfDownloadConfig(
-        hf_dataset_id=versioned("Stanford/wikitablequestions"),
+        hf_dataset_id=versioned(WIKITABLEQUESTIONS_DATASET_ID),
         revision=versioned(WIKITABLEQUESTIONS_REVISION),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
@@ -119,10 +121,10 @@ gittables_raw = ExecutorStep(
 
 STRUCTURED_EVAL_MANIFESTS: dict[str, IngestionSourceManifest] = {
     "totto": IngestionSourceManifest(
-        dataset_key="GEM/totto",
+        dataset_key=TOTTO_DATASET_ID,
         slice_key="structured_text/totto/validation",
         source_label="totto:validation",
-        source_urls=("https://huggingface.co/datasets/GEM/totto",),
+        source_urls=(f"https://huggingface.co/datasets/{TOTTO_DATASET_ID}",),
         source_license="CC BY-SA 3.0",
         source_format="huggingface_parquet_table_records",
         surface_form="wikipedia_table_tsv_plus_summary_sentence",
@@ -140,16 +142,16 @@ STRUCTURED_EVAL_MANIFESTS: dict[str, IngestionSourceManifest] = {
         issue_numbers=(STRUCTURED_TEXT_ISSUE,),
         sample_caps=SampleCapConfig(max_bytes_per_source=DEFAULT_MAX_BYTES_PER_SOURCE),
         source_metadata={
-            "hf_dataset_id": "GEM/totto",
+            "hf_dataset_id": TOTTO_DATASET_ID,
             "hf_revision": TOTTO_REVISION,
             "hf_urls_glob": "**/*.parquet,*.md",
         },
     ),
     "wikitablequestions": IngestionSourceManifest(
-        dataset_key="Stanford/wikitablequestions",
+        dataset_key=WIKITABLEQUESTIONS_DATASET_ID,
         slice_key="structured_text/wikitablequestions/validation",
         source_label="wikitablequestions:validation",
-        source_urls=("https://huggingface.co/datasets/Stanford/wikitablequestions",),
+        source_urls=(f"https://huggingface.co/datasets/{WIKITABLEQUESTIONS_DATASET_ID}",),
         source_license="CC BY 4.0",
         source_format="huggingface_parquet_table_records",
         surface_form="wikipedia_table_tsv_plus_question_answer_lines",
@@ -166,7 +168,7 @@ STRUCTURED_EVAL_MANIFESTS: dict[str, IngestionSourceManifest] = {
         issue_numbers=(STRUCTURED_TEXT_ISSUE,),
         sample_caps=SampleCapConfig(max_bytes_per_source=DEFAULT_MAX_BYTES_PER_SOURCE),
         source_metadata={
-            "hf_dataset_id": "Stanford/wikitablequestions",
+            "hf_dataset_id": WIKITABLEQUESTIONS_DATASET_ID,
             "hf_revision": WIKITABLEQUESTIONS_REVISION,
             "hf_urls_glob": "**/*.parquet,*.md",
         },
