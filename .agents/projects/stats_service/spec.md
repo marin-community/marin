@@ -83,15 +83,15 @@ message Row {
 message RegisterTableRequest {
   string namespace = 1;     // e.g. "iris.worker"
   Schema schema = 2;
-  bool allow_evolve = 3;    // If true, accept additive-nullable extensions of
-                            // a previously-registered schema. (See Open Q in
-                            // design.md — default false; behavior may change.)
 }
 
 message RegisterTableResponse {
-  Schema effective_schema = 1; // The schema now in force. May differ from the
-                               // requested one if allow_evolve=true and the
-                               // server merged in additive columns.
+  Schema effective_schema = 1; // The schema now in force. Differs from the
+                               // requested one when the server merged the
+                               // request as an additive-nullable extension
+                               // of a previously-registered schema, or when
+                               // the request was a subset of the existing
+                               // registered schema.
 }
 
 message WriteRowsRequest {
@@ -148,17 +148,26 @@ class LogClient:
     def get_table(
         self,
         namespace: str,
-        schema: Schema,
-        *,
-        allow_evolve: bool = False,
+        schema: type | Schema,
     ) -> "Table":
         """Idempotently register `namespace` with `schema` and return a
         Table handle.
 
+        `schema` may be either an explicit `Schema` instance or a dataclass
+        class (the common case). When a dataclass is passed, fields are
+        mapped to columns in declaration order using the type-annotation
+        rules in "Dataclass schema inference" below.
+
+        Register is evolve-by-default: if `namespace` already has a
+        registered schema, the server returns a Table whose `.schema` is
+        the union of the requested schema and the registered one
+        (additive-nullable merge). The caller's writes can use either the
+        narrower or wider view.
+
         Raises:
-            SchemaConflictError: a different schema is already registered
-                for `namespace` and `allow_evolve` is False (or the requested
-                schema is not an additive-nullable extension).
+            SchemaConflictError: the requested schema differs from the
+                registered one in a non-additive way (rename, type change,
+                or a new non-nullable column).
         """
 ```
 
@@ -202,15 +211,28 @@ class Table:
         sent as null; missing non-nullable columns raise SchemaValidationError
         client-side before the buffer flush.
 
+        Write semantics match LogPusher: a background flusher retries
+        transient server failures with backoff; rows persist in the
+        in-memory buffer across a finelog restart as long as the client
+        process is alive. If the client process exits with rows still
+        buffered, those rows are lost (acceptable for stats — the writer
+        is expected to re-emit on next sample).
+
         Common shapes accepted: dataclass instances, NamedTuple, dict, or
         any object with __getattr__ matching column names.
         """
 
-    def query(self, sql: str) -> pa.Table:
+    def query(self, sql: str, *, max_rows: int = 100_000) -> pa.Table:
         """Run Postgres-flavored SQL. The string `t` (or the namespace name)
         in the SQL is rewritten to the backing per-namespace Parquet path.
         Returns an Arrow table; SQL syntax is DuckDB's. Coupling to DuckDB
         syntax is deliberate (see design.md "Queries").
+
+        If the result exceeds `max_rows`, raises QueryResultTooLargeError
+        rather than silently truncating. Caller can re-issue with a higher
+        cap (or a `LIMIT`/aggregation in the SQL) if they really want it.
+        Reads have no fallback during a finelog outage — failures surface
+        as exceptions for the caller to handle.
         """
 
     def close(self) -> None:
@@ -224,8 +246,9 @@ class StatsError(Exception): ...
 
 class SchemaConflictError(StatsError):
     """Raised by LogClient.get_table() when the requested schema differs
-    from the registered one and the difference is not an additive-nullable
-    extension (or allow_evolve is False)."""
+    from the registered one in a non-additive way: rename, type change,
+    or a new non-nullable column. Additive-nullable differences are
+    merged silently and do not raise."""
 
 class SchemaValidationError(StatsError):
     """Raised by Table.write() when a row is missing a non-nullable column,
@@ -236,7 +259,27 @@ class SchemaValidationError(StatsError):
 class NamespaceNotFoundError(StatsError):
     """Raised by Table.query() when the SQL references an unregistered
     namespace."""
+
+class QueryResultTooLargeError(StatsError):
+    """Raised by Table.query() when the result row count exceeds `max_rows`.
+    Caller should add a LIMIT, aggregate further, or pass a higher cap."""
 ```
+
+### Dataclass schema inference
+
+When `LogClient.get_table(namespace, schema=SomeDataclass)` is called with a dataclass class, fields are mapped to columns in declaration order:
+
+| Annotation | `ColumnType` | `nullable` |
+|---|---|---|
+| `str` | `STRING` | `False` |
+| `int` | `INT64` | `False` |
+| `float` | `FLOAT64` | `False` |
+| `bool` | `BOOL` | `False` |
+| `datetime` | `TIMESTAMP_MS` | `False` |
+| `bytes` | `BYTES` | `False` |
+| `T \| None` (or `Optional[T]`) | as `T` | `True` |
+
+Dataclasses with unsupported field types (collections, nested dataclasses, custom classes) raise `SchemaValidationError` at `get_table` time, not at first write. Construct an explicit `Schema` if you need finer control than the inference gives you.
 
 ## Persisted shapes
 
@@ -279,10 +322,12 @@ CREATE TABLE namespaces (
 
 ## Concurrent-register and validation behavior
 
-- **Concurrent register, identical schema**: idempotent, no-op (returns the registered schema).
-- **Concurrent register, additive-nullable extension, `allow_evolve=False`**: raises `SchemaConflictError`.
-- **Concurrent register, additive-nullable extension, `allow_evolve=True`**: server merges (UNION on column set, all new columns must be nullable), updates `last_modified_ms`, returns merged schema as `effective_schema`.
-- **Concurrent register, non-additive change (rename, type-change, removed column)**: raises `SchemaConflictError` regardless of `allow_evolve`.
+Register is evolve-by-default; there is no opt-in flag.
+
+- **Identical schema**: idempotent, no-op (returns the registered schema as `effective_schema`).
+- **Subset (caller's columns ⊆ registered)**: accepted, registered schema unchanged. The Table's `.schema` reflects the registered (wider) one. The caller's narrower writes are still valid — missing columns serialize as NULL.
+- **Additive-nullable extension (caller's columns ⊃ registered, all extras are nullable)**: server merges (UNION on column set), updates `last_modified_ms`, returns the merged schema as `effective_schema`.
+- **Non-additive change** — rename, type change, or a new non-nullable column: raises `SchemaConflictError`. The migration path is "register a new namespace and dual-write."
 - **All registry mutations** are guarded by a process-level lock on the `namespaces` row; the DuckDB sidecar's transaction guarantees serialization.
 
 ## Endpoint and resolution

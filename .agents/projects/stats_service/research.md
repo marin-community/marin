@@ -16,10 +16,10 @@ Background research for [`stats_service.md`](./stats_service.md). In-repo findin
 
 Three uncoordinated emitters, none persisted:
 
-- **RPC introspection** — `lib/iris/src/iris/rpc/stats.proto:21-70` (`RpcMethodStats`, percentiles, histograms). Already has its own proto. In-memory only via `RpcStatsCollector` (`lib/iris/src/iris/cluster/controller/dashboard.py:79-81`). **Stays as-is** — different concern (live RPC introspection vs persisted operational stats).
+- **RPC introspection** — `lib/iris/src/iris/rpc/stats.proto:21-70` (`RpcMethodStats`, percentiles, histograms). Already has its own proto. In-memory only via `RpcStatsCollector` (defined `lib/iris/src/iris/rpc/stats.py:81`, instantiated `lib/iris/src/iris/cluster/controller/dashboard.py:243`). **Stays as-is** — different concern (live RPC introspection vs persisted operational stats).
 - **User/job/task counts** — `lib/iris/src/iris/cluster/controller/db.py:192-195` (`UserStats`), computed live via `_live_user_stats()` (`controller/service.py:853-879`). Ephemeral, returned by `GetClusterStatus` RPC.
 - **Worker heartbeats** — `lib/iris/src/iris/cluster/worker/worker.py:67,226`. Tracked as deadlines, not logged.
-- **Container metrics** — `lib/iris/src/iris/cluster/runtime/docker.py:278-330` (`ContainerStats`). Sampled on-demand.
+- **Container metrics** — `ContainerStats` defined in `lib/iris/src/iris/cluster/runtime/types.py:125`, sampled on-demand via `DockerContainerHandle.stats()` at `lib/iris/src/iris/cluster/runtime/docker.py:479`.
 
 The iris dashboard's worker pane reads worker info from the controller's sqlite (`lib/iris/src/iris/cluster/controller/db.py`). MVP cutover replaces that read path with the stats service.
 
@@ -48,7 +48,16 @@ Decisions that shaped the doc:
 3. **`iris.rpc.stats`** — stays as-is for RPC introspection. Post-MVP, worker stats writes go direct to the stats service rather than via the controller; that's a follow-up, not part of this design.
 4. **Schema evolution** — add-nullable and drop-column supported via DuckDB `union_by_name` across segments. Rename / type-change unsupported; register `iris.worker.v2`, dual-write, retire the old. No migration tooling — namespace bump is the tool.
 5. **MVP** — wire iris worker stats end-to-end: worker → stats service → dashboard pane. The dashboard pane currently reading from controller sqlite cuts over to the stats service.
-6. **Open Questions** — only things genuinely uncertain to us. Three made the cut: schema enforcement strictness, retention, batching reuse with `LogPusher`.
+
+Originally three Open Questions; all resolved or folded:
+
+- **Schema enforcement strictness** — resolved: server validates every batch against the registered schema (`design.md:38`). Reject on type mismatch or missing non-nullable; accept missing nullable as NULL.
+- **`LogPusher` batching reuse** — resolved: stats writes get a parallel buffer per `Table` rather than sharing the log batcher (`design.md:43`). Decision driven by per-namespace flush cadences and back-pressure being independent.
+- **Retention** — partially resolved: ship without TTL, revisit when a namespace nears caps (`design.md:20`). Folded into the per-namespace storage-caps question that's still open.
+
+A fourth question — register semantics during rolling upgrades — surfaced during design and was resolved in review: **evolve-by-default**. Server merges additive-nullable extensions silently; non-additive changes still raise `SchemaConflictError`.
+
+Remaining Open Question (`design.md:50-53`): per-namespace storage caps vs global caps (and the retention/displacement policy that question implies).
 
 ## Cardinality back-of-envelope
 
