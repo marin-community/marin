@@ -576,17 +576,16 @@ class LmDataConfig:
 
     chat_template: str | None = None  # If set, use this template for chat datasets. Otherwise, use the tokenizer's.
 
-    shuffle: bool | int | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE
+    shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE
     """Shuffle policy.
 
     - `True`: full permutation shuffle
     - `False`: no shuffle
-    - positive `int`: era shuffle with this era length
     - `BlockShuffleConfig`: hierarchical block shuffle
     """
     permutation_type: Literal["feistel", "linear"] = "feistel"
     """
-    Type of permutation to use for full and era shuffle.
+    Type of permutation to use for full shuffle.
     """
 
     block_cross_document_attention: bool = True
@@ -748,8 +747,6 @@ class LmDataConfig:
                 )
             elif shuffle_cfg is True:
                 ds = ds.shuffle(k, perm_type=perm_type)
-            elif isinstance(shuffle_cfg, int) and not isinstance(shuffle_cfg, bool) and shuffle_cfg > 0:
-                ds = ds.era_shuffle(shuffle_cfg, key=k, perm_type=perm_type)
             return ds
 
         if shuffle_cfg:
