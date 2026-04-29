@@ -33,7 +33,7 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.log_server.server import LogServiceImpl
+from finelog.server.service import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.service import CloudK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider, _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
@@ -76,9 +76,11 @@ class ServiceTestHarness:
 
     def sync_k8s(self) -> None:
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
-        batch = self.state.drain_for_direct_provider()
+        with self.state._store.transaction() as cur:
+            batch = self.state.drain_for_direct_provider(cur)
         result = self.k8s_provider.sync(batch)
-        self.state.apply_direct_provider_updates(result.updates)
+        with self.state._store.transaction() as cur:
+            self.state.apply_direct_provider_updates(cur, result.updates)
 
 
 def _make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:

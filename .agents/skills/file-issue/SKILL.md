@@ -14,21 +14,19 @@ Read first:
 
 @AGENTS.md
 
-## Issue Templates
+## Issue Kinds and Body Structure
 
-This repo has issue templates in `.github/ISSUE_TEMPLATE/`. Choose the right
-one based on what was identified:
+Pick the kind based on what was identified, then use the matching body
+structure below. There are no GitHub issue templates — these structures live
+here.
 
-| Template | When to use | Labels |
+| Kind | When to use | Labels |
 |---|---|---|
-| **bug-report** | A bug or regression was found | `bug`, `agent-generated` |
+| **bug** | A bug or regression was found | `bug`, `agent-generated` |
 | **task** | An improvement, refactor, or feature request | `agent-generated` + priority if known |
-| **experiment** | An experiment needs tracking | `experiment`, `agent-generated` |
+| **experiment** | An experiment needs tracking | `experiment`, `agent-generated` (use `.agents/skills/agent-research/SKILL.md` for the body) |
 
-Always match the section structure of the chosen template. The templates are
-the source of truth for issue format in this repo.
-
-### Bug Report format (`.github/ISSUE_TEMPLATE/bug-report.md`)
+### Bug body
 
 ```markdown
 **Describe the bug**
@@ -45,7 +43,7 @@ the source of truth for issue format in this repo.
 <root cause analysis, file:line references, suggested fix if known>
 ```
 
-### Task format (`.github/ISSUE_TEMPLATE/task.md`)
+### Task body
 
 ```markdown
 ## Description
@@ -55,22 +53,10 @@ the source of truth for issue format in this repo.
 <specific, testable completion criteria>
 ```
 
-### Experiment format (`.github/ISSUE_TEMPLATE/experiment.md`)
+### Experiment body
 
-```markdown
-## Description
-<what is being investigated and why>
-
-## Hypothesis or Goal
-<what you expect to learn or achieve>
-
-### Links
-* WandB Report: <link>
-* <other relevant links>
-
-## Results
-<leave empty for new issues>
-```
+For research/experiment issues, use the body template in
+`.agents/skills/agent-research/SKILL.md` ("Experiment Issue Template").
 
 ## Workflow
 
@@ -89,8 +75,8 @@ before proceeding.
 
 ### 2. Classify the Issue
 
-Pick the template (bug-report, task, or experiment) that best fits the
-identified problem. If unsure, ask the user.
+Pick the kind (bug, task, or experiment) that best fits the identified
+problem. If unsure, ask the user.
 
 ### 3. Duplicate Check
 
@@ -107,7 +93,7 @@ If a matching issue exists, tell the user and offer to comment on it instead.
 **Title**: Short imperative sentence, optionally prefixed with a scope tag
 (e.g. `[levanter] Fix gradient accumulation off-by-one`). Under 80 characters.
 
-**Body**: Use the section structure from the chosen template (see above).
+**Body**: Use the section structure for the chosen kind (see above).
 
 **Rules for the body:**
 
@@ -152,7 +138,7 @@ gh issue create --repo marin-community/marin \
   --body-file "$body_file"
 ```
 
-Add the template-appropriate labels (e.g. `bug` for bug reports, `experiment`
+Add the kind-appropriate labels (e.g. `bug` for bug reports, `experiment`
 for experiments). If a relevant label does not exist, skip it rather than
 creating new labels.
 
@@ -180,9 +166,9 @@ Follow the same terse style from `fix-issue`:
 ## Tasks
 
 - [ ] Extract bug/issue details from conversation
-- [ ] Classify as bug-report, task, or experiment
+- [ ] Classify as bug, task, or experiment
 - [ ] Run duplicate check against open issues
-- [ ] Draft issue title and body using the matching template format
+- [ ] Draft issue title and body using the matching kind structure
 - [ ] Show draft to user for confirmation
 - [ ] File issue with `gh issue create`
 - [ ] Report issue URL to user
@@ -195,5 +181,5 @@ Follow the same terse style from `fix-issue`:
    (not when the user explicitly asked to file).
 3. If the conversation does not contain a clear bug or actionable improvement,
    say so and ask the user what they want to file.
-4. Always use the section structure from the matching `.github/ISSUE_TEMPLATE/`
-   template.
+4. Always use the section structure for the matching kind (see "Issue Kinds
+   and Body Structure" above).

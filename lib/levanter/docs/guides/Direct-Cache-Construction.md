@@ -2,10 +2,10 @@
 
 (See also [Training on Your Own Data](../Training-On-Your-Data.md) for more details on training on your own data.)
 
-Levanter typically handles cache construction automatically, but if you have custom preprocessing logic or Ray isn't
-working for you for some reason, you can directly construct a cache of preprocessed data.
+Levanter typically handles cache construction automatically, but if you have custom preprocessing logic or need a
+scripted one-off cache build, you can directly construct a cache of preprocessed data.
 
-You can directly construct a cache of preprocessed data without using Ray. To do so, you can use [levanter.store.SerialCacheWriter](https://github.com/stanford-crfm/levanter/blob/main/src/levanter/store/cache.py)
+You can directly construct a cache of preprocessed data without going through the automatic Zephyr-backed cache builder. To do so, you can use [levanter.store.SerialCacheWriter](https://github.com/stanford-crfm/levanter/blob/main/src/levanter/store/cache.py)
 to write batches directly. Here's an example:
 
 ```python

@@ -5,8 +5,8 @@
 
 from typing import Protocol
 
+from finelog.rpc import logging_pb2
 from iris.cluster.types import Entrypoint, JobName, TaskAttempt
-from iris.rpc import logging_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from rigging.timing import Duration

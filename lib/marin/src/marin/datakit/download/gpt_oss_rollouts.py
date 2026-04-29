@@ -17,6 +17,7 @@ from zephyr import Dataset, ZephyrContext, counters
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "andyrdt/gpt-oss-20b-rollouts"
@@ -63,7 +64,7 @@ def transform(input_path: str, output_path: str) -> None:
         .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="gpt-oss-rollouts-transform", resources=ResourceConfig(cpu=1, ram="8g"))
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)
 
 
 def download_gpt_oss_rollouts_step() -> StepSpec:
@@ -87,4 +88,13 @@ def download_gpt_oss_rollouts_step() -> StepSpec:
             output_path=output_path,
         ),
         hash_attrs={"version": "v2"},
+    )
+
+
+def gpt_oss_rollouts_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the full ``(download+transform, normalize)`` chain for gpt-oss-rollouts."""
+    processed = download_gpt_oss_rollouts_step()
+    return (
+        processed,
+        normalize_step(name="normalized/gpt-oss-rollouts", download=processed),
     )

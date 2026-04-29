@@ -9,10 +9,21 @@ from typing import Any
 
 import jax
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 import haliax
 
+from levanter.analysis.model_perplexity import (
+    ModelScoreReportBuilder,
+    ScoredDocument,
+    compare_scored_documents,
+    read_model_score_summary,
+    read_token_count_summary,
+    read_scored_documents,
+    write_model_score_files,
+)
 import levanter.analysis.perplexity_gap as gap_analysis
 from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
@@ -281,6 +292,201 @@ def test_write_report_files_and_log_artifact_bundle():
     assert captured["files"] == ["report.md", "summary.json", "worst_documents.jsonl"]
     assert captured["summary"]["model_a"] == "a"
     assert captured["worst_documents"][0]["direction"] == "model_a_worse"
+
+
+def test_model_score_files_roundtrip():
+    document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma", "paloma/example"),
+        shard_name="docs",
+        row_index=0,
+        text="abc",
+    )
+    tokenized = TokenizedDocument(
+        token_ids=np.asarray([1, 2], dtype=np.int32),
+        byte_starts=np.asarray([0, 1], dtype=np.int32),
+        byte_ends=np.asarray([1, 3], dtype=np.int32),
+        num_bytes=3,
+    )
+    scored_document = ScoredDocument(
+        document=document,
+        per_byte_loss=np.asarray([0.1, 0.2, 0.3], dtype=np.float64),
+        tokenized=tokenized,
+    )
+    summary = ModelScoreReportBuilder(model_name="model-a")
+    summary.add_document(document=document, per_byte_loss=scored_document.per_byte_loss)
+    built_summary = summary.build_summary()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        write_model_score_files(tmpdir, built_summary, [scored_document])
+
+        loaded_summary = read_model_score_summary(tmpdir)
+        loaded_documents = read_scored_documents(tmpdir)
+
+    assert loaded_summary["model"] == "model-a"
+    assert loaded_summary["datasets"][0]["name"] == "paloma/example"
+    assert len(loaded_documents) == 1
+    assert loaded_documents[0].document == document
+    assert np.allclose(loaded_documents[0].per_byte_loss, scored_document.per_byte_loss)
+    assert loaded_documents[0].tokenized.token_ids.tolist() == tokenized.token_ids.tolist()
+    assert loaded_documents[0].tokenized.num_bytes == tokenized.num_bytes
+    assert loaded_documents[0].tokenized.byte_starts.tolist() == tokenized.byte_starts.tolist()
+
+
+def test_read_scored_documents_backfills_missing_token_ids():
+    table = pa.Table.from_pydict(
+        {
+            "dataset_name": ["paloma/example"],
+            "tags": [["paloma", "paloma/example"]],
+            "shard_name": ["docs"],
+            "row_index": [0],
+            "text": ["abc"],
+            "per_byte_loss": [[0.1, 0.2, 0.3]],
+            "token_byte_starts": [[0, 1]],
+            "token_byte_ends": [[1, 3]],
+            "num_bytes": [3],
+        },
+        schema=pa.schema(
+            [
+                ("dataset_name", pa.string()),
+                ("tags", pa.list_(pa.string())),
+                ("shard_name", pa.string()),
+                ("row_index", pa.int64()),
+                ("text", pa.string()),
+                ("per_byte_loss", pa.list_(pa.float64())),
+                ("token_byte_starts", pa.list_(pa.int32())),
+                ("token_byte_ends", pa.list_(pa.int32())),
+                ("num_bytes", pa.int32()),
+            ]
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with open(os.path.join(tmpdir, "summary.json"), "w") as f:
+            json.dump({"model": "model-a", "datasets": [], "dataset_groups": [], "pattern_buckets": []}, f)
+        with open(os.path.join(tmpdir, "scored_documents.parquet"), "wb") as f:
+            pq.write_table(table, f)
+
+        loaded_documents = read_scored_documents(tmpdir)
+
+    assert len(loaded_documents) == 1
+    assert loaded_documents[0].tokenized.token_ids.tolist() == [0, 0]
+    assert loaded_documents[0].tokenized.byte_starts.tolist() == [0, 1]
+    assert loaded_documents[0].tokenized.byte_ends.tolist() == [1, 3]
+
+
+def test_model_score_files_write_token_count_summary():
+    first_document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma", "paloma/example"),
+        shard_name="docs",
+        row_index=0,
+        text="abc",
+    )
+    second_document = RawTextDocument(
+        dataset_name="paloma/other",
+        tags=("paloma", "paloma/other"),
+        shard_name="docs",
+        row_index=1,
+        text="def",
+    )
+    first_scored_document = ScoredDocument(
+        document=first_document,
+        per_byte_loss=np.asarray([0.1, 0.2, 0.3], dtype=np.float64),
+        tokenized=TokenizedDocument(
+            token_ids=np.asarray([1, 2, 2, 3], dtype=np.int32),
+            byte_starts=np.asarray([0, 1, 1, 2], dtype=np.int32),
+            byte_ends=np.asarray([1, 2, 2, 3], dtype=np.int32),
+            num_bytes=3,
+        ),
+    )
+    second_scored_document = ScoredDocument(
+        document=second_document,
+        per_byte_loss=np.asarray([0.4, 0.5, 0.6], dtype=np.float64),
+        tokenized=TokenizedDocument(
+            token_ids=np.asarray([4, 4, 5], dtype=np.int32),
+            byte_starts=np.asarray([0, 0, 1], dtype=np.int32),
+            byte_ends=np.asarray([1, 1, 3], dtype=np.int32),
+            num_bytes=3,
+        ),
+    )
+
+    report = ModelScoreReportBuilder(model_name="model-a")
+    report.add_document(document=first_document, per_byte_loss=first_scored_document.per_byte_loss)
+    report.add_document(document=second_document, per_byte_loss=second_scored_document.per_byte_loss)
+    summary = report.build_summary()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        write_model_score_files(
+            tmpdir,
+            summary,
+            [first_scored_document, second_scored_document],
+            vocab_size=8,
+            token_id_to_text={1: "<bos>", 2: "ab", 3: "c", 4: "de", 5: "f"},
+        )
+        token_count_summary = read_token_count_summary(tmpdir)
+
+    assert token_count_summary["vocab_size"] == 8
+    assert token_count_summary["overall"]["total_tokens"] == 7
+    assert token_count_summary["overall"]["unique_tokens"] == 5
+    assert token_count_summary["overall"]["singleton_tokens"] == 3
+    assert token_count_summary["overall"]["rare_tokens_le_3"] == 5
+    assert token_count_summary["overall"]["unseen_tokens"] == 3
+    assert token_count_summary["datasets"][0]["name"] == "paloma/example"
+    assert token_count_summary["datasets"][0]["total_tokens"] == 4
+    assert token_count_summary["datasets"][0]["unique_tokens"] == 3
+    assert token_count_summary["datasets"][0]["rare_token_examples"][0] == {
+        "count": 1,
+        "token_id": 1,
+        "token_text": "<bos>",
+    }
+
+
+def test_compare_scored_documents_matches_direct_gap_builder():
+    document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma", "paloma/example"),
+        shard_name="docs",
+        row_index=0,
+        text="abc",
+    )
+    tokenized_a = TokenizedDocument(
+        token_ids=np.asarray([1], dtype=np.int32),
+        byte_starts=np.asarray([0], dtype=np.int32),
+        byte_ends=np.asarray([3], dtype=np.int32),
+        num_bytes=3,
+    )
+    tokenized_b = TokenizedDocument(
+        token_ids=np.asarray([1, 2], dtype=np.int32),
+        byte_starts=np.asarray([0, 1], dtype=np.int32),
+        byte_ends=np.asarray([1, 3], dtype=np.int32),
+        num_bytes=3,
+    )
+    losses_a = np.asarray([0.2, 0.2, 0.2], dtype=np.float64)
+    losses_b = np.asarray([0.0, 0.0, 0.0], dtype=np.float64)
+
+    direct_report = GapReportBuilder(model_a_name="a", model_b_name="b", output_path="/tmp/direct")
+    direct_report.add_document(
+        document=document,
+        per_byte_loss_a=losses_a,
+        per_byte_loss_b=losses_b,
+        tokenized_a=tokenized_a,
+        tokenized_b=tokenized_b,
+    )
+    direct_summary = direct_report.build_summary()
+
+    scored_summary = compare_scored_documents(
+        model_a_name="a",
+        model_b_name="b",
+        scored_documents_a=[ScoredDocument(document=document, per_byte_loss=losses_a, tokenized=tokenized_a)],
+        scored_documents_b=[ScoredDocument(document=document, per_byte_loss=losses_b, tokenized=tokenized_b)],
+        output_path="/tmp/from-scores",
+    )
+
+    assert scored_summary["datasets"] == direct_summary["datasets"]
+    assert scored_summary["pattern_buckets"] == direct_summary["pattern_buckets"]
+    assert scored_summary["top_literals"] == direct_summary["top_literals"]
+    assert scored_summary["top_documents"] == direct_summary["top_documents"]
 
 
 def test_render_report_markdown_escapes_table_boundaries():
