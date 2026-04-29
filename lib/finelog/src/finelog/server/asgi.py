@@ -9,10 +9,12 @@ from collections.abc import Iterable
 
 from connectrpc.interceptor import Interceptor
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from starlette.routing import Mount, Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from finelog.rpc.logging_connect import LogServiceWSGIApplication
 from finelog.server.interceptors import ConcurrencyLimitInterceptor
@@ -23,6 +25,27 @@ from finelog.server.service import LogServiceImpl
 # page cache and wedges the process. Tune alongside the working-set caps in
 # duckdb_store.py.
 _MAX_CONCURRENT_FETCH_LOGS = 4
+
+# Pre-#5212 (b212f0015) the LogService proto package was iris.logging, so old
+# worker images push to /iris.logging.LogService/*. Wire format is identical
+# (same field numbers across PushLogsRequest/LogEntry/etc.), so we rewrite
+# the path before routing. Drop this once all worker images are post-#5212.
+_LEGACY_PATH_PREFIX = "/iris.logging.LogService/"
+_CURRENT_PATH_PREFIX = "/finelog.logging.LogService/"
+
+
+class _LegacyIrisLoggingPathMiddleware:
+    """Rewrite legacy iris.logging.LogService URLs onto the current path."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope.get("path", "").startswith(_LEGACY_PATH_PREFIX):
+            tail = scope["path"][len(_LEGACY_PATH_PREFIX) :]
+            new_path = _CURRENT_PATH_PREFIX + tail
+            scope = {**scope, "path": new_path, "raw_path": new_path.encode()}
+        await self._app(scope, receive, send)
 
 
 def build_log_server_asgi(
@@ -48,4 +71,4 @@ def build_log_server_asgi(
         Route("/health", _health),
         Mount(log_wsgi_app.path, app=WSGIMiddleware(log_wsgi_app)),
     ]
-    return Starlette(routes=routes)
+    return Starlette(routes=routes, middleware=[Middleware(_LegacyIrisLoggingPathMiddleware)])
