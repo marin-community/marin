@@ -211,6 +211,308 @@ def _tracer_injection() -> tuple[dict[str, str], dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Phase helpers — each runs one of the three trace phases and returns the
+# parsed-row dict plus per-phase status flags. ``contree_trace_one`` chains
+# them together, threading the same session.
+# ---------------------------------------------------------------------------
+
+
+def _phase_cmd(test_cmd: str, trace_path: str, apply_patch_path: str | None) -> str:
+    """Build a shell line that optionally applies a patch, runs ``test_cmd`` traced, and prints a trace-meta marker."""
+    apply_line = (
+        f"git apply --allow-empty {apply_patch_path} || " "{ echo '::PATCH_FAILED::'; exit 97; }; "
+        if apply_patch_path
+        else ""
+    )
+    injected = test_cmd.replace("pytest", "pytest --continue-on-collection-errors", 1)
+    return (
+        f"{apply_line}{injected}; rc=$?; "
+        f"echo '{TRACE_META_MARKER}'; "
+        f"wc -lc {trace_path} 2>/dev/null || echo 'no-trace'; "
+        f"exit $rc"
+    )
+
+
+def _run_pre_phase(
+    session,
+    *,
+    instance_id: str,
+    test_cmd: str,
+    test_patch: str,
+    test_patch_path: str,
+    pre_trace_path: str,
+    common_env: dict[str, str],
+    files: dict[str, str],
+    workdir_path: Path,
+    timeout: float,
+) -> tuple[dict[str, dict], str, bool] | None:
+    """Phase 1: apply ``test_patch`` and run ``test_cmd`` traced.
+
+    Returns ``(rows, stdout, download_failed)`` or ``None`` on a hard failure
+    that means we should give up on this instance entirely.
+    """
+    try:
+        _run_with_retry(
+            session,
+            shell=_phase_cmd(test_cmd, pre_trace_path, test_patch_path if test_patch else None),
+            env={**common_env, "TRACER_OUTPUT": pre_trace_path},
+            files=files,
+            timeout=timeout,
+            disposable=False,
+        )
+    except Exception as e:
+        logger.warning("pre-phase failed for %s: %s", instance_id, e)
+        counters.increment("instances_failed_pre")
+        return None
+
+    stdout = session.stdout or ""
+    pre_jsonl = workdir_path / "pre.jsonl"
+    try:
+        session.download(pre_trace_path, pre_jsonl)
+        rows = _jsonl_to_rows(pre_jsonl)
+        pre_jsonl.unlink(missing_ok=True)
+        return rows, stdout, False
+    except Exception as e:
+        logger.warning("pre download failed for %s: %s", instance_id, e)
+        counters.increment("pre_download_failed")
+        return {}, stdout, True
+
+
+def _run_post_phase(
+    session,
+    *,
+    instance_id: str,
+    test_cmd: str,
+    fix_patch: str,
+    fix_patch_path: str,
+    post_trace_path: str,
+    common_env: dict[str, str],
+    workdir_path: Path,
+    timeout: float,
+) -> tuple[dict[str, dict], bool, bool]:
+    """Phase 2: apply ``fix_patch`` and rerun ``test_cmd`` traced.
+
+    Returns ``(rows, post_patch_ok, download_failed)``. ``post_patch_ok=False``
+    means the fix patch didn't apply cleanly — broad phase is then skipped.
+    """
+    post_patch_ok = False
+    try:
+        _run_with_retry(
+            session,
+            shell=_phase_cmd(test_cmd, post_trace_path, fix_patch_path if fix_patch else None),
+            env={**common_env, "TRACER_OUTPUT": post_trace_path},
+            files=None,
+            timeout=timeout,
+            disposable=False,
+        )
+        post_patch_ok = "::PATCH_FAILED::" not in (session.stdout or "")
+    except Exception as e:
+        logger.warning("post-phase failed for %s: %s", instance_id, e)
+
+    if not post_patch_ok:
+        return {}, False, False
+
+    post_jsonl = workdir_path / "post.jsonl"
+    try:
+        session.download(post_trace_path, post_jsonl)
+        rows = _jsonl_to_rows(post_jsonl)
+        post_jsonl.unlink(missing_ok=True)
+        return rows, True, False
+    except Exception as e:
+        logger.warning("post download failed for %s: %s", instance_id, e)
+        counters.increment("post_download_failed")
+        return {}, True, True
+
+
+def _download_broad_chunk(
+    session, *, chunk_trace: str, workdir_path: Path, chunk_index: int, instance_id: str
+) -> dict[str, dict] | None:
+    """Pull and parse one broad-phase chunk's trace. ``None`` = download failed."""
+    chunk_local = workdir_path / f"broad_{chunk_index}.jsonl"
+    try:
+        session.download(chunk_trace, chunk_local)
+        rows = _jsonl_to_rows(chunk_local)
+        chunk_local.unlink(missing_ok=True)
+        return rows
+    except Exception as e:
+        logger.warning("broad chunk %d download failed for %s: %s", chunk_index, instance_id, e)
+        counters.increment("broad_chunk_download_failed")
+        return None
+
+
+def _recover_broad_session(
+    image,
+    client,
+    error: Exception,
+    *,
+    instance_id: str,
+    test_patch: str,
+    fix_patch: str,
+    test_patch_path: str,
+    fix_patch_path: str,
+    files: dict[str, str],
+):
+    """Resurrect a fresh session after a failed broad chunk.
+
+    Cancels the failed op, sleeps, opens a new session, and reapplies both
+    patches. Returns the new session, or ``None`` if recovery fails.
+    """
+    try:
+        m = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", str(error))
+        if m:
+            client._api.cancel_operation(uuid.UUID(m.group(0)))
+    except Exception:
+        pass
+    time.sleep(5)
+    try:
+        new_session = image.session()
+        reapply = ""
+        if test_patch:
+            reapply += f"git apply --allow-empty {test_patch_path} || " "{ echo '::PATCH_FAILED::'; exit 97; }; "
+        if fix_patch:
+            reapply += f"git apply --allow-empty {fix_patch_path} || " "{ echo '::PATCH_FAILED::'; exit 97; }; "
+        new_session.run(
+            shell=reapply + "echo RECOVERED",
+            files=files,
+            timeout=120,
+            disposable=False,
+        ).wait()
+        if "::PATCH_FAILED::" in (new_session.stdout or "") or new_session.exit_code:
+            raise RuntimeError("patch reapply failed during recovery")
+        counters.increment("broad_session_recovered")
+        return new_session
+    except Exception as e2:
+        logger.warning("broad recovery failed for %s: %s", instance_id, e2)
+        counters.increment("broad_recovery_failed")
+        return None
+
+
+def _run_broad_phase(
+    session,
+    image,
+    client,
+    *,
+    instance_id: str,
+    test_patch: str,
+    fix_patch: str,
+    test_patch_path: str,
+    fix_patch_path: str,
+    files: dict[str, str],
+    common_env: dict[str, str],
+    broad_trace_prefix: str,
+    workdir_path: Path,
+    timeout: float,
+) -> tuple[dict[str, dict], bool, bool]:
+    """Phase 3: discover all repo tests and trace them in fixed-size chunks.
+
+    Returns ``(rows, complete, download_failed)``. ``complete=True`` means
+    every chunk both ran and downloaded successfully.
+    """
+    try:
+        session.run(
+            shell="find . -name 'test_*.py' -o -name '*_test.py' | sort",
+            timeout=60,
+            disposable=False,
+        ).wait()
+        all_test_files = [f.strip() for f in (session.stdout or "").strip().split("\n") if f.strip().endswith(".py")]
+        chunks = [all_test_files[i : i + BROAD_CHUNK_SIZE] for i in range(0, len(all_test_files), BROAD_CHUNK_SIZE)]
+    except Exception as e:
+        logger.warning("broad discovery failed for %s: %s", instance_id, e)
+        counters.increment("broad_discovery_failed")
+        return {}, False, False
+
+    rows: dict[str, dict] = {}
+    download_failed = False
+    completed = 0
+    for ci, chunk in enumerate(chunks):
+        chunk_trace = f"{broad_trace_prefix}_{ci}.jsonl"
+        chunk_files = " ".join(shlex.quote(f) for f in chunk)
+        chunk_shell = (
+            f"pytest {BROAD_PYTEST_FLAGS} {chunk_files}; rc=$?; "
+            f"echo '{TRACE_META_MARKER}'; "
+            f"wc -lc {chunk_trace} 2>/dev/null || echo 'no-trace'; "
+            f"exit $rc"
+        )
+        try:
+            _run_with_retry(
+                session,
+                shell=chunk_shell,
+                env={**common_env, "TRACER_OUTPUT": chunk_trace},
+                files=None,
+                timeout=timeout,
+                disposable=False,
+            )
+        except Exception as e:
+            err_str = str(e)
+            # 409 'Operation already completed' = chunk finished server-side,
+            # we just lost the cancel race. Try the download to see if the
+            # trace is there; session is NOT poisoned, no recovery needed.
+            if "status=409" in err_str and "already completed" in err_str.lower():
+                counters.increment("broad_chunk_409_race")
+                chunk_rows = _download_broad_chunk(
+                    session,
+                    chunk_trace=chunk_trace,
+                    workdir_path=workdir_path,
+                    chunk_index=ci,
+                    instance_id=instance_id,
+                )
+                if chunk_rows is not None:
+                    rows.update(chunk_rows)
+                    completed += 1
+                    counters.increment("broad_chunk_409_recovered")
+                else:
+                    download_failed = True
+                continue
+            logger.warning("broad chunk %d failed for %s: %s", ci, instance_id, e)
+            counters.increment("broad_chunk_failed")
+            if "TimedOut" not in type(e).__name__ and "StateError" not in type(e).__name__:
+                continue
+            session = _recover_broad_session(
+                image,
+                client,
+                e,
+                instance_id=instance_id,
+                test_patch=test_patch,
+                fix_patch=fix_patch,
+                test_patch_path=test_patch_path,
+                fix_patch_path=fix_patch_path,
+                files=files,
+            )
+            if session is None:
+                break
+            continue
+
+        chunk_rows = _download_broad_chunk(
+            session, chunk_trace=chunk_trace, workdir_path=workdir_path, chunk_index=ci, instance_id=instance_id
+        )
+        if chunk_rows is not None:
+            rows.update(chunk_rows)
+            completed += 1
+        else:
+            download_failed = True
+
+    complete = completed == len(chunks) and not download_failed
+    return rows, complete, download_failed
+
+
+def _determine_status(
+    *,
+    post_patch_ok: bool,
+    pre_download_failed: bool,
+    post_download_failed: bool,
+    broad_download_failed: bool,
+    broad_complete: bool,
+) -> str:
+    if not post_patch_ok:
+        return "post_patch_failed"
+    if pre_download_failed or post_download_failed or broad_download_failed:
+        return "trace_download_failed"
+    if not broad_complete:
+        return "broad_partial"
+    return "ok"
+
+
+# ---------------------------------------------------------------------------
 # The per-row map function
 # ---------------------------------------------------------------------------
 
@@ -235,7 +537,6 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
 
     client = _client()
 
-    # Pull image.
     try:
         image = client.images.oci(_oci_ref(image_name), timeout=timeout)
     except Exception as e:
@@ -248,18 +549,6 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
     test_patch_path = "/tmp/_test.patch"
     fix_patch_path = "/tmp/_fix.patch"
     broad_trace_prefix = "/tmp/trace_broad"
-
-    def phase_cmd(trace_path: str, apply_patch: str | None) -> str:
-        apply_line = (
-            f"git apply --allow-empty {apply_patch} || " "{ echo '::PATCH_FAILED::'; exit 97; }; " if apply_patch else ""
-        )
-        injected = test_cmd.replace("pytest", "pytest --continue-on-collection-errors", 1)
-        return (
-            f"{apply_line}{injected}; rc=$?; "
-            f"echo '{TRACE_META_MARKER}'; "
-            f"wc -lc {trace_path} 2>/dev/null || echo 'no-trace'; "
-            f"exit $rc"
-        )
 
     common_env, files = _tracer_injection()
 
@@ -288,208 +577,67 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
     workdir_path = Path(workdir)
 
     try:
-        # ----- Phase 1: pre-patch trace ------------------------------------
-        try:
-            _run_with_retry(
-                session,
-                shell=phase_cmd(pre_trace_path, test_patch_path if test_patch else None),
-                env={**common_env, "TRACER_OUTPUT": pre_trace_path},
-                files=files,
-                timeout=timeout,
-                disposable=False,
-            )
-        except Exception as e:
-            logger.warning("pre-phase failed for %s: %s", instance_id, e)
-            counters.increment("instances_failed_pre")
+        pre_result = _run_pre_phase(
+            session,
+            instance_id=instance_id,
+            test_cmd=test_cmd,
+            test_patch=test_patch,
+            test_patch_path=test_patch_path,
+            pre_trace_path=pre_trace_path,
+            common_env=common_env,
+            files=files,
+            workdir_path=workdir_path,
+            timeout=timeout,
+        )
+        if pre_result is None:
             return
-        pre_stdout = session.stdout or ""
-
-        pre_jsonl = workdir_path / "pre.jsonl"
-        pre_rows: dict[str, dict] = {}
-        try:
-            session.download(pre_trace_path, pre_jsonl)
-            pre_rows = _jsonl_to_rows(pre_jsonl)
-            pre_jsonl.unlink(missing_ok=True)
-        except Exception as e:
-            logger.warning("pre download failed for %s: %s", instance_id, e)
-            counters.increment("pre_download_failed")
-            pre_download_failed = True
-        else:
-            pre_download_failed = False
-
+        pre_rows, pre_stdout, pre_download_failed = pre_result
         if "::PATCH_FAILED::" in pre_stdout:
             counters.increment("instances_failed_test_patch")
             return
 
-        # ----- Phase 2: post-patch trace -----------------------------------
-        post_stdout = ""
-        post_patch_ok = False
-        try:
-            _run_with_retry(
-                session,
-                shell=phase_cmd(post_trace_path, fix_patch_path if fix_patch else None),
-                env={**common_env, "TRACER_OUTPUT": post_trace_path},
-                files=None,
-                timeout=timeout,
-                disposable=False,
-            )
-            post_stdout = session.stdout or ""
-            post_patch_ok = "::PATCH_FAILED::" not in post_stdout
-        except Exception as e:
-            logger.warning("post-phase failed for %s: %s", instance_id, e)
+        post_rows, post_patch_ok, post_download_failed = _run_post_phase(
+            session,
+            instance_id=instance_id,
+            test_cmd=test_cmd,
+            fix_patch=fix_patch,
+            fix_patch_path=fix_patch_path,
+            post_trace_path=post_trace_path,
+            common_env=common_env,
+            workdir_path=workdir_path,
+            timeout=timeout,
+        )
 
-        post_jsonl = workdir_path / "post.jsonl"
-        post_rows: dict[str, dict] = {}
-        post_download_failed = False
-        if post_patch_ok:
-            try:
-                session.download(post_trace_path, post_jsonl)
-                post_rows = _jsonl_to_rows(post_jsonl)
-                post_jsonl.unlink(missing_ok=True)
-            except Exception as e:
-                logger.warning("post download failed for %s: %s", instance_id, e)
-                counters.increment("post_download_failed")
-                post_download_failed = True
-
-        # ----- Phase 3: broad ----------------------------------------------
         broad_rows: dict[str, dict] = {}
         broad_complete = False
         broad_download_failed = False
-        chunks: list[list[str]] = []
         if post_patch_ok:
-            try:
-                session.run(
-                    shell="find . -name 'test_*.py' -o -name '*_test.py' | sort",
-                    timeout=60,
-                    disposable=False,
-                ).wait()
-                all_test_files = [
-                    f.strip() for f in (session.stdout or "").strip().split("\n") if f.strip().endswith(".py")
-                ]
-                chunks = [
-                    all_test_files[i : i + BROAD_CHUNK_SIZE] for i in range(0, len(all_test_files), BROAD_CHUNK_SIZE)
-                ]
-                broad_chunks_completed = 0
-                for ci, chunk in enumerate(chunks):
-                    chunk_trace = f"{broad_trace_prefix}_{ci}.jsonl"
-                    chunk_files = " ".join(shlex.quote(f) for f in chunk)
-                    chunk_shell = (
-                        f"pytest {BROAD_PYTEST_FLAGS} {chunk_files}; rc=$?; "
-                        f"echo '{TRACE_META_MARKER}'; "
-                        f"wc -lc {chunk_trace} 2>/dev/null || echo 'no-trace'; "
-                        f"exit $rc"
-                    )
-                    try:
-                        _run_with_retry(
-                            session,
-                            shell=chunk_shell,
-                            env={**common_env, "TRACER_OUTPUT": chunk_trace},
-                            files=None,
-                            timeout=timeout,
-                            disposable=False,
-                        )
-                        chunk_local = workdir_path / f"broad_{ci}.jsonl"
-                        try:
-                            session.download(chunk_trace, chunk_local)
-                            broad_rows.update(_jsonl_to_rows(chunk_local))
-                            chunk_local.unlink(missing_ok=True)
-                        except Exception as dl_e:
-                            logger.warning(
-                                "broad chunk %d download failed for %s: %s",
-                                ci,
-                                instance_id,
-                                dl_e,
-                            )
-                            counters.increment("broad_chunk_download_failed")
-                            broad_download_failed = True
-                        broad_chunks_completed += 1
-                    except Exception as e:
-                        err_str = str(e)
-                        # 409 'Operation already completed' = chunk finished
-                        # server-side, we just lost the race. Try the download;
-                        # session is NOT poisoned, no recovery needed.
-                        if "status=409" in err_str and "already completed" in err_str.lower():
-                            # Cancel raced with completion. Op is in terminal
-                            # state — could be succeeded OR failed. Try the
-                            # download to find out: if trace data is there,
-                            # treat as success; if not, count as a download
-                            # failure and skip recovery (session not poisoned).
-                            counters.increment("broad_chunk_409_race")
-                            chunk_local = workdir_path / f"broad_{ci}.jsonl"
-                            try:
-                                session.download(chunk_trace, chunk_local)
-                                broad_rows.update(_jsonl_to_rows(chunk_local))
-                                chunk_local.unlink(missing_ok=True)
-                                broad_chunks_completed += 1
-                                counters.increment("broad_chunk_409_recovered")
-                            except Exception as dl_e:
-                                logger.warning(
-                                    "broad chunk %d 409 with no trace for %s: %s",
-                                    ci,
-                                    instance_id,
-                                    dl_e,
-                                )
-                                counters.increment("broad_chunk_download_failed")
-                                broad_download_failed = True
-                            continue
-                        logger.warning("broad chunk %d failed for %s: %s", ci, instance_id, e)
-                        counters.increment("broad_chunk_failed")
-                        if "TimedOut" not in type(e).__name__ and "StateError" not in type(e).__name__:
-                            continue
-                        # Cancel + sleep + fresh session + reapply patches.
-                        try:
-                            m = re.search(
-                                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-                                str(e),
-                            )
-                            if m:
-                                client._api.cancel_operation(uuid.UUID(m.group(0)))
-                        except Exception:
-                            pass
-                        time.sleep(5)
-                        try:
-                            session = image.session()
-                            reapply = ""
-                            if test_patch:
-                                reapply += (
-                                    f"git apply --allow-empty {test_patch_path} || "
-                                    "{ echo '::PATCH_FAILED::'; exit 97; }; "
-                                )
-                            if fix_patch:
-                                reapply += (
-                                    f"git apply --allow-empty {fix_patch_path} || "
-                                    "{ echo '::PATCH_FAILED::'; exit 97; }; "
-                                )
-                            session.run(
-                                shell=reapply + "echo RECOVERED",
-                                files=files,
-                                timeout=120,
-                                disposable=False,
-                            ).wait()
-                            if "::PATCH_FAILED::" in (session.stdout or "") or session.exit_code:
-                                raise RuntimeError("patch reapply failed during recovery")
-                            counters.increment("broad_session_recovered")
-                        except Exception as e2:
-                            logger.warning("broad recovery failed for %s: %s", instance_id, e2)
-                            counters.increment("broad_recovery_failed")
-                            break
-                broad_complete = broad_chunks_completed == len(chunks) and not broad_download_failed
-            except Exception as e:
-                logger.warning("broad discovery failed for %s: %s", instance_id, e)
-                counters.increment("broad_discovery_failed")
+            broad_rows, broad_complete, broad_download_failed = _run_broad_phase(
+                session,
+                image,
+                client,
+                instance_id=instance_id,
+                test_patch=test_patch,
+                fix_patch=fix_patch,
+                test_patch_path=test_patch_path,
+                fix_patch_path=fix_patch_path,
+                files=files,
+                common_env=common_env,
+                broad_trace_prefix=broad_trace_prefix,
+                workdir_path=workdir_path,
+                timeout=timeout,
+            )
 
-        # ----- Determine status ---------------------------------------------
-        if not post_patch_ok:
-            status = "post_patch_failed"
-        elif pre_download_failed or post_download_failed or broad_download_failed:
-            status = "trace_download_failed"
-        elif not broad_complete:
-            status = "broad_partial"
-        else:
-            status = "ok"
+        status = _determine_status(
+            post_patch_ok=post_patch_ok,
+            pre_download_failed=pre_download_failed,
+            post_download_failed=post_download_failed,
+            broad_download_failed=broad_download_failed,
+            broad_complete=broad_complete,
+        )
         counters.increment(f"status_{status}")
 
-        # ----- Yield rows ---------------------------------------------------
+        # Affected rows: tests touched by either pre or post phase.
         affected_ids = sorted(set(pre_rows) | set(post_rows))
         for tid in affected_ids:
             pr = pre_rows.get(tid) or {}
@@ -517,6 +665,7 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
                 "status": status,
             }
 
+        # Broad rows: every other test in the repo, post-patch only.
         affected_set = set(affected_ids)
         for tid, rec in sorted(broad_rows.items()):
             if tid in affected_set:
