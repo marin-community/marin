@@ -485,15 +485,17 @@ class RemoteClusterClient:
 
         return call_with_retry("get_autoscaler_status", _call)
 
-    def report_task_status_text(self, task_id: JobName, status_text_md: str) -> None:
-        """Push a markdown status string to the controller for UI display.
+    def report_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
+        """Push markdown status text to the controller for UI display.
 
         Args:
             task_id: Full task ID of the currently-running task.
-            status_text_md: Human-readable markdown status string.
+            detail_md: Full markdown for the task detail page.
+            summary_md: Short single-line summary for the task list table.
         """
         request = job_pb2.SetTaskStatusTextRequest(
             task_id=task_id.to_wire(),
-            status_text_md=status_text_md,
+            status_text_detail_md=detail_md,
+            status_text_summary_md=summary_md,
         )
         self._client.set_task_status_text(request)
