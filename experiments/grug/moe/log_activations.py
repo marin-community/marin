@@ -41,12 +41,19 @@ def _forward_with_activations(
     token_ids: jax.Array,
 ) -> dict[str, np.ndarray]:
     """Run forward pass, capturing activations at every sublayer."""
+    import levanter.grug.sharding as sharding_mod
+
     import experiments.grug.moe.model as model_mod
     from levanter.grug.attention import reference_attention
 
-    # Use reference attention to avoid splash attention sharding issues
-    _orig_attention = model_mod.attention
+    # Monkey-patch for single-device inference:
+    # 1. Reference attention instead of splash (avoids Explicit axis closure error)
+    # 2. No-op reshard/unshard (avoids sharding conflicts on single device)
+    # 3. No-op batch_spec (avoids sharding on batch dim)
     model_mod.attention = lambda q, k, v, mask: reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    model_mod.reshard = lambda x, *a, **kw: x
+    model_mod._batch_spec = lambda: None
+    sharding_mod.unshard = lambda x: x
 
     cfg = model.config
 
@@ -225,16 +232,6 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
             mesh=explicit_mesh,
         )
         model = mp.cast_to_compute(model)
-
-    # Auto mesh for forward pass — model internally uses unshard/reshard which need a mesh,
-    # but Explicit axes cause sharding conflicts in attention. Replicate params on Auto mesh.
-    from jax.sharding import NamedSharding, PartitionSpec
-
-    auto_mesh = create_mesh_from_axis_specs(**mesh_kw)
-    replicated = NamedSharding(auto_mesh, PartitionSpec())
-    model = jax.tree.map(lambda x: jax.device_put(x, replicated) if hasattr(x, "sharding") else x, model)
-
-    with haliax.partitioning.set_mesh(auto_mesh):
         # 1. Custom text (if provided)
         if config.text:
             print("\n=== Custom text ===")
