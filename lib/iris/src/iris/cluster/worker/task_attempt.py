@@ -689,14 +689,6 @@ class TaskAttempt:
         )
         env = dict(iris_env)
 
-        # Expose the worker's region so child jobs can inherit a region
-        # constraint (e.g. when the parent holds a reservation).
-        from iris.cluster.constraints import WellKnownAttribute
-
-        region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
-        if region_attr and region_attr.string_value:
-            env["IRIS_WORKER_REGION"] = region_attr.string_value
-
         env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
 

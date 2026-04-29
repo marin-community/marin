@@ -8,13 +8,19 @@ This file represents the best practices for each stage of the pipeline.
 import dataclasses
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import timedelta
 from functools import lru_cache
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 import jmp
+import levanter.main.train_lm as levanter_train_lm
 from fray import ResourceConfig
+from fray import client as fray_client
+from fray.types import Entrypoint, JobRequest, create_environment
+from marin.execution.dag import _resolve_step_output_path, materialize, resolve_local_placeholders
+from marin.execution.remote import _sanitize_job_name, remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -58,10 +64,15 @@ from marin.processing.tokenize import (
 )
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
 from marin.training.training import (
+    DEFAULT_CHECKPOINTS_PATH,
+    DEFAULT_HF_CHECKPOINTS_PATH,
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
+    _apply_env_to_process,
+    resolve_training_env,
     run_levanter_train_dpo,
     run_levanter_train_lm,
+    temporary_checkpoint_base_path,
 )
 
 from experiments.evals.task_configs import CORE_TASKS
@@ -524,9 +535,342 @@ def default_train(
             f"= {total_examples * train_length} tokens."
         ),
         fn=run_levanter_train_lm,
+        # Populate the step-level resources so submit_step_to_iris can dispatch the training job.
+        resources=train_config.resources,
         config=config,
         override_output_path=override_output_path,
     )
+
+
+ConfigT = TypeVar("ConfigT")
+
+
+@dataclass(frozen=True)
+class TrainingPlan(Generic[ConfigT]):
+    """A fully-specified training run, ready to submit.
+
+    Built locally in the entrypoint by ``prepare_train`` (or an analogous
+    builder such as ``prepare_grug_trial``). Submitted to a TPU worker by
+    ``run_train``. The TPU worker runs the trainer directly — no nested job
+    submit, no ``ExecutorStep`` wrapper around training.
+
+    Fields:
+        name: human-readable identifier; used for the Iris job name and as a
+            component of ``output_path``.
+        output_path: concrete GCS path under which the trainer writes
+            checkpoints, logs, and final artifacts. Stable across re-submissions
+            of the same plan (the trainer resumes from checkpoints there).
+        train_config: the trainer's config object. May contain
+            ``InputName(step=...)`` placeholders pointing at upstream data
+            ExecutorSteps; those are resolved by ``materialize`` on the worker.
+        worker_fn: the worker entrypoint that consumes the resolved config —
+            e.g. ``levanter.main.train_lm.main`` for Levanter LM training, or
+            ``run_grug`` for the grug template. Must be a top-level function
+            (so Fray can pickle and import it).
+        resources: TPU/GPU/CPU resources to request from Iris.
+        env_vars: env vars to inject into the Iris worker container at startup.
+            Resolved in the caller's process so values like ``GIT_COMMIT`` and
+            ``WANDB_API_KEY`` come from the user's submission environment.
+    """
+
+    name: str
+    output_path: str
+    train_config: ConfigT
+    worker_fn: Callable[[ConfigT], None]
+    resources: ResourceConfig
+    env_vars: dict[str, str]
+
+
+def _compute_training_output_path(
+    name: str,
+    config: Any,
+    *,
+    override_output_path: str | None = None,
+) -> str:
+    """Compute the concrete output path a training run will write to.
+
+    Uses the executor's version-hashing pass via a temporary internal
+    ``ExecutorStep`` whose ``config`` field carries the same dependency graph
+    as the real run. ``Executor.compute_version`` walks the dependency graph
+    and assembles the version hash without submitting jobs or writing to GCS,
+    so this is side-effect free.
+    """
+    sentinel = ExecutorStep(
+        name=os.path.join("checkpoints", name),
+        fn=lambda c: None,
+        config=config,
+        override_output_path=override_output_path,
+    )
+    return _resolve_step_output_path(sentinel)
+
+
+def _bake_output_path_into_train_config(
+    train_config: TrainLmConfig,
+    output_path: str,
+) -> TrainLmConfig:
+    """Wire the concrete ``output_path`` into the trainer's checkpointer + HF
+    save path, mirroring ``_update_config_to_use_out_path`` from training.py.
+
+    The legacy ``TrainLmOnPodConfig`` carries ``output_path`` as a separate
+    field and applies these mutations on the worker; the new path bakes them
+    into the ``TrainLmConfig`` directly so the worker can run Levanter without
+    further config wrangling.
+    """
+    trainer = dataclasses.replace(
+        train_config.trainer,
+        checkpointer=dataclasses.replace(
+            train_config.trainer.checkpointer,
+            base_path=os.path.join(output_path, DEFAULT_CHECKPOINTS_PATH),
+            temporary_base_path=temporary_checkpoint_base_path(output_path),
+            # Output path already encodes the run identity; do NOT also append
+            # the run id again or checkpoints land at .../<run_id>/<run_id>/...
+            append_run_id_to_base_path=False,
+        ),
+    )
+    return dataclasses.replace(
+        train_config,
+        trainer=trainer,
+        hf_save_path=os.path.join(output_path, DEFAULT_HF_CHECKPOINTS_PATH),
+    )
+
+
+def _impute_run_id(output_path: str) -> str:
+    """Pick a run id for the trainer.
+
+    Mirrors ``_enforce_run_id`` in training.py: prefer ``RUN_ID`` from env,
+    else the basename of the output path. This keeps the run id stable across
+    preemption so Levanter's checkpoint resume picks up where it left off.
+    """
+    run_id = os.environ.get("RUN_ID")
+    if run_id:
+        return run_id
+    return os.path.basename(output_path.rstrip("/"))
+
+
+def prepare_train(
+    name: str,
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    model_config: LmConfig,
+    train_config: SimpleTrainConfig,
+    *,
+    tags: Sequence[str] = (),
+    use_default_validation: bool = True,
+    eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    wandb_name: str | None = None,
+    wandb_group: str | None = None,
+    override_output_path: str | None = None,
+) -> TrainingPlan[TrainLmConfig]:
+    """Build a ``TrainingPlan`` from the same arguments ``default_train`` accepts.
+
+    Does NOT submit anything; the caller invokes ``run_train(plan)`` to submit.
+
+    Behaviour mirrors ``default_train`` (including the ``train_seq_len``,
+    optimizer, eval harness, wandb tagging, mixture/validation handling). The
+    differences:
+
+      - No ``TrainLmOnPodConfig`` wrapper is created. The plan's
+        ``train_config`` is a Levanter ``TrainLmConfig`` directly.
+      - The concrete ``output_path`` is computed locally via
+        ``_compute_training_output_path`` and baked into the trainer's
+        checkpointer / HF save path here, rather than at the worker.
+      - Env vars are resolved in the caller's process via
+        ``resolve_training_env``, so ``GIT_COMMIT`` / ``WANDB_API_KEY`` /
+        ``FERRY_DATE`` reflect the submission environment.
+    """
+    pretraining_data = _prepare_data_config(tokenized, use_default_validation)
+
+    if wandb_group is None:
+        wandb_group = os.environ.get("WANDB_GROUP")
+
+    name = _truncate_wandb_name(name)
+
+    if eval_harness_tasks:
+        harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
+    else:
+        harness_config = None
+
+    steps_per_export = train_config.steps_per_export
+    steps_per_export_hf = _resolve_hf_export_steps(train_config.steps_per_hf_export, steps_per_export)
+
+    model_averaging = None
+    if train_config.ema_beta is not None:
+        from levanter.optim.model_averaging import EmaModelAveragingConfig
+
+        model_averaging = EmaModelAveragingConfig(beta=train_config.ema_beta)
+
+    if train_config.per_device_eval_parallelism is None:
+        per_device_eval_parallelism = -1
+    else:
+        per_device_eval_parallelism = train_config.per_device_eval_parallelism
+
+    checkpoint_path_to_load_from = train_config.initialize_from_checkpoint_path
+    hf_checkpoint_path_to_load_from = train_config.initialize_from_hf
+
+    if hf_checkpoint_path_to_load_from is not None and checkpoint_path_to_load_from is not None:
+        raise ValueError("Cannot specify both initialize_from_checkpoint_path and initialize_from_hf")
+
+    train_length = _validate_train_length(train_config.train_seq_len, model_config)
+
+    inner_config = TrainLmConfig(
+        data=pretraining_data,
+        trainer=TrainerConfig(
+            tracker=WandbConfig(
+                project="marin",
+                name=wandb_name,
+                tags=[*tags],
+                group=wandb_group,
+                replicate_path=this_output_path(),
+            ),
+            mp=jmp.get_policy("p=f32,c=bfloat16"),
+            train_batch_size=train_config.train_batch_size,
+            per_device_parallelism=train_config.per_device_parallelism,
+            num_train_steps=train_config.num_train_steps,
+            steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
+            checkpointer=CheckpointerConfig(
+                save_interval=timedelta(minutes=10),
+                keep=_checkpoint_keep(steps_per_export),
+            ),
+            model_averaging=model_averaging,
+            mesh=MeshConfig(
+                axes={"replica": 1, "data": -1, "model": train_config.tensor_parallel_size},
+                compute_mapping={
+                    "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                    "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                },
+            ),
+            allow_partial_checkpoint=train_config.allow_partial_checkpoint,
+            per_device_eval_parallelism=per_device_eval_parallelism,
+            max_eval_batches=train_config.max_eval_batches,
+            allow_nondivisible_batch_size=True,
+            quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
+            initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
+            watch=train_config.watch,
+            profiler=train_config.profiler,
+            use_explicit_mesh_axes=train_config.explicit_mesh_axes,
+        ),
+        initialize_from_checkpoint_path=(
+            checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
+        ),
+        initialize_from_hf=hf_checkpoint_path_to_load_from or False,
+        pad_tokenizer_to_match_model=train_config.pad_tokenizer_to_match_model,
+        z_loss_weight=train_config.z_loss_weight,
+        train_seq_len=train_length,
+        model=model_config,
+        optimizer=(
+            train_config.optimizer_config
+            if getattr(train_config, "optimizer_config", None) is not None
+            else AdamConfig(
+                learning_rate=train_config.learning_rate,
+                weight_decay=(
+                    train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay
+                ),
+                beta1=(train_config.beta1 if train_config.beta1 is not None else AdamConfig().beta1),
+                beta2=(train_config.beta2 if train_config.beta2 is not None else AdamConfig().beta2),
+                epsilon=(train_config.epsilon if train_config.epsilon is not None else AdamConfig().epsilon),
+                max_grad_norm=(
+                    train_config.max_grad_norm if train_config.max_grad_norm is not None else AdamConfig().max_grad_norm
+                ),
+                warmup=(train_config.warmup if train_config.warmup is not None else AdamConfig().warmup),
+                rewarmup=(train_config.rewarmup if train_config.rewarmup is not None else AdamConfig().rewarmup),
+                decay=(train_config.decay if train_config.decay is not None else AdamConfig().decay),
+                lr_schedule=(
+                    train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule
+                ),
+                cycle_length=train_config.cycle_length,
+                min_lr_ratio=(
+                    train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
+                ),
+                skip_bad_steps=train_config.skip_bad_steps,
+            )
+        ),
+        hf_save_steps=steps_per_export_hf,
+        hf_generation_eos_token_ids=train_config.hf_generation_eos_token_ids,
+        data_seed=train_config.data_seed,
+        eval_harness_steps=train_config.steps_per_task_eval or 10000,
+        eval_harness=harness_config,
+    )
+
+    # Resolve the concrete output_path locally via the executor's hashing pass,
+    # then substitute every OutputName in the config with paths under it. The
+    # data config still carries InputName(step=...) placeholders for upstream
+    # tokenize steps; those are preserved here and resolved by `materialize` on
+    # the worker.
+    resolved_output_path = _compute_training_output_path(
+        name,
+        inner_config,
+        override_output_path=override_output_path,
+    )
+    inner_config = resolve_local_placeholders(inner_config, resolved_output_path)
+
+    # Wire the trainer's checkpointer + HF save path. Same semantics as
+    # `_update_config_to_use_out_path` but applied here in the caller's
+    # process rather than on the worker.
+    inner_config = _bake_output_path_into_train_config(inner_config, resolved_output_path)
+
+    # Stamp the run id so Levanter's checkpoint resume picks up the same
+    # output across preemption.
+    run_id = _impute_run_id(resolved_output_path)
+    inner_config = dataclasses.replace(
+        inner_config,
+        trainer=dataclasses.replace(inner_config.trainer, id=run_id),
+    )
+
+    return TrainingPlan(
+        name=os.path.join("checkpoints", name),
+        output_path=resolved_output_path,
+        train_config=inner_config,
+        worker_fn=levanter_train_lm.main,
+        resources=train_config.resources,
+        env_vars=dict(train_config.env_vars or {}),
+    )
+
+
+def run_train(plan: TrainingPlan) -> None:
+    """Submit ``plan`` to Iris as a single job and block until completion.
+
+    Resolves the full env (GIT_COMMIT, JAX_COMPILATION_CACHE_DIR, accelerator
+    defaults, run metadata) in this process so the values reflect the user's
+    submission environment, then submits ``_run_training_on_worker`` which
+    (a) applies the env to ``os.environ``, (b) calls ``materialize`` on the
+    train_config to resolve upstream data ExecutorSteps under the worker's
+    region, and (c) invokes ``plan.worker_fn(train_config)`` directly. No
+    nested submit, no ExecutorStep wrapper around training.
+    """
+    env = resolve_training_env(plan.env_vars, plan.resources)
+
+    job_request = JobRequest(
+        name=_sanitize_job_name(plan.name),
+        entrypoint=Entrypoint.from_callable(
+            _run_training_on_worker,
+            args=[plan.worker_fn, plan.train_config, plan.output_path, env],
+        ),
+        resources=plan.resources,
+        environment=create_environment(env_vars=env),
+    )
+
+    client = fray_client.current_client()
+    handle = client.submit(job_request)
+    handle.wait(raise_on_failure=True)
+
+
+def _run_training_on_worker(
+    worker_fn: Callable[[Any], None],
+    train_config: Any,
+    output_path: str,
+    env_vars: dict[str, str],
+) -> None:
+    """Worker entrypoint for ``run_train``. Top-level so Fray can pickle it.
+
+    Applies env vars, materialises any upstream ExecutorSteps embedded in
+    ``train_config`` under the worker's region, then runs ``worker_fn``
+    directly. The caller is responsible for stripping any ``OutputName``
+    placeholders from ``train_config`` before submission (``prepare_train`` /
+    ``prepare_grug_trial`` do this); ``output_path`` is passed through to
+    ``materialize`` only as a sanity-check anchor.
+    """
+    _apply_env_to_process(env_vars)
+    train_config = materialize(train_config, output_path=output_path)
+    worker_fn(train_config)
 
 
 def default_sft(

@@ -58,8 +58,8 @@ def build_common_iris_env(
     """Build the Iris system env vars shared by both worker and k8s paths.
 
     This is the single source of truth for env vars derived from a
-    RunTaskRequest. Path-specific additions (IRIS_WORKER_ID, IRIS_ADVERTISE_HOST,
-    IRIS_WORKER_REGION) are layered on by each caller.
+    RunTaskRequest. Path-specific additions (IRIS_WORKER_ID, IRIS_ADVERTISE_HOST)
+    are layered on by each caller.
 
     All arguments are keyword-only primitives extracted from the proto so that
     callers from both paths can supply them without importing the full request.

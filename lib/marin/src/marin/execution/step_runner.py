@@ -18,21 +18,23 @@ makes the control flow easy to follow and debug.
 from __future__ import annotations
 
 import contextvars
-import dataclasses
+from datetime import timedelta
 import json
 import logging
 import os
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from typing import Any
 
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray.client import JobHandle, JobStatus
-from fray.local_backend import LocalJobHandle
 from rigging.filesystem import open_url, url_to_fs
 
+from fray import client as fray_client
+from fray.client import JobHandle, JobStatus
+from fray.local_backend import LocalJobHandle
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from marin.execution.artifact import Artifact
 
 # Re-export for backward compatibility
@@ -46,7 +48,7 @@ from marin.execution.executor_step_status import (
     step_lock,
     worker_id,
 )
-from marin.execution.remote import RemoteCallable
+from marin.execution.remote import RemoteCallable, _sanitize_job_name
 from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
 
@@ -343,7 +345,9 @@ def run_step(step: StepSpec) -> None:
             # 3. Run the function
             try:
                 t0 = time.monotonic()
-                if isinstance(step.fn, RemoteCallable):
+                if step.resources is not None:
+                    _run_iris_job(step, output_path)
+                elif isinstance(step.fn, RemoteCallable):
                     _run_remote_step(step, output_path)
                 else:
                     result = step.fn(output_path)  # pyrefly: ignore[not-callable]
@@ -360,20 +364,65 @@ def run_step(step: StepSpec) -> None:
         logger.info(f"Step {step_label} completed by another worker")
 
 
-def _run_remote_step(step: StepSpec, output_path: str) -> None:
-    """Submit the step's raw function to Fray with artifact saving inside the job.
+def _submit_iris_job(
+    step: StepSpec,
+    output_path: str,
+    raw_fn: Callable[[str], Any],
+    resources: ResourceConfig,
+    *,
+    env_vars: dict[str, str] | None = None,
+    pip_dependency_groups: list[str] | None = None,
+) -> None:
+    """Submit ``raw_fn(output_path)`` as a Fray job and block until completion.
 
-    Fray jobs can't return values back to the executor, so the artifact
-    is saved inside the remote job itself.
+    ``raw_fn`` is wrapped to also persist its return value via
+    :func:`Artifact.save` inside the submitted job, since Fray jobs cannot
+    return values back to the caller.
+    """
+
+    def _fn_with_artifact_save() -> None:
+        result = raw_fn(output_path)
+        Artifact.save(result, output_path)
+
+    job_name = _sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
+    request = JobRequest(
+        name=job_name,
+        entrypoint=Entrypoint.from_callable(_fn_with_artifact_save),
+        resources=resources,
+        environment=create_environment(
+            extras=pip_dependency_groups or [],
+            env_vars=env_vars or {},
+        ),
+    )
+    handle = fray_client.current_client().submit(request)
+    handle.wait(raise_on_failure=True)
+
+
+def _run_iris_job(step: StepSpec, output_path: str) -> None:
+    """Dispatch a step with explicit ``resources`` as a Fray job.
+
+    ``step.resources`` takes precedence over any resources carried by a
+    :class:`RemoteCallable` ``fn`` — when both are present, the explicit
+    field wins and the inner callable is unwrapped.
+    """
+    assert step.resources is not None
+    raw_fn = step.fn.fn if isinstance(step.fn, RemoteCallable) else step.fn
+    assert raw_fn is not None, f"Step {step.name} has no callable"
+    _submit_iris_job(step, output_path, raw_fn, step.resources)
+
+
+def _run_remote_step(step: StepSpec, output_path: str) -> None:
+    """Submit the step's ``RemoteCallable`` to Fray (legacy ``@remote`` path).
+
+    Carries the wrapper's ``env_vars`` and ``pip_dependency_groups`` through
+    to the submitted job's environment.
     """
     assert isinstance(step.fn, RemoteCallable)
-    raw_fn = step.fn.fn
-
-    def _fn_with_artifact_save(out_path: str):
-        result = raw_fn(out_path)  # pyrefly: ignore[not-callable]
-        Artifact.save(result, out_path)
-
-    job_name = f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}"
-    remote_callable = step.fn.named(job_name)
-    job = dataclasses.replace(remote_callable, fn=_fn_with_artifact_save)
-    job(output_path)
+    _submit_iris_job(
+        step,
+        output_path,
+        step.fn.fn,
+        step.fn.resources,
+        env_vars=step.fn.env_vars,
+        pip_dependency_groups=step.fn.pip_dependency_groups,
+    )

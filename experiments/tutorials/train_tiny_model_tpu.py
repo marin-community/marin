@@ -10,9 +10,9 @@ For GPU training, see train_tiny_model_gpu.py
 
 from fray import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main, versioned
+from marin.execution.executor import versioned
 
-from experiments.defaults import default_tokenize, default_train
+from experiments.defaults import default_tokenize, prepare_train, run_train
 from experiments.llama import llama_30m
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
@@ -50,8 +50,11 @@ small_train_config = SimpleTrainConfig(
     weight_decay=0.1,
 )
 
-# 4. Train the model
-tinystories_model_30m = default_train(
+# 4. Build a training plan. Training is NOT an ExecutorStep — it's a plain
+# Python plan that `run_train` submits as a single Iris job. The TPU worker
+# materializes upstream tokenize ExecutorSteps in its own region, then runs
+# Levanter's `train_lm.main` directly.
+tinystories_model_30m = prepare_train(
     name="marin-tinystories-30m",
     # Steps can depend on other steps: tinystories_model_30m depends on tinystories_tokenized
     tokenized=tinystories_tokenized,
@@ -67,8 +70,4 @@ tinystories_model_30m = default_train(
 )
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
-            tinystories_model_30m,
-        ]
-    )
+    run_train(tinystories_model_30m)

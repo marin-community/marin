@@ -37,7 +37,9 @@ from iris.cluster.client import (
     get_job_info,
     resolve_job_user,
 )
-from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
+from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
+from iris.cluster.constraints import Constraint, merge_constraints
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
 from iris.cluster.types import (
@@ -644,15 +646,6 @@ class IrisClient:
                 constraints = []
             else:
                 constraints = merge_constraints(parent_constraints, constraints)
-
-            # Always inherit the parent's region unless the child already has
-            # an explicit region constraint.  This applies even when the caller
-            # passes constraints=[] to clear other inherited constraints —
-            # region pinning ensures children stay co-located with the
-            # reservation's claimed workers.
-            if job_info and job_info.worker_region and not any(c.key == WellKnownAttribute.REGION for c in constraints):
-                inherited_region = region_constraint([job_info.worker_region])
-                constraints = [*constraints, inherited_region]
 
         # Convert to wire format
         resources_proto = resources.to_proto()

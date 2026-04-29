@@ -97,7 +97,7 @@ from urllib.parse import urlparse
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray.types import TpuConfig
+from fray.types import ResourceConfig, TpuConfig
 from iris.cluster.constraints import WellKnownAttribute
 from rigging.filesystem import (
     collect_gcs_paths,
@@ -480,7 +480,6 @@ def _component_tpu_pins(
                 adjacency[step].add(dep)
                 adjacency[dep].add(step)
 
-    inherited_region_pin = _iris_worker_region_pin()
     chosen_region_by_step: dict[ExecutorStep, str | None] = {step: None for step in steps}
     visited: set[ExecutorStep] = set()
 
@@ -524,16 +523,7 @@ def _component_tpu_pins(
         if not component_regions:
             continue
 
-        if inherited_region_pin is not None:
-            chosen_region = inherited_region_pin.lower()
-            if chosen_region not in component_regions:
-                component_step_names = ", ".join(sorted(s.name for s in component))
-                raise ValueError(
-                    f"TPU-connected executor steps {component_step_names} require one of "
-                    f"{sorted(component_regions)}, but inherited Iris region is {chosen_region!r}."
-                )
-        else:
-            chosen_region = sorted(component_regions)[0]
+        chosen_region = sorted(component_regions)[0]
 
         for component_step in component:
             chosen_region_by_step[component_step] = chosen_region
@@ -552,15 +542,6 @@ def _iris_backend_is_active() -> bool:
     return isinstance(client, FrayIrisClient)
 
 
-def _iris_worker_region_pin() -> str | None:
-    from iris.cluster.client.job_info import get_job_info
-
-    job_info = get_job_info()
-    if job_info is None:
-        return None
-    return job_info.worker_region
-
-
 def _maybe_attach_inferred_region_constraint(
     *,
     step_name: str,
@@ -573,8 +554,6 @@ def _maybe_attach_inferred_region_constraint(
 ) -> RemoteCallable:
     if not _iris_backend_is_active():
         return remote_fn
-
-    inherited_region_pin = _iris_worker_region_pin()
 
     allowed_regions = _allowed_regions_for_step(
         step_name=step_name,
@@ -591,36 +570,15 @@ def _maybe_attach_inferred_region_constraint(
                 f"Executor step {step_name!r} cannot be pinned to {pinned_region!r}; "
                 f"allowed regions are {sorted(allowed_regions)}."
             )
-        if inherited_region_pin is not None and inherited_region_pin.lower() != pinned_region:
-            raise ValueError(
-                f"Executor step {step_name!r} must run in {pinned_region!r}, "
-                f"but inherited Iris region is {inherited_region_pin.lower()!r}."
-            )
         return dataclasses.replace(
             remote_fn,
             resources=dataclasses.replace(remote_fn.resources, regions=[pinned_region]),
         )
 
     if remote_fn.resources.regions is not None:
-        if inherited_region_pin is not None and allowed_regions is not None:
-            pinned_region = inherited_region_pin.lower()
-            if pinned_region not in allowed_regions:
-                raise ValueError(
-                    f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
-                    f"but inferred regions are {sorted(allowed_regions)}."
-                )
         return remote_fn
 
     if allowed_regions is None:
-        return remote_fn
-
-    if inherited_region_pin is not None:
-        pinned_region = inherited_region_pin.lower()
-        if pinned_region not in allowed_regions:
-            raise ValueError(
-                f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
-                f"but inferred regions are {sorted(allowed_regions)}."
-            )
         return remote_fn
 
     logger.info(
@@ -732,6 +690,7 @@ def resolve_executor_step(
         deps=deps or [],
         override_output_path=output_path,
         fn=final_fn,
+        resources=step.resources,
     )
 
 
@@ -770,6 +729,15 @@ class ExecutorStep(Generic[ConfigT]):
     override_output_path: str | None = None
     """Specifies the `output_path` that should be used.  Print warning if it
     doesn't match the automatically computed one."""
+
+    resources: ResourceConfig | None = None
+    """If set, this step is submitted as its own Fray job using these
+    resources. ``fn`` is invoked inside the submitted job.
+
+    If ``None``, behavior is determined by ``fn``: a ``RemoteCallable``
+    submits as a Fray job (legacy ``@remote`` path, deprecated); a plain
+    callable runs inline in-process.
+    """
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -1050,6 +1018,16 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
 
     Along the way, compute the list of dependencies.
 
+    Delegates traversal to ``marin.execution.dag.walk_config`` (the same
+    walker that backs ``upstream_steps``); this function consumes the typed
+    events to assemble version-string entries and the (block-on /
+    pseudo-dep) dependency lists. The dep ordering matters: each
+    ``InputName`` with ``step is not None`` gets a ``DEP[i]`` slot in the
+    version string, where ``i`` is the index in the combined
+    ``dependencies + pseudo_dependencies`` list at the moment the dep is
+    discovered. Keeping this assembly here (rather than inside the walker)
+    lets the walker stay generic.
+
     Returns:
         - dependencies: list of `ExecutorStep`s that are dependencies of the
           current step.
@@ -1058,50 +1036,31 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
         - pseudo_dependencies: list of `ExecutorStep`s that are dependencies of the step but that we won't
             actually block on
     """
+    # Local import to break a circular dependency: dag.py imports from this
+    # module at top level, so we cannot import dag at the top of this file.
+    from marin.execution.dag import InputNameEvent, VersionedEvent, walk_config
+
     pseudo_dependencies: list[ExecutorStep] = []
     dependencies: list[ExecutorStep] = []
     version: dict[str, Any] = {}
 
-    def recurse(obj: Any, prefix: str):
-        new_prefix = prefix + "." if prefix else ""
-
-        if isinstance(obj, ExecutorStep):
-            obj = output_path_of(obj, None)
-
-        if isinstance(obj, MirroredValue):
-            recurse(obj.value, prefix)
-            return
-
-        if isinstance(obj, VersionedValue):
-            version[prefix] = obj.value
-        elif isinstance(obj, InputName):
-            # Put string i for the i-th dependency
-            if obj.step is not None:
-                index = len(dependencies) + len(pseudo_dependencies)
-                if not obj.block_on_step:
-                    pseudo_dependencies.append(obj.step)
-                else:
-                    dependencies.append(obj.step)
-                version[prefix] = dependency_index_str(index) + ("/" + obj.name if obj.name else "")
-            else:
-                version[prefix] = obj.name
-        elif is_dataclass(obj):
-            # Recurse through dataclasses
-            for field in fields(obj):
-                value = getattr(obj, field.name)
-                recurse(value, new_prefix + field.name)
-        elif isinstance(obj, list):
-            # Recurse through lists
-            for i, x in enumerate(obj):
-                recurse(x, new_prefix + f"[{i}]")
-        elif isinstance(obj, dict):
-            # Recurse through dicts
-            for i, x in obj.items():
-                if not isinstance(i, str):
-                    raise ValueError(f"dict keys must be strs, but got {i} (type: {type(i)})")
-                recurse(x, new_prefix + i)
-
-    recurse(obj, "")
+    for event in walk_config(obj):
+        if isinstance(event, VersionedEvent):
+            version[event.prefix] = event.value
+            continue
+        assert isinstance(event, InputNameEvent)
+        input_name = event.input_name
+        if input_name.step is None:
+            version[event.prefix] = input_name.name
+            continue
+        # Index is computed at the moment the dep is appended; this is what
+        # gives ``DEP[i]`` its meaning in the version string.
+        index = len(dependencies) + len(pseudo_dependencies)
+        if not input_name.block_on_step:
+            pseudo_dependencies.append(input_name.step)
+        else:
+            dependencies.append(input_name.step)
+        version[event.prefix] = dependency_index_str(index) + ("/" + input_name.name if input_name.name else "")
 
     return _Dependencies(dependencies, pseudo_dependencies, version)
 
@@ -1233,7 +1192,7 @@ class Executor:
         run_only: list[str] | None = None,
         force_run_failed: bool = True,
         max_concurrent: int | None = None,
-    ):
+    ) -> dict["ExecutorStep", str]:
         """
         Run the pipeline of `ExecutorStep`s.
 
@@ -1244,6 +1203,16 @@ class Executor:
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
             max_concurrent: Maximum number of steps to run concurrently. If None, run all ready steps in parallel.
+
+        Returns:
+            The executor's `output_paths` mapping. Each known `ExecutorStep` —
+            including transitive dependencies discovered while walking `steps` —
+            is mapped to the concrete output path computed by `compute_version`.
+            The returned dict is the same `self.output_paths` reference, so its
+            keys may include steps that were not in the originally-passed
+            `steps` list. Callers (e.g. ``materialize``) can use this to
+            substitute placeholder paths in a config without poking at internal
+            executor state.
         """
         if max_concurrent is not None and max_concurrent < 1:
             raise ValueError(f"max_concurrent must be a positive integer, got {max_concurrent}")
@@ -1281,6 +1250,7 @@ class Executor:
             force_run_failed=force_run_failed,
             max_concurrent=max_concurrent,
         )
+        return self.output_paths
 
     def _resolve_steps(self, steps: list[ExecutorStep]) -> list[StepSpec]:
         """Convert computed ExecutorStep state into a flat list of StepSpec."""

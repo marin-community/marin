@@ -6,25 +6,16 @@ import importlib
 import logging
 import os
 import urllib.parse
-from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import TypeVar
 
 import draccus
-from fray import (
-    CpuConfig,
-    Entrypoint,
-    GpuConfig,
-    JobRequest,
-    ResourceConfig,
-    TpuConfig,
-    create_environment,
-    current_client,
-)
+from fray import CpuConfig, ResourceConfig, TpuConfig
 from mergedeep import mergedeep
 from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
 
+from marin.execution.dag import materialize
 from marin.training.run_environment import add_run_env_variables
 
 logger = logging.getLogger(__name__)
@@ -222,25 +213,29 @@ def _disable_xla_autotune_subcache(env: dict) -> None:
     logger.info("XLA sub-caches disabled (compilation cache is remote: %s)", cache_dir)
 
 
-def _prepare_training_run(
-    config: TrainOnPodConfigT,
-) -> tuple[TrainOnPodConfigT, object, dict[str, str], list[str]]:
-    """Shared setup for LM and DPO training: env vars, run ID, config adjustments.
+def resolve_training_env(
+    base_env: dict[str, str] | None,
+    resources: ResourceConfig,
+) -> dict[str, str]:
+    """Resolve the training-side environment dict in the *caller's* process.
 
-    Returns the updated pod config, the ready-to-use train config, the
-    environment dict, and the Fray extras list.
+    Combines the base env from the user (typically ``train_config.env_vars``)
+    with hardware-specific defaults from ``levanter.infra.cli_helpers``, run
+    metadata (GIT_COMMIT, FERRY_DATE, etc. via ``add_run_env_variables``), a
+    JAX compilation cache pointing at ``marin_temp_bucket``, and a guard
+    against XLA's autotune subcache when the cache lives on remote storage.
+
+    The dict is meant to be applied to ``os.environ`` on the training worker
+    via ``_apply_env_to_process``, so values like ``GIT_COMMIT`` and
+    ``WANDB_API_KEY`` carry the user's submission environment forward.
     """
     default_launch_config = _cli_helpers_module().load_config()
 
-    if config.output_path is not None:
-        logger.info(f"Using output path: {config.output_path}")
-        config = _update_config_to_use_out_path(config)
-
     env = _add_default_env_variables(
-        config.env_vars or {},
-        default_launch_config.env_for_accel(config.resources.device.variant),
+        base_env or {},
+        default_launch_config.env_for_accel(resources.device.variant),
     )
-    if isinstance(config.resources.device, TpuConfig):
+    if isinstance(resources.device, TpuConfig):
         _check_for_wandb_key(env)
 
     env = add_run_env_variables(env)
@@ -251,6 +246,24 @@ def _prepare_training_run(
         )
         logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
     _disable_xla_autotune_subcache(env)
+
+    return env
+
+
+def _prepare_training_run(
+    config: TrainOnPodConfigT,
+) -> tuple[TrainOnPodConfigT, object, dict[str, str]]:
+    """Shared setup for LM and DPO training: env vars, run ID, config adjustments.
+
+    Returns the updated pod config, the ready-to-use train config, and the
+    environment dict that callers should merge into ``os.environ`` before
+    invoking the Levanter main.
+    """
+    if config.output_path is not None:
+        logger.info(f"Using output path: {config.output_path}")
+        config = _update_config_to_use_out_path(config)
+
+    env = resolve_training_env(config.env_vars, config.resources)
 
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
@@ -266,41 +279,26 @@ def _prepare_training_run(
     if not isinstance(config.resources.device, CpuConfig):
         _doublecheck_paths(config)
 
-    extras: list[str] = []
-    if isinstance(config.resources.device, TpuConfig):
-        extras.append("tpu")
-    elif isinstance(config.resources.device, GpuConfig):
-        extras.append("gpu")
-
-    return config, train_config, env, extras
+    return config, train_config, env
 
 
-def _submit_training_job(
-    *,
-    job_name: str,
-    main_fn: Callable,
-    train_config: TrainConfigT,
-    resources: ResourceConfig,
-    env: dict[str, str],
-    extras: list[str],
-) -> None:
-    """Submit a Levanter training job to Fray and block until completion."""
-    client = current_client()
-    # Using a constant job name allows restarts to adopt the existing job handle
-    # instead of raising a duplicate name error (adopt_existing=True is the default).
-    job_request = JobRequest(
-        name=job_name,
-        entrypoint=Entrypoint.from_callable(main_fn, args=[train_config]),
-        resources=resources,
-        environment=create_environment(env_vars=env, extras=extras),
-        max_retries_failure=0,
-    )
-    job = client.submit(job_request)
-    job.wait(raise_on_failure=True)
+def _apply_env_to_process(env: dict[str, str]) -> None:
+    """Apply training env vars to ``os.environ`` so Levanter's main reads them.
+
+    The training body now runs inline in the worker process, so additions
+    that ``_prepare_training_run`` computes (JAX compilation cache dir,
+    WANDB_API_KEY, accelerator defaults, run metadata) must be propagated
+    to ``os.environ`` rather than handed off in a child JobRequest. We
+    ``setdefault`` so ambient env (already set by Iris from the parent
+    JobRequest) wins on conflict, matching the previous merge order where
+    ``_prepare_training_run`` only filled in missing keys.
+    """
+    for key, value in env.items():
+        os.environ.setdefault(key, value)
 
 
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
-    """Run the Levanter LM training main function by submitting a job to Fray.
+    """Run the Levanter LM training main function in the current process.
 
     Expects the following env vars (in the process env or ``config.env_vars``):
 
@@ -311,10 +309,11 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     This function makes a number of changes to the config and ensures a few things are set:
     - The run ID is set, or sets a default if not.
     - WANDB_API_KEY is set.
-    - Accelerator-appropriate extras (``tpu``/``gpu``) are selected for the Fray environment.
     - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
-    config, train_config, env, extras = _prepare_training_run(config)
+    # Run any embedded ExecutorStep upstream deps under the worker's region and substitute placeholders.
+    config = materialize(config)
+    config, train_config, env = _prepare_training_run(config)
 
     model_config = train_config.model
     logger.info(
@@ -326,31 +325,15 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         config.resources.device,
     )
 
-    _submit_training_job(
-        job_name="train_lm",
-        main_fn=importlib.import_module("levanter.main.train_lm").main,
-        train_config=train_config,
-        resources=config.resources,
-        env=env,
-        extras=extras,
-    )
+    _apply_env_to_process(env)
+    importlib.import_module("levanter.main.train_lm").main(train_config)
 
 
 def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
-    """Run the Levanter DPO training main function through Fray.
-
-    This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
-    """
-    config, train_config, env, extras = _prepare_training_run(config)
-
-    _submit_training_job(
-        job_name="train_dpo",
-        main_fn=importlib.import_module("levanter.main.train_dpo").main,
-        train_config=train_config,
-        resources=config.resources,
-        env=env,
-        extras=extras,
-    )
+    """Run the Levanter DPO training main function in the current process."""
+    config, train_config, env = _prepare_training_run(config)
+    _apply_env_to_process(env)
+    importlib.import_module("levanter.main.train_dpo").main(train_config)
 
 
 def _doublecheck_paths(config: TrainOnPodConfigT):
