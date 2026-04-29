@@ -171,12 +171,15 @@ def _run_and_save(forward_fn, model_cfg, token_ids: np.ndarray, text: str, outpu
     padded_ids = np.zeros(padded_len, dtype=np.int32)
     padded_ids[:seq_len] = token_ids
 
-    token_ids_jax = jnp.array(padded_ids[None, :], dtype=jnp.int32)
+    # Replicate input across batch dim to match data-sharded mesh (batch must be divisible by num_devices)
+    num_devices = len(jax.devices())
+    batch_ids = np.tile(padded_ids, (num_devices, 1))
+    token_ids_jax = jnp.array(batch_ids, dtype=jnp.int32)
     activations = _forward_with_activations(forward_fn, token_ids_jax)
 
-    # Squeeze batch dim and trim padding
+    # Take first batch element and trim padding
     for key in activations:
-        if activations[key].ndim == 4 and activations[key].shape[1] == 1:
+        if activations[key].ndim == 4:
             activations[key] = activations[key][:, 0, :seq_len, :]
         elif activations[key].ndim == 3:
             activations[key] = activations[key][:, :seq_len, :]
@@ -206,11 +209,11 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
 
     import haliax.partitioning
 
-    # Match the training mesh: Explicit axes, single device
+    # Match the training mesh exactly: all devices, expert=1, data absorbs rest
+    num_devices = len(jax.devices())
     mesh = create_mesh_from_axis_specs(
-        ici_axes={"data": 1, "replica": 1, "model": 1, "expert": 1},
+        ici_axes={"data": num_devices, "replica": 1, "model": 1, "expert": 1},
         dcn_axes={},
-        devices=jax.devices()[:1],
         axis_types=tuple(AxisType.Explicit for _ in range(4)),
     )
     with haliax.partitioning.set_mesh(mesh):
