@@ -1064,16 +1064,17 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       <div v-else class="overflow-x-auto">
         <table class="w-full border-collapse md:table-fixed">
           <colgroup class="hidden md:table-column-group">
-            <col class="w-[4%]" />
-            <col class="w-[9%]" />
-            <col />
-            <col class="w-[6%]" />
-            <col class="w-[5%]" />
-            <col class="w-[13%]" />
-            <col class="w-[8%]" />
-            <col class="w-[4%]" />
-            <col class="w-[10%]" />
-            <col class="w-[11%]" />
+            <col class="w-[4%]" />  <!-- Task -->
+            <col class="w-[9%]" />  <!-- State -->
+            <col />                 <!-- Worker -->
+            <col class="w-[6%]" />  <!-- Mem -->
+            <col class="w-[6%]" />  <!-- Peak Mem -->
+            <col class="w-[5%]" />  <!-- CPU -->
+            <col class="w-[13%]" /> <!-- Started -->
+            <col class="w-[8%]" />  <!-- Duration -->
+            <col class="w-[4%]" />  <!-- Exit -->
+            <col class="w-[10%]" /> <!-- Error -->
+            <col class="w-[11%]" /> <!-- Profiling -->
           </colgroup>
           <thead>
             <tr class="border-b border-surface-border">
