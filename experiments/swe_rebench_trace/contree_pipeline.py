@@ -59,7 +59,7 @@ BROAD_PYTEST_FLAGS = (
     "--continue-on-collection-errors --no-header -rA --tb=line --color=no "
     "-p no:cacheprovider -W ignore::DeprecationWarning"
 )
-DEFAULT_TIMEOUT_S = 3600.0
+DEFAULT_TIMEOUT_S = 600.0  # First-pass: cut heavy-tail shards short, recover via deferred-status follow-up.
 # Output goes under MARIN_PREFIX (set on Iris workers; falls back to /tmp/marin
 # locally). Convention follows datakit: <prefix>/raw/<dataset-name>/.
 DEFAULT_OUTPUT_NAME = "raw/swe-rebench-contree-traces"
@@ -81,6 +81,31 @@ OUTPUT_SCHEMA = pa.schema(
         ("status", pa.string()),
     ]
 )
+
+
+def _deferred_row(instance_id: str, status: str) -> dict:
+    """Sentinel row emitted when a phase fails before producing any traces.
+
+    Without this, an instance that times out on pre-phase would just disappear
+    from the output (the early-return yields nothing). With it, a follow-up
+    pipeline can recover the deferred instance_ids by querying the parquet
+    for ``status IN ('pre_failed', 'session_failed', ...)``.
+    """
+    return {
+        "instance_id": instance_id,
+        "test_id": "",
+        "file": "",
+        "function": "",
+        "affected": False,
+        "text": "",
+        "pre_event_count": 0,
+        "post_event_count": 0,
+        "pre_depth_cap": -1,
+        "post_depth_cap": -1,
+        "post_patch_applied": False,
+        "broad_complete": False,
+        "status": status,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +549,7 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
 
     if not test_cmd or not image_name:
         counters.increment("instances_failed_missing_input")
+        yield _deferred_row(instance_id, "missing_input")
         return
 
     client = _client()
@@ -533,6 +559,7 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
     except Exception as e:
         logger.warning("pull failed for %s: %s", instance_id, e)
         counters.increment("instances_failed_pull")
+        yield _deferred_row(instance_id, "image_pull_failed")
         return
 
     pre_trace_path = "/tmp/trace_pre.jsonl"
@@ -562,6 +589,7 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
         logger.warning("session failed for %s: %s", instance_id, e)
         counters.increment("instances_failed_session")
         cleanup_temp_files()
+        yield _deferred_row(instance_id, "session_failed")
         return
 
     workdir = tempfile.mkdtemp(prefix=f"contree_{instance_id.replace('/', '_')}_")
@@ -581,10 +609,12 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
             timeout=timeout,
         )
         if pre_result is None:
+            yield _deferred_row(instance_id, "pre_failed")
             return
         pre_rows, pre_stdout, pre_download_failed = pre_result
         if "::PATCH_FAILED::" in pre_stdout:
             counters.increment("instances_failed_test_patch")
+            yield _deferred_row(instance_id, "test_patch_failed")
             return
 
         post_rows, post_patch_ok, post_download_failed = _run_post_phase(
