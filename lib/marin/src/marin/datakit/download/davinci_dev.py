@@ -122,7 +122,7 @@ def transform_ctx_native(input_path: str, output_path: str) -> None:
         .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="davinci-dev-ctx-transform", resources=ResourceConfig(cpu=1, ram="32g"))
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)
 
 
 def download_davinci_dev_ctx_native_step() -> StepSpec:
@@ -193,18 +193,22 @@ def _render_env_message(msg: dict) -> str:
     return "\n".join(parts)
 
 
+def _success_to_tag(success: bool | None) -> str | None:
+    if success is None:
+        return None
+    if success:
+        return "This trajectory solved the task successfully."
+    return "This trajectory failed to solve the task."
+
+
 def env_row_to_doc(row: dict) -> list[dict]:
     messages = row.get("messages")
     if not messages:
         counters.increment("davinci_dev/env/dropped")
         return []
-    tag = (
-        "This trajectory solved the task successfully."
-        if row.get("success")
-        else "This trajectory failed to solve the task."
-    )
+    tag = _success_to_tag(row.get("success") if "success" in row else None)
     rendered = "\n\n".join(_render_env_message(m) for m in messages)
-    text = f"{tag}\n\n{rendered}"
+    text = f"{tag}\n\n{rendered}" if tag else rendered
 
     counters.increment("davinci_dev/env/kept")
     return [
@@ -224,7 +228,7 @@ def transform_env_native(input_path: str, output_path: str) -> None:
         .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="davinci-dev-env-transform", resources=ResourceConfig(cpu=1, ram="16g"))
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)
 
 
 def download_davinci_dev_env_native_step() -> StepSpec:
