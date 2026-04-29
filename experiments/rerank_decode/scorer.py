@@ -103,6 +103,100 @@ class VLLMLogprobScorer(Scorer):
         return scores
 
 
+class VLLMLogprobScorerTPU(Scorer):
+    """Scores completions by log-likelihood under a local TPU vLLM instance."""
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        max_model_len: int = 8192,
+        tensor_parallel_size: int = 1,
+        data_parallel_size: int = 1,
+        enable_prefix_caching: bool = True,
+        enable_prefix_caching_with_prompt_logprobs: bool = True,
+    ):
+        from vllm import LLM, SamplingParams
+        from vllm.engine.arg_utils import EngineArgs
+
+        backend_supports_apc_prompt_logprobs = (
+            "enable_prefix_caching_with_prompt_logprobs"
+            in EngineArgs.__dataclass_fields__
+        )
+        if (
+            enable_prefix_caching_with_prompt_logprobs
+            and not backend_supports_apc_prompt_logprobs
+        ):
+            raise ValueError(
+                "Installed LLM does not support "
+                "enable_prefix_caching_with_prompt_logprobs"
+            )
+
+        llm_kwargs = dict(
+            model=model,
+            max_model_len=max_model_len,
+            tensor_parallel_size=tensor_parallel_size,
+            data_parallel_size=data_parallel_size,
+            enable_prefix_caching=enable_prefix_caching,
+        )
+        if backend_supports_apc_prompt_logprobs:
+            llm_kwargs["enable_prefix_caching_with_prompt_logprobs"] = (
+                enable_prefix_caching_with_prompt_logprobs
+            )
+
+        self.llm = LLM(**llm_kwargs)
+        self.sampling_params = SamplingParams(
+            temperature=0.0,
+            max_tokens=1,
+            prompt_logprobs=1,
+        )
+        self.tokenizer = self.llm.get_tokenizer()
+        self._cached_prompt_text: str | None = None
+        self._cached_prompt_ids: list[int] | None = None
+
+    def reset(self) -> None:
+        self.llm.llm_engine.collective_rpc("reset_scoring_state")
+        self._cached_prompt_text = None
+        self._cached_prompt_ids = None
+
+    def _prompt_ids_for(self, prompt: str) -> list[int]:
+        if self._cached_prompt_text == prompt and self._cached_prompt_ids is not None:
+            return list(self._cached_prompt_ids)
+
+        prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
+        self._cached_prompt_text = prompt
+        self._cached_prompt_ids = list(prompt_ids)
+        return prompt_ids
+
+    def score(self, prompt: str, completions: list[str]) -> list[float]:
+        prompt_ids = self._prompt_ids_for(prompt)
+        completion_ids = [
+            self.tokenizer.encode(completion, add_special_tokens=False)
+            for completion in completions
+        ]
+        scores = self.llm.llm_engine.collective_rpc(
+            "score_suffixes",
+            args=(prompt_ids, completion_ids),
+        )
+        if len(scores) != 1:
+            raise ValueError(
+                f"Expected one scorer result from TPU worker, got {len(scores)}"
+            )
+        return scores[0]
+
+    def accept(self, prompt: str, completion: str) -> None:
+        prompt_ids = self._prompt_ids_for(prompt)
+        completion_ids = self.tokenizer.encode(
+            completion, add_special_tokens=False
+        )
+        self.llm.llm_engine.collective_rpc(
+            "accept_scoring_suffix",
+            args=(prompt_ids, completion_ids),
+        )
+        self._cached_prompt_text = prompt + completion
+        self._cached_prompt_ids = prompt_ids + completion_ids
+
+
 class KVCacheScorer(Scorer):
     """Scores completions using a HuggingFace model with incremental KV caching.
 
@@ -257,6 +351,7 @@ class LevanterScorer(Scorer):
         max_completion_len: int,
         page_size: int = 32,
         max_pages: int | None = None,
+        initialize_jax_distributed: bool = True,
     ):
         """Initialize a Levanter-backed scorer.
 
@@ -273,6 +368,7 @@ class LevanterScorer(Scorer):
         import levanter
         from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
         from levanter.inference.scoring import ScoringEngine, ScoringEngineConfig
+        from levanter.distributed import DistributedConfig
         from levanter.tracker import NoopConfig
         from levanter.trainer import TrainerConfig
         from levanter.utils.tree_utils import inference_mode
@@ -285,6 +381,9 @@ class LevanterScorer(Scorer):
             tracker=NoopConfig(),
             mp=jmp.get_policy("c=bf16"),
             per_device_eval_parallelism=1,
+            distributed=DistributedConfig(
+                initialize_jax_distributed=initialize_jax_distributed
+            ),
         )
         levanter.initialize(trainer_config)
         self._trainer_config = trainer_config

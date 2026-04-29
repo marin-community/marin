@@ -226,8 +226,11 @@ def run_save_logprobs_on_pod(config: SaveLogprobsOnPodConfig) -> None:
     if isinstance(config.resources.device, TpuConfig):
         extras.append("tpu")
 
+    # Name must be unique per (parent, name) — concurrent steps under the same parent
+    # collide otherwise and adopt_existing=True silently merges them onto one container.
+    job_name = f"save_logprobs-{os.path.basename(config.save_logprobs_config.output_path.rstrip('/'))}"
     job_request = JobRequest(
-        name="save_logprobs",
+        name=job_name,
         entrypoint=Entrypoint.from_callable(save_logprobs, args=[config.save_logprobs_config]),
         resources=config.resources,
         environment=create_environment(extras=extras),
