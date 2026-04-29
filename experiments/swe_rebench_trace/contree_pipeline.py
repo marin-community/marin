@@ -44,6 +44,7 @@ from pathlib import Path
 import pyarrow as pa
 from fray.v2 import ResourceConfig
 from rigging.filesystem import marin_prefix
+from datasets import load_dataset
 from zephyr import Dataset, ZephyrContext, counters
 
 logger = logging.getLogger(__name__)
@@ -361,8 +362,8 @@ def _recover_broad_session(
         m = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", str(error))
         if m:
             client._api.cancel_operation(uuid.UUID(m.group(0)))
-    except Exception:
-        pass
+    except Exception as cancel_err:
+        logger.info("cancel_operation best-effort failed for %s: %s", instance_id, cancel_err)
     time.sleep(5)
     try:
         new_session = image.session()
@@ -697,8 +698,8 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
             for p in workdir_path.iterdir():
                 p.unlink(missing_ok=True)
             workdir_path.rmdir()
-        except Exception:
-            pass
+        except Exception as cleanup_err:
+            logger.info("workdir cleanup failed for %s: %s", workdir_path, cleanup_err)
 
 
 # ---------------------------------------------------------------------------
@@ -708,8 +709,6 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
 
 def _load_images(language: str = "python", limit: int | None = None) -> list[dict]:
     """Stream Python rows out of the HF dataset and shape them for the map fn."""
-    from datasets import load_dataset
-
     ds = load_dataset("nebius/SWE-rebench-V2", split="train", streaming=True)
     out: list[dict] = []
     for row in ds:
