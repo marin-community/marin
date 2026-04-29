@@ -4,6 +4,7 @@
 # Local copy of AdamH for iteration without modifying Levanter.
 # Adapted from levanter.optim.adamh.
 
+from collections import defaultdict
 from typing import Any, NamedTuple
 
 import chex
@@ -12,11 +13,51 @@ import jax.numpy as jnp
 import optax
 from optax import tree_utils as otu
 
+from levanter.utils.jax_utils import leaf_key_paths
+
 
 class ScaleByAdamHState(NamedTuple):
     count: chex.Array
     mu: optax.Updates
     nu: optax.Updates
+
+
+def _module_key(path: str | None) -> str | None:
+    if path is None:
+        return None
+    parts = path.split(".")
+    if len(parts) <= 1:
+        return path
+    return ".".join(parts[:-1])
+
+
+def normalize_module_gradients_to_unit_rms(updates: optax.Updates, eps: float = 1e-16) -> optax.Updates:
+    """Normalize each module's gradient leaves to combined RMS 1."""
+    leaves, treedef = jax.tree_util.tree_flatten(updates, is_leaf=lambda x: x is None)
+    paths = treedef.flatten_up_to(leaf_key_paths(updates))
+    groups: dict[str, list[int]] = defaultdict(list)
+
+    for index, (leaf, path) in enumerate(zip(leaves, paths, strict=True)):
+        if leaf is None or not hasattr(leaf, "shape"):
+            continue
+        module_key = _module_key(path)
+        if module_key is None:
+            continue
+        groups[module_key].append(index)
+
+    normalized_leaves = list(leaves)
+    for group_indices in groups.values():
+        square_sum = sum(
+            (jnp.sum(jnp.square(leaves[index].astype(jnp.float32))) for index in group_indices),
+            jnp.array(0.0, dtype=jnp.float32),
+        )
+        num_elements = sum(int(leaves[index].size) for index in group_indices)
+        inv_rms = jax.lax.rsqrt(square_sum / num_elements + eps)
+        for index in group_indices:
+            leaf = leaves[index]
+            normalized_leaves[index] = leaf * inv_rms.astype(leaf.dtype)
+
+    return jax.tree_util.tree_unflatten(treedef, normalized_leaves)
 
 
 def scale_by_adamh(
@@ -75,4 +116,27 @@ def scale_by_adamh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-__all__ = ["ScaleByAdamHState", "scale_by_adamh"]
+def scale_by_adamh_with_module_gradient_normalization(
+    b1: float = 0.9,
+    b2: float = 0.999,
+    eps: float = 1e-8,
+    learning_rate: float = 0.02,
+    mu_dtype: Any | None = None,
+    gradient_norm_eps: float = 1e-16,
+) -> optax.GradientTransformation:
+    """AdamH with module-wise gradient RMS normalization before moment updates."""
+    adamh = scale_by_adamh(b1=b1, b2=b2, eps=eps, learning_rate=learning_rate, mu_dtype=mu_dtype)
+
+    def update_fn(updates, state, params):
+        normalized_updates = normalize_module_gradients_to_unit_rms(updates, eps=gradient_norm_eps)
+        return adamh.update(normalized_updates, state, params)
+
+    return optax.GradientTransformation(adamh.init, update_fn)
+
+
+__all__ = [
+    "ScaleByAdamHState",
+    "normalize_module_gradients_to_unit_rms",
+    "scale_by_adamh",
+    "scale_by_adamh_with_module_gradient_normalization",
+]
