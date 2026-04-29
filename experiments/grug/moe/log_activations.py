@@ -190,11 +190,17 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
     model_cfg, _, _, _ = build_from_heuristic(budget=config.budget, hidden_dim=config.hidden_dim)
     print(f"Model: d={model_cfg.hidden_dim}, L={model_cfg.num_layers}, E={model_cfg.num_experts}")
 
+    from jax.sharding import AxisType
+
+    import haliax.partitioning
+
     num_devices = len(jax.devices())
     mesh = create_mesh_from_axis_specs(
-        ici_axes={"data": num_devices, "replica": 1, "model": 1, "expert": 1}, dcn_axes={}
+        ici_axes={"data": num_devices, "replica": 1, "model": 1, "expert": 1},
+        dcn_axes={},
+        axis_types=tuple(AxisType.Explicit for _ in range(4)),
     )
-    with mesh:
+    with haliax.partitioning.set_mesh(mesh):
         mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
         model = Transformer.init(model_cfg, key=jax.random.PRNGKey(0))
 
