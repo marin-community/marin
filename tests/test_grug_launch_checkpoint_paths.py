@@ -41,9 +41,9 @@ def test_grug_base_launch_sets_temporary_checkpoint_base_path():
     checkpointer = run_config.trainer.trainer.checkpointer
     assert checkpointer.base_path == "gs://marin-us-east5/experiments/grug/base-trial/checkpoints"
     assert checkpointer.temporary_base_path == (
-        "gs://marin-tmp-us-east5/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
+        "gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
     )
     assert run_config.trainer.trainer.checkpoint_search_paths("grug-temp-path-test") == [
         "gs://marin-us-east5/experiments/grug/base-trial/checkpoints",
-        "gs://marin-tmp-us-east5/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints",
+        "gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints",
     ]
