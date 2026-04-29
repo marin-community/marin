@@ -10,7 +10,8 @@ from dataclasses import replace
 
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.dag import ExecutorStep
+from marin.execution.executor import executor_main
 
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MULTILINGUAL_LM_EVAL_LOGPROB_TASKS
