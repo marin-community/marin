@@ -64,7 +64,7 @@ def transform(input_path: str, output_path: str) -> None:
         .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="swe-rebench-openhands-transform", resources=ResourceConfig(cpu=1, ram="32g"))
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)
 
 
 def download_swe_rebench_openhands_step() -> StepSpec:
