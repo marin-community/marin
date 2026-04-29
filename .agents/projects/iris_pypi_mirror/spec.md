@@ -238,6 +238,56 @@ PyPI project URL); it does not move the `dupekit/` directory or break
 protectively as the need arises — this design only commits to
 `marin-dupekit`.
 
+### Secrets posture
+
+**No long-lived PyPI credential is stored anywhere in the repo, GitHub
+secrets, or GitHub variables.** Trusted publishing (OIDC) replaces the
+classic `PYPI_API_TOKEN` model — at workflow runtime, GitHub mints an
+OIDC ID token, PyPI validates it against the configured publisher
+binding, and PyPI issues a one-shot upload token (TTL ~15 min) that dies
+when the workflow ends. There is no `PYPI_API_TOKEN` to rotate, leak, or
+scope.
+
+What lives where:
+
+| Item | Storage location | Owner |
+| --- | --- | --- |
+| Per-admin PyPI password | each admin's personal password manager | individual |
+| Per-admin PyPI 2FA TOTP seed | each admin's authenticator app | individual |
+| **Per-admin PyPI 2FA recovery codes** | **shared team password vault (1Password)** | all org admins |
+| PyPI org admin role grants | PyPI server-side (assigned via web UI) | n/a |
+| Trusted publisher binding `(marin/dupekit-wheels.yaml, pypi-publish) ↔ marin-dupekit` | PyPI project settings (public, visible at the project's publishing page) | n/a |
+| GitHub OIDC trust config | `.github/workflows/dupekit-wheels.yaml` (committed) | n/a |
+| Per-run PyPI upload token | RAM only, ~15 min TTL | n/a |
+
+The only thing that *must* be in a shared vault is the **2FA recovery
+codes** for the PyPI account(s) that own the `marin-community` org —
+needed if all admins lose their authenticator devices simultaneously.
+Store these in the team password manager under
+`marin-community / pypi-org-recovery`.
+
+**Explicitly rejected**: storing a long-lived `PYPI_API_TOKEN` in GitHub
+Actions secrets. It rotates poorly, leaks easily (any workflow on the
+repo can read it via `${{ secrets.* }}`), needs manual revocation if
+exposed, and gets clunky to scope per-package as we add `marin-kitoken`
+etc. Trusted publishing is strictly better for our case.
+
+**Compromise scenarios**:
+
+- **Workflow file tampering**: an attacker who edits `dupekit-wheels.yaml`
+  cannot publish without also bypassing the `pypi-publish` environment's
+  required-reviewer gate (a Marin admin must click Approve on the GitHub
+  Actions UI). Trust is anchored in three independent things: branch
+  protection on `main`, the environment's reviewer requirement, and the
+  publisher binding's pinning to a specific workflow filename + env name.
+- **Compromised GitHub repo write access**: same — the reviewer gate is
+  the last line of defence. Set the gate to "human admins only," not a
+  bot account.
+- **Compromised admin PyPI account**: revoke their org role on PyPI
+  (`https://pypi.org/manage/organization/marin-community/people/`); their
+  personal trusted-publisher bindings on other PyPI projects are
+  unaffected. No shared credential to rotate.
+
 ### One-time setup (manual)
 
 1. **Register the publishing PyPI organisation.** On
