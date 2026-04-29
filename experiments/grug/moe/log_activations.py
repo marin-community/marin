@@ -19,7 +19,6 @@ import jax.numpy as jnp
 import jmp
 import numpy as np
 from fray.cluster import ResourceConfig
-from jax.sharding import PartitionSpec as P
 from marin.execution.executor import ExecutorStep, executor_main, versioned
 
 from experiments.grug.moe.heuristic import build_from_heuristic
@@ -50,10 +49,8 @@ def _forward_with_activations(
     model_mod.attention = lambda q, k, v, mask: reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
 
     cfg = model.config
-    # Replicate — batch=1 can't be sharded across data devices
-    batch_spec = P(None, None, None)
 
-    hidden = model.token_embed.at[token_ids].get(out_sharding=batch_spec)
+    hidden = model.token_embed.at[token_ids].get()
     hidden = model.embed_gated_norm(model.embed_norm(hidden))
 
     # Collect residual stream snapshots: embed, post_attn_0, post_mlp_0, ..., final
@@ -78,10 +75,9 @@ def _forward_with_activations(
         mlp_in = block.mlp_gated_norm(block.rms_mlp(hidden))
 
         from einops import rearrange
-        from jax.sharding import reshard
 
         x_flat = rearrange(mlp_in, "b s d -> (b s) d")
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(block.mlp.router, P(None, None))).astype(jnp.float32)
+        router_logits = jnp.einsum("td,de->te", x_flat, block.mlp.router).astype(jnp.float32)
         router_logits_all.append(np.array(router_logits))
 
         mlp_out, _ = block.mlp(mlp_in)
