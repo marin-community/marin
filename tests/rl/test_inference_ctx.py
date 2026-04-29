@@ -303,6 +303,31 @@ def test_vllm_sync_engine_receives_kv_cache_metrics_flag(monkeypatch):
     vLLMInferenceContext._get_llm_engine(config)
 
     assert calls["kv_cache_metrics"] is True
+    assert calls["seed"] == 0
+
+
+def test_vllm_sync_engine_receives_engine_seed(monkeypatch):
+    calls = {}
+
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setattr(vLLMInferenceContext, "_patch_tpu_inference_registry", staticmethod(lambda: None))
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.LLM", _FakeLLM)
+
+    config = vLLMInferenceContextConfig(
+        model_name="test-model",
+        max_model_len=1024,
+        tensor_parallel_size=2,
+        gpu_memory_utilization=0.9,
+        sampling_params=VLLMSamplingConfig(),
+        seed=1234,
+    )
+
+    vLLMInferenceContext._get_llm_engine(config)
+
+    assert calls["seed"] == 1234
 
 
 def test_vllm_async_engine_receives_kv_cache_metrics_flag(monkeypatch):
@@ -328,6 +353,32 @@ def test_vllm_async_engine_receives_kv_cache_metrics_flag(monkeypatch):
     vLLMInferenceContext._get_llm_engine(config)
 
     assert calls["kv_cache_metrics"] is True
+    assert calls["seed"] == 0
+
+
+def test_vllm_async_engine_receives_engine_seed(monkeypatch):
+    calls = {}
+
+    class _FakeSyncVLLMWrapper:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setattr(vLLMInferenceContext, "_patch_tpu_inference_registry", staticmethod(lambda: None))
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.SyncVLLMWrapper", _FakeSyncVLLMWrapper)
+
+    config = vLLMInferenceContextConfig(
+        model_name="test-model",
+        max_model_len=1024,
+        tensor_parallel_size=2,
+        gpu_memory_utilization=0.9,
+        sampling_params=VLLMSamplingConfig(),
+        mode=InferenceMode.ASYNC,
+        seed=1234,
+    )
+
+    vLLMInferenceContext._get_llm_engine(config)
+
+    assert calls["seed"] == 1234
 
 
 def test_worker_extension_uses_public_sync_weights():
