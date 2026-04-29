@@ -174,13 +174,10 @@ def test_child_explicit_constraints_override_parent(capturing_client, parent_con
 
 
 def test_child_does_not_inherit_worker_region(capturing_client, parent_context):
-    """A parent's worker_region must NOT auto-pin a child job's region.
+    """A parent's worker_region must not auto-pin a child job's region.
 
-    Region inheritance was removed so that an Iris job submitting another Iris
-    job from inside a region-pinned worker does not automatically force the
-    child into the same region. Region pinning is now opt-in via explicit
-    `regions=[...]` on the child's resources or via the executor's GCS-path
-    inference.
+    Region pinning is opt-in via explicit `regions=[...]` on the child's
+    resources or via the executor's GCS-path inference.
     """
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)

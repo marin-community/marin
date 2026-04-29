@@ -3,16 +3,11 @@
 
 """Step runner for StepSpec.
 
-This module provides the execution layer for ``StepSpec`` objects. The main
-entry point is ``StepRunner``, a thin DAG scheduler that launches steps as
-they are yielded from an iterable, as soon as their dependencies are satisfied.
-
-Caching, distributed locking, heartbeats, and status writes are handled
-explicitly in :func:`run_step` rather than composed as decorators.  This
-makes the control flow easy to follow and debug.
-
-``ExecutorStep`` objects can be converted to ``StepSpec`` via
-``resolve_executor_step`` in ``marin.execution.executor``.
+``StepRunner`` is a thin DAG scheduler that launches steps as they are yielded
+from an iterable, as soon as their dependencies are satisfied. Caching,
+distributed locking, heartbeats, and status writes are handled explicitly in
+:func:`run_step` rather than composed as decorators, so the control flow is
+easy to follow and debug.
 """
 
 from __future__ import annotations
@@ -52,6 +47,8 @@ from marin.execution.remote import RemoteCallable, _sanitize_job_name
 from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
 
+from marin.execution.executor_step_status import PreviousTaskFailedError, worker_id
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,10 +58,10 @@ logger = logging.getLogger(__name__)
 
 
 def _write_executor_info(step: StepSpec) -> None:
-    """Write a ``.executor_info`` JSON file matching the legacy ExecutorStepInfo schema.
+    """Write a ``.executor_info`` JSON file in the ExecutorStepInfo schema.
 
-    Skips writing if the file already exists (e.g. Executor.write_infos() wrote
-    a richer version before StepRunner launched the step).
+    Skips writing if the file already exists (e.g. ``Executor.write_infos()``
+    wrote a richer version before this step launched).
     """
     info_path = os.path.join(step.output_path, ".executor_info")
     fs = url_to_fs(info_path, use_listings_cache=False)[0]
@@ -151,8 +148,8 @@ class StepRunner:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
 
         # Capture the fray client on the calling thread so worker threads can
-        # inherit it explicitly.  This is more robust than contextvars.copy_context()
-        # alone because it survives process/thread-pool boundary edge cases.
+        # inherit it explicitly. More robust than contextvars.copy_context()
+        # alone, which can lose state across thread-pool reuse patterns.
         from fray.client import _current_client_var
 
         caller_fray_client = _current_client_var.get()
@@ -287,10 +284,6 @@ class StepRunner:
         if step.fn is None:
             raise ValueError(f"Step {step_name} has no callable fn")
 
-        # Explicitly propagate the fray client into worker threads.
-        # We use set_current_client() inside the worker rather than relying
-        # solely on contextvars.copy_context(), because the latter can
-        # silently lose state across certain thread-pool reuse patterns.
         captured_client = fray_client
 
         def worker_fn():
@@ -328,9 +321,10 @@ def check_cache(output_path: str) -> bool:
 def run_step(step: StepSpec) -> None:
     """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
 
-    For local steps the result is saved via ``Artifact.save``.  For remote
-    steps (``@remote``) the raw function + artifact save are submitted as a
-    Fray job; the executor node only manages the lock and status file.
+    For inline steps the result is saved via ``Artifact.save``. For
+    ``RemoteCallable`` steps (or any step with explicit ``resources``), the
+    raw function + artifact save are submitted as a Fray job; the runner
+    process only manages the lock and status file.
     """
     output_path = step.output_path
     step_label = step.name_with_hash
@@ -401,9 +395,9 @@ def _submit_iris_job(
 def _run_iris_job(step: StepSpec, output_path: str) -> None:
     """Dispatch a step with explicit ``resources`` as a Fray job.
 
-    ``step.resources`` takes precedence over any resources carried by a
-    :class:`RemoteCallable` ``fn`` — when both are present, the explicit
-    field wins and the inner callable is unwrapped.
+    When ``step.fn`` is a :class:`RemoteCallable`, its inner callable is
+    unwrapped — ``step.resources`` takes precedence over any resources
+    carried by the wrapper.
     """
     assert step.resources is not None
     raw_fn = step.fn.fn if isinstance(step.fn, RemoteCallable) else step.fn
@@ -412,7 +406,7 @@ def _run_iris_job(step: StepSpec, output_path: str) -> None:
 
 
 def _run_remote_step(step: StepSpec, output_path: str) -> None:
-    """Submit the step's ``RemoteCallable`` to Fray (legacy ``@remote`` path).
+    """Submit the step's ``RemoteCallable`` to Fray.
 
     Carries the wrapper's ``env_vars`` and ``pip_dependency_groups`` through
     to the submitted job's environment.

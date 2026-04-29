@@ -50,10 +50,9 @@ small_train_config = SimpleTrainConfig(
     weight_decay=0.1,
 )
 
-# 4. Build a training plan. Training is NOT an ExecutorStep — it's a plain
-# Python plan that `run_train` submits as a single Iris job. The TPU worker
-# materializes upstream tokenize ExecutorSteps in its own region, then runs
-# Levanter's `train_lm.main` directly.
+# 4. Build a training plan. `run_train` submits the plan as a single Iris
+# job; the TPU worker materializes upstream tokenize ExecutorSteps in its
+# own region, then runs Levanter's `train_lm.main` directly.
 tinystories_model_30m = prepare_train(
     name="marin-tinystories-30m",
     # Steps can depend on other steps: tinystories_model_30m depends on tinystories_tokenized

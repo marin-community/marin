@@ -513,10 +513,8 @@ def default_train(
         eval_harness=harness_config,
     )
 
-    # Create the pod config
     pod_config = train_config.resources
 
-    # Create the full config
     config = TrainLmOnPodConfig(
         train_config=inner_config,
         resources=pod_config,
@@ -536,7 +534,6 @@ def default_train(
             f"= {total_examples * train_length} tokens."
         ),
         fn=run_levanter_train_lm,
-        # Populate the step-level resources so submit_step_to_iris can dispatch the training job.
         resources=train_config.resources,
         config=config,
         override_output_path=override_output_path,
@@ -548,26 +545,21 @@ ConfigT = TypeVar("ConfigT")
 
 @dataclass(frozen=True)
 class TrainingPlan(Generic[ConfigT]):
-    """A fully-specified training run, ready to submit.
-
-    Built locally in the entrypoint by ``prepare_train`` (or an analogous
-    builder such as ``prepare_grug_trial``). Submitted to a TPU worker by
-    ``run_train``. The TPU worker runs the trainer directly — no nested job
-    submit, no ``ExecutorStep`` wrapper around training.
+    """A fully-specified training run, ready to submit via ``run_train``.
 
     Fields:
         name: human-readable identifier; used for the Iris job name and as a
             component of ``output_path``.
         output_path: concrete GCS path under which the trainer writes
             checkpoints, logs, and final artifacts. Stable across re-submissions
-            of the same plan (the trainer resumes from checkpoints there).
+            of the same plan so the trainer resumes from checkpoints there.
         train_config: the trainer's config object. May contain
             ``InputName(step=...)`` placeholders pointing at upstream data
             ExecutorSteps; those are resolved by ``materialize`` on the worker.
         worker_fn: the worker entrypoint that consumes the resolved config —
             e.g. ``levanter.main.train_lm.main`` for Levanter LM training, or
-            ``run_grug`` for the grug template. Must be a top-level function
-            (so Fray can pickle and import it).
+            ``_run_grug_local`` for the grug template. Must be a top-level
+            function so Fray can pickle and import it.
         resources: TPU/GPU/CPU resources to request from Iris.
         env_vars: env vars to inject into the Iris worker container at startup.
             Resolved in the caller's process so values like ``GIT_COMMIT`` and
@@ -590,11 +582,11 @@ def _compute_training_output_path(
 ) -> str:
     """Compute the concrete output path a training run will write to.
 
-    Uses the executor's version-hashing pass via a temporary internal
-    ``ExecutorStep`` whose ``config`` field carries the same dependency graph
-    as the real run. ``Executor.compute_version`` walks the dependency graph
-    and assembles the version hash without submitting jobs or writing to GCS,
-    so this is side-effect free.
+    Uses the executor's version-hashing pass via a sentinel ``ExecutorStep``
+    whose ``config`` field carries the same dependency graph as the real run.
+    ``Executor.compute_version`` walks the dependency graph and assembles the
+    version hash without submitting jobs or writing to GCS, so this is
+    side-effect free.
     """
     sentinel = ExecutorStep(
         name=os.path.join("checkpoints", name),
@@ -609,14 +601,7 @@ def _bake_output_path_into_train_config(
     train_config: TrainLmConfig,
     output_path: str,
 ) -> TrainLmConfig:
-    """Wire the concrete ``output_path`` into the trainer's checkpointer + HF
-    save path, mirroring ``_update_config_to_use_out_path`` from training.py.
-
-    The legacy ``TrainLmOnPodConfig`` carries ``output_path`` as a separate
-    field and applies these mutations on the worker; the new path bakes them
-    into the ``TrainLmConfig`` directly so the worker can run Levanter without
-    further config wrangling.
-    """
+    """Wire ``output_path`` into the trainer's checkpointer and HF save path."""
     trainer = dataclasses.replace(
         train_config.trainer,
         checkpointer=dataclasses.replace(
@@ -636,11 +621,9 @@ def _bake_output_path_into_train_config(
 
 
 def _impute_run_id(output_path: str) -> str:
-    """Pick a run id for the trainer.
-
-    Mirrors ``_enforce_run_id`` in training.py: prefer ``RUN_ID`` from env,
-    else the basename of the output path. This keeps the run id stable across
-    preemption so Levanter's checkpoint resume picks up where it left off.
+    """Pick a run id for the trainer: ``RUN_ID`` from env, else the basename
+    of the output path. Stable across preemption so Levanter's checkpoint
+    resume picks up where it left off.
     """
     run_id = os.environ.get("RUN_ID")
     if run_id:
@@ -661,22 +644,15 @@ def prepare_train(
     wandb_group: str | None = None,
     override_output_path: str | None = None,
 ) -> TrainingPlan[TrainLmConfig]:
-    """Build a ``TrainingPlan`` from the same arguments ``default_train`` accepts.
+    """Build a ``TrainingPlan`` for a Levanter LM training run.
 
-    Does NOT submit anything; the caller invokes ``run_train(plan)`` to submit.
+    Resolves the concrete ``output_path`` locally via the executor's hashing
+    pass, bakes it into the trainer's checkpointer / HF save path, and stamps
+    a stable run id. Does NOT submit anything; the caller invokes
+    ``run_train(plan)`` to dispatch.
 
-    Behaviour mirrors ``default_train`` (including the ``train_seq_len``,
-    optimizer, eval harness, wandb tagging, mixture/validation handling). The
-    differences:
-
-      - No ``TrainLmOnPodConfig`` wrapper is created. The plan's
-        ``train_config`` is a Levanter ``TrainLmConfig`` directly.
-      - The concrete ``output_path`` is computed locally via
-        ``_compute_training_output_path`` and baked into the trainer's
-        checkpointer / HF save path here, rather than at the worker.
-      - Env vars are resolved in the caller's process via
-        ``resolve_training_env``, so ``GIT_COMMIT`` / ``WANDB_API_KEY`` /
-        ``FERRY_DATE`` reflect the submission environment.
+    Args mirror ``default_train`` (data, model, optimizer, eval harness, wandb
+    tagging, mixture / validation handling).
     """
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
@@ -791,25 +767,18 @@ def prepare_train(
         eval_harness=harness_config,
     )
 
-    # Resolve the concrete output_path locally via the executor's hashing pass,
-    # then substitute every OutputName in the config with paths under it. The
-    # data config still carries InputName(step=...) placeholders for upstream
-    # tokenize steps; those are preserved here and resolved by `materialize` on
-    # the worker.
+    # Substitute OutputName placeholders in the config with paths under the
+    # resolved output_path. InputName(step=...) references for upstream
+    # tokenize steps are preserved here and resolved by `materialize` on the
+    # worker (which runs in the data's region).
     resolved_output_path = _compute_training_output_path(
         name,
         inner_config,
         override_output_path=override_output_path,
     )
     inner_config = resolve_local_placeholders(inner_config, resolved_output_path)
-
-    # Wire the trainer's checkpointer + HF save path. Same semantics as
-    # `_update_config_to_use_out_path` but applied here in the caller's
-    # process rather than on the worker.
     inner_config = _bake_output_path_into_train_config(inner_config, resolved_output_path)
 
-    # Stamp the run id so Levanter's checkpoint resume picks up the same
-    # output across preemption.
     run_id = _impute_run_id(resolved_output_path)
     inner_config = dataclasses.replace(
         inner_config,
@@ -834,8 +803,7 @@ def run_train(plan: TrainingPlan) -> None:
     submission environment, then submits ``_run_training_on_worker`` which
     (a) applies the env to ``os.environ``, (b) calls ``materialize`` on the
     train_config to resolve upstream data ExecutorSteps under the worker's
-    region, and (c) invokes ``plan.worker_fn(train_config)`` directly. No
-    nested submit, no ExecutorStep wrapper around training.
+    region, and (c) invokes ``plan.worker_fn(train_config)`` directly.
     """
     env = resolve_training_env(plan.env_vars, plan.resources)
 
@@ -864,9 +832,8 @@ def _run_training_on_worker(
 
     Applies env vars, materialises any upstream ExecutorSteps embedded in
     ``train_config`` under the worker's region, then runs ``worker_fn``
-    directly. The caller is responsible for stripping any ``OutputName``
-    placeholders from ``train_config`` before submission (``prepare_train`` /
-    ``prepare_grug_trial`` do this); ``output_path`` is passed through to
+    directly. The caller must strip any ``OutputName`` placeholders from
+    ``train_config`` before submission; ``output_path`` is passed to
     ``materialize`` only as a sanity-check anchor.
     """
     _apply_env_to_process(env_vars)
@@ -899,14 +866,12 @@ def default_sft(
     Returns:
         An ExecutorStep configured for supervised fine-tuning.
     """
-    # Set up common configurations
     if "sft" not in tags:
         tags = [*tags, "sft"]
 
     if sft_config.initialize_from_hf is not None and sft_config.initialize_from_checkpoint_path is not None:
         raise ValueError("Cannot specify both initialize_from_hf and initialize_from_checkpoint_path!")
 
-    # now we just shell out to default_train
     normal_train_config = SimpleTrainConfig(
         resources=sft_config.resources,
         train_batch_size=sft_config.train_batch_size,
@@ -937,7 +902,6 @@ def default_sft(
     if sft_config.reinit_tokens:
         raise NotImplementedError("reinit_tokens is not supported by default_train")
 
-    # Create and return the ExecutorStep
     return default_train(
         name=name,
         tokenized=tokenized,

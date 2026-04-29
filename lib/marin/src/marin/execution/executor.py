@@ -627,21 +627,18 @@ def resolve_executor_step(
     """Convert an ExecutorStep into a StepSpec.
 
     ``config`` should already be instantiated (no InputName / OutputName /
-    VersionedValue markers).  The old executor called ``fn(config)``; we wrap
-    that into a ``fn(output_path)`` closure expected by ``StepRunner``.
+    VersionedValue markers). The ExecutorStep convention is ``fn(config)``;
+    we wrap that into a ``fn(output_path)`` closure expected by ``StepRunner``.
 
     If *step* was created by :meth:`StepSpec.as_executor_step`, the original
     ``StepSpec`` is returned directly (with deps replaced by the resolved
     versions), preserving round-trip identity.
     """
-    # Short-circuit for StepSpec -> ExecutorStep -> StepSpec round-trip.
     original: StepSpec | None = getattr(step, "_original_step_spec", None)
     if original is not None:
-        # ``as_executor_step()`` pins ``override_output_path=original.output_path``
-        # on the ExecutorStep so the executor preserves the original placement.
-        # Mirror that pin on the resolved StepSpec — otherwise replacing deps
-        # with executor-built stubs (which lack the originals' ``hash_attrs``)
-        # would change ``name_with_hash`` and silently shift ``output_path``.
+        # Pin override_output_path so replacing deps with executor-built stubs
+        # (which lack the originals' hash_attrs) doesn't shift name_with_hash
+        # and silently change output_path.
         return dataclasses.replace(
             original,
             deps=deps or list(original.deps),
@@ -663,9 +660,9 @@ def resolve_executor_step(
     step_fn = remote_callable.fn if remote_callable is not None else step.fn
     assert step_fn is not None, f"Step {step.name} has no callable"
 
-    # Old-style ExecutorStep functions accept the resolved config as their only
-    # argument. The config already contains the output path, so we ignore the
-    # output_path parameter that StepRunner passes.
+    # ExecutorStep functions take the resolved config as their only argument.
+    # The output_path is already baked into the config, so the StepRunner-style
+    # output_path argument is ignored here.
     captured_fn = step_fn
     captured_config = config
     captured_budget = mirror_budget_gb
@@ -678,9 +675,8 @@ def resolve_executor_step(
                 return captured_fn(captured_config)
         return captured_fn(captured_config)
 
-    # If the original fn was decorated with @remote, propagate the
-    # RemoteCallable wrapper (with updated inner fn) so Fray dispatch
-    # is preserved.  Plain functions run locally in-thread.
+    # Preserve the RemoteCallable wrapper for @remote-decorated fns so Fray
+    # dispatch is retained; plain functions run inline in the runner thread.
     final_fn: Callable = resolved_fn
     if remote_callable is not None:
         final_fn = dataclasses.replace(remote_callable, fn=resolved_fn)
@@ -735,8 +731,7 @@ class ExecutorStep(Generic[ConfigT]):
     resources. ``fn`` is invoked inside the submitted job.
 
     If ``None``, behavior is determined by ``fn``: a ``RemoteCallable``
-    submits as a Fray job (legacy ``@remote`` path, deprecated); a plain
-    callable runs inline in-process.
+    submits as a Fray job; a plain callable runs inline in-process.
     """
 
     def cd(self, name: str) -> "InputName":
@@ -1018,15 +1013,10 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
 
     Along the way, compute the list of dependencies.
 
-    Delegates traversal to ``marin.execution.dag.walk_config`` (the same
-    walker that backs ``upstream_steps``); this function consumes the typed
-    events to assemble version-string entries and the (block-on /
-    pseudo-dep) dependency lists. The dep ordering matters: each
-    ``InputName`` with ``step is not None`` gets a ``DEP[i]`` slot in the
-    version string, where ``i`` is the index in the combined
+    Each ``InputName`` with ``step is not None`` gets a ``DEP[i]`` slot in
+    the version string, where ``i`` is the index in the combined
     ``dependencies + pseudo_dependencies`` list at the moment the dep is
-    discovered. Keeping this assembly here (rather than inside the walker)
-    lets the walker stay generic.
+    discovered.
 
     Returns:
         - dependencies: list of `ExecutorStep`s that are dependencies of the
@@ -1036,8 +1026,7 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
         - pseudo_dependencies: list of `ExecutorStep`s that are dependencies of the step but that we won't
             actually block on
     """
-    # Local import to break a circular dependency: dag.py imports from this
-    # module at top level, so we cannot import dag at the top of this file.
+    # Local import: dag.py imports from this module at top level.
     from marin.execution.dag import InputNameEvent, VersionedEvent, walk_config
 
     pseudo_dependencies: list[ExecutorStep] = []
@@ -1053,8 +1042,6 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
         if input_name.step is None:
             version[event.prefix] = input_name.name
             continue
-        # Index is computed at the moment the dep is appended; this is what
-        # gives ``DEP[i]`` its meaning in the version string.
         index = len(dependencies) + len(pseudo_dependencies)
         if not input_name.block_on_step:
             pseudo_dependencies.append(input_name.step)
@@ -1205,14 +1192,11 @@ class Executor:
             max_concurrent: Maximum number of steps to run concurrently. If None, run all ready steps in parallel.
 
         Returns:
-            The executor's `output_paths` mapping. Each known `ExecutorStep` —
-            including transitive dependencies discovered while walking `steps` —
-            is mapped to the concrete output path computed by `compute_version`.
-            The returned dict is the same `self.output_paths` reference, so its
-            keys may include steps that were not in the originally-passed
-            `steps` list. Callers (e.g. ``materialize``) can use this to
-            substitute placeholder paths in a config without poking at internal
-            executor state.
+            Mapping from every known `ExecutorStep` (including transitive
+            dependencies discovered while walking `steps`) to its concrete
+            output path. The returned dict is the same `self.output_paths`
+            reference, so its keys may include steps that were not in the
+            originally-passed `steps` list.
         """
         if max_concurrent is not None and max_concurrent < 1:
             raise ValueError(f"max_concurrent must be a positive integer, got {max_concurrent}")
@@ -1446,12 +1430,11 @@ class Executor:
     def _dep_version(self, dep: ExecutorStep) -> dict[str, Any] | str:
         """Full version dict for shallow deps, region-stable name+hash for deep ones.
 
-        Using ``output_paths[dep]`` here would bake the bucket prefix
-        (e.g. ``gs://marin-us-central1``) into the hashed version, so the same
-        logical pipeline rehashed under a different ``MARIN_PREFIX`` would
-        produce a different identity. ``{name}-{hashed_version}`` is the
-        region-independent suffix that already encodes the dep's full transitive
-        version.
+        Avoids ``output_paths[dep]`` because that would bake the bucket prefix
+        (e.g. ``gs://marin-us-central1``) into the hashed version, making the
+        same logical pipeline hash differently under a different
+        ``MARIN_PREFIX``. ``{name}-{hashed_version}`` is the region-independent
+        suffix that already encodes the dep's full transitive version.
         """
         if self._dep_depth(dep) <= self._MAX_INLINE_DEPTH:
             return self.versions[dep]

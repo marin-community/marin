@@ -96,12 +96,7 @@ def _build_grug_run_config(
     *,
     output_path: str,
 ) -> GrugRunConfig:
-    """Map launch-knobs into the trainer's full ``GrugRunConfig``.
-
-    Split into a build phase (this function, called locally by
-    ``prepare_grug_trial``) and a worker phase (``_run_grug_local``, invoked
-    on the TPU worker by ``run_train``).
-    """
+    """Map launch-knobs into the trainer's full ``GrugRunConfig``."""
     trainer = TrainerConfig(
         id=launch.run_id,
         seed=launch.seed,
@@ -143,13 +138,10 @@ def prepare_grug_trial(
 ) -> TrainingPlan[GrugRunConfig]:
     """Build a ``TrainingPlan`` for the grug-base template.
 
-    Like ``prepare_train`` but for the grug trainer. Builds a fully-substituted
-    ``GrugRunConfig``, computes the output_path locally, picks env vars, and
-    returns a plan whose worker_fn runs the grug training body directly.
+    Resolves ``output_path`` via the executor's version-hashing pass so
+    re-submissions of the same plan resume from the same checkpoint
+    directory, then builds the full ``GrugRunConfig`` with that path baked in.
     """
-    # Compute output_path locally via the executor's hashing pass — same trick
-    # as `prepare_train` so re-submissions of the same plan resume from the
-    # same checkpoint directory.
     sentinel = ExecutorStep(
         name=name,
         fn=lambda c: None,
@@ -158,10 +150,9 @@ def prepare_grug_trial(
     )
     output_path = _resolve_step_output_path(sentinel)
 
-    # Bake the resolved output_path into the launch config's OutputName slot
-    # and unwrap VersionedValue wrappers so `_build_grug_run_config` reads
-    # concrete values. Upstream InputName / ExecutorStep references (data
-    # placeholders) are preserved for the worker's `materialize` call.
+    # Substitute OutputName placeholders in the launch config and unwrap
+    # VersionedValue wrappers. Upstream InputName / ExecutorStep references
+    # (data placeholders) are preserved for the worker's `materialize` call.
     launch = resolve_local_placeholders(launch, output_path)
 
     run_config = _build_grug_run_config(launch, output_path=output_path)
@@ -187,8 +178,6 @@ _GRUG_BASE_RESOURCES = ResourceConfig.with_tpu("v5p-8")
 grug_base_launch = GrugBaseLaunchConfig(
     model=versioned(GRUG_130M_MODEL),
     data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-    # this_output_path() resolves under prepare_grug_trial via the same
-    # version-hashing pass `default_train` uses.
     output_path=this_output_path(),
     # Keep run id out of versioning so changing job metadata doesn't create a new output path.
     run_id=RESOLVED_RUN_ID,

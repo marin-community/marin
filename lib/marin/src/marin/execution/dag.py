@@ -3,11 +3,6 @@
 
 """Dependency-graph helpers for the executor.
 
-This module exposes the canonical config walker used both for collecting
-`ExecutorStep` references (dependency tracking, see `upstream_steps`) and for
-assembling version strings (see `executor.collect_dependencies_and_version`,
-which delegates here).
-
 The walker emits typed events that callers consume:
 
   - ``InputNameEvent`` — at every concrete reference to another step. Carries
@@ -23,13 +18,6 @@ The walker emits typed events that callers consume:
 `MirroredValue` is transparently unwrapped (no event emitted; events surface
 from inside `.value`). Dataclasses, dicts, lists, tuples, sets, and
 frozensets recurse element-wise; primitives are leaves.
-
-The version walker historically did not descend into tuples / sets; today's
-configs do not embed `InputName` / `VersionedValue` inside tuples / sets, so
-unifying the traversals is safe and was validated by snapshotting
-`Executor.compute_version` output for representative experiments
-(`tutorials/train_tiny_model_tpu.py`, `grug/base/launch.py`,
-`references/reference_training_pipeline.py`) before and after the refactor.
 """
 
 import os
@@ -105,7 +93,7 @@ def _walk(obj: Any, prefix: str) -> Iterator[_Event]:
 
     if isinstance(obj, ExecutorStep):
         # Canonicalize a bare ExecutorStep to InputName(step=step, name=None)
-        # so dep-collection and version-string assembly see one shape.
+        # so consumers only need to handle one shape.
         yield InputNameEvent(prefix, output_path_of(obj, None))
         return
 
@@ -139,13 +127,8 @@ def _walk(obj: Any, prefix: str) -> Iterator[_Event]:
         return
 
     if isinstance(obj, (tuple, set, frozenset)):
-        # Historically the version walker treated tuples/sets as leaves; the
-        # dep walker descends. Today no config embeds InputName /
-        # VersionedValue inside tuples or sets, so descending here is
-        # additive coverage rather than a behavior change. Use
-        # iteration-order indexing for tuples; sets/frozensets are unordered
-        # and only viable to walk when the contents do not affect hashing
-        # (callers should not put hashing-relevant types inside sets).
+        # sets/frozensets are unordered; callers must not put hashing-relevant
+        # types inside them since iteration order would affect emitted prefixes.
         for i, item in enumerate(obj):
             yield from _walk(item, new_prefix + f"[{i}]")
         return
@@ -203,8 +186,8 @@ def materialize(
     Composes three pieces:
 
       1. ``upstream_steps(config)`` — find embedded ``ExecutorStep``s.
-      2. ``Executor(prefix=...).run(steps)`` — submit them as ``@remote`` sub-jobs
-         and block on completion. The distributed ``step_lock`` keeps concurrent
+      2. ``Executor(prefix=...).run(steps)`` — submit them as sub-jobs and
+         block on completion. The distributed ``step_lock`` keeps concurrent
          callers (sweep members, multi-VM TPU tasks) coordinated; only one
          actually runs each step, the rest read ``STATUS_SUCCESS`` and skip.
       3. ``instantiate_config(config, output_path=<resolved>,
@@ -217,24 +200,17 @@ def materialize(
             and placeholder values.
         prefix: Storage prefix for newly-submitted sub-jobs. Defaults to
             ``marin_prefix()`` (the worker's regional ``gs://marin-{R}``
-            bucket), which is what makes upstream data co-located with
-            training.
+            bucket), so upstream data is co-located with training.
         output_path: Concrete output path for the current step, used to
             resolve ``OutputName(name=...)`` placeholders inside ``config``.
-            If ``None``, ``materialize`` reads ``config.output_path`` (the
-            launcher convention used by ``GrugBaseLaunchConfig`` and
-            ``TrainLmOnPodConfig``). For callers whose config type does not
-            expose ``output_path`` (e.g. Levanter's ``TrainLmConfig``), pass
+            If ``None``, ``materialize`` reads ``config.output_path``. For
+            callers whose config type does not expose ``output_path``, pass
             it explicitly.
 
     Returns:
         A copy of ``config`` with all placeholders substituted to concrete
         paths. A config containing no placeholders round-trips unchanged
         (idempotent — no sub-jobs submitted).
-
-    Raises:
-        Existing executor errors (``PreviousTaskFailedError``, fsspec errors,
-        Iris job-failure exceptions) propagate from sub-step submission.
     """
     resolved_prefix = prefix if prefix is not None else marin_prefix()
 
@@ -256,10 +232,6 @@ def materialize(
         output_paths = {}
 
     if output_path is None:
-        # `instantiate_config` requires `output_path` to be a concrete `str`; if a
-        # caller forgot to resolve `OutputName(name=...)` to the actual step output
-        # directory before invoking the worker function, fail loudly here rather
-        # than producing a garbled path downstream.
         current_output_path = config.output_path  # type: ignore[attr-defined]
     else:
         current_output_path = output_path
@@ -284,13 +256,9 @@ def materialize(
 def _resolve_step_output_path(step: ExecutorStep, *, prefix: str | None = None) -> str:
     """Compute the concrete output path for ``step`` without running anything.
 
-    Drives the executor's version-hashing pass for ``step`` (and the steps it
-    references, transitively) just far enough to populate
-    ``Executor.output_paths[step]``. ``Executor.compute_version`` only walks
-    the dependency graph and computes hashes — it does not submit jobs or
-    write to GCS. The outer ``Executor.run`` writes ``executor_info`` JSON via
-    ``write_infos``; we deliberately call ``compute_version`` directly so this
-    path is side-effect free.
+    Drives ``Executor.compute_version`` (which only walks the dependency graph
+    and computes hashes — no GCS I/O, no job submission) far enough to populate
+    ``Executor.output_paths[step]``.
     """
     resolved_prefix = prefix if prefix is not None else marin_prefix()
     executor_info_base_path = os.path.join(resolved_prefix, "experiments")
@@ -308,18 +276,10 @@ def _substitute_output_paths_only(config: ConfigT, output_path: str) -> ConfigT:
     ``VersionedValue``, ``MirroredValue``) are left intact for the worker's
     ``materialize`` call to resolve in the worker's own region.
 
-    Mirrors ``executor.instantiate_config`` recursion over dataclasses, dicts
-    and lists. Recurses *into* ``MirroredValue`` and ``VersionedValue`` to
-    surface any nested ``OutputName``, but rebuilds the wrapper rather than
-    resolving it — the worker still needs to see the wrapper to apply its
-    region-aware semantics. ``InputName(step=…)`` and bare ``ExecutorStep``
-    references are returned unchanged so the worker can look up the upstream
-    step's output path under the worker's own prefix.
-
-    Tuples and sets are treated as leaves to match
-    ``instantiate_config``'s recursion shape; today's launcher configs do not
-    contain ``OutputName`` inside tuples or sets, and matching the executor's
-    behaviour avoids surprising shape changes.
+    Recurses *into* ``MirroredValue`` and ``VersionedValue`` to surface any
+    nested ``OutputName``, but rebuilds the wrapper rather than resolving it —
+    the worker still needs to see the wrapper to apply its region-aware
+    semantics.
     """
 
     def join_path(name: str | None) -> str:
@@ -334,9 +294,7 @@ def _substitute_output_paths_only(config: ConfigT, output_path: str) -> ConfigT:
             return replace(obj, value=recurse(obj.value))
         if isinstance(obj, VersionedValue):
             return replace(obj, value=recurse(obj.value))
-        # InputName / ExecutorStep are passed through; the worker's
-        # `materialize(config)` resolves them after running upstream steps in
-        # its own region.
+        # InputName / ExecutorStep are deferred to the worker's materialize().
         if isinstance(obj, (InputName, ExecutorStep)):
             return obj
         if is_dataclass(obj) and not isinstance(obj, type):
@@ -353,22 +311,17 @@ def _substitute_output_paths_only(config: ConfigT, output_path: str) -> ConfigT:
 
 def resolve_local_placeholders(config: ConfigT, output_path: str) -> ConfigT:
     """Resolve every placeholder that the *caller* can resolve locally:
-    ``OutputName`` substitutions and ``VersionedValue`` unwrapping. Defers
-    ``InputName(step=…)`` and bare ``ExecutorStep`` references for the
-    worker's ``materialize`` call (which resolves them under the worker's
-    region).
+    ``OutputName`` substitutions and ``VersionedValue`` unwrapping.
 
-    Used by training-plan builders (``prepare_train``, ``prepare_grug_trial``)
-    that need a config they can read concrete values out of (``launch.mp``,
-    ``launch.batch_size``, etc.) to assemble the trainer's full config tree.
-    The legacy entrypoint helper ``submit_step_to_iris`` uses
-    ``_substitute_output_paths_only`` instead — it preserves
-    ``VersionedValue`` because the worker calls ``materialize`` which then
-    unwraps via ``instantiate_config``.
+    ``InputName(step=…)`` and bare ``ExecutorStep`` references are deferred
+    for the worker's ``materialize`` call (which resolves them under the
+    worker's region). ``MirroredValue`` is preserved (rebuilt around its
+    recursed inner value); its meaning is region-aware so resolution belongs
+    on the worker.
 
-    ``MirroredValue`` is preserved (rebuilt around its recursed inner value),
-    matching ``_substitute_output_paths_only`` — its meaning is region-aware
-    so resolution belongs on the worker.
+    Use this when the caller needs a config it can read concrete values out
+    of (e.g. ``launch.mp``, ``launch.batch_size``) to assemble a downstream
+    config tree before submission.
     """
 
     def join_path(name: str | None) -> str:
@@ -382,8 +335,8 @@ def resolve_local_placeholders(config: ConfigT, output_path: str) -> ConfigT:
         if isinstance(obj, MirroredValue):
             return replace(obj, value=recurse(obj.value))
         if isinstance(obj, VersionedValue):
-            # Unwrap fully — version-tracking only matters for hash assembly,
-            # which we already did in `_resolve_step_output_path`.
+            # Version tracking only matters for hash assembly, which was done
+            # by `_resolve_step_output_path`; unwrap fully here.
             return recurse(obj.value)
         if isinstance(obj, (InputName, ExecutorStep)):
             return obj
@@ -402,24 +355,18 @@ def resolve_local_placeholders(config: ConfigT, output_path: str) -> ConfigT:
 def submit_step_to_iris(step: ExecutorStep) -> None:
     """Submit ``step`` as a top-level Iris job and block until it terminates.
 
-    Replaces ``executor_main(steps=[step])`` in pipeline ``__main__`` blocks.
     The submitted job runs ``step.fn(resolved_config)`` on a worker chosen by
     ``step.resources``. ``resolved_config`` is ``step.config`` with the
     current step's ``OutputName`` placeholders pre-substituted to a concrete
-    path, but with upstream ``InputName(step=…)`` / ``ExecutorStep``
-    references left for the worker to resolve via ``materialize`` — that's
-    the whole point of the new architecture: upstream materialisation
-    happens in the worker's region, not the entrypoint's.
+    path; upstream ``InputName(step=…)`` / ``ExecutorStep`` references are
+    left for the worker to resolve via ``materialize`` in its own region.
 
     Args:
-        step: The ExecutorStep to submit. Must have ``resources`` set; an
-            entrypoint helper that fell back to inline execution would defeat
-            its purpose.
+        step: The ExecutorStep to submit. Must have ``resources`` set.
 
     Raises:
         ValueError: if ``step.resources`` is ``None``.
-        Any exception raised by the submitted job (via
-        ``handle.wait(raise_on_failure=True)``).
+        Any exception raised by the submitted job.
     """
     if step.resources is None:
         raise ValueError(
@@ -430,9 +377,8 @@ def submit_step_to_iris(step: ExecutorStep) -> None:
     step_output_path = _resolve_step_output_path(step)
     resolved_config = _substitute_output_paths_only(step.config, step_output_path)
 
-    # If the caller still has a `RemoteCallable` on the step, unwrap it: the
-    # outer submit happens here, and re-submitting from inside the job would
-    # double-launch. step_runner._run_iris_job applies the same convention.
+    # Unwrap RemoteCallable so the inner fn runs directly in the submitted
+    # job; re-submitting from inside would double-launch.
     inner_fn = step.fn.fn if isinstance(step.fn, RemoteCallable) else step.fn
 
     job_request = JobRequest(

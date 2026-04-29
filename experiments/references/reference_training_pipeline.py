@@ -82,10 +82,6 @@ data = dataclasses.replace(data, tokenizer=marin_tokenizer)
 data = add_validation_sets_to_mixture(data, default_validation_sets(tokenizer=data.tokenizer))
 
 # --- Training ---
-# Build a GrugBaseLaunchConfig and turn it into a TrainingPlan. Training is
-# NOT an ExecutorStep — `prepare_grug_trial` resolves the output_path locally,
-# `run_train` submits a single Iris job, and the worker materializes upstream
-# data in its own region.
 training_launch = GrugBaseLaunchConfig(
     model=model,
     data=data,
