@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from fray.types import ResourceConfig
 
+from experiments.bio_chem_notation import bio_chem_raw_validation_sets
 from experiments.defaults import default_raw_validation_sets
 from experiments.evals.fineweb2_multilingual import fineweb2_multilingual_raw_validation_sets
 from experiments.evals.long_tail_ppl_runnable import runnable_long_tail_raw_validation_sets
@@ -92,11 +93,20 @@ def runnable_long_tail_bundle() -> PerplexityGapBundle:
     )
 
 
+def bio_chem_bundle() -> PerplexityGapBundle:
+    return PerplexityGapBundle(
+        key="bio_chem",
+        description="Bio/chem notation slices materialized by the canonical bio_chem dataset factory.",
+        datasets_factory=bio_chem_raw_validation_sets,
+    )
+
+
 def registered_perplexity_gap_bundles() -> tuple[PerplexityGapBundle, ...]:
     return (
         base_raw_bundle(),
         multilingual_bundle(),
         runnable_long_tail_bundle(),
+        bio_chem_bundle(),
     )
 
 

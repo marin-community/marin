@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from fray.types import ResourceConfig
+
 from experiments.bio_chem_notation import BIO_CHEM_SLICES, bio_chem_raw_validation_sets
+from experiments.evals.perplexity_gap_registry import build_registered_perplexity_gap_coverage_plan
 
 EXPECTED_KEYS = {
     "bio_chem/refseq/refseq_viral_fasta",
@@ -35,7 +38,9 @@ def test_default_marin_vs_llama_gap_script_does_not_include_bio_chem_slices():
     assert all(not name.startswith("bio_chem/") for name in dataset_names)
 
 
-def test_bio_chem_gap_script_only_includes_bio_chem_slices():
-    from experiments.exp_model_perplexity_gap_bio_chem_marin_vs_llama import DATASETS
+def test_registered_coverage_plan_exposes_bio_chem_only_bundle():
+    plan = build_registered_perplexity_gap_coverage_plan(
+        resource_config=ResourceConfig.with_tpu("v5p-8", regions=["us-central1"])
+    )
 
-    assert set(DATASETS) == EXPECTED_KEYS
+    assert set(plan.score_steps[("bio_chem", "marin_8b")].config.datasets) == EXPECTED_KEYS
