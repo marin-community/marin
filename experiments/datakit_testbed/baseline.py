@@ -23,7 +23,11 @@ from __future__ import annotations
 import logging
 import os
 
-from marin.execution.executor import Executor, ExecutorMainConfig, ExecutorStep, executor_main
+from rigging.filesystem import marin_prefix
+from rigging.log_setup import configure_logging
+
+from marin.execution.dag import ExecutorStep
+from marin.execution.executor import Executor, ExecutorMainConfig, executor_main
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem import marin_prefix

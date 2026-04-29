@@ -14,7 +14,8 @@ For GPU training, see train_tiny_model_gpu.py
 
 from fray import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main, versioned
+from marin.execution.dag import versioned
+from marin.execution.executor import executor_main
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_nano

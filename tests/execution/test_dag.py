@@ -10,17 +10,16 @@ from threading import Thread
 
 import pytest
 
-from marin.execution.dag import upstream_steps
-from marin.execution.executor import (
+from marin.execution.dag import (
     ExecutorStep,
     InputName,
-    compute_output_path,
-    materialize,
     mirrored,
     output_path_of,
     this_output_path,
+    upstream_steps,
     versioned,
 )
+from marin.execution.executor import compute_output_path, materialize
 
 
 @dataclass(frozen=True)

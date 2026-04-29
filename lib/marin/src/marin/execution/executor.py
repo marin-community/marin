@@ -114,20 +114,11 @@ from marin.execution.dag import (
     InputNameEvent,
     MirroredValue,
     OutputName,
-    THIS_OUTPUT_PATH,
     VersionedEvent,
     VersionedValue,
     _make_prefix_absolute_path,
-    ensure_versioned,
-    get_executor_step,
     instantiate_config,
-    mirrored,
-    output_path_of,
-    resolve_local_placeholders,
-    this_output_path,
-    unwrap_versioned_value,
     upstream_steps,
-    versioned,
     walk_config,
 )
 from marin.execution.step_spec import StepSpec
@@ -141,38 +132,6 @@ from marin.execution.remote import RemoteCallable
 from marin.execution.step_runner import StepRunner, worker_id
 from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
-
-# Re-exports kept so the ~100 importers of `from marin.execution.executor
-# import …` continue to work after the placeholder dataclasses moved to
-# dag.py. The cycle is gone (dag.py does not import from this module), so
-# these re-exports add no risk.
-__all__ = [
-    "THIS_OUTPUT_PATH",
-    "Executor",
-    "ExecutorInfo",
-    "ExecutorMainConfig",
-    "ExecutorStep",
-    "ExecutorStepInfo",
-    "InputName",
-    "InputNameEvent",
-    "MirroredValue",
-    "OutputName",
-    "VersionedEvent",
-    "VersionedValue",
-    "ensure_versioned",
-    "executor_main",
-    "get_executor_step",
-    "instantiate_config",
-    "materialize",
-    "mirrored",
-    "output_path_of",
-    "resolve_local_placeholders",
-    "this_output_path",
-    "unwrap_versioned_value",
-    "upstream_steps",
-    "versioned",
-    "walk_config",
-]
 
 logger = logging.getLogger(__name__)
 

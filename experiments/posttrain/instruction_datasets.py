@@ -44,14 +44,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from marin.execution.executor import (
-    ExecutorStep,
-    executor_main,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
-from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
+from experiments.defaults import default_tokenize
+from experiments.llama import llama3_tokenizer
+from marin.execution.dag import ExecutorStep, output_path_of, this_output_path, versioned
+from marin.execution.executor import executor_main
 from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
     convert_conversation_to_dolma,

@@ -10,7 +10,7 @@ Helpful functions for the executor
 import logging
 import re
 
-from marin.execution.executor import InputName
+from marin.execution.dag import InputName
 
 logger = logging.getLogger(__name__)
 

@@ -31,7 +31,7 @@ from fray.cluster import ResourceConfig
 from fray.types import Entrypoint, JobRequest, create_environment
 from rigging.filesystem import marin_prefix
 
-from marin.execution.executor import versioned
+from marin.execution.dag import versioned
 from marin.execution.sweep import SweepTarget, claim_and_run
 
 from experiments.defaults import prepare_train, run_train

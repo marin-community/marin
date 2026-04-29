@@ -21,7 +21,8 @@ import os
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
-from marin.execution.executor import Executor, ExecutorMainConfig, ExecutorStep, executor_main
+from marin.execution.dag import ExecutorStep
+from marin.execution.executor import Executor, ExecutorMainConfig, executor_main
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate

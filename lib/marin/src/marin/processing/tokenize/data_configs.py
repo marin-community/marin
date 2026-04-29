@@ -10,8 +10,8 @@ import numpy
 from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, BlockShuffleConfig, DatasetComponent, LmDataConfig
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
+from marin.execution.dag import ExecutorStep, InputName, output_path_of
 from marin.execution import unwrap_versioned_value
-from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
 
 TokenizerStep = ExecutorStep[TokenizeConfig]

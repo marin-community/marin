@@ -24,7 +24,7 @@ from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
 
-from marin.execution.executor import THIS_OUTPUT_PATH
+from marin.execution.dag import THIS_OUTPUT_PATH
 from marin.processing.classification.deduplication.dedup_commons import (
     DEFAULT_FILETYPES,
     _collect_input_files,

@@ -4,7 +4,8 @@
 """Tokenization and mixture configs for the Common Pile v0.1 dataset."""
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.dag import ExecutorStep, this_output_path
+from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 
 from experiments.defaults import default_tokenize

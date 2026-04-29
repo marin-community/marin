@@ -17,7 +17,7 @@ from levanter.main.viz_logprobs import main as viz_lm_main
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.executor import this_output_path
+from marin.execution.dag import this_output_path
 
 logger = logging.getLogger(__name__)
 

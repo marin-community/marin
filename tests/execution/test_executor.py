@@ -19,19 +19,16 @@ from marin.evaluation.perplexity_gap import (
     model_perplexity_scores,
     raw_text_dataset,
 )
-from marin.execution import THIS_OUTPUT_PATH
-from marin.execution.executor import (
-    Executor,
+from marin.execution.dag import (
     ExecutorStep,
     InputName,
-    _get_info_path,
-    collect_dependencies_and_version,
     instantiate_config,
     mirrored,
     output_path_of,
     this_output_path,
     versioned,
 )
+from marin.execution.executor import Executor, _get_info_path, collect_dependencies_and_version
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,

@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import posixpath
 
+from marin.execution.dag import ExecutorStep
 from marin.datakit.download.npm_registry_metadata import (
     NPM_REGISTRY_SLICE_KEY,
     NpmRegistryMetadataSource,
     npm_registry_metadata_step,
 )
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import ExecutorStep
 
 ISSUE_5061 = 5061
 EPIC_5005 = 5005

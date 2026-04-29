@@ -21,7 +21,9 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from rigging.filesystem import open_url
+from marin.execution.dag import ExecutorStep, this_output_path
+from marin.execution.executor import executor_main
 from marin.utils import fsspec_glob
 from rigging.filesystem import open_url
 from zephyr import Dataset, ZephyrContext, load_file, load_jsonl
