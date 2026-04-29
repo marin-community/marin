@@ -117,13 +117,12 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/tokenizat
 
 - `true`: full permutation shuffle (best mixing, highest random-access IO pressure)
 - `false`: no shuffle
-- positive integer: era shuffle with that era length
 - object: hierarchical block shuffle (`BlockShuffleConfig`)
 - omitted: hierarchical block shuffle with `io_block_size: 256`, `window_blocks: 512`, and `perm_type: feistel`
 
 ```yaml
 data:
-  # Default block shuffle
+  # Hierarchical block shuffle (default)
   shuffle:
     io_block_size: 256
     window_blocks: 512
@@ -136,25 +135,8 @@ data:
   shuffle: true
 ```
 
-```yaml
-data:
-  # Era shuffle with 131072-example eras
-  shuffle: 131072
-  permutation_type: feistel
-```
-
-```yaml
-data:
-  # Hierarchical block shuffle
-  shuffle:
-    io_block_size: 256
-    window_blocks: 512
-    perm_type: feistel
-```
-
-Block shuffle is designed for TensorStore-backed training caches: it preserves more IO locality than full shuffle while
-still mixing globally better than era shuffle. Internally it shuffles full blocks, then shuffles examples within a
-window of blocks.
+Block shuffle is designed for TensorStore-backed training caches: it preserves more IO locality than full shuffle.
+Internally it shuffles full blocks, then shuffles examples within a window of blocks.
 
 Practical defaults:
 
