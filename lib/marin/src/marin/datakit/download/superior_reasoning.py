@@ -14,6 +14,7 @@ from zephyr import Dataset, ZephyrContext, counters
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step
 from marin.datakit.download.rollout_transforms import strip_think_tags
 from marin.execution.step_spec import StepSpec
 
@@ -59,7 +60,7 @@ def transform(input_path: str, output_path: str) -> None:
         .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="superior-reasoning-transform", resources=ResourceConfig(cpu=1, ram="8g"))
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)
 
 
 def download_superior_reasoning_step() -> StepSpec:
@@ -79,4 +80,13 @@ def download_superior_reasoning_step() -> StepSpec:
             output_path=output_path,
         ),
         hash_attrs={"version": "v1"},
+    )
+
+
+def superior_reasoning_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the full ``(download+transform, normalize)`` chain for superior-reasoning."""
+    processed = download_superior_reasoning_step()
+    return (
+        processed,
+        normalize_step(name="normalized/superior-reasoning", download=processed),
     )

@@ -36,11 +36,12 @@ from iris.cluster.types import (
     ResourceSpec,
     is_job_finished,
 )
-from iris.rpc import config_pb2, logging_pb2
+from finelog.rpc import logging_pb2
+from iris.rpc import config_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
+from finelog.rpc.logging_connect import LogServiceClientSync
 from rigging.timing import Duration
 
 from .chronos import VirtualClock

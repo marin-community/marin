@@ -102,11 +102,6 @@ class AsyncDataset(DatasetBase[T_co]):
 
         return permutation.PermutationDataset(self, key, perm_type=perm_type)
 
-    def era_shuffle(self, era_length: int, key: PRNGKeyArray, *, perm_type: PermType = "feistel"):
-        import levanter.data.permutation as permutation
-
-        return permutation.EraShufflingDataset(self, era_length, key=key, perm_type=perm_type)
-
     def block_shuffle(
         self,
         *,

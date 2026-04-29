@@ -6,7 +6,6 @@ from functools import lru_cache
 from typing import Optional, Sequence
 
 import jax.random
-from async_lru import alru_cache
 from jaxtyping import PRNGKeyArray
 
 from levanter.data._prp import PermType, Permutation
@@ -58,90 +57,6 @@ class PermutationDataset(AsyncDataset[T_co]):
         if self._permutation is None:
             self._permutation = Permutation.make(self._perm_type, await self.async_len(), self.key)
         return self._permutation
-
-
-class EraShufflingDataset(AsyncDataset[T_co]):
-    r"""
-    A dataset that shuffles the data in "eras" of fixed length. Era shuffling is somewhere in between a shuffle buffer
-    and a permutation. It's a "local" permutation where pi(i) \in [ (i//L) * L, (i//L + 1) * L ) for some era length L.
-
-    The advantages of era shuffling are:
-    - It's stateless, so resumes are easy
-    - Like shuffle buffers, it's a decent compromise between full shuffling and no shuffling
-    - Like a shuffle buffer, it's streaming: we don't need to know the length of the data in advance
-
-    The disadvantages are:
-    - It's not as good as full shuffling
-    - It distributes less well than a shuffle buffer does. It's more like a "local" shuffle buffer.
-    - You have to wait for an era to fill before you can start shuffling it. With prefetching, this is less of an issue.
-
-
-    # TODO: given the way tokenization works (where it runs way ahead of training), we can probably increase the era
-    length # over time. This would be a nice feature to have.
-    """
-
-    def __init__(
-        self, dataset: AsyncDataset[T_co], era_length: int, *, key: jax.random.PRNGKey, perm_type: PermType = "feistel"
-    ):
-        self.dataset = dataset
-        self.era_length = era_length
-
-        # Force key to CPU (like MixtureDataset does) to prevent JAX device placement errors
-        with local_cpu_mesh():
-            if isinstance(key, int):
-                key = jax.random.PRNGKey(key)
-            else:
-                key = _key_on_local_cpu(key)
-
-        self.key = key
-        self._perm_type = perm_type
-
-        @alru_cache(maxsize=4)  # we're mostly going to be going sequentially
-        async def gen_era_permutation(era: int) -> Permutation:
-            # TODO: support epochs
-            if self.dataset.is_finite():
-                # edge case: final era may be shorter than era_length
-                dataset_len = await self.dataset.async_len()
-                remaining = dataset_len - era * self.era_length
-                if remaining <= 0:
-                    raise IndexError(
-                        f"Era {era} is out of bounds for dataset length {dataset_len} with era length {self.era_length}"
-                    )
-                era_length_val = min(self.era_length, remaining)
-            else:
-                era_length_val = self.era_length
-
-            mix_key = _fold_in_on_local_cpu(key, era)
-            return Permutation.make(self._perm_type, era_length_val, mix_key)
-
-        self.gen_era_permutation = gen_era_permutation
-
-    async def _get_index(self, idx: int) -> int:
-        if idx < 0:
-            raise ValueError("Negative indices are not supported")
-        era = idx // self.era_length
-        permutation = await self.gen_era_permutation(era)
-        out = permutation(idx - era * self.era_length) + era * self.era_length
-
-        return out
-
-    async def async_len(self) -> int:
-        return await self.dataset.async_len()
-
-    def is_finite(self) -> bool:
-        return self.dataset.is_finite()
-
-    async def getitem_async(self, index: int) -> T_co:
-        return await self.dataset.getitem_async(await self._get_index(index))
-
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
-        return await self.dataset.get_batch([await self._get_index(i) for i in indices])
-
-    def __repr__(self):
-        return f"EraShufflingDataset({repr(self.dataset)}, era_length={self.era_length})"
-
-    def __str__(self):
-        return f"EraShufflingDataset({str(self.dataset)})"
 
 
 @dataclass(frozen=True)

@@ -24,6 +24,8 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 # RAW DATASET DOWNLOADS AND NORMALIZED OUTPUTS
 # ============================================================================
 
+# TODO (rav): remove these in favor of the datakit sources
+
 _downloads = {family: download_nemotron_v2_step(family) for family in NEMOTRON_V2_DATASETS}
 
 downloads: dict[str, ExecutorStep] = {family: step.as_executor_step() for family, step in _downloads.items()}
@@ -68,7 +70,7 @@ def tokenize_nemotron_v2_family(
             name=output_name,
             fn=tokenize,
             config=TokenizeConfig(
-                train_paths=[normalized_step / "outputs/main/**/*.parquet"],
+                train_paths=[normalized_step / "outputs/main/*.parquet"],
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),

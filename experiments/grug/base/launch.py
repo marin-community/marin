@@ -23,6 +23,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
+from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_validation_sets
 from experiments.grug.base.model import GrugModelConfig
@@ -99,6 +100,7 @@ def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(
             base_path=os.path.join(config.output_path, "checkpoints"),
+            temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
             keep=[{"every": 1000}],
