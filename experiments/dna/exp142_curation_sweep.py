@@ -32,10 +32,6 @@ Environment variables:
     SWEEP_DATASETS   CSV of dataset names to run (default: all in
                      ``TRAIN_DATASETS``). Useful for ``v31``, ``v32``, or
                      ``v33`` in isolation.
-    WARMUP_MODE      'yes'/'no' (default 'no'). When 'yes', each run is
-                     truncated to ``WARMUP_NUM_TRAIN_STEPS`` with
-                     ``WARMUP_EVALS_PER_RUN`` evals so the LR schedule and
-                     eval cadence (both derived from this) compress together.
 
 https://github.com/Open-Athena/bolinas-dna/issues/142
 """
@@ -130,10 +126,6 @@ EVALS_PER_RUN = 10
 CHECKPOINTS_PER_RUN = 3
 CHECKPOINT_TIME_INTERVAL = timedelta(hours=1)
 
-# Warmup mode (WARMUP_MODE=yes): smoke-test the full pipeline end-to-end.
-WARMUP_NUM_TRAIN_STEPS = 100
-WARMUP_EVALS_PER_RUN = 3
-
 WANDB_PROJECT = "marin"
 
 _EXPECTED_VOCAB_SIZE_WARNING = f"Tokenizer {TOKENIZER!r} not found in _KNOWN_VOCAB_SIZES"
@@ -145,13 +137,6 @@ logging.getLogger("marin.processing.tokenize.data_configs").addFilter(
 # =============================================================================
 # Environment overrides
 # =============================================================================
-
-
-def _warmup_mode() -> bool:
-    value = os.getenv("WARMUP_MODE", "no").lower()
-    if value not in ("yes", "no"):
-        raise ValueError(f"WARMUP_MODE must be 'yes' or 'no', got {value!r}")
-    return value == "yes"
 
 
 def _selected_datasets() -> dict[str, str]:
@@ -239,16 +224,9 @@ def _checkpointer(num_train_steps: int) -> CheckpointerConfig:
 
 
 def _build_train_step(strategy: str, dataset: str) -> ExecutorStep:
-    warmup = _warmup_mode()
-    num_train_steps = WARMUP_NUM_TRAIN_STEPS if warmup else NUM_TRAIN_STEPS
-    evals_per_run = WARMUP_EVALS_PER_RUN if warmup else EVALS_PER_RUN
-    steps_per_eval = max(1, num_train_steps // evals_per_run)
-
-    warmup_suffix = "-warmup" if warmup else ""
-    run_name = f"dna-bolinas-curation-sweep-{VERSION}{warmup_suffix}-{strategy}"
+    steps_per_eval = max(1, NUM_TRAIN_STEPS // EVALS_PER_RUN)
+    run_name = f"dna-bolinas-curation-sweep-{VERSION}-{strategy}"
     tags = ("dna", "exp142", "curation_sweep", VERSION, f"strategy={strategy}")
-    if warmup:
-        tags = (*tags, "warmup")
 
     inner = TrainLmConfig(
         data=_build_data_mixture(strategy, dataset),
@@ -267,9 +245,9 @@ def _build_train_step(strategy: str, dataset: str) -> ExecutorStep:
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=BATCH_SIZE,
-            num_train_steps=num_train_steps,
+            num_train_steps=NUM_TRAIN_STEPS,
             steps_per_eval=steps_per_eval,
-            checkpointer=_checkpointer(num_train_steps),
+            checkpointer=_checkpointer(NUM_TRAIN_STEPS),
             mesh=MeshConfig(axes={"replica": 1, "data": -1, "model": 1}),
             allow_nondivisible_batch_size=True,
         ),
