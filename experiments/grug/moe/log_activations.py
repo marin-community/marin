@@ -23,7 +23,7 @@ from jax.sharding import PartitionSpec as P
 from marin.execution.executor import ExecutorStep, executor_main, versioned
 
 from experiments.grug.moe.heuristic import build_from_heuristic
-from experiments.grug.moe.model import Transformer, _batch_spec
+from experiments.grug.moe.model import Transformer
 from levanter.grug.attention import AttentionMask
 
 
@@ -43,7 +43,8 @@ def _forward_with_activations(
 ) -> dict[str, np.ndarray]:
     """Run forward pass, capturing activations at every sublayer."""
     cfg = model.config
-    batch_spec = _batch_spec()
+    # Replicate — batch=1 can't be sharded across data devices
+    batch_spec = P(None, None, None)
 
     hidden = model.token_embed.at[token_ids].get(out_sharding=batch_spec)
     hidden = model.embed_gated_norm(model.embed_norm(hidden))
