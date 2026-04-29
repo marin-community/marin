@@ -193,12 +193,7 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
             a different region than the job output path.
     """
     if ttl_days not in ALLOWED_TTL_DAYS:
-        raise ValueError(
-            f"ttl_days={ttl_days} is not configured. "
-            f"Allowed values: {ALLOWED_TTL_DAYS}. "
-            f"Update ALLOWED_TTL_DAYS in lib/rigging/src/rigging/filesystem.py "
-            f"and re-run infra/configure_main_buckets.py to add a new TTL bucket."
-        )
+        raise ValueError(f"ttl_days={ttl_days} is not configured. Allowed values: {ALLOWED_TTL_DAYS}.")
 
     mp = marin_prefix()
 
