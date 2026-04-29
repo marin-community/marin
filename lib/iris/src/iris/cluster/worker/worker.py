@@ -8,10 +8,12 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
-from finelog.client import LogPusher, RemoteLogHandler
+from connectrpc.errors import ConnectError
+from finelog.client import LogClient, RemoteLogHandler, StatsError, Table
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos
@@ -35,6 +37,13 @@ from iris.cluster.worker.env_probe import (
 )
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
+from iris.cluster.worker.stats import (
+    WORKER_STATS_NAMESPACE,
+    WORKER_STATUS_IDLE,
+    WORKER_STATUS_RUNNING,
+    IrisWorkerStat,
+    build_worker_stat,
+)
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
@@ -44,6 +53,24 @@ from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
+
+
+def _now_dt() -> datetime:
+    """Wall-clock UTC datetime, sourced through ``rigging.timing.Timestamp``.
+
+    Stats rows record the UTC moment of the heartbeat. Going through
+    ``Timestamp.now()`` keeps the worker on the project's standard time
+    primitive (per ``lib/iris/AGENTS.md``); we cast to ``datetime`` only
+    at the schema boundary because the stats namespace's ``ts`` column is
+    ``TIMESTAMP_MS``.
+
+    The returned datetime is tz-naive but represents a UTC instant. The
+    stats namespace's ``ts`` column is ``pa.timestamp("ms")`` (no tz);
+    callers must normalize to UTC before storage so that server-side
+    queries which cast ``now() AT TIME ZONE 'UTC'`` line up. See
+    design.md "Datetime precision".
+    """
+    return datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
 
 
 @dataclass
@@ -189,17 +216,24 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        # LogPusher and RemoteLogHandler are created in start() before container
+        # LogClient and RemoteLogHandler are created in start() before container
         # adoption and registration. Building before adoption ensures adopted
-        # attempts capture a live pusher (regression #5261). Building before
+        # attempts capture a live client (regression #5261). Building before
         # registration ensures pre-register failures (container bring-up,
         # disk/health probes, registration rejection) leave remote logs.
         # Attachment relies on ``self._worker_id`` having been resolved locally
         # (IRIS_WORKER_ID, slice_id + TPU index, or GCE instance name); the rare
         # case where the controller assigns the id is handled by re-attaching
         # post-register.
-        self._log_pusher: LogPusher | None = None
+        self._log_client: LogClient | None = None
         self._log_handler: RemoteLogHandler | None = None
+        # Stats Table for the iris.worker namespace. Created lazily on the
+        # first successful register; if registration ever fails (server
+        # unreachable, version skew) we log the failure once and leave the
+        # field None so subsequent heartbeats silently no-op. The dashboard
+        # pane treats an empty roster as "no workers" rather than blocking.
+        self._stats_table: Table | None = None
+        self._stats_register_failed = False
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -226,15 +260,15 @@ class Worker:
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
 
     def start(self) -> None:
-        # Build the LogPusher *before* adopting containers so adopted attempts
-        # capture a live pusher rather than a permanent ``None`` (regression #5261).
-        # The pusher only depends on auth + the resolver callback, neither of
+        # Build the LogClient *before* adopting containers so adopted attempts
+        # capture a live client rather than a permanent ``None`` (regression #5261).
+        # The client only depends on auth + the resolver callback, neither of
         # which need the uvicorn server or controller client to exist yet.
         interceptors: tuple[AuthTokenInjector, ...] = ()
         if self._config.controller_address and self._config.auth_token:
             interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
         if self._config.controller_address:
-            self._log_pusher = LogPusher(
+            self._log_client = LogClient.connect(
                 "/system/log-server",
                 interceptors=interceptors,
                 resolver=self._resolve_log_service,
@@ -326,7 +360,7 @@ class Worker:
             attempt = TaskAttempt.adopt(
                 discovered=container,
                 container_handle=handle,
-                log_pusher=self._log_pusher,
+                log_client=self._log_client,
                 port_allocator=self._port_allocator,
                 poll_interval_seconds=self._config.poll_interval.to_seconds(),
             )
@@ -398,8 +432,8 @@ class Worker:
         if self._controller_client:
             self._controller_client.close()
         self._detach_log_handler()
-        if self._log_pusher is not None:
-            self._log_pusher.close()
+        if self._log_client is not None:
+            self._log_client.close()
         self._bundle_store.close()
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:
@@ -496,11 +530,11 @@ class Worker:
 
     def _attach_log_handler(self) -> None:
         """Attach or rename the remote log handler under ``worker_log_key(self._worker_id)``."""
-        if not self._worker_id or self._log_pusher is None:
+        if not self._worker_id or self._log_client is None:
             return
         key = worker_log_key(self._worker_id)
         if self._log_handler is None:
-            self._log_handler = RemoteLogHandler(self._log_pusher, key=key)
+            self._log_handler = RemoteLogHandler(self._log_client, key=key)
             self._log_handler.setLevel(logging.INFO)
             self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
             logging.getLogger().addHandler(self._log_handler)
@@ -508,14 +542,21 @@ class Worker:
             self._log_handler.key = key
 
     def _detach_log_handler(self) -> None:
-        """Remove and close the current RemoteLogHandler and LogPusher if any."""
+        """Remove and close the current RemoteLogHandler and LogClient if any.
+
+        ``LogClient.close`` drains every open Table including the stats
+        Table, so stats rows queued before shutdown still ship.
+        """
         if self._log_handler is not None:
             logging.getLogger().removeHandler(self._log_handler)
             self._log_handler.close()
             self._log_handler = None
-        if self._log_pusher is not None:
-            self._log_pusher.close()
-            self._log_pusher = None
+        # The stats Table belongs to LogClient; LogClient.close() drains it.
+        # Drop our cached reference so a subsequent register starts fresh.
+        self._stats_table = None
+        if self._log_client is not None:
+            self._log_client.close()
+            self._log_client = None
 
     def _make_state_change_callback(self, attempt: TaskAttempt) -> Callable[[job_pb2.TaskState], None]:
         """Build a closure that pushes a WorkerTaskStatus to the controller on transition.
@@ -713,7 +754,7 @@ class Worker:
             default_task_image=self._config.default_task_image,
             resolve_image=self._config.resolve_image,
             port_allocator=self._port_allocator,
-            log_pusher=self._log_pusher,
+            log_client=self._log_client,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
         attempt.on_state_change = self._make_state_change_callback(attempt)
@@ -886,11 +927,84 @@ class Worker:
         health = check_worker_health(disk_path=str(self._cache_dir))
         if not health.healthy:
             logger.warning("Worker health check failed: %s", health.error)
+        self._emit_worker_stat(resource_snapshot, healthy=health.healthy)
         return worker_pb2.Worker.PingResponse(
             resource_snapshot=resource_snapshot,
             healthy=health.healthy,
             health_error=health.error,
         )
+
+    def _emit_worker_stat(self, snapshot: job_pb2.WorkerResourceSnapshot, *, healthy: bool) -> None:
+        """Append one heartbeat row to the ``iris.worker`` stats namespace.
+
+        Non-blocking: ``Table.write`` queues for the bg flush thread, so the
+        ping path never waits on the stats service. Schema-register
+        failures (server unreachable, namespace conflict) are logged once
+        and the writer is dropped — the dashboard treats an empty roster
+        as "no workers" rather than blocking the rest of the page.
+
+        Schema-validation bugs (a missing/extra/typo'd field on
+        ``IrisWorkerStat``) are intentionally NOT swallowed here — they
+        propagate so the worker fails fast and the bug surfaces in tests
+        rather than silently producing an empty stats namespace.
+        """
+        table = self._get_or_register_stats_table()
+        if table is None:
+            return
+        if self._worker_id is None:
+            return
+        running = int(snapshot.running_task_count) if snapshot is not None else 0
+        if running > 0 or self._tasks:
+            status = WORKER_STATUS_RUNNING
+        else:
+            status = WORKER_STATUS_IDLE
+        try:
+            stat = build_worker_stat(
+                worker_id=self._worker_id,
+                ts=_now_dt(),
+                status=status,
+                address=self._resolve_address(),
+                healthy=healthy,
+                snapshot=snapshot,
+                metadata=self._worker_metadata,
+            )
+            table.write([stat])
+        except (StatsError, ConnectError, ConnectionError, OSError, TimeoutError):
+            # Transport / stats-protocol failure: log and move on; the bg
+            # flush thread already logs at warning when retries fail and
+            # the heartbeat path must not block on the stats service.
+            logger.debug("worker stat write failed", exc_info=True)
+
+    def _get_or_register_stats_table(self) -> Table | None:
+        """Lazily register the iris.worker namespace and cache the Table.
+
+        Returns ``None`` if registration has previously failed for this
+        worker process (we do not retry register-time failures within one
+        process — a misconfigured schema or unavailable stats endpoint is
+        a startup-time problem).
+        """
+        if self._stats_table is not None:
+            return self._stats_table
+        if self._stats_register_failed:
+            return None
+        if self._log_client is None:
+            return None
+        try:
+            self._stats_table = self._log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
+        except (StatsError, ConnectError, ConnectionError, OSError, TimeoutError) as exc:
+            # Transport / stats-protocol failure: one-shot give up. Schema
+            # bugs (TypeError, KeyError out of schema_from_dataclass) are
+            # intentionally NOT caught — the worker should crash visibly so
+            # the bug surfaces in tests / startup logs rather than the
+            # dashboard silently rendering empty.
+            logger.warning(
+                "worker stats namespace register failed (giving up): %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            self._stats_register_failed = True
+            return None
+        return self._stats_table
 
     def handle_start_tasks(self, request: worker_pb2.Worker.StartTasksRequest) -> worker_pb2.Worker.StartTasksResponse:
         """Start task attempts on this worker. Returns per-task ack."""

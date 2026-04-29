@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from finelog.client import LogPusher
+from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from finelog.types import str_to_log_level
 from rigging.log_setup import parse_log_level
@@ -204,7 +204,7 @@ class TaskAttempt:
         default_task_image: str | None,
         resolve_image: Callable[[str], str] | None,
         port_allocator: PortAllocator,
-        log_pusher: LogPusher | None,
+        log_client: LogClient | None,
         poll_interval_seconds: float = 5.0,
         *,
         container_handle: ContainerHandle | None = None,
@@ -232,7 +232,7 @@ class TaskAttempt:
             default_task_image: Fully-qualified task container image from cluster config
             resolve_image: Resolves image tags for the current platform (None for adopted tasks)
             port_allocator: Port allocator for releasing ports on cleanup
-            log_pusher: Pushes log entries to the central LogService.
+            log_client: Streams log entries to the central LogService.
             poll_interval_seconds: How often to poll container status
             container_handle: Pre-existing container handle for adopted tasks
             initial_status: Starting status (default PENDING, use RUNNING for adopted tasks)
@@ -247,7 +247,7 @@ class TaskAttempt:
         self._resolve_image_fn = resolve_image or (lambda x: x)
         self._port_allocator = port_allocator
         self._poll_interval_seconds = poll_interval_seconds
-        self._log_pusher = log_pusher
+        self._log_client = log_client
         self._log_key = task_log_key(config.task_attempt)
 
         # Task identity (from config)
@@ -293,7 +293,7 @@ class TaskAttempt:
         cls,
         discovered: DiscoveredContainer,
         container_handle: ContainerHandle,
-        log_pusher: LogPusher | None,
+        log_client: LogClient | None,
         port_allocator: PortAllocator,
         poll_interval_seconds: float = 5.0,
     ) -> "TaskAttempt":
@@ -330,7 +330,7 @@ class TaskAttempt:
             default_task_image=None,
             resolve_image=None,
             port_allocator=port_allocator,
-            log_pusher=log_pusher,
+            log_client=log_client,
             poll_interval_seconds=poll_interval_seconds,
             container_handle=container_handle,
             initial_status=job_pb2.TASK_STATE_RUNNING,
@@ -907,10 +907,10 @@ class TaskAttempt:
 
     def _push_logs(self, entries: list[logging_pb2.LogEntry]) -> None:
         """Push a batch of log entries to the central LogService."""
-        if not self._log_pusher or not entries:
+        if not self._log_client or not entries:
             return
         try:
-            self._log_pusher.push(self._log_key, entries)
+            self._log_client.write_batch(self._log_key, entries)
         except Exception:
             logger.debug("Failed to push %d logs for task %s", len(entries), self.task_id, exc_info=True)
 
@@ -941,11 +941,11 @@ class TaskAttempt:
         self.cleanup_done = True
 
         # Flush buffered log entries so they reach the server before the task
-        # is reported as complete. The pusher is shared across tasks so we
+        # is reported as complete. The client is shared across tasks so we
         # flush rather than close.
-        if self._log_pusher is not None:
+        if self._log_client is not None:
             try:
-                self._log_pusher.flush()
+                self._log_client.flush()
             except Exception as e:
                 logger.debug("Failed to flush logs for task %s: %s", self.task_id, e)
 

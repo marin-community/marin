@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""ASGI app wiring for the finelog log server."""
+"""ASGI app wiring for the finelog log + stats server."""
 
 from __future__ import annotations
 
@@ -17,8 +17,10 @@ from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from finelog.rpc.logging_connect import LogServiceWSGIApplication
+from finelog.rpc.finelog_stats_connect import StatsServiceWSGIApplication
 from finelog.server.interceptors import ConcurrencyLimitInterceptor
 from finelog.server.service import LogServiceImpl
+from finelog.server.stats_service import StatsServiceImpl
 
 # Cap on concurrent FetchLogs RPCs. Each read can fan out into DuckDB scans
 # across hundreds of MB of parquet; allowing unbounded parallelism evicts the
@@ -55,12 +57,17 @@ def build_log_server_asgi(
     *,
     interceptors: Iterable[Interceptor] = (),
     max_concurrent_fetch_logs: int = _MAX_CONCURRENT_FETCH_LOGS,
+    stats_service: StatsServiceImpl | None = None,
 ) -> Starlette:
-    """Build the ASGI app that serves the LogService RPC endpoints.
+    """Build the ASGI app that serves both the LogService and StatsService.
 
     A ``ConcurrencyLimitInterceptor`` is appended to ``interceptors`` to cap
     parallel ``FetchLogs`` RPCs. Callers override ``max_concurrent_fetch_logs``
     in tests that want to exercise the cap deterministically.
+
+    ``stats_service`` is optional for tests that don't exercise the stats
+    surface; production wiring (``run_log_server``) always supplies one
+    backed by the same ``LogStore`` as ``service``.
     """
     chain: list[Interceptor] = list(interceptors)
     chain.append(ConcurrencyLimitInterceptor({"FetchLogs": max_concurrent_fetch_logs}))
@@ -73,4 +80,7 @@ def build_log_server_asgi(
         Route("/health", _health),
         Mount(log_wsgi_app.path, app=WSGIMiddleware(log_wsgi_app)),
     ]
+    if stats_service is not None:
+        stats_wsgi_app = StatsServiceWSGIApplication(service=stats_service, interceptors=tuple(interceptors))
+        routes.append(Mount(stats_wsgi_app.path, app=WSGIMiddleware(stats_wsgi_app)))
     return Starlette(routes=routes, middleware=[Middleware(_LegacyIrisLoggingPathMiddleware)])

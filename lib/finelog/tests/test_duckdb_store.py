@@ -72,18 +72,21 @@ def test_regex_pattern_query(store: DuckDBLogStore):
 
 
 def test_flush_and_compaction(tmp_path: Path):
-    log_dir = tmp_path / "logs"
-    store = _make_store(log_dir=log_dir)
+    data_dir = tmp_path / "logs"
+    # The log namespace's parquet files live under {data_dir}/log/, not
+    # directly under {data_dir}.
+    namespace_dir = data_dir / "log"
+    store = _make_store(log_dir=data_dir)
     try:
         for batch in range(3):
             store.append(KEY, [_entry(f"b{batch}-{i}", epoch_ms=batch * 10 + i) for i in range(5)])
             store._force_flush()
-        assert len(sorted(log_dir.glob("tmp_*.parquet"))) == 3
+        assert len(sorted(namespace_dir.glob("tmp_*.parquet"))) == 3
 
         store._force_compaction()
 
-        assert len(sorted(log_dir.glob("tmp_*.parquet"))) == 0
-        assert len(sorted(log_dir.glob("logs_*.parquet"))) == 1
+        assert len(sorted(namespace_dir.glob("tmp_*.parquet"))) == 0
+        assert len(sorted(namespace_dir.glob("logs_*.parquet"))) == 1
 
         result = store.get_logs(KEY)
         assert len(result.entries) == 15

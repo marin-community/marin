@@ -17,7 +17,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import uvicorn
-from finelog.client import LogPusher, LogServiceProxy, RemoteLogHandler
+from finelog.client import LogClient, RemoteLogHandler
+from finelog.client.proxy import LogServiceProxy
 from finelog.server import LogServiceImpl
 from finelog.server.asgi import build_log_server_asgi
 from finelog.store.mem_store import MemStore
@@ -1187,11 +1188,13 @@ class Controller:
         # Providers that collect logs outside the worker process push directly
         # to the log server via RPC.
         if isinstance(self._provider, K8sTaskProvider):
-            self._provider.log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
+            self._provider.log_client = LogClient.connect(
+                self._log_service_address, interceptors=log_client_interceptors
+            )
 
         # Controller process logs ship to the log server via RemoteLogHandler.
-        self._log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
-        self._log_handler = RemoteLogHandler(self._log_pusher, key=CONTROLLER_LOG_KEY)
+        self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
+        self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)
 
         self._log_handler.setLevel(logging.DEBUG)
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
@@ -1215,6 +1218,7 @@ class Controller:
             auth=config.auth,
             system_endpoints={},
             user_budget_defaults=config.user_budget_defaults,
+            stats_log_client=self._log_client,
         )
         self._dashboard = ControllerDashboard(
             self._service,
@@ -1293,7 +1297,7 @@ class Controller:
 
         TODO(#5215): when rigging-mediated log sinks land, this fallback
         becomes a NullSink + StderrSink pair instead of a bundled server,
-        and the LogPusher / LogServiceProxy wiring below stops being a
+        and the LogClient / LogServiceProxy wiring below stops being a
         special case.
         """
         log_server_port = find_free_port()
@@ -1449,7 +1453,7 @@ class Controller:
         # from late log records hitting a closed store or connection.
         logging.getLogger("iris").removeHandler(self._log_handler)
         self._log_handler.close()
-        self._log_pusher.close()
+        self._log_client.close()
         self._remote_log_service.close()
         if self._log_service:
             self._log_service.close()

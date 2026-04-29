@@ -200,7 +200,7 @@ def make_controller(tmp_path):
     """Factory for building ``Controller`` instances with automatic teardown.
 
     ``Controller.__init__`` attaches a ``RemoteLogHandler`` to the ``iris``
-    logger and spawns a ``LogPusher`` drain thread. Without ``stop()``, those
+    logger and spawns a ``LogClient`` drain thread. Without ``stop()``, those
     leak across the test session and pull every ``iris.*`` log record into
     their internal queue — which can then be flushed into another test's
     monkeypatched ``LogServiceClientSync``. The factory tracks every

@@ -22,15 +22,23 @@ from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
 
 
-class InProcessLogPusher:
-    """Test-friendly log pusher that calls LogServiceImpl directly."""
+class InProcessLogClient:
+    """Test-friendly LogClient stand-in that calls LogServiceImpl directly.
+
+    Satisfies :class:`finelog.types.LogWriterProtocol` without spinning up
+    a real Connect endpoint, so provider tests can assert what landed in
+    the log store without RPC plumbing.
+    """
 
     def __init__(self, log_service: LogServiceImpl) -> None:
         self._log_service = log_service
 
-    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        if entries:
-            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries), ctx=None)
+    def write_batch(self, key: str, messages: list[logging_pb2.LogEntry]) -> None:
+        if messages:
+            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=messages), ctx=None)
+
+    def close(self) -> None:
+        pass
 
 
 @pytest.fixture
@@ -52,18 +60,18 @@ def log_service() -> LogServiceImpl:
 
 
 @pytest.fixture
-def log_pusher(log_service) -> InProcessLogPusher:
-    return InProcessLogPusher(log_service)
+def log_client(log_service) -> InProcessLogClient:
+    return InProcessLogClient(log_service)
 
 
 @pytest.fixture
-def provider(k8s, log_pusher):
+def provider(k8s, log_client):
     p = K8sTaskProvider(
         kubectl=k8s,
         namespace="iris",
         default_image="myrepo/iris:latest",
         cache_dir="/cache",
-        log_pusher=log_pusher,
+        log_client=log_client,
         log_poll_interval=1.0,
     )
     yield p

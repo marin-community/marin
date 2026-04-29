@@ -1114,12 +1114,12 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
 # ---------------------------------------------------------------------------
 
 
-def test_log_collector_set_pods_adds_and_removes(k8s, log_pusher):
+def test_log_collector_set_pods_adds_and_removes(k8s, log_client):
     """LogCollector.set_pods() adds new pods and removes absent ones."""
     from iris.cluster.providers.k8s.tasks import LogCollector
     from iris.cluster.types import JobName
 
-    collector = LogCollector(k8s, log_pusher, concurrency=1)
+    collector = LogCollector(k8s, log_client, concurrency=1)
     task_a = JobName.from_wire("/job/0")
     task_b = JobName.from_wire("/job/1")
     key_a = f"{task_a.to_wire()}:0"
@@ -1153,14 +1153,14 @@ def test_log_collector_set_pods_adds_and_removes(k8s, log_pusher):
     collector.close()
 
 
-def test_log_collector_set_pods_preserves_cursor_state(k8s, log_pusher):
+def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
     """set_pods() preserves last_timestamp for pods that remain tracked."""
     from datetime import datetime, timezone
 
     from iris.cluster.providers.k8s.tasks import LogCollector
     from iris.cluster.types import JobName
 
-    collector = LogCollector(k8s, log_pusher, concurrency=1)
+    collector = LogCollector(k8s, log_client, concurrency=1)
     task_id = JobName.from_wire("/job/0")
     key = f"{task_id.to_wire()}:0"
 

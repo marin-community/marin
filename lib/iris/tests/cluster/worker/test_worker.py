@@ -728,12 +728,12 @@ def test_port_binding_failure(mock_bundle_store, tmp_path):
 # ============================================================================
 
 
-def _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime):
-    """Build a Worker and attach a fake LogPusher (normally built in start())."""
+def _worker_with_mock_log_client(config, mock_bundle_store, mock_runtime):
+    """Build a Worker and attach a fake LogClient (normally built in start())."""
     worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
 
-    class _FakePusher:
-        def push(self, key, entries):
+    class _FakeLogClient:
+        def write_batch(self, key, messages):
             pass
 
         def flush(self, timeout=None):
@@ -742,7 +742,7 @@ def _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime):
         def close(self):
             pass
 
-    worker._log_pusher = _FakePusher()
+    worker._log_client = _FakeLogClient()
     return worker
 
 
@@ -758,7 +758,7 @@ def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_stor
         default_task_image="mock-image",
         worker_id="w-1",
     )
-    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
+    worker = _worker_with_mock_log_client(config, mock_bundle_store, mock_runtime)
 
     try:
         worker._attach_log_handler()
@@ -776,7 +776,7 @@ def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runti
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
     )
-    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
+    worker = _worker_with_mock_log_client(config, mock_bundle_store, mock_runtime)
 
     worker._attach_log_handler()
     assert worker._log_handler is None
@@ -793,7 +793,7 @@ def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runti
         default_task_image="mock-image",
         worker_id="w-1",
     )
-    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
+    worker = _worker_with_mock_log_client(config, mock_bundle_store, mock_runtime)
 
     try:
         worker._attach_log_handler()
@@ -1130,7 +1130,7 @@ def test_task_attempt_adopt_factory():
     attempt = TaskAttempt.adopt(
         discovered=container,
         container_handle=handle,
-        log_pusher=None,
+        log_client=None,
         port_allocator=port_allocator,
     )
 
