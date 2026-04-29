@@ -22,14 +22,14 @@ from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 GATE2_CONFIGS: list[tuple[int, float]] = [
     (1024, 9.00e18),
-    (1280, 2.83e19),
+    # (1280, 2.83e19),  # running
 ]
 
 # Only variants that passed gate 1
 # (label, split_gate_up, flatten_expert_norm)
 CONFIGS: list[tuple[str, bool, bool]] = [
     ("merged-all-expert", False, True),
-    ("split-all-expert", True, True),
+    # ("split-all-expert", True, True),  # running
 ]
 
 
