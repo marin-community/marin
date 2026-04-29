@@ -41,11 +41,14 @@ from fray.types import Entrypoint, JobRequest
 from rigging.filesystem import marin_temp_bucket
 from rigging.timing import ExponentialBackoff, log_time
 
+from iris.client import get_iris_ctx
+from iris.cluster.client.job_info import get_job_info
 from zephyr.dataset import Dataset
 from zephyr.plan import (
     Join,
     PhysicalOp,
     PhysicalPlan,
+    PhysicalStage,
     Scatter,
     Shard,
     SourceItem,
@@ -64,6 +67,9 @@ MAX_SHARD_FAILURES = 3
 
 ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/stage/{stage_name}/item_count"
 ZEPHYR_STAGE_BYTES_PROCESSED_KEY = "zephyr/stage/{stage_name}/bytes_processed"
+
+# Typical status text for a 6-stage pipeline is ~300 chars.
+MAX_STATUS_TEXT_LENGTH = 1000
 
 
 class ShardFailureKind(enum.StrEnum):
@@ -341,6 +347,9 @@ class ZephyrCoordinator:
         self._worker_states: dict[str, WorkerState] = {}
         self._last_seen: dict[str, float] = {}
         self._stage_name: str = ""
+        # The index of the currently active stage. For joins and reshards, the index of the parent.
+        self._current_stage_index: int = 0
+        self._plan_stages: list = []  # PhysicalStage list, set in run_pipeline
         self._total_shards: int = 0
         self._completed_shards: int = 0
         self._retries: int = 0
@@ -449,6 +458,7 @@ class ZephyrCoordinator:
                 now = time.monotonic()
                 if self._has_active_execution() and now - last_log_time > 5.0:
                     self._log_status()
+                    self._report_task_stats()
                     last_log_time = now
             except Exception:
                 if sys.is_finalizing():
@@ -479,6 +489,53 @@ class ZephyrCoordinator:
 
     def _has_active_execution(self) -> bool:
         return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
+
+    def _report_task_stats(self) -> None:
+        """Push task status text to the Iris coordinator if available."""
+        iris_client = ctx.client if (ctx := get_iris_ctx()) is not None else None
+        if iris_client is None:
+            return
+
+        job_info = get_job_info()
+        if job_info is None:
+            return
+
+        with self._lock:
+            current_stage_index = self._current_stage_index
+            stage_name = self._stage_name
+            plan_stages = self._plan_stages
+            completed = self._completed_shards
+            total_shards = self._total_shards
+            in_flight = len(self._in_flight)
+            queued = len(self._task_queue)
+            stage_start = self._stage_monotonic_start
+
+        totals = self.get_counters()
+        items = totals.get(ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name), 0)
+        bytes_processed = totals.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name), 0)
+        elapsed = time.monotonic() - (stage_start if stage_start is not None else float("inf"))
+        item_rate = items / elapsed if elapsed > 0 else 0.0
+        byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
+
+        lines = ["**Stages**\n"]
+        for idx, stage in enumerate(plan_stages):
+            stage_desc = _get_stage_description(stage)
+            bullet = f"- **{stage_desc}**" if idx == current_stage_index else f"- {stage_desc}"
+            lines.append(f"{bullet}")
+
+        pct = int(100 * completed / total_shards) if total_shards > 0 else 0
+        lines.append(
+            f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
+        )
+        mib = bytes_processed / (1024 * 1024)
+        mib_rate = byte_rate / (1024 * 1024)
+        lines.append(f"\n**Throughput** — {items:,} items ({item_rate:.1f}/s), {mib:.1f} MiB ({mib_rate:.1f} MiB/s)")
+
+        status_text_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
+        try:
+            iris_client.report_task_status_text(job_info.task_id, status_text_md)
+        except Exception:
+            logger.warning("Failed to report task status text to Iris controller", exc_info=True)
 
     def _log_status(self) -> None:
         with self._lock:
@@ -770,12 +827,19 @@ class ZephyrCoordinator:
                 logger.error("Coordinator aborted: %s", reason)
                 self._fatal_error = reason
 
-    def _start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
+    def _start_stage(
+        self,
+        stage_name: str,
+        current_stage_index: int,
+        tasks: list[ShardTask],
+        is_last_stage: bool = False,
+    ) -> None:
         """Load a new stage's tasks into the queue."""
         with self._lock:
             self._task_queue = deque(tasks)
             self._results = {}
             self._stage_name = stage_name
+            self._current_stage_index = current_stage_index
             self._total_shards = len(tasks)
             self._completed_shards = 0
             self._retries = 0
@@ -875,6 +939,10 @@ class ZephyrCoordinator:
                 default=-1,
             )
 
+            with self._lock:
+                self._current_stage_index = 0
+                self._plan_stages = list(plan.stages)
+
             for stage_idx, stage in enumerate(plan.stages):
                 stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
 
@@ -888,7 +956,7 @@ class ZephyrCoordinator:
                 # Build and submit tasks
                 tasks = _compute_tasks_from_shards(shards, stage, stage_name=stage_label, aux_per_shard=aux_per_shard)
                 logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
-                self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
+                self._start_stage(stage_label, stage_idx, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
 
                 # Wait for stage completion
                 self._wait_for_stage()
@@ -942,7 +1010,7 @@ class ZephyrCoordinator:
 
                 join_stage_label = f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}"
                 right_tasks = _compute_tasks_from_shards(right_refs, right_stage, stage_name=join_stage_label)
-                self._start_stage(join_stage_label, right_tasks)
+                self._start_stage(join_stage_label, parent_stage_idx, right_tasks)
                 self._wait_for_stage()
                 raw = self._collect_results()
                 right_is_scatter = any(isinstance(op, Scatter) for op in right_stage.operations)
@@ -1808,6 +1876,19 @@ def _compute_tasks_from_shards(
     return tasks
 
 
+def _get_stage_description(stage: PhysicalStage) -> str:
+    """Get a description of a stage, including optional hints."""
+    name = stage.stage_name()
+    hint_parts = []
+    if stage.stage_type == StageType.RESHARD:
+        hint_parts.append(f"reshard→{stage.output_shards}")
+    for op in stage.operations:
+        if isinstance(op, Join) and op.right_plan is not None:
+            hint_parts.append(f"join({len(op.right_plan.source_items)} items)")
+    hint_str = f" [{', '.join(hint_parts)}]" if hint_parts else ""
+    return f"{name}{hint_str}"
+
+
 def _print_plan(original_ops: list, plan: PhysicalPlan) -> None:
     """Print the physical plan showing shard count and operation fusion."""
     total_physical_ops = sum(len(stage.operations) for stage in plan.stages)
@@ -1824,13 +1905,8 @@ def _print_plan(original_ops: list, plan: PhysicalPlan) -> None:
 
     logger.info("\nPhysical stages:")
     for i, stage in enumerate(plan.stages, 1):
-        stage_desc = stage.stage_name()
-        hint_parts = []
-        if stage.stage_type == StageType.RESHARD:
-            hint_parts.append(f"reshard→{stage.output_shards}")
-        if any(isinstance(op, Join) for op in stage.operations):
-            hint_parts.append("join")
-        hint_str = f" [{', '.join(hint_parts)}]" if hint_parts else ""
-        logger.info(f"  {i}. {stage_desc}{hint_str}")
+
+        stage_desc = _get_stage_description(stage)
+        logger.info(f"  {i}. {stage_desc}")
 
     logger.info("\n=== End Plan ===\n")

@@ -1571,6 +1571,8 @@ class ControllerServiceImpl:
                     row.res_cpu_millicores, row.res_memory_bytes, row.res_disk_bytes, row.res_device_json
                 )
 
+        proto.status_text_md = self._store.tasks.get_status_text(task_id.to_wire())
+
         return controller_pb2.Controller.GetTaskStatusResponse(task=proto, job_resources=job_resources)
 
     def list_tasks(
@@ -2725,3 +2727,18 @@ class ControllerServiceImpl:
                 )
             self._controller.wake()
         return controller_pb2.Controller.UpdateTaskStatusResponse()
+
+    # --- Task Status Text Push ---
+
+    def set_task_status_text(
+        self,
+        request: job_pb2.SetTaskStatusTextRequest,
+        _ctx: Any,
+    ) -> job_pb2.SetTaskStatusTextResponse:
+        """Task pushes a markdown status string to the coordinator."""
+        task_id = JobName.from_wire(request.task_id)
+        task = _read_task_with_attempts(self._db, task_id)
+        if task is None:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+        self._transitions.record_task_status_text(task_id, request.status_text_md)
+        return job_pb2.SetTaskStatusTextResponse()
