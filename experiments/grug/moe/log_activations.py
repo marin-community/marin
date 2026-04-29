@@ -48,7 +48,9 @@ def _forward_with_activations(
     hidden = model.token_embed.at[token_ids].get(out_sharding=batch_spec)
     hidden = model.embed_gated_norm(model.embed_norm(hidden))
 
-    activations = {"embed": np.array(hidden)}
+    # Collect residual stream snapshots: embed, post_attn_0, post_mlp_0, ..., final
+    # Shape: (2*num_layers + 2, seq_len, hidden_dim)
+    residual_snapshots = [np.array(hidden)]  # embed
 
     segment_ids = None
     short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
@@ -62,17 +64,15 @@ def _forward_with_activations(
         # Attention sublayer
         attn_in = block.attn_gated_norm(block.rms_attn(hidden))
         hidden = hidden + block.attn(attn_in, layer_mask)
-        activations[f"layer_{i}_post_attn"] = np.array(hidden)
+        residual_snapshots.append(np.array(hidden))  # post_attn
 
-        # MLP sublayer
+        # MLP sublayer — capture router logits
         mlp_in = block.mlp_gated_norm(block.rms_mlp(hidden))
 
-        # Capture router logits before MoE dispatch
         from einops import rearrange
-
-        x_flat = rearrange(mlp_in, "b s d -> (b s) d")
         from jax.sharding import reshard
 
+        x_flat = rearrange(mlp_in, "b s d -> (b s) d")
         router_logits = jnp.einsum(
             "td,de->te", x_flat, reshard(block.mlp.router, P(None, None))
         ).astype(jnp.float32)
@@ -84,49 +84,58 @@ def _forward_with_activations(
 
             mlp_out = mlp_out + block.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         hidden = hidden + mlp_out
-        activations[f"layer_{i}_post_mlp"] = np.array(hidden)
+        residual_snapshots.append(np.array(hidden))  # post_mlp
 
     # Final norm
     hidden = model.final_gated_norm(model.final_norm(hidden))
-    activations["final"] = np.array(hidden)
+    residual_snapshots.append(np.array(hidden))  # final
 
-    # Stack router logits: (num_layers, num_tokens, num_experts)
-    activations["router_logits"] = np.stack(router_logits_all, axis=0)
+    return {
+        # (2*L+2, seq_len, hidden_dim) — order: embed, post_attn_0, post_mlp_0, ..., post_attn_L-1, post_mlp_L-1, final
+        "residual_stream": np.stack(residual_snapshots, axis=0),
+        # (num_layers, num_tokens, num_experts)
+        "router_logits": np.stack(router_logits_all, axis=0),
+    }
 
-    return activations
 
-
-def _save_to_gcs(activations: dict[str, np.ndarray], output_path: str, token_ids: np.ndarray, text: str):
-    """Save activations as .npy files to GCS."""
+def _save_to_gcs(activations: dict[str, np.ndarray], output_path: str, token_ids: np.ndarray, text: str, num_layers: int):
+    """Save activations to GCS: metadata + residual_stream + router_logits + token_ids."""
     fs = gcsfs.GCSFileSystem()
 
-    # Save metadata
+    # Build residual stream index: which row corresponds to what
+    residual_labels = ["embed"]
+    for i in range(num_layers):
+        residual_labels.append(f"layer_{i}_post_attn")
+        residual_labels.append(f"layer_{i}_post_mlp")
+    residual_labels.append("final")
+
     metadata = {
         "text": text,
         "num_tokens": len(token_ids),
         "token_ids": token_ids.tolist(),
-        "keys": list(activations.keys()),
+        "num_layers": num_layers,
+        "residual_labels": residual_labels,
+        "residual_stream_shape": list(activations["residual_stream"].shape),
+        "router_logits_shape": list(activations["router_logits"].shape),
     }
     with fs.open(f"{output_path}/metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
 
-    # Save each activation as .npy
-    for key, arr in activations.items():
+    for key in ["residual_stream", "router_logits"]:
         buf = io.BytesIO()
-        np.save(buf, arr)
+        np.save(buf, activations[key])
         buf.seek(0)
         with fs.open(f"{output_path}/{key}.npy", "wb") as f:
             f.write(buf.read())
-        print(f"Saved {key}: shape={arr.shape}, dtype={arr.dtype}")
+        print(f"Saved {key}: shape={activations[key].shape}, dtype={activations[key].dtype}")
 
-    # Save token ids
     buf = io.BytesIO()
     np.save(buf, token_ids)
     buf.seek(0)
     with fs.open(f"{output_path}/token_ids.npy", "wb") as f:
         f.write(buf.read())
 
-    print(f"\nAll activations saved to {output_path}")
+    print(f"\nSaved to {output_path} (4 files)")
 
 
 def main():
@@ -167,13 +176,16 @@ def main():
         # Forward with activations
         activations = _forward_with_activations(model, token_ids_jax)
 
-    # Squeeze batch dim
+    # Squeeze batch dim from residual_stream: (snapshots, 1, seq, d) -> (snapshots, seq, d)
     for key in activations:
-        if activations[key].ndim >= 2 and activations[key].shape[0] == 1:
-            activations[key] = activations[key].squeeze(0)
+        if activations[key].ndim == 4 and activations[key].shape[1] == 1:
+            activations[key] = activations[key][:, 0, :, :]
+        elif activations[key].ndim == 3 and activations[key].shape[1] == 1:
+            # router_logits batch dim is already squeezed by rearrange
+            pass
 
     # Save
-    _save_to_gcs(activations, args.output, token_ids, args.text)
+    _save_to_gcs(activations, args.output, token_ids, args.text, num_layers=model_cfg.num_layers)
 
 
 if __name__ == "__main__":
