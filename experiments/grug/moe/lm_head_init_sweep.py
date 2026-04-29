@@ -126,10 +126,46 @@ def _build_steps(gate: str) -> list[ExecutorStep]:
     ]
 
 
+def _dump_traceback_to_gcs(label: str) -> None:
+    """Write the current exception traceback to a fixed GCS path for debugging."""
+    import datetime
+    import traceback
+
+    try:
+        from fsspec import url_to_fs
+    except ImportError:
+        return
+    try:
+        path = (
+            "gs://marin-us-east5/grug/lm_head_init_sweep/_debug/"
+            f"{label}-{datetime.datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.log"
+        )
+        fs, _ = url_to_fs(path)
+        with fs.open(path, "w") as f:
+            f.write(traceback.format_exc())
+    except Exception:
+        # Best-effort; never let logging itself crash the process.
+        pass
+
+
 if __name__ == "__main__":
+    import sys
+    import traceback
+
     gate = os.environ.get("LM_HEAD_INIT_SWEEP_GATE", "1")
-    steps = _build_steps(gate)
-    executor_main(
-        steps=steps,
-        description=f"MoE lm_head init scale sweep (gate={gate}): scales={_LM_HEAD_INIT_SCALES}.",
-    )
+    try:
+        steps = _build_steps(gate)
+    except Exception:
+        _dump_traceback_to_gcs(f"build-gate{gate}")
+        traceback.print_exc(file=sys.stderr)
+        raise
+
+    try:
+        executor_main(
+            steps=steps,
+            description=f"MoE lm_head init scale sweep (gate={gate}): scales={_LM_HEAD_INIT_SCALES}.",
+        )
+    except Exception:
+        _dump_traceback_to_gcs(f"executor-gate{gate}")
+        traceback.print_exc(file=sys.stderr)
+        raise
