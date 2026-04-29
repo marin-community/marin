@@ -16,13 +16,28 @@ from marin.processing.tokenize import HfDatasetSpec
 RAW_WEB_MARKUP_PREFIX = "raw_web_markup"
 RAW_WEB_MARKUP_ISSUE_TAG = "issue:5056"
 SVG_STACK_DATASET = HfDatasetSpec(id="starvector/svg-stack")
-SVG_STACK_SOURCE_TAG = "source:svg_stack"
-SVG_XML_SURFACE_TAG = "surface:svg_xml"
 SVG_TEXT_KEY = "Svg"
 
 
-def _slice_key(source: str, surface: str) -> str:
+def raw_web_markup_slice_key(source: str, surface: str) -> str:
+    """Return the unprefixed raw-web-markup slice key for a source and surface."""
     return f"{source}/{surface}"
+
+
+def raw_web_markup_tags(
+    *,
+    source: str,
+    surface: str,
+    extra_tags: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Return standard tags for a raw-web-markup evaluation slice."""
+    return (
+        RAW_WEB_MARKUP_PREFIX,
+        RAW_WEB_MARKUP_ISSUE_TAG,
+        f"source:{source}",
+        f"surface:{surface}",
+        *extra_tags,
+    )
 
 
 def _hf_raw_web_markup_dataset(
@@ -30,31 +45,31 @@ def _hf_raw_web_markup_dataset(
     *,
     text_key: str,
     split: str,
-    source_tag: str,
-    surface_tag: str,
+    source: str,
+    surface: str,
 ) -> RawTextEvaluationDataset:
     return raw_text_dataset(
         hf_dataset,
         text_key=text_key,
         split=split,
-        tags=(RAW_WEB_MARKUP_PREFIX, RAW_WEB_MARKUP_ISSUE_TAG, source_tag, surface_tag, f"split:{split}"),
+        tags=raw_web_markup_tags(source=source, surface=surface, extra_tags=(f"split:{split}",)),
     )
 
 
 ACTIVE_RAW_WEB_MARKUP_DATASETS: dict[str, RawTextEvaluationDataset] = {
-    _slice_key("svg_stack", "svg_xml_val"): _hf_raw_web_markup_dataset(
+    raw_web_markup_slice_key("svg_stack", "svg_xml_val"): _hf_raw_web_markup_dataset(
         SVG_STACK_DATASET,
         text_key=SVG_TEXT_KEY,
         split="val",
-        source_tag=SVG_STACK_SOURCE_TAG,
-        surface_tag=SVG_XML_SURFACE_TAG,
+        source="svg_stack",
+        surface="svg_xml",
     ),
-    _slice_key("svg_stack", "svg_xml_test"): _hf_raw_web_markup_dataset(
+    raw_web_markup_slice_key("svg_stack", "svg_xml_test"): _hf_raw_web_markup_dataset(
         SVG_STACK_DATASET,
         text_key=SVG_TEXT_KEY,
         split="test",
-        source_tag=SVG_STACK_SOURCE_TAG,
-        surface_tag=SVG_XML_SURFACE_TAG,
+        source="svg_stack",
+        surface="svg_xml",
     ),
 }
 
