@@ -5,10 +5,11 @@
 
 from urllib.parse import urlparse
 
-from fray.v2.types import ResourceConfig
+from fray.types import ResourceConfig
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
 from marin.rl.placement import marin_prefix_for_region
+from rigging.filesystem import REGION_TO_DATA_BUCKET
 
 CANONICAL_MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 MODEL_ARTIFACT_SUBPATH = "models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f"
@@ -26,6 +27,7 @@ DEFAULT_GPU_MEMORY_UTILIZATION = 0.90
 GPU_WORKER_CPU = 32
 GPU_WORKER_RAM = "240g"
 GPU_WORKER_DISK = "128g"
+_DATA_BUCKET_TO_REGION = {bucket: bucket_region for bucket_region, bucket in REGION_TO_DATA_BUCKET.items()}
 
 
 def gpu_smoke_resources(*, region: str, gpu_type: str, gpu_count: int) -> ResourceConfig:
@@ -102,26 +104,30 @@ def gpu_smoke_model_path(region: str) -> str:
 
 
 def validate_gpu_smoke_model_path(*, region: str, model_path: str) -> None:
-    """Require a region-local Marin GCS artifact path for smoke-run model bootstrap."""
-    if urlparse(model_path).scheme != "gs":
-        raise ValueError(
-            "GPU smoke model_path must be a region-local Marin GCS artifact. "
-            f"Pass a gs:// path under {gpu_smoke_prefix(region)!r}."
-        )
+    """Reject cross-region Marin GCS reads while allowing external model sources."""
+    parsed = urlparse(model_path)
+    if parsed.scheme != "gs":
+        return
 
-    expected_prefix = gpu_smoke_prefix(region)
-    if not model_path.startswith(f"{expected_prefix}/"):
-        raise ValueError(
-            "GPU smoke model_path must stay in the launcher region to avoid cross-region model reads. "
-            f"Expected a path under {expected_prefix!r}, got {model_path!r}."
-        )
+    expected_bucket = REGION_TO_DATA_BUCKET.get(region.lower())
+    model_bucket_region = _DATA_BUCKET_TO_REGION.get(parsed.netloc)
+    if model_bucket_region is None or parsed.netloc == expected_bucket:
+        return
+
+    expected_prefix = f"gs://{expected_bucket}" if expected_bucket is not None else f"region {region!r}"
+    actual_prefix = f"gs://{parsed.netloc}"
+    raise ValueError(
+        "GPU smoke model_path must stay in the launcher region to avoid cross-region model reads. "
+        f"Expected a path under {expected_prefix!r}, got {actual_prefix!r} for region {model_bucket_region!r}."
+    )
 
 
 def resolve_gpu_smoke_model_path(*, region: str, model_path: str | None) -> str:
     """Return the validated model artifact path for a smoke run."""
-    resolved_model_path = model_path or gpu_smoke_model_path(region)
-    validate_gpu_smoke_model_path(region=region, model_path=resolved_model_path)
-    return resolved_model_path
+    if model_path is None:
+        return gpu_smoke_model_path(region)
+    validate_gpu_smoke_model_path(region=region, model_path=model_path)
+    return model_path
 
 
 DEFAULT_MODEL_PATH = gpu_smoke_model_path(DEFAULT_EXPERIMENT_REGION)

@@ -3,11 +3,7 @@
 
 # nodryrun because vLLM is not installed by default
 
-"""Regression probe E6: executor + GCS + small GPU-only RL launch.
-
-This keeps the same small smoke envelope as E5, but routes through executor_main
-to preserve the executor-managed RL regression path for the first GPU milestone.
-"""
+"""Regression probe: executor + small GPU-only RL launch."""
 
 import argparse
 import datetime
@@ -75,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-path",
         default=None,
-        help="Region-local Marin GCS model artifact path. Defaults to the canonical cached artifact in --region.",
+        help="Model artifact path or Hugging Face model id. Defaults to the canonical cached artifact in --region.",
     )
     return parser.parse_args()
 
@@ -99,7 +95,7 @@ def build_debug_config(
     model_path: str | None,
 ) -> RLExperimentConfig:
     resolved_model_path = resolve_gpu_smoke_model_path(region=region, model_path=model_path)
-    tags = ["rl", "iris-debug", "regression", "e6", "gpu", experiment_name_suffix]
+    tags = ["rl", "iris-debug", "regression", "gpu", experiment_name_suffix]
     return RLExperimentConfig(
         model_config=build_model_config(resolved_model_path),
         rl_loss=RLOOLoss(
@@ -165,9 +161,7 @@ def main() -> None:
     executor_main(
         executor_main_config_for_rl_experiment(debug_config),
         steps=[step],
-        description=(
-            f"Iris RL regression probe E6: executor + GCS + small GPU-only " f"({args.num_train_steps} training steps)"
-        ),
+        description=(f"Iris RL regression probe: executor + small GPU-only ({args.num_train_steps} training steps)"),
     )
 
 

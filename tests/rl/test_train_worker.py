@@ -4,7 +4,6 @@
 from types import SimpleNamespace
 
 import pytest
-from levanter.layers.attention import AttentionBackend
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.train_worker import (
@@ -12,7 +11,6 @@ from marin.rl.train_worker import (
     InitialRolloutState,
     TrainWorker,
     _initial_rollout_state,
-    _resolved_attention_backend,
     _resume_safe_weight_transfer_metrics,
     _training_step_timing_metrics,
 )
@@ -348,14 +346,3 @@ def test_checkpoint_debug_snapshot_includes_replay_buffer_and_transfer_state():
             "latest_transfer_metrics": {"a": 1},
         },
     }
-
-
-def test_resolved_attention_backend_uses_runtime_default(monkeypatch):
-    monkeypatch.setattr("marin.rl.train_worker.default_attention_type", lambda: AttentionBackend.NVTE)
-
-    assert _resolved_attention_backend(None) == AttentionBackend.NVTE
-    assert _resolved_attention_backend(AttentionBackend.DEFAULT) == AttentionBackend.NVTE
-
-
-def test_resolved_attention_backend_preserves_explicit_backend():
-    assert _resolved_attention_backend(AttentionBackend.SPLASH) == AttentionBackend.SPLASH
