@@ -10,7 +10,6 @@ The first non-empty slices use ``starvector/svg-stack`` directly from Hugging Fa
 so we can preserve exact SVG XML without adding a downloader.
 """
 
-import os
 from collections.abc import Mapping
 
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
@@ -22,6 +21,10 @@ SVG_STACK_DATASET = HfDatasetSpec(id="starvector/svg-stack")
 SVG_STACK_SOURCE_TAG = "source:svg_stack"
 SVG_XML_SURFACE_TAG = "surface:svg_xml"
 SVG_TEXT_KEY = "Svg"
+
+
+def _slice_key(source: str, surface: str) -> str:
+    return f"{source}/{surface}"
 
 
 def _hf_raw_web_markup_dataset(
@@ -41,14 +44,14 @@ def _hf_raw_web_markup_dataset(
 
 
 ACTIVE_RAW_WEB_MARKUP_DATASETS: dict[str, RawTextEvaluationDataset] = {
-    os.path.join("svg_stack", "svg_xml_val"): _hf_raw_web_markup_dataset(
+    _slice_key("svg_stack", "svg_xml_val"): _hf_raw_web_markup_dataset(
         SVG_STACK_DATASET,
         text_key=SVG_TEXT_KEY,
         split="val",
         source_tag=SVG_STACK_SOURCE_TAG,
         surface_tag=SVG_XML_SURFACE_TAG,
     ),
-    os.path.join("svg_stack", "svg_xml_test"): _hf_raw_web_markup_dataset(
+    _slice_key("svg_stack", "svg_xml_test"): _hf_raw_web_markup_dataset(
         SVG_STACK_DATASET,
         text_key=SVG_TEXT_KEY,
         split="test",
@@ -62,7 +65,7 @@ def prefixed_raw_web_markup_validation_sets(
     datasets: Mapping[str, RawTextEvaluationDataset],
 ) -> dict[str, RawTextEvaluationDataset]:
     """Prefix raw-web-markup slice names with ``raw_web_markup/``."""
-    return {os.path.join(RAW_WEB_MARKUP_PREFIX, slice_name): dataset for slice_name, dataset in datasets.items()}
+    return {f"{RAW_WEB_MARKUP_PREFIX}/{slice_name}": dataset for slice_name, dataset in datasets.items()}
 
 
 def raw_web_markup_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
