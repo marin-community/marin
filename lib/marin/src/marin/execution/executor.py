@@ -1388,12 +1388,22 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
 ############################################################
 
 
-def _resolve_step_output_path(step: ExecutorStep, *, prefix: str | None = None) -> str:
-    """Compute the concrete output path for ``step`` without running anything.
+def compute_output_path(
+    name: str,
+    config: Any,
+    *,
+    override_output_path: str | None = None,
+    prefix: str | None = None,
+) -> str:
+    """Compute the concrete output path a step with this name+config will produce.
 
-    Drives ``Executor.compute_version`` (which only walks the dependency graph
-    and computes hashes — no GCS I/O, no job submission) far enough to populate
-    ``Executor.output_paths[step]``.
+    Drives ``Executor.compute_version`` (which walks the config's dependency
+    graph and hashes versioned values — no GCS I/O, no job submission) far
+    enough to populate the resulting output path. Honors ``override_output_path``
+    if provided. Otherwise resolves ``prefix`` from ``marin_prefix()`` and
+    derives the path from ``name`` + a hash of the config's versioned values,
+    matching ``Executor``'s scheme so a step run via ``Executor.run`` and a
+    path computed here agree on the same value.
     """
     resolved_prefix = prefix if prefix is not None else marin_prefix()
     executor_info_base_path = os.path.join(resolved_prefix, "experiments")
@@ -1401,8 +1411,26 @@ def _resolve_step_output_path(step: ExecutorStep, *, prefix: str | None = None) 
         prefix=resolved_prefix,
         executor_info_base_path=executor_info_base_path,
     )
+    # Build a transient ExecutorStep purely as input to compute_version. The
+    # step is never submitted; only its name + config + override_output_path
+    # are read to derive the path. Keeping this private to compute_output_path
+    # means callers don't have to construct a fake step they never run.
+    step = ExecutorStep(
+        name=name,
+        fn=_noop_step_fn,
+        config=config,
+        override_output_path=override_output_path,
+    )
     executor.compute_version(step, is_pseudo_dep=False)
     return executor.output_paths[step]
+
+
+def _noop_step_fn(config: Any) -> None:
+    """Placeholder fn for the transient step built inside ``compute_output_path``.
+
+    The step is discarded after path computation; this fn is never called.
+    """
+    return None
 
 
 def materialize(

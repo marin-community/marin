@@ -22,7 +22,7 @@ from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.dag import resolve_local_placeholders
-from marin.execution.executor import ExecutorStep, _resolve_step_output_path, this_output_path, versioned
+from marin.execution.executor import compute_output_path, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.training.training import temporary_checkpoint_base_path
 
@@ -142,13 +142,7 @@ def prepare_grug_trial(
     re-submissions of the same plan resume from the same checkpoint
     directory, then builds the full ``GrugRunConfig`` with that path baked in.
     """
-    sentinel = ExecutorStep(
-        name=name,
-        fn=lambda c: None,
-        config=launch,
-        override_output_path=override_output_path,
-    )
-    output_path = _resolve_step_output_path(sentinel)
+    output_path = compute_output_path(name, launch, override_output_path=override_output_path)
 
     # Substitute OutputName placeholders in the launch config and unwrap
     # VersionedValue wrappers. Upstream InputName / ExecutorStep references

@@ -17,7 +17,7 @@ This module owns the configuration-graph primitives:
 This module **does not** import from :mod:`marin.execution.executor`; the
 dependency direction is one-way (``executor → dag``). Helpers that need
 to drive an :class:`Executor` instance (``materialize``,
-``_resolve_step_output_path``) live in ``executor.py``.
+``compute_output_path``) live in ``executor.py``.
 
 Walker event semantics
 ----------------------
