@@ -5,8 +5,8 @@
 and cross-region read guards.
 
 Provides a unified API for resolving the marin storage prefix and building
-GCS paths with lifecycle-managed TTL prefixes. The canonical temp-bucket
-definitions live in ``infra/configure_temp_buckets.py``.
+GCS paths with lifecycle-managed TTL prefixes. Lifecycle rules on the
+``marin-{region}`` buckets are managed by ``infra/configure_main_buckets.py``.
 
 Resolution chain for the storage prefix:
   1. ``MARIN_PREFIX`` environment variable
@@ -49,18 +49,6 @@ _GCP_METADATA_ZONE_URL = "http://metadata.google.internal/computeMetadata/v1/ins
 
 _DEFAULT_LOCAL_PREFIX = "/tmp/marin"
 
-# Canonical mapping from GCP region to marin-tmp bucket name.
-# Must stay in sync with infra/configure_temp_buckets.py BUCKETS dict.
-REGION_TO_TMP_BUCKET: dict[str, str] = {
-    "us-central1": "marin-tmp-us-central1",
-    "us-central2": "marin-tmp-us-central2",
-    "europe-west4": "marin-tmp-eu-west4",
-    "eu-west4": "marin-tmp-eu-west4",
-    "us-west4": "marin-tmp-us-west4",
-    "us-east1": "marin-tmp-us-east1",
-    "us-east5": "marin-tmp-us-east5",
-}
-
 # Special-case overrides for primary Marin buckets that do not follow the
 # default `marin-{region}` naming convention.
 _REGION_TO_MARIN_BUCKET_OVERRIDES: dict[str, str] = {
@@ -68,7 +56,8 @@ _REGION_TO_MARIN_BUCKET_OVERRIDES: dict[str, str] = {
 }
 
 # All known primary marin data buckets, keyed by region.
-# Used by the mirror filesystem to scan for files across regions.
+# Used by the mirror filesystem to scan for files across regions, and by
+# `marin_temp_bucket` to address the region-local TTL-managed scratch area.
 REGION_TO_DATA_BUCKET: dict[str, str] = {
     "us-central1": "marin-us-central1",
     "us-central2": "marin-us-central2",
@@ -77,6 +66,21 @@ REGION_TO_DATA_BUCKET: dict[str, str] = {
     "us-west4": "marin-us-west4",
     "europe-west4": "marin-eu-west4",
 }
+
+# Region aliases that resolve to the same physical region (e.g. the "eu-west4"
+# label that some legacy paths and metadata tools surface).
+_REGION_ALIASES: dict[str, str] = {
+    "eu-west4": "europe-west4",
+}
+
+# Allowed TTL-day values. Each value N corresponds to a lifecycle rule on every
+# ``marin-{region}`` bucket that deletes objects under ``tmp/ttl=Nd/`` after N
+# days. Keep in sync with ``infra/configure_main_buckets.py``.
+ALLOWED_TTL_DAYS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
+
+# Path prefix under each ``marin-{region}`` bucket where TTL-managed scratch
+# data lives. Lifecycle rules live under ``{TEMP_PATH_PREFIX}/ttl=Nd/``.
+TEMP_PATH_PREFIX: str = "tmp"
 
 # Reverse lookup: bucket name → canonical GCP region.
 # Derived from REGION_TO_DATA_BUCKET so that region_from_prefix can return
@@ -167,27 +171,35 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
     """Return a path on region-local temp storage. Never returns ``None``.
 
     For a GCS marin prefix with a known region, or an explicitly provided
-    ``source_prefix`` with a known region, returns a path on the dedicated temp
-    bucket::
+    ``source_prefix`` with a known region, returns a path under the
+    region-local marin bucket::
 
-        gs://marin-tmp-{region}/ttl={N}d/{prefix}
+        gs://marin-{region}/tmp/ttl={N}d/{prefix}
 
     Otherwise falls back to a flat path under the marin prefix::
 
         {marin_prefix}/tmp/{prefix}
 
-    The temp buckets are provisioned by ``infra/configure_temp_buckets.py``
-    with lifecycle rules that auto-delete objects under ``ttl=Nd/`` after
-    *N* days.
+    Lifecycle rules on each ``marin-{region}`` bucket — managed by
+    ``infra/configure_main_buckets.py`` — auto-delete objects under
+    ``tmp/ttl=Nd/`` after *N* days.
 
     Args:
-        ttl_days: Lifecycle TTL in days.  Should match one of the configured
-            values (1-7, 14, 30) in ``infra/configure_temp_buckets.py``.
+        ttl_days: Lifecycle TTL in days.  Must be one of
+            :data:`ALLOWED_TTL_DAYS`.
         prefix: Optional sub-path appended after the TTL directory.
         source_prefix: Optional path used to choose the temp bucket region.
             Useful when configuring a remote job from a launcher that may be in
             a different region than the job output path.
     """
+    if ttl_days not in ALLOWED_TTL_DAYS:
+        raise ValueError(
+            f"ttl_days={ttl_days} is not configured. "
+            f"Allowed values: {ALLOWED_TTL_DAYS}. "
+            f"Update ALLOWED_TTL_DAYS in lib/rigging/src/rigging/filesystem.py "
+            f"and re-run infra/configure_main_buckets.py to add a new TTL bucket."
+        )
+
     mp = marin_prefix()
 
     region = region_from_prefix(source_prefix) if source_prefix is not None else None
@@ -195,14 +207,15 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
         region = marin_region()
 
     if region:
-        bucket = REGION_TO_TMP_BUCKET.get(region)
+        canonical = _REGION_ALIASES.get(region, region)
+        bucket = REGION_TO_DATA_BUCKET.get(canonical)
         if bucket:
-            path = f"gs://{bucket}/ttl={ttl_days}d"
+            path = f"gs://{bucket}/{TEMP_PATH_PREFIX}/ttl={ttl_days}d"
             return _append_path_prefix(path, prefix)
 
     if "://" not in mp:
         mp = f"file://{mp}"
-    path = f"{mp}/tmp"
+    path = f"{mp}/{TEMP_PATH_PREFIX}"
     return _append_path_prefix(path, prefix)
 
 
