@@ -10,14 +10,45 @@ able to read this and answer "yes, that's the API I'd accept."
 New module, sibling to `bootstrap.py`.
 
 ```python
+from dataclasses import dataclass
+
+from iris.cluster.providers.gcp.bootstrap import _ZONE_PREFIX_TO_MULTI_REGION
+
 AR_PROJECT: str = "hai-gcp-models"
 PYPI_MIRROR_REPO: str = "pypi-mirror"
 PYTORCH_CPU_MIRROR_REPO: str = "pytorch-cpu-mirror"
 
-_SUPPORTED_MULTI_REGIONS: frozenset[str] = frozenset({"us", "europe"})
+# Top-level constants for the opt-out env-var contract (AGENTS.md § Naming).
+IRIS_PYPI_MIRROR_ENV_VAR: str = "IRIS_PYPI_MIRROR"
+IRIS_PYPI_MIRROR_OPT_OUT: str = "0"
+
+# Single source of truth for which multi-regions have AR repos provisioned.
+# Derived from `bootstrap._ZONE_PREFIX_TO_MULTI_REGION` so adding a third
+# continent (e.g. `southamerica`) only requires one edit, not two.
+SUPPORTED_MULTI_REGIONS: frozenset[str] = frozenset(_ZONE_PREFIX_TO_MULTI_REGION.values())
 
 
-def build_pypi_mirror_env(multi_region: str, project: str = AR_PROJECT) -> dict[str, str]:
+@dataclass(frozen=True)
+class PypiMirrorEnv:
+    """Typed env-var bundle for AR-mirror uv configuration.
+
+    Use ``as_env()`` to materialize as a ``dict[str, str]`` at the worker
+    callsite. Field-level access keeps tests readable.
+    """
+
+    default_index: str
+    pytorch_cpu_index: str
+    keyring_provider: str = "subprocess"
+
+    def as_env(self) -> dict[str, str]:
+        return {
+            "UV_DEFAULT_INDEX": self.default_index,
+            "UV_INDEX_PYTORCH_CPU": self.pytorch_cpu_index,
+            "UV_KEYRING_PROVIDER": self.keyring_provider,
+        }
+
+
+def build_pypi_mirror_env(multi_region: str, project: str = AR_PROJECT) -> PypiMirrorEnv:
     """Build uv env vars that point dependency resolution at AR remote PyPI repos.
 
     Caller responsibilities (not enforced here, kept out so the helper is
@@ -28,17 +59,17 @@ def build_pypi_mirror_env(multi_region: str, project: str = AR_PROJECT) -> dict[
        ``EnvironmentConfig.env_vars``.
 
     Args:
-        multi_region: AR multi-region location. Must be in {"us", "europe"};
-            other values raise. Pass the result of ``zone_to_multi_region``.
+        multi_region: AR multi-region location. Must be in
+            ``SUPPORTED_MULTI_REGIONS``; other values raise. Pass the
+            result of ``zone_to_multi_region``.
         project: GCP project hosting the AR repos. Defaults to ``AR_PROJECT``.
 
     Returns:
-        Three-key dict containing ``UV_DEFAULT_INDEX``, ``UV_INDEX_PYTORCH_CPU``,
-        and ``UV_KEYRING_PROVIDER``. URL form:
+        ``PypiMirrorEnv`` with three populated fields. URL form:
         ``https://{multi_region}-python.pkg.dev/{project}/<repo>/simple/``.
 
     Raises:
-        ValueError: if ``multi_region`` is not in ``_SUPPORTED_MULTI_REGIONS``.
+        ValueError: if ``multi_region`` is not in ``SUPPORTED_MULTI_REGIONS``.
     """
 ```
 
@@ -62,7 +93,10 @@ if region_attr and region_attr.string_value:
 # EnvironmentConfig.env_vars directly, so user `IRIS_PYPI_MIRROR=0` in
 # env_vars suppresses injection (the value also flows through to the task
 # via the env.update on line 699).
-mirror_disabled = self.request.environment.env_vars.get("IRIS_PYPI_MIRROR") == "0"
+mirror_disabled = (
+    self.request.environment.env_vars.get(IRIS_PYPI_MIRROR_ENV_VAR)
+    == IRIS_PYPI_MIRROR_OPT_OUT
+)
 if region_attr and region_attr.string_value and not mirror_disabled:
     try:
         multi_region = zone_to_multi_region(region_attr.string_value)
@@ -78,7 +112,7 @@ if region_attr and region_attr.string_value and not mirror_disabled:
             region_attr.string_value,
         )
     else:
-        env.update(build_pypi_mirror_env(multi_region))
+        env.update(build_pypi_mirror_env(multi_region).as_env())
 
 # Existing (unchanged):
 env.update(self._task_env)
@@ -87,12 +121,26 @@ env.update(dict(self.request.environment.env_vars))
 
 Contract notes:
 
-- **Opt-out lookup is `== "0"`**; any other value (including unset, `"1"`,
-  `"true"`, `"false"`, `"off"`) enables the mirror. Single canonical sentinel
-  matches existing IRIS_DEBUG_UV_SYNC convention.
+- **Opt-out lookup is `== IRIS_PYPI_MIRROR_OPT_OUT` (`"0"`)**; any other
+  value (including unset, `"1"`, `"true"`, `"false"`, `"off"`) enables the
+  mirror. Single canonical sentinel matches existing `IRIS_DEBUG_UV_SYNC`
+  convention.
+- **AGENTS.md tension — explicitly acknowledged.** AGENTS.md § Configuration
+  prefers typed config fields over env vars for behavioral knobs. We keep
+  the env-var surface here for three reasons: (1) `EnvironmentConfig` is a
+  protobuf message — adding a `pypi_mirror: bool` field is a wire-format
+  change that ripples through proto codegen, and the kill switch is a
+  single bit that doesn't justify the schema bump; (2) the same env var
+  doubles as a per-pool override via the existing `_task_env` plumbing
+  (rollback lever #2 in `design.md`) without any new code path; (3) it
+  matches the established `IRIS_DEBUG_UV_SYNC` precedent so operators have
+  one mental model. Constants are hoisted (`IRIS_PYPI_MIRROR_ENV_VAR`,
+  `IRIS_PYPI_MIRROR_OPT_OUT`) per § Naming so the magic strings live in
+  exactly one place.
 - **Source of truth for opt-out**: `self.request.environment.env_vars` is a
   `dict[str, str]` populated from `EnvironmentConfig.env_vars`. Read it
-  **before** any env merging via `self.request.environment.env_vars.get("IRIS_PYPI_MIRROR")`.
+  **before** any env merging via
+  `self.request.environment.env_vars.get(IRIS_PYPI_MIRROR_ENV_VAR)`.
 - **URL trailing slash**: env-var values end with `/simple/` (with the
   trailing slash). uv tolerates either form for `UV_DEFAULT_INDEX` but
   `UV_INDEX_<NAME>` requires the trailing slash on some uv versions —
@@ -191,12 +239,24 @@ under the token's lifetime, so a typical ~30 s `uv sync` is unaffected.
 Long resolves (>1 h) may hit a mid-stream 401; current Marin syncs are
 nowhere near that bound, but documented for future reference.
 
+**Anonymous-fetch failure mode.** Some uv versions only invoke the
+`subprocess` keyring provider when the index URL contains a username
+component, and otherwise hit AR anonymously and 401 regardless of the
+keyring backend. If the validation gate above returns 401 against AR,
+the documented remediation is to embed `oauth2accesstoken@` in the URL
+form for both indexes, i.e.
+`https://oauth2accesstoken@{mr}-python.pkg.dev/{project}/<repo>/simple/`,
+and pin a uv version that exhibits the working behavior. Gate must pass
+end-to-end before rollout PR merges; pin the working uv version in the
+Dockerfile if the no-username form does not work.
+
 ## Errors
 
 No new exception types. Behavior changes:
 
 - `build_pypi_mirror_env` raises `ValueError` if `multi_region` is not in
-  `_SUPPORTED_MULTI_REGIONS` (`{"us", "europe"}`). Caller wraps via
+  `SUPPORTED_MULTI_REGIONS` (derived from
+  `bootstrap._ZONE_PREFIX_TO_MULTI_REGION`). Caller wraps via
   `zone_to_multi_region` so this only fires on programmer error (passing a
   string that wasn't run through the canonical mapper).
 - `zone_to_multi_region` raising `ValueError` for `asia`/`me` is **caught**
@@ -303,16 +363,28 @@ etc. Trusted publishing is strictly better for our case.
    create empty placeholder uploads for `marin-kitoken`, `marin-iris`,
    `marin-zephyr`, etc. so squatters can't grab them. Out of scope here;
    noted for ops.
-3. **Configure trusted publishing (OIDC).** On
-   `https://pypi.org/manage/project/marin-dupekit/settings/publishing/`
-   add a pending publisher with:
+3. **Configure trusted publishing (OIDC) — first publish uses the
+   org-level pending-publisher page.** The per-project settings URL
+   (`https://pypi.org/manage/project/marin-dupekit/settings/publishing/`)
+   only renders for projects that already exist on PyPI; for a not-yet-
+   published project that page 404s. Use
+   `https://pypi.org/manage/organizations/marin-community/publishing/`
+   (org-level pending-publisher; available after step 1) — or, as a
+   fallback, the account-level page at
+   `https://pypi.org/manage/account/publishing/`.
+
+   Add a pending publisher with:
    - Repository owner: `marin-community`
    - Repository name: `marin`
    - Workflow filename: `dupekit-wheels.yaml`
    - Environment name: `pypi-publish` (matches the GitHub Actions
      environment we'll add for gating)
-   No long-lived API tokens; PyPI mints a short-lived token per workflow
-   run via OIDC. This avoids storing any static credential in the repo.
+
+   After the first OIDC-published release lands, PyPI auto-creates the
+   project, attaches it to the org, and the per-project settings URL
+   becomes valid for subsequent edits. No long-lived API tokens; PyPI
+   mints a short-lived token per workflow run via OIDC. This avoids
+   storing any static credential in the repo.
 4. **Create the `pypi-publish` GitHub Actions environment** in
    `https://github.com/marin-community/marin/settings/environments` with:
    - Required reviewer: at least one Marin admin (so a release isn't a
@@ -334,17 +406,50 @@ inside a fresh venv.
 `.github/workflows/dupekit-wheels.yaml` — change the `release` job:
 
 - Add `environment: pypi-publish` and
-  `permissions: { id-token: write, contents: write }` so OIDC is available
-  and the existing `gh release create` keeps working.
+  `permissions: { id-token: write, contents: write, pull-requests: write }`
+  so OIDC is available, the existing `gh release create` keeps working,
+  **and** `peter-evans/create-pull-request@v7` (line 80) keeps its
+  `pull-requests: write` grant. Job-level `permissions:` *replaces* (does
+  not merge with) workflow-level permissions, so we must restate
+  `pull-requests: write` here or the create-pull-request step 403s
+  immediately after the PyPI upload commits — the worst possible failure
+  ordering. Reference: [GitHub docs — modifying permissions for a job
+  overrides any configuration at the workflow level](https://docs.github.com/en/actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token).
 - After the existing `python scripts/rust_package.py --skip-build` step
   (which still creates the GitHub Release for now — see "Cutover" below),
-  add a step that calls `pypa/gh-action-pypi-publish@release/v1` pointing
-  at the artifacts in `dist/` (already populated by the upstream
-  `actions/download-artifact` step at line 72-75).
+  add a step that calls `pypa/gh-action-pypi-publish@v1.12.4` (pin a
+  specific version, not a moving tag) pointing at the artifacts in
+  `dist/` (already populated by the upstream `actions/download-artifact`
+  step at line 72-75).
 
 The PyPI publish step is gated identically to the existing release step
 (`github.ref == 'refs/heads/main'` and `should_run == 'true'`), so PR
 builds remain build-only.
+
+### sdist single-source build
+
+`build_wheels()` in `scripts/rust_package.py:244-249` currently builds an
+sdist unconditionally at the end of every invocation. With the matrix
+splitting linux + macos legs (yaml L43-50), both legs produce
+`marin_dupekit-<v>.tar.gz` with the same filename, and the release job's
+`actions/download-artifact` step uses `merge-multiple: true` (yaml L75)
+which silently clobbers on duplicate paths. Whichever leg finishes last
+wins; if the two sdists differ at all (host-dependent metadata, lockfile
+state) the published artifact silently differs from what the maintainer
+expected.
+
+Fix: lift the sdist build out of `build_wheels()` and into a dedicated
+step in the `release` job, before `pypa/gh-action-pypi-publish` runs.
+Concretely:
+
+- Remove the `maturin sdist` block from `build_wheels()` so matrix legs
+  produce only wheels.
+- Expose a `build_sdist()` function (or a `--sdist-only` mode) in
+  `scripts/rust_package.py` that runs `maturin sdist --out dist/
+  --manifest-path rust/dupekit/Cargo.toml` once.
+- In the `release` job, after `actions/download-artifact` and before
+  `pypa/gh-action-pypi-publish`, call `python scripts/rust_package.py
+  --sdist-only` (or equivalent). One canonical sdist, one upload path.
 
 ### Version handling
 
@@ -355,45 +460,55 @@ already reads version from `Cargo.toml`; no script change required for
 versioning itself. **What does change**: the script's
 `update_pyproject(tag, version)` step (line 318) currently rewrites
 `find-links` to a new GitHub-Releases URL **and** the `dupekit >= ...`
-version pin. After cutover the `find-links` rewrite is dropped and the
-pin substitution targets `marin-dupekit >= <version>` instead.
+version pin. PR 1 retargets the version-pin regex to `marin-dupekit`
+(no-op until the consumer flips); PR 2 drops the `find-links` rewrite
+entirely, leaving the script as a pure version-pin bumper.
 
-### Cutover (single PR — atomic rename + consumer update)
+### Cutover (two-PR sequence — producer publishes, then consumer flips)
 
-The rename and consumer update **must land in a single PR**. If we land
-the rename first (alone), the workflow produces wheels named
-`marin_dupekit-*.whl` while the root `pyproject.toml` still pins
-`dupekit >= 0.1.0` against the GitHub-Releases `find-links` URL — `uv
-lock` on `main` breaks immediately. Atomic merge avoids the broken
-intermediate state.
+A single-PR cutover is **not** realizable. The `release` job in
+`.github/workflows/dupekit-wheels.yaml` is gated on `github.ref ==
+'refs/heads/main'` (line 65) and the workflow itself only runs the
+publish on `push: branches:[main]` (lines 5-6). If a single PR renames
+the producer to `marin-dupekit` *and* flips the root `pyproject.toml`
+pin, the PR's own CI runs `uv lock` against a `marin-dupekit` that does
+not yet exist on PyPI — so PR CI fails before the merge that would
+publish it can land. Even bypassing PR CI, there is a post-merge race
+window: any `uv sync` on `main` between the merge commit and the
+publish-workflow's matrix-build + release-job + PyPI upload finishing
+will fail.
 
-The PR contains:
+We split into two sequential PRs:
+
+#### PR 1 — Producer-only
+
+Goal: rename and publish the new dist name to PyPI. Root `pyproject.toml`
+is **not** touched, so `uv lock` on `main` keeps resolving the old
+`dupekit` package against the GitHub-Releases `find-links` URL (no
+break).
+
+Contents:
 
 1. **Producer rename**:
-   - `rust/dupekit/pyproject.toml`: `name = "dupekit"` → `name = "marin-dupekit"`.
-     `module-name = "dupekit._native"` unchanged. Bump
-     `rust/dupekit/Cargo.toml:version` to a new patch (PyPI no-reupload).
+   - `rust/dupekit/pyproject.toml`: `name = "dupekit"` →
+     `name = "marin-dupekit"`. `module-name = "dupekit._native"`
+     unchanged. Bump `rust/dupekit/Cargo.toml:version` (PyPI no-reupload).
 2. **Workflow**:
-   - `.github/workflows/dupekit-wheels.yaml`: add `environment: pypi-publish`,
-     `permissions: { id-token: write, contents: write }`, and the
-     `pypa/gh-action-pypi-publish@v1.12.4` step (pin a specific version, not
-     `release/v1`, to avoid silent action breaking changes).
+   - `.github/workflows/dupekit-wheels.yaml`: add `environment:
+     pypi-publish`, `permissions: { id-token: write, contents: write,
+     pull-requests: write }` (see "Workflow changes" above for why
+     `pull-requests: write` is required), and the
+     `pypa/gh-action-pypi-publish@v1.12.4` step.
+   - Apply the sdist single-source-build fix (see "sdist single-source
+     build" above) in this same PR — keeps producer changes contained.
 3. **Release script**:
-   - `scripts/rust_package.py`: drop the `find-links` rewrite from
-     `update_pyproject` (lines 318-345); change the version-pin regex to
-     match `"marin-dupekit\s*>=\s*[^"]*"`.
-4. **Consumer**:
-   - Root `pyproject.toml`: replace `"dupekit >= 0.1.0"` (line 23) with
-     `"marin-dupekit >= <new-version>"`; remove the dupekit `find-links`
-     entry (line 29). Keep the `kitoken` line untouched.
-5. **Lockfile**: run `uv lock`; the lockfile entry for the package should
-   switch from
-   `source = { registry = "https://github.com/.../expanded_assets/..." }`
-   to `source = { registry = "https://pypi.org/simple" }` with dist name
-   `marin-dupekit`.
+   - `scripts/rust_package.py`: change the version-pin regex to match
+     `"marin-dupekit\s*>=\s*[^"]*"` (it won't match anything in PR 1
+     since the consumer hasn't flipped yet — that's fine; the rewrite is
+     a no-op until PR 2 lands).
 
-**Pre-merge gate (mandatory)**: build the renamed package locally and run
-the import smoke check. The reviewer can replicate:
+**Pre-merge gate**: build the renamed package locally and run the import
+smoke check:
 
 ```bash
 uv build --package marin-dupekit
@@ -403,14 +518,37 @@ python -c "import dupekit; from dupekit import _native; print(_native.__file__)"
 
 This proves (a) the wheel name follows PEP 427 (`marin_dupekit-*.whl`),
 (b) the top-level Python package is still importable as `dupekit`, and
-(c) the Rust extension is loadable. Without this gate we only learn the
-import works post-merge.
+(c) the Rust extension is loadable.
 
-**Post-merge validation**: confirm the wheel + sdist appear on
-`https://pypi.org/project/marin-dupekit/` once `main` runs the workflow,
-and that an Iris smoke task with `IRIS_PYPI_MIRROR=1` resolves
-`marin-dupekit` through AR (look for the AR domain in uv's `--verbose`
-output, or in AR access logs).
+**Post-merge gate (mandatory before PR 2)**: confirm the wheel + sdist
+appear on `https://pypi.org/project/marin-dupekit/` once `main` runs the
+workflow. Do not open PR 2 until this is green.
+
+#### PR 2 — Consumer cutover
+
+Goal: flip the root pin from `dupekit` (find-links) to `marin-dupekit`
+(PyPI). Now safe because PR 1 published the package.
+
+Contents:
+
+1. **Consumer**:
+   - Root `pyproject.toml`: replace `"dupekit >= 0.1.0"` (line 23) with
+     `"marin-dupekit >= <published-version>"`; remove the dupekit
+     `find-links` entry (line 29). Keep the `kitoken` line untouched.
+2. **Release-script cleanup**:
+   - `scripts/rust_package.py`: drop the `find-links` rewrite from
+     `update_pyproject` (lines 318-345); from this point the script only
+     bumps the version pin.
+3. **Lockfile**: run `uv lock`; the lockfile entry for the package
+   switches from
+   `source = { registry = "https://github.com/.../expanded_assets/..." }`
+   to `source = { registry = "https://pypi.org/simple" }` with dist name
+   `marin-dupekit`. PR CI now resolves cleanly because PR 1 already
+   published the dist.
+
+**Post-merge validation**: an Iris smoke task with `IRIS_PYPI_MIRROR=1`
+resolves `marin-dupekit` through AR (look for the AR domain in uv's
+`--verbose` output, or in AR access logs).
 
 The GitHub Release continues to be produced by the workflow for now (no
 harm; humans may still want to download wheels off a release page).
@@ -420,17 +558,17 @@ Removal of the GitHub Release flow is a follow-up — out of scope here.
 
 | File | Status | Purpose |
 | --- | --- | --- |
-| `lib/iris/src/iris/cluster/providers/gcp/pypi_mirror.py` | NEW | `build_pypi_mirror_env`, repo-name constants, `AR_PROJECT` |
+| `lib/iris/src/iris/cluster/providers/gcp/pypi_mirror.py` | NEW | `PypiMirrorEnv` dataclass, `build_pypi_mirror_env`, repo-name constants, `AR_PROJECT`, opt-out constants. `SUPPORTED_MULTI_REGIONS` derived from `bootstrap._ZONE_PREFIX_TO_MULTI_REGION`. |
 | `lib/iris/src/iris/cluster/worker/task_attempt.py` | MODIFY | Conditional env-var injection in `_prepare_container_config` after `IRIS_WORKER_REGION` is set |
 | `lib/iris/Dockerfile` | MODIFY | `task` stage adds `keyrings.google-artifactregistry-auth` |
 | `lib/iris/scripts/setup_pypi_mirror.py` | NEW | Idempotent provisioning script (4 repos + IAM grant + cleanup policy) |
 | `lib/iris/docs/image-push.md` | MODIFY | One-paragraph cross-reference to the new mirror, or split into a sibling `pypi-mirror.md` |
 | `lib/iris/tests/test_pypi_mirror.py` | NEW | Unit tests for `build_pypi_mirror_env`, opt-out behavior, region propagation |
 | `rust/dupekit/pyproject.toml` | MODIFY | Rename `name = "dupekit"` → `name = "marin-dupekit"`. `module-name` unchanged (import name stays `dupekit`). |
-| `.github/workflows/dupekit-wheels.yaml` | MODIFY | Add `environment: pypi-publish`, OIDC permissions, and `pypa/gh-action-pypi-publish` step in the `release` job |
-| `scripts/rust_package.py` | MODIFY | Drop `find-links` rewrite from `update_pyproject` (lines 318-345); change version-pin regex to match `marin-dupekit`. |
-| `pyproject.toml` | MODIFY | Rename top-level dep `dupekit >= 0.1.0` → `marin-dupekit >= 0.1.0` (line 23); remove the dupekit `find-links` entry (line 29). `kitoken` stays. |
-| `uv.lock` | REGENERATED | After `pyproject.toml` edit, `uv lock` rewrites the registry source from GitHub-Releases to `pypi.org/simple` and the dist name to `marin-dupekit`. |
+| `.github/workflows/dupekit-wheels.yaml` | MODIFY (PR 1) | Add `environment: pypi-publish`; permissions block `{ id-token: write, contents: write, pull-requests: write }` — `pull-requests: write` restated explicitly because job-level permissions replace workflow-level; add `pypa/gh-action-pypi-publish@v1.12.4` step; lift sdist build into `release` job before publish. |
+| `scripts/rust_package.py` | MODIFY (PR 1 + PR 2) | PR 1: lift `maturin sdist` out of `build_wheels()` into a `build_sdist()` / `--sdist-only` mode invoked once in the `release` job; change version-pin regex to match `marin-dupekit`. PR 2: drop `find-links` rewrite from `update_pyproject` (lines 318-345). |
+| `pyproject.toml` | MODIFY (PR 2) | Rename top-level dep `dupekit >= 0.1.0` → `marin-dupekit >= <published-version>` (line 23); remove the dupekit `find-links` entry (line 29). `kitoken` stays. |
+| `uv.lock` | REGENERATED (PR 2) | After `pyproject.toml` edit, `uv lock` rewrites the registry source from GitHub-Releases to `pypi.org/simple` and the dist name to `marin-dupekit`. |
 
 No changes to: any workspace `pyproject.toml` (only the root's
 `find-links` entry shifts), or any other `lib/*/pyproject.toml`. Local dev
