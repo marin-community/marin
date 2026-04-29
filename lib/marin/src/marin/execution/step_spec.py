@@ -12,6 +12,7 @@ from functools import cached_property
 from typing import Any
 from urllib.parse import urlparse
 
+from fray.types import ResourceConfig
 from rigging.filesystem import marin_prefix
 
 
@@ -71,6 +72,13 @@ class StepSpec:
     arguments. Usually you would specify this via a `lambda output_path: foo(output_path=output_path, bar=42)`.
 
     May be a :class:`~marin.execution.remote.RemoteCallable` for Fray dispatch.
+    """
+
+    resources: ResourceConfig | None = None
+    """If set, the step runner submits ``fn`` as its own Fray job with these
+    resources. If ``None``, dispatch falls back to ``fn``'s type: a
+    :class:`~marin.execution.remote.RemoteCallable` is submitted via Fray
+    (legacy path); a plain callable runs inline in the runner thread.
     """
 
     @cached_property

@@ -22,14 +22,18 @@ from marin.execution.remote import remote
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
-from experiments.defaults import default_tokenize, default_validation_sets
-from experiments.grug.base.launch import GrugBaseLaunchConfig, run_grug_base_trial
+from experiments.defaults import default_tokenize, default_validation_sets, run_train
+from experiments.grug.base.launch import GrugBaseLaunchConfig, prepare_grug_trial
 from experiments.grug.base.model import GrugModelConfig
 from experiments.grug.base.train import GrugEvalConfig
 from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino
+from fray.cluster import ResourceConfig
+from marin.execution.executor import this_output_path
+from marin.processing.tokenize import add_validation_sets_to_mixture
+from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 # --- Model: 600M Grug ---
 model = GrugModelConfig(
@@ -78,36 +82,39 @@ data = dataclasses.replace(data, tokenizer=marin_tokenizer)
 data = add_validation_sets_to_mixture(data, default_validation_sets(tokenizer=data.tokenizer))
 
 # --- Training ---
-training_step = ExecutorStep(
-    name="reference-pipeline",
-    fn=remote(run_grug_base_trial, resources=ResourceConfig.with_tpu("v4-8")),
-    config=GrugBaseLaunchConfig(
-        model=model,
-        data=data,
-        output_path=this_output_path(),
-        run_id="reference-pipeline",
-        resources=ResourceConfig.with_tpu("v4-8"),
-        steps=TOTAL_STEPS,
-        batch_size=256,
-        seed=0,
-        mp="params=float32,compute=bfloat16,output=bfloat16",
-        tracker=WandbConfig(
-            project="marin",
-            tags=["reference", "pipeline"],
-            group="reference-pipeline",
-            name=None,
-        ),
-        optimizer=AdamConfig(
-            learning_rate=3e-3,
-            weight_decay=0.1,
-            warmup=0.05,
-            decay=0.2,
-        ),
-        eval=GrugEvalConfig(
-            steps_per_eval=500,
-        ),
+# Build a GrugBaseLaunchConfig and turn it into a TrainingPlan. Training is
+# NOT an ExecutorStep — `prepare_grug_trial` resolves the output_path locally,
+# `run_train` submits a single Iris job, and the worker materializes upstream
+# data in its own region.
+training_launch = GrugBaseLaunchConfig(
+    model=model,
+    data=data,
+    output_path=this_output_path(),
+    run_id="reference-pipeline",
+    resources=ResourceConfig.with_tpu("v4-8"),
+    steps=TOTAL_STEPS,
+    batch_size=256,
+    seed=0,
+    mp="params=float32,compute=bfloat16,output=bfloat16",
+    tracker=WandbConfig(
+        project="marin",
+        tags=["reference", "pipeline"],
+        group="reference-pipeline",
+        name=None,
+    ),
+    optimizer=AdamConfig(
+        learning_rate=3e-3,
+        weight_decay=0.1,
+        warmup=0.05,
+        decay=0.2,
+    ),
+    eval=GrugEvalConfig(
+        steps_per_eval=500,
     ),
 )
 
+training_plan = prepare_grug_trial(name="reference-pipeline", launch=training_launch)
+
+
 if __name__ == "__main__":
-    executor_main(steps=[training_step])
+    run_train(training_plan)

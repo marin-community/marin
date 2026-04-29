@@ -173,9 +173,15 @@ def test_child_explicit_constraints_override_parent(capturing_client, parent_con
     )
 
 
-def test_child_inherits_worker_region_constraint(capturing_client, parent_context):
-    """When the parent has a worker_region and the child has no region constraint,
-    the child should get an implicit region constraint from the parent's worker."""
+def test_child_does_not_inherit_worker_region(capturing_client, parent_context):
+    """A parent's worker_region must NOT auto-pin a child job's region.
+
+    Region inheritance was removed so that an Iris job submitting another Iris
+    job from inside a region-pinned worker does not automatically force the
+    child into the same region. Region pinning is now opt-in via explicit
+    `regions=[...]` on the child's resources or via the executor's GCS-path
+    inference.
+    """
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
@@ -187,16 +193,15 @@ def test_child_inherits_worker_region_constraint(capturing_client, parent_contex
             return_value=_parent_job_info({}, worker_region="us-central1"),
         ),
     ):
-        client.submit(entrypoint, "child-region-inherit", resources)
+        client.submit(entrypoint, "child-no-region-inherit", resources)
 
-    assert any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-central1" for c in stub.captured_constraints
-    )
+    region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
+    assert region_constraints == []
 
 
-def test_child_explicit_region_not_overridden_by_worker_region(capturing_client, parent_context):
-    """When the child already has a region constraint, the parent's worker_region
-    should NOT override it."""
+def test_child_explicit_region_preserved(capturing_client, parent_context):
+    """A child's explicit region constraint is preserved verbatim — independent
+    of whatever region the parent worker happens to be in."""
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
@@ -217,25 +222,3 @@ def test_child_explicit_region_not_overridden_by_worker_region(capturing_client,
     assert not any(
         c.key == WellKnownAttribute.REGION and c.value.string_value == "us-central1" for c in stub.captured_constraints
     )
-
-
-def test_parent_region_constraint_not_overridden_by_worker_region(capturing_client, parent_context):
-    """When the parent already has a region constraint in its stored constraints,
-    the worker_region should NOT add a duplicate."""
-    client, stub = capturing_client
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-    parent_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
-
-    with (
-        iris_ctx_scope(parent_context),
-        patch(
-            "iris.client.client.get_job_info",
-            return_value=_parent_job_info({}, constraints=parent_constraints, worker_region="us-central1"),
-        ),
-    ):
-        client.submit(entrypoint, "child-parent-region", resources)
-
-    region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
-    assert len(region_constraints) == 1
-    assert region_constraints[0].value.string_value == "us-west4"
