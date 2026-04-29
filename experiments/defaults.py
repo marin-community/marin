@@ -69,6 +69,7 @@ from marin.training.training import (
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
     _apply_env_to_process,
+    extras_for_resources,
     resolve_training_env,
     run_levanter_train_dpo,
     run_levanter_train_lm,
@@ -845,7 +846,7 @@ def run_train(plan: TrainingPlan) -> None:
             args=[plan.worker_fn, plan.train_config, plan.output_path, env],
         ),
         resources=plan.resources,
-        environment=create_environment(env_vars=env),
+        environment=create_environment(env_vars=env, extras=extras_for_resources(plan.resources)),
     )
 
     client = fray_client.current_client()
