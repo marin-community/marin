@@ -29,6 +29,7 @@ from marin.datakit.download.institutional_books import institutional_books_norma
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
 from marin.datakit.download.nemotron_v2 import nemotron_v2_normalize_steps
 from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
+from marin.datakit.download.sec_edgar import sec_edgar_normalize_steps
 from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_normalize_steps
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_normalize_steps
@@ -146,6 +147,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("institutional_books", institutional_books_normalize_steps, 203.63),
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
+        ("sec-edgar", sec_edgar_normalize_steps, 43.73),
         ("superior-reasoning", superior_reasoning_normalize_steps, 7.08),
         ("swe-rebench-openhands", swe_rebench_openhands_normalize_steps, 2.47),
         ("synthetic-1", synthetic1_normalize_steps, 7.32),
