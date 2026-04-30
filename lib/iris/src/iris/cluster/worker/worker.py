@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 from pathlib import Path
 
 import uvicorn
@@ -55,21 +56,16 @@ from iris.time_proto import timestamp_to_proto
 logger = logging.getLogger(__name__)
 
 
+class _StatsState(StrEnum):
+    """Lifecycle of the worker's iris.worker stats Table registration."""
+
+    UNINITIALIZED = "uninitialized"
+    READY = "ready"
+    FAILED = "failed"
+
+
 def _now_dt() -> datetime:
-    """Wall-clock UTC datetime, sourced through ``rigging.timing.Timestamp``.
-
-    Stats rows record the UTC moment of the heartbeat. Going through
-    ``Timestamp.now()`` keeps the worker on the project's standard time
-    primitive (per ``lib/iris/AGENTS.md``); we cast to ``datetime`` only
-    at the schema boundary because the stats namespace's ``ts`` column is
-    ``TIMESTAMP_MS``.
-
-    The returned datetime is tz-naive but represents a UTC instant. The
-    stats namespace's ``ts`` column is ``pa.timestamp("ms")`` (no tz);
-    callers must normalize to UTC before storage so that server-side
-    queries which cast ``now() AT TIME ZONE 'UTC'`` line up. See
-    design.md "Datetime precision".
-    """
+    """Tz-naive UTC datetime for the stats namespace's TIMESTAMP_MS column."""
     return datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
 
 
@@ -233,7 +229,7 @@ class Worker:
         # field None so subsequent heartbeats silently no-op. The dashboard
         # pane treats an empty roster as "no workers" rather than blocking.
         self._stats_table: Table | None = None
-        self._stats_register_failed = False
+        self._stats_state: _StatsState = _StatsState.UNINITIALIZED
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -554,6 +550,7 @@ class Worker:
         # The stats Table belongs to LogClient; LogClient.close() drains it.
         # Drop our cached reference so a subsequent register starts fresh.
         self._stats_table = None
+        self._stats_state = _StatsState.UNINITIALIZED
         if self._log_client is not None:
             self._log_client.close()
             self._log_client = None
@@ -969,11 +966,10 @@ class Worker:
                 metadata=self._worker_metadata,
             )
             table.write([stat])
-        except (StatsError, ConnectError, ConnectionError, OSError, TimeoutError):
-            # Transport / stats-protocol failure: log and move on; the bg
-            # flush thread already logs at warning when retries fail and
-            # the heartbeat path must not block on the stats service.
-            logger.debug("worker stat write failed", exc_info=True)
+        except (StatsError, ConnectError, ConnectionError, OSError, TimeoutError) as exc:
+            # Transport / stats-protocol failure: log and move on. The
+            # heartbeat path must not block on the stats service.
+            logger.warning("worker stat write failed: %s: %s", type(exc).__name__, exc)
 
     def _get_or_register_stats_table(self) -> Table | None:
         """Lazily register the iris.worker namespace and cache the Table.
@@ -983,9 +979,9 @@ class Worker:
         process — a misconfigured schema or unavailable stats endpoint is
         a startup-time problem).
         """
-        if self._stats_table is not None:
+        if self._stats_state is _StatsState.READY:
             return self._stats_table
-        if self._stats_register_failed:
+        if self._stats_state is _StatsState.FAILED:
             return None
         if self._log_client is None:
             return None
@@ -1002,8 +998,9 @@ class Worker:
                 type(exc).__name__,
                 exc,
             )
-            self._stats_register_failed = True
+            self._stats_state = _StatsState.FAILED
             return None
+        self._stats_state = _StatsState.READY
         return self._stats_table
 
     def handle_start_tasks(self, request: worker_pb2.Worker.StartTasksRequest) -> worker_pb2.Worker.StartTasksResponse:

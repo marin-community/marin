@@ -16,6 +16,7 @@ import io
 import logging
 import threading
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import ClassVar
 
 import pyarrow as pa
@@ -25,7 +26,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.client import LogClient, RemoteLogHandler, schema_from_dataclass
 from finelog.client import log_client as log_client_mod
-from finelog.client.errors import (
+from finelog.errors import (
     InvalidNamespaceError,
     QueryResultTooLargeError,
     SchemaConflictError,
@@ -258,8 +259,8 @@ def test_invalidates_on_connection_refused(tracked_clients, monkeypatch):
     ``flush()`` then blocks until the row is acknowledged, which is the
     deterministic signal that the retry landed.
     """
-    monkeypatch.setattr(log_client_mod, "_BACKOFF_INITIAL_S", 1e-9)
-    monkeypatch.setattr(log_client_mod, "_BACKOFF_MAX_S", 1e-9)
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_INITIAL", 1e-9)
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_MAX", 1e-9)
     log_clients, _ = tracked_clients
     client = LogClient.connect("http://h:1")
     try:
@@ -331,7 +332,7 @@ def test_get_table_with_explicit_schema(tracked_clients):
     try:
         table = client.get_table("iris.metric", schema)
         assert table.schema.key_column == "ts"
-        table.write([{"ts": 1, "value": 1.5}])
+        table.write([SimpleNamespace(ts=1, value=1.5)])
         assert table.flush(timeout=5.0) is True
     finally:
         client.close()

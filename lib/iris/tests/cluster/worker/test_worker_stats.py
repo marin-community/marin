@@ -19,7 +19,7 @@ from iris.cluster.worker.stats import (
     WORKER_STATS_NAMESPACE,
     IrisWorkerStat,
 )
-from iris.cluster.worker.worker import Worker, WorkerConfig
+from iris.cluster.worker.worker import Worker, WorkerConfig, _StatsState
 from iris.rpc import worker_pb2
 from rigging.timing import Duration
 
@@ -149,11 +149,10 @@ def test_register_failure_does_not_break_ping(tmp_path):
         # ping must also not retry register (one-shot give-up).
         worker.handle_ping(worker_pb2.Worker.PingRequest())
         worker.handle_ping(worker_pb2.Worker.PingRequest())
+        assert worker._stats_state is _StatsState.FAILED
+        assert worker._stats_table is None
     finally:
         worker.stop()
-
-    assert worker._stats_register_failed is True
-    assert worker._stats_table is None
 
 
 def test_subsequent_heartbeats_reuse_table(tmp_path):
