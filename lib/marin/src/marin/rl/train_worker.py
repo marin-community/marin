@@ -32,6 +32,7 @@ from levanter.checkpoint import (
     unregister_debug_checkpointer_state_provider,
 )
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
 from levanter.lora import (
     LoraConfig,
     lora_trainable_params_filter,
@@ -40,7 +41,6 @@ from levanter.lora import (
     save_merged_hf_model,
     save_peft_pretrained,
 )
-from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.optim import OptimizerConfig

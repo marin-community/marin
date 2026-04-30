@@ -14,8 +14,8 @@ from marin.rl.curriculum import CurriculumConfig
 from marin.rl.model_utils import is_hf_checkpoint
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
-    RLJob,
     RLExperimentConfig,
+    RLJob,
     RLStepConfig,
     _build_rl_job_config,
     _run_rl_experiment_step,

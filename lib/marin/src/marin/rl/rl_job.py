@@ -17,9 +17,9 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from fray import JobHandle
-from levanter.lora import LoraConfig
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
+from levanter.lora import LoraConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
