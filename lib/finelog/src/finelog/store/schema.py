@@ -15,9 +15,8 @@ Validation rules live here too: ordering-key resolution, schema merging
 (additive-nullable extension vs non-additive conflict), and per-batch IPC
 schema checks (subset acceptance, dictionary decode, nested-type rejection).
 
-The error types are owned by :mod:`finelog.client.errors` (the public
-stats-service surface). They are re-exported here so server/store-layer
-imports do not have to change.
+The error types are owned by :mod:`finelog.errors`. They are re-exported
+here so server/store-layer imports do not have to change.
 """
 
 from __future__ import annotations

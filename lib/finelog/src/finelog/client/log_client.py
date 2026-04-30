@@ -48,7 +48,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.interceptor import Interceptor
 from rigging.timing import ExponentialBackoff, RateLimiter
 
-from finelog.client.errors import (
+from finelog.errors import (
     InvalidNamespaceError,
     NamespaceNotFoundError,
     QueryResultTooLargeError,
@@ -107,7 +107,7 @@ if not logger.handlers:
 LOG_NAMESPACE = "log"
 """Privileged namespace name. ``write_batch`` and ``query`` route here."""
 
-DEFAULT_FLUSH_INTERVAL_S = 1.0
+DEFAULT_FLUSH_INTERVAL = 1.0
 """Default time-based flush interval for a Table's bg thread."""
 
 DEFAULT_BATCH_ROWS = 10_000
@@ -116,23 +116,21 @@ DEFAULT_BATCH_ROWS = 10_000
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
 """Default per-Table queue cap in bytes (matches WriteRows max body size)."""
 
-_BACKOFF_INITIAL_S = 0.5
-_BACKOFF_MAX_S = 30.0
+_BACKOFF_INITIAL = 0.5
+_BACKOFF_MAX = 30.0
 
 # Floor on per-row byte cost. Strings vary; we use a conservative estimate
 # so the byte cap is not bypassed by tiny entries.
 _EST_BYTES_PER_LOG_ENTRY = 256
 
 # Throttle overflow warnings.
-_OVERFLOW_LOG_INTERVAL_S = 5.0
+_OVERFLOW_LOG_INTERVAL = 5.0
 
 
 def _format_exc_summary(exc: BaseException) -> str:
-    """Collapse a ConnectError-style exception to ``ClassName(CODE)``."""
-    code = getattr(exc, "code", None)
-    code_name = getattr(code, "name", None) or getattr(code, "value", None)
-    if code_name is not None:
-        return f"{type(exc).__name__}({code_name})"
+    """Collapse a ConnectError to ``ClassName(CODE)``; otherwise ``ClassName: msg``."""
+    if isinstance(exc, ConnectError):
+        return f"{type(exc).__name__}({exc.code.name})"
     return f"{type(exc).__name__}: {exc}"
 
 
@@ -247,7 +245,7 @@ class Table:
         flusher: Callable[[str, list[Any]], None],
         client_class: type | None = None,
         querier: Callable[[str], pa.Table] | None = None,
-        flush_interval_s: float = DEFAULT_FLUSH_INTERVAL_S,
+        flush_interval: float = DEFAULT_FLUSH_INTERVAL,
         batch_rows: int = DEFAULT_BATCH_ROWS,
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
         max_buffer_rows: int = DEFAULT_BATCH_ROWS,
@@ -259,7 +257,7 @@ class Table:
         self._flusher = flusher
         self._client_class = client_class  # dataclass class for stats Tables (None for log)
         self._querier = querier
-        self._flush_interval_s = flush_interval_s
+        self._flush_interval = flush_interval
         self._batch_rows = batch_rows
         self._max_buffer_bytes = max_buffer_bytes
         self._max_buffer_rows = max_buffer_rows
@@ -275,8 +273,8 @@ class Table:
         self._processed_seq = 0
 
         self._overflow_dropped_pending = 0
-        self._overflow_log_limiter = RateLimiter(interval_seconds=_OVERFLOW_LOG_INTERVAL_S)
-        self._backoff = ExponentialBackoff(initial=_BACKOFF_INITIAL_S, maximum=_BACKOFF_MAX_S, factor=2.0)
+        self._overflow_log_limiter = RateLimiter(interval_seconds=_OVERFLOW_LOG_INTERVAL)
+        self._backoff = ExponentialBackoff(initial=_BACKOFF_INITIAL, maximum=_BACKOFF_MAX, factor=2.0)
 
         self._thread = threading.Thread(
             target=self._run,
@@ -368,7 +366,7 @@ class Table:
                 return
             self._closing = True
             self._cond.notify_all()
-        self._thread.join(timeout=max(self._flush_interval_s * 2, 10.0))
+        self._thread.join(timeout=max(self._flush_interval * 2, 10.0))
         with self._cond:
             self._closed = True
             self._cond.notify_all()
@@ -425,7 +423,7 @@ class Table:
         while True:
             with self._cond:
                 while not self._closing and not self._queue:
-                    self._cond.wait(timeout=self._flush_interval_s)
+                    self._cond.wait(timeout=self._flush_interval)
                 if not self._queue:
                     return
                 items = self._take_queue_locked()
@@ -855,7 +853,7 @@ def _log_size_estimator(payload: Any) -> int:
 
 
 def _rows_to_arrow_ipc(rows: list[Any], arrow_schema: pa.Schema, schema: Schema) -> bytes:
-    """Convert ``rows`` (dataclass instances / dicts / objects) to Arrow IPC bytes.
+    """Convert ``rows`` (dataclass instances or attribute-bearing objects) to Arrow IPC bytes.
 
     Uses the registered/effective schema's column order. Missing nullable
     columns are filled with NULL; missing non-nullable columns raise
@@ -906,8 +904,6 @@ _MISSING = object()
 
 
 def _extract_row_value(row: Any, name: str) -> Any:
-    if isinstance(row, dict):
-        return row.get(name, _MISSING)
     return getattr(row, name, _MISSING)
 
 

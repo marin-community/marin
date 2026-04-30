@@ -152,19 +152,7 @@ ORDER BY worker_id
 
 
 def _stats_status_message(*, healthy: bool, ts: Any) -> str:
-    """Mirror ``worker_status_message`` from a stats-row payload.
-
-    The dashboard's "error" column shows ``status_message`` only when it is
-    a non-empty string (FleetTab.vue treats it as the unhealthy banner).
-    The sqlite path returns "" when healthy, otherwise
-    ``"Unhealthy (last seen Ns ago)"``; mirror that exactly so the visible
-    UI is identical between read paths.
-
-    The dataclass ``status`` field (RUNNING / IDLE / REGISTERED) is
-    operational metadata — useful for SQL queries against the stats
-    namespace, but it is NOT the wire ``status_message`` and must not land
-    there.
-    """
+    """Empty when healthy; otherwise the unhealthy banner shown in the dashboard."""
     if healthy:
         return ""
     age_ms = _to_timestamp(ts).age_ms()
@@ -174,15 +162,7 @@ def _stats_status_message(*, healthy: bool, ts: Any) -> str:
 def _stats_table_to_list_response(
     table,
 ) -> "controller_pb2.Controller.ListWorkersResponse":
-    """Map the latest-row-per-worker pa.Table to ListWorkersResponse.
-
-    The stats table only carries fields that the dashboard reads; running
-    task count comes from the row's ``running_task_count`` (the worker's
-    self-reported view). The ``running_job_ids`` list stays empty because
-    the stats namespace doesn't carry per-task identity — the dashboard
-    cell renders ``runningJobIds.length``, which still gives the right
-    count when populated as a placeholder list of empty strings.
-    """
+    """Map the latest-row-per-worker pa.Table to ListWorkersResponse."""
     workers: list[controller_pb2.Controller.WorkerHealthStatus] = []
     rows = table.to_pylist()
     for row in rows:
@@ -226,20 +206,7 @@ def _stats_table_to_list_response(
 
 
 def _to_timestamp(value: Any) -> Timestamp:
-    """Coerce a query-result timestamp value to ``rigging.timing.Timestamp``.
-
-    DuckDB returns ``ts`` as a ``datetime`` (TIMESTAMP_MS columns decode
-    that way). Empty / None becomes epoch 0 — the Vue layer's relative-time
-    formatter handles "1970" gracefully but the value should never appear
-    in practice because the SQL filters by ``ts``.
-
-    The stats namespace stores ``ts`` as tz-naive UTC (see
-    design.md "Datetime precision"). We treat naive datetimes as UTC
-    here — using ``datetime.timestamp()`` directly on a naive value
-    would interpret it as the controller's local time, breaking the
-    ``last_heartbeat`` value and the ``status_message`` "N seconds ago"
-    string on non-UTC controllers.
-    """
+    """Coerce a query-result timestamp (tz-naive UTC datetime, or epoch ms) to Timestamp."""
     if value is None:
         return Timestamp.from_ms(0)
     if isinstance(value, datetime):

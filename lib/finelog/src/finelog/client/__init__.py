@@ -8,11 +8,13 @@ legacy log surface (``write_batch`` / ``query``) and the stats surface
 (``get_table`` / ``drop_table``). :class:`RemoteLogHandler` plugs Python's
 ``logging`` into a :class:`LogClient`.
 
-The error types live in :mod:`finelog.client.errors` and are re-exported
-here so callers can ``from finelog.client import SchemaConflictError`` etc.
+The error types live in :mod:`finelog.errors` and are re-exported here so
+callers can ``from finelog.client import SchemaConflictError`` etc.
 """
 
-from finelog.client.errors import (
+from finelog.client.log_client import LogClient, Table, schema_from_dataclass
+from finelog.client.remote_log_handler import RemoteLogHandler
+from finelog.errors import (
     InvalidNamespaceError,
     NamespaceNotFoundError,
     QueryResultTooLargeError,
@@ -20,8 +22,6 @@ from finelog.client.errors import (
     SchemaValidationError,
     StatsError,
 )
-from finelog.client.log_client import LogClient, Table, schema_from_dataclass
-from finelog.client.remote_log_handler import RemoteLogHandler
 
 __all__ = [
     "InvalidNamespaceError",
