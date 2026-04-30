@@ -28,6 +28,7 @@ from marin.datakit.ingestion_manifest import (
 )
 from marin.evaluation.perplexity_gap import raw_text_dataset
 from marin.execution.executor import ExecutorStep, this_output_path
+from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utils import fsspec_mkdirs, fsspec_size, load_dataset_with_backoff
 from rigging.filesystem import open_url
 
@@ -97,7 +98,7 @@ def render_capability_eval_dataset(config: CapabilityEvalDatasetConfig) -> None:
             if raw_text_row is None:
                 continue
 
-            raw_text_out.write(json.dumps(raw_text_row, sort_keys=True) + "\n")
+            raw_text_out.write(json.dumps(raw_text_row, sort_keys=True, cls=CustomJsonEncoder) + "\n")
             emitted += 1
             if config.max_rows is not None and emitted >= config.max_rows:
                 break
