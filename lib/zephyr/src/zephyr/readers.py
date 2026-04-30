@@ -130,7 +130,7 @@ def iter_parquet_row_groups(
 
 
 # 16 MB read blocks with background prefetch for S3/remote reads.
-_READ_BLOCK_SIZE = 16_000_000
+_READ_BLOCK_SIZE = 16_000
 _READ_CACHE_TYPE = "background"
 _READ_MAX_BLOCKS = 2
 
