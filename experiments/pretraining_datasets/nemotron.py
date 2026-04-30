@@ -3,11 +3,9 @@
 
 """NEMOTRON CC dataset definitions and tokenization."""
 
-import dataclasses
 import os.path
 
 from fray.types import ResourceConfig
-from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE
 from marin.datakit.download.nemotron_v1 import download_nemotron_v1_step
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.execution.remote import remote
@@ -129,8 +127,6 @@ nemotron_mix = lm_mixture_data_config(
         "proofpile_2": 0.055,
     },
 )
-
-nemotron_mix_block_shuffle = dataclasses.replace(nemotron_mix, shuffle=DEFAULT_LM_DATA_SHUFFLE)
 
 
 def tokenize_nemotron_subset(name: str, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:
