@@ -24,47 +24,17 @@ Usage::
         python -m experiments.protein.continue_train_protein_1b_distance_masked
 """
 
-import dataclasses
-
-import jax
-import jax.numpy as jnp
-from levanter.data.text import LmDataConfig, TextLmDatasetFormat
+from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
 
-from experiments.defaults import default_tokenize, default_train
-from experiments.protein.create_protein_tokenizer import create_protein_tokenizer
-from experiments.simple_train_config import SimpleTrainConfig
-from fray.v2 import ResourceConfig
-from marin.execution.executor import executor_main, versioned
-from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
-
-PROTEIN_TOKENIZER = "timodonnell/protein-docs-tokenizer"
-DISTANCE_TOKEN_ID: int = create_protein_tokenizer().convert_tokens_to_ids("<distance>")
-_NUM_NON_BIN_STATEMENT_POSITIONS = 4
-
-
-def _distance_bin_only_loss_weight(tokens: jax.Array) -> jax.Array:
-    """Zero the loss at all distance-statement positions except the bin itself."""
-    is_distance = tokens == DISTANCE_TOKEN_ID
-    mask_zero = is_distance
-    for shift in range(1, _NUM_NON_BIN_STATEMENT_POSITIONS):
-        mask_zero = mask_zero | jnp.roll(is_distance, shift)
-    return jnp.where(mask_zero, 0.0, 1.0).astype(jnp.float32)
-
-
-# Pin to us-east5-a so the TPU is co-located with the `marin-us-east5`
-# checkpoint bucket. The v5p-preemptible pool spans {us-central1-a, us-east5-a};
-# without this pin a worker can land in us-central1 and pay cross-region I/O
-# latency on every checkpoint write (which contributed to the stall / failure
-# of this run's previous attempt).
-RESOURCES = ResourceConfig.with_tpu(
-    "v5p-8",
-    slice_count=1,
-    cpu=32,
-    ram="128g",
-    disk="50g",
-    zone="us-east5-a",
+from experiments.defaults import default_train
+from experiments.protein.protein_train_common import (
+    PROTEIN_RESOURCES_USE5,
+    PROTEIN_TOKENIZER,
+    distance_masked_components,
 )
+from experiments.simple_train_config import SimpleTrainConfig
+from marin.execution.executor import executor_main, versioned
 
 protein_llama_1b = LlamaConfig(
     max_seq_len=8192,
@@ -75,35 +45,8 @@ protein_llama_1b = LlamaConfig(
     num_layers=16,
 )
 
-HF_DATASET_BASE = "hf://datasets/timodonnell/protein-docs@main/contacts-and-distances-v1-5x"
-
-protein_docs_tokenized = default_tokenize(
-    name="protein-docs-cd",
-    dataset=f"{HF_DATASET_BASE}/train/",
-    tokenizer=PROTEIN_TOKENIZER,
-    format=TextLmDatasetFormat(text_key="document"),
-)
-protein_docs_val_tokenized = default_tokenize(
-    name="protein-docs-cd-val",
-    dataset=f"{HF_DATASET_BASE}/val/",
-    tokenizer=PROTEIN_TOKENIZER,
-    format=TextLmDatasetFormat(text_key="document"),
-    is_validation=True,
-)
-
-train_component = dataclasses.replace(
-    step_to_lm_mixture_component(protein_docs_tokenized, include_raw_paths=True),
-    pack=True,
-    loss_weight_fn=_distance_bin_only_loss_weight,
-)
-val_component = dataclasses.replace(
-    step_to_lm_mixture_component(protein_docs_val_tokenized, include_raw_paths=True),
-    pack=True,
-    loss_weight_fn=_distance_bin_only_loss_weight,
-)
-
 protein_docs_data = LmDataConfig(
-    components={"protein-docs-cd": train_component, "protein-docs-cd-val": val_component},
+    components=distance_masked_components(),
     train_weights={"protein-docs-cd": 1.0, "protein-docs-cd-val": 0.0},
     tokenizer=PROTEIN_TOKENIZER,
     cache_dir=None,
@@ -111,7 +54,7 @@ protein_docs_data = LmDataConfig(
 )
 
 train_config = SimpleTrainConfig(
-    resources=RESOURCES,
+    resources=PROTEIN_RESOURCES_USE5,
     train_batch_size=128,
     num_train_steps=50_000,
     learning_rate=versioned(3.5e-4),
