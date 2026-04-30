@@ -95,7 +95,12 @@ def main(config: EvalLmConfig):
             per_pos_loss = model.compute_next_token_loss(batch, reduction=None, reduction_axis=()).array
             per_pos_weight = batch.loss_weight.array
             per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
-            return per_pos_loss, per_pos_weight, per_pos_token_id
+            seg_pair = batch.attn_mask.segment_ids
+            if seg_pair is not None:
+                per_pos_segment_id = seg_pair[0].array
+            else:
+                per_pos_segment_id = jnp.zeros_like(per_pos_token_id)
+            return per_pos_loss, per_pos_weight, per_pos_token_id, per_pos_segment_id
 
         evaluator = TaggedEvaluator(
             EvalBatch=Batch,

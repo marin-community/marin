@@ -59,6 +59,12 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+    positional_loss_tanh_divisor: float | None = None
+    """If set, multiply per-position training loss_weight by tanh(pos_in_segment / divisor).
+
+    Downweights loss on tokens at the start of each document (segment) and ramps to ~1
+    after a few `divisor` worth of positions.
+    """
 
 
 @dataclass(frozen=True)
@@ -73,6 +79,7 @@ class GrugEvalConfig:
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
+    last_n_eval_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -153,7 +160,9 @@ def build_tagged_evaluator(
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
     eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
 
-    def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+    def eval_loss_fn(
+        model: Transformer, batch: LmExample | GrugLmExample
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
         per_pos_loss = model.next_token_loss(
@@ -166,7 +175,12 @@ def build_tagged_evaluator(
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
         per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
-        return per_pos_loss, per_pos_weight, per_pos_token_id
+        seg_pair = batch.attn_mask.segment_ids
+        if seg_pair is not None:
+            per_pos_segment_id = jax.sharding.reshard(seg_pair[0], eval_array_sharding)
+        else:
+            per_pos_segment_id = jnp.zeros_like(per_pos_token_id)
+        return per_pos_loss, per_pos_weight, per_pos_token_id, per_pos_segment_id
 
     return TaggedEvaluator(
         EvalBatch=eval_batch,
@@ -176,6 +190,7 @@ def build_tagged_evaluator(
         device_mesh=mesh,
         axis_mapping=eval_axis_mapping,
         max_examples_per_dataset=max_examples_per_dataset,
+        last_n_tokens=eval_cfg.last_n_eval_tokens,
     )
 
 
@@ -271,6 +286,18 @@ def initial_state(
     )
 
 
+def _position_in_segment(segment_ids: jax.Array) -> jax.Array:
+    """Position within current segment, 0-indexed; works on any rank with seg axis last."""
+    seq_len = segment_ids.shape[-1]
+    is_new_segment = jnp.concatenate(
+        [jnp.ones((*segment_ids.shape[:-1], 1), dtype=bool), jnp.diff(segment_ids, axis=-1) != 0],
+        axis=-1,
+    )
+    indices = jnp.broadcast_to(jnp.arange(seq_len), segment_ids.shape)
+    last_seg_start = jnp.maximum.accumulate(jnp.where(is_new_segment, indices, -1), axis=-1)
+    return indices - last_seg_start
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -278,6 +305,7 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
+    positional_loss_tanh_divisor: float | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -299,11 +327,19 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
+        loss_weight = batch.loss_weight
+        if positional_loss_tanh_divisor is not None:
+            seg_pair = batch.attn_mask.segment_ids
+            assert seg_pair is not None, "positional_loss_tanh_divisor requires segment_ids on attn_mask"
+            pos_in_seg = _position_in_segment(seg_pair[0])
+            ramp = jnp.tanh(pos_in_seg.astype(loss_weight.dtype) / positional_loss_tanh_divisor)
+            loss_weight = loss_weight * ramp
+
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
                 batch.tokens,
-                batch.loss_weight,
+                loss_weight,
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
@@ -373,6 +409,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
+        positional_loss_tanh_divisor=config.trainer.positional_loss_tanh_divisor,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)

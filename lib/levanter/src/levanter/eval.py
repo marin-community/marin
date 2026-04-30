@@ -43,7 +43,15 @@ T = TypeVar("T")
 M = TypeVar("M")
 Ex = TypeVar("Ex")
 LmEvalExample = LmExample | GrugLmExample
-LossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
+LossFnOutput = tuple[jax.Array, jax.Array, jax.Array, jax.Array]
+"""Per-position arrays returned from a tagged eval loss fn.
+
+Tuple is `(per_pos_loss, per_pos_weight, per_pos_token_id, per_pos_segment_id)`.
+The segment_ids array is shape `(batch, position)` and is used by `TaggedEvaluator`
+to compute the optional last-N-tokens-of-each-segment metric. Loss fns whose
+batches do not carry segment ids should return `jnp.zeros_like(per_pos_token_id)`
+so the whole sequence is treated as a single segment.
+"""
 TagArray = Int[Array, "tag"]
 BatchedTagArray = Int[Array, "... tag"]
 
@@ -59,6 +67,15 @@ class EvalResult:
     macro_bpb: Optional[float] = None
     tag_macro_bpb: Optional[dict[str, float]] = None
     tag_micro_bpb: Optional[dict[str, float]] = None
+    last_n_tokens: Optional[int] = None
+    micro_avg_loss_last_n: Optional[float] = None
+    macro_avg_loss_last_n: Optional[float] = None
+    tag_macro_loss_last_n: Optional[dict[str, float]] = None
+    tag_micro_loss_last_n: Optional[dict[str, float]] = None
+    micro_bpb_last_n: Optional[float] = None
+    macro_bpb_last_n: Optional[float] = None
+    tag_macro_bpb_last_n: Optional[dict[str, float]] = None
+    tag_micro_bpb_last_n: Optional[dict[str, float]] = None
 
 
 class DomainTaggedDataset(AsyncDataset[tuple[T, TagArray]]):
@@ -163,6 +180,24 @@ def _join_prefix(prefix: str, tag: str) -> str:
     return tag
 
 
+def _last_n_tokens_of_segment_mask(segment_ids: jax.Array, last_n: int) -> jax.Array:
+    """Boolean mask marking the last ``last_n`` positions of each contiguous segment.
+
+    ``segment_ids`` is shape ``(batch, position)`` with monotonically non-decreasing
+    ids per row; positions sharing an id form a segment. Returns a ``(batch, position)``
+    bool array that is True where ``last_idx_of_segment[i] - i < last_n``.
+    """
+    if segment_ids.ndim != 2:
+        raise ValueError(f"segment_ids must be rank-2 (batch, position), got rank={segment_ids.ndim}")
+    batch_size, seq_len = segment_ids.shape
+    seg_diff = jnp.diff(segment_ids, axis=-1) != 0
+    is_last = jnp.concatenate([seg_diff, jnp.ones((batch_size, 1), dtype=bool)], axis=-1)
+    indices = jnp.broadcast_to(jnp.arange(seq_len)[None, :], (batch_size, seq_len))
+    marked = jnp.where(is_last, indices, seq_len)
+    last_idx = jnp.minimum.accumulate(marked[:, ::-1], axis=-1)[:, ::-1]
+    return (last_idx - indices) < last_n
+
+
 def _ensure_named_lm_example(batch: LmEvalExample, *, EvalBatch: hax.Axis, model_pos: hax.Axis) -> LmExample:
     if isinstance(batch, LmExample):
         return batch
@@ -193,7 +228,12 @@ def _default_lm_eval_loss_fn(
     per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
     per_pos_weight = named_batch.loss_weight.array
     per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
-    return per_pos_loss, per_pos_weight, per_pos_token_id
+    seg_pair = named_batch.attn_mask.segment_ids
+    if seg_pair is not None:
+        per_pos_segment_id = seg_pair[0].array
+    else:
+        per_pos_segment_id = jnp.zeros_like(per_pos_token_id)
+    return per_pos_loss, per_pos_weight, per_pos_token_id, per_pos_segment_id
 
 
 def cb_tagged_lm_evaluate(
@@ -209,6 +249,7 @@ def cb_tagged_lm_evaluate(
     mp: jmp.Policy = None,
     checkpoint_path: Optional[str] = None,
     loss_fn: Callable[[LmHeadModel, LmEvalExample], LossFnOutput] | None = None,
+    last_n_tokens: int | None = None,
 ) -> Callable[[StepInfo], None]:
     """
     Evaluates multiple tagged datasets using a given evaluation function.
@@ -249,6 +290,7 @@ def cb_tagged_lm_evaluate(
         device_mesh=device_mesh,
         axis_mapping=axis_mapping,
         max_examples_per_dataset=max_examples_per_dataset,
+        last_n_tokens=last_n_tokens,
     )
 
     if not eval_current and not eval_ema:
@@ -381,6 +423,34 @@ def construct_log_dict(evaluator, eval_result, total_time, prefix):
         if has_tags:
             for tag, bpb in eval_result.tag_macro_bpb.items():
                 log_dict[_join_prefix(prefix, tag) + "/macro_bpb"] = bpb
+
+    if eval_result.last_n_tokens is not None:
+        n = eval_result.last_n_tokens
+        log_dict[_join_prefix(prefix, f"loss_last{n}")] = eval_result.micro_avg_loss_last_n
+        if has_tags:
+            log_dict[_join_prefix(prefix, f"macro_loss_last{n}")] = eval_result.macro_avg_loss_last_n
+            for tag, loss in eval_result.tag_macro_loss_last_n.items():
+                if tag in evaluator.dataset.tag_to_index:
+                    continue
+                if not tag:
+                    continue
+                log_dict[_join_prefix(prefix, tag) + f"/macro_loss_last{n}"] = loss
+        for tag, loss in eval_result.tag_micro_loss_last_n.items():
+            if not tag:
+                continue
+            if tag in evaluator.dataset.tag_to_index:
+                log_dict[_join_prefix(prefix, tag) + f"/loss_last{n}"] = loss
+            else:
+                log_dict[_join_prefix(prefix, tag) + f"/micro_loss_last{n}"] = loss
+        if tokenizer is not None and eval_result.tag_micro_bpb_last_n is not None:
+            log_dict[_join_prefix(prefix, f"bpb_last{n}")] = eval_result.micro_bpb_last_n
+            if has_tags:
+                log_dict[_join_prefix(prefix, f"macro_bpb_last{n}")] = eval_result.macro_bpb_last_n
+            for tag, bpb in eval_result.tag_micro_bpb_last_n.items():
+                log_dict[_join_prefix(prefix, tag) + f"/bpb_last{n}"] = bpb
+            if has_tags:
+                for tag, bpb in eval_result.tag_macro_bpb_last_n.items():
+                    log_dict[_join_prefix(prefix, tag) + f"/macro_bpb_last{n}"] = bpb
     return log_dict
 
 
@@ -396,10 +466,14 @@ class TaggedEvaluator(Generic[Ex, M]):
         device_mesh=None,
         axis_mapping=None,
         max_examples_per_dataset=None,
+        last_n_tokens: int | None = None,
     ):
         if isinstance(EvalBatch, int):
             EvalBatch = hax.Axis("batch", EvalBatch)
+        if last_n_tokens is not None and last_n_tokens <= 0:
+            raise ValueError(f"last_n_tokens must be positive when set, got {last_n_tokens}")
         self.loss_fn = loss_fn
+        self.last_n_tokens = last_n_tokens
         self.dataset = DomainTaggedDataset(tagged_eval_sets, max_examples_per_dataset)
         self.loader = DataLoader(
             self.dataset.as_async_dataset(),
@@ -423,21 +497,23 @@ class TaggedEvaluator(Generic[Ex, M]):
 
     def _make_accum_for_batch(self) -> Callable[[M, "_EvalRunningMeans", Ex, BatchedTagArray], "_EvalRunningMeans"]:
         bytes_per_token = self.bytes_per_token
+        last_n_tokens = self.last_n_tokens
         log2e = jnp.log2(jnp.e)
         per_tag_out_sharding = None if self.device_mesh is None else NamedSharding(self.device_mesh, P(None))
         per_pos_out_sharding = self.per_pos_out_sharding
 
         @hax.named_jit(axis_resources=self.axis_mapping)
         def accum_for_batch(model: M, state: _EvalRunningMeans, batch: Ex, tags: BatchedTagArray):
-            losses, weights, token_ids = self.loss_fn(model, batch)
+            losses, weights, token_ids, segment_ids = self.loss_fn(model, batch)
             weighted_loss = losses * weights  # b t
             this_loss = jnp.sum(weighted_loss)  # scalar
             this_weights = jnp.sum(weights)  # scalar
 
-            if losses.ndim != 2 or weights.ndim != 2 or token_ids.ndim != 2 or tags.ndim != 2:
+            if losses.ndim != 2 or weights.ndim != 2 or token_ids.ndim != 2 or segment_ids.ndim != 2 or tags.ndim != 2:
                 raise ValueError(
                     f"Expected batched eval tensors with rank 2, got losses={losses.ndim}, "
-                    f"weights={weights.ndim}, token_ids={token_ids.ndim}, tags={tags.ndim}"
+                    f"weights={weights.ndim}, token_ids={token_ids.ndim}, "
+                    f"segment_ids={segment_ids.ndim}, tags={tags.ndim}"
                 )
             this_weights_per_tag = jnp.einsum("bt,bk->k", weights, tags, out_sharding=per_tag_out_sharding)
             this_loss_per_tag = jnp.einsum("bt,bk->k", weighted_loss, tags, out_sharding=per_tag_out_sharding)
@@ -466,6 +542,49 @@ class TaggedEvaluator(Generic[Ex, M]):
                 if len(self.dataset.tag_to_index) > 0:
                     bpb_per_tag_mean = state.bpb_per_tag.add(bpb_per_tag, this_weights_per_tag)
                     state = dataclasses.replace(state, bpb_per_tag=bpb_per_tag_mean)
+
+            if last_n_tokens is not None:
+                last_n_mask = _last_n_tokens_of_segment_mask(segment_ids, last_n_tokens).astype(weights.dtype)
+                weights_last_n = weights * last_n_mask
+                weighted_loss_last_n = weighted_loss * last_n_mask
+                this_loss_last_n = jnp.sum(weighted_loss_last_n)
+                this_weights_last_n = jnp.sum(weights_last_n)
+                this_weights_per_tag_last_n = jnp.einsum(
+                    "bt,bk->k", weights_last_n, tags, out_sharding=per_tag_out_sharding
+                )
+                this_loss_per_tag_last_n = jnp.einsum(
+                    "bt,bk->k", weighted_loss_last_n, tags, out_sharding=per_tag_out_sharding
+                )
+
+                token_avg_last_n = state.token_avg_loss_last_n.add(
+                    this_loss_last_n / jnp.maximum(this_weights_last_n, 1.0), this_weights_last_n
+                )
+                state = dataclasses.replace(state, token_avg_loss_last_n=token_avg_last_n)
+
+                if len(self.dataset.tag_to_index) > 0:
+                    nonzero_last_n = this_weights_per_tag_last_n > 0
+                    safe_mean_last_n = jnp.where(
+                        nonzero_last_n, this_loss_per_tag_last_n / this_weights_per_tag_last_n, 0.0
+                    )
+                    mean_per_tag_last_n = state.loss_per_tag_last_n.add(safe_mean_last_n, this_weights_per_tag_last_n)
+                    state = dataclasses.replace(state, loss_per_tag_last_n=mean_per_tag_last_n)
+
+                if bytes_per_token is not None:
+                    bytes_last_n = bytes_per_pos * last_n_mask
+                    this_bytes_last_n = jnp.sum(bytes_last_n * weights)
+                    bytes_per_tag_last_n = jnp.einsum(
+                        "bt,bt,bk->k", bytes_last_n, weights, tags, out_sharding=per_tag_out_sharding
+                    )
+                    bpb_last_n = this_loss_last_n / jnp.maximum(this_bytes_last_n, 1.0) * log2e
+                    bpb_per_tag_last_n = this_loss_per_tag_last_n / jnp.maximum(bytes_per_tag_last_n, 1.0) * log2e
+
+                    bpb_mean_last_n = state.bpb_last_n.add(bpb_last_n, this_weights_last_n)
+                    state = dataclasses.replace(state, bpb_last_n=bpb_mean_last_n)
+                    if len(self.dataset.tag_to_index) > 0:
+                        bpb_per_tag_mean_last_n = state.bpb_per_tag_last_n.add(
+                            bpb_per_tag_last_n, this_weights_per_tag_last_n
+                        )
+                        state = dataclasses.replace(state, bpb_per_tag_last_n=bpb_per_tag_mean_last_n)
 
             return state
 
@@ -523,6 +642,53 @@ class TaggedEvaluator(Generic[Ex, M]):
             if self.bytes_per_token is not None:
                 tag_micro_bpb[tag] = float(mean_bits_per_tag_cpu[index])
 
+        last_n_kwargs: dict[str, object] = {}
+        if self.last_n_tokens is not None:
+            mean_loss_last_n_cpu = np.array(state.loss_per_tag_last_n.mean)
+            total_tokens_last_n_cpu = np.array(state.loss_per_tag_last_n.total)
+            tag_macro_loss_last_n: dict[str, float] = {}
+            tag_micro_loss_last_n: dict[str, float] = {}
+            tag_macro_bpb_last_n: dict[str, float] = {}
+            tag_micro_bpb_last_n: dict[str, float] = {}
+            mean_bits_last_n_cpu = np.array(state.bpb_per_tag_last_n.mean)
+            total_bytes_last_n_cpu = np.array(state.bpb_per_tag_last_n.total)
+
+            for parent, children in self.hierarchy.items():
+                mask = np.zeros(self.dataset.num_tags, dtype=bool)
+                mask[children] = 1
+                mask_last_n = mask & (total_tokens_last_n_cpu > 0)
+
+                tag_macro_loss_last_n[parent] = np.mean(mean_loss_last_n_cpu, where=mask_last_n)
+                tag_micro_loss_last_n[parent] = np.average(
+                    mean_loss_last_n_cpu, weights=total_tokens_last_n_cpu * mask_last_n
+                )
+
+                if self.bytes_per_token is not None:
+                    tag_macro_bpb_last_n[parent] = np.mean(mean_bits_last_n_cpu, where=mask_last_n)
+                    tag_micro_bpb_last_n[parent] = np.average(
+                        mean_bits_last_n_cpu, weights=total_bytes_last_n_cpu * mask_last_n
+                    )
+
+            for tag, index in self.dataset.tag_to_index.items():
+                tag_micro_loss_last_n[tag] = float(mean_loss_last_n_cpu[index])
+                if self.bytes_per_token is not None:
+                    tag_micro_bpb_last_n[tag] = float(mean_bits_last_n_cpu[index])
+
+            last_n_kwargs = dict(
+                last_n_tokens=self.last_n_tokens,
+                micro_avg_loss_last_n=state.token_avg_loss_last_n.mean.item(),
+                macro_avg_loss_last_n=jnp.mean(state.loss_per_tag_last_n.mean).item(),
+                tag_macro_loss_last_n=tag_macro_loss_last_n,
+                tag_micro_loss_last_n=tag_micro_loss_last_n,
+            )
+            if self.bytes_per_token is not None:
+                last_n_kwargs.update(
+                    micro_bpb_last_n=state.bpb_last_n.mean.item(),
+                    macro_bpb_last_n=jnp.mean(state.bpb_per_tag_last_n.mean).item(),
+                    tag_macro_bpb_last_n=tag_macro_bpb_last_n,
+                    tag_micro_bpb_last_n=tag_micro_bpb_last_n,
+                )
+
         return EvalResult(
             micro_avg_loss,
             macro_avg_loss,
@@ -533,6 +699,7 @@ class TaggedEvaluator(Generic[Ex, M]):
             macro_avg_bpb,
             tag_macro_bpb,
             tag_micro_bpb,
+            **last_n_kwargs,
         )
 
     def _construct_tag_hierarchy(self) -> dict[str, list[int]]:
@@ -566,9 +733,13 @@ class _EvalRunningMeans(eqx.Module):
     loss_per_tag: RunningMean  # average loss per tag
     bpb: RunningMean  # bits per byte averaged over all tokens
     bpb_per_tag: RunningMean  # bits per byte per tag
+    token_avg_loss_last_n: RunningMean  # avg loss restricted to last-N tokens of each segment
+    loss_per_tag_last_n: RunningMean
+    bpb_last_n: RunningMean
+    bpb_per_tag_last_n: RunningMean
 
     @staticmethod
     def zeros_like(total: Float[Array, "..."], per_tag: Float[Array, "tag"]) -> "_EvalRunningMeans":
         z = RunningMean.zeros_like(total)
         per_tag = RunningMean.zeros_like(per_tag)
-        return _EvalRunningMeans(z, per_tag, z, per_tag)
+        return _EvalRunningMeans(z, per_tag, z, per_tag, z, per_tag, z, per_tag)

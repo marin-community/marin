@@ -148,7 +148,9 @@ def build_tagged_evaluator(
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
     eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
 
-    def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+    def eval_loss_fn(
+        model: Transformer, batch: LmExample | GrugLmExample
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
         per_pos_loss = model.next_token_loss(
@@ -161,7 +163,12 @@ def build_tagged_evaluator(
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
         per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
-        return per_pos_loss, per_pos_weight, per_pos_token_id
+        seg_pair = batch.attn_mask.segment_ids
+        if seg_pair is not None:
+            per_pos_segment_id = jax.sharding.reshard(seg_pair[0], eval_array_sharding)
+        else:
+            per_pos_segment_id = jnp.zeros_like(per_pos_token_id)
+        return per_pos_loss, per_pos_weight, per_pos_token_id, per_pos_segment_id
 
     return TaggedEvaluator(
         EvalBatch=eval_batch,

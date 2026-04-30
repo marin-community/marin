@@ -49,7 +49,8 @@ def test_tagged_evaluator_accepts_grug_lm_examples():
                 named_batch = named_lm_example_from_grug(batch, Pos=model.Pos, batch_axis=EvalBatch)
             with hax.axis_mapping({EvalBatch.name: ResourceAxis.DATA}):
                 per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
-            return per_pos_loss, named_batch.loss_weight.array, jnp.roll(named_batch.tokens.array, -1, axis=-1)
+            token_ids = jnp.roll(named_batch.tokens.array, -1, axis=-1)
+            return per_pos_loss, named_batch.loss_weight.array, token_ids, jnp.zeros_like(token_ids)
 
         evaluator = TaggedEvaluator(
             EvalBatch=EvalBatch,
@@ -97,7 +98,8 @@ def test_tagged_evaluator_accepts_mixed_lm_example_types():
                 named_batch = named_lm_example_from_grug(batch, Pos=model.Pos, batch_axis=EvalBatch)
             with hax.axis_mapping({EvalBatch.name: ResourceAxis.DATA}):
                 per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
-            return per_pos_loss, named_batch.loss_weight.array, jnp.roll(named_batch.tokens.array, -1, axis=-1)
+            token_ids = jnp.roll(named_batch.tokens.array, -1, axis=-1)
+            return per_pos_loss, named_batch.loss_weight.array, token_ids, jnp.zeros_like(token_ids)
 
         evaluator = TaggedEvaluator(
             EvalBatch=EvalBatch,
@@ -155,7 +157,8 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
                 reduction="none",
                 logsumexp_weight=None,
             )
-            return per_pos_loss, batch.loss_weight, jnp.roll(batch.tokens, -1, axis=-1)
+            token_ids = jnp.roll(batch.tokens, -1, axis=-1)
+            return per_pos_loss, batch.loss_weight, token_ids, jnp.zeros_like(token_ids)
 
         evaluator = TaggedEvaluator(
             EvalBatch=EvalBatch,
@@ -169,6 +172,50 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
 
     assert np.isfinite(result.micro_avg_loss)
     assert "grug" in result.tag_micro_losses
+
+
+def test_tagged_evaluator_last_n_tokens_metric():
+    cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
+    Vocab = Axis("vocab", 32)
+    model = ToyLmHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(0))
+
+    EvalBatch = Axis("batch", len(jax.devices()))
+
+    examples = []
+    for i in range(EvalBatch.size):
+        tokens = jnp.mod(jnp.arange(cfg.max_seq_len, dtype=jnp.int32) + i, Vocab.size)
+        # Two segments per example: positions [0,4) and [4,8).
+        segment_ids = jnp.concatenate([jnp.zeros(4, dtype=jnp.int32), jnp.ones(4, dtype=jnp.int32)])
+        examples.append(GrugLmExample.causal(tokens, segment_ids=segment_ids))
+
+    dataset = ListAsyncDataset(examples)
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+
+        def loss_fn(model, batch) -> LossFnOutput:
+            model = inference_mode(model, True)
+            named_batch = named_lm_example_from_grug(batch, Pos=model.Pos, batch_axis=EvalBatch)
+            with hax.axis_mapping({EvalBatch.name: ResourceAxis.DATA}):
+                per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+            token_ids = jnp.roll(named_batch.tokens.array, -1, axis=-1)
+            seg_pair = named_batch.attn_mask.segment_ids
+            assert seg_pair is not None
+            return per_pos_loss, named_batch.loss_weight.array, token_ids, seg_pair[0].array
+
+        evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=[(dataset, ["seg"])],
+            loss_fn=loss_fn,
+            tokenizer=None,
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+            last_n_tokens=2,
+        )
+        result = evaluator.evaluate(model)
+
+    assert result.last_n_tokens == 2
+    assert np.isfinite(result.micro_avg_loss_last_n)
+    assert "seg" in result.tag_micro_loss_last_n
 
 
 def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):

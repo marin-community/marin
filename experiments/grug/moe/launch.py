@@ -17,6 +17,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LmDataConfig
+from levanter.data.text.datasets import DatasetComponent
 from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -56,9 +57,38 @@ class GrugMoeLaunchConfig:
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
 
 
-NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
-    nemotron_mix_block_shuffle,
-    default_validation_sets(tokenizer=nemotron_mix_block_shuffle.tokenizer),
+def _pack_validation_components(config: LmDataConfig) -> LmDataConfig:
+    """Force pack=True on validation-only components (train_weight=0)."""
+    new_components: dict = {}
+    for name, comp in config.components.items():
+        if not isinstance(comp, DatasetComponent) or config._has_nonzero_weight(name):
+            new_components[name] = comp
+            continue
+        new_components[name] = dataclasses.replace(comp, pack=True)
+    return dataclasses.replace(config, components=new_components)
+
+
+def _pack_training_components(config: LmDataConfig) -> LmDataConfig:
+    """Force pack=True on training components (train_weight>0).
+
+    Switches training from concat-and-split (pack=False ⇒ CausalLmDataset) to
+    greedy whole-document packing (pack=True ⇒ PackedTokenDataset) so each
+    packed sequence carries segment_ids per document.
+    """
+    new_components: dict = {}
+    for name, comp in config.components.items():
+        if not isinstance(comp, DatasetComponent) or not config._has_nonzero_weight(name):
+            new_components[name] = comp
+            continue
+        new_components[name] = dataclasses.replace(comp, pack=True)
+    return dataclasses.replace(config, components=new_components)
+
+
+NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = _pack_validation_components(
+    add_validation_sets_to_mixture(
+        nemotron_mix_block_shuffle,
+        default_validation_sets(tokenizer=nemotron_mix_block_shuffle.tokenizer),
+    )
 )
 
 
@@ -170,6 +200,7 @@ baseline_moe = ExecutorStep(
                 max_eval_batches=8,
                 eval_current=True,
                 eval_ema=False,
+                last_n_eval_tokens=500,
             )
         ),
     ),
