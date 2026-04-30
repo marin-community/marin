@@ -36,7 +36,7 @@ from __future__ import annotations
 import logging
 import os
 
-from fray.v2.types import ResourceConfig
+from fray.types import ResourceConfig
 
 from experiments.llama import llama3_tokenizer
 from marin.datakit.download.formal_methods_evals import (
@@ -48,7 +48,8 @@ from marin.datakit.download.formal_methods_evals import (
 from marin.evaluation.perplexity_gap import (
     GapFinderModelConfig,
     RawTextEvaluationDataset,
-    default_model_perplexity_gap,
+    model_perplexity_gap_from_scores,
+    model_perplexity_scores,
     raw_text_dataset,
 )
 from marin.execution.executor import ExecutorStep, executor_main
@@ -211,30 +212,61 @@ def _pilot_gap_report(
     name: str,
     model_b: GapFinderModelConfig,
     model_b_label: str,
-) -> ExecutorStep:
-    return default_model_perplexity_gap(
-        name=name,
-        model_a=_MARIN_MODEL,
-        model_b=model_b,
-        datasets=exp5060_raw_validation_sets(),
+) -> tuple[ExecutorStep, ExecutorStep, ExecutorStep]:
+    datasets = exp5060_raw_validation_sets()
+    common_tags = [
+        "rerun=exp5060-formal-hardware-first-pass",
+        "dataset_bundle=exp5060_formal_methods_hardware_rtl",
+        "source_split=http_archive",
+        f"max_docs_per_dataset={_PILOT_MAX_DOCS_PER_DATASET}",
+    ]
+    marin_scores = model_perplexity_scores(
+        name=f"{name}/marin_8b_scores",
+        model=_MARIN_MODEL,
+        datasets=datasets,
         resource_config=_PILOT_RESOURCE_CONFIG,
         per_device_batch_size=_PILOT_PER_DEVICE_BATCH_SIZE,
         max_eval_length=_PILOT_MAX_EVAL_LENGTH,
         max_docs_per_dataset=_PILOT_MAX_DOCS_PER_DATASET,
         max_doc_bytes=_PILOT_MAX_DOC_BYTES,
         wandb_tags=[
-            "eval=perplexity-gap",
-            "rerun=exp5060-formal-hardware-first-pass",
-            "model_a=marin-community/marin-8b-base",
-            f"model_b={model_b_label}",
-            "dataset_bundle=exp5060_formal_methods_hardware_rtl",
-            "source_split=http_archive",
-            f"max_docs_per_dataset={_PILOT_MAX_DOCS_PER_DATASET}",
+            "eval=model-perplexity",
+            "model=marin-community/marin-8b-base",
+            *common_tags,
         ],
     )
+    model_b_scores = model_perplexity_scores(
+        name=f"{name}/{model_b_label.replace('/', '_')}_scores",
+        model=model_b,
+        datasets=datasets,
+        resource_config=_PILOT_RESOURCE_CONFIG,
+        per_device_batch_size=_PILOT_PER_DEVICE_BATCH_SIZE,
+        max_eval_length=_PILOT_MAX_EVAL_LENGTH,
+        max_docs_per_dataset=_PILOT_MAX_DOCS_PER_DATASET,
+        max_doc_bytes=_PILOT_MAX_DOC_BYTES,
+        wandb_tags=[
+            "eval=model-perplexity",
+            f"model={model_b_label}",
+            *common_tags,
+        ],
+    )
+    gap_report = model_perplexity_gap_from_scores(
+        name=name,
+        model_a_name="marin-community/marin-8b-base",
+        model_b_name=model_b_label,
+        model_a_scores_path=marin_scores.as_input_name(),
+        model_b_scores_path=model_b_scores.as_input_name(),
+        wandb_tags=[
+            "eval=perplexity-gap",
+            "model_a=marin-community/marin-8b-base",
+            f"model_b={model_b_label}",
+            *common_tags,
+        ],
+    )
+    return marin_scores, model_b_scores, gap_report
 
 
-MARIN_VS_LLAMA = _pilot_gap_report(
+MARIN_VS_LLAMA_SCORES, LLAMA_SCORES, MARIN_VS_LLAMA = _pilot_gap_report(
     name="exp5060-marin-8b-base-vs-llama-3.1-8b-doccap256",
     model_b=GapFinderModelConfig(
         checkpoint_path="meta-llama/Llama-3.1-8B",
@@ -244,7 +276,7 @@ MARIN_VS_LLAMA = _pilot_gap_report(
     model_b_label="meta-llama/Llama-3.1-8B",
 )
 
-MARIN_VS_QWEN3 = _pilot_gap_report(
+MARIN_VS_QWEN3_SCORES, QWEN3_SCORES, MARIN_VS_QWEN3 = _pilot_gap_report(
     name="exp5060-marin-8b-base-vs-qwen3-8b-base-doccap256",
     model_b=GapFinderModelConfig(
         checkpoint_path="Qwen/Qwen3-8B-Base",
@@ -263,7 +295,15 @@ def main() -> None:
     download_steps = [step.as_executor_step() for step in FORMAL_METHODS_STEPS.values()]
     download_steps.extend(step.as_executor_step() for step in HARDWARE_RTL_STEPS.values())
     executor_main(
-        steps=[*download_steps, MARIN_VS_LLAMA, MARIN_VS_QWEN3],
+        steps=[
+            *download_steps,
+            MARIN_VS_LLAMA_SCORES,
+            LLAMA_SCORES,
+            MARIN_VS_LLAMA,
+            MARIN_VS_QWEN3_SCORES,
+            QWEN3_SCORES,
+            MARIN_VS_QWEN3,
+        ],
         description=(
             "Issue #5060: formal-methods and hardware-RTL PPL slices, plus pilot gap-report "
             "against Llama-3.1-8B and Qwen3-8B-Base (parent epic #5005)."

@@ -86,6 +86,8 @@ class vLLMInferenceContextConfig:
     tensor_parallel_size: int
     gpu_memory_utilization: float
     sampling_params: VLLMSamplingConfig
+    seed: int = 0
+    """Engine-level vLLM seed. TPU vLLM does not support per-request sampling seeds."""
     canonical_model_name: str | None = None
     mode: InferenceMode = InferenceMode.SYNC
     load_format: str = "auto"
@@ -184,15 +186,18 @@ class vLLMInferenceContext(BaseInferenceContext):
         else:
             raise ValueError(f"Invalid inference mode: {inference_config.mode}")
 
-        return llm_engine_cls(
-            model=inference_config.model_name,
-            max_model_len=inference_config.max_model_len,
-            tensor_parallel_size=inference_config.tensor_parallel_size,
-            gpu_memory_utilization=inference_config.gpu_memory_utilization,
-            load_format=inference_config.load_format,
-            enforce_eager=inference_config.enforce_eager,
-            kv_cache_metrics=inference_config.kv_cache_metrics,
-        )
+        engine_kwargs = {
+            "model": inference_config.model_name,
+            "max_model_len": inference_config.max_model_len,
+            "tensor_parallel_size": inference_config.tensor_parallel_size,
+            "gpu_memory_utilization": inference_config.gpu_memory_utilization,
+            "load_format": inference_config.load_format,
+            "enforce_eager": inference_config.enforce_eager,
+            "kv_cache_metrics": inference_config.kv_cache_metrics,
+            "seed": inference_config.seed,
+        }
+
+        return llm_engine_cls(**engine_kwargs)
 
     def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize the prompt with the choice's prompt token IDs.

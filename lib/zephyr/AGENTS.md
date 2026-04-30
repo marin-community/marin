@@ -6,7 +6,7 @@ Lazy dataset processing library. Start with the shared instructions in `/AGENTS.
 
 - `README.md` — overview, API reference, quick start
 - `OPS.md` — debugging pipelines: dashboard, observability, profiling, diagnostic patterns (also used by skills: `debug-infra`, `babysit-zephyr`)
-- Archived: `.agents/projects/20260130_fray_lite_design.md` — Fray v2 backend design (implemented; read `lib/fray/src/fray/v2/` instead)
+- Archived: `.agents/projects/20260130_fray_lite_design.md` — Fray backend design (implemented; read `lib/fray/src/fray/` instead)
 
 ## Source Layout
 
@@ -50,6 +50,6 @@ Shared data is uploaded to filesystem by `ZephyrContext._upload_shared_data()` b
 
 ## Notes
 
-### MacOS
+### Backends
 
-Ray 2.53 enables a `uv run` runtime_env hook by default. When tests run via `uv run pytest`, this can start workers with a different Python version or fail with psutil errors in sandboxed environments. Disable it for tests. See https://github.com/ray-project/ray/issues/59639.
+`ZephyrContext` uses `fray.current_client()`: Iris is auto-detected inside an Iris job, and `LocalClient` is the fallback for local tests and scripts.

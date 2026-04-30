@@ -3,6 +3,7 @@
 
 import json
 import os
+from collections import Counter
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Sequence
@@ -26,6 +27,9 @@ from levanter.analysis.perplexity_gap import (
 
 SCORED_DOCUMENTS_FILENAME = "scored_documents.parquet"
 SUMMARY_FILENAME = "summary.json"
+TOKEN_COUNTS_FILENAME = "token_counts.parquet"
+TOKEN_COUNT_SUMMARY_FILENAME = "token_counts_summary.json"
+DEFAULT_RARE_TOKEN_LIMIT = 32
 
 
 @dataclass(frozen=True)
@@ -129,10 +133,17 @@ class ModelScoreReportBuilder:
 
 
 def write_model_score_files(
-    output_path: str, summary: dict[str, Any], scored_documents: Sequence[ScoredDocument]
+    output_path: str,
+    summary: dict[str, Any],
+    scored_documents: Sequence[ScoredDocument],
+    *,
+    vocab_size: int | None = None,
+    token_id_to_text: dict[int, str] | None = None,
 ) -> None:
     summary_path = os.path.join(output_path, SUMMARY_FILENAME)
     scored_documents_path = os.path.join(output_path, SCORED_DOCUMENTS_FILENAME)
+    token_counts_path = os.path.join(output_path, TOKEN_COUNTS_FILENAME)
+    token_count_summary_path = os.path.join(output_path, TOKEN_COUNT_SUMMARY_FILENAME)
     fs, _, _ = fsspec.get_fs_token_paths(summary_path)
     fs.makedirs(output_path, exist_ok=True)
 
@@ -142,6 +153,16 @@ def write_model_score_files(
     table = _scored_documents_table(scored_documents)
     with fsspec.open(scored_documents_path, "wb") as f:
         pq.write_table(table, f)
+
+    token_count_summary, token_count_table = _token_count_artifacts(
+        scored_documents,
+        vocab_size=vocab_size,
+        token_id_to_text=token_id_to_text,
+    )
+    with open_url(token_count_summary_path, "w") as f:
+        json.dump(token_count_summary, f, indent=2, sort_keys=True)
+    with fsspec.open(token_counts_path, "wb") as f:
+        pq.write_table(token_count_table, f)
 
 
 def read_model_score_summary(output_path: str) -> dict[str, Any]:
@@ -155,6 +176,12 @@ def read_scored_documents(output_path: str) -> list[ScoredDocument]:
     with fsspec.open(scored_documents_path, "rb") as f:
         table = pq.read_table(f)
     return [_scored_document_from_row(row) for row in table.to_pylist()]
+
+
+def read_token_count_summary(output_path: str) -> dict[str, Any]:
+    token_count_summary_path = os.path.join(output_path, TOKEN_COUNT_SUMMARY_FILENAME)
+    with open_url(token_count_summary_path) as f:
+        return json.load(f)
 
 
 def compare_scored_outputs(
@@ -220,6 +247,7 @@ def _scored_documents_table(scored_documents: Sequence[ScoredDocument]) -> pa.Ta
         "shard_name": [doc.document.shard_name for doc in scored_documents],
         "row_index": [doc.document.row_index for doc in scored_documents],
         "text": [doc.document.text for doc in scored_documents],
+        "token_ids": [doc.tokenized.token_ids.tolist() for doc in scored_documents],
         "per_byte_loss": [doc.per_byte_loss.tolist() for doc in scored_documents],
         "token_byte_starts": [doc.tokenized.byte_starts.tolist() for doc in scored_documents],
         "token_byte_ends": [doc.tokenized.byte_ends.tolist() for doc in scored_documents],
@@ -232,6 +260,7 @@ def _scored_documents_table(scored_documents: Sequence[ScoredDocument]) -> pa.Ta
             ("shard_name", pa.string()),
             ("row_index", pa.int64()),
             ("text", pa.string()),
+            ("token_ids", pa.list_(pa.int32())),
             ("per_byte_loss", pa.list_(pa.float64())),
             ("token_byte_starts", pa.list_(pa.int32())),
             ("token_byte_ends", pa.list_(pa.int32())),
@@ -249,10 +278,17 @@ def _scored_document_from_row(row: dict[str, Any]) -> ScoredDocument:
         row_index=int(row["row_index"]),
         text=row["text"],
     )
+    token_byte_starts = np.asarray(row["token_byte_starts"], dtype=np.int32)
+    token_byte_ends = np.asarray(row["token_byte_ends"], dtype=np.int32)
+    token_ids_row = row.get("token_ids")
+    if token_ids_row is None:
+        token_ids = np.zeros(len(token_byte_starts), dtype=np.int32)
+    else:
+        token_ids = np.asarray(token_ids_row, dtype=np.int32)
     tokenized = TokenizedDocument(
-        token_ids=np.zeros(len(row["token_byte_starts"]), dtype=np.int32),
-        byte_starts=np.asarray(row["token_byte_starts"], dtype=np.int32),
-        byte_ends=np.asarray(row["token_byte_ends"], dtype=np.int32),
+        token_ids=token_ids,
+        byte_starts=token_byte_starts,
+        byte_ends=token_byte_ends,
         num_bytes=int(row["num_bytes"]),
     )
     per_byte_loss = np.asarray(row["per_byte_loss"], dtype=np.float64)
@@ -275,3 +311,117 @@ def _char_to_byte_offsets(text: str) -> np.ndarray:
         running += len(ch.encode("utf-8"))
         offsets[i] = running
     return offsets
+
+
+def _token_count_artifacts(
+    scored_documents: Sequence[ScoredDocument],
+    *,
+    vocab_size: int | None,
+    token_id_to_text: dict[int, str] | None,
+) -> tuple[dict[str, Any], pa.Table]:
+    dataset_counters = _dataset_token_counters(scored_documents)
+    overall_counter: Counter[int] = Counter()
+    for counter in dataset_counters.values():
+        overall_counter.update(counter)
+
+    summary = {
+        "vocab_size": vocab_size,
+        "overall": _token_count_stats(
+            name="overall",
+            counts=overall_counter,
+            vocab_size=vocab_size,
+            token_id_to_text=token_id_to_text,
+        ),
+        "datasets": [
+            _token_count_stats(
+                name=dataset_name,
+                counts=counts,
+                vocab_size=vocab_size,
+                token_id_to_text=token_id_to_text,
+            )
+            for dataset_name, counts in sorted(dataset_counters.items())
+        ],
+    }
+    return summary, _token_counts_table(dataset_counters, token_id_to_text=token_id_to_text)
+
+
+def _dataset_token_counters(scored_documents: Sequence[ScoredDocument]) -> dict[str, Counter[int]]:
+    counters: dict[str, Counter[int]] = defaultdict(Counter)
+    for scored_document in scored_documents:
+        token_ids = scored_document.tokenized.token_ids
+        if token_ids.size == 0:
+            continue
+        unique_ids, counts = np.unique(token_ids, return_counts=True)
+        dataset_counter = counters[scored_document.document.dataset_name]
+        for token_id, count in zip(unique_ids.tolist(), counts.tolist(), strict=True):
+            dataset_counter[int(token_id)] += int(count)
+    return counters
+
+
+def _token_count_stats(
+    *,
+    name: str,
+    counts: Counter[int],
+    vocab_size: int | None,
+    token_id_to_text: dict[int, str] | None,
+) -> dict[str, Any]:
+    total_tokens = int(sum(counts.values()))
+    unique_tokens = int(len(counts))
+    singleton_tokens = int(sum(1 for count in counts.values() if count == 1))
+    rare_tokens_le_3 = int(sum(1 for count in counts.values() if count <= 3))
+    coverage_fraction = None if vocab_size is None or vocab_size <= 0 else unique_tokens / vocab_size
+    unseen_tokens = None if vocab_size is None else max(vocab_size - unique_tokens, 0)
+    rare_token_examples = [
+        {
+            "token_id": int(token_id),
+            "count": int(count),
+            "token_text": _token_text(token_id, token_id_to_text),
+        }
+        for token_id, count in sorted(counts.items(), key=lambda item: (item[1], item[0]))[:DEFAULT_RARE_TOKEN_LIMIT]
+    ]
+    return {
+        "name": name,
+        "total_tokens": total_tokens,
+        "unique_tokens": unique_tokens,
+        "singleton_tokens": singleton_tokens,
+        "rare_tokens_le_3": rare_tokens_le_3,
+        "coverage_fraction": coverage_fraction,
+        "unseen_tokens": unseen_tokens,
+        "rare_token_examples": rare_token_examples,
+    }
+
+
+def _token_counts_table(
+    dataset_counters: dict[str, Counter[int]],
+    *,
+    token_id_to_text: dict[int, str] | None,
+) -> pa.Table:
+    rows = {
+        "dataset_name": [],
+        "token_id": [],
+        "count": [],
+        "token_text": [],
+    }
+    for dataset_name in sorted(dataset_counters):
+        counts = dataset_counters[dataset_name]
+        for token_id, count in sorted(counts.items(), key=lambda item: (item[1], item[0])):
+            rows["dataset_name"].append(dataset_name)
+            rows["token_id"].append(int(token_id))
+            rows["count"].append(int(count))
+            rows["token_text"].append(_token_text(token_id, token_id_to_text))
+
+    schema = pa.schema(
+        [
+            ("dataset_name", pa.string()),
+            ("token_id", pa.int32()),
+            ("count", pa.int64()),
+            ("token_text", pa.string()),
+        ]
+    )
+    return pa.Table.from_pydict(rows, schema=schema)
+
+
+def _token_text(token_id: int, token_id_to_text: dict[int, str] | None) -> str | None:
+    if token_id_to_text is None:
+        return None
+    return token_id_to_text.get(int(token_id))

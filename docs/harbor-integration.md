@@ -112,7 +112,7 @@ def evaluate_harbor(
   - `"e2b"` - E2B containers (requires API key)
   - `"modal"` - Modal containers (requires API key)
 - `wandb_tags`: Additional W&B tags
-- `resource_config`: Fray resource configuration for Ray
+- `resource_config`: Fray resource configuration (dispatched to Iris or a local backend)
 
 ## Examples
 

@@ -1,13 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
+"""Executor steps for scoring model perplexity and comparing score outputs."""
+
 import tempfile
 from dataclasses import dataclass, field
 from typing import Any
 
-from fray.v2 import current_client
-from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
+from fray import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from levanter.analysis.model_perplexity import compare_scored_outputs
 from levanter.analysis.perplexity_gap import write_report_files
 from levanter.data.text import DatasetComponent, HfDatasetSourceConfig, TextLmDatasetFormat, UrlDatasetSourceConfig
@@ -19,11 +20,14 @@ from levanter.main.perplexity_gap import (
 from levanter.models.lm_model import LmConfig
 from levanter.tokenizers import TokenizerBackend
 from levanter.trainer import TrainerConfig
+from levanter.tracker.wandb import WandbConfig
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue, this_output_path, versioned
 from marin.processing.tokenize import HfDatasetSpec
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 from marin.utilities.wandb_utils import init_wandb
+
+WANDB_PROJECT = "marin-eval"
 
 
 @dataclass(frozen=True)
@@ -48,7 +52,7 @@ class RawTextEvaluationDataset:
 
 @dataclass
 class ModelPerplexityScoreConfig:
-    name: str | None
+    name: str
     model: GapFinderModelConfig
     datasets: dict[str, RawTextEvaluationDataset]
     resource_config: ResourceConfig
@@ -63,7 +67,7 @@ class ModelPerplexityScoreConfig:
 
 @dataclass
 class ModelPerplexityGapConfig:
-    name: str | None
+    name: str
     model_a_name: str
     model_b_name: str
     model_a_scores_path: str | InputName | ExecutorStep
@@ -93,7 +97,7 @@ def raw_text_dataset(
     return RawTextEvaluationDataset(input_path=source, text_key=text_key, split=split, tags=tags)
 
 
-def default_model_perplexity_scores(
+def model_perplexity_scores(
     *,
     model: GapFinderModelConfig,
     datasets: dict[str, RawTextEvaluationDataset],
@@ -106,7 +110,7 @@ def default_model_perplexity_scores(
     wandb_tags: list[str] | None = None,
 ) -> ExecutorStep:
     if name is None:
-        name = _default_score_step_name(model)
+        name = ckpt_path_to_step_name(model.checkpoint_path)
 
     return ExecutorStep(
         name=f"analysis/model_perplexity_scores/{name}",
@@ -138,54 +142,7 @@ def default_model_perplexity_scores(
     )
 
 
-def default_model_perplexity_gap(
-    *,
-    model_a: GapFinderModelConfig,
-    model_b: GapFinderModelConfig,
-    datasets: dict[str, RawTextEvaluationDataset],
-    resource_config: ResourceConfig,
-    per_device_batch_size: int = 4,
-    max_eval_length: int = 4096,
-    max_docs_per_dataset: int | None = 256,
-    max_doc_bytes: int | None = 32_768,
-    name: str | None = None,
-    wandb_tags: list[str] | None = None,
-) -> ExecutorStep:
-    if name is None:
-        name = _default_gap_step_name(model_a, model_b)
-
-    score_step_a = default_model_perplexity_scores(
-        model=model_a,
-        datasets=datasets,
-        resource_config=resource_config,
-        per_device_batch_size=per_device_batch_size,
-        max_eval_length=max_eval_length,
-        max_docs_per_dataset=max_docs_per_dataset,
-        max_doc_bytes=max_doc_bytes,
-        wandb_tags=_default_score_wandb_tags(model_a),
-    )
-    score_step_b = default_model_perplexity_scores(
-        model=model_b,
-        datasets=datasets,
-        resource_config=resource_config,
-        per_device_batch_size=per_device_batch_size,
-        max_eval_length=max_eval_length,
-        max_docs_per_dataset=max_docs_per_dataset,
-        max_doc_bytes=max_doc_bytes,
-        wandb_tags=_default_score_wandb_tags(model_b),
-    )
-
-    return default_model_perplexity_gap_from_scores(
-        model_a_name=_model_label(model_a),
-        model_b_name=_model_label(model_b),
-        model_a_scores_path=score_step_a.as_input_name(),
-        model_b_scores_path=score_step_b.as_input_name(),
-        name=name,
-        wandb_tags=wandb_tags,
-    )
-
-
-def default_model_perplexity_gap_from_scores(
+def model_perplexity_gap_from_scores(
     *,
     model_a_name: str,
     model_b_name: str,
@@ -216,23 +173,17 @@ def default_model_perplexity_gap_from_scores(
     )
 
 
-def do_find_model_perplexity_scores(config: LevanterModelPerplexityConfig) -> None:
-    score_main(config)
-
-
 def find_model_perplexity_scores(config: ModelPerplexityScoreConfig) -> None:
     datasets = {name: _to_dataset_component(dataset) for name, dataset in config.datasets.items()}
 
-    if config.name is None:
-        run_name = os.path.basename(config.output_path.rstrip("/"))
-    else:
-        run_name = config.name.replace("/", "-")
+    run_name = config.name.replace("/", "-")
+    tags = ["model_perplexity_scores", *(config.wandb_tags or [])]
 
     levanter_config = LevanterModelPerplexityConfig(
         model=_to_levanter_model_config(config.model),
         datasets=datasets,
         trainer=TrainerConfig(
-            tracker=(),
+            tracker=WandbConfig(project=WANDB_PROJECT, tags=tags, name=run_name),
             per_device_eval_parallelism=config.per_device_batch_size,
         ),
         output_path=config.output_path,
@@ -247,7 +198,7 @@ def find_model_perplexity_scores(config: ModelPerplexityScoreConfig) -> None:
     job_request = JobRequest(
         name=f"model-perplexity-scores-{run_name}",
         resources=config.resource_config,
-        entrypoint=Entrypoint.from_callable(do_find_model_perplexity_scores, args=[levanter_config]),
+        entrypoint=Entrypoint.from_callable(score_main, args=[levanter_config]),
         environment=create_environment(extras=["tpu"]),
     )
     job = client.submit(job_request)
@@ -266,14 +217,13 @@ def find_model_perplexity_gap(config: ModelPerplexityGapConfig) -> None:
 
 
 def _log_gap_report_to_wandb(*, config: ModelPerplexityGapConfig, summary: dict[str, Any]) -> None:
-    run_name = (
-        config.name.replace("/", "-") if config.name is not None else os.path.basename(config.output_path.rstrip("/"))
-    )
+    run_name = config.name.replace("/", "-")
     tags = ["perplexity_gap", *(config.wandb_tags or [])]
     run = init_wandb(
         run_name=run_name,
         tags=tags,
         config={"model_a": config.model_a_name, "model_b": config.model_b_name},
+        project=WANDB_PROJECT,
     )
     if run is None:
         return
@@ -325,26 +275,6 @@ def _to_dataset_component(config: RawTextEvaluationDataset) -> DatasetComponent:
             format=dataset_format,
         )
     return DatasetComponent(source=source, format=dataset_format, tags=list(config.tags), split=config.split)
-
-
-def _default_gap_step_name(model_a: GapFinderModelConfig, model_b: GapFinderModelConfig) -> str:
-    left = ckpt_path_to_step_name(model_a.checkpoint_path)
-    right = ckpt_path_to_step_name(model_b.checkpoint_path)
-    return f"{left}-vs-{right}"
-
-
-def _default_score_step_name(model: GapFinderModelConfig) -> str:
-    return ckpt_path_to_step_name(model.checkpoint_path)
-
-
-def _model_label(config: GapFinderModelConfig) -> str:
-    if isinstance(config.checkpoint_path, InputName):
-        return config.tokenizer or "model"
-    return config.checkpoint_path
-
-
-def _default_score_wandb_tags(model: GapFinderModelConfig) -> list[str]:
-    return [f"model={_model_label(model)}"]
 
 
 def _summary_scalars(summary: dict[str, Any]) -> dict[str, float]:

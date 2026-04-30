@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from fray.v2.types import ResourceConfig
+from fray.types import ResourceConfig
 
 from experiments.defaults import default_raw_validation_sets
 from experiments.evals.fineweb2_multilingual import fineweb2_multilingual_raw_validation_sets
@@ -25,8 +25,8 @@ from experiments.marin_models import marin_tokenizer
 from marin.evaluation.perplexity_gap import (
     GapFinderModelConfig,
     RawTextEvaluationDataset,
-    default_model_perplexity_gap_from_scores,
-    default_model_perplexity_scores,
+    model_perplexity_gap_from_scores,
+    model_perplexity_scores,
 )
 from marin.execution.executor import ExecutorStep
 
@@ -155,7 +155,7 @@ def registered_perplexity_gap_models() -> tuple[PerplexityGapModel, ...]:
     )
 
 
-def default_perplexity_gap_pairs() -> tuple[PerplexityGapPair, ...]:
+def registered_perplexity_gap_pairs() -> tuple[PerplexityGapPair, ...]:
     return (
         PerplexityGapPair("marin_8b", "llama3_1_8b"),
         PerplexityGapPair("marin_8b", "qwen3_8b"),
@@ -172,7 +172,7 @@ def build_registered_perplexity_gap_coverage_plan(
 ) -> PerplexityGapCoveragePlan:
     resolved_bundles = tuple(registered_perplexity_gap_bundles() if bundles is None else bundles)
     resolved_models = tuple(registered_perplexity_gap_models() if models is None else models)
-    resolved_pairs = tuple(default_perplexity_gap_pairs() if comparison_pairs is None else comparison_pairs)
+    resolved_pairs = tuple(registered_perplexity_gap_pairs() if comparison_pairs is None else comparison_pairs)
 
     models_by_key = {model.key: model for model in resolved_models}
     score_steps: dict[tuple[str, str], ExecutorStep] = {}
@@ -180,7 +180,7 @@ def build_registered_perplexity_gap_coverage_plan(
     for bundle in resolved_bundles:
         datasets = bundle.datasets()
         for model in resolved_models:
-            score_steps[(bundle.key, model.key)] = default_model_perplexity_scores(
+            score_steps[(bundle.key, model.key)] = model_perplexity_scores(
                 name=f"{bundle.key}/{model.key}",
                 model=model.config,
                 datasets=datasets,
@@ -203,7 +203,7 @@ def build_registered_perplexity_gap_coverage_plan(
             right_model = models_by_key[pair.right_model_key]
             left_score = score_steps[(bundle.key, left_model.key)]
             right_score = score_steps[(bundle.key, right_model.key)]
-            pairwise_gap_steps[(bundle.key, left_model.key, right_model.key)] = default_model_perplexity_gap_from_scores(
+            pairwise_gap_steps[(bundle.key, left_model.key, right_model.key)] = model_perplexity_gap_from_scores(
                 name=f"{bundle.key}/{left_model.key}-vs-{right_model.key}",
                 model_a_name=left_model.label,
                 model_b_name=right_model.label,

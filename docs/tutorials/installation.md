@@ -21,7 +21,7 @@ In addition, you might find it useful to have the following accounts:
 
 This document focuses on basic setup and usage of Marin.
 If you're on a GPU, see [Local GPU Setup](local-gpu.md) for a GPU-specific walkthrough for getting started.
-If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
+Running on shared TPU/GPU capacity is handled by [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md); Marin's live TPU pool is reachable via `uv run iris --cluster=marin job run ...`.
 
 ## Installation
 

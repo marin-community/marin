@@ -15,16 +15,17 @@ from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
 
 from iris.cluster.client.bundle import BundleCreator
-from iris.cluster.log_store._types import build_log_source
+from finelog.rpc import logging_pb2
+from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
-from iris.rpc import logging_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
 from iris.time_proto import duration_to_proto
+from iris.version import client_revision_date
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,7 @@ class RemoteClusterClient:
             task_image=task_image or "",
             priority_band=priority_band,
             submit_argv=submit_argv or [],
+            client_revision_date=client_revision_date(),
         )
         if self._bundle_id:
             request.bundle_id = self._bundle_id
@@ -484,3 +486,16 @@ class RemoteClusterClient:
             return self._client.get_autoscaler_status(request)
 
         return call_with_retry("get_autoscaler_status", _call)
+
+    def report_task_status_text(self, task_id: JobName, status_text_md: str) -> None:
+        """Push a markdown status string to the controller for UI display.
+
+        Args:
+            task_id: Full task ID of the currently-running task.
+            status_text_md: Human-readable markdown status string.
+        """
+        request = job_pb2.SetTaskStatusTextRequest(
+            task_id=task_id.to_wire(),
+            status_text_md=status_text_md,
+        )
+        self._client.set_task_status_text(request)

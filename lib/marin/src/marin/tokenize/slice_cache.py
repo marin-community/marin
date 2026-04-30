@@ -170,21 +170,12 @@ def _short_desc_from_lm_config(input_config: LmDatasetSourceConfigBase) -> str:
             url += f" (name: {input_config.name})"
         return url
     elif isinstance(input_config, UrlDatasetSourceConfig):
-        out = ""
+        sections = []
         if input_config.train_urls:
-            out = "Train Urls: \n"
-            for url in input_config.train_urls:
-                out += f"- {url}\n"
-
+            sections.append("Train Urls: \n" + "".join(f"- {url}\n" for url in input_config.train_urls))
         if input_config.validation_urls:
-            out = "Validation Urls: \n"
-            for url in input_config.validation_urls:
-                out += f"- {url}\n"
-
-        if not out:
-            out = "{missing urls}"
-
-        return out
+            sections.append("Validation Urls: \n" + "".join(f"- {url}\n" for url in input_config.validation_urls))
+        return "".join(sections) if sections else "{missing urls}"
     else:
         return ""
 
@@ -201,7 +192,7 @@ def _patch_source_config(
     return dataclasses.replace(input_config, cache_dir=output_path, tags=base_tags + extra_tags)
 
 
-def _slice_cache_in_ray(cfg: SliceCacheConfig):
+def _slice_cache_entrypoint(cfg: SliceCacheConfig):
 
     configure_logging(level=logging.INFO)
     logger.info(f"Starting slice cache with config: {cfg}")
@@ -231,7 +222,7 @@ def slice_cache(
 
     return ExecutorStep(
         name=output_path,
-        fn=_slice_cache_in_ray,
+        fn=_slice_cache_entrypoint,
         config=SliceCacheConfig(
             input_config=input_config,
             num_tokens=num_tokens,

@@ -177,10 +177,22 @@ def score_main(config: ModelPerplexityConfig) -> None:
             if docs_processed % 32 == 0:
                 logger.info("Processed %s documents for model perplexity scores", docs_processed)
 
+        token_id_to_text = _token_id_to_text(scored_documents, runner.hf_tokenizer)
         summary = report.build_summary()
-        write_model_score_files(config.output_path, summary, scored_documents)
+        write_model_score_files(
+            config.output_path,
+            summary,
+            scored_documents,
+            vocab_size=len(runner.tokenizer),
+            token_id_to_text=token_id_to_text,
+        )
         levanter.tracker.log(_model_score_scalars(summary), step=0)
-        _log_model_score_artifact(summary, scored_documents)
+        _log_model_score_artifact(
+            summary,
+            scored_documents,
+            vocab_size=len(runner.tokenizer),
+            token_id_to_text=token_id_to_text,
+        )
 
     levanter.tracker.current_tracker().finish()
 
@@ -362,6 +374,23 @@ def _model_label(spec: GapFinderModelConfig) -> str:
     return os.path.basename(spec.checkpoint_path.rstrip("/")) or spec.checkpoint_path
 
 
+def _token_id_to_text(scored_documents: Sequence[ScoredDocument], hf_tokenizer: Any) -> dict[int, str]:
+    token_ids = sorted({int(token_id) for doc in scored_documents for token_id in doc.tokenized.token_ids.tolist()})
+    if not token_ids:
+        return {}
+
+    token_texts = hf_tokenizer.convert_ids_to_tokens(token_ids)
+    if not isinstance(token_texts, list):
+        token_texts = list(token_texts)
+
+    mapping: dict[int, str] = {}
+    for token_id, token_text in zip(token_ids, token_texts, strict=True):
+        if token_text is None:
+            continue
+        mapping[token_id] = str(token_text)
+    return mapping
+
+
 def _accumulate_token_losses(
     out: np.ndarray,
     starts: np.ndarray,
@@ -442,12 +471,24 @@ def _log_report_artifact(summary: dict[str, Any]) -> None:
         )
 
 
-def _log_model_score_artifact(summary: dict[str, Any], scored_documents: Sequence[ScoredDocument]) -> None:
+def _log_model_score_artifact(
+    summary: dict[str, Any],
+    scored_documents: Sequence[ScoredDocument],
+    *,
+    vocab_size: int | None = None,
+    token_id_to_text: dict[int, str] | None = None,
+) -> None:
     if jax.process_index() != 0:
         return
 
     with tempfile.TemporaryDirectory(prefix="model-perplexity-scores-") as tmpdir:
-        write_model_score_files(tmpdir, summary, scored_documents)
+        write_model_score_files(
+            tmpdir,
+            summary,
+            scored_documents,
+            vocab_size=vocab_size,
+            token_id_to_text=token_id_to_text,
+        )
         levanter.tracker.current_tracker().log_artifact(
             tmpdir,
             name="model_perplexity_scores",

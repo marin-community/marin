@@ -19,9 +19,10 @@ from collections.abc import Iterator, Sequence
 import braceexpand
 import draccus
 import fsspec
+import pyarrow.parquet as pq
 from rigging.filesystem import open_url, url_to_fs
 from datasets import load_dataset_builder
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -44,6 +45,22 @@ from rigging.log_setup import configure_logging
 logger = logging.getLogger(__name__)
 
 MIN_GROUP_BYTES = 100_000_000  # 100 MB floor to avoid degenerate tiny shards
+# Empirical upper bound on the zephyr window size (see
+# https://github.com/marin-community/marin/issues/2829#issuecomment-3963661943).
+_MAX_WINDOW_SIZE = 64
+
+
+def _avg_parquet_row_group_rows(path: str) -> int | None:
+    """Return the mean rows-per-row-group from ``path``.
+
+    Returns ``None`` if the file has no row groups (empty parquet footer).
+    """
+    fs, resolved = url_to_fs(path)
+    with fs.open(resolved, "rb") as f:
+        meta = pq.ParquetFile(f).metadata
+    if meta.num_row_groups == 0:
+        return None
+    return max(1, meta.num_rows // meta.num_row_groups)
 
 
 def _compute_target_group_bytes(total_input_bytes: int, max_workers: int) -> int:
@@ -288,6 +305,13 @@ def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Ite
     # load_tokenizer is @lru_cache, so this only loads once per worker process.
     tokenizer: MarinTokenizer = load_tokenizer(name, backend=backend)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
+    # Levanter's BatchTokenizer ships ``long_string_workaround`` opt-in but the
+    # behavior is desirable always: per-record texts above ``_workaround_len``
+    # (10K chars) get split at safe whitespace boundaries before the underlying
+    # ``encode_batch`` is called, then merged back. No-op for short records.
+    # Without this, a single multi-MB outlier passes one giant string to the
+    # Rust tokenizer and OOMs the worker.
+    batch_processor._long_string_workaround = True
 
     batch_count = 0
     record_count = 0
@@ -396,6 +420,29 @@ def tokenize(config: TokenizeConfigBase):
         prefix = os.path.join(config.cache_path, split_name)
         pipeline_start = time.monotonic()
 
+        # For parquet sources, align zephyr's window and levanter's cache batch
+        # with the parquet row-group size so each unit of work is exactly one
+        # row group end-to-end. Non-parquet inputs fall through to the defaults.
+        sample_path = next(
+            (p for group in file_groups for p in group if p.endswith(".parquet")),
+            None,
+        )
+        window_size = _MAX_WINDOW_SIZE
+        batch_size = config.levanter_batch_size
+        if sample_path is not None:
+            avg_rg_rows = _avg_parquet_row_group_rows(sample_path)
+            if avg_rg_rows is not None:
+                half_rg = max(avg_rg_rows // 2, 1)
+                window_size = min(half_rg, _MAX_WINDOW_SIZE)
+                batch_size = half_rg if config.levanter_batch_size is None else config.levanter_batch_size
+                logger.info(
+                    "Parquet source: avg rows/row-group=%d (from %s) → window=%d, levanter batch_size=%d",
+                    avg_rg_rows,
+                    sample_path,
+                    window_size,
+                    batch_size,
+                )
+
         ds = Dataset.from_list(file_groups).flat_map(lambda file_list: file_list).flat_map(load_file)
 
         if config.sample_count is not None:
@@ -403,15 +450,13 @@ def tokenize(config: TokenizeConfigBase):
             ds = ds.take_per_shard(config.sample_count)
 
         temp_shards = (
-            # NOTE: https://github.com/marin-community/marin/issues/2829#issuecomment-3963661943
-            # Window set to 64 ^
-            ds.window(64)
+            ds.window(window_size)
             .map_shard(lambda batches, _: _tokenize_batches(config=config, batches=batches))
             .write_levanter_cache(
                 f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}",
                 metadata={},
                 skip_existing=True,
-                batch_size=config.levanter_batch_size,
+                batch_size=batch_size,
             )
         )
 

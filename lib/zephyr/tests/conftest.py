@@ -16,9 +16,9 @@ from pathlib import Path
 from rigging.timing import ExponentialBackoff
 
 import pytest
-from fray.v2 import ResourceConfig
-from fray.v2.iris_backend import FrayIrisClient
-from fray.v2.local_backend import LocalClient
+from fray import ResourceConfig
+from fray.iris_backend import FrayIrisClient
+from fray.local_backend import LocalClient
 from zephyr import load_file
 from zephyr.execution import ZephyrContext
 
@@ -133,7 +133,7 @@ def actor_context():
     """Provide a fake actor context so ZephyrCoordinator can call current_actor()."""
     from unittest.mock import MagicMock
 
-    from fray.v2.actor import ActorContext, _reset_current_actor, _set_current_actor
+    from fray.actor import ActorContext, _reset_current_actor, _set_current_actor
 
     token = _set_current_actor(ActorContext(handle=MagicMock(), index=0, group_name="test-coord"))
     yield
