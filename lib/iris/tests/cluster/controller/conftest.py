@@ -26,22 +26,21 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
+from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
-    TERMINAL_TASK_STATES,
     ControllerDB,
     _decode_attribute_rows,
-    job_is_finished,
-    task_can_be_scheduled,
-    task_is_finished,
-    worker_available_cpu_millicores,
-    worker_available_gpus,
-    worker_available_memory,
-    worker_available_tpus,
+    task_row_can_be_scheduled,
+    task_row_is_finished,
 )
+from iris.cluster.controller.provider import ProviderUnsupportedError
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
+    JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     JOB_SCHEDULING_PROJECTION,
     TASK_DETAIL_PROJECTION,
@@ -51,92 +50,45 @@ from iris.cluster.controller.schema import (
     WorkerRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.provider import ProviderUnsupportedError
-from iris.cluster.controller.scaling_group import ScalingGroup
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.stores import ControllerStore
+from finelog.server import LogServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
-    DispatchBatch,
-    HEARTBEAT_FAILURE_THRESHOLD,
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.log_store import LogStore
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2, config_pb2, logging_pb2
+from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId, is_job_finished
+from iris.rpc import config_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 from tests.cluster.providers.conftest import make_mock_platform
 
-# ---------------------------------------------------------------------------
-# Convenience wrappers around standalone functions for test readability.
-# These accept a row object and unpack the fields needed by the standalone fn.
-# ---------------------------------------------------------------------------
+check_task_can_be_scheduled = task_row_can_be_scheduled
+check_task_is_finished = task_row_is_finished
 
 
-def check_task_can_be_scheduled(t: TaskDetailRow) -> bool:
-    """Whether a task row is eligible for scheduling."""
-    return task_can_be_scheduled(
-        t.state,
-        t.current_attempt_id,
-        t.failure_count,
-        t.max_retries_failure,
-        t.preemption_count,
-        t.max_retries_preemption,
-    )
-
-
-def check_task_is_finished(t: TaskDetailRow) -> bool:
-    """Whether a task row has reached a terminal state with no remaining retries."""
-    return task_is_finished(
-        t.state, t.failure_count, t.max_retries_failure, t.preemption_count, t.max_retries_preemption
-    )
-
-
-def check_job_is_finished(j: JobDetailRow) -> bool:
+def check_is_job_finished(j: JobDetailRow) -> bool:
     """Whether a job row is in a terminal state."""
-    return job_is_finished(j.state)
+    return is_job_finished(j.state)
 
 
 class FakeProvider:
     """Minimal TaskProvider for tests that only exercise transitions, not RPCs."""
 
-    def sync(
-        self,
-        batches: list[DispatchBatch],
-    ) -> list[tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]]:
-        return [(b, None, "no stub") for b in batches]
-
-    def fetch_live_logs(
-        self,
-        worker_id: WorkerId,
-        address: str | None,
-        task_id: str,
-        attempt_id: int,
-        cursor: int,
-        max_lines: int,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        raise ProviderUnsupportedError("fake")
-
-    def fetch_process_logs(
-        self,
-        worker_id: WorkerId,
-        address: str | None,
-        request: cluster_pb2.FetchLogsRequest,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        raise ProviderUnsupportedError("fake")
-
     def get_process_status(
         self,
         worker_id: WorkerId,
         address: str | None,
-        request: cluster_pb2.GetProcessStatusRequest,
-    ) -> cluster_pb2.GetProcessStatusResponse:
+        request: job_pb2.GetProcessStatusRequest,
+    ) -> job_pb2.GetProcessStatusResponse:
         raise ProviderUnsupportedError("fake")
 
     def on_worker_failed(self, worker_id: WorkerId, address: str | None) -> None:
@@ -145,10 +97,26 @@ class FakeProvider:
     def profile_task(
         self,
         address: str,
-        request: cluster_pb2.ProfileTaskRequest,
+        request: job_pb2.ProfileTaskRequest,
         timeout_ms: int,
-    ) -> cluster_pb2.ProfileTaskResponse:
+    ) -> job_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("fake")
+
+    # --- Split heartbeat surface (no-op stubs so split-mode tests can run) ---
+
+    def ping_workers(self, workers):
+        return []
+
+    def start_tasks(self, jobs):
+        from iris.rpc import worker_pb2
+
+        return [(wid, worker_pb2.Worker.StartTasksResponse(), None) for wid, _, _ in jobs]
+
+    def stop_tasks(self, jobs):
+        return [(wid, None) for wid, _, _ in jobs]
+
+    def poll_workers(self, running, worker_addresses):
+        return []
 
     def close(self) -> None:
         pass
@@ -180,14 +148,34 @@ def mock_controller() -> MockController:
 
 
 @pytest.fixture
-def controller_service(state, mock_controller, tmp_path) -> ControllerServiceImpl:
-    """ControllerServiceImpl with fresh DB, log store, and mock controller."""
+def log_service(state, tmp_path) -> LogServiceImpl:
+    """LogServiceImpl with its own internal log store.
+
+    Wraps ``fetch_logs`` to run the bg compact step first so push→fetch in
+    the same test is synchronously visible. The production path relies on the
+    1s bg tick; tests can't afford that wait.
+    """
+    svc = LogServiceImpl(log_dir=tmp_path / "log_service_logs")
+    original_fetch = svc.fetch_logs
+
+    def fetch_logs(request, ctx):
+        svc._log_store._compact_step()
+        return original_fetch(request, ctx)
+
+    svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
+    yield svc
+    svc.close()
+
+
+@pytest.fixture
+def controller_service(state, log_service, mock_controller, tmp_path) -> ControllerServiceImpl:
+    """ControllerServiceImpl with fresh DB, log service, and mock controller."""
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=log_service,
     )
 
 
@@ -198,40 +186,110 @@ def controller_service(state, mock_controller, tmp_path) -> ControllerServiceImp
 
 @contextmanager
 def make_controller_state(**kwargs):
-    """Yield a ControllerTransitions with a fresh temp DB and log store, cleaning up on exit."""
+    """Yield a ControllerTransitions with a fresh temp DB, cleaning up on exit."""
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     try:
         db = ControllerDB(db_dir=tmp)
-        log_store = LogStore(log_dir=tmp / "logs")
-        yield ControllerTransitions(db=db, log_store=log_store, **kwargs)
-        log_store.close()
+        store = ControllerStore(db)
+        yield ControllerTransitions(store=store, **kwargs)
         db.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
+@pytest.fixture
+def make_controller(tmp_path):
+    """Factory for building ``Controller`` instances with automatic teardown.
+
+    ``Controller.__init__`` attaches a ``RemoteLogHandler`` to the ``iris``
+    logger and spawns a ``LogPusher`` drain thread. Without ``stop()``, those
+    leak across the test session and pull every ``iris.*`` log record into
+    their internal queue — which can then be flushed into another test's
+    monkeypatched ``LogServiceClientSync``. The factory tracks every
+    constructed controller and ``stop()``s them at fixture teardown.
+
+    Pass ``db=`` to inject a pre-built ``ControllerDB`` (otherwise the
+    ``Controller`` opens one under ``config.local_state_dir``). Pass
+    ``provider=`` to override the default ``FakeProvider``. Any remaining
+    keyword arguments are forwarded to ``ControllerConfig``.
+
+    Usage::
+
+        def test_foo(make_controller, tmp_path):
+            ctrl = make_controller(remote_state_dir="file:///tmp/iris-state")
+            # Or inject an existing DB / provider:
+            ctrl = make_controller(
+                remote_state_dir="file:///tmp/iris-state",
+                local_state_dir=tmp_path,
+                db=my_db,
+            )
+    """
+    created: list[Controller] = []
+
+    def _factory(
+        config: ControllerConfig | None = None,
+        *,
+        provider=None,
+        db: ControllerDB | None = None,
+        **config_kwargs,
+    ) -> Controller:
+        if config is None:
+            config_kwargs.setdefault("remote_state_dir", f"file://{tmp_path}/remote")
+            config = ControllerConfig(**config_kwargs)
+        elif config_kwargs:
+            raise TypeError("make_controller: pass either a config or config kwargs, not both")
+        controller = Controller(
+            config=config,
+            provider=provider if provider is not None else FakeProvider(),
+            db=db,
+        )
+        created.append(controller)
+        return controller
+
+    yield _factory
+    errors: list[BaseException] = []
+    for controller in created:
+        try:
+            controller.stop()
+        except BaseException as exc:
+            errors.append(exc)
+    if errors:
+        raise errors[0]
+
+
+def make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
+    entrypoint = job_pb2.RuntimeEntrypoint()
     entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
 
-def make_direct_job_request(name: str = "test-job", replicas: int = 1) -> cluster_pb2.Controller.LaunchJobRequest:
+def make_direct_job_request(
+    name: str = "test-job",
+    replicas: int = 1,
+    task_image: str = "",
+) -> controller_pb2.Controller.LaunchJobRequest:
     job_name = JobName.root("test-user", name)
-    return cluster_pb2.Controller.LaunchJobRequest(
+    return controller_pb2.Controller.LaunchJobRequest(
         name=job_name.to_wire(),
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=replicas,
+        task_image=task_image,
     )
 
 
-def submit_direct_job(state: ControllerTransitions, name: str, replicas: int = 1) -> list[JobName]:
+def submit_direct_job(
+    state: ControllerTransitions,
+    name: str,
+    replicas: int = 1,
+    task_image: str = "",
+) -> list[JobName]:
     jid = JobName.root("test-user", name)
-    req = make_direct_job_request(name, replicas)
-    state.submit_job(jid, req, Timestamp.now())
-    with state._db.snapshot() as q:
+    req = make_direct_job_request(name, replicas, task_image=task_image)
+    with state._store.transaction() as cur:
+        state.submit_job(cur, jid, req, Timestamp.now())
+    with state._store.read_snapshot() as q:
         tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
     return [t.task_id for t in tasks]
 
@@ -242,14 +300,14 @@ def submit_direct_job(state: ControllerTransitions, name: str, replicas: int = 1
 
 
 def query_task(state: ControllerTransitions, task_id: JobName):
-    with state._db.snapshot() as q:
+    with state._db.read_snapshot() as q:
         return TASK_DETAIL_PROJECTION.decode_one(
             q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)),
         )
 
 
 def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: int):
-    with state._db.snapshot() as q:
+    with state._db.read_snapshot() as q:
         rows = ATTEMPT_PROJECTION.decode(
             q.fetchall(
                 "SELECT * FROM task_attempts WHERE task_id = ? AND attempt_id = ?",
@@ -260,36 +318,42 @@ def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: in
 
 
 def query_job(state: ControllerTransitions, job_id: JobName) -> JobDetailRow | None:
-    with state._db.snapshot() as q:
+    with state._db.read_snapshot() as q:
         return JOB_DETAIL_PROJECTION.decode_one(
-            q.fetchall("SELECT * FROM jobs WHERE job_id = ? LIMIT 1", (job_id.to_wire(),))
+            q.fetchall(
+                f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ? LIMIT 1",
+                (job_id.to_wire(),),
+            )
         )
 
 
 def query_job_row(state: ControllerTransitions, job_id: JobName):
     """Query a job as a JobSchedulingRow (scheduling projection with resources/constraints)."""
-    with state._db.snapshot() as q:
+    with state._db.read_snapshot() as q:
         return JOB_SCHEDULING_PROJECTION.decode_one(
-            q.fetchall("SELECT * FROM jobs WHERE job_id = ? LIMIT 1", (job_id.to_wire(),))
+            q.fetchall(
+                f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ? LIMIT 1",
+                (job_id.to_wire(),),
+            )
         )
 
 
 def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerRow | None:
-    with state._db.snapshot() as q:
+    with state._db.read_snapshot() as q:
         return WORKER_ROW_PROJECTION.decode_one(
             q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", (str(worker_id),)),
         )
 
 
 def query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list[TaskDetailRow]:
-    with state._db.snapshot() as q:
+    with state._db.read_snapshot() as q:
         return TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (job_id.to_wire(),)))
 
 
 def schedulable_tasks(state: ControllerTransitions):
     """Return non-terminal tasks eligible for scheduling, in priority order."""
     terminal_placeholders = ",".join("?" for _ in TERMINAL_TASK_STATES)
-    with state._db.snapshot() as q:
+    with state._db.read_snapshot() as q:
         tasks = TASK_DETAIL_PROJECTION.decode(
             q.fetchall(
                 f"SELECT * FROM tasks WHERE state IS NOT NULL AND state NOT IN ({terminal_placeholders})"
@@ -302,7 +366,7 @@ def schedulable_tasks(state: ControllerTransitions):
 
 def building_counts(state: ControllerTransitions) -> dict[WorkerId, int]:
     """Count tasks in BUILDING/ASSIGNED state per worker, excluding reservation holders."""
-    with state._db.snapshot() as snapshot:
+    with state._db.read_snapshot() as snapshot:
         rows = snapshot.raw(
             "SELECT a.worker_id, COUNT(*) as c FROM tasks t "
             "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
@@ -310,8 +374,8 @@ def building_counts(state: ControllerTransitions) -> dict[WorkerId, int]:
             "WHERE t.state IN (?, ?) AND j.is_reservation_holder = 0 "
             "GROUP BY a.worker_id ORDER BY a.worker_id ASC",
             (
-                cluster_pb2.TASK_STATE_BUILDING,
-                cluster_pb2.TASK_STATE_ASSIGNED,
+                job_pb2.TASK_STATE_BUILDING,
+                job_pb2.TASK_STATE_ASSIGNED,
             ),
             decoders={"worker_id": WorkerId, "c": int},
         )
@@ -322,26 +386,28 @@ def register_worker(
     state: ControllerTransitions,
     worker_id: str,
     address: str,
-    metadata: cluster_pb2.WorkerMetadata,
+    metadata: job_pb2.WorkerMetadata,
     healthy: bool = True,
     slice_id: str = "",
     scale_group: str = "",
 ) -> WorkerId:
     wid = WorkerId(worker_id)
-    state.register_or_refresh_worker(
-        worker_id=wid,
-        address=address,
-        metadata=metadata,
-        ts=Timestamp.now(),
-        slice_id=slice_id,
-        scale_group=scale_group,
-    )
-    if not healthy:
-        state._db.execute("UPDATE workers SET healthy = 0 WHERE worker_id = ?", (str(wid),))
+    with state._store.transaction() as cur:
+        state.register_or_refresh_worker(
+            cur,
+            worker_id=wid,
+            address=address,
+            metadata=metadata,
+            ts=Timestamp.now(),
+            slice_id=slice_id,
+            scale_group=scale_group,
+        )
+        if not healthy:
+            state._store.workers.set_health_for_test(cur, wid, healthy=False)
     return wid
 
 
-def inject_device_constraints(request: cluster_pb2.Controller.LaunchJobRequest) -> None:
+def inject_device_constraints(request: controller_pb2.Controller.LaunchJobRequest) -> None:
     """Auto-inject device constraints from the resource spec, mirroring service.py.
 
     In production, the service layer merges auto-generated device constraints
@@ -361,7 +427,7 @@ def inject_device_constraints(request: cluster_pb2.Controller.LaunchJobRequest) 
 def submit_job(
     state: ControllerTransitions,
     job_id: str,
-    request: cluster_pb2.Controller.LaunchJobRequest,
+    request: controller_pb2.Controller.LaunchJobRequest,
     timestamp_ms: int | None = None,
 ) -> list:
     """Submit a job and return created task rows.
@@ -372,11 +438,13 @@ def submit_job(
     inject_device_constraints(request)
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
-    state.submit_job(
-        jid,
-        request,
-        Timestamp.from_ms(timestamp_ms) if timestamp_ms is not None else Timestamp.now(),
-    )
+    with state._store.transaction() as cur:
+        state.submit_job(
+            cur,
+            jid,
+            request,
+            Timestamp.from_ms(timestamp_ms) if timestamp_ms is not None else Timestamp.now(),
+        )
     return query_tasks_for_job(state, jid)
 
 
@@ -387,7 +455,7 @@ def submit_job(
 
 
 def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> list[TaskDetailRow]:
-    with state._db.snapshot() as q:
+    with state._db.read_snapshot() as q:
         tasks = TASK_DETAIL_PROJECTION.decode(
             q.fetchall("SELECT * FROM tasks WHERE job_id = ? ORDER BY task_index ASC", (job_id.to_wire(),)),
         )
@@ -406,7 +474,7 @@ def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> 
 
 def query_task_with_attempts(state: ControllerTransitions, task_id: JobName) -> TaskDetailRow | None:
     wire = task_id.to_wire()
-    with state._db.snapshot() as q:
+    with state._db.read_snapshot() as q:
         tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (wire,)))
         attempts = ATTEMPT_PROJECTION.decode(
             q.fetchall("SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt_id ASC", (wire,)),
@@ -424,17 +492,19 @@ def make_job_request(
     max_retries_preemption: int = 0,
     scheduling_timeout_seconds: int = 0,
     priority_band: int = 0,
-) -> cluster_pb2.Controller.LaunchJobRequest:
+    task_image: str = "",
+) -> controller_pb2.Controller.LaunchJobRequest:
     job_name = JobName.from_string(name) if name.startswith("/") else JobName.root("test-user", name)
-    request = cluster_pb2.Controller.LaunchJobRequest(
+    request = controller_pb2.Controller.LaunchJobRequest(
         name=job_name.to_wire(),
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=cpu * 1000, memory_bytes=memory_bytes),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=cpu * 1000, memory_bytes=memory_bytes),
+        environment=job_pb2.EnvironmentConfig(),
         max_retries_failure=max_retries_failure,
         max_retries_preemption=max_retries_preemption,
         replicas=replicas,
         priority_band=priority_band,
+        task_image=task_image,
     )
     if scheduling_timeout_seconds > 0:
         request.scheduling_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(scheduling_timeout_seconds)))
@@ -448,21 +518,21 @@ def make_worker_metadata(
     gpu_count: int = 0,
     gpu_name: str = "",
     tpu_name: str = "",
-) -> cluster_pb2.WorkerMetadata:
+) -> job_pb2.WorkerMetadata:
     """Build WorkerMetadata with device config and well-known attributes.
 
     Populates device-type and device-variant attributes so constraint-based
     scheduling works the same way as production.
     """
-    device = cluster_pb2.DeviceConfig()
+    device = job_pb2.DeviceConfig()
     if tpu_name:
-        device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=tpu_name))
+        device.tpu.CopyFrom(job_pb2.TpuDevice(variant=tpu_name))
     elif gpu_count > 0:
-        device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant=gpu_name or "auto", count=gpu_count))
+        device.gpu.CopyFrom(job_pb2.GpuDevice(variant=gpu_name or "auto", count=gpu_count))
     else:
-        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+        device.cpu.CopyFrom(job_pb2.CpuDevice(variant="cpu"))
 
-    meta = cluster_pb2.WorkerMetadata(
+    meta = job_pb2.WorkerMetadata(
         hostname="test-worker",
         ip_address="127.0.0.1",
         cpu_count=cpu,
@@ -488,7 +558,7 @@ def make_worker_metadata(
 
 
 def worker_running_tasks(state: ControllerTransitions, worker_id: WorkerId) -> frozenset[JobName]:
-    with state._db.snapshot() as q:
+    with state._db.read_snapshot() as q:
         rows = q.raw(
             "SELECT t.task_id FROM tasks t "
             "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
@@ -504,7 +574,7 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> li
         return workers
     worker_ids = [str(w.worker_id) for w in workers]
     placeholders = ",".join("?" for _ in worker_ids)
-    with state._db.snapshot() as q:
+    with state._db.read_snapshot() as q:
         attrs = q.raw(
             f"SELECT worker_id, key, value_type, str_value, int_value, float_value"
             f" FROM worker_attributes WHERE worker_id IN ({placeholders})",
@@ -515,36 +585,39 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> li
         _replace(
             w,
             attributes=attrs_by_worker.get(w.worker_id, {}),
-            available_cpu_millicores=worker_available_cpu_millicores(w.total_cpu_millicores, w.committed_cpu_millicores),
-            available_memory=worker_available_memory(w.total_memory_bytes, w.committed_mem),
-            available_gpus=worker_available_gpus(w.total_gpu_count, w.committed_gpu),
-            available_tpus=worker_available_tpus(w.total_tpu_count, w.committed_tpu),
+            available_cpu_millicores=w.total_cpu_millicores - w.committed_cpu_millicores,
+            available_memory=w.total_memory_bytes - w.committed_mem,
+            available_gpus=w.total_gpu_count - w.committed_gpu,
+            available_tpus=w.total_tpu_count - w.committed_tpu,
         )
         for w in workers
     ]
 
 
 def healthy_active_workers(state: ControllerTransitions) -> list[WorkerRow]:
-    with state._db.snapshot() as q:
+    with state._db.read_snapshot() as q:
         workers = WORKER_ROW_PROJECTION.decode(q.fetchall("SELECT * FROM workers WHERE healthy = 1 AND active = 1"))
     return hydrate_worker_attributes(state, workers)
 
 
 def dispatch_task(state: ControllerTransitions, task: TaskDetailRow, worker_id: WorkerId) -> None:
-    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=worker_id,
-            worker_resource_snapshot=None,
-            updates=[
-                TaskUpdate(
-                    task_id=task.task_id,
-                    attempt_id=query_task(state, task.task_id).current_attempt_id,
-                    new_state=cluster_pb2.TASK_STATE_RUNNING,
-                )
-            ],
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)])
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=worker_id,
+                worker_resource_snapshot=None,
+                updates=[
+                    TaskUpdate(
+                        task_id=task.task_id,
+                        attempt_id=query_task(state, task.task_id).current_attempt_id,
+                        new_state=job_pb2.TASK_STATE_RUNNING,
+                    )
+                ],
+            ),
         )
-    )
 
 
 def transition_task(
@@ -557,8 +630,9 @@ def transition_task(
 ) -> object:
     task = query_task_with_attempts(state, task_id)
     assert task is not None
-    if new_state == cluster_pb2.TASK_STATE_KILLED:
-        return state.cancel_job(task.job_id, reason=error or "killed")
+    if new_state == job_pb2.TASK_STATE_KILLED:
+        with state._store.transaction() as cur:
+            return state.cancel_job(cur, task.job_id, reason=error or "killed")
     # Compute worker_id: prefer current attempt's worker, fall back to current_worker_id.
     current_attempt = task.attempts[-1] if task.attempts else None
     worker_id = current_attempt.worker_id if current_attempt is not None else task.current_worker_id
@@ -570,29 +644,28 @@ def transition_task(
             exit_code=exit_code,
         )
         return state
-    return state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=worker_id,
-            worker_resource_snapshot=None,
-            updates=[
-                TaskUpdate(
-                    task_id=task_id,
-                    attempt_id=task.current_attempt_id,
-                    new_state=new_state,
-                    error=error,
-                    exit_code=exit_code,
-                )
-            ],
+    with state._store.transaction() as cur:
+        return state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=worker_id,
+                worker_resource_snapshot=None,
+                updates=[
+                    TaskUpdate(
+                        task_id=task_id,
+                        attempt_id=task.current_attempt_id,
+                        new_state=new_state,
+                        error=error,
+                        exit_code=exit_code,
+                    )
+                ],
+            ),
         )
-    )
 
 
 def fail_worker(state: ControllerTransitions, worker_id: WorkerId, error: str) -> None:
-    batch = state.drain_dispatch(worker_id)
-    if batch is None:
-        return
-    for _ in range(HEARTBEAT_FAILURE_THRESHOLD):
-        state.record_heartbeat_failure(worker_id, error, batch)
+    """Force-remove a worker via the explicit kill path used by the reaper thread."""
+    state.fail_workers([(worker_id, None, error)])
 
 
 # =============================================================================
@@ -726,7 +799,7 @@ def make_demand_entries(
 ) -> list[DemandEntry]:
     if count <= 0:
         return []
-    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
+    resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
     if device_type == DeviceType.TPU:
         resources.device.tpu.variant = device_variant or ""
     elif device_type == DeviceType.GPU:
@@ -748,7 +821,7 @@ def make_demand_entries(
     constraint_list: list[Constraint] = []
     if device_type is not None:
         constraint_list.append(
-            Constraint(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type.value)
+            Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type.value)
         )
     if effective_variants:
         constraint_list.append(device_variant_constraint(sorted(effective_variants)))
@@ -759,14 +832,12 @@ def make_demand_entries(
     if required_zones:
         for z in sorted(required_zones):
             constraint_list.append(zone_constraint(z))
-    proto_constraints = [c.to_proto() for c in constraint_list]
-
     return [
         DemandEntry(
             task_ids=[f"{task_prefix}-{i}"],
             coschedule_group_id=None,
             normalized=normalized,
-            constraints=proto_constraints,
+            constraints=constraint_list,
             resources=resources,
         )
         for i in range(count)
@@ -785,7 +856,7 @@ def make_big_demand_entries(
     coschedule_group_id: str | None = None,
 ) -> list[DemandEntry]:
     """Create demand entries with explicit resource sizes for packing tests."""
-    resources = cluster_pb2.ResourceSpecProto(
+    resources = job_pb2.ResourceSpecProto(
         cpu_millicores=cpu_millicores,
         memory_bytes=memory_bytes,
         disk_bytes=disk_bytes,

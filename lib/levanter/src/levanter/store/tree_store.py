@@ -12,7 +12,7 @@ import numpy as np
 from haliax.jax_utils import is_jax_array_like
 from jaxtyping import PyTree
 
-from .jagged_array import JaggedArrayStore, PreparedBatch
+from .jagged_array import JaggedArrayStore
 
 T = TypeVar("T", bound=PyTree)
 
@@ -50,10 +50,6 @@ class TreeStore(Generic[T]):
         self.mode = mode
         self.tree = tree
 
-    @property
-    def batch_preparer(self):
-        return TreeBatchPreparer(jtu.tree_map(lambda writer: 9, self.tree, is_leaf=heuristic_is_leaf))
-
     @staticmethod
     def open(exemplar: T, path: str, *, mode="a", cache_metadata: bool = False) -> "TreeStore":
         """
@@ -70,7 +66,7 @@ class TreeStore(Generic[T]):
         Append a batch of data to the store.
         """
         jtu.tree_map(
-            lambda writer, *xs: writer.extend([np.asarray(x) for x in xs]),
+            lambda writer, *xs: writer.extend(xs),
             self.tree,
             *batch,
             is_leaf=heuristic_is_leaf,
@@ -84,7 +80,7 @@ class TreeStore(Generic[T]):
         For instance, HF's BatchEncoding is a dict of lists of numpy arrays.
         """
         jtu.tree_map(
-            lambda writer, xs: writer.extend(xs if isinstance(xs, PreparedBatch) else [np.asarray(x) for x in xs]),
+            lambda writer, xs: writer.extend(xs),
             self.tree,
             batch,
             is_leaf=heuristic_is_leaf_batched,
@@ -98,9 +94,7 @@ class TreeStore(Generic[T]):
         For instance, HF's BatchEncoding is a dict of lists of numpy arrays.
         """
         futures = jtu.tree_map(
-            lambda writer, xs: writer.extend_async(
-                xs if isinstance(xs, PreparedBatch) else [np.asarray(x) for x in xs]
-            ),
+            lambda writer, xs: writer.extend_async(xs),
             self.tree,
             batch,
             is_leaf=heuristic_is_leaf_batched,
@@ -205,16 +199,3 @@ def _render_path_elem(x):
             return f"{i}"
         case _:
             return str(x)
-
-
-class TreeBatchPreparer(Generic[T]):
-    def __init__(self, exemplar: T):
-        self.exemplar = exemplar
-
-    def __call__(self, batch: List[T]) -> PyTree:
-        return jtu.tree_map(
-            lambda _, *xs: PreparedBatch.from_batch([np.asarray(x) for x in xs]),
-            self.exemplar,
-            *batch,
-            is_leaf=heuristic_is_leaf,
-        )

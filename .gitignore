@@ -212,9 +212,6 @@ archive/
 # wandb logs
 wandb
 
-# Generated leaderboard data
-marin/speedrun/static/data/runs.json
-
 # Ignore generated credentials from google-github-actions/auth
 gha-creds-*.json
 
@@ -252,3 +249,5 @@ experiments/posttrain/**/shard_*.jsonl.gz
 experiments/posttrain/**/inference_raw.jsonl.gz
 experiments/posttrain/**/output.jsonl
 experiments/posttrain/**/requests.jsonl
+
+.worktrees

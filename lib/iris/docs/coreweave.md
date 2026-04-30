@@ -137,7 +137,7 @@ environment variables automatically.
 ### Step 3: Start the cluster
 
 ```bash
-iris --config=lib/iris/examples/coreweave.yaml cluster start
+iris --cluster=coreweave cluster start
 ```
 
 This is fully idempotent. It creates/reconciles:
@@ -151,14 +151,14 @@ This is fully idempotent. It creates/reconciles:
 ### Step 4: Use the cluster
 
 ```bash
-iris --config=lib/iris/examples/coreweave.yaml cluster status
-iris --config=lib/iris/examples/coreweave.yaml cluster dashboard
+iris --cluster=coreweave cluster status
+iris --cluster=coreweave cluster dashboard
 ```
 
 ### Step 5: Stop
 
 ```bash
-iris --config=lib/iris/examples/coreweave.yaml cluster stop
+iris --cluster=coreweave cluster stop
 ```
 
 Deletes worker Pods and controller resources. NodePools are left in place (they
@@ -439,7 +439,7 @@ scale_groups:
         region: US-WEST-04A
         pool: h100-16x
         backend.coreweave.cloud/superpod: same-slice
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 1
     priority: 50
     slice_template:

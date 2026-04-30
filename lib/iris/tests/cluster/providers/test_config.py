@@ -8,7 +8,6 @@ YAML, ensuring that vm_type and platform configuration are preserved correctly.
 """
 
 from pathlib import Path
-from typing import ClassVar
 
 import pytest
 import yaml
@@ -24,8 +23,9 @@ from iris.cluster.config import (
 )
 from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.constraints import WellKnownAttribute
-from iris.rpc import cluster_pb2, config_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc import config_pb2
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, ExponentialBackoff
 
@@ -57,7 +57,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 8
       capacity_type: preemptible
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 10
     slice_template:
       gcp:
@@ -168,7 +168,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 8
       capacity_type: preemptible
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 10
     slice_template:
       gcp:
@@ -184,7 +184,7 @@ scale_groups:
       device_variant: v5litepod-16
       device_count: 8
       capacity_type: preemptible
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 4
     slice_template:
       gcp:
@@ -299,7 +299,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 8
       capacity_type: preemptible
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 10
     slice_template:
       gcp:
@@ -341,7 +341,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 8
       capacity_type: preemptible
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 2
     slice_template:
       gcp:
@@ -437,7 +437,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 8
       capacity_type: preemptible
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 2
     slice_template:
       gcp:
@@ -627,7 +627,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 8
       capacity_type: preemptible
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 10
     slice_template:
       gcp:
@@ -681,7 +681,7 @@ scale_groups:
       device_type: cpu
       device_count: 0
       capacity_type: on-demand
-    min_slices: 2
+    buffer_slices: 2
     max_slices: 5
     priority: 50
     slice_template:
@@ -698,7 +698,7 @@ scale_groups:
       device_variant: v5litepod-16
       device_count: 8
       capacity_type: preemptible
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 3
     priority: 100
     slice_template:
@@ -715,14 +715,14 @@ scale_groups:
         # Verify other fields preserved
         cpu_group = local_config.scale_groups["cpu_group"]
         assert cpu_group.resources.device_type == config_pb2.ACCELERATOR_TYPE_CPU
-        assert cpu_group.min_slices == 2
+        assert cpu_group.buffer_slices == 2
         assert cpu_group.max_slices == 5
         assert cpu_group.priority == 50
 
         tpu_group = local_config.scale_groups["tpu_group"]
         assert tpu_group.resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
         assert tpu_group.resources.device_variant == "v5litepod-16"
-        assert tpu_group.min_slices == 1
+        assert tpu_group.buffer_slices == 1
         assert tpu_group.max_slices == 3
         assert tpu_group.priority == 100
 
@@ -754,6 +754,22 @@ scale_groups:
             # Verify fast timings applied
             assert local_config.defaults.autoscaler.evaluation_interval.milliseconds == 500
             assert local_config.defaults.autoscaler.scale_up_delay.milliseconds == 1000
+
+    def test_example_config_zones_in_known_gcp_zones(self):
+        """All GCP zones used in example configs must be in KNOWN_GCP_ZONES."""
+        from iris.cluster.providers.gcp.service import KNOWN_GCP_ZONES
+
+        iris_root = Path(__file__).parent.parent.parent.parent
+        for config_path in [iris_root / "examples" / "marin.yaml", iris_root / "examples" / "marin-dev.yaml"]:
+            if not config_path.exists():
+                pytest.skip(f"Example config not found: {config_path}")
+            config = load_config(config_path)
+            for name, sg in config.scale_groups.items():
+                template = sg.slice_template
+                if template.WhichOneof("platform") == "gcp" and template.gcp.zone:
+                    assert (
+                        template.gcp.zone in KNOWN_GCP_ZONES
+                    ), f"Scale group '{name}': zone '{template.gcp.zone}' not in KNOWN_GCP_ZONES"
 
 
 def _valid_scale_group() -> config_pb2.ScaleGroupConfig:
@@ -989,77 +1005,33 @@ def _config_with_gcp_sg(
 
 
 class TestWorkerSettingsValidation:
-    """Tests for worker.attributes validation (region/zone consistency, preemptible agreement)."""
+    """Tests for worker.attributes validation (rejection of derived/well-known keys)."""
 
     def test_no_worker_settings_accepted(self):
         """Scale groups without worker settings always pass validation."""
         config = _config_with_gcp_sg("us-west4-b")
         validate_config(config)
 
-    def test_region_matching_zone_prefix_accepted(self):
-        """worker.attributes.region that matches zone prefix passes validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.REGION: "us-west4"})
-        validate_config(config)
-
     @pytest.mark.parametrize(
-        "zone,region",
+        "attr",
         [
-            ("us-west4-b", "us-central1"),
-            ("us-central1-a", "us-west4"),
-            ("europe-west4-a", "us-west4"),
+            WellKnownAttribute.REGION,
+            WellKnownAttribute.ZONE,
+            WellKnownAttribute.DEVICE_TYPE,
+            WellKnownAttribute.DEVICE_VARIANT,
+            WellKnownAttribute.PREEMPTIBLE,
         ],
     )
-    def test_region_mismatching_zone_prefix_rejected(self, zone: str, region: str):
-        """worker.attributes.region that doesn't match zone prefix fails validation."""
-        config = _config_with_gcp_sg(zone, worker_attributes={WellKnownAttribute.REGION: region})
-        with pytest.raises(ValueError, match="must match"):
+    def test_derived_attributes_rejected(self, attr: str):
+        """Well-known attributes derived from resources/slice_template must not be set explicitly."""
+        config = _config_with_gcp_sg("us-west4-b", worker_attributes={attr: "anything"})
+        with pytest.raises(ValueError, match="derived automatically"):
             validate_config(config)
 
-    @pytest.mark.parametrize("attr", [WellKnownAttribute.REGION, WellKnownAttribute.ZONE])
-    def test_empty_attribute_rejected(self, attr: str):
-        """worker.attributes set to empty string fails validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={attr: ""})
-        with pytest.raises(ValueError, match="must be non-empty"):
-            validate_config(config)
-
-    @pytest.mark.parametrize("preemptible_value", ["true", "false", "yes"])
-    def test_preemptible_in_worker_attributes_rejected(self, preemptible_value: str):
-        """worker.attributes.preemptible is now derived from resources and rejected."""
-        config = _config_with_gcp_sg(
-            "us-west4-b",
-            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
-            worker_attributes={WellKnownAttribute.PREEMPTIBLE: preemptible_value},
-        )
-        with pytest.raises(ValueError, match="derived from resources"):
-            validate_config(config)
-
-    def test_region_valid_without_preemptible_attribute(self):
-        """Region in worker.attributes works when capacity_type is only on resources."""
-        config = _config_with_gcp_sg(
-            "us-west4-b",
-            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
-            worker_attributes={WellKnownAttribute.REGION: "us-west4"},
-        )
+    def test_custom_attributes_accepted(self):
+        """Non-well-known attributes are not rejected."""
+        config = _config_with_gcp_sg("us-west4-b", worker_attributes={"team": "frontier"})
         validate_config(config)
-
-    def test_region_check_skipped_for_non_gcp_platform(self):
-        """Region/zone consistency is only checked for GCP slice templates; manual/local groups are unaffected."""
-        sg = _valid_scale_group()  # uses local platform
-        sg.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
-        config = config_pb2.IrisClusterConfig()
-        config.scale_groups["test"].CopyFrom(sg)
-        validate_config(config)  # no GCP zone — region check does not apply
-
-    def test_zone_matching_gcp_zone_accepted(self):
-        """worker.attributes.zone matching slice_template.gcp.zone passes validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.ZONE: "us-west4-b"})
-        validate_config(config)
-
-    def test_zone_mismatching_gcp_zone_rejected(self):
-        """worker.attributes.zone not matching slice_template.gcp.zone fails validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.ZONE: "us-west4-a"})
-        with pytest.raises(ValueError, match="must match"):
-            validate_config(config)
 
 
 class TestMultiZoneExpansion:
@@ -1102,16 +1074,12 @@ scale_groups:
 
         eu = config.scale_groups["tpu_v5e_16-europe-west4-b"]
         assert eu.slice_template.gcp.zone == "europe-west4-b"
-        assert eu.worker.attributes[WellKnownAttribute.ZONE] == "europe-west4-b"
-        assert eu.worker.attributes[WellKnownAttribute.REGION] == "europe-west4"
-        assert eu.min_slices == 0
+        assert eu.buffer_slices == 0
 
         us = config.scale_groups["tpu_v5e_16-us-west4-a"]
         assert us.slice_template.gcp.zone == "us-west4-a"
-        assert us.worker.attributes[WellKnownAttribute.ZONE] == "us-west4-a"
-        assert us.worker.attributes[WellKnownAttribute.REGION] == "us-west4"
 
-    def test_min_slices_preserved_when_explicit(self, tmp_path: Path):
+    def test_buffer_slices_preserved_when_explicit(self, tmp_path: Path):
         config_content = """\
 platform:
   gcp:
@@ -1125,7 +1093,7 @@ scale_groups:
   tpu_group:
     zones: [us-west4-a]
     num_vms: 1
-    min_slices: 2
+    buffer_slices: 2
     resources:
       cpu: 8
       ram: 16GB
@@ -1141,7 +1109,7 @@ scale_groups:
         p = tmp_path / "config.yaml"
         p.write_text(config_content)
         config = load_config(p)
-        assert config.scale_groups["tpu_group-us-west4-a"].min_slices == 2
+        assert config.scale_groups["tpu_group-us-west4-a"].buffer_slices == 2
 
     def test_groups_without_zones_unchanged(self, tmp_path: Path):
         config_content = """\
@@ -1165,7 +1133,7 @@ scale_groups:
       device_variant: v5litepod-4
       device_count: 1
       capacity_type: preemptible
-    min_slices: 1
+    buffer_slices: 1
     slice_template:
       gcp:
         zone: us-west4-a
@@ -1175,7 +1143,7 @@ scale_groups:
         p.write_text(config_content)
         config = load_config(p)
         assert "static_group" in config.scale_groups
-        assert config.scale_groups["static_group"].min_slices == 1
+        assert config.scale_groups["static_group"].buffer_slices == 1
 
     def test_zones_auto_populated_in_platform(self, tmp_path: Path):
         config_content = """\
@@ -1340,39 +1308,9 @@ scale_groups:
         with pytest.raises(ValueError, match="non-empty string"):
             load_config(p)
 
-    _ZONES_CONFLICT_CONFIGS: ClassVar[dict[str, str]] = {
-        "gcp_zone": (
-            """\
-    slice_template:
-      gcp:
-        zone: europe-west4-b
-        runtime_version: v2-alpha-tpuv5-lite"""
-        ),
-        "worker_zone": (
-            """\
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv5-lite
-    worker:
-      attributes:
-        zone: "us-west4-a" """
-        ),
-        "worker_region": (
-            """\
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv5-lite
-    worker:
-      attributes:
-        region: "us-west4" """
-        ),
-    }
-
-    @pytest.mark.parametrize("conflict_type", ["gcp_zone", "worker_zone", "worker_region"])
-    def test_conflicting_field_with_zones_rejected(self, tmp_path: Path, conflict_type: str):
-        """Fields that conflict with zones expansion are rejected."""
-        extra_yaml = self._ZONES_CONFLICT_CONFIGS[conflict_type]
-        config_content = f"""\
+    def test_gcp_zone_with_zones_rejected(self, tmp_path: Path):
+        """Setting both zones: and slice_template.gcp.zone is rejected by expansion."""
+        config_content = """\
 platform:
   gcp:
     project_id: test
@@ -1389,7 +1327,10 @@ scale_groups:
       device_variant: v5litepod-4
       device_count: 1
       capacity_type: preemptible
-{extra_yaml}
+    slice_template:
+      gcp:
+        zone: europe-west4-b
+        runtime_version: v2-alpha-tpuv5-lite
 """
         p = tmp_path / "config.yaml"
         p.write_text(config_content)
@@ -1495,7 +1436,7 @@ v5e-preempt:
         service_account: test@test.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
-      4:  { min_slices: 3, max_slices: 1024 }
+      4:  { buffer_slices: 3, max_slices: 1024 }
       16: { max_slices: 256 }"""
         p = tmp_path / "config.yaml"
         p.write_text(self._BASE.format(pool_yaml=pool_yaml))
@@ -1513,11 +1454,9 @@ v5e-preempt:
         assert g4eu.priority == 10  # base_priority + 0*10
         assert g4eu.quota_pool == "v5e-preempt/europe-west4-b"
         assert g4eu.allocation_tier == 1
-        assert g4eu.min_slices == 3
+        assert g4eu.buffer_slices == 3
         assert g4eu.max_slices == 1024
         assert g4eu.slice_template.gcp.zone == "europe-west4-b"
-        assert g4eu.worker.attributes["zone"] == "europe-west4-b"
-        assert g4eu.worker.attributes["region"] == "europe-west4"
         assert g4eu.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
 
         # Check v5e-16 in us-west4-a (tier 2)
@@ -1527,7 +1466,7 @@ v5e-preempt:
         assert g16us.num_vms == 4
         assert g16us.priority == 20  # base_priority + 1*10
         assert g16us.allocation_tier == 2
-        assert g16us.min_slices == 0  # default
+        assert g16us.buffer_slices == 0  # default
         assert g16us.max_slices == 256
 
     def test_priority_override_per_size(self, tmp_path: Path):
@@ -1704,7 +1643,7 @@ tpu_pools:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
-      128: { min_slices: 1, max_slices: 4 }
+      128: { buffer_slices: 1, max_slices: 4 }
 """
         p = tmp_path / "config.yaml"
         p.write_text(config_content)
@@ -1836,12 +1775,11 @@ def _config_with_coreweave_gpu_sg(topology_attrs: dict[str, str] | None = None) 
     sg.resources.device_variant = "H100"
     sg.resources.device_count = 8
     sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-    sg.min_slices = 0
+    sg.buffer_slices = 0
     sg.max_slices = 1
     sg.slice_template.num_vms = 2
     sg.slice_template.coreweave.region = "US-WEST-04A"
     sg.slice_template.coreweave.instance_type = "gd-8xh100ib-i128"
-    sg.worker.attributes["region"] = "US-WEST-04A"
     sg.worker.attributes["pool"] = "h100-16x"
     if topology_attrs:
         for k, v in topology_attrs.items():
@@ -1885,12 +1823,12 @@ def test_smoke_gcp_config_boots_locally():
 
     with connect_cluster(config) as url:
         client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        # The smoke config has min_slices=1 for v5e-smoke/16 across 2 zones,
+        # The smoke config has buffer_slices=1 for v5e-smoke/16 across 2 zones,
         # each with num_vms=4 → 8 workers total.  We only need one healthy
         # worker to confirm the config boots.
 
         def _has_healthy_worker() -> bool:
-            workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
+            workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
             return any(w.healthy for w in workers)
 
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until_or_raise(

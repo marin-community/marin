@@ -224,6 +224,8 @@ def _validate_worker_settings(config: config_pb2.IrisClusterConfig) -> None:
         WellKnownAttribute.PREEMPTIBLE,
         WellKnownAttribute.DEVICE_TYPE,
         WellKnownAttribute.DEVICE_VARIANT,
+        WellKnownAttribute.REGION,
+        WellKnownAttribute.ZONE,
     }
     for name, sg_config in config.scale_groups.items():
         if not sg_config.HasField("worker"):
@@ -231,37 +233,18 @@ def _validate_worker_settings(config: config_pb2.IrisClusterConfig) -> None:
 
         attributes = sg_config.worker.attributes
 
-        # Reject well-known keys that are now derived from resources
+        # Reject well-known keys that are derived elsewhere: device-type /
+        # device-variant / preemptible come from `resources`; region / zone
+        # come from `slice_template` (gcp.zone or coreweave.region).
         for attr_key in _well_known_resource_attrs:
             if attr_key in attributes:
                 raise ValueError(
-                    f"Scale group '{name}': worker.attributes.{attr_key} is now derived from "
-                    f"resources and must not be set explicitly. Remove it from worker.attributes."
-                )
-
-        region = attributes.get(WellKnownAttribute.REGION, "").strip()
-        if WellKnownAttribute.REGION in attributes and not region:
-            raise ValueError(f"Scale group '{name}': worker.attributes.region must be non-empty.")
-
-        zone_attr = attributes.get(WellKnownAttribute.ZONE, "").strip()
-        if WellKnownAttribute.ZONE in attributes and not zone_attr:
-            raise ValueError(f"Scale group '{name}': worker.attributes.zone must be non-empty.")
-        if zone_attr and sg_config.slice_template.HasField("gcp") and sg_config.slice_template.gcp.zone:
-            if zone_attr != sg_config.slice_template.gcp.zone:
-                raise ValueError(
-                    f"Scale group '{name}': worker.attributes.zone={zone_attr!r} must match "
-                    f"slice_template.gcp.zone={sg_config.slice_template.gcp.zone!r}."
+                    f"Scale group '{name}': worker.attributes.{attr_key} is derived automatically "
+                    f"(from resources or slice_template) and must not be set explicitly. "
+                    f"Remove it from worker.attributes."
                 )
 
         template = sg_config.slice_template
-        if region and template.HasField("gcp") and template.gcp.zone:
-            zone_region = template.gcp.zone.rsplit("-", 1)[0]
-            if region != zone_region:
-                raise ValueError(
-                    f"Scale group '{name}': worker.attributes.region={region!r} must match "
-                    f"slice_template.gcp.zone region {zone_region!r}."
-                )
-
         if (
             template.HasField("coreweave")
             and sg_config.resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU
@@ -547,10 +530,6 @@ def apply_defaults(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClust
     for key, value in merged.defaults.task_env.items():
         merged.defaults.worker.task_env[key] = value
 
-    # Apply controller defaults
-    if not merged.controller.HasField("heartbeat_failure_threshold"):
-        merged.controller.heartbeat_failure_threshold = 10
-
     # Apply scale group defaults
     for group in merged.scale_groups.values():
         if not group.HasField("priority"):
@@ -598,11 +577,6 @@ def make_local_config(
     if not config.HasField("defaults"):
         config.defaults.CopyFrom(config_pb2.DefaultsConfig())
 
-    # Set fast controller timings for local testing.
-    # worker_timeout is derived: heartbeat_interval * heartbeat_failure_threshold
-    # = 0.5s * 3 = 1.5s effective timeout.
-    config.controller.heartbeat_failure_threshold = 3
-
     # Set fast autoscaler timings for local testing
     config.defaults.autoscaler.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.5)))
     config.defaults.autoscaler.scale_up_delay.CopyFrom(duration_to_proto(Duration.from_seconds(1)))
@@ -617,7 +591,7 @@ def _expand_tpu_pools(data: dict) -> None:
     """Expand ``tpu_pools`` into per-(size, zone) scale groups.
 
     Each pool defines shared properties for a TPU family. The ``sizes`` map
-    lists per-size overrides (min_slices, max_slices, priority). For each
+    lists per-size overrides (buffer_slices, max_slices, priority). For each
     pool x size x zone the function emits a fully-specified scale group with
     topology-derived fields (device_variant, num_vms, device_count) and
     autoscaler allocation metadata (quota_pool, allocation_tier, priority).
@@ -676,7 +650,6 @@ def _expand_tpu_pools(data: dict) -> None:
             topo = get_tpu_topology(variant)
 
             for zone in zones:
-                region = zone.rsplit("-", 1)[0]
                 sg_name = f"tpu_{pool_name}_{size_int}-{zone}"
 
                 if sg_name in scale_groups:
@@ -702,15 +675,9 @@ def _expand_tpu_pools(data: dict) -> None:
                     "quota_pool": f"{pool_name}/{zone}",
                     "allocation_tier": tier_index + 1,
                     "resources": resources,
-                    "min_slices": size_overrides.get("min_slices", 0),
+                    "buffer_slices": size_overrides.get("buffer_slices", 0),
                     "max_slices": size_overrides["max_slices"],
                     "slice_template": st,
-                    "worker": {
-                        "attributes": {
-                            WellKnownAttribute.ZONE: zone,
-                            WellKnownAttribute.REGION: region,
-                        }
-                    },
                 }
 
                 scale_groups[sg_name] = sg
@@ -737,15 +704,14 @@ def _expand_multi_zone_groups(data: dict) -> None:
     creates a copy of the scale group with:
     - name suffixed with -{zone} (e.g. tpu_v5e_16-europe-west4-b)
     - slice_template.gcp.zone set to the zone
-    - worker.attributes.zone and worker.attributes.region set automatically
-    - min_slices defaulted to 0 if not explicitly set
+    - buffer_slices defaulted to 0 if not explicitly set
 
     Also merges all expanded zones into platform.gcp.zones.
 
     Raises:
         ValueError: If zones is not a non-empty list of unique non-empty strings,
             if an expanded name collides with an existing scale group, or if
-            user-provided zone/region fields conflict with the expansion.
+            slice_template.gcp.zone is set while zones is also specified.
     """
     scale_groups = data.get("scale_groups")
     if not isinstance(scale_groups, dict):
@@ -785,28 +751,14 @@ def _expand_multi_zone_groups(data: dict) -> None:
 
         # Detect conflicts with user-provided fields that expansion will set
         existing_gcp_zone = (sg.get("slice_template") or {}).get("gcp", {}).get("zone")
-        existing_worker_attrs = (sg.get("worker") or {}).get("attributes", {})
-        existing_zone_attr = existing_worker_attrs.get(WellKnownAttribute.ZONE)
-        existing_region_attr = existing_worker_attrs.get(WellKnownAttribute.REGION)
 
         if existing_gcp_zone:
             raise ValueError(
                 f"Scale group '{name}': cannot set both 'zones' and 'slice_template.gcp.zone'. "
                 f"Remove slice_template.gcp.zone — it is set automatically by zone expansion."
             )
-        if existing_zone_attr:
-            raise ValueError(
-                f"Scale group '{name}': cannot set both 'zones' and 'worker.attributes.zone'. "
-                f"Remove worker.attributes.zone — it is set automatically by zone expansion."
-            )
-        if existing_region_attr:
-            raise ValueError(
-                f"Scale group '{name}': cannot set both 'zones' and 'worker.attributes.region'. "
-                f"Remove worker.attributes.region — it is set automatically by zone expansion."
-            )
 
         for zone in zones:
-            region = zone.rsplit("-", 1)[0]
             expanded_name = f"{name}-{zone}"
 
             if expanded_name in scale_groups:
@@ -826,14 +778,8 @@ def _expand_multi_zone_groups(data: dict) -> None:
             gcp = st.setdefault("gcp", {})
             gcp["zone"] = zone
 
-            # Set worker.attributes.zone and .region
-            worker = expanded_sg.setdefault("worker", {})
-            attrs = worker.setdefault("attributes", {})
-            attrs[WellKnownAttribute.ZONE] = zone
-            attrs[WellKnownAttribute.REGION] = region
-
-            if "min_slices" not in expanded_sg:
-                expanded_sg["min_slices"] = 0
+            if "buffer_slices" not in expanded_sg:
+                expanded_sg["buffer_slices"] = 0
 
             expanded[expanded_name] = expanded_sg
             all_expanded_zones.add(zone)
@@ -1282,7 +1228,7 @@ def create_autoscaler(
     """
     # Local import: controller modules import config.py, creating a circular dependency.
     from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.scaling_group import (
+    from iris.cluster.controller.autoscaler.scaling_group import (
         DEFAULT_SCALE_DOWN_RATE_LIMIT,
         DEFAULT_SCALE_UP_RATE_LIMIT,
         ScalingGroup,
@@ -1313,13 +1259,13 @@ def create_autoscaler(
         slice_template = group_config.slice_template
         cw_instance = slice_template.coreweave.instance_type if slice_template.HasField("coreweave") else ""
         logger.info(
-            "Scale group %s: device=%s:%s device_count=%d num_vms=%d min=%d max=%d instance=%s worker_attrs=%s",
+            "Scale group %s: device=%s:%s device_count=%d num_vms=%d buffer=%d max=%d instance=%s worker_attrs=%s",
             name,
             resources.device_type,
             resources.device_variant,
             resources.device_count,
             group_config.num_vms,
-            group_config.min_slices,
+            group_config.buffer_slices,
             group_config.max_slices,
             cw_instance or "n/a",
             worker_attrs or "none",

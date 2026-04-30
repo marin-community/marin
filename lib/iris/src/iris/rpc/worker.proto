@@ -1,0 +1,124 @@
+// Copyright The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+// Worker-specific request/response messages and the WorkerService RPC.
+// Shared types (including RunTaskRequest and WorkerTaskStatus) live in
+// job.proto; controller-specific types live in controller.proto.
+//
+// Package deliberately kept as iris.cluster to preserve the wire-protocol URL
+// /iris.cluster.WorkerService/... for all existing workers and the controller.
+package iris.cluster;
+
+import "job.proto";
+import "time.proto";
+
+// ============================================================================
+// WORKER SERVICE MESSAGES
+// ============================================================================
+
+message Worker {
+  message GetTaskStatusRequest {
+    string task_id = 1;
+    reserved 2;  // was include_result (removed: serialized_result no longer exists)
+  }
+
+  message ListTasksRequest {}
+
+  message ListTasksResponse {
+    repeated iris.job.TaskStatus tasks = 1;
+  }
+
+  message KillTaskRequest {
+    string task_id = 1;
+    iris.time.Duration term_timeout = 2;  // Time to wait for graceful termination before SIGKILL
+  }
+
+  message HealthResponse {
+    bool healthy = 1;
+    iris.time.Duration uptime = 2;
+    int32 running_tasks = 3;        // Renamed from running_jobs
+  }
+
+  // --- Exec in Container ---
+  message ExecInContainerRequest {
+    string task_id = 1;             // Task whose container to exec into
+    repeated string command = 2;     // Command to execute (e.g. ["bash", "-c", "ls"])
+    int32 timeout_seconds = 3;      // Command timeout in seconds (0 = default 60s)
+  }
+
+  message ExecInContainerResponse {
+    int32 exit_code = 1;
+    string stdout = 2;
+    string stderr = 3;
+    string error = 4;               // Non-empty if exec setup failed
+  }
+
+  // --- Worker lifecycle / task RPCs ---
+
+  message PingRequest {}
+  message PingResponse {
+    iris.job.WorkerResourceSnapshot resource_snapshot = 1;
+    bool healthy = 2;
+    string health_error = 3;
+  }
+
+  message StartTasksRequest {
+    repeated iris.job.RunTaskRequest tasks = 1;
+  }
+  message StartTasksResponse {
+    repeated TaskAck acks = 1;
+  }
+  message TaskAck {
+    string task_id = 1;
+    bool accepted = 2;
+    string error = 3;
+  }
+
+  message StopTasksRequest {
+    repeated string task_ids = 1;
+  }
+  message StopTasksResponse {}
+
+  message PollTasksRequest {
+    repeated iris.job.WorkerTaskStatus expected_tasks = 1;
+  }
+  message PollTasksResponse {
+    repeated iris.job.WorkerTaskStatus tasks = 1;
+  }
+}
+
+// ============================================================================
+// SERVICES
+// ============================================================================
+
+service WorkerService {
+  rpc GetTaskStatus(Worker.GetTaskStatusRequest) returns (iris.job.TaskStatus);
+  rpc ListTasks(Worker.ListTasksRequest) returns (Worker.ListTasksResponse);
+  rpc HealthCheck(iris.job.Empty) returns (Worker.HealthResponse);
+  rpc ProfileTask(iris.job.ProfileTaskRequest) returns (iris.job.ProfileTaskResponse);
+
+  // Process status (local process info + recent logs)
+  rpc GetProcessStatus(iris.job.GetProcessStatusRequest) returns (iris.job.GetProcessStatusResponse);
+
+  // Exec in container
+  rpc ExecInContainer(Worker.ExecInContainerRequest) returns (Worker.ExecInContainerResponse);
+
+  // --- Worker lifecycle / task RPCs (controller -> worker) ---
+  rpc Ping(Worker.PingRequest) returns (Worker.PingResponse);
+  rpc StartTasks(Worker.StartTasksRequest) returns (Worker.StartTasksResponse);
+  rpc StopTasks(Worker.StopTasksRequest) returns (Worker.StopTasksResponse);
+  rpc PollTasks(Worker.PollTasksRequest) returns (Worker.PollTasksResponse);
+}

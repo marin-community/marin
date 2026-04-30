@@ -15,6 +15,7 @@ import warnings
 
 import pytest
 from iris.cluster.config import load_config, make_local_config
+from iris.managed_thread import thread_container_scope
 from iris.rpc import config_pb2
 from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
@@ -30,7 +31,7 @@ def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
     sg = config.scale_groups["placeholder"]
     sg.name = "placeholder"
     sg.num_vms = 1
-    sg.min_slices = 0
+    sg.buffer_slices = 0
     sg.max_slices = 0
     sg.resources.cpu_millicores = 1000
     sg.resources.memory_bytes = 1 * 1024**3
@@ -107,18 +108,22 @@ def sentinel(tmp_path) -> SentinelFile:
 
 
 @pytest.fixture(autouse=True)
-def _thread_cleanup():
-    """Ensure no new non-daemon threads leak from each test.
+def _thread_cleanup(request):
+    """Isolate each test's managed threads and warn on leaks.
 
-    Takes a snapshot of threads before the test and checks that no new
-    non-daemon threads remain after teardown. Waits briefly for threads
-    that are in the process of shutting down.
+    Installs a fresh ThreadContainer via thread_container_scope() so every
+    component that calls get_thread_container() (e.g. Controller._start_local_log_server)
+    registers its threads into a per-test container that is stopped on teardown.
+    This ensures log-server uvicorn threads and other managed threads are joined
+    even when a test constructs a Controller without calling stop().
 
-    This fixture helps catch tests that don't properly clean up their threads,
-    which can cause tests to hang or interfere with each other.
+    As a safety net, takes a snapshot of threads before the test and warns
+    about any non-daemon threads created outside any container that survive
+    teardown.
     """
     before = {t.ident for t in threading.enumerate()}
-    yield
+    with thread_container_scope(name=f"test:{request.node.name}"):
+        yield
 
     def _no_leaked_threads() -> bool:
         return not any(

@@ -10,8 +10,8 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.dashboard_common import html_shell, static_files_mount
-from iris.rpc.cluster_connect import WorkerServiceWSGIApplication
+from iris.cluster.dashboard_common import favicon_route, html_shell, static_files_mount
+from iris.rpc.worker_connect import WorkerServiceWSGIApplication
 
 
 class WorkerDashboard:
@@ -43,6 +43,7 @@ class WorkerDashboard:
         routes = [
             Route("/health", self._health),
             Route("/", self._dashboard),
+            favicon_route(),
             Route("/task/{task_id:path}", self._task_detail_page),
             Route("/status", self._status_page),
             static_files_mount(),

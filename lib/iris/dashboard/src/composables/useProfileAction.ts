@@ -16,8 +16,19 @@ function buildProfileType(profilerType: ProfilerType): Record<string, unknown> {
   return { threads: {} }
 }
 
-function handleProfileResult(decoded: string, profilerType: ProfilerType, label: string) {
+/** Decode a base64 string to a Uint8Array without UTF-8 corruption. */
+function base64ToBytes(base64: string): Uint8Array {
+  const bin = atob(base64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i)
+  }
+  return bytes
+}
+
+function handleProfileResult(raw: string, profilerType: ProfilerType, label: string) {
   if (profilerType === 'threads') {
+    const decoded = atob(raw)
     const w = window.open('', '_blank')
     if (w) {
       const escaped = decoded.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -28,7 +39,8 @@ function handleProfileResult(decoded: string, profilerType: ProfilerType, label:
       w.document.close()
     }
   } else {
-    const blob = new Blob([decoded], { type: 'application/octet-stream' })
+    const bytes = base64ToBytes(raw)
+    const blob = new Blob([bytes], { type: 'application/octet-stream' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -65,7 +77,7 @@ export function useProfileAction(rpcCall: RpcCall, target: string | (() => strin
         return
       }
       if (resp.profileData) {
-        handleProfileResult(atob(resp.profileData), profilerType, currentTarget)
+        handleProfileResult(resp.profileData, profilerType, currentTarget)
       }
     } catch (e) {
       alert(`${profilerType.toUpperCase()} profile failed: ${e instanceof Error ? e.message : e}`)

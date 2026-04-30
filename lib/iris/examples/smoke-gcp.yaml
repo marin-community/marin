@@ -1,5 +1,5 @@
 # Iris smoke-test configuration (GCP)
-# Usage: iris --config=examples/smoke-gcp.yaml cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
+# Usage: iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
 
 platform:
   label_prefix: smoke-ci
@@ -47,7 +47,7 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
-      16: { min_slices: 1, max_slices: 4 }
+      16: { buffer_slices: 1, max_slices: 4 }
 
 scale_groups:
   # Low-priority fallback CPU VM group for on-demand scheduling tests.
@@ -61,7 +61,7 @@ scale_groups:
       disk: 100GB
       device_type: cpu
       capacity_type: on-demand
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 2
     priority: 1000
     slice_template:

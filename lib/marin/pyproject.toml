@@ -5,55 +5,57 @@ requires-python = ">=3.11,<3.13"
 
 [project]
 name = "marin"
-version = "0.1.0"
+version = "0.99"
 
 requires-python = ">=3.11"
 dependencies = [
     "braceexpand",
-    "cryptography>=45",
+    "cryptography>=46.0.6",
     "datasets<4.0.0",
-    "ddsketch",
-    "deepdiff",
+    "deepdiff>=8.6.2",
     "draccus>=0.11.5",
     "fasteners>=0.19",
-    "flask",
-    "floret",
-    "fray",
-    "rigging",
+    "flask>=3.1.3",
+    "marin-fray",
+    "marin-iris",
+    "marin-rigging",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "haliax",
+    "marin-haliax",
     "jax==0.8.0",  # vllm-tpu currently requires this exact version
     "jaxopt>=0.8.3",
-    "levanter[serve]",
+    "marin-levanter[serve]",
     "tenacity",
     "lxml[html_clean]",
-    "lz4",
-    "markdownify==0.12.1",
+    "lxml-html-clean>=0.4.4",
+    "markdownify>=0.14.1",
     "multiprocess==0.70.16",
+    "mcp>=1.25.0",
     "numpy",
     "openai",
     "pandas>=2.0",
     "plotly",
     "pyarrow>=22",
-    "ray==2.53.0",
     "regex",
-    "requests",
+    "requests>=2.33.0",
     "resiliparse>=0.17.2",
     "s3fs>=2024",
     "toml",
     "tqdm",
     "tqdm-loggable",
-    "wandb",
+    "wandb>0.24.0",
     "warcio",
-    "zephyr",
+    "marin-zephyr",
 ]
 
 [project.license]
 file = "../../LICENSE"
+
+[project.scripts]
+marin-mcp-babysitter = "marin.mcp.babysitter:main"
 
 [dependency-groups]
 test = [
@@ -71,9 +73,9 @@ test = [
 ]
 lint = [
     "ruff==0.14.3",
-    "black==25.9.0",
+    "black>=26.3.1",
     "mypy>=1.4.1",
-    "pyrefly==0.40.0",
+    "pyrefly>=0.42.0",
     "types-PyYAML",
     "types-requests",
     "types-six",

@@ -5,7 +5,6 @@
 import tempfile
 
 import atexit
-import logging
 import os
 import sys
 import threading
@@ -16,17 +15,10 @@ from pathlib import Path
 
 from rigging.timing import ExponentialBackoff
 
-# Disable Ray's automatic UV runtime env propagation BEFORE importing ray.
-# This prevents Ray from packaging the entire working directory (~38MB) for actors.
-os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
-os.environ["MARIN_CI_DISABLE_RUNTIME_ENVS"] = "1"
-
 import pytest
-import ray
-from fray.v2 import ResourceConfig
-from fray.v2.iris_backend import FrayIrisClient
-from fray.v2.local_backend import LocalClient
-from fray.v2.ray_backend.backend import RayClient
+from fray import ResourceConfig
+from fray.iris_backend import FrayIrisClient
+from fray.local_backend import LocalClient
 from zephyr import load_file
 from zephyr.execution import ZephyrContext
 
@@ -46,23 +38,6 @@ def iris_cluster():
     config = make_local_config(config)
     with connect_cluster(config) as url:
         yield url
-
-
-@pytest.fixture(scope="session")
-def ray_cluster():
-    """Initialize Ray cluster for testing - reused across all tests."""
-    if not ray.is_initialized():
-        logging.info("Initializing Ray cluster for zephyr tests")
-        ray.init(
-            address="local",
-            num_cpus=8,
-            ignore_reinit_error=True,
-            logging_level="info",
-            log_to_driver=True,
-            resources={"head_node": 1},
-        )
-    yield
-    # Don't shutdown - Ray will be reused across test sessions
 
 
 # --- Local-only fixtures (functional tests) ---
@@ -93,14 +68,18 @@ def zephyr_ctx(local_client, tmp_path_factory):
 # --- Multi-backend fixtures (integration tests) ---
 
 
-@pytest.fixture(params=["local", "iris", "ray"], scope="session")
+def _parent_holder_entrypoint():
+    """Long-running no-op that keeps the integration-test parent job alive."""
+    import time
+
+    time.sleep(3600)
+
+
+@pytest.fixture(params=["local", "iris"], scope="session")
 def integration_client(request):
-    """Parametrized fixture providing Local, Iris, and Ray clients.
+    """Parametrized fixture providing Local and Iris clients.
 
     Session-scoped to reuse clusters across all test modules.
-    Fixtures are requested lazily to avoid initializing Ray when running
-    Iris tests (and vice-versa), since ray.is_initialized() being true
-    causes current_client() auto-detection to pick Ray.
     """
     if request.param == "local":
         client = LocalClient()
@@ -108,21 +87,28 @@ def integration_client(request):
         client.shutdown(wait=True)
     elif request.param == "iris":
         from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
-        from iris.cluster.types import JobName
+        from iris.cluster.types import Entrypoint, ResourceSpec
 
         iris_cluster = request.getfixturevalue("iris_cluster")
         iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
         client = FrayIrisClient.from_iris_client(iris_client)
 
-        ctx = IrisContext(job_id=JobName.root("test-user", "test"), client=iris_client)
-        with iris_ctx_scope(ctx):
-            yield client
-        client.shutdown(wait=True)
-    elif request.param == "ray":
-        request.getfixturevalue("ray_cluster")
-        client = RayClient()
-        yield client
-        client.shutdown(wait=True)
+        # Submit a long-running parent job so child submissions have a live
+        # parent row in the controller DB. Absent parents are rejected with
+        # FAILED_PRECONDITION, so simulating a parent context without a real
+        # parent no longer works.
+        parent_job = iris_client.submit(
+            entrypoint=Entrypoint.from_callable(_parent_holder_entrypoint),
+            name="test",
+            resources=ResourceSpec(cpu=1, memory="512m"),
+        )
+        try:
+            ctx = IrisContext(job_id=parent_job.job_id, client=iris_client)
+            with iris_ctx_scope(ctx):
+                yield client
+        finally:
+            iris_client.terminate(parent_job.job_id)
+            client.shutdown(wait=True)
     else:
         raise ValueError(f"Unknown backend: {request.param}")
 
@@ -147,7 +133,7 @@ def actor_context():
     """Provide a fake actor context so ZephyrCoordinator can call current_actor()."""
     from unittest.mock import MagicMock
 
-    from fray.v2.actor import ActorContext, _reset_current_actor, _set_current_actor
+    from fray.actor import ActorContext, _reset_current_actor, _set_current_actor
 
     token = _set_current_actor(ActorContext(handle=MagicMock(), index=0, group_name="test-coord"))
     yield
@@ -197,14 +183,13 @@ def _configure_marin_prefix():
 
 
 # Thread name prefixes for infrastructure threads managed by session-scoped
-# clusters (iris, ray, fray). These persist across tests and are not leaks.
+# clusters (iris, fray). These persist across tests and are not leaks.
 _INFRA_THREAD_PREFIXES = (
     "worker-server",
     "worker-lifecycle",
     "AnyIO worker thread",
     "ThreadPoolExecutor",
     "asyncio_",
-    "ray::",
     "grpc_",
     "monitoring",
 )
@@ -218,7 +203,7 @@ def _thread_cleanup():
     non-daemon threads remain after teardown. Waits briefly for threads
     that are in the process of shutting down.
 
-    Infrastructure threads from session-scoped clusters (iris, ray) are
+    Infrastructure threads from session-scoped clusters (iris) are
     excluded — they persist for the session and are not leaks.
     """
     before = {t.ident for t in threading.enumerate()}

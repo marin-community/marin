@@ -34,8 +34,6 @@ uv run pytest -m 'not slow' <relevant test paths>
 
 Use `make test` when you need the full default test suite.
 
-*Note* that to run the unit tests, you must not have set `RAY_ADDRESS`. You can unset it with `unset RAY_ADDRESS` or `export RAY_ADDRESS=""`.
-
 ### Opening a pull request
 
 Before opening a pull request:
@@ -48,8 +46,6 @@ Before opening a pull request:
 6. Keep the PR description concise and plain text because it becomes the squash-merge commit message. The `.github/PULL_REQUEST_TEMPLATE.md` file shows the expected style.
 7. Make sure the PR body references an issue with `Fixes #NNNN` or `Part of #NNNN`.
 8. After pushing, verify the relevant GitHub CI checks pass before considering the PR ready for review.
-
-For the end-to-end branch and fork workflow, follow the PR steps in [Submitting to the Marin Speedrun](../tutorials/submitting-speedrun.md#submit). The same GitHub push and PR process applies to non-speedrun changes.
 
 ## Guidelines
 

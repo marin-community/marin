@@ -45,7 +45,6 @@ export interface ResourceUsage {
   diskMb?: string
   cpuMillicores?: number
   memoryPeakMb?: string
-  cpuPercent?: number
   processCount?: number
 }
 
@@ -95,6 +94,8 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
+  resourceHistory?: ResourceUsage[]
+  statusTextMd?: string
 }
 
 // -- Jobs --
@@ -120,6 +121,18 @@ export interface JobStatus {
   taskCount?: number
   completedCount?: number
   pendingReason?: string
+  hasChildren?: boolean
+}
+
+export interface JobQuery {
+  scope?: string
+  parentJobId?: string
+  nameFilter?: string
+  stateFilter?: string
+  sortField?: string
+  sortDirection?: string
+  offset?: number
+  limit?: number
 }
 
 // -- Controller RPC Responses --
@@ -133,17 +146,45 @@ export interface ListJobsResponse {
 export interface GetJobStatusResponse {
   job: JobStatus
   request?: LaunchJobRequest
+  resourceMin?: ResourceUsage
+  resourceMax?: ResourceUsage
+}
+
+export interface CommandEntrypoint {
+  argv?: string[]
+}
+
+export interface RuntimeEntrypoint {
+  setupCommands?: string[]
+  runCommand?: CommandEntrypoint
+  workdirFiles?: Record<string, string>
+  workdirFileRefs?: Record<string, string>
+}
+
+export interface EnvironmentConfig {
+  pipPackages?: string[]
+  envVars?: Record<string, string>
+  extras?: string[]
+  pythonVersion?: string
+  dockerfile?: string
 }
 
 export interface LaunchJobRequest {
   name: string
+  entrypoint?: RuntimeEntrypoint
+  environment?: EnvironmentConfig
   resources?: ResourceSpecProto
   constraints?: Constraint[]
+  ports?: string[]
+  bundleId?: string
   replicas?: number
+  priorityBand?: string
+  submitArgv?: string[]
 }
 
 export interface GetTaskStatusResponse {
   task: TaskStatus
+  jobResources?: ResourceSpecProto
 }
 
 export interface ListTasksResponse {
@@ -190,7 +231,7 @@ export interface ListWorkersResponse {
 
 export interface WorkerResourceSnapshot {
   timestamp?: ProtoTimestamp
-  cpuPercent?: number
+  hostCpuPercent?: number
   memoryUsedBytes?: string
   memoryTotalBytes?: string
   diskUsedBytes?: string
@@ -242,6 +283,8 @@ export interface VmInfo {
   initPhase?: string
   initLogTail?: string
   initError?: string
+  /** Number of tasks currently assigned to this VM by the scheduler. */
+  runningTaskCount?: number
   labels?: Record<string, string>
 }
 
@@ -403,7 +446,7 @@ export interface ProcessInfo {
   uptimeMs?: string
   memoryRssBytes?: string
   memoryVmsBytes?: string
-  cpuPercent?: number
+  cpuMillicores?: number
   threadCount?: number
   openFdCount?: number
   memoryTotalBytes?: string
@@ -414,19 +457,6 @@ export interface ProcessInfo {
 export interface GetProcessStatusResponse {
   processInfo?: ProcessInfo
   logEntries?: LogEntry[]
-}
-
-// -- Transactions --
-
-export interface TransactionAction {
-  timestamp?: ProtoTimestamp
-  action?: string
-  entityId?: string
-  details?: string
-}
-
-export interface GetTransactionsResponse {
-  actions: TransactionAction[]
 }
 
 // -- Task State Counts (used in job summaries and user summaries) --
@@ -506,3 +536,37 @@ export interface GetSchedulerStateResponse {
   totalRunning: number
 }
 
+// -- RPC Statistics (iris.stats.StatsService) --
+
+export interface RpcMethodStats {
+  method: string
+  count?: string
+  errorCount?: string
+  totalDurationMs?: number
+  maxDurationMs?: number
+  p50Ms?: number
+  p95Ms?: number
+  p99Ms?: number
+  bucketUpperBoundsMs?: string[]
+  bucketCounts?: string[]
+  lastCall?: ProtoTimestamp
+}
+
+export interface RpcCallSample {
+  method: string
+  timestamp?: ProtoTimestamp
+  durationMs?: number
+  peer?: string
+  userAgent?: string
+  caller?: string
+  errorCode?: string
+  errorMessage?: string
+  requestPreview?: string
+}
+
+export interface GetRpcStatsResponse {
+  methods?: RpcMethodStats[]
+  slowSamples?: RpcCallSample[]
+  discoverySamples?: RpcCallSample[]
+  collectorStartedAt?: ProtoTimestamp
+}

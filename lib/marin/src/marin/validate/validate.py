@@ -10,11 +10,6 @@ Given an input path to a top-level `documents/` directory on GCS, runs a Zephyr 
 validates all documents, computes dataset statistics, and writes a `metadata.json` file
 to the same directory.
 
-Run with:
-    uv run zephyr --backend=ray --max-parallelism=1000 --memory=4GB --cluster=us-central2 \
-        lib/marin/src/marin/validate/validate.py \
-        --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart \
-        --num_examples_to_sample 1024
 """
 
 import json
@@ -160,7 +155,7 @@ def main(cfg: ValidationConfig) -> None:
     )
 
     ctx = ZephyrContext(name="validate")
-    result = list(ctx.execute(pipeline))
+    result = ctx.execute(pipeline).results
     print(f"Validation complete: {result[0]}")
 
 

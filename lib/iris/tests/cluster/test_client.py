@@ -11,7 +11,8 @@ import pytest
 from connectrpc.errors import ConnectError
 
 from iris.cluster.types import JobName
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 
 from .conftest import ServiceTestHarness
 
@@ -34,7 +35,7 @@ def test_list_jobs_returns_all_jobs(harness: ServiceTestHarness):
     id1 = harness.submit("list-job-1")
     id2 = harness.submit("list-job-2")
 
-    resp = harness.service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), None)
+    resp = harness.service.list_jobs(controller_pb2.Controller.ListJobsRequest(), None)
     job_ids = {j.job_id for j in resp.jobs}
 
     assert id1.to_wire() in job_ids
@@ -52,12 +53,17 @@ def test_list_jobs_filter_by_state(harness: ServiceTestHarness):
     harness.drive_job_to_completion(done_id)
     pending_id = harness.submit("stays-pending")
 
-    succeeded = harness.service.list_jobs(cluster_pb2.Controller.ListJobsRequest(state_filter="succeeded"), None)
+    succeeded = harness.service.list_jobs(
+        controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(state_filter="succeeded")),
+        None,
+    )
     succeeded_ids = {j.job_id for j in succeeded.jobs}
     assert done_id.to_wire() in succeeded_ids
     assert pending_id.to_wire() not in succeeded_ids
 
-    pending = harness.service.list_jobs(cluster_pb2.Controller.ListJobsRequest(state_filter="pending"), None)
+    pending = harness.service.list_jobs(
+        controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(state_filter="pending")), None
+    )
     pending_ids = {j.job_id for j in pending.jobs}
     assert pending_id.to_wire() in pending_ids
     assert done_id.to_wire() not in pending_ids
@@ -69,7 +75,9 @@ def test_list_jobs_filter_by_name(harness: ServiceTestHarness):
     harness.submit("exp-b-job")
     other_id = harness.submit("other-job")
 
-    resp = harness.service.list_jobs(cluster_pb2.Controller.ListJobsRequest(name_filter="exp-"), None)
+    resp = harness.service.list_jobs(
+        controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(name_filter="exp-")), None
+    )
     job_ids = {j.job_id for j in resp.jobs}
 
     assert other_id.to_wire() not in job_ids
@@ -81,10 +89,10 @@ def test_terminate_job(harness: ServiceTestHarness):
     _ensure_workers(harness)
     job_id = harness.submit("term-me")
 
-    harness.service.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
+    harness.service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
 
     status = harness.get_job_status(job_id)
-    assert status.state == cluster_pb2.JOB_STATE_KILLED
+    assert status.state == job_pb2.JOB_STATE_KILLED
 
 
 def test_terminate_job_skips_finished(harness: ServiceTestHarness):
@@ -94,13 +102,13 @@ def test_terminate_job_skips_finished(harness: ServiceTestHarness):
     harness.drive_job_to_completion(job_id)
 
     status = harness.get_job_status(job_id)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
     # Terminating a finished job should not raise
-    harness.service.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
+    harness.service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
     # State should remain SUCCEEDED
     status = harness.get_job_status(job_id)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_submit_rejects_name_with_slash(harness: ServiceTestHarness):

@@ -324,7 +324,7 @@ class InMemoryGcpService:
         self._vms[(request.name, request.zone)] = info
         return info
 
-    def vm_delete(self, name: str, zone: str) -> None:
+    def vm_delete(self, name: str, zone: str, *, wait: bool = False) -> None:
         self._check_injected_failure("vm_delete")
         self._vms.pop((name, zone), None)
 
@@ -374,6 +374,9 @@ class InMemoryGcpService:
         self._check_injected_failure("vm_get_serial_port_output")
         full_output = self._serial_port_output.get((name, zone), "")
         return full_output[start:]
+
+    def logging_read(self, filter_str: str, limit: int = 200) -> list[str]:
+        return []
 
     # ========================================================================
     # LOCAL mode: worker spawning
@@ -461,7 +464,6 @@ class InMemoryGcpService:
                 for k, v in worker_config.worker_attributes.items():
                     extra_attrs.setdefault(k, v)
 
-            extra_attrs.setdefault("region", "local")
             # Use the canonical capacity_type from the slice config proto.
             capacity_type_val = config.capacity_type or config_pb2.CAPACITY_TYPE_ON_DEMAND
 

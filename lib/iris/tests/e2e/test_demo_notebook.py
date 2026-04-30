@@ -21,7 +21,7 @@ def _make_demo_config() -> config_pb2.IrisClusterConfig:
     config = config_pb2.IrisClusterConfig()
     cpu_sg = config.scale_groups["cpu"]
     cpu_sg.name = "cpu"
-    cpu_sg.min_slices = 0
+    cpu_sg.buffer_slices = 0
     cpu_sg.max_slices = 1
     cpu_sg.num_vms = 1
     cpu_sg.resources.cpu_millicores = 1000

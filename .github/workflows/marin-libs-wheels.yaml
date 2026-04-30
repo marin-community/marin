@@ -1,0 +1,100 @@
+name: marin-libs - Build Wheels
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Build mode"
+        type: choice
+        options: [nightly, manual]
+        default: manual
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC daily
+  push:
+    tags:
+      - "marin-libs-v*"
+  pull_request:
+    paths:
+      - "lib/**"
+      - "scripts/python_libs_package.py"
+      - ".github/workflows/marin-libs-wheels.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false  # don't kill an in-flight nightly mid-publish
+
+permissions:
+  contents: write   # creating GH releases
+  pull-requests: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.pick.outputs.mode }}
+      version: ${{ steps.pick.outputs.version }}
+    steps:
+      - id: pick
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/marin-libs-v* ]]; then
+            echo "mode=stable" >> "$GITHUB_OUTPUT"
+            echo "version=${GITHUB_REF_NAME#marin-libs-v}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            echo "mode=nightly" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+          else
+            # pull_request: build-only smoke test
+            echo "mode=manual" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # for git rev-parse in manual mode
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Build wheels
+        run: |
+          uv run python scripts/python_libs_package.py \
+            --mode "${{ needs.resolve.outputs.mode }}" \
+            ${{ needs.resolve.outputs.version && format('--version {0}', needs.resolve.outputs.version) || '' }} \
+            --skip-publish
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marin-libs-wheels
+          # BUILD_INFO.json travels with the wheels so the publish job uses
+          # the same resolved version the build job stamped in, instead of
+          # re-computing it (which would drift across midnight UTC).
+          path: |
+            dist/*.whl
+            dist/BUILD_INFO.json
+          retention-days: 14
+
+  publish:
+    needs: [resolve, build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: marin-libs-wheels
+          path: dist
+      - name: Publish releases and prune nightlies
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          uv run python scripts/python_libs_package.py \
+            --mode "${{ needs.resolve.outputs.mode }}" \
+            ${{ needs.resolve.outputs.version && format('--version {0}', needs.resolve.outputs.version) || '' }} \
+            --publish-only

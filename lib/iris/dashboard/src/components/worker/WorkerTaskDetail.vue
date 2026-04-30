@@ -5,7 +5,7 @@ import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { useProfileAction } from '@/composables/useProfileAction'
 import { stateToName } from '@/types/status'
 import type { TaskStatus } from '@/types/rpc'
-import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatTimestamp } from '@/utils/formatting'
+import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime, formatTimestamp } from '@/utils/formatting'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
@@ -42,7 +42,7 @@ function pushSample(history: number[], value: number) {
 watch(task, (t) => {
   const ru = t?.resourceUsage
   if (ru) {
-    pushSample(cpuHistory.value, ru.cpuPercent ?? 0)
+    pushSample(cpuHistory.value, (ru.cpuMillicores ?? 0) / 1000)
     pushSample(memHistory.value, ru.memoryMb ? parseFloat(ru.memoryMb) : 0)
   }
 })
@@ -62,7 +62,12 @@ const duration = computed(() => {
   return formatDuration(startedMs.value, finishedMs.value || undefined)
 })
 
-const cpuUsed = computed(() => task.value?.resourceUsage?.cpuPercent ?? 0)
+const cpuUsed = computed(() => (task.value?.resourceUsage?.cpuMillicores ?? 0) / 1000)
+const cpuTotal = computed(() => {
+  const maxObserved = Math.max(...cpuHistory.value, cpuUsed.value, 0)
+  if (maxObserved <= 0) return 1
+  return Math.max(1, maxObserved * 1.5)
+})
 
 const memUsedMb = computed(() => {
   const raw = task.value?.resourceUsage?.memoryMb
@@ -205,9 +210,11 @@ onMounted(async () => {
             <div class="space-y-3 mb-3">
               <div class="flex items-center gap-2">
                 <div class="flex-1">
-                  <ResourceGauge label="CPU" :used="cpuUsed" :total="100" unit="%" />
+                  <ResourceGauge label="CPU" :used="cpuUsed" :total="cpuTotal" unit="cores" />
                 </div>
-                <Sparkline :data="cpuHistory" :width="64" :height="20" />
+                <div class="w-16 shrink-0">
+                  <Sparkline :data="cpuHistory" :height="20" />
+                </div>
               </div>
               <div class="flex items-center gap-2">
                 <div class="flex-1">
@@ -218,7 +225,9 @@ onMounted(async () => {
                     unit="bytes"
                   />
                 </div>
-                <Sparkline :data="memHistory" :width="64" :height="20" />
+                <div class="w-16 shrink-0">
+                  <Sparkline :data="memHistory" :height="20" />
+                </div>
               </div>
               <ResourceGauge
                 v-if="diskUsedMb > 0"
@@ -231,6 +240,9 @@ onMounted(async () => {
             <div class="text-xs text-text-muted space-y-0.5">
               <div v-if="task.resourceUsage.processCount">
                 Processes: {{ task.resourceUsage.processCount }}
+              </div>
+              <div v-if="task.resourceUsage.cpuMillicores">
+                CPU: {{ formatCpuMillicores(task.resourceUsage.cpuMillicores) }}
               </div>
               <div v-if="memPeakMb">
                 Peak memory: {{ formatBytes(memPeakMb * 1024 * 1024) }}

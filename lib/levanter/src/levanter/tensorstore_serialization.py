@@ -25,9 +25,25 @@ from haliax.util import is_named_array
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
+from rigging.filesystem import record_transfer
+
+from levanter._debug_logging import flush_debug_output
 from levanter.utils import fsspec_utils, jax_utils
 
 logger = logging.getLogger(__name__)
+
+
+def _format_gib(num_bytes: int) -> str:
+    return f"{num_bytes / (1024**3):.2f}GiB"
+
+
+def _estimate_array_nbytes(array: Any) -> int:
+    size = getattr(array, "size", None)
+    dtype = getattr(array, "dtype", None)
+    itemsize = getattr(dtype, "itemsize", None)
+    if size is None or itemsize is None:
+        return 0
+    return int(size) * int(itemsize)
 
 
 def build_kvstore_spec(path: str) -> dict:
@@ -104,6 +120,7 @@ def tree_serialize_leaves_tensorstore(
     manager: Optional[array_ser.GlobalAsyncCheckpointManager] = None,
     *,
     commit_callback: Optional[Callable] = None,
+    debug_checkpointer: bool = False,
 ):
     if manager is None:
         manager = array_ser.GlobalAsyncCheckpointManager()
@@ -146,8 +163,28 @@ def tree_serialize_leaves_tensorstore(
     arrays = [a for a, _ in filtered]
     paths = [p for _, p in filtered]
 
+    total_array_bytes = sum(_estimate_array_nbytes(array) for array in arrays)
+    largest_path: str | None = None
+    largest_array_bytes = 0
+    for path, array in zip(paths, arrays):
+        array_bytes = _estimate_array_nbytes(array)
+        if array_bytes > largest_array_bytes:
+            largest_path = path
+            largest_array_bytes = array_bytes
+
     if commit_callback is None:
         commit_callback = lambda: logger.info("Committed checkpoint to Tensorstore")  # noqa
+
+    if debug_checkpointer:
+        logger.info(
+            "Checkpoint tensorstore serialize start: dir=%s arrays=%d total=%s largest=%s (%s)",
+            checkpoint_dir,
+            len(arrays),
+            _format_gib(total_array_bytes),
+            largest_path or "<none>",
+            _format_gib(largest_array_bytes),
+        )
+        flush_debug_output(logger)
 
     # Create specs for each array
     tspecs = []
@@ -155,7 +192,19 @@ def tree_serialize_leaves_tensorstore(
         spec = _create_ocdbt_spec(checkpoint_dir, path)
         tspecs.append(spec)
 
+    # Pre-charge the cross-region transfer budget before kicking off the
+    # async writes — tensorstore bypasses fsspec, so the CrossRegionGuardedFS
+    # interceptor never sees these bytes.  No-op when checkpoint_dir is local
+    # or in the same region as the VM.
+    record_transfer(total_array_bytes, checkpoint_dir)
+
+    if debug_checkpointer:
+        logger.info("Checkpoint tensorstore serialize entering manager.serialize for %s", checkpoint_dir)
+        flush_debug_output(logger)
     manager.serialize(arrays, tspecs, on_commit_callback=commit_callback)
+    if debug_checkpointer:
+        logger.info("Checkpoint tensorstore serialize returned from manager.serialize for %s", checkpoint_dir)
+        flush_debug_output(logger)
 
     if manager_was_none:
         manager.wait_until_finished()
@@ -339,6 +388,20 @@ def tree_deserialize_leaves_tensorstore(
     """
     if manager is None:
         manager = array_ser.GlobalAsyncCheckpointManager()
+
+    # Pre-charge the cross-region transfer budget before kicking off the
+    # async reads.  Tensorstore bypasses fsspec, so the CrossRegionGuardedFS
+    # interceptor never sees these bytes.  We use the exemplar pytree's
+    # shapes/dtypes as an upper bound — if `allow_missing=True` and some
+    # leaves aren't on disk we'll over-charge slightly, but the common case
+    # (no missing arrays) is exact.  No-op when checkpoint_dir is local or
+    # in the same region as the VM.
+    estimated_bytes = sum(
+        _estimate_array_nbytes(leaf.array if is_named_array(leaf) else leaf)
+        for leaf in jtu.tree_leaves(pytree, is_leaf=_is_named_or_none)
+        if leaf is not None
+    )
+    record_transfer(estimated_bytes, checkpoint_dir)
 
     shardings: PyTree[Optional[Sharding]] = jtu.tree_map(
         partial(_sharding_from_leaf, axis_mapping=axis_mapping, mesh=mesh), pytree, is_leaf=_is_named_or_none

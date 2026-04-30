@@ -36,7 +36,7 @@ Suggested path pattern:
 For each research thread, maintain all of:
 
 1. A long-lived branch (for example `research/<topic>`).
-2. A GitHub experiment issue (using `.github/ISSUE_TEMPLATE/experiment.md`).
+2. A GitHub experiment issue (use the template under "Experiment Issue Template" below; label it `experiment`).
 3. A local append-only research logbook in `.agents/logbooks/<topic>.md`.
 4. Optional W&B runs/report for dense numeric output and charts.
 5. One or more tags to seal meaningful snapshots.
@@ -58,8 +58,7 @@ When using W&B:
   - iteration is quick,
   - you are tuning kernels or benchmarks,
   - full pipeline apparatus is unnecessary.
-- Use `.agents/skills/dev-tpu/SKILL.md` for the standard Iris-backed workflow.
-- Use `.agents/skills/dev-tpu-ray/SKILL.md` only when you specifically need the legacy Ray-backed workflow.
+- Use `.agents/skills/dev-tpu/SKILL.md` for the Iris-backed workflow.
 
 Rule of thumb:
 - Start with dev TPU for fast hillclimbing.
@@ -69,7 +68,7 @@ Rule of thumb:
 
 ### 1) Kickoff
 1. Create/switch to a long-lived research branch.
-2. Create an experiment issue from `.github/ISSUE_TEMPLATE/experiment.md`.
+2. Create an experiment issue using the body template under "Experiment Issue Template" below. Apply the `experiment` label.
 3. Start a research logbook file in `.agents/logbooks/<topic>.md`.
 4. Add links both ways immediately:
    - logbook links to the issue URL,
@@ -206,6 +205,34 @@ Use this structure in `.agents/logbooks/<topic>.md`:
 - Next action:
 ```
 
+## Experiment Issue Template
+Use this body when filing the GitHub experiment issue at kickoff. Title the
+issue `Experiment: <topic>` and apply the `experiment` label.
+
+```md
+## Description
+
+(Add enough context someone outside could understand what you're trying to do.
+Doesn't need to be too long, but enough you could explain it to someone working
+on LLMs at another lab.)
+
+## Hypothesis or Goal
+
+(What are you trying to learn or achieve?)
+
+### Links
+
+(Delete any that aren't applicable.)
+
+* WandB Report:  (link)
+* Data Browser: (link)
+* (etc.)
+
+## Results
+
+(What did you find, including relevant evaluation metrics, etc.)
+```
+
 ## Issue Update Template
 Use concise updates in issue comments:
 
@@ -269,6 +296,5 @@ Before closing the issue:
 - Final snapshot tag is linked.
 
 ## See Also
-- `.github/ISSUE_TEMPLATE/experiment.md`
 - `.agents/skills/organize-experiments/`
 - `.agents/skills/add-pallas-kernel/`

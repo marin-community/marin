@@ -51,6 +51,10 @@ class Labels:
         self.iris_controller = f"iris-{prefix}-controller"
         self.iris_controller_address = f"iris-{prefix}-controller-address"
         self.iris_slice_id = f"iris-{prefix}-slice-id"
+        # Marks a slice as operator-created via `iris cluster create-slice`.
+        # The autoscaler ignores these: they don't count toward demand, don't
+        # participate in scale-down, and survive `iris cluster stop`.
+        self.iris_manual = f"iris-{prefix}-manual"
 
 
 def find_free_port(start: int = -1) -> int:
@@ -81,6 +85,29 @@ def find_free_port(start: int = -1) -> int:
             except OSError:
                 continue
     raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
+
+
+def port_is_open(port: int, host: str = "localhost") -> bool:
+    """Check if a TCP port is accepting connections."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.1)
+        return s.connect_ex((host, port)) == 0
+
+
+def resolve_external_host(host: str) -> str:
+    """Return an externally-reachable address for a bind host.
+
+    Workers running off-host cannot connect to the unspecified address
+    ``0.0.0.0``; probe for a real network IP instead.
+    """
+    if host != "0.0.0.0":
+        return host
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
 
 
 def wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> bool:
@@ -261,7 +288,7 @@ class StandaloneWorkerHandle(RemoteWorkerHandle, Protocol):
         """Run the bootstrap script on the worker."""
         ...
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         """Destroy the worker."""
         ...
 
@@ -317,7 +344,7 @@ class SliceHandle(Protocol):
         """Query cloud state, returning status and worker handles."""
         ...
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         """Destroy the slice and all its workers."""
         ...
 

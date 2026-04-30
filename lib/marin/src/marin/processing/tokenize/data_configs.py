@@ -8,13 +8,12 @@ from functools import lru_cache
 
 import numpy
 
-import transformers
-from levanter.data.text import BlockShuffleConfig, DatasetComponent, LmDataConfig
+from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, BlockShuffleConfig, DatasetComponent, LmDataConfig
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 from marin.execution import unwrap_versioned_value
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
-from marin.utils import load_tokenizer_with_backoff
 
 TokenizerStep = ExecutorStep[TokenizeConfig]
 
@@ -24,11 +23,13 @@ _KNOWN_VOCAB_SIZES: dict[str, int] = {
     "EleutherAI/gpt-neox-20b": 50_257,
     "meta-llama/Meta-Llama-3.1-8B": 128_256,
     "meta-llama/Meta-Llama-3.1-8B-Instruct": 128_256,
-    "stanford-crfm/marin-tokenizer": 128_256,
     "marin-community/marin-tokenizer": 128_256,
     "meta-llama/Llama-2-7b": 32_000,
     "gpt2": 50_257,
 }
+
+# The marin tokenizer is a re-upload of the llama3 tokenizer with a custom chat template.
+_EQUIVALENT_TOKENIZERS = frozenset({"meta-llama/Meta-Llama-3.1-8B", "marin-community/marin-tokenizer"})
 
 
 def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_raw_paths: bool) -> DatasetComponent:
@@ -54,7 +55,7 @@ def lm_data_config(
     training_set: TokenizerStep | InputName,
     *,
     validation_sets: dict[str, TokenizerStep] | None = None,
-    shuffle: bool | int | BlockShuffleConfig = True,
+    shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
     max_train_batches: dict[str, int] | None = None,
     num_validation_sequences: dict[str, int] | None = None,
     block_cross_document_attention: bool = True,
@@ -67,8 +68,8 @@ def lm_data_config(
     Args:
         training_set: The training set to use
         validation_sets: A sequence of validation sets to use
-        shuffle: Shuffle policy. `True` = full shuffle, positive `int` = era shuffle,
-            `BlockShuffleConfig` = hierarchical block shuffle.
+        shuffle: Shuffle policy. Defaults to hierarchical block shuffle.
+            `True` = full shuffle, `BlockShuffleConfig` = hierarchical block shuffle.
         max_train_batches: Maximum number of batches to use for the training set per dataset.
         num_validation_sequences: Number of validation sequences to take from the training set per dataset.
         block_cross_document_attention: Whether to mask attention across document boundaries.
@@ -100,7 +101,7 @@ def lm_mixture_data_config(
     components: dict[str, TokenizerStep | TokenizeConfig],
     weights: dict[str, float],
     *,
-    shuffle: bool | int | BlockShuffleConfig = True,
+    shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
     missing_weights_are_validation: bool = True,
     include_raw_paths: bool = True,
     max_train_batches: dict[str, int] | None = None,
@@ -115,8 +116,8 @@ def lm_mixture_data_config(
     Args:
         components: dict from names of datasets to the steps that produced them.
         weights: dict from names of datasets to their weights.
-        shuffle: shuffling policy. int means era shuffling (~shuffle buffer);
-            `BlockShuffleConfig` enables hierarchical block shuffling.
+        shuffle: shuffling policy. Defaults to hierarchical block shuffle.
+            `True` enables a full permutation shuffle; `BlockShuffleConfig` enables hierarchical block shuffling.
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
         include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
         max_train_batches: Maximum number of batches to use for the training set per dataset.
@@ -195,7 +196,7 @@ def lm_varying_mixture_data_config(
     components: dict[str, TokenizerStep],
     weights_list: list[tuple[int, dict[str, float]]],
     *,
-    shuffle: bool | int | BlockShuffleConfig = True,
+    shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
     missing_weights_are_validation: bool = True,
     include_raw_paths: bool = True,
     mixture_block_size: int | None = None,
@@ -212,8 +213,8 @@ def lm_varying_mixture_data_config(
             weights_dict maps dataset names to their weights.
             The weights will change at each start_seq_index. start_seq_index's must be sorted in ascending order.
             Note that start_seq_index should be the index of the sequence (not batch) where the transition should occur.
-        shuffle: shuffling policy. int means era shuffling (~shuffle buffer);
-            `BlockShuffleConfig` enables hierarchical block shuffling.
+        shuffle: shuffling policy. Defaults to hierarchical block shuffle.
+            `True` enables a full permutation shuffle; `BlockShuffleConfig` enables hierarchical block shuffling.
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
         include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
         mixture_block_size: The block size to use for the mixture.
@@ -322,10 +323,12 @@ def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LmDataConfig:
     )
 
 
-@lru_cache(maxsize=32)
-def _load_tokenizer(tokenizer_name: str) -> transformers.PreTrainedTokenizer:
-    """Load and cache a tokenizer by name"""
-    return load_tokenizer_with_backoff(tokenizer_name)
+def _load_tokenizer(tokenizer_name: str) -> MarinTokenizer:
+    """Load and cache a tokenizer by name.
+
+    Delegates to levanter.tokenizers.load_tokenizer which is already lru_cached.
+    """
+    return load_tokenizer(tokenizer_name)
 
 
 @lru_cache(maxsize=128)
@@ -348,7 +351,7 @@ def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
         resolved_name,
     )
     tokenizer = _load_tokenizer(resolved_name)
-    return len(tokenizer)
+    return tokenizer.vocab_size
 
 
 def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
@@ -356,11 +359,9 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     tokenizer1 = unwrap_versioned_value(tokenizer1)
     tokenizer2 = unwrap_versioned_value(tokenizer2)
 
-    from experiments.llama import llama3_tokenizer
-    from experiments.marin_models import marin_tokenizer
-
-    # special case, i'm sorry
-    if tokenizer1 in {llama3_tokenizer, marin_tokenizer} and tokenizer2 in {llama3_tokenizer, marin_tokenizer}:
+    # The marin tokenizer is a re-upload of the llama3 tokenizer with a custom chat template,
+    # so they share the same vocabulary and token IDs.
+    if tokenizer1 in _EQUIVALENT_TOKENIZERS and tokenizer2 in _EQUIVALENT_TOKENIZERS:
         return True
 
     t1 = _load_tokenizer(tokenizer1)
@@ -381,7 +382,7 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
         if vocab2[token] != id1:
             return False
 
-    if getattr(t1, "chat_template", None) is not None and getattr(t2, "chat_template", None) is not None:
+    if t1.chat_template is not None and t2.chat_template is not None:
         if t1.chat_template != t2.chat_template:
             return False
 

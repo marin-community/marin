@@ -31,7 +31,7 @@ from iris.cluster.constraints import zone_constraint
 from iris.cluster.config import IrisConfig
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device
 from iris.dev_tpu import DevTpuState, DevTpuWorker, GcpNodeRef, parse_worker_host
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 from marin.cluster import gcp
 
 logger = logging.getLogger(__name__)
@@ -314,12 +314,12 @@ def wait_for_workers(job, *, timeout: float, project: str) -> list[DevTpuWorker]
     while time.monotonic() < deadline:
         status = job.status()
         if status.state in (
-            cluster_pb2.JOB_STATE_FAILED,
-            cluster_pb2.JOB_STATE_KILLED,
-            cluster_pb2.JOB_STATE_UNSCHEDULABLE,
-            cluster_pb2.JOB_STATE_WORKER_FAILED,
+            job_pb2.JOB_STATE_FAILED,
+            job_pb2.JOB_STATE_KILLED,
+            job_pb2.JOB_STATE_UNSCHEDULABLE,
+            job_pb2.JOB_STATE_WORKER_FAILED,
         ):
-            error = status.error or cluster_pb2.JobState.Name(status.state)
+            error = status.error or job_pb2.JobState.Name(status.state)
             raise click.ClickException(f"Dev TPU allocation failed: {error}")
 
         tasks = job.tasks()
@@ -328,7 +328,7 @@ def wait_for_workers(job, *, timeout: float, project: str) -> list[DevTpuWorker]
             all_running = True
             for task in tasks:
                 task_status = task.status()
-                if task_status.state != cluster_pb2.TASK_STATE_RUNNING or not task_status.worker_address:
+                if task_status.state != job_pb2.TASK_STATE_RUNNING or not task_status.worker_address:
                     all_running = False
                     break
                 host = parse_worker_host(task_status.worker_address)
@@ -352,11 +352,11 @@ def wait_for_workers(job, *, timeout: float, project: str) -> list[DevTpuWorker]
 def is_job_active(client: IrisClient, job_id: str) -> bool:
     status = client.status(JobName.from_wire(job_id))
     return status.state not in {
-        cluster_pb2.JOB_STATE_SUCCEEDED,
-        cluster_pb2.JOB_STATE_FAILED,
-        cluster_pb2.JOB_STATE_KILLED,
-        cluster_pb2.JOB_STATE_WORKER_FAILED,
-        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+        job_pb2.JOB_STATE_SUCCEEDED,
+        job_pb2.JOB_STATE_FAILED,
+        job_pb2.JOB_STATE_KILLED,
+        job_pb2.JOB_STATE_WORKER_FAILED,
+        job_pb2.JOB_STATE_UNSCHEDULABLE,
     }
 
 

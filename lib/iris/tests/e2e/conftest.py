@@ -36,8 +36,12 @@ from iris.cluster.types import (
     ResourceSpec,
     is_job_finished,
 )
-from iris.rpc import cluster_pb2, config_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from finelog.rpc import logging_pb2
+from iris.rpc import config_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from finelog.rpc.logging_connect import LogServiceClientSync
 from rigging.timing import Duration
 
 from .chronos import VirtualClock
@@ -122,6 +126,7 @@ class IrisTestCluster:
     url: str
     client: IrisClient
     controller_client: ControllerServiceClientSync
+    log_client: LogServiceClientSync
     job_timeout: float = 60.0
     is_cloud: bool = False
 
@@ -166,17 +171,17 @@ class IrisTestCluster:
             reservation=reservation,
         )
 
-    def status(self, job: Job) -> cluster_pb2.JobStatus:
+    def status(self, job: Job) -> job_pb2.JobStatus:
         """Get the current JobStatus protobuf for a job."""
         job_id = job.job_id.to_wire()
-        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
+        request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         response = self.controller_client.get_job_status(request)
         return response.job
 
-    def task_status(self, job: Job, task_index: int = 0) -> cluster_pb2.TaskStatus:
+    def task_status(self, job: Job, task_index: int = 0) -> job_pb2.TaskStatus:
         """Get the current TaskStatus protobuf for a specific task."""
         task_id = job.job_id.task(task_index).to_wire()
-        request = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_id)
+        request = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id)
         response = self.controller_client.get_task_status(request)
         return response.task
 
@@ -186,7 +191,7 @@ class IrisTestCluster:
         timeout: float = 60.0,
         chronos: VirtualClock | None = None,
         poll_interval: float = 0.5,
-    ) -> cluster_pb2.JobStatus:
+    ) -> job_pb2.JobStatus:
         """Poll until a job reaches a terminal state. Returns the final JobStatus.
 
         If chronos is provided, uses virtual time for deterministic tests.
@@ -215,7 +220,7 @@ class IrisTestCluster:
         state: int,
         timeout: float = 10.0,
         poll_interval: float = 0.1,
-    ) -> cluster_pb2.JobStatus:
+    ) -> job_pb2.JobStatus:
         """Poll until a job reaches a specific state (e.g. JOB_STATE_RUNNING)."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -241,14 +246,14 @@ class IrisTestCluster:
     def kill(self, job: Job) -> None:
         """Terminate a running job."""
         job_id = job.job_id.to_wire()
-        request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
+        request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id)
         self.controller_client.terminate_job(request)
 
     def wait_for_workers(self, min_workers: int, timeout: float = 30.0) -> None:
         """Wait until at least min_workers healthy workers are registered."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            request = cluster_pb2.Controller.ListWorkersRequest()
+            request = controller_pb2.Controller.ListWorkersRequest()
             response = self.controller_client.list_workers(request)
             healthy = [w for w in response.workers if w.healthy]
             if len(healthy) >= min_workers:
@@ -259,8 +264,8 @@ class IrisTestCluster:
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         """Fetch log lines for a task."""
         task_id = job.job_id.task(task_index).to_wire()
-        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
-        response = self.controller_client.fetch_logs(request)
+        request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        response = self.log_client.fetch_logs(request)
         return [f"{e.source}: {e.data}" for e in response.entries]
 
 
@@ -288,7 +293,7 @@ class ClusterCapabilities:
 
 def discover_capabilities(controller_client: ControllerServiceClientSync) -> ClusterCapabilities:
     """Probe the live worker fleet to determine cluster capabilities."""
-    request = cluster_pb2.Controller.ListWorkersRequest()
+    request = controller_pb2.Controller.ListWorkersRequest()
     response = controller_client.list_workers(request)
     healthy = [w for w in response.workers if w.healthy]
 
@@ -326,7 +331,7 @@ def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
     sg = config.scale_groups["tpu_cosched_2"]
     sg.name = "tpu_cosched_2"
     sg.num_vms = 2
-    sg.min_slices = 1
+    sg.buffer_slices = 1
     sg.max_slices = 2
     sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024 * 1024 * 1024
@@ -350,7 +355,9 @@ def cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        yield IrisTestCluster(url=url, client=client, controller_client=controller_client)
+        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
+        yield IrisTestCluster(url=url, client=client, controller_client=controller_client, log_client=log_client)
+        log_client.close()
         controller_client.close()
 
 
@@ -361,7 +368,7 @@ def _make_multi_worker_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     sg = config.scale_groups["local-cpu"]
     sg.name = "local-cpu"
     sg.num_vms = 1
-    sg.min_slices = num_workers
+    sg.buffer_slices = num_workers
     sg.max_slices = num_workers
     sg.resources.cpu_millicores = 8000
     sg.resources.memory_bytes = 16 * 1024**3
@@ -384,9 +391,11 @@ def multi_worker_cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
+        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client, log_client=log_client)
         tc.wait_for_workers(num_workers, timeout=60)
         yield tc
+        log_client.close()
         controller_client.close()
 
 

@@ -79,7 +79,7 @@ class ManualStandaloneWorkerHandle(RemoteExecWorkerBase):
     def status(self) -> WorkerStatus:
         return WorkerStatus(state=CloudWorkerState.RUNNING)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         if self._on_terminate:
             self._on_terminate()
 
@@ -174,7 +174,7 @@ class ManualSliceHandle:
 
         return SliceStatus(state=state, worker_count=len(self._hosts), workers=workers)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         if self._terminated:
             return
         self._terminated = True
@@ -334,7 +334,15 @@ class ManualWorkerProvider:
         return results
 
     def list_all_slices(self) -> list[ManualSliceHandle]:
-        return self.list_slices(zones=[], labels={self._iris_labels.iris_managed: "true"})
+        """List autoscaler-managed slices.
+
+        Excludes slices tagged iris_manual=true (operator-created via
+        `iris cluster create-slice`), which the autoscaler and
+        `iris cluster stop` must not see or terminate.
+        """
+        all_managed = self.list_slices(zones=[], labels={self._iris_labels.iris_managed: "true"})
+        manual_label = self._iris_labels.iris_manual
+        return [s for s in all_managed if s.labels.get(manual_label) != "true"]
 
     def list_vms(
         self,
@@ -428,11 +436,12 @@ class ManualControllerProvider:
         port = manual.port or 10000
         return f"{manual.host}:{port}"
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
         address, _vm = vm_start_controller(
             self.worker_provider,
             config,
             resolve_image=self.worker_provider.resolve_image,
+            fresh=fresh,
         )
         return address
 

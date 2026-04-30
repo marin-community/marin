@@ -6,9 +6,34 @@ from collections.abc import Iterator, Sequence
 from typing import Any, TypedDict
 
 import dupekit
-from zephyr import Dataset, ZephyrContext, counters, write_vortex_file, ShardInfo
+from zephyr import Dataset, ZephyrContext, counters, write_parquet_file, ShardInfo
+
+from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
+
+
+def _find_last_complete_iteration(
+    output_dir: str, max_iterations: int, expected_parquets: int
+) -> tuple[int, list[str]] | None:
+    """Return (last_iteration, parquet_paths) from prior run outputs, or None if nothing reusable.
+
+    A CC iteration ``it_N/`` is considered complete iff its parquet file count equals
+    ``expected_parquets`` (= ``ctx.max_workers`` at write time). Iteration 0 uses the
+    ``part-{shard:05d}.parquet`` naming; iterations 1+ use ``part-{shard:05d}-of-{total:05d}.parquet``.
+    Both are detected by globbing ``it_N/*.parquet``.
+    """
+    last_complete = -1
+    last_paths: list[str] = []
+    for i in range(max_iterations + 1):
+        paths = fsspec_glob(f"{output_dir}/it_{i}/*.parquet")
+        if len(paths) != expected_parquets:
+            break
+        last_complete = i
+        last_paths = paths
+    if last_complete < 0:
+        return None
+    return last_complete, last_paths
 
 
 # TODO (rav): can we have just a single id that's expected to be clean on the inputs?
@@ -37,7 +62,7 @@ def _internal_orderable_id(record_id: Any) -> str:
     """
     We need an id that has a total ordering for connected components. If the id is an int,
     we can use it as is. If it's a string, we hash it and convert it to string. We convert
-    to string to make internal zephyr/ray/pyarrow serde happy.
+    to string to make internal zephyr/pyarrow serde happy.
     """
     if isinstance(record_id, int):
         id_norm = str(record_id)
@@ -55,6 +80,7 @@ def connected_components(
     output_dir: str,
     max_iterations: int = 10,
     preserve_singletons: bool = True,
+    resume: bool = False,
 ) -> tuple[bool, Sequence[str]]:
     """
     Connected Components implementation using Zephyr Dataset API and Hash-to-Min algorithm (https://arxiv.org/abs/1203.5387)
@@ -65,6 +91,9 @@ def connected_components(
         output_dir: Directory to write intermediate and final output files
         max_iterations: Maximum number of iterations to run the connected components algorithm
         preserve_singletons: Whether to preserve single-node buckets in the output
+        resume: If True, skip iterations whose ``it_N/`` already contains a complete set of
+            parquet files (count == ``ctx.max_workers``). Starts from the first incomplete
+            iteration. If no complete prior state exists, runs from scratch.
     """
 
     def _reduce_bucket_to_links(bucket: str, items: Iterator[CCInput]) -> Iterator[dict]:
@@ -124,25 +153,34 @@ def connected_components(
     # I/O amplification.
     num_reduce_shards = ctx.max_workers
 
-    curr_it = ctx.execute(
-        ds
-        # Group nodes in buckets, deduplicate, and emit pairwise links
-        .group_by(
-            lambda x: x["bucket"],
-            reducer=_reduce_bucket_to_links,
-            combiner=_dedup_combiner,
-            num_output_shards=num_reduce_shards,
-        )
-        # Construct Node state, init with:
-        #  * each node is its own component
-        #  * adjacency list from links
-        .group_by(
-            lambda x: x["source_id_norm"],
-            reducer=_build_adjacency,
-            num_output_shards=num_reduce_shards,
-        ).write_vortex(f"{output_dir}/it_0/part-{{shard:05d}}.vortex"),
-        verbose=True,
-    )
+    start_iteration = 1
+    curr_it: Sequence[str]
+    resumed = _find_last_complete_iteration(output_dir, max_iterations, num_reduce_shards) if resume else None
+    if resumed is not None:
+        last_it, last_paths = resumed
+        logger.info("CC resume: skipping through it_%d (%d parquets present)", last_it, len(last_paths))
+        curr_it = last_paths
+        start_iteration = last_it + 1
+    else:
+        curr_it = ctx.execute(
+            ds
+            # Group nodes in buckets, deduplicate, and emit pairwise links
+            .group_by(
+                lambda x: x["bucket"],
+                reducer=_reduce_bucket_to_links,
+                combiner=_dedup_combiner,
+                num_output_shards=num_reduce_shards,
+            )
+            # Construct Node state, init with:
+            #  * each node is its own component
+            #  * adjacency list from links
+            .group_by(
+                lambda x: x["source_id_norm"],
+                reducer=_build_adjacency,
+                num_output_shards=num_reduce_shards,
+            ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
+            verbose=True,
+        ).results
 
     def _get_write_shard_and_count_fn(iteration: int):
         # NOTE: this function exists to make the iteration number closure capture explicit
@@ -158,27 +196,27 @@ def connected_components(
                         counters.increment("cc/changes")
                     yield node
 
-            path = f"{output_dir}/it_{iteration}/part-{shard_info.shard_idx:05d}-of-{shard_info.total_shards:05d}.vortex"
-            result = write_vortex_file(counting_iter(), path)
+            path = (
+                f"{output_dir}/it_{iteration}/part-{shard_info.shard_idx:05d}-of-{shard_info.total_shards:05d}.parquet"
+            )
+            result = write_parquet_file(counting_iter(), path)
             yield {**result, "num_changes": num_changes}
 
         return _write_shard_and_count
 
     converged = False
-    for i in range(1, max_iterations + 1):  # type: ignore[bad-assignment]
+    for i in range(start_iteration, max_iterations + 1):  # type: ignore[bad-assignment]
         logger.info(f"Connected components iteration {i}...")
 
-        shard_results = list(
-            ctx.execute(
-                Dataset.from_list(curr_it)
-                .load_vortex()
-                .map(lambda record: CCNode(**record))
-                .flat_map(_emit_messages)
-                .group_by(key=lambda x: x["key"], reducer=_reduce_node_step, num_output_shards=num_reduce_shards)
-                .map_shard(_get_write_shard_and_count_fn(i)),
-                verbose=True,
-            )
-        )
+        shard_results = ctx.execute(
+            Dataset.from_list(curr_it)
+            .load_parquet()
+            .map(lambda record: CCNode(**record))
+            .flat_map(_emit_messages)
+            .group_by(key=lambda x: x["key"], reducer=_reduce_node_step, num_output_shards=num_reduce_shards)
+            .map_shard(_get_write_shard_and_count_fn(i)),
+            verbose=True,
+        ).results
 
         curr_it = [r["path"] for r in shard_results]
         num_changes = sum(r["num_changes"] for r in shard_results)

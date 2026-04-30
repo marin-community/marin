@@ -30,6 +30,7 @@ import tempfile
 import threading
 import uuid
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,7 +56,7 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -301,15 +302,15 @@ def _read_proc_memory_mb(pid: int) -> int | None:
             return None
 
 
-def _read_proc_cpu_percent(
+def _read_proc_cpu_millicores(
     pid: int,
     prev_total: float,
     prev_utime: float,
 ) -> tuple[int, float, float]:
-    """Compute delta CPU usage percentage between calls.
+    """Compute delta CPU usage in millicores between calls.
 
     On Linux reads /proc/{pid}/stat and /proc/stat. On other platforms returns 0.
-    Returns (cpu_percent, new_total, new_utime).
+    Returns (cpu_millicores, new_total, new_utime).
     """
     if sys.platform != "linux":
         return (0, prev_total, prev_utime)
@@ -326,20 +327,21 @@ def _read_proc_cpu_percent(
         delta_utime = utime - prev_utime
         if delta_total <= 0 or prev_total == 0:
             return (0, total, utime)
-        pct = int((delta_utime / delta_total) * 100)
-        return (pct, total, utime)
+        cpu_count = os.cpu_count() or 1
+        millicores = int((delta_utime / delta_total) * cpu_count * 1000)
+        return (millicores, total, utime)
     except (FileNotFoundError, ProcessLookupError, IndexError, ValueError):
         return (0, prev_total, prev_utime)
 
 
 def _cpu_profile_stub(cpu_format: int) -> bytes:
     """Return a minimal stub CPU profile for when py-spy is unavailable."""
-    if cpu_format == cluster_pb2.CpuProfile.FLAMEGRAPH:
+    if cpu_format == job_pb2.CpuProfile.FLAMEGRAPH:
         return (
             b'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="50">'
             b'<text x="10" y="30" font-size="14">py-spy unavailable in local mode</text></svg>'
         )
-    elif cpu_format == cluster_pb2.CpuProfile.SPEEDSCOPE:
+    elif cpu_format == job_pb2.CpuProfile.SPEEDSCOPE:
         return (
             b'{"version":"0.1.0","$schema":"https://www.speedscope.app/file-format-schema.json",'
             b'"profiles":[],"shared":{"frames":[]}}'
@@ -350,14 +352,14 @@ def _cpu_profile_stub(cpu_format: int) -> bytes:
 
 def _memory_profile_stub(memory_format: int) -> bytes:
     """Return a minimal stub memory profile for when memray is unavailable."""
-    if memory_format == cluster_pb2.MemoryProfile.FLAMEGRAPH:
+    if memory_format == job_pb2.MemoryProfile.FLAMEGRAPH:
         return (
             b"<!DOCTYPE html><html><head><title>Memory Profile</title></head><body>"
             b"<p>memray unavailable in local mode</p></body></html>"
         )
-    elif memory_format == cluster_pb2.MemoryProfile.TABLE:
+    elif memory_format == job_pb2.MemoryProfile.TABLE:
         return b"memray unavailable in local mode\n"
-    elif memory_format == cluster_pb2.MemoryProfile.RAW:
+    elif memory_format == job_pb2.MemoryProfile.RAW:
         return b""
     else:  # STATS
         return b'{"error": "memray unavailable in local mode"}'
@@ -425,7 +427,7 @@ class ProcessContainerHandle:
         """Return the container ID, if any."""
         return self._container_id
 
-    def build(self) -> list[LogLine]:
+    def build(self, on_logs: Callable[[list[LogLine]], None] | None = None) -> list[LogLine]:
         """No-op for local execution - host is already configured.
 
         In local/test mode, the environment is already set up with the
@@ -509,16 +511,16 @@ class ProcessContainerHandle:
     def stats(self) -> ContainerStats:
         """Get resource usage statistics from the underlying subprocess."""
         if not self._container or not self._container._process or self._container._process.poll() is not None:
-            return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+            return ContainerStats(memory_mb=0, cpu_millicores=0, process_count=0, available=False)
 
         pid = self._container._process.pid
         memory_mb = _read_proc_memory_mb(pid)
-        cpu_pct, self._prev_cpu_total, self._prev_cpu_utime = _read_proc_cpu_percent(
+        cpu_millicores, self._prev_cpu_total, self._prev_cpu_utime = _read_proc_cpu_millicores(
             pid, self._prev_cpu_total, self._prev_cpu_utime
         )
         return ContainerStats(
             memory_mb=memory_mb or 0,
-            cpu_percent=cpu_pct,
+            cpu_millicores=cpu_millicores,
             process_count=1,
             available=memory_mb is not None,
         )
@@ -529,7 +531,7 @@ class ProcessContainerHandle:
             return int(shutil.disk_usage(self.config.workdir_host_path).used / (1024 * 1024))
         return 0
 
-    def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
 
         if not self._container or not self._container._process:
@@ -545,7 +547,7 @@ class ProcessContainerHandle:
         else:
             raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
-    def _profile_cpu(self, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile) -> bytes:
+    def _profile_cpu(self, duration_seconds: int, cpu_config: job_pb2.CpuProfile) -> bytes:
         """Profile CPU using py-spy, with fallback stub."""
         pid = self._container._process.pid
         spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=str(pid))
@@ -571,7 +573,7 @@ class ProcessContainerHandle:
 
         return _cpu_profile_stub(cpu_config.format)
 
-    def _profile_memory(self, duration_seconds: int, memory_config: cluster_pb2.MemoryProfile) -> bytes:
+    def _profile_memory(self, duration_seconds: int, memory_config: job_pb2.MemoryProfile) -> bytes:
         """Profile memory using memray, with fallback stub."""
         pid = self._container._process.pid
         spec = resolve_memory_spec(memory_config, duration_seconds, pid=str(pid))

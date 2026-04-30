@@ -21,8 +21,9 @@ from iris.cli import iris
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.providers.local.cluster import LocalCluster
-from iris.rpc import cluster_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 
 pytestmark = pytest.mark.e2e
 
@@ -53,7 +54,7 @@ def cluster_config_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
                 },
                 "scale_groups": {
                     "local-cpu": {
-                        "min_slices": 1,
+                        "buffer_slices": 1,
                         "max_slices": 1,
                         "num_vms": 1,
                         "resources": {
@@ -83,7 +84,7 @@ def _wait_for_workers(address: str, timeout: float = 30.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            resp = client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+            resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
             if resp.workers:
                 return
         except Exception:
@@ -146,7 +147,7 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
         )
 
         status = job.wait(timeout=30, raise_on_failure=True)
-        assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+        assert status.state == job_pb2.JOB_STATE_SUCCEEDED
     finally:
         controller.close()
         cli_thread.join(timeout=5)

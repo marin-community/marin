@@ -24,10 +24,11 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
+from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_validation_sets
+from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.pretraining_datasets import nemotron_mix_block_shuffle
 
@@ -54,23 +55,6 @@ class GrugMoeLaunchConfig:
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
 
-
-GRUG_MOE_TRIAL_MODEL = GrugModelConfig(
-    vocab_size=128_256,
-    hidden_dim=1024,
-    intermediate_dim=512,
-    shared_expert_intermediate_dim=1024,
-    dense_intermediate_dim=3072,
-    num_experts=64,
-    num_experts_per_token=4,
-    num_layers=11,
-    num_heads=8,
-    num_kv_heads=8,
-    max_seq_len=4096,
-    head_dim=None,
-    initializer_std=0.5 / 1024**0.5,  # 0.5 / sqrt(hidden_dim)
-    qk_mult=1.3,
-)
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
     nemotron_mix_block_shuffle,
@@ -109,6 +93,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(
             base_path=os.path.join(config.output_path, "checkpoints"),
+            temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
             keep=[{"every": 1000}],
@@ -128,44 +113,49 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     run_grug(run_config)
 
 
-RESOLVED_RUN_ID = _resolve_run_id("03_24_baseline_moe")
+RESOLVED_RUN_ID = _resolve_run_id("4_10_test_moe")
+
+
+# Baseline: 1e18 compute budget, d1024. Model + optimizer + batch + steps are
+# all derived from `MoeAdamHHeuristic`. To override any of these, swap in
+# an explicit `GrugModelConfig` / `GrugMoeAdamHConfig` below.
+_BASELINE_BUDGET: float = 1e18
+_BASELINE_HIDDEN_DIM: int = 1024
+_BASELINE_TARGET_STEPS: int = 2**14
+_baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_from_heuristic(
+    budget=_BASELINE_BUDGET,
+    hidden_dim=_BASELINE_HIDDEN_DIM,
+    target_steps=_BASELINE_TARGET_STEPS,
+)
+
+# Public alias for the heuristic-derived baseline GrugModelConfig. Kept
+# because consumers (e.g. experiments/ferries/canary_ferry.py) import it by
+# name.
+GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
 
 
 baseline_moe = ExecutorStep(
-    name="grug/03_24_baseline_moe",
+    name="grug/4_10_baseline_moe",
     fn=run_grug_moe_trial,
     config=GrugMoeLaunchConfig(
-        model=versioned(GRUG_MOE_TRIAL_MODEL),
+        model=versioned(_baseline_model),
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
         # this_output_path() resolves to this step's output root (e.g. gs://.../grug/moe-trial-<version>).
         output_path=this_output_path(),
         # Keep run id out of versioning so changing job metadata doesn't create a new output path.
         run_id=RESOLVED_RUN_ID,
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-        steps=versioned(10_670),
-        batch_size=versioned(32),
+        steps=versioned(_baseline_steps),
+        batch_size=versioned(_baseline_batch),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
-            project="dial_moe",
-            tags=["adamh", "qb", "sharded-qb", "gatednorm", "xsa", "zloss", "eq3e3"],
+            project="marin_moe",
+            tags=["moe"],
             group="moe-iter04",
             name=None,
         ),
-        optimizer=versioned(
-            GrugMoeAdamHConfig(
-                learning_rate=0.003,
-                adam_lr=0.003,
-                beta1=0.96,
-                beta2=0.995,
-                epsilon=1e-15,
-                lr_schedule="linear",
-                decay=0.2,
-                min_lr_ratio=0.0,
-                warmup=0.1,
-                max_grad_norm=1,
-            )
-        ),
+        optimizer=versioned(_baseline_optimizer),
         grug_trainer=versioned(
             GrugTrainerConfig(
                 z_loss_weight=1e-4,

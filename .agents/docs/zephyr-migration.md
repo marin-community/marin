@@ -1,14 +1,10 @@
-# Zephyr Migration Patterns
+# Archived Zephyr Migration Patterns
 
-**Last Updated**: 2025-01-07
+**Last Updated**: 2026-04-27
 
-## Status Summary
+This document is archived historical guidance for recognizing old Ray-style data-processing loops and replacing them with Zephyr patterns. Ray is no longer a supported Marin execution backend, and this document predates the current `ZephyrContext` API. For current Zephyr usage, read `lib/zephyr/README.md` and `lib/zephyr/AGENTS.md`.
 
-**Completed**: 19 files migrated ✅
-**Remaining**: 33 files to migrate
-**Not Suitable**: ~39 files (TPU orchestration, RL training, stateful orchestration, infrastructure, etc.)
-
-This document describes concrete patterns for migrating Ray boilerplate to zephyr. Each section shows a real codebase example with before/after code.
+The examples below intentionally preserve Ray-shaped "before" snippets because they document what the migration removed.
 
 ## Backend Configuration: `flow_backend()` vs `create_backend()`
 
@@ -21,22 +17,19 @@ Use `flow_backend()` to get the backend configured via the zephyr CLI. This is t
 from zephyr import Dataset, flow_backend
 
 def main():
-    backend = flow_backend()  # Get backend from CLI context
+    backend = flow_backend()  # Get backend from environment
     pipeline = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
     backend.execute(pipeline)
 ```
 
-Run with: `uv run zephyr --backend=ray --max-parallelism=1000 --memory=8GB script.py`
-
-**Override specific parameters** while inheriting other settings from CLI:
+**Override specific parameters** while inheriting other settings from the ambient context:
 ```python
-# CLI: zephyr --backend=ray --max-parallelism=50 --memory=2GB
-outer_backend = flow_backend()              # Uses CLI config: 50 workers, 2GB
-inner_backend = flow_backend(max_parallelism=16)  # Override: 16 workers, 2GB (inherited)
+outer_backend = flow_backend()              # Uses ambient config
+inner_backend = flow_backend(max_parallelism=16)  # Override worker count
 ```
 
 ### `create_backend()` (Advanced)
-Only use `create_backend()` when you need programmatic backend creation outside the CLI context:
+Only use `create_backend()` when you need programmatic backend creation outside an ambient `flow_backend()` context:
 
 ```python
 from zephyr import Dataset, create_backend

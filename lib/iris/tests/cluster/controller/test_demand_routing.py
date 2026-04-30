@@ -1,30 +1,32 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for demand routing, bin packing, and compute_required_slices.
+"""Tests for demand routing and bin packing.
 
 These tests exercise pure scheduling/routing logic. They call route_demand(),
-compute_required_slices(), and first_fit_decreasing() directly -- no platform
-or provider is needed.
+and first_fit_decreasing() directly -- no platform or provider is needed.
 """
 
 import pytest
 
-from iris.cluster.controller.autoscaler import (
-    AdditiveReq,
-    DemandEntry,
+from iris.cluster.controller.autoscaler.models import AdditiveReq, DemandEntry
+from iris.cluster.controller.autoscaler.routing import (
     RoutingBudget,
-    compute_required_slices,
     first_fit_decreasing,
     route_demand,
 )
-from iris.cluster.controller.scaling_group import ScalingGroup
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.constraints import (
+    Constraint,
+    ConstraintOp,
     DeviceType,
     PlacementRequirements,
     WellKnownAttribute,
+    region_constraint,
+    zone_constraint,
 )
-from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc import config_pb2
+from iris.rpc import job_pb2
 from rigging.timing import Duration, Timestamp
 from tests.cluster.providers.conftest import (
     make_mock_platform,
@@ -87,12 +89,17 @@ class TestFirstFitDecreasing:
 
 
 # ---------------------------------------------------------------------------
-# compute_required_slices
+# group_required_slices via route_demand
 # ---------------------------------------------------------------------------
 
 
-class TestComputeRequiredSlices:
-    """Tests for compute_required_slices with different group configurations."""
+class TestGroupRequiredSlices:
+    """Tests for required-slice accounting through route_demand()."""
+
+    @staticmethod
+    def _required_slices(group: ScalingGroup, entries: list[DemandEntry]) -> int:
+        result = route_demand([group], entries)
+        return result.group_required_slices.get(group.name, 0)
 
     def test_tiny_entries_pack_densely(self):
         """Many small CPU entries pack into a single VM and therefore a single slice."""
@@ -105,7 +112,7 @@ class TestComputeRequiredSlices:
 
         # 16 entries at 1000m CPU, 1024 bytes mem -> all fit in 1 VM (128 cores, 128GiB)
         entries = make_demand_entries(16, device_type=DeviceType.CPU)
-        assert compute_required_slices(group, entries) == 1
+        assert self._required_slices(group, entries) == 1
 
     def test_accelerator_entries_not_packed(self):
         """Accelerator entries get 1 VM each -- they are not bin-packed."""
@@ -117,7 +124,7 @@ class TestComputeRequiredSlices:
         group = ScalingGroup(config, make_mock_platform())
 
         entries = make_demand_entries(4, device_type=DeviceType.TPU, device_variant="v5p-8")
-        assert compute_required_slices(group, entries) == 4
+        assert self._required_slices(group, entries) == 4
 
     def test_full_vm_entries_need_one_slice_each(self):
         """Entries that fill an entire VM each need 1 slice per entry (num_vms=1)."""
@@ -135,7 +142,7 @@ class TestComputeRequiredSlices:
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
         )
-        assert compute_required_slices(group, entries) == 3
+        assert self._required_slices(group, entries) == 3
 
     def test_multi_vm_slice_packs_across_vms(self):
         """With num_vms=4, entries that need 4 VMs fit in 1 slice."""
@@ -154,7 +161,7 @@ class TestComputeRequiredSlices:
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
         )
-        assert compute_required_slices(group, entries) == 1
+        assert self._required_slices(group, entries) == 1
 
     def test_multi_vm_slice_needs_multiple_slices(self):
         """With num_vms=4, 5 full-VM entries need ceil(5/4) = 2 slices."""
@@ -172,7 +179,7 @@ class TestComputeRequiredSlices:
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
         )
-        assert compute_required_slices(group, entries) == 2
+        assert self._required_slices(group, entries) == 2
 
     def test_coscheduled_entries_use_full_slice(self):
         """A coscheduled entry always consumes exactly 1 slice."""
@@ -192,7 +199,7 @@ class TestComputeRequiredSlices:
             coschedule_group_id="job-1",
         )
         assert len(entries) == 1
-        assert compute_required_slices(group, entries) == 1
+        assert self._required_slices(group, entries) == 1
 
     def test_mixed_coscheduled_and_packable(self):
         """Coscheduled entries add 1 slice each; non-coscheduled entries are packed."""
@@ -222,10 +229,10 @@ class TestComputeRequiredSlices:
         )
         entries = coscheduled + non_coscheduled
         # 1 coscheduled slice + 1 packed slice = 2
-        assert compute_required_slices(group, entries) == 2
+        assert self._required_slices(group, entries) == 2
 
-    def test_no_resources_configured_falls_back_to_entry_count(self):
-        """Without per-VM resources, each entry = 1 slice (pre-packing behavior)."""
+    def test_no_resources_configured_does_not_route_unmatched_entries(self):
+        """A group without configured resources does not match TPU demand for routing."""
         config = config_pb2.ScaleGroupConfig(
             name="no-resources",
             max_slices=5,
@@ -235,12 +242,12 @@ class TestComputeRequiredSlices:
         assert group.resources is None
 
         entries = make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8")
-        assert compute_required_slices(group, entries) == 3
+        assert self._required_slices(group, entries) == 0
 
     def test_empty_entries_returns_zero(self):
         config = make_scale_group_config(name="test", max_slices=5, num_vms=1)
         group = ScalingGroup(config, make_mock_platform())
-        assert compute_required_slices(group, []) == 0
+        assert self._required_slices(group, []) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +298,7 @@ class TestWaterfallRouting:
         discovered = [make_mock_slice_handle(f"slice-{i}", all_ready=True) for i in range(2)]
         group_high = ScalingGroup(config_high, make_mock_platform(slices_to_discover=discovered))
         group_high.reconcile()
+        _mark_discovered_ready(group_high, discovered)
 
         group_low = ScalingGroup(config_low, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
 
@@ -373,7 +381,7 @@ class TestWaterfallRouting:
 
     def test_backoff_group_falls_through_to_fallback(self):
         """When primary group is in BACKOFF, demand falls through to fallback."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10)
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20)
@@ -405,7 +413,7 @@ class TestWaterfallRouting:
 
     def test_backoff_group_with_ready_slices_still_falls_through(self):
         """Even with ready slices, a BACKOFF group rejects demand so it falls through."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10)
@@ -436,7 +444,7 @@ class TestWaterfallRouting:
 
     def test_cooldown_does_not_cause_fallthrough(self):
         """Groups in COOLDOWN still accept demand -- demand does not fall through."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config_a = make_scale_group_config(name="group-a", max_slices=5, priority=10)
         config_b = make_scale_group_config(name="group-b", max_slices=5, priority=20)
@@ -468,7 +476,7 @@ class TestWaterfallRouting:
 
     def test_at_max_slices_causes_fallthrough(self):
         """Groups at AT_MAX_SLICES reject demand, causing fallthrough to lower-priority groups."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config_a = make_scale_group_config(name="group-a", max_slices=1, priority=10)
         config_b = make_scale_group_config(name="group-b", max_slices=5, priority=20)
@@ -476,6 +484,7 @@ class TestWaterfallRouting:
         discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
         group_a = ScalingGroup(config_a, make_mock_platform(slices_to_discover=discovered))
         group_a.reconcile()
+        _mark_discovered_ready(group_a, discovered)
         assert group_a.availability().status == GroupAvailability.AT_MAX_SLICES
 
         group_b = ScalingGroup(
@@ -489,6 +498,63 @@ class TestWaterfallRouting:
 
         # 2 tiny CPU entries pack into 1 slice
         assert len(result.routed_entries.get("group-b", [])) == 2
+
+    def test_booting_slice_at_max_does_not_cascade_across_zones(self):
+        """A single pending task must not waterfall across zones when the first zone
+        has a booting (in-flight) slice at max_slices.
+
+        Regression test: with max_slices=1 per zone and N zones, a single CPU task
+        caused all N zones to scale up because once a slice moved from REQUESTING to
+        BOOTING, the group returned AT_MAX_SLICES (rejecting), and demand waterfalled
+        to the next zone on every autoscaler cycle.
+        """
+
+        # Simulate 3 zones, each with max_slices=1 (mirrors production CPU VM config)
+        configs = [
+            make_scale_group_config(
+                name=f"cpu-zone-{i}",
+                max_slices=1,
+                priority=1000,
+                accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+                accelerator_variant="",
+            )
+            for i in range(3)
+        ]
+
+        ts = Timestamp.from_ms(1_000_000)
+
+        # Zone 0: has 1 booting slice (scale-up happened, slice created but not ready)
+        handle_0 = make_mock_slice_handle("slice-zone-0", all_ready=False)
+        group_0 = ScalingGroup(configs[0], make_mock_platform(), scale_up_cooldown=Duration.from_ms(60_000))
+        group_0.begin_scale_up(timestamp=ts)
+        group_0.complete_scale_up(handle_0, timestamp=ts)
+        # Slice is BOOTING, not READY. Group is at max_slices.
+        assert group_0.slice_count() == 1
+
+        # Zone 1 and 2: empty, ready to accept
+        group_1 = ScalingGroup(configs[1], make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_2 = ScalingGroup(configs[2], make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+
+        groups = [group_0, group_1, group_2]
+        demand = make_demand_entries(1, device_type=DeviceType.CPU, device_variant=None)
+
+        eval_ts = Timestamp.from_ms(1_030_000)
+        result = route_demand(groups, demand, eval_ts)
+
+        # The task should route to zone 0 (which already has a booting slice)
+        # and NOT cascade to zone 1 or zone 2.
+        routed_groups = [name for name, entries in result.routed_entries.items() if entries]
+        assert len(routed_groups) == 1, (
+            f"Expected demand routed to exactly 1 group, but routed to {routed_groups}. "
+            f"launch={result.group_to_launch}"
+        )
+        assert routed_groups[0] == "cpu-zone-0", (
+            f"Expected demand routed to cpu-zone-0 (has booting slice), " f"but routed to {routed_groups[0]}"
+        )
+        # No new slices should be launched — zone 0 already has capacity incoming
+        assert result.group_to_launch.get("cpu-zone-0", 0) == 0
+        assert result.group_to_launch.get("cpu-zone-1", 0) == 0
+        assert result.group_to_launch.get("cpu-zone-2", 0) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -560,10 +626,7 @@ class TestPreemptibleRouting:
 class TestRegionRouting:
     def test_route_demand_filters_by_required_region(self):
         config_west = make_scale_group_config(name="west", max_slices=5, priority=10, zones=["us-west4-b"])
-        config_west.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
-
         config_eu = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
-        config_eu.worker.attributes[WellKnownAttribute.REGION] = "europe-west4"
 
         west = ScalingGroup(config_west, make_mock_platform())
         eu = ScalingGroup(config_eu, make_mock_platform())
@@ -583,7 +646,6 @@ class TestRegionRouting:
 
     def test_route_demand_unmet_when_no_group_matches_region(self):
         config_eu = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
-        config_eu.worker.attributes[WellKnownAttribute.REGION] = "europe-west4"
         eu = ScalingGroup(config_eu, make_mock_platform())
 
         demand = make_demand_entries(
@@ -609,7 +671,6 @@ class TestRegionRouting:
             zones=["us-west4-b"],
             capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
         )
-        config_west_preemptible.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
 
         config_west_ondemand = make_scale_group_config(
             name="west-ondemand",
@@ -618,7 +679,6 @@ class TestRegionRouting:
             zones=["us-west4-b"],
             capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
         )
-        config_west_ondemand.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
 
         config_eu_preemptible = make_scale_group_config(
             name="eu-preemptible",
@@ -627,7 +687,6 @@ class TestRegionRouting:
             zones=["europe-west4-b"],
             capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
         )
-        config_eu_preemptible.worker.attributes[WellKnownAttribute.REGION] = "europe-west4"
 
         west_preemptible = ScalingGroup(config_west_preemptible, make_mock_platform())
         west_ondemand = ScalingGroup(config_west_ondemand, make_mock_platform())
@@ -657,12 +716,7 @@ class TestRegionRouting:
 class TestZoneRouting:
     def test_route_demand_filters_by_required_zone(self):
         config_a = make_scale_group_config(name="zone-a", max_slices=5, priority=10, zones=["us-central2-a"])
-        config_a.worker.attributes[WellKnownAttribute.REGION] = "us-central2"
-        config_a.worker.attributes[WellKnownAttribute.ZONE] = "us-central2-a"
-
         config_b = make_scale_group_config(name="zone-b", max_slices=5, priority=10, zones=["us-central2-b"])
-        config_b.worker.attributes[WellKnownAttribute.REGION] = "us-central2"
-        config_b.worker.attributes[WellKnownAttribute.ZONE] = "us-central2-b"
 
         zone_a = ScalingGroup(config_a, make_mock_platform())
         zone_b = ScalingGroup(config_b, make_mock_platform())
@@ -682,8 +736,6 @@ class TestZoneRouting:
 
     def test_route_demand_unmet_when_no_group_matches_zone(self):
         config_a = make_scale_group_config(name="zone-a", max_slices=5, priority=10, zones=["us-central2-a"])
-        config_a.worker.attributes[WellKnownAttribute.REGION] = "us-central2"
-        config_a.worker.attributes[WellKnownAttribute.ZONE] = "us-central2-a"
         zone_a = ScalingGroup(config_a, make_mock_platform())
 
         demand = make_demand_entries(
@@ -703,8 +755,6 @@ class TestZoneRouting:
     def test_zone_typo_suggests_close_match(self):
         """A zone typo like 'europe-west4b' triggers a 'did you mean' suggestion."""
         config = make_scale_group_config(name="eu", max_slices=5, priority=10, zones=["europe-west4-b"])
-        config.worker.attributes[WellKnownAttribute.REGION] = "europe-west4"
-        config.worker.attributes[WellKnownAttribute.ZONE] = "europe-west4-b"
         eu = ScalingGroup(config, make_mock_platform())
 
         demand = make_demand_entries(
@@ -739,7 +789,7 @@ class TestZoneRouting:
 
         assert len(result.unmet_entries) == 1
         reason = result.unmet_entries[0].reason
-        assert "no groups with device" in reason
+        assert "no scaling group provides device" in reason
         assert "tpu" in reason
 
     def test_reason_string_is_concise(self):
@@ -753,7 +803,6 @@ class TestZoneRouting:
                 priority=10,
                 zones=[zone],
             )
-            config.worker.attributes[WellKnownAttribute.ZONE] = zone
             groups.append(ScalingGroup(config, make_mock_platform()))
 
         demand = make_demand_entries(
@@ -1014,7 +1063,7 @@ class TestRoutingBinPacking:
         return ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
 
     def _make_entries(self, count: int, memory_bytes: int = 32 * 1024**3) -> list[DemandEntry]:
-        resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=memory_bytes)
+        resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=memory_bytes)
         normalized = PlacementRequirements(
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
@@ -1098,7 +1147,7 @@ class TestRoutingBinPacking:
         config.slice_template.gcp.zone = "us-central1-a"
         group = ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
 
-        resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
+        resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
         normalized = PlacementRequirements(
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
@@ -1140,7 +1189,7 @@ class TestRoutingBinPacking:
         config.slice_template.gcp.zone = "us-central1-a"
         group = ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
 
-        resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
+        resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
         normalized = PlacementRequirements(
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
@@ -1182,12 +1231,12 @@ class TestRoutingBinPacking:
             (
                 DeviceType.GPU,
                 "h100",
-                lambda: cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="h100", count=1)),
+                lambda: job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="h100", count=1)),
             ),
             (
                 DeviceType.TPU,
                 "v5p-8",
-                lambda: cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
+                lambda: job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5p-8")),
             ),
         ],
         ids=["gpu", "tpu"],
@@ -1196,7 +1245,7 @@ class TestRoutingBinPacking:
         """Accelerator entries (GPU/TPU) must each get their own VM, not share a bin."""
         group = self._make_group(max_slices=2, memory_bytes=128 * 1024**3)
 
-        resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=32 * 1024**3, device=make_device())
+        resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=32 * 1024**3, device=make_device())
         normalized = PlacementRequirements(
             device_type=device_type,
             device_variants=frozenset({device_variant}),
@@ -1228,7 +1277,7 @@ class TestRoutingBinPacking:
 
 
 class TestCheckCoschedulingFeasibility:
-    """Tests for Autoscaler.check_coscheduling_feasibility()."""
+    """Tests for Autoscaler.job_feasibility() with replicas (coscheduled jobs)."""
 
     def _make_constraints(self):
         return make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")[0].constraints
@@ -1246,19 +1295,19 @@ class TestCheckCoschedulingFeasibility:
         """Replicas == num_vms is feasible."""
         config = make_scale_group_config(name="group-4", max_slices=5, num_vms=4)
         autoscaler = self._make_autoscaler({"group-4": ScalingGroup(config, make_mock_platform())})
-        assert autoscaler.check_coscheduling_feasibility(4, self._make_constraints()) is None
+        assert autoscaler.job_feasibility(self._make_constraints(), replicas=4) is None
 
     def test_feasible_exact_multiple(self):
         """Replicas that are an exact multiple of num_vms are feasible."""
         config = make_scale_group_config(name="group-4", max_slices=5, num_vms=4)
         autoscaler = self._make_autoscaler({"group-4": ScalingGroup(config, make_mock_platform())})
-        assert autoscaler.check_coscheduling_feasibility(8, self._make_constraints()) is None
+        assert autoscaler.job_feasibility(self._make_constraints(), replicas=8) is None
 
     def test_infeasible_not_a_multiple(self):
         """Replicas that aren't a multiple of any group's num_vms are rejected."""
         config = make_scale_group_config(name="group-3", max_slices=5, num_vms=3)
         autoscaler = self._make_autoscaler({"group-3": ScalingGroup(config, make_mock_platform())})
-        result = autoscaler.check_coscheduling_feasibility(8, self._make_constraints())
+        result = autoscaler.job_feasibility(self._make_constraints(), replicas=8)
         assert result is not None
         assert "8" in result
 
@@ -1268,14 +1317,103 @@ class TestCheckCoschedulingFeasibility:
             name="gpu-group", max_slices=5, num_vms=8, accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU
         )
         autoscaler = self._make_autoscaler({"gpu-group": ScalingGroup(config, make_mock_platform())})
-        result = autoscaler.check_coscheduling_feasibility(8, self._make_constraints())
+        result = autoscaler.job_feasibility(self._make_constraints(), replicas=8)
         assert result is not None
-        assert "no scaling group matches" in result
+        assert "no scaling group provides" in result
 
     def test_no_groups_returns_none(self):
         """Returns None when there are no groups (no validation possible)."""
         autoscaler = self._make_autoscaler({})
-        assert autoscaler.check_coscheduling_feasibility(8, []) is None
+        assert autoscaler.job_feasibility([], replicas=8) is None
+
+
+# ---------------------------------------------------------------------------
+# Routing feasibility (submit-time constraint validation)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckRoutingFeasibility:
+    """Tests for Autoscaler.job_feasibility() (non-coscheduled jobs)."""
+
+    def _make_autoscaler(self, groups):
+        from iris.cluster.controller.autoscaler import Autoscaler
+
+        return Autoscaler(
+            scale_groups=groups,
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=make_mock_platform(),
+        )
+
+    def _tpu_constraints(self, variant: str = "v5p-8") -> list[Constraint]:
+        return make_demand_entries(1, device_type=DeviceType.TPU, device_variant=variant)[0].constraints
+
+    def test_feasible_matching_group(self):
+        """Returns None when a group matches the constraints."""
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=4)
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        assert autoscaler.job_feasibility(self._tpu_constraints()) is None
+
+    def test_infeasible_wrong_device_type(self):
+        """Rejects when no group has the requested device type."""
+        config = make_scale_group_config(
+            name="gpu-group", max_slices=5, num_vms=4, accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU
+        )
+        autoscaler = self._make_autoscaler({"gpu-group": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.job_feasibility(self._tpu_constraints())
+        assert result is not None
+        assert "tpu" in result
+
+    def test_infeasible_wrong_region(self):
+        """Rejects when no group is in the requested region."""
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=4, zones=["us-central1-a"])
+        constraints = self._tpu_constraints()
+        constraints.append(region_constraint(["europe-west4"]))
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.job_feasibility(constraints)
+        assert result is not None
+        assert "region" in result
+
+    def test_infeasible_zone_used_as_region(self):
+        """Detects when a zone value is specified as a region constraint."""
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=4, zones=["us-central1-a"])
+        constraints = self._tpu_constraints()
+        # User mistakenly passes a zone value as a region constraint
+        constraints.append(region_constraint(["us-central1-a"]))
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.job_feasibility(constraints)
+        assert result is not None
+        assert "looks like a zone" in result
+
+    def test_infeasible_region_used_as_zone(self):
+        """Detects when a region value is specified as a zone constraint."""
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=4, zones=["us-central1-a"])
+        constraints = self._tpu_constraints()
+        # User mistakenly passes a region value as a zone constraint
+        constraints.append(zone_constraint("us-central1"))
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.job_feasibility(constraints)
+        assert result is not None
+        assert "looks like a region" in result
+
+    def test_soft_constraint_does_not_reject(self):
+        """Soft constraints that don't match any group should not cause rejection."""
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=4, zones=["us-central1-a"])
+        constraints = self._tpu_constraints()
+        # Add a soft region constraint for a region that doesn't exist
+        soft = Constraint.create(
+            key=WellKnownAttribute.REGION,
+            op=ConstraintOp.EQ,
+            value="europe-west4",
+            mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
+        )
+        constraints.append(soft)
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        assert autoscaler.job_feasibility(constraints) is None
+
+    def test_no_groups_returns_none(self):
+        """Returns None when there are no groups (no validation possible)."""
+        autoscaler = self._make_autoscaler({})
+        assert autoscaler.job_feasibility([]) is None
 
 
 # ---------------------------------------------------------------------------

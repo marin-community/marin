@@ -164,6 +164,153 @@ export function statusColors(state: string): StatusColorClasses {
   return STATUS_COLORS[state] ?? DEFAULT_COLORS
 }
 
+/** Ordered list of job/task states that have explicit color mappings. */
+export const STATUS_COLOR_ORDER: readonly string[] = [
+  'running',
+  'succeeded',
+  'failed',
+  'worker_failed',
+  'preempted',
+  'pending',
+  'unschedulable',
+  'building',
+  'assigned',
+  'killed',
+] as const
+
+// -- Slice lifecycle badge styling (Autoscaler tab) --
+
+/**
+ * Visual style for a single-letter slice badge rendered in the Autoscaler tab.
+ *
+ * Letters:
+ *   - R = ready and available (fully provisioned, no tasks assigned)
+ *   - U = in-use (ready with at least one VM running a task)
+ *   - Q = requesting (scale-up in flight)
+ *   - B = booting (VMs coming up)
+ *   - I = initializing (runtime setup)
+ *   - F = failed
+ */
+export interface SliceBadgeStyle {
+  letter: string
+  label: string
+  bg: string
+  text: string
+  border: string
+}
+
+export const SLICE_STATE_STYLES: Record<string, SliceBadgeStyle> = {
+  ready: {
+    letter: 'R',
+    label: 'Ready and available (no tasks assigned)',
+    bg: 'bg-status-success-bg',
+    text: 'text-status-success',
+    border: 'border-status-success-border',
+  },
+  in_use: {
+    letter: 'U',
+    label: 'In use (ready with tasks actively running)',
+    bg: 'bg-status-orange-bg',
+    text: 'text-status-orange',
+    border: 'border-status-orange-border',
+  },
+  requesting: {
+    letter: 'Q',
+    label: 'Requesting (scale-up in flight)',
+    bg: 'bg-accent-subtle',
+    text: 'text-accent',
+    border: 'border-accent-border',
+  },
+  booting: {
+    letter: 'B',
+    label: 'Booting (VMs starting)',
+    bg: 'bg-status-purple-bg',
+    text: 'text-status-purple',
+    border: 'border-status-purple-border',
+  },
+  initializing: {
+    letter: 'I',
+    label: 'Initializing (runtime setup)',
+    bg: 'bg-status-warning-bg',
+    text: 'text-status-warning',
+    border: 'border-status-warning-border',
+  },
+  failed: {
+    letter: 'F',
+    label: 'Failed',
+    bg: 'bg-status-danger-bg',
+    text: 'text-status-danger',
+    border: 'border-status-danger-border',
+  },
+}
+
+/** Order in which slice badges should be rendered in the Autoscaler tab. */
+export const SLICE_BADGE_ORDER: readonly string[] = [
+  'ready',
+  'in_use',
+  'requesting',
+  'booting',
+  'initializing',
+  'failed',
+] as const
+
+// -- Progress bar segment colors (Jobs tab) --
+
+/**
+ * Tailwind background color for a task-state segment in the Jobs tab progress bar.
+ * Kept as a single Tailwind class because only the fill color matters for a stacked
+ * bar; text/border colors come from the state-level STATUS_COLORS when rendered
+ * as a badge elsewhere.
+ */
+export const SEGMENT_COLORS: Record<string, string> = {
+  succeeded: 'bg-status-success',
+  running: 'bg-accent',
+  building: 'bg-status-purple',
+  assigned: 'bg-status-orange',
+  failed: 'bg-status-danger',
+  worker_failed: 'bg-status-danger',
+  preempted: 'bg-status-warning',
+  killed: 'bg-text-muted',
+  pending: 'bg-surface-border',
+}
+
+/** Order to render segments in the Jobs tab progress bar. */
+export const SEGMENT_ORDER: readonly string[] = [
+  'succeeded',
+  'running',
+  'building',
+  'assigned',
+  'failed',
+  'worker_failed',
+  'preempted',
+  'killed',
+  'pending',
+] as const
+
+// -- Categorical color palette --
+
+/** Shared categorical palette for charts, bars, and legends. */
+export const CATEGORICAL_COLORS = [
+  '#1877F2', '#F0701A', '#5A24C7', '#E42C97', '#00487C', '#0EAC96',
+  '#AB76FF', '#B50550', '#0099E6', '#22085F', '#783301',
+] as const
+
+/** Diverging positive-to-negative palette (index 0 = most negative, 10 = most positive).
+ *  Use for heatmaps, utilization gauges, or any scale from bad → neutral → good. */
+export const DIVERGING_COLORS = [
+  '#B50550', '#BF0F76', '#FC7BC6', '#FFADE4', '#FFD9F2',
+  '#F0F2F5',
+  '#CBF9D7', '#A3E6B5', '#45BD62', '#2A9142', '#1D632E',
+] as const
+
+/** Diverging hot-to-cold palette (index 0 = hottest, 10 = coldest).
+ *  Use for temperature-style scales from hot (red/orange) → neutral → cold (blue). */
+export const DIVERGING_HOT_TO_COLD = [
+  '#AA2312', '#D4311C', '#EB630E', '#FFB973', '#FFF2A6',
+  '#F0F2F5',
+  '#CDE5FF', '#76B6FF', '#1877F2', '#083E89', '#07316D',
+] as const
+
 // -- VM state helpers --
 
 /** Strip the VM_STATE_ prefix and lowercase. */

@@ -6,20 +6,6 @@ Download script for the Wikipedia raw HTML data, provided by Wikimedia.
 
 Home Page: https://dumps.wikimedia.org/other/enterprise_html/runs/
 
-Example Usage (production, large dataset):
-ENWIKI=https://dumps.wikimedia.org/other/enterprise_html/runs/20250320/enwiki-NS0-20250320-ENTERPRISE-HTML.json.tar.gz
-uv run zephyr --backend=ray --max-parallelism=10 \
-    lib/marin/src/marin/datakit/download/wikipedia.py \
-    --input_urls $ENWIKI \
-    --revision 20250320 --output_path gs://path/to/output
-
-Example Usage (local testing, small dataset):
-SIMPLEWIKI=https://dumps.wikimedia.org/other/enterprise_html/runs/20250320/simplewiki-NS0-20250320-ENTERPRISE-HTML.json.tar.gz
-uv run zephyr --backend=threadpool --max-parallelism=4 --entry-point=main \
-    lib/marin/src/marin/datakit/download/wikipedia.py \
-    --input_urls "[$SIMPLEWIKI]" \
-    --revision 20250320 --output_path /tmp/wikipedia_test
-
 Note: The enwiki-NS0 file (English Wikipedia, namespace 0 = articles) is approximately 130 GB compressed.
       The simplewiki-NS0 file (Simple English Wikipedia) is much smaller at ~2 GB compressed.
 """
@@ -100,18 +86,18 @@ def download_wikipedia(input_urls: list[str], revision: str, output_path: str) -
         Dataset.from_list(input_urls)
         .map(lambda url: download_tar(url, output_base))
         .write_jsonl(f"{output_base}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True),
-    )
+    ).results
 
     # load all of the output filenames to process
-    downloads = ctx.execute(Dataset.from_list(download_metrics).flat_map(load_jsonl))
+    downloads = ctx.execute(Dataset.from_list(download_metrics).flat_map(load_jsonl)).results
 
     extracted = ctx.execute(
         Dataset.from_list(downloads)
         .flat_map(lambda file: process_file(file, output_base))
         .write_jsonl(f"{output_base}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True),
-    )
+    ).results
 
-    logger.info("Wikipedia dump transfer complete, wrote: %s", list(extracted))
+    logger.info("Wikipedia dump transfer complete, wrote: %s", extracted)
 
 
 def download_wikipedia_step(

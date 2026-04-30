@@ -7,7 +7,8 @@ Verifies that task status correctly records multiple attempts after
 failure + retry, using the ServiceTestHarness (parameterized GCP + K8s).
 """
 
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 
 from .conftest import ServiceTestHarness
 
@@ -23,14 +24,14 @@ def test_task_status_shows_attempts(harness: ServiceTestHarness):
     task_id = tasks[0].task_id
 
     # Drive first attempt to FAILED
-    harness.drive_task_state(task_id, cluster_pb2.TASK_STATE_FAILED)
+    harness.drive_task_state(task_id, job_pb2.TASK_STATE_FAILED)
 
     # After failure with retries remaining, task goes back to PENDING.
     # Drive the retry attempt to SUCCEEDED.
-    harness.drive_task_state(task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+    harness.drive_task_state(task_id, job_pb2.TASK_STATE_SUCCEEDED)
 
     # Check via RPC that attempts are visible
-    req = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_id.to_wire())
+    req = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id.to_wire())
     resp = harness.service.get_task_status(req, None)
     attempts = resp.task.attempts
 
@@ -38,8 +39,8 @@ def test_task_status_shows_attempts(harness: ServiceTestHarness):
 
     # First attempt should have failed
     assert attempts[0].state in (
-        cluster_pb2.TASK_STATE_FAILED,
-        cluster_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_WORKER_FAILED,
     )
     # Last attempt should have succeeded
-    assert attempts[-1].state == cluster_pb2.TASK_STATE_SUCCEEDED
+    assert attempts[-1].state == job_pb2.TASK_STATE_SUCCEEDED

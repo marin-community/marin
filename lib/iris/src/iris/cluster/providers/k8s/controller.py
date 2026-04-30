@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 
 from iris.cluster.config import config_to_dict
 from iris.cluster.providers.k8s.service import K8sService
+from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.types import InfraError, Labels
 from iris.rpc import config_pb2
 from rigging.timing import Deadline
@@ -40,8 +41,8 @@ _DEPLOYMENT_READY_TIMEOUT = 2400.0
 _KUBECTL_TIMEOUT = 1800.0
 
 _S3_SECRET_NAME = "iris-s3-credentials"
-_CONTROLLER_CPU_REQUEST = "2"
-_CONTROLLER_MEMORY_REQUEST = "4Gi"
+_CONTROLLER_CPU_REQUEST = "4"
+_CONTROLLER_MEMORY_REQUEST = "16Gi"
 
 
 # S3-compatible endpoints that require virtual-hosted-style addressing where the
@@ -134,6 +135,7 @@ def _build_controller_deployment(
     port: int,
     node_selector: dict[str, str],
     s3_env_vars: list[dict],
+    fresh: bool = False,
 ) -> dict:
     """Build the controller Deployment manifest as a dict."""
     # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod
@@ -171,6 +173,7 @@ def _build_controller_deployment(
                                 "--host=0.0.0.0",
                                 f"--port={port}",
                                 "--config=/etc/iris/config.json",
+                                *(["--fresh"] if fresh else []),
                             ],
                             "ports": [{"containerPort": port}],
                             "env": s3_env_vars,
@@ -265,7 +268,7 @@ class K8sControllerProvider:
         port = cw.port or 10000
         return f"{service_name}.{self._namespace}.svc.cluster.local:{port}"
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start the controller, reconciling all resources. Returns address (host:port).
 
         Fully idempotent: always applies ConfigMap, Deployment, and Service
@@ -308,9 +311,10 @@ class K8sControllerProvider:
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
             s3_env_vars=s3_env,
+            fresh=fresh,
         )
         self._kubectl.apply_json(deploy_manifest)
-        self._kubectl.rollout_restart("deployment", "iris-controller", namespaced=True)
+        self._kubectl.rollout_restart(K8sResource.DEPLOYMENTS, "iris-controller")
         logger.info("Controller Deployment iris-controller applied (rollout restarted)")
 
         svc_manifest = {
@@ -326,8 +330,20 @@ class K8sControllerProvider:
         self._kubectl.apply_json(svc_manifest)
         logger.info("Controller Service %s applied", service_name)
 
+        pdb_manifest = {
+            "apiVersion": "policy/v1",
+            "kind": "PodDisruptionBudget",
+            "metadata": {"name": "iris-controller-pdb", "namespace": self._namespace},
+            "spec": {
+                "minAvailable": 1,
+                "selector": {"matchLabels": {"app": "iris-controller"}},
+            },
+        }
+        self._kubectl.apply_json(pdb_manifest)
+        logger.info("PodDisruptionBudget iris-controller-pdb applied")
+
         self.wait_for_deployment_ready()
-        self._kubectl.rollout_status("deployment", "iris-controller", namespaced=True)
+        self._kubectl.rollout_status(K8sResource.DEPLOYMENTS, "iris-controller")
 
         return self.discover_controller(config.controller)
 
@@ -338,15 +354,16 @@ class K8sControllerProvider:
         cw = config.controller.coreweave
         service_name = cw.service_name or "iris-controller-svc"
 
-        self._kubectl.delete("deployment", "iris-controller")
-        self._kubectl.delete("service", service_name)
-        self._kubectl.delete("configmap", "iris-cluster-config")
+        self._kubectl.delete(K8sResource.DEPLOYMENTS, "iris-controller")
+        self._kubectl.delete(K8sResource.SERVICES, service_name)
+        self._kubectl.delete(K8sResource.PDBS, "iris-controller-pdb")
+        self._kubectl.delete(K8sResource.CONFIGMAPS, "iris-cluster-config")
         if self.uses_s3_storage(config):
-            self._kubectl.delete("secret", _S3_SECRET_NAME)
+            self._kubectl.delete(K8sResource.SECRETS, _S3_SECRET_NAME)
 
         cluster_role_name = self.rbac_cluster_role_name()
-        self._kubectl.delete("clusterrolebinding", cluster_role_name, cluster_scoped=True)
-        self._kubectl.delete("clusterrole", cluster_role_name, cluster_scoped=True)
+        self._kubectl.delete(K8sResource.CLUSTER_ROLE_BINDINGS, cluster_role_name)
+        self._kubectl.delete(K8sResource.CLUSTER_ROLES, cluster_role_name)
         logger.info("Controller resources deleted (including RBAC %s)", cluster_role_name)
 
     def stop_all(
@@ -381,7 +398,7 @@ class K8sControllerProvider:
 
     def debug_report(self) -> None:
         """Log controller pod termination reason and previous container logs."""
-        pods = self._kubectl.list_json("pods", labels={"app": "iris-controller"})
+        pods = self._kubectl.list_json(K8sResource.PODS, labels={"app": "iris-controller"})
         if not pods:
             logger.warning("Post-mortem: no controller pods found")
             return
@@ -474,6 +491,11 @@ class K8sControllerProvider:
                     "resources": ["pods"],
                     "verbs": ["get", "list"],
                 },
+                {
+                    "apiGroups": ["policy"],
+                    "resources": ["poddisruptionbudgets"],
+                    "verbs": ["get", "list", "create", "update", "patch", "delete"],
+                },
             ],
         }
 
@@ -525,7 +547,7 @@ class K8sControllerProvider:
             pool_name = self._nodepool_name(name)
             expected_names.add(pool_name)
             num_vms = max(1, sg.slice_template.num_vms)
-            min_nodes = sg.min_slices * num_vms
+            min_nodes = sg.buffer_slices * num_vms
             max_nodes = sg.max_slices * num_vms
             futures.append(
                 self._executor.submit(
@@ -550,15 +572,14 @@ class K8sControllerProvider:
         deprovisioning that can take many minutes. We don't need to block on it.
         """
         existing = self._kubectl.list_json(
-            "nodepools",
+            K8sResource.NODE_POOLS,
             labels={self._iris_labels.iris_managed: "true"},
-            cluster_scoped=True,
         )
         for item in existing:
             pool_name = item.get("metadata", {}).get("name", "")
             if pool_name and pool_name not in expected_names:
                 logger.info("Deleting stale NodePool %s (async)", pool_name)
-                self._kubectl.delete("nodepool", pool_name, cluster_scoped=True, wait=False)
+                self._kubectl.delete(K8sResource.NODE_POOLS, pool_name, wait=False)
 
     def _ensure_one_nodepool(
         self,
@@ -578,7 +599,7 @@ class K8sControllerProvider:
         multihost desired capacity back to a single node.
         """
         target_nodes = 0
-        existing = self._kubectl.get_json("nodepool", pool_name, cluster_scoped=True)
+        existing = self._kubectl.get_json(K8sResource.NODE_POOLS, pool_name)
         if existing is not None:
             target_nodes = max(min_nodes, min(max_nodes, warm_nodes))
 
@@ -689,7 +710,7 @@ class K8sControllerProvider:
                 raise InfraError(
                     f"Controller Deployment iris-controller did not become available within {_DEPLOYMENT_READY_TIMEOUT}s"
                 )
-            data = self._kubectl.get_json("deployment", "iris-controller")
+            data = self._kubectl.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
             if data is not None:
                 available = data.get("status", {}).get("availableReplicas", 0)
                 if available >= 1:
@@ -737,7 +758,7 @@ class K8sControllerProvider:
         2. Container crash loops (CrashLoopBackOff)
         3. Volume/secret mount failures (via events)
         """
-        pods = self._kubectl.list_json("pods", labels={"app": "iris-controller"})
+        pods = self._kubectl.list_json(K8sResource.PODS, labels={"app": "iris-controller"})
         for pod in pods:
             pod_name = pod.get("metadata", {}).get("name", "")
             status = pod.get("status", {})
@@ -793,7 +814,7 @@ class K8sControllerProvider:
         (e.g. FailedMount for a missing Secret) cause an immediate failure
         instead of waiting for the full deployment timeout.
         """
-        pods = self._kubectl.list_json("pods", labels={"app": "iris-controller"})
+        pods = self._kubectl.list_json(K8sResource.PODS, labels={"app": "iris-controller"})
         for pod in pods:
             pod_name = pod.get("metadata", {}).get("name", "")
             if not pod_name:

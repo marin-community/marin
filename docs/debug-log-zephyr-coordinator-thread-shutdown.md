@@ -19,7 +19,7 @@ The real `ZephyrContext.execute()` teardown path leaves the coordinator actor's 
 ## Changes to make
 
 - Inspect `_run_coordinator_job()` in `lib/zephyr/src/zephyr/execution.py`
-- Inspect `LocalClient.host_actor()` in `lib/fray/src/fray/v2/local_backend.py`
+- Inspect `LocalClient.host_actor()` in `lib/fray/src/fray/local_backend.py`
 - Add a regression test in `lib/zephyr/tests/test_execution.py` that exercises `execute()` and waits for `zephyr-coordinator-loop` to disappear
 
 ## Future Work

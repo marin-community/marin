@@ -21,11 +21,113 @@ from rigging.filesystem import open_url, url_to_fs
 import msgspec
 import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from zephyr import counters
 from zephyr.expr import Expr
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Shared Parquet row-group reader
+# ---------------------------------------------------------------------------
+
+
+def _check_row_group_statistics(
+    rg_meta: pq.RowGroupMetaData,
+    equality_predicates: dict[str, object],
+) -> bool:
+    """Return False if row group min/max statistics prove no rows can match."""
+    for col_idx in range(rg_meta.num_columns):
+        col_meta = rg_meta.column(col_idx)
+        name = col_meta.path_in_schema
+        if name not in equality_predicates:
+            continue
+        stats = col_meta.statistics
+        if stats is None or not stats.has_min_max:
+            continue  # no stats — assume it could match
+        value = equality_predicates[name]
+        if value < stats.min or value > stats.max:
+            return False
+    return True
+
+
+def iter_parquet_row_groups(
+    source: str | pq.ParquetFile,
+    *,
+    columns: list[str] | None = None,
+    row_start: int | None = None,
+    row_end: int | None = None,
+    equality_predicates: dict[str, object] | None = None,
+) -> Iterator[pa.Table]:
+    """Yield one ``pa.Table`` per qualifying row group with O(row_group) memory.
+
+    Uses ``pq.ParquetFile`` instead of ``pyarrow.dataset`` to avoid the
+    upstream memory leak (https://github.com/apache/arrow/issues/39808).
+
+    Args:
+        source: Path to parquet file or an already-open ``pq.ParquetFile``.
+        columns: Columns to read (``None`` for all).
+        row_start: First row to include (inclusive, before filtering).
+        row_end: Last row to include (exclusive, before filtering).
+        equality_predicates: Column-value pairs for row group skipping and
+            row-level filtering.  Row groups whose min/max statistics exclude
+            the target value are not read at all, and within matching groups
+            only rows where every predicate column equals its target are kept.
+    """
+    pf = pq.ParquetFile(source) if isinstance(source, str) else source
+    has_row_range = row_start is not None and row_end is not None
+
+    # If caller requests specific columns, ensure predicate columns are
+    # also read so row-level filtering works; drop them before yielding.
+    read_columns = columns
+    drop_columns: list[str] = []
+    if columns is not None and equality_predicates:
+        extra = [c for c in equality_predicates if c not in columns]
+        if extra:
+            read_columns = list(columns) + extra
+            drop_columns = extra
+
+    cumulative_rows = 0
+
+    for i in range(pf.metadata.num_row_groups):
+        rg_meta = pf.metadata.row_group(i)
+        rg_num_rows = rg_meta.num_rows
+        rg_start = cumulative_rows
+        rg_end = cumulative_rows + rg_num_rows
+        cumulative_rows = rg_end
+
+        if equality_predicates and not _check_row_group_statistics(rg_meta, equality_predicates):
+            continue
+
+        if has_row_range:
+            assert row_start is not None and row_end is not None
+            if rg_end <= row_start:
+                continue
+            if rg_start >= row_end:
+                return
+
+        table = pf.read_row_group(i, columns=read_columns)
+
+        if has_row_range:
+            assert row_start is not None and row_end is not None
+            is_interior = rg_start >= row_start and rg_end <= row_end
+            if not is_interior:
+                local_start = max(0, row_start - rg_start)
+                local_end = min(rg_num_rows, row_end - rg_start)
+                table = table.slice(local_start, local_end - local_start)
+
+        if equality_predicates:
+            for col_name, value in equality_predicates.items():
+                mask = pa.compute.equal(table.column(col_name), value)
+                table = table.filter(mask)
+            if drop_columns:
+                table = table.drop(drop_columns)
+
+        if len(table) > 0:
+            yield table
+
 
 # 16 MB read blocks with background prefetch for S3/remote reads.
 _READ_BLOCK_SIZE = 16_000_000
@@ -36,6 +138,9 @@ _READ_MAX_BLOCKS = 2
 @dataclass
 class InputFileSpec:
     """Specification for reading a file or portion of a file.
+
+    Pure read-spec: everything here is caller-supplied. Discovered metadata
+    (e.g. file size from a bulk listing) lives on ``FileEntry`` instead.
 
     Attributes:
         path: Path to the file
@@ -121,12 +226,12 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
         >>>
         >>> # Load from HuggingFace Hub (requires HF_TOKEN env var)
         >>> hf_url = "hf://datasets/username/dataset@main/data/train.jsonl.gz"
         >>> ds = Dataset.from_list([hf_url]).flat_map(load_jsonl)
-        >>> records = list(ctx.execute(ds))
+        >>> records = ctx.execute(ds).results
     """
     spec = _as_spec(source)
     decoder = msgspec.json.Decoder()
@@ -161,13 +266,10 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
         ...     .map(lambda r: transform_record(r))
         ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
     """
-    import pyarrow.dataset as pads
-
     spec = _as_spec(source)
     logger.info("Loading: %s", spec.path)
-    columns = spec.columns
 
     pa_filter = None
     if spec.filter_expr is not None:
@@ -175,59 +277,30 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
 
         pa_filter = to_pyarrow_expr(spec.filter_expr)
 
-    dataset = pads.dataset(spec.path, format="parquet")
+    # Determine columns to read: include any filter-referenced columns
+    # so post-hoc filtering works, then project down afterwards.
+    read_columns = spec.columns
+    need_project = False
+    if spec.columns is not None and spec.filter_expr is not None:
+        from zephyr.expr import referenced_columns
 
-    # Handle empty parquet files (no data columns in schema)
-    schema_names = dataset.schema.names
-    if not schema_names:
-        return
+        filter_cols = referenced_columns(spec.filter_expr) - set(spec.columns)
+        if filter_cols:
+            read_columns = list(spec.columns) + sorted(filter_cols)
+            need_project = True
 
-    if spec.row_start is not None and spec.row_end is not None:
-        # Row range first: select rows by position, then apply filter
-        cumulative_rows = 0
-        for fragment in dataset.get_fragments():
-            for rg_fragment in fragment.split_by_row_group():
-                # Get row group size from RowGroupInfo (no data read)
-                assert len(rg_fragment.row_groups) == 1
-                rg_info = rg_fragment.row_groups[0]
-                rg_num_rows = rg_info.num_rows
-                rg_start = cumulative_rows
-                rg_end = cumulative_rows + rg_num_rows
-
-                if rg_end > spec.row_start and rg_start < spec.row_end:
-                    is_interior = rg_start >= spec.row_start and rg_end <= spec.row_end
-
-                    if is_interior:
-                        # Entirely within range: push filter down, yield all
-                        table = rg_fragment.to_table(columns=columns, filter=pa_filter)
-                        counters.increment("zephyr/records_in", len(table))
-                        yield from table.to_pylist()
-                    else:
-                        # Boundary row group: slice first, then filter
-                        table = rg_fragment.to_table(columns=columns)
-                        local_start = max(0, spec.row_start - rg_start)
-                        local_end = min(rg_num_rows, spec.row_end - rg_start)
-                        sliced = table.slice(local_start, local_end - local_start)
-
-                        if pa_filter is not None:
-                            filtered = sliced.filter(pa_filter)
-                            counters.increment("zephyr/records_in", len(filtered))
-                            yield from filtered.to_pylist()
-                        else:
-                            counters.increment("zephyr/records_in", len(sliced))
-                            yield from sliced.to_pylist()
-
-                cumulative_rows = rg_end
-                if cumulative_rows >= spec.row_end:
-                    return
-    elif pa_filter is not None:
-        table = dataset.to_table(columns=columns, filter=pa_filter)
+    for table in iter_parquet_row_groups(
+        spec.path,
+        columns=read_columns,
+        row_start=spec.row_start,
+        row_end=spec.row_end,
+    ):
+        if pa_filter is not None:
+            table = table.filter(pa_filter)
+        if need_project:
+            table = table.select(spec.columns)
         counters.increment("zephyr/records_in", len(table))
         yield from table.to_pylist()
-    else:
-        for batch in dataset.to_batches(columns=columns):
-            counters.increment("zephyr/records_in", len(batch))
-            yield from batch.to_pylist()
 
 
 def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
@@ -250,7 +323,7 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
     """
     import vortex
 
@@ -323,7 +396,7 @@ def load_file(source: str | InputFileSpec) -> Iterator[dict]:
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
     """
     spec = _as_spec(source)
     logger.info("Loading file: %s", spec.path)
@@ -366,7 +439,7 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
         ...     .flat_map(lambda p: load_zip_members(p, pattern="test.jsonl"))
         ...     .map(lambda m: process_file(m["filename"], m["content"]))
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
     """
     spec = _as_spec(source)
     with open_url(spec.path, "rb") as f:

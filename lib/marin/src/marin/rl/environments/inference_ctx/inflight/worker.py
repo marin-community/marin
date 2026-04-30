@@ -162,11 +162,11 @@ class WorkerExtension:
         # Deserialize from (bytes, dtype, shape) tuples back to numpy arrays
         deserialized_state_dict = deserialize_state_dict_from_rpc(new_state_dict)
         new_state = levanter_state_dict_to_nnx_state_on_cpu(deserialized_state_dict)
-        self.model_runner._sync_weights(
+        self.sync_weights(
             new_state,
-            MODEL_MAPPINGS[model_name],
-            MODEL_TRANSPOSE_KEYS[model_name],
-            None,
+            mappings=MODEL_MAPPINGS[model_name],
+            transpose_keys=MODEL_TRANSPOSE_KEYS[model_name],
+            reshard_fn=None,
         )
 
 
@@ -184,6 +184,8 @@ class SyncVLLMWrapper:
         gpu_memory_utilization: float = 0.95,
         load_format: str = "auto",
         enforce_eager: bool = True,
+        kv_cache_metrics: bool = False,
+        seed: int = 0,
     ):
         if AsyncEngineArgs is None:
             raise RuntimeError("vLLM async engine is not available. Please install vLLM v1 with: pip install vllm")
@@ -192,15 +194,18 @@ class SyncVLLMWrapper:
         self.bridge.start()
 
         # Initialize async engine from sync code
-        engine_args = AsyncEngineArgs(
-            model=model,
-            max_model_len=max_model_len,
-            worker_extension_cls="marin.rl.environments.inference_ctx.inflight.worker.WorkerExtension",
-            tensor_parallel_size=tensor_parallel_size,
-            gpu_memory_utilization=gpu_memory_utilization,
-            load_format=load_format,
-            enforce_eager=enforce_eager,
-        )
+        engine_kwargs = {
+            "model": model,
+            "max_model_len": max_model_len,
+            "worker_extension_cls": "marin.rl.environments.inference_ctx.inflight.worker.WorkerExtension",
+            "tensor_parallel_size": tensor_parallel_size,
+            "gpu_memory_utilization": gpu_memory_utilization,
+            "load_format": load_format,
+            "enforce_eager": enforce_eager,
+            "kv_cache_metrics": kv_cache_metrics,
+            "seed": seed,
+        }
+        engine_args = AsyncEngineArgs(**engine_kwargs)
 
         self.engine = self.bridge.run(self._init_engine(engine_args))
 

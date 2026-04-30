@@ -2,9 +2,15 @@
 requires = ["uv_build>=0.7.19,<0.10.0"]
 build-backend = "uv_build"
 
+# Explicit module-name override because the dist name (marin-levanter) no
+# longer matches the import name (levanter); uv_build's default would look
+# for src/marin_levanter/ which doesn't exist.
+[tool.uv.build-backend]
+module-name = "levanter"
+
 [project]
-name = "levanter"
-version = "1.2"
+name = "marin-levanter"
+version = "0.99"
 description = "Scalable Training for Foundation Models with Named Tensors and JAX"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,41 +34,43 @@ classifiers = [
 ]
 
 dependencies = [
-    "haliax>=1.4.dev450",
+    "marin-haliax",
     "equinox>=0.11.7,!=0.12.0",
     "jax>=0.8.0",
-    "fray",
-    "rigging",
-    "zephyr",
+    "marin-fray",
+    "marin-rigging",
+    "marin-zephyr",
     "einops",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
+    "kitoken>=0.10.2",
     "transformers>=4.57.1,<5.0",
-    "optax>=0.1.9",
-    "wandb>=0.17.8",
+    "chex>=0.1.86",
+    "optax>=0.1.9,<0.2.7",
+    "wandb>0.24.0",
     "draccus>=0.11.5",
     "pyarrow>=11.0.0",
     "zstandard>=0.18.0",
     "datasets>=3.1.0,<5.0",
     "gcsfs>=2024.2,<2026",
     "braceexpand>=0.1.7",
+    "chex>=0.1.86",
     "jmp>=0.0.3",
     "fsspec[http]>=2024.2,<2026",
-    "tensorstore>=0.1.73",
+    "tensorstore>=0.1.73,<0.1.82",
     "pytimeparse>=1.1.8",
     "humanfriendly==10.0",
     "safetensors[numpy]>=0.4.2,<0.7.0",
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
-    "ray[default]==2.53.0",
     "pydantic<3",
     "filelock~=3.13",
     "async-lru~=2.0",
     "tqdm-loggable>=0.2",
-    "deepdiff",
+    "deepdiff>=8.6.2",
     "lenses",
     "jinja2",  # needed for apply_chat_template
-    "protobuf>=6,<7",  # ensure TB/XProf compatibility; avoid 7+ due to ray
+    "protobuf>=6",
     "immutabledict",
 ]
 
@@ -98,6 +106,10 @@ kernels = [
     "tokamax",
 ]
 
+kitoken = [
+    "kitoken>=0.10.2",
+]
+
 gcp = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
@@ -116,6 +128,7 @@ test = [
   "chex>=0.1.86",
   "httpx>=0.28.1",
   "pytest-profiling>=1.8.1",
+  "pytest-xdist",
   "trackio>=0.5.0",
   # need this or else the resolver gets a bad version
   "numba>=0.62.1"
@@ -144,6 +157,9 @@ dev = [
 
 
 [tool.uv]
+find-links = [
+  "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
+]
 conflicts = [
   [
     { extra = "gpu" },
@@ -173,6 +189,7 @@ mypy_path = ["src"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
+addopts = "-n auto"
 pythonpath = ["src", "tests"]
 filterwarnings = [
     "ignore:Transparent hugepages are not enabled\\..*:UserWarning:jax._src.cloud_tpu_init",
@@ -186,7 +203,6 @@ filterwarnings = [
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "entry: marks tests as entry point tests (deselect with '-m \"not entry\"')",
-    "ray: marks tests that require Ray (deselect with '-m \"not ray\"')",
     "torch: mark tests that use Torch (deselect with '-m \"not torch\"')",
     "tpu: mark tests that require TPU (deselect with '-m \"not tpu\"')",
 ]

@@ -732,6 +732,27 @@ def test_list_all_slices_returns_all_managed(platform_env: PlatformEnv):
     assert len(all_slices) == 2
 
 
+def test_list_all_slices_excludes_manual_slices(platform_env: PlatformEnv):
+    """list_all_slices drops slices labeled iris_manual=true so the autoscaler ignores them."""
+    labels = Labels(platform_env.label_prefix)
+
+    cfg_auto = _make_slice_config(platform_env, "auto-group")
+    handle_auto = platform_env.platform.create_slice(cfg_auto)
+
+    cfg_manual = _make_slice_config(platform_env, "auto-group")
+    cfg_manual.labels[labels.iris_manual] = "true"
+    handle_manual = platform_env.platform.create_slice(cfg_manual)
+
+    all_slices = platform_env.platform.list_all_slices()
+    slice_ids = {s.slice_id for s in all_slices}
+    assert handle_auto.slice_id in slice_ids
+    assert handle_manual.slice_id not in slice_ids
+
+    # Manual slices are still discoverable when explicitly asked for (delete-slice path).
+    manual_only = platform_env.platform.list_slices(zones=[platform_env.zone], labels={labels.iris_manual: "true"})
+    assert {s.slice_id for s in manual_only} == {handle_manual.slice_id}
+
+
 def test_gcp_list_all_slices_multi_zone():
     """GcpWorkerProvider.list_all_slices returns slices across multiple zones."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
@@ -930,12 +951,10 @@ def test_gcp_tpu_slice_os_login_prefers_external_ip_for_direct_ssh():
 
 
 # =============================================================================
-# Section 6: VM Slice Bootstrap Tests
+# Section 6: TPU/VM Bootstrap Tests
 #
-# Tests for _run_vm_slice_bootstrap with split timeouts and health probing.
+# Tests for bootstrap timeout sizing, diagnostics, and VM health probing.
 # =============================================================================
-
-
 def _make_vm_slice_for_bootstrap(
     gcp_service: InMemoryGcpService,
     zone: str = "us-central2-b",

@@ -5,32 +5,35 @@
 """Benchmark Iris controller DB queries against a local checkpoint.
 
 Usage:
-    # Download a checkpoint
-    gsutil cp gs://<bucket>/<prefix>/controller-state/latest.sqlite3 ./controller.sqlite3
+    # Auto-download latest archive from the marin cluster and run all benchmarks
+    uv run python lib/iris/scripts/benchmark_db_queries.py
 
-    # Run all benchmarks
+    # Use a specific local checkpoint
     uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3
 
-    # Run specific benchmark group
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only scheduling
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only dashboard
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only heartbeat
+    # Re-download even if cached
+    uv run python lib/iris/scripts/benchmark_db_queries.py --fresh
 
-    # Compare with/without ANALYZE statistics
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only heartbeat
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only heartbeat --no-analyze
+    # Run specific benchmark group
+    uv run python lib/iris/scripts/benchmark_db_queries.py --only scheduling
+    uv run python lib/iris/scripts/benchmark_db_queries.py --only dashboard
+    uv run python lib/iris/scripts/benchmark_db_queries.py --only heartbeat
+    uv run python lib/iris/scripts/benchmark_db_queries.py --only endpoints
 """
 
 import shutil
 import sqlite3
 import tempfile
+import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 
 import click
 
+from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     _building_counts,
     _find_reservation_ancestor,
@@ -41,7 +44,6 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
-    TERMINAL_JOB_STATES,
     ControllerDB,
     EndpointQuery,
     healthy_active_workers_with_attributes,
@@ -49,15 +51,15 @@ from iris.cluster.controller.db import (
     tasks_for_job_with_attempts,
 )
 from iris.cluster.controller.schema import (
+    JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
     _descendant_jobs,
-    _descendants_for_roots,
-    _jobs_paginated,
     _live_user_stats,
-    _query_endpoints,
+    _parent_ids_with_children,
+    _query_jobs,
     _read_job,
     _read_task_with_attempts,
     _read_worker,
@@ -69,6 +71,8 @@ from iris.cluster.controller.service import (
     _worker_addresses_for_tasks,
     _worker_roster,
 )
+from iris.cluster.controller.schema import EndpointRow
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -76,14 +80,18 @@ from iris.cluster.controller.transitions import (
     ReservationClaim,
     TaskUpdate,
 )
-from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.cluster.types import TERMINAL_JOB_STATES, JobName, WorkerId
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from rigging.timing import Timestamp
 
 _results: list[tuple[str, float, float, int]] = []
 
 # Tables needed for write-path benchmarks (queue_assignments, heartbeat, prune).
 _CLONE_TABLES = [
     "jobs",
+    "job_config",
+    "job_workdir_files",
     "tasks",
     "task_attempts",
     "workers",
@@ -91,13 +99,11 @@ _CLONE_TABLES = [
     "dispatch_queue",
     "worker_task_history",
     "worker_resource_history",
+    "task_resource_history",
     "endpoints",
     "reservation_claims",
-    "txn_log",
-    "txn_actions",
     "meta",
     "schema_migrations",
-    "logs",
 ]
 
 
@@ -112,10 +118,20 @@ def clone_db(source: ControllerDB) -> ControllerDB:
     clone_path = clone_dir / ControllerDB.DB_FILENAME
     conn = sqlite3.connect(str(clone_path))
     conn.execute("ATTACH DATABASE ? AS src", (str(source.db_path),))
-    # Copy schema + data for each table
-    for table in _CLONE_TABLES:
-        conn.execute(f"CREATE TABLE {table} AS SELECT * FROM src.{table}")
-    # Copy indexes from source schema
+
+    # Use the source's real CREATE TABLE DDL — CREATE TABLE AS SELECT drops
+    # UNIQUE/PRIMARY KEY/CHECK constraints, which breaks UPSERT paths like
+    # register_worker's INSERT ... ON CONFLICT.
+    clone_tables = set(_CLONE_TABLES)
+    table_ddl = conn.execute("SELECT name, sql FROM src.sqlite_master WHERE type='table' AND sql IS NOT NULL").fetchall()
+    for name, sql in table_ddl:
+        if name not in clone_tables:
+            continue
+        conn.execute(sql)
+        conn.execute(f"INSERT INTO {name} SELECT * FROM src.{name}")
+
+    # Copy indexes from source schema (skip autoindexes — those come from
+    # UNIQUE/PK constraints already in the CREATE TABLE).
     rows = conn.execute("SELECT sql FROM src.sqlite_master WHERE type='index' AND sql IS NOT NULL").fetchall()
     for row in rows:
         try:
@@ -129,6 +145,7 @@ def clone_db(source: ControllerDB) -> ControllerDB:
             conn.execute(row[0])
         except sqlite3.OperationalError:
             pass
+    conn.commit()
     conn.execute("DETACH DATABASE src")
     conn.execute("ANALYZE")
     conn.close()
@@ -181,7 +198,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     with db.read_snapshot() as snap:
         running_jobs = snap.fetchall(
             "SELECT job_id FROM jobs WHERE state = ? LIMIT 50",
-            (cluster_pb2.JOB_STATE_RUNNING,),
+            (job_pb2.JOB_STATE_RUNNING,),
         )
     pending_count = 0
     for job_row in running_jobs:
@@ -190,7 +207,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
             "UPDATE tasks SET state = ?, current_worker_id = NULL, current_worker_address = NULL "
             "WHERE job_id = ? AND state = ? AND rowid IN "
             "(SELECT rowid FROM tasks WHERE job_id = ? AND state = ? LIMIT 3)",
-            (cluster_pb2.TASK_STATE_PENDING, jid, cluster_pb2.TASK_STATE_RUNNING, jid, cluster_pb2.TASK_STATE_RUNNING),
+            (job_pb2.TASK_STATE_PENDING, jid, job_pb2.TASK_STATE_RUNNING, jid, job_pb2.TASK_STATE_RUNNING),
         )
         pending_count += db.fetchone("SELECT changes() as c")["c"]
     if pending_count:
@@ -225,9 +242,9 @@ def benchmark_scheduling(db: ControllerDB) -> None:
         print("  _find_reservation_ancestor                        (skipped, no pending jobs)")
 
     reservable_states = (
-        cluster_pb2.JOB_STATE_PENDING,
-        cluster_pb2.JOB_STATE_BUILDING,
-        cluster_pb2.JOB_STATE_RUNNING,
+        job_pb2.JOB_STATE_PENDING,
+        job_pb2.JOB_STATE_BUILDING,
+        job_pb2.JOB_STATE_RUNNING,
     )
     bench(
         "_jobs_with_reservations",
@@ -236,7 +253,8 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # --- Write-path benchmarks (use a lightweight clone) ---
     write_db = clone_db(db)
-    write_txns = ControllerTransitions(write_db, log_store=None)  # type: ignore[arg-type]
+    write_store = ControllerStore(write_db)
+    write_txns = ControllerTransitions(store=write_store)
 
     try:
         # queue_assignments: the main write-lock holder in scheduling.
@@ -372,7 +390,7 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         with db.read_snapshot() as q:
             return JOB_DETAIL_PROJECTION.decode(
                 q.fetchall(
-                    f"SELECT * FROM jobs WHERE state IN ({placeholders}) AND depth = 1",
+                    f"SELECT * FROM jobs j {JOB_CONFIG_JOIN} " f"WHERE j.state IN ({placeholders}) AND j.depth = 1",
                     (*USER_JOB_STATES,),
                 ),
             )
@@ -384,21 +402,33 @@ def benchmark_dashboard(db: ControllerDB) -> None:
 
     bench("_task_summaries_for_jobs (all)", lambda: _task_summaries_for_jobs(db, job_ids))
 
+    roots_by_date = controller_pb2.Controller.JobQuery(
+        scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
+        limit=50,
+    )
     bench(
-        "_jobs_paginated (by date)",
-        lambda: _jobs_paginated(db, USER_JOB_STATES, limit=50),
+        "_query_jobs (roots, by date)",
+        lambda: _query_jobs(db, roots_by_date, USER_JOB_STATES),
     )
 
+    roots_by_name = controller_pb2.Controller.JobQuery(
+        scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
+        name_filter="test",
+        limit=50,
+    )
     bench(
-        "_jobs_paginated (name filter)",
-        lambda: _jobs_paginated(db, USER_JOB_STATES, name_filter="test", limit=50),
+        "_query_jobs (roots, name filter)",
+        lambda: _query_jobs(db, roots_by_name, USER_JOB_STATES),
     )
 
+    roots_by_failures = controller_pb2.Controller.JobQuery(
+        scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
+        sort_field=controller_pb2.Controller.JOB_SORT_FIELD_FAILURES,
+        limit=50,
+    )
     bench(
-        "_jobs_paginated (sort failures)",
-        lambda: _jobs_paginated(
-            db, USER_JOB_STATES, sort_field=cluster_pb2.Controller.JOB_SORT_FIELD_FAILURES, limit=50
-        ),
+        "_query_jobs (roots, sort failures)",
+        lambda: _query_jobs(db, roots_by_failures, USER_JOB_STATES),
     )
 
     sample_job = jobs[0] if jobs else None
@@ -409,13 +439,6 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         print("  _worker_addresses_for_tasks                       (skipped, no jobs)")
 
     bench("_live_user_stats", lambda: _live_user_stats(db))
-
-    bench("_query_endpoints (all)", lambda: _query_endpoints(db))
-
-    bench(
-        "_query_endpoints (prefix)",
-        lambda: _query_endpoints(db, EndpointQuery(name_prefix="test")),
-    )
 
     bench("_transaction_actions", lambda: _transaction_actions(db))
 
@@ -438,12 +461,19 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         bench("_descendant_jobs", lambda: _descendant_jobs(db, sample_job.job_id))
 
     # Use paginated roots (limit=50) like the real list_jobs RPC does, not all jobs
-    paginated_jobs, _ = _jobs_paginated(db, USER_JOB_STATES, limit=50)
-    root_job_ids = [j.job_id.to_wire() for j in paginated_jobs]
+    roots_query = controller_pb2.Controller.JobQuery(
+        scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
+        limit=50,
+    )
+    paginated_jobs, _ = _query_jobs(db, roots_query, USER_JOB_STATES)
+    root_job_ids = [j.job_id for j in paginated_jobs]
     if root_job_ids:
-        bench(f"_descendants_for_roots ({len(root_job_ids)} roots)", lambda: _descendants_for_roots(db, root_job_ids))
+        bench(
+            f"_parent_ids_with_children ({len(root_job_ids)} roots)",
+            lambda: _parent_ids_with_children(db, root_job_ids),
+        )
     else:
-        print("  _descendants_for_roots                            (skipped, no jobs)")
+        print("  _parent_ids_with_children                         (skipped, no jobs)")
 
     if sample_job:
         bench("_read_job", lambda: _read_job(db, sample_job.job_id))
@@ -468,11 +498,10 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         bench("_tasks_for_worker", lambda: _tasks_for_worker(db, sample_worker_id))
 
     def _list_jobs_full(db):
-        paginated_jobs, _total = _jobs_paginated(db, USER_JOB_STATES, limit=50)
-        root_ids = [j.job_id.to_wire() for j in paginated_jobs]
-        descendants = _descendants_for_roots(db, root_ids)
-        all_jobs = paginated_jobs + descendants
-        _task_summaries_for_jobs(db, {j.job_id for j in all_jobs})
+        paginated_jobs, _total = _query_jobs(db, roots_query, USER_JOB_STATES)
+        root_ids = [j.job_id for j in paginated_jobs]
+        _task_summaries_for_jobs(db, {j.job_id for j in paginated_jobs})
+        _parent_ids_with_children(db, root_ids)
 
     bench("list_jobs_full (composite)", lambda: _list_jobs_full(db))
 
@@ -499,7 +528,7 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
                 (sample_worker_id, *active_states),
             )
 
-    bench("drain_dispatch (1 worker)", _single_worker_running_tasks)
+    bench("running_tasks (1 worker)", _single_worker_running_tasks)
 
     def _all_workers_running_tasks():
         with db.read_snapshot() as q:
@@ -511,14 +540,14 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
                 active_states,
             )
 
-    bench(f"drain_dispatch ({len(workers)} workers)", _all_workers_running_tasks)
+    bench(f"running_tasks ({len(workers)} workers)", _all_workers_running_tasks)
 
     bench("running_tasks_by_worker", lambda: running_tasks_by_worker(db, worker_ids))
 
-    transitions = ControllerTransitions(db, log_store=None)  # type: ignore[arg-type]
+    transitions = ControllerTransitions(store=ControllerStore(db))
     bench(
-        f"drain_dispatch_all ({len(workers)} workers)",
-        lambda: transitions.drain_dispatch_all(),
+        f"get_running_tasks_for_poll ({len(workers)} workers)",
+        lambda: transitions.get_running_tasks_for_poll(),
     )
 
     # Collect running tasks per worker for apply_heartbeats_batch benchmark.
@@ -540,11 +569,11 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
     if not running_tasks_per_worker:
         return
 
-    resource_usage_proto = cluster_pb2.ResourceUsage()
+    resource_usage_proto = job_pb2.ResourceUsage()
     resource_usage_proto.cpu_millicores = 1000
     resource_usage_proto.memory_mb = 1024
 
-    snapshot_proto = cluster_pb2.WorkerResourceSnapshot()
+    snapshot_proto = job_pb2.WorkerResourceSnapshot()
 
     heartbeat_requests: list[HeartbeatApplyRequest] = []
     for wid, task_list in running_tasks_per_worker.items():
@@ -554,7 +583,7 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
                 TaskUpdate(
                     task_id=JobName.from_wire(task_id),
                     attempt_id=attempt_id,
-                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                    new_state=job_pb2.TASK_STATE_RUNNING,
                     resource_usage=resource_usage_proto,
                 )
             )
@@ -567,16 +596,791 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
         )
 
     hb_db = clone_db(db)
-    hb_transitions = ControllerTransitions(hb_db, log_store=None)  # type: ignore[arg-type]
+    hb_transitions = ControllerTransitions(store=ControllerStore(hb_db))
 
     try:
         bench(
             f"apply_heartbeats_batch ({len(heartbeat_requests)}w, {total_tasks}t)",
             lambda: hb_transitions.apply_heartbeats_batch(heartbeat_requests),
         )
+
+        # prune_worker_resource_history runs in the background prune loop every
+        # 10 minutes. It was previously inlined into apply_heartbeats_batch as
+        # a per-worker SELECT+DELETE pair, adding ~N*2 queries to each sync
+        # cycle's write transaction. Benchmark it here so we can track its cost
+        # as a background operation.
+        workers_over_limit = hb_db.fetchall(
+            "SELECT COUNT(DISTINCT worker_id) as cnt FROM worker_resource_history "
+            "GROUP BY worker_id HAVING COUNT(*) >= ?",
+            (500,),
+        )
+        n_over = len(workers_over_limit)
+        if n_over:
+            bench(
+                f"prune_worker_resource_history ({n_over} workers over limit)",
+                lambda: hb_transitions.prune_worker_resource_history(),
+            )
+        else:
+            print("  prune_worker_resource_history                     (skipped, no workers over limit)")
     finally:
         hb_db.close()
         shutil.rmtree(hb_db._db_dir, ignore_errors=True)
+
+
+def _active_task_sample(db: ControllerDB, limit: int) -> list[tuple[JobName, int]]:
+    """Return up to ``limit`` (task_id, current_attempt_id) pairs for non-terminal tasks.
+
+    add_endpoint checks that the task is not TERMINAL, so we pick from
+    ACTIVE_TASK_STATES to exercise the full RegisterEndpoint write path.
+    """
+    active_states = tuple(ACTIVE_TASK_STATES)
+    placeholders = ",".join("?" for _ in active_states)
+    rows = db.fetchall(
+        f"SELECT task_id, current_attempt_id FROM tasks "
+        f"WHERE state IN ({placeholders}) AND current_attempt_id IS NOT NULL LIMIT ?",
+        (*active_states, limit),
+    )
+    return [(JobName.from_wire(str(r["task_id"])), int(r["current_attempt_id"])) for r in rows]
+
+
+def _make_endpoint(task_id: JobName) -> EndpointRow:
+    return EndpointRow(
+        endpoint_id=str(uuid.uuid4()),
+        name=f"/bench/endpoint/{uuid.uuid4().hex[:8]}",
+        address="127.0.0.1:0",
+        task_id=task_id,
+        metadata={"bench": "true"},
+        registered_at=Timestamp.now(),
+    )
+
+
+def _measure_tail_latency(
+    *,
+    name: str,
+    write_db: ControllerDB,
+    write_txns: ControllerTransitions,
+    batch_fn: Callable[[], Any],
+    endpoint_tasks: list[JobName],
+    reset: Callable[[], Any],
+) -> None:
+    """Fire add_endpoint calls on a probe thread while ``batch_fn`` runs on
+    another thread, and report the per-call latency distribution of the
+    probe. This is the metric that matches the production symptom —
+    RegisterEndpoint RPCs stalling for seconds while a large
+    fail_workers holds the SQLite writer — not the batch's own
+    wall time.
+    """
+    print(f"  {name:50s}  ", end="", flush=True)
+
+    def _run() -> tuple[list[float], float]:
+        probe_latencies: list[float] = []
+        errors: list[BaseException] = []
+        stop = threading.Event()
+
+        def _batch() -> None:
+            try:
+                batch_fn()
+            except BaseException as e:
+                errors.append(e)
+            finally:
+                stop.set()
+
+        def _probe() -> None:
+            # Hammer add_endpoint back-to-back; record each call's latency.
+            # Rotate through endpoint_tasks to avoid exhausting the list.
+            i = 0
+            try:
+                while not stop.is_set():
+                    t = endpoint_tasks[i % len(endpoint_tasks)]
+                    start = time.perf_counter()
+                    write_txns.add_endpoint(_make_endpoint(t))
+                    probe_latencies.append((time.perf_counter() - start) * 1000)
+                    i += 1
+            except BaseException as e:
+                errors.append(e)
+
+        t_batch = threading.Thread(target=_batch)
+        t_probe = threading.Thread(target=_probe)
+        wall_start = time.perf_counter()
+        t_batch.start()
+        t_probe.start()
+        t_batch.join()
+        t_probe.join()
+        wall_ms = (time.perf_counter() - wall_start) * 1000
+        if errors:
+            raise errors[0]
+        return probe_latencies, wall_ms
+
+    # Single real run — no warmup; the batch itself is expensive.
+    latencies, wall_ms = _run()
+    reset()
+
+    if not latencies:
+        print("(no probe samples)")
+        return
+
+    latencies.sort()
+    p50 = latencies[len(latencies) // 2]
+    p95 = latencies[int(len(latencies) * 0.95)]
+    max_ms = latencies[-1]
+    _results.append((name, p50, p95, len(latencies)))
+    print(
+        f"probes={len(latencies):4d} p50={p50:7.1f}ms  p95={p95:7.1f}ms  "
+        f"max={max_ms:7.1f}ms  batch_wall={wall_ms:7.0f}ms"
+    )
+
+
+def benchmark_endpoints(db: ControllerDB) -> None:
+    """Benchmark registration RPC hot paths: RegisterEndpoint and Register (worker).
+
+    Covers:
+      - add_endpoint: single write, burst-per-txn, burst-in-one-txn
+      - fail_workers: slice-reaping failure path
+      - endpoint burst contending with apply_heartbeats_batch on a thread
+      - register_worker: single, burst of 100, and burst under heartbeat
+        contention (matches the production Register p95 of 3-4s)
+    """
+    # Read-path queries run against the source DB (cheap, no clone needed).
+    read_store = ControllerStore(db)
+    bench("endpoint_store.query (all)", lambda: read_store.endpoints.query())
+    bench(
+        "endpoint_store.query (prefix)",
+        lambda: read_store.endpoints.query(EndpointQuery(name_prefix="test")),
+    )
+
+    write_db = clone_db(db)
+    write_store = ControllerStore(write_db)
+    write_txns = ControllerTransitions(store=write_store)
+
+    try:
+        sample = _active_task_sample(write_db, limit=300)
+        if not sample:
+            print("  (skipped, no active tasks to attach endpoints to)")
+            return
+
+        # Single RegisterEndpoint write: one transaction = one fsync.
+        single_task = sample[0][0]
+
+        def _do_single():
+            write_txns.add_endpoint(_make_endpoint(single_task))
+
+        def _reset_single():
+            write_db.execute("DELETE FROM endpoints WHERE name LIKE '/bench/endpoint/%'")
+            write_store.endpoints._load_all()
+
+        bench("add_endpoint (1 write)", _do_single, reset=_reset_single)
+
+        # Burst: N endpoints each in their own transaction. This is what the
+        # controller does today — every RegisterEndpoint RPC opens its own
+        # write transaction, so N simultaneous callers serialize on the DB
+        # write lock.
+        for burst_n in (50, 200):
+            if len(sample) < burst_n:
+                print(f"  add_endpoint burst x{burst_n} (per-txn)                 (skipped, only {len(sample)} tasks)")
+                continue
+            tasks_for_burst = [t for t, _ in sample[:burst_n]]
+
+            def _do_burst_per_txn(tasks=tasks_for_burst):
+                for t in tasks:
+                    write_txns.add_endpoint(_make_endpoint(t))
+
+            bench(
+                f"add_endpoint burst x{burst_n} (per-txn)",
+                _do_burst_per_txn,
+                reset=_reset_single,
+                min_runs=3,
+                min_time_s=1.0,
+            )
+
+            # Same N inserts, but coalesced into a single transaction — the
+            # upper bound on what a batched RegisterEndpoint would cost.
+            def _do_burst_one_txn(tasks=tasks_for_burst):
+                with write_db.transaction() as cur:
+                    for t in tasks:
+                        write_store.endpoints.add(cur, _make_endpoint(t))
+
+            bench(
+                f"add_endpoint burst x{burst_n} (1 txn)",
+                _do_burst_one_txn,
+                reset=_reset_single,
+                min_runs=3,
+                min_time_s=1.0,
+            )
+
+        # Slice-reaping failure path: mark ~N workers failed in one
+        # fail_workers call. This is the exact code path the controller log
+        # attributes the 29s "apply results" phase to.
+        # x50 is enough to show the contention pattern (~5s batch, plenty of
+        # headroom to observe starved RPCs). x300 is instructive but 6x longer
+        # and doesn't change the conclusion.
+        for fail_n in (50,):
+            with write_db.read_snapshot() as snap:
+                worker_rows = snap.fetchall(
+                    "SELECT worker_id, address FROM workers WHERE active = 1 LIMIT ?",
+                    (fail_n,),
+                )
+            if len(worker_rows) < fail_n:
+                print(
+                    f"  fail_workers x{fail_n}                      "
+                    f"(skipped, only {len(worker_rows)} active workers)"
+                )
+                continue
+
+            failures: list[tuple[WorkerId, str | None, str]] = [
+                (
+                    WorkerId(str(r["worker_id"])),
+                    str(r["address"]) if r["address"] is not None else None,
+                    "benchmark: simulated provider-sync failure",
+                )
+                for r in worker_rows
+            ]
+
+            # Snapshot worker rows so we can restore between runs. force_remove
+            # flips active=0 and clears current_worker_* on tasks, so the reset
+            # has to restore the worker table and re-activate their tasks.
+            target_ids = [str(r["worker_id"]) for r in worker_rows]
+            placeholders_w = ",".join("?" for _ in target_ids)
+            saved_workers = write_db.fetchall(
+                f"SELECT * FROM workers WHERE worker_id IN ({placeholders_w})",
+                tuple(target_ids),
+            )
+            saved_tasks = write_db.fetchall(
+                f"SELECT task_id, state, current_attempt_id, current_worker_id, current_worker_address, "
+                f"started_at_ms FROM tasks WHERE current_worker_id IN ({placeholders_w})",
+                tuple(target_ids),
+            )
+
+            def _reset_fail(saved_w=saved_workers, saved_t=saved_tasks):
+                for r in saved_w:
+                    cols = r.keys()
+                    ph = ",".join("?" for _ in cols)
+                    write_db.execute(
+                        f"INSERT OR REPLACE INTO workers({','.join(cols)}) VALUES ({ph})",
+                        tuple(r),
+                    )
+                for r in saved_t:
+                    write_db.execute(
+                        "UPDATE tasks SET state=?, current_attempt_id=?, current_worker_id=?, "
+                        "current_worker_address=?, started_at_ms=? WHERE task_id=?",
+                        (
+                            r["state"],
+                            r["current_attempt_id"],
+                            r["current_worker_id"],
+                            r["current_worker_address"],
+                            r["started_at_ms"],
+                            r["task_id"],
+                        ),
+                    )
+
+            bench(
+                f"fail_workers x{fail_n}",
+                lambda f=failures: write_txns.fail_workers(f),
+                reset=_reset_fail,
+                min_runs=3,
+                min_time_s=1.0,
+            )
+
+            # Tail-latency: what does a concurrent RegisterEndpoint see while
+            # fail_workers is running? This is the metric that matches the
+            # production symptom (2-6s RegisterEndpoint RPCs during a
+            # zone-wide worker failure burst), not the batch's own wall
+            # time. One thread runs the failure batch; another thread fires
+            # add_endpoint calls back-to-back and records each one's
+            # latency. Report p50/p95/max of the endpoint adds.
+            endpoint_tasks = [t for t, _ in sample[:200]] if len(sample) >= 200 else None
+            if endpoint_tasks:
+                # A/B: simulate "one giant txn" (pre-fix) vs chunk_size=10
+                # (current default) to show what chunking buys.
+                _measure_tail_latency(
+                    name=f"add_endpoint tail latency during fail x{fail_n} (1 txn)",
+                    write_db=write_db,
+                    write_txns=write_txns,
+                    batch_fn=lambda f=failures, n=fail_n: write_txns.fail_workers(f, chunk_size=n),
+                    endpoint_tasks=endpoint_tasks,
+                    reset=_reset_fail,
+                )
+                _measure_tail_latency(
+                    name=f"add_endpoint tail latency during fail x{fail_n} (chunk=10)",
+                    write_db=write_db,
+                    write_txns=write_txns,
+                    batch_fn=lambda f=failures: write_txns.fail_workers(f, chunk_size=10),
+                    endpoint_tasks=endpoint_tasks,
+                    reset=_reset_fail,
+                )
+
+        # Contention: run an add_endpoint burst concurrently with an
+        # apply_heartbeats_batch call on two Python threads sharing the clone
+        # DB. SQLite serializes writers, so this measures write-lock wait.
+        workers = healthy_active_workers_with_attributes(write_db)
+        if workers and len(sample) >= 200:
+            active_states = tuple(ACTIVE_TASK_STATES)
+            running_by_worker: dict[str, list[tuple[str, int]]] = {}
+            for w in workers:
+                wid = str(w.worker_id)
+                rows = write_db.fetchall(
+                    "SELECT task_id, current_attempt_id FROM tasks "
+                    "WHERE current_worker_id = ? AND state IN (?, ?, ?)",
+                    (wid, *active_states),
+                )
+                if rows:
+                    running_by_worker[wid] = [(str(r["task_id"]), int(r["current_attempt_id"])) for r in rows]
+
+            snapshot_proto = job_pb2.WorkerResourceSnapshot()
+            resource_usage_proto = job_pb2.ResourceUsage(cpu_millicores=1000, memory_mb=1024)
+            hb_requests: list[HeartbeatApplyRequest] = []
+            for wid, task_list in running_by_worker.items():
+                updates = [
+                    TaskUpdate(
+                        task_id=JobName.from_wire(tid),
+                        attempt_id=aid,
+                        new_state=job_pb2.TASK_STATE_RUNNING,
+                        resource_usage=resource_usage_proto,
+                    )
+                    for tid, aid in task_list
+                ]
+                hb_requests.append(
+                    HeartbeatApplyRequest(
+                        worker_id=WorkerId(wid),
+                        worker_resource_snapshot=snapshot_proto,
+                        updates=updates,
+                    )
+                )
+
+            burst_tasks = [t for t, _ in sample[:200]]
+
+            def _run_contended():
+                errors: list[BaseException] = []
+
+                def _hb():
+                    try:
+                        write_txns.apply_heartbeats_batch(hb_requests)
+                    except BaseException as e:  # surface thread errors
+                        errors.append(e)
+
+                def _reg():
+                    try:
+                        for t in burst_tasks:
+                            write_txns.add_endpoint(_make_endpoint(t))
+                    except BaseException as e:
+                        errors.append(e)
+
+                t1 = threading.Thread(target=_hb)
+                t2 = threading.Thread(target=_reg)
+                t1.start()
+                t2.start()
+                t1.join()
+                t2.join()
+                if errors:
+                    raise errors[0]
+
+            bench(
+                f"contention: add_endpoint x200 || apply_heartbeats_batch ({len(hb_requests)}w)",
+                _run_contended,
+                reset=_reset_single,
+                min_runs=3,
+                min_time_s=1.0,
+            )
+        else:
+            print("  contention (endpoint burst || heartbeats)         (skipped, insufficient workers/tasks)")
+
+        # --- Worker Register RPC benchmarks ---
+        # Production report: Register RPC takes 3-4s under burst. Same
+        # single-writer transaction path as add_endpoint, but register_worker
+        # also writes to worker_attributes and touches the in-memory
+        # attribute cache, so measure it separately.
+        #
+        # NOTE: clone_db() uses CREATE TABLE AS SELECT which drops the UNIQUE
+        # constraint needed by register_worker's UPSERT. Skip when the clone
+        # can't support it.
+        try:
+            _bench_register_worker(write_db, write_txns)
+        except sqlite3.OperationalError as e:
+            print(f"  register_worker benchmarks                        (skipped: {e})")
+    finally:
+        write_db.close()
+        shutil.rmtree(write_db._db_dir, ignore_errors=True)
+
+
+def _build_sample_worker_metadata() -> job_pb2.WorkerMetadata:
+    """Minimal but representative WorkerMetadata for a CPU worker.
+
+    Matches the shape of real worker metadata (device set, a handful of
+    attributes) so the INSERT path hits the same column and attribute count
+    as production.
+    """
+    device = job_pb2.DeviceConfig()
+    device.cpu.CopyFrom(job_pb2.CpuDevice(variant="cpu"))
+    meta = job_pb2.WorkerMetadata(
+        hostname="bench-worker",
+        ip_address="127.0.0.1",
+        cpu_count=64,
+        memory_bytes=256 * 1024**3,
+        disk_bytes=2 * 1024**4,
+        device=device,
+    )
+    meta.attributes["device_type"].string_value = "cpu"
+    meta.attributes["device_variant"].string_value = "cpu"
+    meta.attributes["pool"].string_value = "default"
+    return meta
+
+
+def _bench_register_worker(write_db: ControllerDB, write_txns: ControllerTransitions) -> None:
+    """Benchmark the worker Register RPC hot path.
+
+    Cases:
+      (a) single fresh Register — per-call INSERT cost baseline.
+      (b) sequential burst of 100 fresh Registers — what happens when a slice
+          of 100 workers all come up at once and each hits its own write txn.
+      (c) same 100-burst with apply_heartbeats_batch hammering the same DB on
+          a background thread — exercises SQLite write-lock contention, which
+          is our leading theory for the 3-4s p95 seen in prod.
+    """
+    sample_meta = _build_sample_worker_metadata()
+
+    def _register_one(worker_id: WorkerId) -> None:
+        write_txns.register_worker(
+            worker_id=worker_id,
+            address=f"tcp://{worker_id}:1234",
+            metadata=sample_meta,
+            ts=Timestamp.now(),
+            slice_id="",
+            scale_group="bench",
+        )
+
+    # (a) single Register, fresh worker each iteration.
+    single_counter = {"n": 0}
+
+    def _single():
+        single_counter["n"] += 1
+        _register_one(WorkerId(f"bench-single-{uuid.uuid4().hex[:8]}-{single_counter['n']}"))
+
+    bench("register_worker (1 fresh, WRITE)", _single)
+
+    # (b) burst: 100 sequential fresh Registers per bench iteration.
+    burst_counter = {"n": 0}
+
+    def _burst_100():
+        burst_counter["n"] += 1
+        base = f"bench-burst-{uuid.uuid4().hex[:8]}-{burst_counter['n']}"
+        for i in range(100):
+            _register_one(WorkerId(f"{base}-{i}"))
+
+    bench("register_worker (burst 100, WRITE)", _burst_100, min_runs=3, min_time_s=2.0)
+
+    # (c) burst 100 under concurrent apply_heartbeats_batch contention.
+    active_states = tuple(ACTIVE_TASK_STATES)
+    workers = healthy_active_workers_with_attributes(write_db)
+    running_tasks_per_worker: dict[str, list[tuple[str, int]]] = {}
+    for w in workers:
+        wid = str(w.worker_id)
+        rows = write_db.fetchall(
+            "SELECT task_id, current_attempt_id FROM tasks " "WHERE current_worker_id = ? AND state IN (?, ?, ?)",
+            (wid, *active_states),
+        )
+        if rows:
+            running_tasks_per_worker[wid] = [(str(r["task_id"]), int(r["current_attempt_id"])) for r in rows]
+
+    if not running_tasks_per_worker:
+        print("  register_worker (burst 100 + hb contention)       (skipped, no running tasks)")
+        return
+
+    resource_usage_proto = job_pb2.ResourceUsage(cpu_millicores=1000, memory_mb=1024)
+    snapshot_proto = job_pb2.WorkerResourceSnapshot()
+    heartbeat_requests: list[HeartbeatApplyRequest] = [
+        HeartbeatApplyRequest(
+            worker_id=WorkerId(wid),
+            worker_resource_snapshot=snapshot_proto,
+            updates=[
+                TaskUpdate(
+                    task_id=JobName.from_wire(tid),
+                    attempt_id=aid,
+                    new_state=job_pb2.TASK_STATE_RUNNING,
+                    resource_usage=resource_usage_proto,
+                )
+                for tid, aid in task_list
+            ],
+        )
+        for wid, task_list in running_tasks_per_worker.items()
+    ]
+
+    stop_flag = threading.Event()
+
+    def _heartbeat_loop():
+        while not stop_flag.is_set():
+            write_txns.apply_heartbeats_batch(heartbeat_requests)
+
+    contention_counter = {"n": 0}
+
+    def _burst_100_contended():
+        contention_counter["n"] += 1
+        base = f"bench-contend-{uuid.uuid4().hex[:8]}-{contention_counter['n']}"
+        for i in range(100):
+            _register_one(WorkerId(f"{base}-{i}"))
+
+    hb_thread = threading.Thread(target=_heartbeat_loop, name="bench-heartbeat", daemon=True)
+    hb_thread.start()
+    try:
+        bench(
+            "register_worker (burst 100 + hb contention, WRITE)",
+            _burst_100_contended,
+            min_runs=3,
+            min_time_s=2.0,
+        )
+    finally:
+        stop_flag.set()
+        hb_thread.join(timeout=10.0)
+
+
+def _build_heartbeat_requests(db: ControllerDB) -> list[HeartbeatApplyRequest]:
+    """Build a heartbeat batch shaped like a live provider-sync round:
+    one HeartbeatApplyRequest per active worker, with one RUNNING
+    resource-usage update per task currently assigned to that worker.
+    """
+    workers = healthy_active_workers_with_attributes(db)
+    active_states = tuple(ACTIVE_TASK_STATES)
+    snapshot_proto = job_pb2.WorkerResourceSnapshot()
+    usage = job_pb2.ResourceUsage(cpu_millicores=1000, memory_mb=1024)
+    requests: list[HeartbeatApplyRequest] = []
+    for w in workers:
+        wid = str(w.worker_id)
+        rows = db.fetchall(
+            "SELECT task_id, current_attempt_id FROM tasks " "WHERE current_worker_id = ? AND state IN (?, ?, ?)",
+            (wid, *active_states),
+        )
+        updates = [
+            TaskUpdate(
+                task_id=JobName.from_wire(str(r["task_id"])),
+                attempt_id=int(r["current_attempt_id"]),
+                new_state=job_pb2.TASK_STATE_RUNNING,
+                resource_usage=usage,
+            )
+            for r in rows
+        ]
+        requests.append(
+            HeartbeatApplyRequest(
+                worker_id=WorkerId(wid),
+                worker_resource_snapshot=snapshot_proto,
+                updates=updates,
+            )
+        )
+    return requests
+
+
+def _build_failure_batch(db: ControllerDB, n: int) -> list[tuple[WorkerId, str | None, str]]:
+    rows = db.fetchall(
+        "SELECT worker_id, address FROM workers WHERE active = 1 LIMIT ?",
+        (n,),
+    )
+    return [
+        (
+            WorkerId(str(r["worker_id"])),
+            str(r["address"]) if r["address"] is not None else None,
+            "benchmark: simulated provider-sync failure",
+        )
+        for r in rows
+    ]
+
+
+def _print_latency_distribution(name: str, latencies: list[float]) -> None:
+    if not latencies:
+        print(f"  {name:60s}  (no samples)")
+        return
+    latencies.sort()
+    p50 = latencies[len(latencies) // 2]
+    p95 = latencies[int(len(latencies) * 0.95)]
+    p99 = latencies[int(len(latencies) * 0.99)]
+    max_ms = latencies[-1]
+    _results.append((name, p50, p95, len(latencies)))
+    print(
+        f"  {name:60s}  n={len(latencies):3d}  "
+        f"p50={p50:7.1f}ms  p95={p95:8.1f}ms  p99={p99:8.1f}ms  max={max_ms:8.1f}ms"
+    )
+
+
+def _run_apply_under_contention(
+    *,
+    name: str,
+    write_db: ControllerDB,
+    write_txns: ControllerTransitions,
+    heartbeat_requests: list[HeartbeatApplyRequest],
+    fail_threads: int = 0,
+    fail_n: int = 50,
+    fail_chunk: int = 50,
+    fail_interval_s: float = 2.0,
+    register_threads: int = 0,
+    register_burst: int = 100,
+    endpoint_threads: int = 0,
+    checkpoint_thread: bool = False,
+    synchronous_normal: bool = False,
+    duration_s: float = 8.0,
+) -> None:
+    """Run apply_heartbeats_batch repeatedly on a victim thread while
+    configurable write storms hammer the same clone DB. Report p50/p95/p99/max
+    of the victim's per-call latency.
+    """
+    if synchronous_normal:
+        # PRAGMA synchronous can't be changed mid-connection once a tx has run,
+        # so issue it on a fresh raw connection to the clone file. It persists
+        # for that connection only; our ControllerDB connection is unaffected,
+        # which is the point — prod can't change synchronous mid-flight either.
+        _raw = sqlite3.connect(str(write_db.db_path))
+        _raw.execute("PRAGMA synchronous=NORMAL")
+        _raw.close()
+
+    endpoint_tasks_rows = write_db.fetchall(
+        "SELECT task_id FROM tasks WHERE state IN (1,2,3,9) AND current_attempt_id IS NOT NULL LIMIT 200"
+    )
+    endpoint_tasks = [JobName.from_wire(str(r["task_id"])) for r in endpoint_tasks_rows]
+
+    stop = threading.Event()
+    victim_latencies: list[float] = []
+    errors: list[BaseException] = []
+
+    def _victim():
+        try:
+            while not stop.is_set():
+                t0 = time.perf_counter()
+                write_txns.apply_heartbeats_batch(heartbeat_requests)
+                victim_latencies.append((time.perf_counter() - t0) * 1000)
+        except BaseException as e:
+            errors.append(e)
+
+    def _fail_storm():
+        try:
+            while not stop.is_set():
+                failures = _build_failure_batch(write_db, fail_n)
+                if failures:
+                    write_txns.fail_workers(failures, chunk_size=fail_chunk)
+                stop.wait(fail_interval_s)
+        except BaseException as e:
+            errors.append(e)
+
+    def _register_storm():
+        try:
+            meta = _build_sample_worker_metadata()
+            while not stop.is_set():
+                base = f"bench-contend-{uuid.uuid4().hex[:8]}"
+                for i in range(register_burst):
+                    write_txns.register_worker(
+                        worker_id=WorkerId(f"{base}-{i}"),
+                        address=f"tcp://{base}-{i}:1234",
+                        metadata=meta,
+                        ts=Timestamp.now(),
+                        slice_id="",
+                        scale_group="bench",
+                    )
+                    if stop.is_set():
+                        break
+        except BaseException as e:
+            errors.append(e)
+
+    def _endpoint_storm():
+        try:
+            i = 0
+            while not stop.is_set():
+                t = endpoint_tasks[i % len(endpoint_tasks)]
+                write_txns.add_endpoint(_make_endpoint(t))
+                i += 1
+        except BaseException as e:
+            errors.append(e)
+
+    def _checkpoint_loop():
+        try:
+            while not stop.is_set():
+                try:
+                    write_db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except sqlite3.OperationalError:
+                    pass
+                stop.wait(1.0)
+        except BaseException as e:
+            errors.append(e)
+
+    threads: list[threading.Thread] = [threading.Thread(target=_victim, name="victim")]
+    for _ in range(fail_threads):
+        threads.append(threading.Thread(target=_fail_storm, name="fail"))
+    for _ in range(register_threads):
+        threads.append(threading.Thread(target=_register_storm, name="register"))
+    for _ in range(endpoint_threads):
+        threads.append(threading.Thread(target=_endpoint_storm, name="endpoint"))
+    if checkpoint_thread:
+        threads.append(threading.Thread(target=_checkpoint_loop, name="checkpoint"))
+
+    for t in threads:
+        t.start()
+    time.sleep(duration_s)
+    stop.set()
+    for t in threads:
+        t.join(timeout=30.0)
+
+    if errors:
+        print(f"  {name}: background thread error: {errors[0]!r}")
+    _print_latency_distribution(name, victim_latencies)
+
+
+def benchmark_apply_contention(db: ControllerDB) -> None:
+    """Reproduce the production 'apply results' multi-second tail by running
+    apply_heartbeats_batch as the victim under concurrent write storms.
+    """
+    heartbeat_requests = _build_heartbeat_requests(db)
+    total_tasks = sum(len(r.updates) for r in heartbeat_requests)
+    print(f"  (victim heartbeat batch: {len(heartbeat_requests)} workers, {total_tasks} tasks)")
+
+    if not heartbeat_requests:
+        print("  (skipped, no workers)")
+        return
+
+    scenarios = [
+        dict(name="apply @ baseline (no contention)"),
+        dict(name="apply + 1x fail_workers", fail_threads=1),
+        dict(name="apply + 1x register_worker burst", register_threads=1),
+        dict(name="apply + 1x add_endpoint storm", endpoint_threads=1),
+        dict(
+            name="apply + prod-mix (fail + register + endpoint)",
+            fail_threads=1,
+            register_threads=1,
+            endpoint_threads=1,
+        ),
+        dict(
+            name="apply + heavy storm (2f/2r/2e, chunk=200, 0.5s)",
+            fail_threads=2,
+            fail_chunk=200,
+            fail_interval_s=0.5,
+            register_threads=2,
+            endpoint_threads=2,
+        ),
+        dict(
+            name="apply + heavy + forced WAL checkpoints",
+            fail_threads=2,
+            fail_chunk=200,
+            fail_interval_s=0.5,
+            register_threads=2,
+            endpoint_threads=2,
+            checkpoint_thread=True,
+        ),
+        dict(
+            name="apply + heavy + synchronous=NORMAL",
+            fail_threads=2,
+            fail_chunk=200,
+            fail_interval_s=0.5,
+            register_threads=2,
+            endpoint_threads=2,
+            synchronous_normal=True,
+        ),
+    ]
+
+    write_db = clone_db(db)
+    write_txns = ControllerTransitions(store=ControllerStore(write_db))
+    try:
+        for scenario in scenarios:
+            _run_apply_under_contention(
+                write_db=write_db,
+                write_txns=write_txns,
+                heartbeat_requests=heartbeat_requests,
+                **scenario,
+            )
+    finally:
+        write_db.close()
+        shutil.rmtree(write_db._db_dir, ignore_errors=True)
 
 
 def print_summary() -> None:
@@ -597,19 +1401,50 @@ def print_db_stats(db: ControllerDB) -> None:
     print(f"  DB stats: {', '.join(f'{t}={c}' for t, c in row_counts.items())}")
 
 
+MARIN_REMOTE_STATE_DIR = "gs://marin-us-central2/iris/marin/state"
+DEFAULT_DB_DIR = Path("/tmp/iris_benchmark")
+
+
+def _ensure_db(db_path: Path | None) -> Path:
+    """Download latest archive from the marin cluster if no local DB is provided."""
+    if db_path is not None:
+        return db_path
+
+    db_dir = DEFAULT_DB_DIR
+    db_file = db_dir / ControllerDB.DB_FILENAME
+    if db_file.exists():
+        print(f"Using cached DB at {db_file}")
+        return db_file
+
+    print(f"Downloading latest controller archive from {MARIN_REMOTE_STATE_DIR} ...")
+    db_dir.mkdir(parents=True, exist_ok=True)
+    ok = download_checkpoint_to_local(MARIN_REMOTE_STATE_DIR, db_dir)
+    if not ok:
+        raise click.ClickException("No checkpoint found in remote state dir")
+    print(f"Downloaded to {db_file}\n")
+    return db_file
+
+
 @click.command()
-@click.argument("db_path", type=click.Path(exists=True, path_type=Path))
+@click.argument("db_path", type=click.Path(exists=True, path_type=Path), required=False, default=None)
 @click.option(
     "--only",
     "only_group",
-    type=click.Choice(["scheduling", "dashboard", "heartbeat"]),
+    type=click.Choice(["scheduling", "dashboard", "heartbeat", "endpoints", "apply_contention"]),
     help="Run only this group",
 )
 @click.option("--no-analyze", is_flag=True, help="Skip ANALYZE to test unoptimized query plans")
-def main(db_path: Path, only_group: str | None, no_analyze: bool) -> None:
+@click.option("--fresh", is_flag=True, help="Re-download the archive even if cached")
+def main(db_path: Path | None, only_group: str | None, no_analyze: bool, fresh: bool) -> None:
     """Benchmark Iris controller DB queries against a local checkpoint."""
     _results.clear()
 
+    if fresh and db_path is None:
+        cached = DEFAULT_DB_DIR / ControllerDB.DB_FILENAME
+        if cached.exists():
+            cached.unlink()
+
+    db_path = _ensure_db(db_path)
     db = ControllerDB(db_dir=db_path.parent)
     db.apply_migrations()
     if no_analyze:
@@ -636,6 +1471,16 @@ def main(db_path: Path, only_group: str | None, no_analyze: bool) -> None:
     if only_group is None or only_group == "heartbeat":
         print("[heartbeat]")
         benchmark_heartbeat(db)
+        print()
+
+    if only_group is None or only_group == "endpoints":
+        print("[endpoints]")
+        benchmark_endpoints(db)
+        print()
+
+    if only_group == "apply_contention":
+        print("[apply_contention]")
+        benchmark_apply_contention(db)
 
     print_summary()
     db.close()

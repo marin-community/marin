@@ -161,7 +161,7 @@ class DistributedLease(abc.ABC):
             _, lock_data = self._read_with_generation()
             if lock_data and lock_data.worker_id == self.worker_id:
                 self._delete()
-                logger.debug("[%s] Released lock %s", self.worker_id, self.lock_path)
+                logger.info("Released lock path=%s worker=%s", self.lock_path, self.worker_id)
         except FileNotFoundError:
             pass
 
@@ -256,7 +256,15 @@ class S3Lease(DistributedLease):
 
     @staticmethod
     @functools.cache
-    def _make_client():
+    def _make_client(cache_key: str = ""):
+        """Create a botocore S3 client, cached per *cache_key*.
+
+        Conditional writes inject temporary event hooks on the client's event bus
+        (register before put, unregister after). A single shared client is not
+        thread-safe: concurrent ``_write`` calls interleave hooks, corrupting
+        headers and causing ``SignatureDoesNotMatch``. Keying by lock path gives
+        each ``S3Lease`` instance its own client, avoiding the race.
+        """
         import botocore.config
         import botocore.session
 
@@ -275,7 +283,7 @@ class S3Lease(DistributedLease):
     def _read_with_generation(self) -> tuple[int, Lease | None]:
         from botocore.exceptions import ClientError
 
-        client = self._make_client()
+        client = self._make_client(self.lock_path)
         bucket, key = self._parse_s3_path(self.lock_path)
         try:
             resp = client.get_object(Bucket=bucket, Key=key)
@@ -291,7 +299,7 @@ class S3Lease(DistributedLease):
     def _write(self, lease: Lease, if_generation_match: int) -> None:
         from botocore.exceptions import ClientError
 
-        client = self._make_client()
+        client = self._make_client(self.lock_path)
         bucket, key = self._parse_s3_path(self.lock_path)
         body = json.dumps(asdict(lease)).encode()
 
@@ -316,7 +324,7 @@ class S3Lease(DistributedLease):
             client.meta.events.unregister("before-sign.s3.PutObject", inject_condition)
 
     def _delete(self) -> None:
-        client = self._make_client()
+        client = self._make_client(self.lock_path)
         bucket, key = self._parse_s3_path(self.lock_path)
         client.delete_object(Bucket=bucket, Key=key)
 

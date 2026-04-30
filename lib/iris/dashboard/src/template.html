@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title><%= title %></title>
+    <script>
+      // Apply dark mode before first paint to prevent flash
+      try {
+        var stored = localStorage.getItem('iris-dark-mode');
+        if (stored === 'true' || (stored === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch(e) {}
+    </script>
   </head>
   <body class="bg-surface text-text font-sans antialiased">
     <div id="app"></div>

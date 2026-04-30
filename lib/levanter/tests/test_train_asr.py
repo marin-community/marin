@@ -9,7 +9,6 @@ import pytest
 
 import levanter.main.train_asr as train_asr
 import tiny_test_corpus
-from levanter.distributed import RayConfig
 from levanter.tracker import NoopConfig
 from test_utils import skip_if_no_soundlibs
 
@@ -33,7 +32,6 @@ def test_train_asr():
                     max_eval_batches=1,
                     tracker=NoopConfig(),
                     require_accelerator=False,
-                    ray=RayConfig(auto_start_cluster=False),
                 ),
                 hf_save_path=f"{tmpdir}/hf_asr_output",
             )

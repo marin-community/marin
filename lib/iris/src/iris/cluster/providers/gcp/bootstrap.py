@@ -270,6 +270,27 @@ echo "[iris-controller] ================================================"
 # Write config file if provided
 {{ config_setup }}
 
+# Install host telemetry. sysstat records memory/CPU/IO to /var/log/sysstat/
+# every 10 minutes so a wedged VM can be diagnosed after reboot. The Ops Agent
+# streams the same data to Cloud Monitoring while the VM is alive; install is
+# best-effort since it depends on the VM service account having metricWriter.
+echo "[iris-controller] [telemetry] Installing sysstat + Ops Agent..."
+export DEBIAN_FRONTEND=noninteractive
+if ! dpkg -s sysstat >/dev/null 2>&1; then
+    sudo apt-get update -qq || true
+    sudo apt-get install -y -qq sysstat || true
+fi
+if [ -f /etc/default/sysstat ]; then
+    sudo sed -i 's/^ENABLED="false"/ENABLED="true"/' /etc/default/sysstat || true
+    sudo systemctl enable --now sysstat || true
+fi
+if ! systemctl is-active --quiet google-cloud-ops-agent; then
+    curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh \
+        && sudo bash add-google-cloud-ops-agent-repo.sh --also-install \
+        || echo "[iris-controller] [telemetry] Ops Agent install failed (non-fatal)"
+    rm -f add-google-cloud-ops-agent-repo.sh
+fi
+
 # Install Docker if missing
 if ! command -v docker &> /dev/null; then
     echo "[iris-controller] [1/5] Docker not found, installing..."
@@ -316,11 +337,15 @@ else
     exit 1
 fi
 
-# Stop existing controller if running
+# Stop existing controller if running.
+# Use `docker kill` (SIGKILL) instead of `docker stop` (SIGTERM) because the
+# controller's SIGTERM handler runs autoscaler.shutdown() → terminate_all(),
+# which deletes every worker VM. On a controller restart the CLI has already
+# taken a checkpoint via RPC, so the graceful shutdown path is unnecessary.
 echo "[iris-controller] [5/5] Starting controller container..."
 if sudo docker ps -a --format '{{.Names}}' | grep -q "^{{ container_name }}$"; then
-    echo "[iris-controller]       Stopping existing container..."
-    sudo docker stop {{ container_name }} 2>/dev/null || true
+    echo "[iris-controller]       Killing existing container..."
+    sudo docker kill {{ container_name }} 2>/dev/null || true
     sudo docker rm {{ container_name }} 2>/dev/null || true
 fi
 
@@ -339,7 +364,7 @@ sudo docker run -d --name {{ container_name }} \\
     {{ config_volume }} \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.controller.main serve \\
-        --host 0.0.0.0 --port {{ port }} {{ config_flag }}
+        --host 0.0.0.0 --port {{ port }} {{ config_flag }} {{ fresh_flag }}
 
 echo "[iris-controller] [5/5] Controller container started"
 
@@ -409,6 +434,7 @@ def build_controller_bootstrap_script(
     docker_image: str,
     port: int,
     config_yaml: str = "",
+    fresh: bool = False,
 ) -> str:
     """Build bootstrap script for controller VM.
 
@@ -416,6 +442,8 @@ def build_controller_bootstrap_script(
         docker_image: Docker image to run
         port: Controller port
         config_yaml: Optional YAML config to write to /etc/iris/config.yaml
+        fresh: When True, pass ``--fresh`` to the controller serve command so
+            it starts with an empty local database and skips checkpoint restore.
     """
     if config_yaml:
         config_setup = _build_config_setup(config_yaml, log_prefix="[iris-controller]")
@@ -434,18 +462,22 @@ def build_controller_bootstrap_script(
         config_setup=config_setup,
         config_volume=config_volume,
         config_flag=config_flag,
+        fresh_flag="--fresh" if fresh else "",
     )
 
 
 def build_controller_bootstrap_script_from_config(
     config: config_pb2.IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str],
+    fresh: bool = False,
 ) -> str:
     """Build controller bootstrap script from the full cluster config.
 
     Args:
         config: Full cluster configuration.
         resolve_image: Resolves a container image tag for the target registry.
+        fresh: When True, pass ``--fresh`` to the controller serve command so
+            it starts with an empty local database and skips checkpoint restore.
     """
     # Local import to avoid circular dependency (config.py imports from bootstrap)
     from iris.cluster.config import config_to_dict
@@ -461,4 +493,4 @@ def build_controller_bootstrap_script_from_config(
 
     image = resolve_image(image, zone)
 
-    return build_controller_bootstrap_script(image, port, config_yaml)
+    return build_controller_bootstrap_script(image, port, config_yaml, fresh=fresh)

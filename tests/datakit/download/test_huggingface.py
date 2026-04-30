@@ -3,12 +3,13 @@
 
 """Tests for HuggingFace download scripts."""
 
-import io
 import json
-from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+from huggingface_hub.errors import HfHubHTTPError
+from requests import Response
 
+from marin.datakit.download import huggingface as hf_download
 from marin.datakit.download.huggingface import (
     DownloadConfig,
     _relative_path_in_source,
@@ -17,54 +18,18 @@ from marin.datakit.download.huggingface import (
 )
 
 
-@pytest.fixture
-def mock_hf_fs():
-    """Create a mock HuggingFace filesystem with test files."""
-
-    def _create(files: dict[str, bytes] | None = None) -> MagicMock:
-        """Create mock HfFileSystem.
-
-        Args:
-            files: Dict mapping file paths to file contents
-
-        Returns:
-            Mock HfFileSystem
-        """
-        if files is None:
-            files = {}
-
-        fs = MagicMock()
-
-        def mock_open(path, mode="rb", **_kwargs):
-            if path in files:
-                return io.BytesIO(files[path])
-            raise FileNotFoundError(f"File not found: {path}")
-
-        fs.open.side_effect = mock_open
-        fs.exists = Mock(side_effect=lambda p: p in files)
-        fs.find = Mock(return_value=list(files.keys()))
-        fs.glob = Mock(
-            side_effect=lambda pattern, revision=None: [
-                f for f in files.keys() if "*" not in pattern or pattern.split("*")[0] in f
-            ]
-        )
-        fs.ls = Mock(return_value=list(files.keys()))
-        fs.info = Mock(side_effect=lambda path, revision=None: {"size": len(files.get(path, b""))})
-
-        return fs
-
-    return _create
+def _write(root, relative_path: str, content: bytes) -> None:
+    full = root / relative_path
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_bytes(content)
 
 
-def test_download_hf_basic(mock_hf_fs, tmp_path):
-    """Test basic HF download functionality."""
-    test_files = {
-        "datasets/test-org/test-dataset/data/file1.txt": b"Content 1",
-        "datasets/test-org/test-dataset/data/file2.txt": b"Content 2",
-        "datasets/test-org/test-dataset/README.md": b"# Test Dataset",
-    }
-
-    hf_fs = mock_hf_fs(test_files)
+def test_download_hf_basic(tmp_path):
+    """End-to-end download against a local fsspec source (no mocks)."""
+    source_root = tmp_path / "src"
+    _write(source_root, "data/file1.txt", b"Content 1")
+    _write(source_root, "data/file2.txt", b"Content 2")
+    _write(source_root, "README.md", b"# Test Dataset")
 
     output_path = tmp_path / "output"
     output_path.mkdir()
@@ -73,40 +38,26 @@ def test_download_hf_basic(mock_hf_fs, tmp_path):
         hf_dataset_id="test-org/test-dataset",
         revision="abc1234",
         gcs_output_path=str(output_path),
+        source_url_override=str(source_root),
     )
 
-    # Mock HfFileSystem creation
-    with patch("marin.datakit.download.huggingface.HfFileSystem", return_value=hf_fs):
-        download_hf(cfg)
+    download_hf(cfg)
 
-    # Verify files were downloaded
-    assert (output_path / "data" / "file1.txt").exists()
-    assert (output_path / "data" / "file2.txt").exists()
-    assert (output_path / "README.md").exists()
-
-    # Verify content
     assert (output_path / "data" / "file1.txt").read_bytes() == b"Content 1"
     assert (output_path / "data" / "file2.txt").read_bytes() == b"Content 2"
+    assert (output_path / "README.md").read_bytes() == b"# Test Dataset"
 
-    # Verify provenance file was created
-    provenance_file = output_path / "provenance.json"
-    assert provenance_file.exists()
-
-    provenance = json.loads(provenance_file.read_text())
+    provenance = json.loads((output_path / "provenance.json").read_text())
     assert provenance["dataset"] == "test-org/test-dataset"
     assert provenance["version"] == "abc1234"
     assert "access_time" in provenance
     assert len(provenance["links"]) == 3
 
 
-def test_download_hf_appends_sha_when_configured(mock_hf_fs, tmp_path):
-    """Ensure outputs are written under a revision subdirectory when requested."""
-
-    test_files = {
-        "datasets/test-org/test-dataset/data/file1.txt": b"Content 1",
-    }
-
-    hf_fs = mock_hf_fs(test_files)
+def test_download_hf_appends_sha_when_configured(tmp_path):
+    """Outputs are written under a revision subdirectory when requested."""
+    source_root = tmp_path / "src"
+    _write(source_root, "data/file1.txt", b"Content 1")
 
     base_output_path = tmp_path / "output"
     revision = "abc1234"
@@ -116,13 +67,13 @@ def test_download_hf_appends_sha_when_configured(mock_hf_fs, tmp_path):
         revision=revision,
         gcs_output_path=str(base_output_path),
         append_sha_to_path=True,
+        source_url_override=str(source_root),
     )
 
-    with patch("marin.datakit.download.huggingface.HfFileSystem", return_value=hf_fs):
-        download_hf(cfg)
+    download_hf(cfg)
 
     target_output = base_output_path / revision
-    assert (target_output / "data" / "file1.txt").exists()
+    assert (target_output / "data" / "file1.txt").read_bytes() == b"Content 1"
     assert (target_output / "provenance.json").exists()
 
 
@@ -150,48 +101,65 @@ def test_download_hf_bucket_requires_newer_huggingface_hub(tmp_path):
         download_hf(cfg)
 
 
-def test_stream_file_to_fsspec_retries_on_timeout(tmp_path):
-    """A socket timeout while reading should trigger retry and then succeed."""
-    file_path = "datasets/test-org/test-dataset/data/file1.txt"
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_stream_file_to_fsspec_aborts_on_hf_auth_error(tmp_path, monkeypatch, status_code):
+    """401/403 from HF must short-circuit the retry loop and surface immediately."""
     output_path = tmp_path / "output"
     output_path.mkdir()
     destination = output_path / "data" / "file1.txt"
 
-    content = b"retry me"
+    response = Response()
+    response.status_code = status_code
+    auth_error = HfHubHTTPError(f"{status_code} Client Error", response=response)
 
-    hf_fs = MagicMock()
-    read_attempts = {"count": 0}
+    real_open_url = hf_download.open_url
+    call_count = {"hf": 0}
 
-    class FlakyReader:
-        def __enter__(self):
-            return self
+    def fake_open_url(url, *args, **kwargs):
+        if str(url).startswith("hf://"):
+            call_count["hf"] += 1
+            raise auth_error
+        return real_open_url(url, *args, **kwargs)
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
+    monkeypatch.setattr(hf_download, "open_url", fake_open_url)
+    # Sleep would only fire on retry; failing here proves no retry happened.
+    monkeypatch.setattr(
+        hf_download.time,
+        "sleep",
+        lambda _: pytest.fail("auth errors must not trigger retry sleeps"),
+    )
 
-        def read(self, chunk_size):
-            read_attempts["count"] += 1
-            if read_attempts["count"] == 1:
-                raise TimeoutError("simulated timeout")
-            if read_attempts["count"] == 2:
-                return content
-            return b""
-
-    hf_fs.open.side_effect = lambda path, mode="rb", **_kwargs: FlakyReader()
-
-    with (
-        patch("marin.datakit.download.huggingface.HfFileSystem", return_value=hf_fs),
-        patch("marin.datakit.download.huggingface.time.sleep", return_value=None),
-    ):
-        result = stream_file_to_fsspec(
+    with pytest.raises(RuntimeError, match=f"HTTP {status_code}"):
+        stream_file_to_fsspec(
             str(output_path),
-            file_path,
+            "hf://datasets/private/gated/file.parquet",
             str(destination),
-            expected_size=len(content),
             read_timeout_seconds=1.0,
             progress_log_interval_seconds=0.0,
         )
 
+    assert call_count["hf"] == 1
+
+
+def test_stream_file_to_fsspec_reads_local_source(tmp_path):
+    """stream_file_to_fsspec should copy an arbitrary fsspec URL to the destination."""
+    source_file = tmp_path / "src" / "file1.txt"
+    source_file.parent.mkdir(parents=True)
+    content = b"hello world"
+    source_file.write_bytes(content)
+
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    destination = output_path / "data" / "file1.txt"
+
+    result = stream_file_to_fsspec(
+        str(output_path),
+        str(source_file),
+        str(destination),
+        expected_size=len(content),
+        read_timeout_seconds=1.0,
+        progress_log_interval_seconds=0.0,
+    )
+
     assert result["status"] == "success"
     assert destination.read_bytes() == content
-    assert read_attempts["count"] >= 3
