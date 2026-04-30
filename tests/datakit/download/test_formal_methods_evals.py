@@ -41,7 +41,7 @@ from marin.datakit.download.formal_methods_evals import (
     archive_slice_step,
     download_archive_slice,
 )
-from experiments.evals.exp5060_formal_methods_evals import (
+from experiments.evals.formal_methods_ppl import (
     FORMAL_METHODS_SOURCES,
     HARDWARE_RTL_SOURCES,
 )
