@@ -32,6 +32,7 @@ import logging
 import posixpath
 import tarfile
 import zipfile
+import zstandard
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -152,8 +153,6 @@ def _iter_tar_members(archive_bytes: bytes, archive_format: str) -> Iterator[_So
 
 
 def _iter_tar_zst_members(archive_bytes: bytes) -> Iterator[_SourceFile]:
-    import zstandard  # loaded only for tar.zst archives
-
     dctx = zstandard.ZstdDecompressor()
     decompressed = dctx.decompress(archive_bytes, max_output_size=2**34)  # 16 GB ceiling
     yield from _iter_tar_members(decompressed, "tar")
@@ -271,25 +270,29 @@ def _write_budgeted_jsonl_gz(
     max_compressed_bytes: int,
     max_files: int | None,
 ) -> dict[str, Any]:
-    """Write records to gzipped JSONL, truncating once the compressed buffer exceeds the budget."""
+    """Write records to gzipped JSONL, truncating before the next record would exceed the budget."""
     buf = io.BytesIO()
     written = 0
-    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=9) as gz:
-        for idx, (filename, text) in enumerate(records):
-            if buf.tell() >= max_compressed_bytes:
-                logger.info("byte budget reached after %d records", written)
-                break
-            if max_files is not None and written >= max_files:
-                break
-            record = {
-                "id": f"{source_label}#{idx:06d}",
-                "text": text,
-                "source": source_label,
-                "filename": filename,
-            }
-            gz.write((json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"))
-            gz.flush()
-            written += 1
+    for idx, (filename, text) in enumerate(records):
+        if max_files is not None and written >= max_files:
+            break
+        record = {
+            "id": f"{source_label}#{idx:06d}",
+            "text": text,
+            "source": source_label,
+            "filename": filename,
+        }
+        member = gzip.compress(
+            (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"),
+            compresslevel=9,
+            mtime=0,
+        )
+        next_size = buf.tell() + len(member)
+        if next_size > max_compressed_bytes:
+            logger.info("byte budget reached after %d records", written)
+            break
+        buf.write(member)
+        written += 1
     payload = buf.getvalue()
     with atomic_rename(output_path) as temp_path, open_url(temp_path, "wb") as out:
         out.write(payload)

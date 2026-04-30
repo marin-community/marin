@@ -56,6 +56,12 @@ from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
+Z3_MASTER_REV = "b9be33bb06b5e29ab65963e87c32bfa5c8a7f701"
+COQGYM_MASTER_REV = "a739d99cdf5b0451dd8a362d3c541ca3b66112d3"
+VERILOG_EVAL_MAIN_REV = "c498220d0a52248f8e3fdffe279075215bde2da6"
+RTL_REPO_MAIN_REV = "7d10aa175afa56e500f58eacb7f5183b5f56ba25"
+RTL_CODER_MAIN_REV = "b2847073be62d5f1d6d9b17bb247f0cfeb1ce642"
+
 
 # --- Source configurations --------------------------------------------------------------------
 
@@ -65,7 +71,7 @@ FORMAL_METHODS_SOURCES: tuple[ArchiveSourceConfig, ...] = (
         # Z3 ships a large corpus of SMT-LIB2 example/regression files we can mirror as a
         # representative SMT-LIB sample. For full SMT-LIB benchmark logics, repoint to a
         # specific Zenodo tar.zst (see https://smt-lib.org/benchmarks.shtml).
-        url="https://github.com/Z3Prover/z3/archive/refs/heads/master.zip",
+        url=f"https://github.com/Z3Prover/z3/archive/{Z3_MASTER_REV}.zip",
         archive_format="zip",
         include_globs=("*.smt2", "*.smt"),
         max_compressed_bytes=DEFAULT_MAX_COMPRESSED_BYTES,
@@ -83,7 +89,7 @@ FORMAL_METHODS_SOURCES: tuple[ArchiveSourceConfig, ...] = (
     ),
     ArchiveSourceConfig(
         slice_key="formal_methods/coqgym",
-        url="https://github.com/princeton-vl/CoqGym/archive/refs/heads/master.zip",
+        url=f"https://github.com/princeton-vl/CoqGym/archive/{COQGYM_MASTER_REV}.zip",
         archive_format="zip",
         include_globs=("*.v",),
         # CoqGym vendors proof-state JSON under data/; we only want the Coq script text.
@@ -107,7 +113,7 @@ FORMAL_METHODS_SOURCES: tuple[ArchiveSourceConfig, ...] = (
 HARDWARE_RTL_SOURCES: tuple[ArchiveSourceConfig, ...] = (
     ArchiveSourceConfig(
         slice_key="hardware_rtl/verilog_eval",
-        url="https://github.com/NVlabs/verilog-eval/archive/refs/heads/main.zip",
+        url=f"https://github.com/NVlabs/verilog-eval/archive/{VERILOG_EVAL_MAIN_REV}.zip",
         archive_format="zip",
         include_globs=("*.sv", "*.v"),
         max_compressed_bytes=DEFAULT_MAX_COMPRESSED_BYTES,
@@ -115,7 +121,7 @@ HARDWARE_RTL_SOURCES: tuple[ArchiveSourceConfig, ...] = (
     ),
     ArchiveSourceConfig(
         slice_key="hardware_rtl/rtl_repo",
-        url="https://github.com/AUCOHL/RTL-Repo/archive/refs/heads/main.zip",
+        url=f"https://github.com/AUCOHL/RTL-Repo/archive/{RTL_REPO_MAIN_REV}.zip",
         archive_format="zip",
         include_globs=("predictions/*.jsonl",),
         content_mode=JSONL_TEXT_COLUMN_CONTENT_MODE,
@@ -125,7 +131,7 @@ HARDWARE_RTL_SOURCES: tuple[ArchiveSourceConfig, ...] = (
     ),
     ArchiveSourceConfig(
         slice_key="hardware_rtl/rtl_coder",
-        url="https://github.com/hkust-zhiyao/RTL-Coder/archive/refs/heads/main.zip",
+        url=f"https://github.com/hkust-zhiyao/RTL-Coder/archive/{RTL_CODER_MAIN_REV}.zip",
         archive_format="zip",
         include_globs=("dataset/*.json", "data_generation/data_sample.json"),
         content_mode=JSONL_TEXT_COLUMN_CONTENT_MODE,
@@ -138,7 +144,6 @@ HARDWARE_RTL_SOURCES: tuple[ArchiveSourceConfig, ...] = (
 # AIGER / BTOR hardware model-checking benchmarks (https://fmv.jku.at/hwmcc11/benchmarks.html)
 # are intentionally omitted: the primary distribution is binary AIGER. Adding a Marin-internal
 # text rendering would be a bespoke serializer nobody else uses. Per @dlwh 2026-04-22, skip.
-SKIPPED_BINARY_SOURCES: tuple[str, ...] = ("hardware_rtl/aiger_hwmcc",)
 
 
 # --- StepSpec registration -------------------------------------------------------------------

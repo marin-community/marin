@@ -214,9 +214,8 @@ def test_byte_budget_truncates(make_zip_archive, tmp_path: Path) -> None:
 
     # Budget was reached, so we wrote fewer records than archive members.
     assert result["records"] < large_file_count
-    assert result["records"] >= 1
-    # Actual compressed size stays close to the budget (some overshoot from the last record is OK).
-    assert result["compressed_bytes"] <= 4_096 + 2_000
+    # The downloader stops before appending a record that would cross the compressed-byte budget.
+    assert result["compressed_bytes"] <= 4_096
 
 
 def test_max_files_cap(make_zip_archive, tmp_path: Path) -> None:
@@ -386,13 +385,17 @@ def test_exp5060_sources_match_expected_formats() -> None:
     assert source_by_key["formal_methods/tptp"].url == "https://tptp.org/TPTP/Archive/TPTP-v8.2.0.tgz"
     assert source_by_key["formal_methods/dimacs_cnf"].archive_format == "tar.gz"
     assert source_by_key["formal_methods/dimacs_cnf"].include_globs == ("*.cnf",)
+    assert "refs/heads" not in source_by_key["formal_methods/smt_lib"].url
+    assert "refs/heads" not in source_by_key["formal_methods/coqgym"].url
 
     rtl_repo = source_by_key["hardware_rtl/rtl_repo"]
     assert rtl_repo.content_mode == "jsonl_text_column"
     assert rtl_repo.jsonl_text_column == "label"
     assert rtl_repo.include_globs == ("predictions/*.jsonl",)
+    assert "refs/heads" not in rtl_repo.url
 
     rtl_coder = source_by_key["hardware_rtl/rtl_coder"]
     assert rtl_coder.content_mode == "jsonl_text_column"
     assert rtl_coder.jsonl_text_column == "Response"
     assert rtl_coder.include_globs == ("dataset/*.json", "data_generation/data_sample.json")
+    assert "refs/heads" not in rtl_coder.url
