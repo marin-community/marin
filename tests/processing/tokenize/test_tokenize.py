@@ -16,6 +16,7 @@ from marin.processing.tokenize.tokenize import (
     TokenizeConfig,
     _bundle_files_by_size,
     _compute_target_group_bytes,
+    _shard_paths_for_ledger,
     tokenize,
 )
 from zephyr.dataset import FileEntry
@@ -172,6 +173,23 @@ def test_bundle_files_single_large_file():
     groups = list(_bundle_files_by_size(files, target))
     assert groups[0] == ["big.jsonl"]
     assert groups[1] == ["small1.jsonl", "small2.jsonl"]
+
+
+def test_shard_paths_for_ledger_makes_child_paths_relative():
+    cache_path = "gs://bucket/cache/train"
+
+    assert _shard_paths_for_ledger(
+        cache_path,
+        [
+            "gs://bucket/cache/train/part-00000-of-00002",
+            "gs://bucket/cache/train/nested/part-00001-of-00002",
+            "gs://other-bucket/cache/train/part-00000-of-00001",
+        ],
+    ) == [
+        "part-00000-of-00002",
+        "nested/part-00001-of-00002",
+        "gs://other-bucket/cache/train/part-00000-of-00001",
+    ]
 
 
 @pytest.mark.slow

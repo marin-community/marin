@@ -142,7 +142,8 @@ class TreeCache(AsyncDataset[T_co]):
         if not ledger.is_finished:
             raise FileNotFoundError(f"Cache at {cache_dir} is not finished. Use build_or_load to build it.")
         if ledger.shard_paths is not None:
-            return ShardedTreeCache(ledger.shard_paths, exemplar, ledger)  # type: ignore[return-value]
+            shard_paths = [_resolve_shard_path(cache_dir, path) for path in ledger.shard_paths]
+            return ShardedTreeCache(shard_paths, exemplar, ledger)  # type: ignore[return-value]
         return TreeCache(cache_dir, exemplar, ledger)
 
     @staticmethod
@@ -523,6 +524,12 @@ def _group_indices_by_shard(indices: Sequence[int], boundaries: Sequence[int]) -
         local_index = index - boundaries[shard_index]
         shard_groups.setdefault(shard_index, []).append((position, local_index))
     return shard_groups
+
+
+def _resolve_shard_path(cache_dir: str, shard_path: str) -> str:
+    if "://" in shard_path or os.path.isabs(shard_path):
+        return shard_path
+    return os.path.join(cache_dir, shard_path)
 
 
 @dataclass_json

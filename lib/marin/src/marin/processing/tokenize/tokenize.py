@@ -78,6 +78,11 @@ def _local_metadata_workers(num_items: int) -> int:
     return max(1, min(_LOCAL_METADATA_MAX_WORKERS, num_items))
 
 
+def _shard_paths_for_ledger(cache_path: str, shard_paths: Sequence[str]) -> list[str]:
+    prefix = cache_path.rstrip("/") + "/"
+    return [path.removeprefix(prefix) if path.startswith(prefix) else path for path in shard_paths]
+
+
 @dataclasses.dataclass(frozen=True)
 class HfDatasetSpec:
     """Specification for a HuggingFace dataset and optional subset name."""
@@ -498,7 +503,7 @@ def tokenize(config: TokenizeConfigBase):
             finished_shards=list(shard_rows.keys()),
             field_counts=field_counts,
             metadata=CacheMetadata.empty(),
-            shard_paths=shard_paths,
+            shard_paths=_shard_paths_for_ledger(prefix, shard_paths),
         )
         ledger._serialize_and_commit(prefix)
 

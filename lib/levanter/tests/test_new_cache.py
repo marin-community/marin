@@ -461,12 +461,14 @@ def test_sharded_tree_cache_via_load():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         shard_paths = []
+        relative_shard_paths = []
         for shard_idx, shard_name in enumerate(source.shard_names):
             shard_path = os.path.join(tmpdir, f"shard_{shard_idx}")
             with SerialCacheWriter(shard_path, exemplar, shard_name=shard_name) as writer:
                 for batch in batched(source.open_shard(shard_name), 32):
                     writer.write_batch(processor(batch))
             shard_paths.append(shard_path)
+            relative_shard_paths.append(os.path.basename(shard_path))
 
         shard_rows = {}
         for path in shard_paths:
@@ -480,7 +482,7 @@ def test_sharded_tree_cache_via_load():
             finished_shards=list(shard_rows.keys()),
             field_counts={},
             metadata=CacheMetadata.empty(),
-            shard_paths=shard_paths,
+            shard_paths=relative_shard_paths,
         )
         ledger._serialize_and_commit(tmpdir)
 
