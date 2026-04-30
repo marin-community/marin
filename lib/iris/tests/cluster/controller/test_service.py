@@ -12,16 +12,15 @@ from datetime import date, timedelta
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-
+from finelog.server import LogServiceImpl
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
+from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
     FRESHNESS_WINDOW,
     ControllerServiceImpl,
     _check_client_freshness,
 )
-from finelog.server import LogServiceImpl
-from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -29,15 +28,18 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
 )
 from iris.cluster.types import JobName, WorkerId, tpu_device
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
 from .conftest import (
     make_job_request,
     make_test_entrypoint,
     make_worker_metadata,
+)
+from .conftest import (
     query_job as _query_job,
+)
+from .conftest import (
     query_tasks_with_attempts as _query_tasks_with_attempts,
 )
 
@@ -664,7 +666,7 @@ def test_terminate_job_skips_already_finished_children(service, state):
 
 def test_terminate_job_allowed_by_owner(service):
     """Job owner can terminate their own job."""
-    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     service.launch_job(make_job_request("/alice/my-job"), None)
 
@@ -683,7 +685,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
-    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     auth_service = ControllerServiceImpl(
         state,
@@ -714,7 +716,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
     """Cannot submit a child job under another user's hierarchy."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
-    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     auth_service = ControllerServiceImpl(
         state,
@@ -1064,7 +1066,7 @@ def test_worker_addresses_for_tasks(state, service):
 
 def test_list_workers_returns_all(service, state):
     """Verify list_workers returns all registered workers."""
-    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
     db.ensure_user("system:worker", Timestamp.now(), role="worker")
@@ -1172,7 +1174,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
     """Non-worker user gets PERMISSION_DENIED on register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
-    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
     now = Timestamp.now()
@@ -1208,7 +1210,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
     """Worker-role user can call register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
-    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
     now = Timestamp.now()

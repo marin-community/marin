@@ -4,7 +4,6 @@
 """Common Corpus dataset definitions and tokenization."""
 
 from fray import ResourceConfig
-
 from marin.datakit.download.common_corpus import (
     download_common_corpus_raw_step,
     filter_common_corpus_step,

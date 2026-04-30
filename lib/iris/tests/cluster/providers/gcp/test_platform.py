@@ -15,17 +15,16 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
-
 from iris.cluster.providers.gcp.controller import GcpControllerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_resource_name
-from iris.cluster.providers.remote_exec import DirectSshRemoteExec, GceRemoteExec, GcloudRemoteExec
 from iris.cluster.providers.gcp.workers import (
     GcpWorkerProvider,
     _run_vm_slice_bootstrap,
     _validate_slice_config,
 )
 from iris.cluster.providers.manual.provider import ManualControllerProvider, ManualWorkerProvider
+from iris.cluster.providers.remote_exec import DirectSshRemoteExec, GceRemoteExec, GcloudRemoteExec
 from iris.cluster.providers.types import (
     CloudSliceState,
     InfraError,

@@ -8,6 +8,7 @@ creates N tasks). Tasks are the unit of scheduling and execution. Job state is
 aggregated from task states.
 """
 
+import dataclasses
 import json
 import logging
 import re
@@ -15,7 +16,6 @@ import secrets
 import threading
 import time
 import uuid
-import dataclasses
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Protocol
@@ -23,24 +23,13 @@ from typing import Any, Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
+from finelog.client import LogServiceProxy
+from finelog.rpc import logging_pb2
+from finelog.server import LogServiceImpl
+from rigging.timing import Timer, Timestamp
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
-from iris.cluster.redaction import redact_request_env_vars
-from iris.cluster.controller.codec import (
-    constraints_from_json,
-    proto_from_json,
-    reservation_entries_from_json,
-    resource_spec_from_scalars,
-)
-from iris.cluster.controller.budget import (
-    UserBudgetDefaults,
-    UserTask,
-    compute_effective_band,
-    compute_user_spend,
-    interleave_by_user,
-    resource_value,
-)
-from iris.rpc.proto_utils import priority_band_name
 from iris.cluster.controller.auth import (
     DEFAULT_JWT_TTL_SECONDS,
     ControllerAuth,
@@ -49,15 +38,21 @@ from iris.cluster.controller.auth import (
     revoke_api_key,
     revoke_login_keys_for_user,
 )
-from iris.rpc.auth import (
-    AuthzAction,
-    authorize,
-    authorize_resource_owner,
-    get_verified_identity,
-    get_verified_user,
-    require_identity,
+from iris.cluster.controller.autoscaler.status import PendingHint
+from iris.cluster.controller.budget import (
+    UserBudgetDefaults,
+    UserTask,
+    compute_effective_band,
+    compute_user_spend,
+    interleave_by_user,
+    resource_value,
 )
-from iris.cluster.bundle import BundleStore
+from iris.cluster.controller.codec import (
+    constraints_from_json,
+    proto_from_json,
+    reservation_entries_from_json,
+    resource_spec_from_scalars,
+)
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     ControllerDB,
@@ -68,6 +63,9 @@ from iris.cluster.controller.db import (
     running_tasks_by_worker,
     task_row_can_be_scheduled,
 )
+from iris.cluster.controller.provider import ProviderError
+from iris.cluster.controller.query import execute_raw_query
+from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     API_KEY_PROJECTION,
     ATTEMPT_PROJECTION,
@@ -86,22 +84,15 @@ from iris.cluster.controller.schema import (
     WorkerRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.query import execute_raw_query
-from iris.rpc import query_pb2
-from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.stores import TASK_RESOURCE_HISTORY_RETENTION, ControllerStore
 from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
     task_updates_from_proto,
 )
-from iris.cluster.controller.provider import ProviderError
-from finelog.client import LogServiceProxy
-from finelog.rpc import logging_pb2
-from finelog.server import LogServiceImpl
 from iris.cluster.log_store_helpers import build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
+from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
@@ -112,14 +103,18 @@ from iris.cluster.types import (
     get_tpu_count,
     is_job_finished,
 )
+from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc import logging_pb2 as iris_logging_pb2
-from iris.rpc import vm_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
-from iris.rpc import worker_pb2
-from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
+from iris.rpc.auth import (
+    AuthzAction,
+    authorize,
+    authorize_resource_owner,
+    get_verified_identity,
+    get_verified_user,
+    require_identity,
+)
+from iris.rpc.proto_utils import job_state_friendly, priority_band_name, task_state_friendly
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Timestamp, Timer
 
 logger = logging.getLogger(__name__)
 

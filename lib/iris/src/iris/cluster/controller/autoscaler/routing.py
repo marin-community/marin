@@ -11,6 +11,8 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from rigging.timing import Timestamp
+
 from iris.cluster.constraints import (
     Constraint,
     ConstraintIndex,
@@ -31,7 +33,6 @@ from iris.cluster.controller.autoscaler.models import (
 )
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.rpc import config_pb2
-from rigging.timing import Timestamp
 
 
 def additive_req(entry: DemandEntry) -> AdditiveReq:
