@@ -23,7 +23,7 @@ from marin.datakit.download.common_crawl_archives import (
     common_crawl_sample_step,
 )
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import ExecutorStep
+from marin.execution.step_spec import StepSpec
 
 common_crawl_warc_raw = common_crawl_sample_step(COMMON_CRAWL_WARC_SOURCE)
 common_crawl_wat_raw = common_crawl_sample_step(COMMON_CRAWL_WAT_SOURCE)
@@ -36,8 +36,8 @@ def _surface_tags(surface: str) -> tuple[str, ...]:
 def common_crawl_raw_validation_sets(
     *,
     raw_root: str | None = None,
-    warc_raw: ExecutorStep | None = None,
-    wat_raw: ExecutorStep | None = None,
+    warc_raw: StepSpec | None = None,
+    wat_raw: StepSpec | None = None,
 ) -> dict[str, RawTextEvaluationDataset]:
     """Return Common Crawl WARC/WAT slices keyed under ``raw_web_markup/``."""
 
@@ -47,13 +47,13 @@ def common_crawl_raw_validation_sets(
         wat_raw = common_crawl_wat_raw
 
     if raw_root is not None:
-        warc_source: str | ExecutorStep = posixpath.join(raw_root, "web/common_crawl/warc.jsonl.gz")
-        wat_source: str | ExecutorStep = posixpath.join(raw_root, "web/common_crawl/wat.jsonl.gz")
+        warc_source = posixpath.join(raw_root, "web/common_crawl/warc.jsonl.gz")
+        wat_source = posixpath.join(raw_root, "web/common_crawl/wat.jsonl.gz")
     else:
         assert warc_raw is not None
         assert wat_raw is not None
-        warc_source = warc_raw.cd("data.jsonl.gz")
-        wat_source = wat_raw.cd("data.jsonl.gz")
+        warc_source = warc_raw.as_executor_step().cd("data.jsonl.gz")
+        wat_source = wat_raw.as_executor_step().cd("data.jsonl.gz")
 
     return prefixed_raw_web_markup_validation_sets(
         {

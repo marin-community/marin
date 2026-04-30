@@ -18,7 +18,7 @@ import logging
 import posixpath
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 from urllib.parse import urljoin
@@ -41,7 +41,8 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
     write_ingestion_metadata_json,
 )
-from marin.execution.executor import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, versioned
+from marin.execution.executor import THIS_OUTPUT_PATH
+from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
@@ -115,13 +116,12 @@ class CommonCrawlArchiveSource:
 
 @dataclass
 class DownloadCommonCrawlSampleConfig:
-    """Executor config for :func:`download_common_crawl_sample`."""
+    """Runtime config for :func:`download_common_crawl_sample`."""
 
     source: CommonCrawlArchiveSource
-    output_path: str | VersionedValue[str] = THIS_OUTPUT_PATH
+    output_path: str = THIS_OUTPUT_PATH
     output_filename: str = COMMON_CRAWL_OUTPUT_FILENAME
     http_timeout: int = COMMON_CRAWL_HTTP_TIMEOUT
-    cache_key: dict[str, Any] | VersionedValue[dict[str, Any]] = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True)
@@ -522,28 +522,29 @@ def common_crawl_sample_step(
     *,
     name: str | None = None,
     http_timeout: int = COMMON_CRAWL_HTTP_TIMEOUT,
-) -> ExecutorStep[DownloadCommonCrawlSampleConfig]:
-    """Create the executor step for one Common Crawl WARC/WAT sample."""
+) -> StepSpec:
+    """Create the StepSpec for one Common Crawl WARC/WAT sample."""
 
     source.validate()
     step_name = name or f"raw/{source.manifest.slice_key}"
-    return ExecutorStep(
+    return StepSpec(
         name=step_name,
-        fn=download_common_crawl_sample,
-        config=DownloadCommonCrawlSampleConfig(
-            source=source,
-            http_timeout=http_timeout,
-            cache_key=versioned(
-                {
-                    "slice_key": source.manifest.slice_key,
-                    "manifest_fingerprint": source.manifest.fingerprint(),
-                    "archive_kind": source.archive_kind.value,
-                    "crawl_id": source.crawl_id,
-                    "base_url": source.base_url,
-                    "max_output_bytes": source.max_output_bytes,
-                    "max_record_bytes": source.max_record_bytes,
-                    "max_files": source.max_files,
-                }
-            ),
+        fn=lambda output_path: download_common_crawl_sample(
+            DownloadCommonCrawlSampleConfig(
+                source=source,
+                output_path=output_path,
+                http_timeout=http_timeout,
+            )
         ),
+        hash_attrs={
+            "slice_key": source.manifest.slice_key,
+            "manifest_fingerprint": source.manifest.fingerprint(),
+            "archive_kind": source.archive_kind.value,
+            "crawl_id": source.crawl_id,
+            "base_url": source.base_url,
+            "max_output_bytes": source.max_output_bytes,
+            "max_record_bytes": source.max_record_bytes,
+            "max_files": source.max_files,
+            "http_timeout": http_timeout,
+        },
     )
