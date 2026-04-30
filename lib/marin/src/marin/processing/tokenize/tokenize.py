@@ -502,13 +502,18 @@ def tokenize(config: TokenizeConfigBase):
         )
         ledger._serialize_and_commit(prefix)
 
-        # Sum token counts across shards
         exemplar = {"input_ids": np.zeros(0, dtype=np.int32)}
-        total_tokens = 0
-        for path in shard_paths:
+
+        def input_id_data_size(path: str) -> int:
             store = TreeStore.open(exemplar, path, mode="r", cache_metadata=True)
             if "input_ids" in store.tree:
-                total_tokens += store.tree["input_ids"].data_size
+                return store.tree["input_ids"].data_size
+            return 0
+
+        # Sum token counts across shards. TreeStore.open and data_size are
+        # remote metadata I/O, so parallelize with the same local cap.
+        with ThreadPoolExecutor(max_workers=_local_metadata_workers(len(shard_paths))) as pool:
+            total_tokens = sum(pool.map(input_id_data_size, shard_paths))
 
         stats_path = os.path.join(prefix, ".stats.json")
         with open_url(stats_path, "w") as f:
