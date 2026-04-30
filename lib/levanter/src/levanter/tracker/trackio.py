@@ -13,7 +13,7 @@ import numpy as np
 from draccus import field
 
 from levanter.tracker import Tracker
-from levanter.tracker.background import BackgroundTracker
+from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.histogram import Histogram
 from levanter.tracker.tracker import NoopTracker, TrackerConfig
 
@@ -155,11 +155,9 @@ class TrackioConfig(TrackerConfig):
             resume=resume,
             embed=False,
         )
-        tracker: Tracker = TrackioTracker(r)
-        if self.background:
-            tracker = BackgroundTracker(
-                tracker,
-                max_queue_size=self.background_max_queue_size,
-                finish_timeout=self.background_finish_timeout,
-            )
-        return tracker
+        return maybe_wrap_background(
+            TrackioTracker(r),
+            enabled=self.background,
+            max_queue_size=self.background_max_queue_size,
+            finish_timeout=self.background_finish_timeout,
+        )

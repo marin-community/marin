@@ -17,7 +17,7 @@ from draccus import field
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 
 from levanter.tracker import Tracker
-from levanter.tracker.background import BackgroundTracker
+from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
 from levanter.tracker.histogram import Histogram
 from levanter.tracker.tracker import TrackerConfig
@@ -331,14 +331,12 @@ class WandbConfig(TrackerConfig):
         wandb.summary["num_hosts"] = jax.process_count()  # type: ignore
         wandb.summary["backend"] = jax.default_backend()  # type: ignore
 
-        tracker: Tracker = WandbTracker(r, replicate_path=self.replicate_path)
-        if self.background:
-            tracker = BackgroundTracker(
-                tracker,
-                max_queue_size=self.background_max_queue_size,
-                finish_timeout=self.background_finish_timeout,
-            )
-        return tracker
+        return maybe_wrap_background(
+            WandbTracker(r, replicate_path=self.replicate_path),
+            enabled=self.background,
+            max_queue_size=self.background_max_queue_size,
+            finish_timeout=self.background_finish_timeout,
+        )
 
     def _git_settings(self):
         other_settings = dict()

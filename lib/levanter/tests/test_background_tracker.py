@@ -246,7 +246,7 @@ def test_background_tracker_drops_when_queue_full(caplog):
                 bt.log({"i": i + 3}, step=i + 3)
             elapsed = time.monotonic() - start
             assert elapsed < 1.0
-            assert bt.dropped_count >= 50
+            assert bt._dropped >= 50
     finally:
         release_event.set()
         bt.finish()

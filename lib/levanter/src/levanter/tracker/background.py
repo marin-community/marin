@@ -94,20 +94,16 @@ class BackgroundTracker(Tracker):
                     method(*args, **kwargs)
                 except Exception:
                     logger.exception(
-                        "Background tracker '%s' raised while processing %s; " "dropping update and continuing.",
+                        "Background tracker '%s' raised while processing %s; dropping update and continuing.",
                         self.name,
-                        getattr(method, "__name__", repr(method)),
+                        method.__name__,
                     )
             finally:
                 self._queue.task_done()
 
     def _enqueue(self, method, *args, **kwargs) -> None:
         if self._stopped:
-            logger.debug(
-                "Background tracker '%s' already stopped; dropping %s",
-                self.name,
-                getattr(method, "__name__", repr(method)),
-            )
+            logger.debug("Background tracker '%s' already stopped; dropping %s", self.name, method.__name__)
             return
         try:
             self._queue.put_nowait((method, args, kwargs))
@@ -183,7 +179,7 @@ class BackgroundTracker(Tracker):
         self._thread.join(timeout=remaining)
         if self._thread.is_alive():
             logger.warning(
-                "Background tracker '%s' did not exit within %.1fs; " "abandoning thread (some updates may be lost).",
+                "Background tracker '%s' did not exit within %.1fs; abandoning thread (some updates may be lost).",
                 self.name,
                 self._finish_timeout,
             )
@@ -196,26 +192,31 @@ class BackgroundTracker(Tracker):
 
     # ---- Helpers (mostly for tests) -----------------------------------------
 
-    @property
-    def dropped_count(self) -> int:
-        """Return the number of updates dropped because the queue was full."""
-        with self._lock:
-            return self._dropped
-
     def _wait_until_idle(self, timeout: float = 5.0) -> bool:
         """Block until every queued item has been processed.
 
         Returns ``True`` if the queue drained within ``timeout``, else
-        ``False``. Intended for tests.
+        ``False``. Intended for tests; mirrors :meth:`queue.Queue.join` but
+        with a deadline.
         """
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            with self._queue.all_tasks_done:
-                if self._queue.unfinished_tasks == 0:
-                    return True
+        with self._queue.all_tasks_done:
+            while self._queue.unfinished_tasks:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return False
                 self._queue.all_tasks_done.wait(timeout=remaining)
-        with self._queue.all_tasks_done:
-            return self._queue.unfinished_tasks == 0
+            return True
+
+
+def maybe_wrap_background(
+    tracker: Tracker,
+    *,
+    enabled: bool,
+    max_queue_size: int,
+    finish_timeout: float,
+) -> Tracker:
+    """Return ``tracker`` wrapped in a :class:`BackgroundTracker` iff ``enabled``."""
+    if not enabled:
+        return tracker
+    return BackgroundTracker(tracker, max_queue_size=max_queue_size, finish_timeout=finish_timeout)
