@@ -11,9 +11,9 @@ from .spec import (
     NoRewardSignalConfig,
     ObjectiveSpec,
     PolicyGradientTermConfig,
-    RLOOSignalConfig,
     ReductionConfig,
     ReductionKind,
     ReferenceKLTermConfig,
+    RLOOSignalConfig,
     TruncationPolicy,
 )

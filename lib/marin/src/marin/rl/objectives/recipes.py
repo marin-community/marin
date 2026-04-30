@@ -7,10 +7,10 @@ from .spec import (
     BatchView,
     ObjectiveSpec,
     PolicyGradientTermConfig,
-    RLOOSignalConfig,
     ReductionConfig,
     ReductionKind,
     ReferenceKLTermConfig,
+    RLOOSignalConfig,
     TruncationPolicy,
 )
 
