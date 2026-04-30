@@ -41,9 +41,10 @@ from marin.datakit.ingestion_manifest import (
     StagingMetadata,
     UsagePolicy,
 )
-from marin.datakit.download.huggingface import DownloadConfig as HfDownloadConfig, download_hf
+from marin.datakit.download.huggingface import download_hf_step
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 from marin.transform.structured_text.table_records import (
@@ -82,40 +83,25 @@ def _eval_only_policy(provenance_notes: str) -> IngestionPolicy:
     )
 
 
-totto_raw = ExecutorStep(
-    name="raw/gem/totto",
-    fn=download_hf,
-    config=HfDownloadConfig(
-        hf_dataset_id=versioned(TOTTO_DATASET_ID),
-        revision=versioned(TOTTO_REVISION),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
+totto_raw = download_hf_step(
+    "raw/gem/totto",
+    hf_dataset_id=TOTTO_DATASET_ID,
+    revision=TOTTO_REVISION,
+    hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
-wikitablequestions_raw = ExecutorStep(
-    name="raw/stanford/wikitablequestions",
-    fn=download_hf,
-    config=HfDownloadConfig(
-        hf_dataset_id=versioned(WIKITABLEQUESTIONS_DATASET_ID),
-        revision=versioned(WIKITABLEQUESTIONS_REVISION),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
+wikitablequestions_raw = download_hf_step(
+    "raw/stanford/wikitablequestions",
+    hf_dataset_id=WIKITABLEQUESTIONS_DATASET_ID,
+    revision=WIKITABLEQUESTIONS_REVISION,
+    hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
-gittables_raw = ExecutorStep(
-    name="raw/target-benchmark/gittables-corpus",
-    fn=download_hf,
-    config=HfDownloadConfig(
-        hf_dataset_id=versioned(GITTABLES_DATASET_ID),
-        revision=versioned(GITTABLES_REVISION),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
+gittables_raw = download_hf_step(
+    "raw/target-benchmark/gittables-corpus",
+    hf_dataset_id=GITTABLES_DATASET_ID,
+    revision=GITTABLES_REVISION,
+    hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
 
@@ -250,7 +236,7 @@ STRUCTURED_EVAL_MANIFESTS: dict[str, IngestionSourceManifest] = {
 }
 
 
-STRUCTURED_EVAL_SOURCES = {
+STRUCTURED_EVAL_SOURCES: dict[str, dict[str, StepSpec | IngestionSourceManifest]] = {
     "totto": {"raw_step": totto_raw, "manifest": STRUCTURED_EVAL_MANIFESTS["totto"]},
     "wikitablequestions": {
         "raw_step": wikitablequestions_raw,
@@ -260,52 +246,76 @@ STRUCTURED_EVAL_SOURCES = {
 }
 
 
-def _staged_hf_step(dataset_key: str, spec: dict[str, ExecutorStep | IngestionSourceManifest]) -> ExecutorStep:
-    """Build the staging ExecutorStep for one HF-backed structured-eval source."""
+def _staged_hf_step(dataset_key: str, spec: dict[str, StepSpec | IngestionSourceManifest]) -> StepSpec:
+    """Build the staging StepSpec for one HF-backed structured-eval source."""
     manifest = spec["manifest"]
     raw_step = spec["raw_step"]
     assert isinstance(manifest, IngestionSourceManifest)
-    assert isinstance(raw_step, ExecutorStep)
-    return ExecutorStep(
+    assert isinstance(raw_step, StepSpec)
+    return StepSpec(
         name=f"evaluation/structured-text/{dataset_key}",
-        fn=stage_table_record_source,
-        config=TableRecordStagingConfig(
-            input_path=output_path_of(raw_step),
-            output_path=this_output_path(),
-            source_label=manifest.source_label,
-            serializer_name=manifest.staging.serializer_name or "",
-            split=manifest.staging.split or "validation",
-            subset=manifest.staging.subset,
-            max_bytes_per_source=manifest.sample_caps.max_bytes_per_source or DEFAULT_MAX_BYTES_PER_SOURCE,
-            source_manifest=manifest,
-            content_fingerprint=manifest.fingerprint(),
+        deps=[raw_step],
+        fn=lambda output_path: stage_table_record_source(
+            TableRecordStagingConfig(
+                input_path=raw_step.output_path,
+                output_path=output_path,
+                source_label=manifest.source_label,
+                serializer_name=manifest.staging.serializer_name or "",
+                split=manifest.staging.split or "validation",
+                subset=manifest.staging.subset,
+                max_bytes_per_source=manifest.sample_caps.max_bytes_per_source or DEFAULT_MAX_BYTES_PER_SOURCE,
+                source_manifest=manifest,
+                content_fingerprint=manifest.fingerprint(),
+            )
         ),
+        hash_attrs={
+            "dataset_key": dataset_key,
+            "manifest_fingerprint": manifest.fingerprint(),
+            "serializer_name": manifest.staging.serializer_name,
+            "split": manifest.staging.split,
+            "subset": manifest.staging.subset,
+            "max_bytes_per_source": manifest.sample_caps.max_bytes_per_source or DEFAULT_MAX_BYTES_PER_SOURCE,
+        },
     )
 
 
-def _staged_wdc_step(dataset_key: str, manifest: IngestionSourceManifest) -> ExecutorStep:
+def _staged_wdc_step(dataset_key: str, manifest: IngestionSourceManifest) -> StepSpec:
     metadata = manifest.staging.metadata
     sample_name = metadata["sample_name"]
     assert isinstance(sample_name, str)
-    return ExecutorStep(
+    return StepSpec(
         name=f"evaluation/structured-text/{dataset_key}",
-        fn=stage_web_data_commons_source,
-        config=WebDataCommonsStagingConfig(
-            sample_url=versioned(manifest.source_urls[0]),
-            output_path=this_output_path(),
-            source_label=manifest.source_label,
-            sample_name=sample_name,
-            max_bytes_per_source=manifest.sample_caps.max_bytes_per_source or DEFAULT_MAX_BYTES_PER_SOURCE,
-            max_bytes_per_document=manifest.sample_caps.max_bytes_per_document or 32 * 1024,
-            preserve_header=manifest.staging.preserve_header if manifest.staging.preserve_header is not None else True,
-            extra_metadata={"release": "webtables-2012-english"},
-            source_manifest=manifest,
-            content_fingerprint=manifest.fingerprint(),
+        fn=lambda output_path: stage_web_data_commons_source(
+            WebDataCommonsStagingConfig(
+                sample_url=manifest.source_urls[0],
+                output_path=output_path,
+                source_label=manifest.source_label,
+                sample_name=sample_name,
+                max_bytes_per_source=manifest.sample_caps.max_bytes_per_source or DEFAULT_MAX_BYTES_PER_SOURCE,
+                max_bytes_per_document=manifest.sample_caps.max_bytes_per_document or 32 * 1024,
+                preserve_header=(
+                    manifest.staging.preserve_header if manifest.staging.preserve_header is not None else True
+                ),
+                extra_metadata={"release": "webtables-2012-english"},
+                source_manifest=manifest,
+                content_fingerprint=manifest.fingerprint(),
+            )
         ),
+        hash_attrs={
+            "dataset_key": dataset_key,
+            "manifest_fingerprint": manifest.fingerprint(),
+            "sample_url": manifest.source_urls[0],
+            "sample_name": sample_name,
+            "max_bytes_per_source": manifest.sample_caps.max_bytes_per_source or DEFAULT_MAX_BYTES_PER_SOURCE,
+            "max_bytes_per_document": manifest.sample_caps.max_bytes_per_document or 32 * 1024,
+            "preserve_header": (
+                manifest.staging.preserve_header if manifest.staging.preserve_header is not None else True
+            ),
+        },
     )
 
 
-STRUCTURED_EVAL_STAGED: dict[str, ExecutorStep] = {
+STRUCTURED_EVAL_STAGED: dict[str, StepSpec] = {
     key: _staged_hf_step(key, spec) for key, spec in STRUCTURED_EVAL_SOURCES.items()
 }
 STRUCTURED_EVAL_STAGED["web_data_commons_sample10"] = _staged_wdc_step(
@@ -324,7 +334,7 @@ def structured_evals_raw_validation_sets() -> dict[str, RawTextEvaluationDataset
     """Return staged raw-text eval datasets for perplexity-gap reports."""
     return {
         os.path.join("structured_text", key): raw_text_dataset(
-            staged.cd("staged.jsonl.gz"),
+            staged.as_executor_step().cd("staged.jsonl.gz"),
             tags=_dataset_tags(key),
         )
         for key, staged in STRUCTURED_EVAL_STAGED.items()
@@ -343,7 +353,7 @@ def structured_evals_tokenized(
         name = os.path.join("structured_text", key)
         steps[name] = default_tokenize(
             name=name,
-            dataset=staged.cd("staged.jsonl.gz"),
+            dataset=staged.as_executor_step().cd("staged.jsonl.gz"),
             tokenizer=tokenizer,
             is_validation=True,
             tags=list(_dataset_tags(key)),
@@ -354,10 +364,10 @@ def structured_evals_tokenized(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            totto_raw,
-            wikitablequestions_raw,
-            gittables_raw,
-            *STRUCTURED_EVAL_STAGED.values(),
+            totto_raw.as_executor_step(),
+            wikitablequestions_raw.as_executor_step(),
+            gittables_raw.as_executor_step(),
+            *[step.as_executor_step() for step in STRUCTURED_EVAL_STAGED.values()],
             *structured_evals_tokenized().values(),
         ]
     )
