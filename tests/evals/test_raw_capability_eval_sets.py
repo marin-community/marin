@@ -1,24 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-
 from experiments.evals.raw_capability_eval_sets import (
     CapabilityEvalDatasetConfig,
     CapabilityEvalRenderer,
-    DEFAULT_CAPABILITY_TAGS,
     _project_chat_row_to_raw_text,
     _render_capability_chat_row,
-    capability_source_inventory,
-    capability_chat_validation_components,
-    capability_oai_eval_sets,
-    capability_raw_validation_sets,
-    render_capability_eval_dataset,
-    opt_in_capability_chat_validation_components,
-    opt_in_capability_oai_eval_sets,
-    opt_in_capability_raw_validation_sets,
 )
-from levanter.data.text import ChatLmDatasetFormat
 
 
 def test_render_wildchat_row_writes_oai_chat_and_marin_projection():
@@ -202,71 +190,3 @@ def test_render_global_mgsm_row_preserves_answer_prefix_in_chat_projection():
         {"role": "assistant", "content": "Answer Prefix:\nAnswer\n\nAnswer:\n42"},
     ]
     assert "Answer Prefix:\nAnswer\n\nAnswer:\n42" in raw_text["text"]
-
-
-def test_capability_eval_sets_expose_curated_families():
-    raw_datasets = capability_raw_validation_sets()
-    oai_datasets = capability_oai_eval_sets()
-    chat_components = capability_chat_validation_components()
-
-    assert set(raw_datasets) == {
-        "agent_traces/openhands_swe_rebench",
-        "chat/wildchat",
-        "reasoning_qa/global_mgsm_en",
-        "reasoning_qa/gsm8k_main",
-    }
-    assert set(oai_datasets) == set(raw_datasets)
-    assert set(chat_components) == set(raw_datasets)
-    assert raw_datasets["chat/wildchat"].tags == ("chat", "dialogue", "multi_turn")
-    assert raw_datasets["agent_traces/openhands_swe_rebench"].tags == ("agent_traces", "code", "tool_use")
-    assert isinstance(chat_components["chat/wildchat"].format, ChatLmDatasetFormat)
-    assert chat_components["chat/wildchat"].tags == list(DEFAULT_CAPABILITY_TAGS["chat/wildchat"])
-
-
-def test_opt_in_capability_eval_sets_cover_gated_chat_sources():
-    raw_datasets = opt_in_capability_raw_validation_sets()
-    oai_datasets = opt_in_capability_oai_eval_sets()
-    chat_components = opt_in_capability_chat_validation_components()
-
-    assert set(raw_datasets) == {"chat/lima_train", "chat/lmsys_chat_1m"}
-    assert set(oai_datasets) == set(raw_datasets)
-    assert set(chat_components) == set(raw_datasets)
-    assert raw_datasets["chat/lima_train"].tags == ("chat", "dialogue", "alignment")
-
-
-def test_render_capability_eval_dataset_writes_ingestion_metadata(tmp_path, monkeypatch):
-    manifest = next(source for source in capability_source_inventory() if source.source_label == "wildchat:train")
-    config = CapabilityEvalDatasetConfig(
-        dataset_id="allenai/WildChat",
-        revision="rev",
-        split="train",
-        renderer=CapabilityEvalRenderer.WILDCHAT,
-        source_manifest=manifest,
-        output_path=str(tmp_path),
-    )
-    row = {
-        "conversation_id": "conv-1",
-        "conversation": [
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "content": "hi there"},
-        ],
-        "language": "English",
-        "model": "gpt-4",
-        "redacted": False,
-        "timestamp": "2024-01-01T00:00:00+00:00",
-        "toxic": False,
-        "turn": 1,
-    }
-
-    monkeypatch.setattr(
-        "experiments.evals.raw_capability_eval_sets.load_dataset_with_backoff",
-        lambda **_: [row],
-    )
-
-    render_capability_eval_dataset(config)
-
-    payload = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
-    assert payload["source_manifest"]["dataset_key"] == "allenai/WildChat"
-    assert payload["source_manifest"]["policy"]["eval_only"] is True
-    assert payload["materialized_output"]["record_count"] == 1
-    assert payload["materialized_output"]["metadata"]["renderer"] == "wildchat"

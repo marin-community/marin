@@ -312,15 +312,6 @@ def default_raw_validation_sets() -> dict[str, Any]:
     return validation_sets
 
 
-@lru_cache
-def extended_raw_validation_sets() -> dict[str, Any]:
-    from experiments.evals.raw_capability_eval_sets import opt_in_capability_raw_validation_sets
-
-    validation_sets = dict(default_raw_validation_sets())
-    validation_sets.update(opt_in_capability_raw_validation_sets())
-    return validation_sets
-
-
 def simulated_epoching_train(
     name: str,
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
