@@ -22,13 +22,13 @@ from experiments.grug.moe.launch import (
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 GATE1_CONFIGS: list[tuple[int, float]] = [
-    (512, 2.19e17),
-    (768, 1.70e18),
+    # (512, 2.19e17),  # finished
+    # (768, 1.70e18),  # finished
 ]
 
 GATE2_CONFIGS: list[tuple[int, float]] = [
     (1024, 9.00e18),
-    (1280, 2.83e19),
+    # (1280, 2.83e19),  # running
 ]
 
 
