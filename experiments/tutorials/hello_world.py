@@ -14,8 +14,7 @@ from dataclasses import dataclass
 
 from rigging.filesystem import open_url
 
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
-from marin.execution.executor import executor_main
+from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, executor_main
 
 logger = logging.getLogger(__name__)
 

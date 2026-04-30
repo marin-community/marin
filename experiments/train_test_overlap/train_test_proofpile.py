@@ -14,8 +14,7 @@ Usage:
 
 import logging
 
-from marin.execution.executor import ExecutorStep, this_output_path
-from marin.execution.executor import executor_main
+from marin.execution.executor import ExecutorStep, this_output_path, executor_main
 from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 
 from experiments.pretraining_datasets.simple import tokenized
