@@ -12,6 +12,7 @@ Pipeline outputs land under ``$MARIN_PREFIX/datakit-nemotron-smoke/$SMOKE_RUN_ID
 ``MARIN_PREFIX`` defaults to a region-local temp bucket with 1-day TTL.
 """
 
+import argparse
 import json
 import logging
 import os
@@ -75,7 +76,7 @@ def _verify_nemotron_medium_present(output_path: str) -> None:
     logger.info("Nemotron-CC medium split confirmed at %s (e.g. %s)", medium_dir, sample[0])
 
 
-def build_steps(run_id: str) -> list[StepSpec]:
+def build_steps(run_id: str, *, file_stride: int = 1) -> list[StepSpec]:
     base = f"datakit-nemotron-smoke/{run_id}"
 
     # Verify-only raw step. Uses an absolute override so it points at the
@@ -97,6 +98,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="5g"),
         max_workers=512,
         override_output_path=f"{base}/normalize",
+        file_stride=file_stride,
     )
 
     minhash = StepSpec(
@@ -182,6 +184,21 @@ def _write_status(status: str, marin_prefix: str) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Datakit nemotron ferry.")
+    parser.add_argument(
+        "--stride",
+        type=int,
+        default=1,
+        help=(
+            "Take every Nth input file from nemotron-medium (default 1 = full medium). "
+            "Used by zephyr-perf Gate 2 to sub-slice without copying data; "
+            "calibrated start: 5 (~1/5 of medium, ~2-3h wall)."
+        ),
+    )
+    args = parser.parse_args()
+    if args.stride < 1:
+        parser.error(f"--stride must be >= 1, got {args.stride}")
+
     configure_logging()
     if not os.environ.get("MARIN_PREFIX"):
         os.environ["MARIN_PREFIX"] = marin_temp_bucket(ttl_days=1)
@@ -197,7 +214,7 @@ def main() -> None:
 
     _write_status("running", marin_prefix)
     with log_time("Datakit nemotron ferry total wall time"):
-        StepRunner().run(build_steps(run_id))
+        StepRunner().run(build_steps(run_id, file_stride=args.stride))
     _write_status("succeeded", marin_prefix)
 
 

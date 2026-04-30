@@ -42,6 +42,7 @@ class GateConfig:
     cpu: str
     extra: str
     priority: str
+    ferry_args: tuple[str, ...] = ()
 
     @property
     def iris_args(self) -> list[str]:
@@ -59,7 +60,9 @@ class GateConfig:
 
 # Mirrors the canonical workflow YAMLs:
 #   .github/workflows/marin-datakit-smoke.yaml          -> Gate 1
-#   .github/workflows/marin-datakit-nemotron-ferry.yaml -> Gate 2
+#   .github/workflows/marin-datakit-nemotron-ferry.yaml -> Gate 3
+# Gate 2 reuses the nemotron ferry with `--stride 5` to land at ~1/5 of full
+# medium (~2-3h wall). See SKILL.md ladder for sizing rationale.
 GATES: dict[str, GateConfig] = {
     "1": GateConfig(
         ferry_module="experiments.ferries.datakit_ferry",
@@ -71,6 +74,16 @@ GATES: dict[str, GateConfig] = {
         priority="production",
     ),
     "2": GateConfig(
+        ferry_module="experiments.ferries.datakit_nemotron_ferry",
+        region="europe-west4",
+        memory="3G",
+        disk="5G",
+        cpu="1",
+        extra="cpu",
+        priority="production",
+        ferry_args=("--stride", "5"),
+    ),
+    "3": GateConfig(
         ferry_module="experiments.ferries.datakit_nemotron_ferry",
         region="europe-west4",
         memory="3G",
@@ -143,6 +156,7 @@ def submit(
         "python",
         "-m",
         cfg.ferry_module,
+        *cfg.ferry_args,
     ]
 
     if dry_run:

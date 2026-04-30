@@ -325,6 +325,7 @@ def normalize_to_parquet(
     max_workers: int | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
+    file_stride: int = 1,
 ) -> NormalizedData:
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
@@ -364,14 +365,23 @@ def normalize_to_parquet(
             ``EXACT`` (the default) drops records with duplicate ``id`` values
             (i.e. byte-identical text).  ``NONE`` skips dedup and preserves
             all input records.
+        file_stride: Take every ``file_stride``-th input file after sort.
+            Default ``1`` (no subsetting). Used by zephyr-perf Gate 2 to
+            sub-slice nemotron-medium without copying data.
 
     Returns:
         A :class:`NormalizedData` describing the output directories and
         aggregated zephyr counters.
     """
+    if file_stride < 1:
+        raise ValueError(f"file_stride must be >= 1, got {file_stride}")
     resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="10g")
 
     files = _discover_files(input_path, file_extensions=file_extensions)
+    if file_stride > 1:
+        before = len(files)
+        files = sorted(files)[::file_stride]
+        logger.info("file_stride=%d: sliced %d -> %d input files", file_stride, before, len(files))
     if not files:
         raise FileNotFoundError(f"No data files found under {input_path}")
 
@@ -433,6 +443,7 @@ def normalize_step(
     relative_input_path: str | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
+    file_stride: int = 1,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
 
@@ -454,6 +465,8 @@ def normalize_step(
             ``zephyr.readers.load_file``.
         dedup_mode: How to deduplicate records within each output shard.
             Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
+        file_stride: Take every ``file_stride``-th input file. Default ``1``
+            (no subsetting). See :func:`normalize_to_parquet`.
     """
     if relative_input_path:
         # ``os.path.join`` collapses redundant separators when ``download.output_path``
@@ -477,6 +490,7 @@ def normalize_step(
             max_workers=max_workers,
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
+            file_stride=file_stride,
         ),
         deps=[download],
         hash_attrs={
@@ -487,6 +501,7 @@ def normalize_step(
             "relative_input_path": relative_input_path,
             "file_extensions": file_extensions,
             "dedup_mode": dedup_mode,
+            "file_stride": file_stride,
         },
         override_output_path=override_output_path,
     )

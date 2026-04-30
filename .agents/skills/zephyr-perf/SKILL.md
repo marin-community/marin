@@ -5,9 +5,11 @@ description: Run an A/B perf gate on a PR that touches Zephyr internals — subm
 
 # Skill: Zephyr Perf Gate
 
-A/B perf gate for Zephyr-internals PRs. The agent picks a gate based on touched
-paths, submits the same ferry on the PR's merge-base (control) and PR head
-(treatment), compares metrics, and posts a single canonical comment to the PR.
+A/B perf gate for Zephyr-internals PRs. The agent reads the diff, picks a
+max-gate from the assessment, submits the treatment ferry, compares against
+the latest scheduled run, and posts a single canonical comment to the PR.
+Scheduled ferry runs (daily fineweb smoke, weekly nemotron) are the golden
+baseline — the agent does not re-run a fresh control.
 
 This skill **only** triggers on changes to Zephyr internals
 (`lib/zephyr/src/zephyr/**`). Datakit / dedup / normalize / tokenize live in
@@ -19,9 +21,9 @@ let the datakit smoke / nemotron ferry workflows cover the rest.
 
 The agent may, without asking:
 
-- Read the PR diff and decide gate / scope via `select_gate.py`.
-- Create temporary git worktrees at the PR's merge-base and head SHAs.
-- Submit Iris ferry jobs at production priority for both runs.
+- Read the PR diff and decide scope + max-gate (see *Assess the diff*).
+- Create a temporary git worktree at the PR head SHA.
+- Submit Iris ferry jobs at production priority.
 - Poll job state and pull coordinator logs.
 - Post **one** canonical comment on the PR (sentinel-marked, idempotent).
 
@@ -31,8 +33,8 @@ with rationale).
 
 The agent must ask before:
 
-- Promoting a PR from Gate 1 to Gate 2 against `select_gate.py`'s recommendation
-  (Gate 2 is overnight and expensive).
+- Escalating to Gate 3 (overnight nemotron). Reviewer label
+  `zephyr-perf-gate:3` is the explicit consent.
 - Re-running on a different cluster than `lib/iris/examples/marin.yaml`.
 - Stopping a ferry that has not crossed its gate timeout.
 
@@ -40,11 +42,9 @@ The agent must ask before:
 
 Run this skill when:
 
-1. A PR's diff has at least one file matching the Zephyr-internals globs in
-   `select_gate.py` (canonical list: `lib/zephyr/src/zephyr/**/*.py`,
-   `lib/zephyr/pyproject.toml`), AND
-2. None of those touched files are test-only (`lib/zephyr/tests/**`,
-   `lib/zephyr/src/zephyr/_test_helpers.py`).
+1. A PR's diff has at least one non-test, non-docs file under
+   `lib/zephyr/src/zephyr/**` (or `lib/zephyr/pyproject.toml`), AND
+2. The reviewer asked for a perf gate (label, comment, or @-mention).
 
 Out of scope (do **not** trigger):
 
@@ -54,65 +54,42 @@ Out of scope (do **not** trigger):
 - `lib/fray/**` (execution backend — flag it in the PR comment but don't
   auto-gate; ask the reviewer)
 - Any docs-only diff (`*.md`, `lib/zephyr/AGENTS.md`, `lib/zephyr/OPS.md`)
+- Test-only changes (`lib/zephyr/tests/**`)
 
-When unsure, run `select_gate.py` and trust its `in_scope` field.
+The agent makes this scope call by reading the diff. There is no path-glob
+script — when in doubt, ask the reviewer.
 
 ## Gate ladder
 
 | Gate | Ferry | Scheduled baseline | Wall-time | Notes |
 |---|---|---|---|---|
 | **skip** | — | — | — | All-trivial diff (e.g. comments, docstrings, type hints, renames). Reviewer must concur. |
-| **1 — fineweb smoke** | `experiments.ferries.datakit_ferry` (FineWeb-Edu sample/10BT) | daily `marin-datakit-smoke` workflow | ~30–60 min | Cheap; runs scatter, dedup, consolidate, tokenize end-to-end at small scale. |
-| **2 — full nemotron** | `experiments.ferries.datakit_nemotron_ferry` (Nemotron-CC medium, ~3.4 TiB) | weekly `marin-datakit-nemotron-ferry` workflow | overnight (≤24 h) | Reserved for diffs that materially affect shuffle, memory, CPU, or zephyr design. Expensive; reviewer approval required. |
+| **1 — fineweb smoke** | `experiments.ferries.datakit_ferry` (FineWeb-Edu sample/10BT) | daily `marin-datakit-smoke` workflow | ~30–60 min | Cheap end-to-end pass at small scale. |
+| **2 — nemotron 1-slice** | `experiments.ferries.datakit_nemotron_ferry --stride 5` (every 5th file of nemotron-medium) | TBD — needs a scheduled workflow at the same stride | ~2–3 h | Mid-tier signal between fineweb and full medium. Surfaces scale-only effects (memory pressure, OOMs, fanout shape) without paying for an overnight run. |
+| **3 — full nemotron** | `experiments.ferries.datakit_nemotron_ferry` (full nemotron-medium, ~3.4 TiB) | weekly `marin-datakit-nemotron-ferry` workflow | overnight (≤24 h) | Reserved for diffs the reviewer wants tested at full scale. Expensive; reviewer approval (`zephyr-perf-gate:3`) required. |
 
-**Gate 1 is always run first**, even when the assessment recommends Gate 2. If
-Gate 1 passes *and* the assessment flagged a Gate-2 dimension, escalate to
-Gate 2. If Gate 1 fails, post the verdict and stop — no point burning Gate-2
-budget on a regression already proven at small scale. The assessment in step 2
-therefore yields a `max_gate`, not a single chosen gate.
+**Gate 1 is always run first**, regardless of `max_gate`. If Gate 1 passes
+and `max_gate` is `2` or `3`, escalate. If Gate 1 fails, post the verdict
+and stop — no point burning bigger budget on a regression already proven at
+small scale. The assessment in step 2 yields a `max_gate`, not a single
+chosen gate.
 
 The gate is **not** chosen mechanically from file paths. The agent reads the
-diff and judges (see *Assess the diff* below). A one-character fix in
-`shuffle.py` should not trigger an overnight run; a five-line tweak elsewhere
-that flips a buffer size should.
+diff and judges (see *Assess the diff* below).
 
-Reviewer always overrides via PR labels `zephyr-perf-gate:skip` /
-`zephyr-perf-gate:1` / `zephyr-perf-gate:2`. The label sets `max_gate`;
-Gate 1 still runs first.
+Reviewer always overrides via PR labels `zephyr-perf-gate:{skip,1,2,3}`.
+The label sets `max_gate`; Gate 1 still runs first.
 
-A medium tier ("Nemotron 1-slice", ~few hours) is intentionally **not** in this
-ladder yet — there is no script for it. Track as future work.
+Sizing note for Gate 2 (`--stride 5`): from one fineweb run (~46 min total)
+and a partial full-medium run (~10–14 h extrapolated), 1/5 of medium lands
+near 2.5 h. Recalibrate the stride after the first real Gate 2 run if it
+falls outside [2 h, 3.5 h].
 
 ## Workflow
 
-### 1. Mechanical scope check
+### 1. Assess the diff
 
-```bash
-uv run python scripts/zephyr/perf/select_gate.py --pr <PR_NUMBER>
-```
-
-Output is JSON:
-
-```json
-{
-  "in_scope": true,
-  "touched_zephyr_files": ["lib/zephyr/src/zephyr/shuffle.py"],
-  "touched_fray_files": [],
-  "hot_files_touched": ["lib/zephyr/src/zephyr/shuffle.py"],
-  "next_step": "Read the diff for the hot files first, ..."
-}
-```
-
-If `in_scope` is `false`, stop here and post nothing. The script does **not**
-choose the gate — go to the next step.
-
-`hot_files_touched` is a *hint* (scatter / planner / executor / sort / spill)
-about which files have higher prior likelihood of perf impact. Read those
-first; do not treat their presence as an automatic Gate-2 trigger.
-
-### 2. Assess the diff
-
-Read the actual diff, not just the file list:
+Read the actual diff:
 
 ```bash
 gh pr diff <PR_NUMBER>          # PRs
@@ -130,11 +107,18 @@ answers to a small JSON file (used later in the PR comment):
 | 4 | Affects CPU utilization? | hot loops, serialization paths, sort/merge inner loops, polling intervals, lock contention, JSON/parquet read/write. |
 | 5 | Changes zephyr design in an important way? | new public API, changed actor protocol, changed stage semantics, changed `.result()` ordering, changed retry/error classification, changed plan/fusion rules. |
 
+The agent should also use `lib/zephyr/AGENTS.md` and the diff context to
+identify which files most likely matter (scatter / planner / executor / sort
+/ spill historically have the highest prior probability of perf impact) —
+but this is judgment, not a path-glob rule.
+
 **Decision (`max_gate`, not a single chosen gate — Gate 1 always runs first):**
 
 - All-trivial (q1 yes for every file, q2–q5 no everywhere) → propose
   `zephyr-perf-gate:skip` and ask the reviewer to confirm before posting.
-- Any of q2 / q3 / q4 / q5 = yes anywhere → `max_gate = "2"`.
+- Any of q2 / q3 / q4 / q5 = yes anywhere → `max_gate = "2"` (1-slice
+  nemotron). The reviewer can promote to `max_gate = "3"` (full overnight
+  nemotron) by applying the `zephyr-perf-gate:3` label.
 - Otherwise → `max_gate = "1"`.
 
 Record the answers and the agent's one-line rationale per file:
@@ -155,74 +139,63 @@ Record the answers and the agent's one-line rationale per file:
 This file is consumed by `compare_perf_runs.py` (via `--assessment`) so the
 posted comment shows the agent's reasoning, not just the timings.
 
-If a `zephyr-perf-gate:skip|1|2` label is set on the PR, that label wins —
-record the override in `rationale`. The label sets `max_gate`; Gate 1 still
-runs first when `max_gate = "2"`.
+If a `zephyr-perf-gate:{skip,1,2,3}` label is set on the PR, that label wins
+— record the override in `rationale`. The label sets `max_gate`; Gate 1
+still runs first when `max_gate >= 2`.
 
-### 3. Resolve treatment SHA and the scheduled baseline
+### 2. Locate the scheduled baselines
 
-```bash
-gh pr view <PR_NUMBER> --json headRefOid,baseRefOid,baseRefName -q '...'
-git fetch origin <baseRefName>
-TREATMENT_SHA=<headRefOid>
-MERGE_BASE=$(git merge-base origin/<baseRefName> "$TREATMENT_SHA")
-```
-
-We do not set up a control worktree yet. Each gate is run **treatment first**,
-compared against the latest successful scheduled run, and a fresh control is
-re-run from `$MERGE_BASE` only when the agent decides it's worth it (see step
-6). Saves wall-time and Iris budget when the regression is already obvious
-against the scheduled baseline.
-
-Fetch the scheduled baselines now (one per gate the agent may run):
+Each gate compares its treatment run against the **latest successful
+scheduled ferry** on `main`. Scheduled ferries are the golden baseline; the
+agent does not re-run a fresh control.
 
 ```bash
-# Gate 1 baseline: latest successful daily datakit-smoke run on origin/main.
+# Gate 1 baseline: latest successful daily fineweb smoke.
 BASELINE_GATE1_RUN=$(gh run list \
   --repo marin-community/marin \
   --workflow=marin-datakit-smoke.yaml \
   --branch=main --status=success --limit=1 \
   --json databaseId,headSha,createdAt -q '.[0]')
 
-# Gate 2 baseline: latest successful weekly nemotron ferry on origin/main.
-BASELINE_GATE2_RUN=$(gh run list \
+# Gate 3 baseline: latest successful weekly full-nemotron ferry.
+BASELINE_GATE3_RUN=$(gh run list \
   --repo marin-community/marin \
   --workflow=marin-datakit-nemotron-ferry.yaml \
   --branch=main --status=success --limit=1 \
   --json databaseId,headSha,createdAt -q '.[0]')
+
+# Gate 2 baseline: TBD — needs a scheduled `--stride 5` workflow. Until
+# that exists, fall back to either:
+#   (a) the most recent successful Gate 2 run from a prior PR (search by
+#       run-id pattern `zephyr-perf-pr*-g2-*`), or
+#   (b) a one-off `--stride 5` run kicked off on `main` ahead of the gate.
+# Track in the open questions section.
 ```
 
 The Iris job id and W&B run for each scheduled run are in its workflow logs
-(`gh run view --log <run_id>`). Pass those to `collect_perf_metrics.py` in
-step 6 to get the baseline metrics. If the run is too old and Iris/wandb
-retention has dropped its logs, fall back to running a fresh control at
-`$MERGE_BASE`.
+(`gh run view --log <run_id>`). Pass them to `collect_perf_metrics.py` in
+step 5.
 
-### 4. Set up the treatment worktree
+### 3. Set up the treatment worktree
 
 Iris bundles the working directory; submit the treatment from a worktree at
-the PR head. Control worktrees are created on demand inside the gate
-protocol.
+the PR head.
 
 ```bash
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 WT_DIR="../.zephyr_perf_worktrees"
 mkdir -p "$WT_DIR"
 TREATMENT_WT="$WT_DIR/${PR_NUMBER}-${TS}-treatment"
+
+gh pr view <PR_NUMBER> --json headRefOid -q .headRefOid > /tmp/pr-head
+TREATMENT_SHA=$(cat /tmp/pr-head)
 git worktree add "$TREATMENT_WT" "$TREATMENT_SHA"
-```
-
-If a fresh control turns out to be needed:
-
-```bash
-CONTROL_WT="$WT_DIR/${PR_NUMBER}-${TS}-control"
-git worktree add "$CONTROL_WT" "$MERGE_BASE"
 ```
 
 Stale runs from a prior gate execution can be wiped with
 `git worktree remove ../.zephyr_perf_worktrees/${PR_NUMBER}-*`.
 
-### 5. Run zephyr tests on the treatment worktree
+### 4. Run zephyr tests on the treatment worktree
 
 Before paying for ferries, confirm the treatment compiles, type-checks, and
 passes the zephyr unit/integration suite. A broken test is much cheaper to
@@ -235,10 +208,9 @@ catch here than after a 30-minute Gate 1 (or an overnight Gate 2).
   uv run pytest lib/zephyr/tests/ )
 ```
 
-Treatment-only by default — control is the merge-base on `main` and is
-assumed green from CI. If the treatment suite passes but ferry verdicts look
-suspicious, sanity-check control by running the same command in
-`$CONTROL_WT`.
+Treatment-only — there is no control worktree. CI is assumed green on
+`main`; if it isn't, the broken commit is upstream of the gate's concerns
+and the agent should call that out separately.
 
 If any of these fail, **stop here**. Do not submit ferries. Post a halt
 comment using the same sentinel as the verdict (so re-runs upsert in place):
@@ -265,10 +237,10 @@ else
 fi
 ```
 
-### 6. Run Gate 1 (always — even when `max_gate = "2"`)
+### 5. Run Gate 1 (always — even when `max_gate >= 2`)
 
-Treatment-first protocol. Cheap signal early; only re-run a fresh control
-when the scheduled baseline isn't enough to call it.
+Run treatment, compare against the latest scheduled fineweb smoke. The
+scheduled run **is** the control; we never re-run a fresh control.
 
 **a. Submit treatment.**
 
@@ -281,11 +253,11 @@ uv run python scripts/zephyr/perf/submit_perf_run.py \
 
 **b. Babysit until terminal.** Delegate to **babysit-zephyr** (or
 **babysit-job** for the outer Iris job). Don't poll in a tight loop — sleep
-≥ 10 min between checks for Gate 1. If the leg flakes (worker pool wedged,
-coord zombie), escalate to **debug-infra**; do not silently retry — a flaky
-run masks a real regression.
+≥ 10 min between checks. If the leg flakes (worker pool wedged, coord
+zombie), escalate to **debug-infra**; do not silently retry — a flaky run
+masks a real regression.
 
-**c. Collect treatment metrics + scheduled-baseline metrics.**
+**c. Collect treatment + baseline metrics.**
 
 ```bash
 uv run python scripts/zephyr/perf/collect_perf_metrics.py \
@@ -293,15 +265,13 @@ uv run python scripts/zephyr/perf/collect_perf_metrics.py \
   --job-id <treatment_iris_job_id> \
   --out /tmp/zephyr-perf/<PR>/treatment-g1.json
 
-# Read iris job id from the scheduled run's GHA log, then collect.
 SCHED_JOB_ID=$(gh run view --log <BASELINE_GATE1_RUN_ID> | grep -oE 'iris-run-[a-z0-9-]+' | head -1)
 uv run python scripts/zephyr/perf/collect_perf_metrics.py \
   --job-id "$SCHED_JOB_ID" \
   --out /tmp/zephyr-perf/<PR>/baseline-g1.json
 ```
 
-**d. Compare treatment vs scheduled baseline. Decide whether to re-run
-control.**
+**d. Compare and produce verdict.**
 
 ```bash
 uv run python scripts/zephyr/perf/compare_perf_runs.py \
@@ -313,70 +283,40 @@ uv run python scripts/zephyr/perf/compare_perf_runs.py \
   --verdict-out /tmp/zephyr-perf/<PR>/verdict.json
 ```
 
-Apply the **scheduled-baseline thresholds** (looser than in-pair, because
-the baseline ran days ago on a different SHA):
-
-| Signal | Hard-fail vs scheduled baseline |
-|---|---|
-| New OOMs in treatment | any |
-| New failed shards in treatment | any |
-| Total wall-time delta | > +20% |
-| Per-stage wall-time delta | > +20% |
-
-Branch on the verdict:
-
-- **❌ fail** ("much worse" than the scheduled baseline): the regression is
-  obvious; **do not** re-run control. Note the baseline source in the comment
-  (`baseline = scheduled run #<id>, sha=<sha>, age=<days>`) and skip to step 8.
-- **✅ pass / ⚠ warn** (treatment is comparable or better): the agent decides
-  whether to re-run a fresh control for a clean A/B. Run fresh control when
-  the baseline is suspect:
-  - scheduled baseline is older than ~7 days, or
-  - merge-base SHA is far from the baseline's SHA (touched files overlap), or
-  - the scheduled baseline failed to collect (Iris log retention dropped),
-    or
-  - close-call deltas (within ±5% on stages flagged by the assessment).
-  Skip control re-run when the baseline is recent (< 24 h) and the deltas
-  are clearly within tolerance — the verdict already stands.
-
-**e. (Optional) Re-run control at `$MERGE_BASE` for a clean A/B.**
-
-```bash
-git worktree add "$CONTROL_WT" "$MERGE_BASE"
-uv run python scripts/zephyr/perf/submit_perf_run.py \
-  --gate 1 --label control --cwd "$CONTROL_WT" \
-  --pr <PR_NUMBER> \
-  --status-out gs://marin-us-central1/tmp/ttl=7d/zephyr-perf/<PR>/control-g1.json
-# babysit + collect + re-run compare with --control control-g1.json (in-pair
-# thresholds — see table below).
-```
-
-In-pair thresholds (used when control is the merge-base re-run, not the
-scheduled baseline):
+Thresholds (vs scheduled baseline — looser than an in-pair re-run, because
+the baseline ran days ago on a different SHA on the same cluster):
 
 | Signal | Warn | Hard fail |
 |---|---|---|
-| Per-stage wall-time delta vs control | > +5% | > +10% |
-| New OOMs | any | — |
-| New failed shards | — | any |
-| Total wall-time delta | > +5% | > +10% |
+| Total wall-time delta | > +10% | > +20% |
+| Per-stage wall-time delta | > +10% | > +20% |
+| New OOMs in treatment | any | — |
+| New failed shards in treatment | — | any |
 
-The assessment JSON from step 2 is included in the rendered comment so the
-reviewer sees both the verdict (timings + OOMs) and the agent's reasoning.
+The rendered comment notes the baseline source
+(`baseline = scheduled run #<id>, sha=<sha>, age=<days>`) so the reviewer
+can sanity-check the comparison.
 
-### 7. Run Gate 2 (only if Gate 1 passed *and* `max_gate = "2"`)
+If Gate 1 returns `❌ fail`, **stop** — post the verdict and don't
+escalate. The regression is proven; no point in burning Gate 2 or 3
+budget.
 
-Same protocol as step 6, but with the weekly nemotron baseline:
+### 6. Escalate to Gate 2 / Gate 3 (only if Gate 1 passed *and* `max_gate >= 2`)
 
-- `submit_perf_run.py --gate 2` (overnight; sleep ≥ 30 min between checks)
-- baseline = `$BASELINE_GATE2_RUN` (latest weekly nemotron ferry)
-- thresholds and decision rules identical to step 6
+Same protocol as step 5, with two changes:
+- Submit with `--gate 2` (or `--gate 3` if the reviewer applied
+  `zephyr-perf-gate:3`).
+- Baseline = `$BASELINE_GATE2_RUN` for Gate 2, `$BASELINE_GATE3_RUN` for
+  Gate 3.
 
-If Gate 1 returned `❌ fail` or `⚠ warn`, **stop**. Don't burn an overnight
-nemotron run on a regression Gate 1 already proved (or a borderline case
-that needs a clean Gate-1 A/B first).
+Gate 2 sleeps ≥ 30 min between babysit checks; Gate 3 ≥ 60 min. The same
+threshold table as step 5 applies.
 
-### 8. Post one canonical comment
+If Gate 2 fails, do not escalate to Gate 3 even when the label is set —
+Gate 2 already proved the regression. The reviewer can manually request
+Gate 3 if they want full-scale data on a non-regressing change.
+
+### 7. Post one canonical comment
 
 The comment is sentinel-marked so re-runs replace the prior comment instead of
 stacking. Two `gh api` calls — find the existing comment, then patch or post:
@@ -398,10 +338,9 @@ fi
 The comment is the only output — no separate issue is filed on `❌ fail`. The
 author decides next steps (revert, fix, or accept with rationale).
 
-### 9. Clean up
+### 8. Clean up
 
 ```bash
-git worktree remove "$CONTROL_WT"
 git worktree remove "$TREATMENT_WT"
 ```
 
@@ -459,17 +398,17 @@ The comment **must** begin with `🤖` per repo convention (see
 
 ## Failure modes
 
-- **Control flakes, treatment passes**: re-submit control; do not call the gate
-  pass on a single run.
-- **Both flake at the same stage**: not a regression — a real environmental
-  problem. Post a comment on the PR explaining the flake and ping the reviewer;
-  do not post a pass/fail verdict and do not file an issue.
-- **Treatment OOMs at a stage that control survives**: hard fail. Always
+- **Treatment flakes**: re-submit treatment; do not call the gate based on
+  a single failed run. If it flakes again, escalate to **debug-infra**.
+- **Scheduled baseline is missing or unparseable** (Iris log retention,
+  expired status JSON, parsing error): post a comment explaining the gap and
+  ping the reviewer; do not invent numbers and do not run a fresh control
+  unless explicitly asked.
+- **Treatment OOMs at a stage the baseline didn't**: hard fail. Always
   surface the worker-pool death log with the OOM line in the comment so the
   author can act without re-pulling logs.
-- **`select_gate.py` says out-of-scope but the reviewer disagrees**: reviewer
-  applies `zephyr-perf-gate:1` or `zephyr-perf-gate:2` label; the agent re-runs
-  with the forced gate.
+- **Agent says out of scope but the reviewer disagrees**: reviewer applies
+  `zephyr-perf-gate:{1,2,3}`; the agent re-runs with the forced gate.
 
 ## Composes with
 
@@ -479,7 +418,14 @@ The comment **must** begin with `🤖` per repo convention (see
 
 ## Open questions
 
-- Should weekly scheduled nemotron ferries auto-feed control results so PRs can
-  skip the control re-run? (Currently no — re-run for safety.)
-- Add a Gate 1.5 scale-stress lane (10k workers, minimal RAM) to surface
-  scatter OOMs and controller back-pressure faster than Gate 2? Not built yet.
+- Gate 2 needs its own scheduled CI workflow (`marin-datakit-nemotron-ferry`
+  with `--stride 5`, on a daily/2-day cadence) to provide a baseline. Until
+  it exists, Gate 2 falls back to ad-hoc baselines (see step 2).
+- Calibrate the Gate 2 stride after the first real run lands. Target wall
+  ~2.5h; adjust between `--stride 4` and `--stride 6` if the actual run
+  falls outside [2h, 3.5h].
+- Should the agent compute median-of-N scheduled runs instead of "latest
+  successful" to stabilize the baseline?
+- Add a high-fanout / low-RAM stress lane (10k workers, minimal RAM) to
+  surface scatter OOMs and controller back-pressure faster than Gate 2?
+  Not built yet.
