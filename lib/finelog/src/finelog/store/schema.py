@@ -30,7 +30,7 @@ import pyarrow as pa
 
 # InvalidNamespaceError / NamespaceNotFoundError are re-exported so
 # server/store-layer modules can import the full error set from one place.
-from finelog.client.errors import (
+from finelog.errors import (
     InvalidNamespaceError,  # noqa: F401  re-export
     NamespaceNotFoundError,  # noqa: F401  re-export
     SchemaConflictError,
