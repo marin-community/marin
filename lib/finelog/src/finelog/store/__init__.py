@@ -3,40 +3,19 @@
 
 """Log store package.
 
-Exports ``LogStore`` as the environment-appropriate implementation:
-- Tests / CI (``PYTEST_CURRENT_TEST`` or ``CI`` set): in-memory ``MemStore``
-- Production: DuckDB-backed ``DuckDBLogStore``
-
-All consumers should import from this package:
-``from finelog.store import LogStore, LogCursor, ...``
+Exports ``LogStore`` (an alias for :class:`DuckDBLogStore`) plus the
+``LogCursor`` and ``LogStoreHandler`` helpers that wrap it. Constructed
+without a ``log_dir`` it owns a tempdir that is cleaned up on ``close``,
+which is the form tests use.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 
 from finelog.rpc import logging_pb2
+from finelog.store.duckdb_store import DuckDBLogStore as LogStore
 from finelog.types import _EST_BYTES_PER_ROW, LogReadResult, str_to_log_level
-
-
-def _is_test_environment() -> bool:
-    return "PYTEST_CURRENT_TEST" in os.environ or "CI" in os.environ
-
-
-def _has_duckdb() -> bool:
-    try:
-        import duckdb
-
-        return True
-    except ImportError:
-        return False
-
-
-if _is_test_environment() or not _has_duckdb():
-    from finelog.store.mem_store import MemStore as LogStore
-else:
-    from finelog.store.duckdb_store import DuckDBLogStore as LogStore
 
 
 class LogCursor:

@@ -40,9 +40,17 @@ class RegistryDB:
     the registry's insertion mutex around any mutating call.
     """
 
-    def __init__(self, data_dir: Path) -> None:
-        self._path = data_dir / REGISTRY_DB_FILENAME
-        self._conn = duckdb.connect(str(self._path))
+    def __init__(self, data_dir: Path | None) -> None:
+        # ``data_dir is None`` selects an in-memory registry — paired with
+        # ``LogNamespace`` instances that hold their segments as Arrow
+        # tables instead of parquet files. Used for tests and for any
+        # caller that wants a finelog store with no on-disk footprint.
+        if data_dir is None:
+            self._path: Path | None = None
+            self._conn = duckdb.connect(":memory:")
+        else:
+            self._path = data_dir / REGISTRY_DB_FILENAME
+            self._conn = duckdb.connect(str(self._path))
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS namespaces (
