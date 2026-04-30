@@ -4,7 +4,6 @@
 """Molmo2-Cap dataset tokenization."""
 
 from fray import ResourceConfig
-
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize

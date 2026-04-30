@@ -16,7 +16,6 @@ import datetime
 import logging
 import os
 
-from experiments.models import llama_3_1_8b_instruct
 from fray.types import ResourceConfig
 from levanter.checkpoint import CheckpointDebugConfig
 from levanter.models.llama import LlamaConfig
@@ -31,6 +30,8 @@ from marin.rl.rl_experiment_utils import (
     make_rl_step,
 )
 from marin.rl.rl_losses import RLOOLoss
+
+from experiments.models import llama_3_1_8b_instruct
 
 logger = logging.getLogger(__name__)
 

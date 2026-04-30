@@ -12,6 +12,14 @@ import os
 
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
+from marin.rl.rl_experiment_utils import (
+    ModelConfig,
+    RLExperimentConfig,
+    config_class_path,
+    executor_main_config_for_rl_experiment,
+    make_rl_step,
+)
+from marin.rl.rl_losses import RLOOLoss
 
 from experiments.iris_rl_gpu_smoke import (
     CANONICAL_MODEL_NAME,
@@ -22,17 +30,9 @@ from experiments.iris_rl_gpu_smoke import (
     gpu_smoke_curriculum,
     gpu_smoke_resources,
     gpu_smoke_rollout_count,
-    resolve_gpu_smoke_model_path,
     gpu_smoke_train_batch_size,
+    resolve_gpu_smoke_model_path,
 )
-from marin.rl.rl_experiment_utils import (
-    ModelConfig,
-    RLExperimentConfig,
-    config_class_path,
-    executor_main_config_for_rl_experiment,
-    make_rl_step,
-)
-from marin.rl.rl_losses import RLOOLoss
 
 logger = logging.getLogger(__name__)
 
