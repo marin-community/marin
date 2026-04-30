@@ -477,15 +477,17 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
         total_prompt_tokens = 0
         total_completion_tokens = 0
         prompt_token_lists: List[List[int]] = []
+        echo_logprobs_top_k = int(request.logprobs) if request.echo and request.logprobs else None
 
         for prompt in prompts:
             # Tokenize prompt
             prompt_tokens = ctx.tokenizer.encode(prompt, add_special_tokens=False)
-            if request.echo and request.logprobs and len(prompt_tokens) > ctx.config.service.max_seq_len:
+            scored_token_budget = len(prompt_tokens) + request.max_tokens
+            if echo_logprobs_top_k is not None and scored_token_budget > ctx.config.service.max_seq_len:
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        "echo logprobs are not supported for prompts longer than "
+                        "echo logprobs are not supported when prompt tokens plus max_tokens exceeds "
                         f"max_seq_len={ctx.config.service.max_seq_len}"
                     ),
                 )
@@ -506,7 +508,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 seed=request.seed,
                 future=future,
                 n_generations=request.n or 1,
-                echo_logprobs_top_k=int(request.logprobs) if request.echo and request.logprobs else None,
+                echo_logprobs_top_k=echo_logprobs_top_k,
             )
 
         # Wait for all results

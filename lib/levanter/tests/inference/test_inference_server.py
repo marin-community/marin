@@ -302,8 +302,8 @@ def test_completion_echo_logprobs_are_lm_eval_aligned():
     assert logprobs["top_logprobs"][2][" X"] == pytest.approx(expected_completion_logprob)
 
 
-def test_completion_echo_logprobs_rejects_prompt_truncation():
-    ctx = _FakeCompletionContext(max_seq_len=1)
+def test_completion_echo_logprobs_rejects_scored_sequence_over_context():
+    ctx = _FakeCompletionContext(max_seq_len=2)
     app = InferenceServer._create_app(ctx)
 
     with TestClient(app) as client:
@@ -323,6 +323,18 @@ def test_completion_echo_logprobs_rejects_prompt_truncation():
     assert response.status_code == 400, response.text
     assert "echo logprobs" in response.json()["detail"]
     assert ctx.submitted_requests == 0
+
+
+def test_score_token_sequence_logprobs_empty_and_single_token_sequences():
+    model = _DeterministicCompletionScoringModel()
+
+    empty_result = score_token_sequence_logprobs(model, [], top_k=1)
+    assert empty_result.token_logprobs == []
+    assert empty_result.top_token_logprobs == []
+
+    single_token_result = score_token_sequence_logprobs(model, [2], top_k=3)
+    assert single_token_result.token_logprobs == [0.0]
+    assert single_token_result.top_token_logprobs == [{2: 0.0}]
 
 
 @pytest.mark.slow

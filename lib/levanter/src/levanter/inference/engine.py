@@ -750,7 +750,11 @@ FIRST_TOKEN_LOGPROB = 0.0
 
 @dataclass(frozen=True)
 class TokenSequenceLogprobs:
-    """Causal logprobs aligned with an input token sequence."""
+    """Causal logprobs aligned with an input token sequence.
+
+    The first token has no preceding context, so its logprob is the synthetic
+    ``FIRST_TOKEN_LOGPROB`` sentinel and its top-token map contains only itself.
+    """
 
     token_logprobs: list[float]
     top_token_logprobs: list[dict[int, float]]
