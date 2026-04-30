@@ -37,8 +37,6 @@ from iris.cluster.client import (
     get_job_info,
     resolve_job_user,
 )
-from iris.rpc.auth import AuthTokenInjector, TokenProvider
-from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
 from iris.cluster.constraints import Constraint, merge_constraints
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config

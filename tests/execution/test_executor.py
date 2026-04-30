@@ -20,6 +20,7 @@ from marin.evaluation.perplexity_gap import (
     raw_text_dataset,
 )
 from marin.execution.executor import (
+    THIS_OUTPUT_PATH,
     Executor,
     ExecutorStep,
     InputName,

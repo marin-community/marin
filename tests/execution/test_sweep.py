@@ -13,7 +13,6 @@ import os
 import threading
 
 import pytest
-
 from marin.execution.executor_step_status import (
     STATUS_FAILED,
     STATUS_SUCCESS,

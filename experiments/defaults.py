@@ -18,19 +18,6 @@ import levanter.main.train_lm as levanter_train_lm
 from fray import ResourceConfig
 from fray import client as fray_client
 from fray.types import Entrypoint, JobRequest, create_environment
-from marin.execution.executor import (
-    ExecutorStep,
-    InputName,
-    VersionedValue,
-    compute_output_path,
-    ensure_versioned,
-    materialize,
-    resolve_local_placeholders,
-    this_output_path,
-    unwrap_versioned_value,
-    versioned,
-)
-from marin.execution.remote import _sanitize_job_name, remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -54,7 +41,20 @@ from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
 from levanter.utils.mesh import MeshConfig
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
-from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
+from marin.execution.executor import (
+    ExecutorStep,
+    InputName,
+    VersionedValue,
+    compute_output_path,
+    ensure_versioned,
+    materialize,
+    resolve_local_placeholders,
+    this_output_path,
+    unwrap_versioned_value,
+    versioned,
+)
+from marin.execution.remote import _sanitize_job_name, remote
 from marin.processing.tokenize import (
     HfDatasetSpec,
     TokenizeConfig,
