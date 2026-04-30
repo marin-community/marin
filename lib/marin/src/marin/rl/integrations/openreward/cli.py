@@ -7,7 +7,6 @@
 import logging
 
 import click
-
 from marin.rl.integrations.openreward.manifest import (
     prepare_openreward_task_manifest,
     save_openreward_task_manifest,

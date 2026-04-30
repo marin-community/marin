@@ -17,8 +17,8 @@ from marin.rl.integrations.openreward.models import (
     OpenRewardTaskManifest,
     OpenRewardTaskManifestEntry,
     OpenRewardToolSpec,
-    SecretValue,
     SecretsMapping,
+    SecretValue,
 )
 
 __all__ = [

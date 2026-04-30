@@ -8,14 +8,10 @@ import sys
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
 
+import marin.rl.environments.inference_ctx.vllm as vllm_module
 import numpy as np
 import pytest
 from levanter.inference.openai import ChatMessage
-from openai.types.chat import ChatCompletionMessage
-from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
-from transformers import AutoTokenizer
-
-import marin.rl.environments.inference_ctx.vllm as vllm_module
 from marin.rl.environments.inference_ctx import (
     MODEL_MAPPINGS,
     MODEL_TRANSPOSE_KEYS,
@@ -28,8 +24,11 @@ from marin.rl.environments.inference_ctx import (
     vLLMInferenceContextConfig,
 )
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
-from marin.rl.environments.inference_ctx.vllm import InferenceMode
 from marin.rl.environments.inference_ctx.render import Qwen3Renderer
+from marin.rl.environments.inference_ctx.vllm import InferenceMode
+from openai.types.chat import ChatCompletionMessage
+from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
+from transformers import AutoTokenizer
 
 _LLAMA3_MODEL_ID = "NousResearch/Meta-Llama-3-8B-Instruct"
 

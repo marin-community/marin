@@ -5,11 +5,6 @@ import jax.numpy as jnp
 import jax.random
 import numpy as np
 import pytest
-from openai.types.chat import ChatCompletion, ChatCompletionMessage
-from openai.types.chat.chat_completion import Choice
-from openai.types.completion_usage import CompletionUsage
-
-from marin.rl.integrations.openreward.env import OpenRewardEnv
 from marin.rl.environments.inference_ctx.render import Qwen3Renderer
 from marin.rl.integrations.openreward import (
     OpenRewardPromptBlock,
@@ -19,7 +14,11 @@ from marin.rl.integrations.openreward import (
     OpenRewardToolSpec,
     save_openreward_task_manifest,
 )
+from marin.rl.integrations.openreward.env import OpenRewardEnv
 from marin.rl.types import Rollout, RolloutGroup
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat.chat_completion import Choice
+from openai.types.completion_usage import CompletionUsage
 
 
 class RendererTestTokenizer:

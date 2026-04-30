@@ -11,7 +11,7 @@ from enum import StrEnum
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import load_tokenizer
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.inference_ctx.base import AssistantTurnParseResult, BaseInferenceContext, ToolSpec
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
 from marin.rl.environments.inference_ctx.render import Llama3Renderer, Message, Qwen3Renderer, Renderer
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS

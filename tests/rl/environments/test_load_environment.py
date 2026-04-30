@@ -3,6 +3,9 @@
 
 """Tests for environment loading from EnvConfig."""
 
+from marin.rl.environments import EnvConfig, load_environment_from_spec
+from marin.rl.environments.math_env import MathEnv
+from marin.rl.environments.mock_env import MockEnv
 from marin.rl.integrations.openreward import (
     OpenRewardPromptBlock,
     OpenRewardPromptBlockType,
@@ -11,9 +14,6 @@ from marin.rl.integrations.openreward import (
     OpenRewardToolSpec,
     save_openreward_task_manifest,
 )
-from marin.rl.environments import EnvConfig, load_environment_from_spec
-from marin.rl.environments.math_env import MathEnv
-from marin.rl.environments.mock_env import MockEnv
 from marin.rl.integrations.openreward.env import OpenRewardEnv
 
 

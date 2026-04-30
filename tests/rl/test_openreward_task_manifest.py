@@ -4,7 +4,6 @@
 from dataclasses import dataclass
 
 import pytest
-
 from marin.rl.integrations.openreward import (
     OpenRewardPromptBlockType,
     build_openreward_task_manifest,
