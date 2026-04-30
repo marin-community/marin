@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useControllerRpc } from '@/composables/useRpc'
+import { useControllerRpc, logServiceRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import type {
   GetWorkerStatusResponse,
-  TaskStatus,
+  WorkerTaskAttempt,
   WorkerResourceSnapshot,
   LogEntry,
+  FetchLogsResponse,
 } from '@/types/rpc'
-import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime, formatRate, logLevelClass, formatLogTime, formatWorkerDevice } from '@/utils/formatting'
+import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatRate, logLevelClass, formatLogTime, formatWorkerDevice } from '@/utils/formatting'
 
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -36,9 +37,25 @@ const worker = computed(() => data.value?.worker)
 const vm = computed(() => data.value?.vm)
 const currentResources = computed(() => data.value?.currentResources)
 const resourceHistory = computed(() => data.value?.resourceHistory ?? [])
-const recentTasks = computed(() => data.value?.recentTasks ?? [])
-const workerLogEntries = computed(() => data.value?.workerLogEntries ?? [])
+const recentAttempts = computed(() => data.value?.recentAttempts ?? [])
+// Worker daemon logs are fetched independently via LogService.FetchLogs so a
+// slow/unreachable worker can't stall the worker page. Empty until the
+// async fetch completes; failures leave the array empty rather than throw.
+const workerLogEntries = ref<LogEntry[]>([])
 const attributes = computed(() => worker.value?.metadata?.attributes ?? {})
+
+async function fetchWorkerLogs() {
+  try {
+    const resp = await logServiceRpcCall<FetchLogsResponse>('FetchLogs', {
+      source: `/system/worker/${props.workerId}`,
+      maxLines: 200,
+      tail: true,
+    })
+    workerLogEntries.value = resp.entries ?? []
+  } catch {
+    workerLogEntries.value = []
+  }
+}
 
 // Sparkline data from resource history
 const cpuHistory = computed(() => resourceHistory.value.map((s) => s.hostCpuPercent ?? 0))
@@ -65,20 +82,25 @@ const memoryDisplay = computed(() => {
 
 const taskColumns: Column[] = [
   { key: 'taskId', label: 'Task ID', mono: true },
+  { key: 'attempt', label: 'Attempt', align: 'right' },
   { key: 'state', label: 'State' },
-  { key: 'memory', label: 'Memory', align: 'right' },
-  { key: 'cpu', label: 'CPU', align: 'right' },
   { key: 'duration', label: 'Duration', align: 'right' },
 ]
 
 useAutoRefresh(fetchWorker, DEFAULT_REFRESH_MS)
-onMounted(fetchWorker)
+useAutoRefresh(fetchWorkerLogs, DEFAULT_REFRESH_MS)
+onMounted(() => {
+  fetchWorker()
+  fetchWorkerLogs()
+})
 
 // Re-fetch when navigating between workers (Vue Router reuses the component).
 // Clear stale data first so loading/error states render correctly if the fetch fails.
 watch(() => props.workerId, () => {
   data.value = null
+  workerLogEntries.value = []
   fetchWorker()
+  fetchWorkerLogs()
 })
 
 function attributeDisplay(val: { stringValue?: string; intValue?: string; floatValue?: string }): string {
@@ -272,39 +294,30 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
         </div>
       </div>
 
-      <!-- Task history -->
-      <div v-if="recentTasks.length > 0" class="mb-6">
+      <!-- Task history (per-attempt: each retry on this worker is its own row) -->
+      <div v-if="recentAttempts.length > 0" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Task History</h3>
         <div class="rounded-lg border border-surface-border bg-surface overflow-hidden">
           <DataTable
             :columns="taskColumns"
-            :rows="recentTasks"
+            :rows="recentAttempts"
             :page-size="25"
             empty-message="No recent tasks"
           >
             <template #cell-taskId="{ row }">
-              <span class="font-mono text-xs">{{ (row as TaskStatus).taskId }}</span>
+              <span class="font-mono text-xs">{{ (row as WorkerTaskAttempt).taskId }}</span>
+            </template>
+            <template #cell-attempt="{ row }">
+              <span class="font-mono text-xs">{{ (row as WorkerTaskAttempt).attempt?.attemptId ?? '-' }}</span>
             </template>
             <template #cell-state="{ row }">
-              <StatusBadge :status="(row as TaskStatus).state" size="sm" />
-            </template>
-            <template #cell-memory="{ row }">
-              <span class="font-mono text-xs">
-                {{ (row as TaskStatus).resourceUsage?.memoryMb
-                  ? parseFloat((row as TaskStatus).resourceUsage!.memoryMb!) + ' MB'
-                  : '-' }}
-              </span>
-            </template>
-            <template #cell-cpu="{ row }">
-              <span class="font-mono text-xs">
-                {{ formatCpuMillicores((row as TaskStatus).resourceUsage?.cpuMillicores) }}
-              </span>
+              <StatusBadge :status="(row as WorkerTaskAttempt).attempt?.state ?? 0" size="sm" />
             </template>
             <template #cell-duration="{ row }">
               <span class="font-mono text-xs">
                 {{ formatDuration(
-                  timestampMs((row as TaskStatus).startedAt),
-                  timestampMs((row as TaskStatus).finishedAt) || undefined,
+                  timestampMs((row as WorkerTaskAttempt).attempt?.startedAt),
+                  timestampMs((row as WorkerTaskAttempt).attempt?.finishedAt) || undefined,
                 ) }}
               </span>
             </template>

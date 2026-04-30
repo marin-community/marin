@@ -4,17 +4,17 @@
       "created_at_ms": 1704067200000,
       "id": 1,
       "kind": "run",
-      "payload_proto": "ChcvdGVzdC11c2VyL2NhbmNlbC1qb2IvMBACGhQSEgoGcHl0aG9uCgItYwoEcGFzcyIAKgAyDQjoByCAgICABCoASABIAFoA",
+      "payload_proto": "ChwvdGVzdC11c2VyL2Nvc2NoZWQtcHJlZW1wdC8wEAIaFBISCgZweXRob24KAi1jCgRwYXNzIgAqADINCOgHIICAgIAEKgBIAEgAWgA=",
       "task_id": null,
-      "worker_id": "w-cancel"
+      "worker_id": "w-cosched-preempt-a"
     },
     {
       "created_at_ms": 1704067200000,
       "id": 2,
       "kind": "run",
-      "payload_proto": "ChcvdGVzdC11c2VyL2NhbmNlbC1qb2IvMRACGhQSEgoGcHl0aG9uCgItYwoEcGFzcyIAKgAyDQjoByCAgICABCoASABIAFoA",
+      "payload_proto": "ChwvdGVzdC11c2VyL2Nvc2NoZWQtcHJlZW1wdC8xEAIaFBISCgZweXRob24KAi1jCgRwYXNzIgAqADINCOgHIICAgIAEKgBIAEgAWgA=",
       "task_id": null,
-      "worker_id": "w-cancel"
+      "worker_id": "w-cosched-preempt-b"
     }
   ],
   "endpoints": [],
@@ -22,18 +22,18 @@
     {
       "bundle_id": "",
       "constraints_json": null,
-      "coscheduling_group_by": "",
+      "coscheduling_group_by": "task_index",
       "entrypoint_json": "{\"run_command\": {\"argv\": [\"python\", \"-c\", \"pass\"]}}",
       "environment_json": "{}",
       "existing_job_policy": 0,
       "fail_if_exists": 0,
-      "has_coscheduling": 0,
+      "has_coscheduling": 1,
       "has_reservation": 0,
-      "job_id": "/test-user/cancel-job",
+      "job_id": "/test-user/cosched-preempt",
       "max_retries_failure": 0,
-      "max_retries_preemption": 0,
+      "max_retries_preemption": 2,
       "max_task_failures": 0,
-      "name": "/test-user/cancel-job",
+      "name": "/test-user/cosched-preempt",
       "ports_json": "[]",
       "preemption_policy": 0,
       "priority_band": 0,
@@ -52,20 +52,20 @@
   "jobs": [
     {
       "depth": 1,
-      "error": "user-cancel",
+      "error": null,
       "exit_code": null,
-      "finished_at_ms": 1704067200001,
+      "finished_at_ms": null,
       "has_reservation": 0,
       "is_reservation_holder": 0,
-      "job_id": "/test-user/cancel-job",
-      "name": "/test-user/cancel-job",
+      "job_id": "/test-user/cosched-preempt",
+      "name": "/test-user/cosched-preempt",
       "num_tasks": 2,
       "parent_job_id": null,
-      "root_job_id": "/test-user/cancel-job",
+      "root_job_id": "/test-user/cosched-preempt",
       "root_submitted_at_ms": 1704067200000,
       "scheduling_deadline_epoch_ms": null,
       "started_at_ms": 1704067200000,
-      "state": 6,
+      "state": 3,
       "submitted_at_ms": 1704067200000,
       "user_id": "test-user"
     }
@@ -87,24 +87,24 @@
     {
       "attempt_id": 0,
       "created_at_ms": 1704067200000,
-      "error": "user-cancel",
+      "error": "evicted-by-prod",
       "exit_code": null,
       "finished_at_ms": 1704067200001,
       "started_at_ms": null,
-      "state": 6,
-      "task_id": "/test-user/cancel-job/0",
-      "worker_id": "w-cancel"
+      "state": 10,
+      "task_id": "/test-user/cosched-preempt/0",
+      "worker_id": "w-cosched-preempt-a"
     },
     {
       "attempt_id": 0,
       "created_at_ms": 1704067200000,
-      "error": "user-cancel",
+      "error": "Coscheduled sibling /test-user/cosched-preempt/0 bounced for atomic re-scheduling",
       "exit_code": null,
       "finished_at_ms": 1704067200001,
       "started_at_ms": null,
-      "state": 6,
-      "task_id": "/test-user/cancel-job/1",
-      "worker_id": "w-cancel"
+      "state": 10,
+      "task_id": "/test-user/cosched-preempt/1",
+      "worker_id": "w-cosched-preempt-b"
     }
   ],
   "task_resource_history": [],
@@ -114,22 +114,22 @@
       "current_attempt_id": 0,
       "current_worker_address": null,
       "current_worker_id": null,
-      "error": "user-cancel",
+      "error": "evicted-by-prod",
       "exit_code": null,
       "failure_count": 0,
-      "finished_at_ms": 1704067200001,
-      "job_id": "/test-user/cancel-job",
+      "finished_at_ms": null,
+      "job_id": "/test-user/cosched-preempt",
       "max_retries_failure": 0,
-      "max_retries_preemption": 0,
+      "max_retries_preemption": 2,
       "preemption_count": 0,
       "priority_band": 2,
       "priority_insertion": 1,
       "priority_neg_depth": -1,
       "priority_root_submitted_ms": 1704067200000,
       "started_at_ms": 1704067200000,
-      "state": 6,
+      "state": 1,
       "submitted_at_ms": 1704067200000,
-      "task_id": "/test-user/cancel-job/0",
+      "task_id": "/test-user/cosched-preempt/0",
       "task_index": 0
     },
     {
@@ -137,22 +137,22 @@
       "current_attempt_id": 0,
       "current_worker_address": null,
       "current_worker_id": null,
-      "error": "user-cancel",
+      "error": "Coscheduled sibling /test-user/cosched-preempt/0 bounced for atomic re-scheduling",
       "exit_code": null,
       "failure_count": 0,
-      "finished_at_ms": 1704067200001,
-      "job_id": "/test-user/cancel-job",
+      "finished_at_ms": null,
+      "job_id": "/test-user/cosched-preempt",
       "max_retries_failure": 0,
-      "max_retries_preemption": 0,
+      "max_retries_preemption": 2,
       "preemption_count": 0,
       "priority_band": 2,
       "priority_insertion": 2,
       "priority_neg_depth": -1,
       "priority_root_submitted_ms": 1704067200000,
       "started_at_ms": 1704067200000,
-      "state": 6,
+      "state": 1,
       "submitted_at_ms": 1704067200000,
-      "task_id": "/test-user/cancel-job/1",
+      "task_id": "/test-user/cosched-preempt/1",
       "task_index": 1
     }
   ],
@@ -172,7 +172,15 @@
       "key": "device-type",
       "str_value": "cpu",
       "value_type": "str",
-      "worker_id": "w-cancel"
+      "worker_id": "w-cosched-preempt-a"
+    },
+    {
+      "float_value": null,
+      "int_value": null,
+      "key": "device-type",
+      "str_value": "cpu",
+      "value_type": "str",
+      "worker_id": "w-cosched-preempt-b"
     }
   ],
   "worker_resource_history": [],
@@ -180,20 +188,20 @@
     {
       "assigned_at_ms": 1704067200000,
       "id": 1,
-      "task_id": "/test-user/cancel-job/0",
-      "worker_id": "w-cancel"
+      "task_id": "/test-user/cosched-preempt/0",
+      "worker_id": "w-cosched-preempt-a"
     },
     {
       "assigned_at_ms": 1704067200000,
       "id": 2,
-      "task_id": "/test-user/cancel-job/1",
-      "worker_id": "w-cancel"
+      "task_id": "/test-user/cosched-preempt/1",
+      "worker_id": "w-cosched-preempt-b"
     }
   ],
   "workers": [
     {
       "active": 1,
-      "address": "w-cancel:8080",
+      "address": "w-cosched-preempt-a:8080",
       "committed_cpu_millicores": 0,
       "committed_gpu": 0,
       "committed_mem_bytes": 0,
@@ -234,7 +242,52 @@
       "total_gpu_count": 0,
       "total_memory_bytes": 17179869184,
       "total_tpu_count": 0,
-      "worker_id": "w-cancel"
+      "worker_id": "w-cosched-preempt-a"
+    },
+    {
+      "active": 1,
+      "address": "w-cosched-preempt-b:8080",
+      "committed_cpu_millicores": 0,
+      "committed_gpu": 0,
+      "committed_mem_bytes": 0,
+      "committed_tpu": 0,
+      "consecutive_failures": 0,
+      "device_type": "",
+      "device_variant": "",
+      "healthy": 1,
+      "last_heartbeat_ms": 1704067200000,
+      "md_cpu_count": 8,
+      "md_device_json": "{\"cpu\": {\"variant\": \"cpu\"}}",
+      "md_disk_bytes": 17179869184,
+      "md_gce_instance_name": "",
+      "md_gce_zone": "",
+      "md_git_hash": "",
+      "md_gpu_count": 0,
+      "md_gpu_memory_mb": 0,
+      "md_gpu_name": "",
+      "md_hostname": "replay-worker",
+      "md_ip_address": "127.0.0.1",
+      "md_memory_bytes": 17179869184,
+      "md_tpu_chips_per_host_bounds": "",
+      "md_tpu_name": "",
+      "md_tpu_worker_hostnames": "",
+      "md_tpu_worker_id": "",
+      "scale_group": "",
+      "slice_id": "",
+      "snapshot_disk_total_bytes": null,
+      "snapshot_disk_used_bytes": null,
+      "snapshot_host_cpu_percent": null,
+      "snapshot_memory_total_bytes": null,
+      "snapshot_memory_used_bytes": null,
+      "snapshot_net_recv_bps": null,
+      "snapshot_net_sent_bps": null,
+      "snapshot_running_task_count": null,
+      "snapshot_total_process_count": null,
+      "total_cpu_millicores": 8000,
+      "total_gpu_count": 0,
+      "total_memory_bytes": 17179869184,
+      "total_tpu_count": 0,
+      "worker_id": "w-cosched-preempt-b"
     }
   ]
 }
