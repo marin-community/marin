@@ -255,11 +255,12 @@ class _ShardedShapes:
             if step != 1:
                 values = await self._read(slice(start, stop))
                 return values[::step]
-            pieces = []
+            reads = []
             for shard_index, local_slice in _split_slice_by_boundaries(start, stop, self._boundaries):
                 shapes = self._stores[shard_index].shapes
                 assert shapes is not None
-                pieces.append(await shapes[local_slice].read())
+                reads.append(shapes[local_slice].read())
+            pieces = await asyncio.gather(*reads)
             return _concatenate_or_empty(pieces)
 
         index = item

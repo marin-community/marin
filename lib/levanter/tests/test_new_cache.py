@@ -19,6 +19,7 @@ from levanter.store.cache import (
     SerialCacheWriter,
     _ShardedArray,
     _ShardedOffsets,
+    _ShardedShapes,
     ShardedTreeCache,
     TreeStore,
     build_or_load_cache,
@@ -413,6 +414,47 @@ async def test_sharded_array_reads_slice_shards_concurrently():
     values = await asyncio.wait_for(sharded[2:6], timeout=1)
 
     np.testing.assert_array_equal(values, np.asarray([2, 3, 4, 5]))
+
+
+@pytest.mark.asyncio
+async def test_sharded_shapes_reads_slice_shards_concurrently():
+    started = 0
+    both_started = asyncio.Event()
+
+    class FakeRead:
+        def __init__(self, values: np.ndarray):
+            self._values = values
+
+        async def read(self):
+            nonlocal started
+            started += 1
+            if started == 2:
+                both_started.set()
+            await both_started.wait()
+            return self._values
+
+    class FakeShapes:
+        def __init__(self, values: np.ndarray):
+            self._values = values
+
+        def __getitem__(self, item):
+            return FakeRead(self._values[item])
+
+    class FakeStore:
+        def __init__(self, shapes: np.ndarray):
+            self.num_rows = len(shapes)
+            self.shapes = FakeShapes(shapes)
+
+    sharded = _ShardedShapes(
+        [
+            FakeStore(np.asarray([[0], [1], [2], [3]])),
+            FakeStore(np.asarray([[4], [5], [6], [7]])),
+        ]
+    )
+
+    values = await asyncio.wait_for(sharded[2:6], timeout=1)
+
+    np.testing.assert_array_equal(values, np.asarray([[2], [3], [4], [5]]))
 
 
 @pytest.mark.asyncio
