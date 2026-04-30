@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Curated capability eval datasets for chat, agent traces, and reasoning/ICL.
+"""Curated capability eval datasets for chat, agent traces, and reasoning QA.
 
 Each source is normalized to an OpenAI-chat JSONL artifact first. The current
 pairwise perplexity-gap runner still consumes raw text, so the same step also
@@ -60,8 +60,8 @@ LMSYS_CHAT_REVISION = "200748d9d3cddcc9d782887541057aca0b18c5da"
 DEFAULT_CAPABILITY_TAGS = {
     "chat/wildchat": ("chat", "dialogue", "multi_turn"),
     "agent_traces/openhands_swe_rebench": ("agent_traces", "code", "tool_use"),
-    "reasoning_icl/gsm8k_main": ("reasoning_icl", "math", "english"),
-    "reasoning_icl/global_mgsm_en": ("reasoning_icl", "math", "multilingual"),
+    "reasoning_qa/gsm8k_main": ("reasoning_qa", "math", "english"),
+    "reasoning_qa/global_mgsm_en": ("reasoning_qa", "math", "multilingual"),
 }
 OPT_IN_CAPABILITY_TAGS = {
     "chat/lima_train": ("chat", "dialogue", "alignment"),
@@ -179,13 +179,13 @@ def capability_raw_validation_sets() -> dict[str, Any]:
             steps["agent_traces/openhands_swe_rebench"].cd("raw_text/data-*.jsonl.gz"),
             tags=DEFAULT_CAPABILITY_TAGS["agent_traces/openhands_swe_rebench"],
         ),
-        "reasoning_icl/gsm8k_main": raw_text_dataset(
-            steps["reasoning_icl/gsm8k_main"].cd("raw_text/data-*.jsonl.gz"),
-            tags=DEFAULT_CAPABILITY_TAGS["reasoning_icl/gsm8k_main"],
+        "reasoning_qa/gsm8k_main": raw_text_dataset(
+            steps["reasoning_qa/gsm8k_main"].cd("raw_text/data-*.jsonl.gz"),
+            tags=DEFAULT_CAPABILITY_TAGS["reasoning_qa/gsm8k_main"],
         ),
-        "reasoning_icl/global_mgsm_en": raw_text_dataset(
-            steps["reasoning_icl/global_mgsm_en"].cd("raw_text/data-*.jsonl.gz"),
-            tags=DEFAULT_CAPABILITY_TAGS["reasoning_icl/global_mgsm_en"],
+        "reasoning_qa/global_mgsm_en": raw_text_dataset(
+            steps["reasoning_qa/global_mgsm_en"].cd("raw_text/data-*.jsonl.gz"),
+            tags=DEFAULT_CAPABILITY_TAGS["reasoning_qa/global_mgsm_en"],
         ),
     }
 
@@ -236,23 +236,23 @@ def _default_capability_eval_steps() -> dict[str, ExecutorStep]:
             max_rows=OPENHANDS_MAX_ROWS,
             source_manifest=CAPABILITY_SOURCE_MANIFESTS["agent_traces/openhands_swe_rebench"],
         ),
-        "reasoning_icl/gsm8k_main": _rendered_dataset_step(
-            "reasoning_icl/gsm8k_main",
+        "reasoning_qa/gsm8k_main": _rendered_dataset_step(
+            "reasoning_qa/gsm8k_main",
             dataset_id="openai/gsm8k",
             dataset_name="main",
             revision=GSM8K_REVISION,
             split="train",
             renderer=CapabilityEvalRenderer.GSM8K,
-            source_manifest=CAPABILITY_SOURCE_MANIFESTS["reasoning_icl/gsm8k_main"],
+            source_manifest=CAPABILITY_SOURCE_MANIFESTS["reasoning_qa/gsm8k_main"],
         ),
-        "reasoning_icl/global_mgsm_en": _rendered_dataset_step(
-            "reasoning_icl/global_mgsm_en",
+        "reasoning_qa/global_mgsm_en": _rendered_dataset_step(
+            "reasoning_qa/global_mgsm_en",
             dataset_id="CohereLabs/global-mgsm",
             dataset_name="en",
             revision=GLOBAL_MGSM_REVISION,
             split="test",
             renderer=CapabilityEvalRenderer.GLOBAL_MGSM,
-            source_manifest=CAPABILITY_SOURCE_MANIFESTS["reasoning_icl/global_mgsm_en"],
+            source_manifest=CAPABILITY_SOURCE_MANIFESTS["reasoning_qa/global_mgsm_en"],
         ),
     }
 
@@ -339,9 +339,9 @@ CAPABILITY_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
         sample_caps=SampleCapConfig(max_examples=OPENHANDS_MAX_ROWS),
         source_metadata={"hf_revision": OPENHANDS_REVISION},
     ),
-    "reasoning_icl/gsm8k_main": IngestionSourceManifest(
+    "reasoning_qa/gsm8k_main": IngestionSourceManifest(
         dataset_key="openai/gsm8k",
-        slice_key="capability/reasoning_icl/gsm8k_main/train",
+        slice_key="capability/reasoning_qa/gsm8k_main/train",
         source_label="gsm8k:main_train",
         source_urls=("https://huggingface.co/datasets/openai/gsm8k",),
         source_license="MIT",
@@ -362,9 +362,9 @@ CAPABILITY_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
         issue_numbers=(RAW_CAPABILITY_ISSUE,),
         source_metadata={"hf_revision": GSM8K_REVISION},
     ),
-    "reasoning_icl/global_mgsm_en": IngestionSourceManifest(
+    "reasoning_qa/global_mgsm_en": IngestionSourceManifest(
         dataset_key="CohereLabs/global-mgsm",
-        slice_key="capability/reasoning_icl/global_mgsm_en/test",
+        slice_key="capability/reasoning_qa/global_mgsm_en/test",
         source_label="global_mgsm:en_test",
         source_urls=("https://huggingface.co/datasets/CohereLabs/global-mgsm",),
         source_license="Mixed upstream public licenses; see original per-language sources",
@@ -798,10 +798,19 @@ def _canonical_role_key(raw_role: Any) -> str:
 
 
 def _drop_tool_call_ids(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {key: _drop_tool_call_ids(val) for key, val in value.items() if key not in {"id", "tool_call_id", "type"}}
     if isinstance(value, list):
         return [_drop_tool_call_ids(item) for item in value]
+    if isinstance(value, dict):
+        stripped = {key: val for key, val in value.items() if key not in {"id", "tool_call_id", "type"}}
+        return {key: _strip_tool_call_metadata_value(val) for key, val in stripped.items()}
+    return _strip_tool_call_metadata_value(value)
+
+
+def _strip_tool_call_metadata_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _strip_tool_call_metadata_value(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_strip_tool_call_metadata_value(item) for item in value]
     return value
 
 

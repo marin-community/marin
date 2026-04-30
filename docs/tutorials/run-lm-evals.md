@@ -198,8 +198,8 @@ The raw perplexity-gap workflow uses `default_raw_validation_sets()` from `exper
 - Curated capability-family slices for:
   - `chat/wildchat`
   - `agent_traces/openhands_swe_rebench`
-  - `reasoning_icl/gsm8k_main`
-  - `reasoning_icl/global_mgsm_en`
+  - `reasoning_qa/gsm8k_main`
+  - `reasoning_qa/global_mgsm_en`
 
 These capability datasets are first normalized into reusable OpenAI-chat JSONL artifacts under each step's `oai/` output. Consumers that want Levanter chat tokenization can use `capability_chat_validation_components()`, which wraps those rows in `ChatLmDatasetFormat` with `MARIN_CHAT_TEMPLATE`. The raw gap finder still consumes plain `text`, so the same step also writes a derived `raw_text/` projection using Marin's chat-token surface. OpenHands traces keep the full system/user/tool conversation in the OAI artifact, while the raw-text projection scores only assistant-generated trace targets and final patches.
 

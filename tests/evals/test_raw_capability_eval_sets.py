@@ -87,7 +87,7 @@ def test_render_openhands_row_keeps_full_oai_trace_but_scores_only_model_targets
                         "type": "function",
                         "function": {
                             "name": "bash",
-                            "arguments": '{"command":"ls -la","timeout":30}',
+                            "arguments": '{"command":"ls -la","timeout":30,"schema":{"id":"inner-id","type":"object"}}',
                         },
                     }
                 ],
@@ -115,7 +115,11 @@ def test_render_openhands_row_keeps_full_oai_trace_but_scores_only_model_targets
     assert rendered["messages"][0]["role"] == "system"
     assert rendered["messages"][1]["content"] == "Fix the failing test in example/repo."
     assert rendered["messages"][2]["tool_calls"][0]["id"] == "call-1"
-    assert rendered["messages"][2]["tool_calls"][0]["function"]["arguments"] == {"command": "ls -la", "timeout": 30}
+    assert rendered["messages"][2]["tool_calls"][0]["function"]["arguments"] == {
+        "command": "ls -la",
+        "timeout": 30,
+        "schema": {"id": "inner-id", "type": "object"},
+    }
     assert rendered["messages"][3]["role"] == "tool"
     assert rendered["messages"][3]["tool_call_id"] == "call-1"
     assert rendered["metadata"]["instance_id"] == "repo__issue-1"
@@ -133,6 +137,8 @@ def test_render_openhands_row_keeps_full_oai_trace_but_scores_only_model_targets
     assert "Resolved: 1" not in raw_text["text"]
     assert "call-1" not in raw_text["text"]
     assert '"type": "function"' not in raw_text["text"]
+    assert '"id": "inner-id"' in raw_text["text"]
+    assert '"type": "object"' in raw_text["text"]
     assert "repo__issue-1" not in raw_text["text"]
     assert "traj-1" not in raw_text["text"]
 
@@ -206,8 +212,8 @@ def test_capability_eval_sets_expose_curated_families():
     assert set(raw_datasets) == {
         "agent_traces/openhands_swe_rebench",
         "chat/wildchat",
-        "reasoning_icl/global_mgsm_en",
-        "reasoning_icl/gsm8k_main",
+        "reasoning_qa/global_mgsm_en",
+        "reasoning_qa/gsm8k_main",
     }
     assert set(oai_datasets) == set(raw_datasets)
     assert set(chat_components) == set(raw_datasets)
