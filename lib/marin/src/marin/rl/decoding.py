@@ -3,9 +3,9 @@
 
 """Shared decoding configuration for RL rollout generation."""
 
+import logging
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-import logging
 from typing import Literal
 
 logger = logging.getLogger(__name__)

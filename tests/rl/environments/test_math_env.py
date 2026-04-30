@@ -14,6 +14,7 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_usage import CompletionUsage
 
+
 def create_mock_chat_completion(tokenizer) -> ChatCompletion:
     """Create a mock ChatCompletion with logprobs for testing."""
     response_text: str = "\\boxed{4}"

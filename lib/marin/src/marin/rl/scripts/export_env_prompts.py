@@ -24,7 +24,6 @@ import jax
 import jax.random as jrandom
 from levanter.inference.openai import ChatCompletionRequest, ChatMessage
 from levanter.tokenizers import load_tokenizer
-
 from marin.rl.decoding import DecodingConfig, stop_strings_for_decoding
 from marin.rl.environments import EnvConfig, load_environment_from_spec
 from rigging.log_setup import configure_logging

@@ -9,11 +9,10 @@ import jax.random
 import numpy as np
 import pytest
 from levanter.tokenizers import load_tokenizer
+from marin.rl.decoding import DecodingConfig
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
-
-from marin.rl.decoding import DecodingConfig
 
 try:
     import verifiers as vf

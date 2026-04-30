@@ -6,7 +6,6 @@
 import time
 
 import numpy as np
-
 from marin.rl.decoding import DecodingConfig
 from marin.rl.types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
 
