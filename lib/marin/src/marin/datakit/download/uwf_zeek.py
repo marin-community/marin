@@ -72,16 +72,6 @@ class UwfZeekSampleSource:
             raise ValueError("max_rows_per_category must be positive")
 
 
-@dataclass
-class DownloadUwfZeekSampleConfig:
-    """Runtime config for :func:`download_uwf_zeek_sample`."""
-
-    source: UwfZeekSampleSource
-    output_path: str = THIS_OUTPUT_PATH
-    output_filename: str = DEFAULT_OUTPUT_FILENAME
-    http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS
-
-
 class _HrefParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -179,31 +169,34 @@ def _iter_csv_records(
     return rows, manifest
 
 
-def download_uwf_zeek_sample(config: DownloadUwfZeekSampleConfig) -> dict[str, Any]:
+def download_uwf_zeek_sample(
+    *,
+    source: UwfZeekSampleSource,
+    output_path: str = THIS_OUTPUT_PATH,
+    output_filename: str = DEFAULT_OUTPUT_FILENAME,
+    http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
     """Download the bounded UWF Zeek CSV sample and write a gzipped JSONL output."""
 
-    source = config.source
     source.validate()
-    output_path = str(config.output_path)
+    output_path = str(output_path)
     fsspec_mkdirs(output_path, exist_ok=True)
 
     session = _build_session()
-    output_file = posixpath.join(output_path, config.output_filename)
+    output_file = posixpath.join(output_path, output_filename)
     manifest_entries: list[dict[str, Any]] = []
     total_rows = 0
     try:
         with atomic_rename(output_file) as temp_path:
             with open_url(temp_path, "wt", encoding="utf-8", compression="gzip") as handle:
                 for category in source.categories:
-                    csv_url = _category_csv_url(
-                        session, source, category=category, timeout_seconds=config.http_timeout_seconds
-                    )
+                    csv_url = _category_csv_url(session, source, category=category, timeout_seconds=http_timeout_seconds)
                     records, manifest = _iter_csv_records(
                         session,
                         csv_url=csv_url,
                         source=source,
                         category=category,
-                        timeout_seconds=config.http_timeout_seconds,
+                        timeout_seconds=http_timeout_seconds,
                     )
                     manifest_entries.append(manifest)
                     total_rows += len(records)
@@ -247,11 +240,9 @@ def uwf_zeek_sample_step(
     return StepSpec(
         name=step_name,
         fn=lambda output_path: download_uwf_zeek_sample(
-            DownloadUwfZeekSampleConfig(
-                source=source,
-                output_path=output_path,
-                http_timeout_seconds=http_timeout_seconds,
-            )
+            source=source,
+            output_path=output_path,
+            http_timeout_seconds=http_timeout_seconds,
         ),
         hash_attrs={
             "slice_key": source.slice_key,

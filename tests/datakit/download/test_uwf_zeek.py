@@ -10,7 +10,6 @@ import pytest
 import marin.datakit.download.uwf_zeek as uwf_zeek
 from marin.datakit.download.uwf_zeek import (
     DEFAULT_OUTPUT_FILENAME,
-    DownloadUwfZeekSampleConfig,
     UwfZeekSampleSource,
     download_uwf_zeek_sample,
 )
@@ -88,14 +87,12 @@ def test_download_uwf_zeek_sample_lists_categories_and_caps_rows(
 
     output_dir = tmp_path / "output"
     manifest = download_uwf_zeek_sample(
-        DownloadUwfZeekSampleConfig(
-            source=UwfZeekSampleSource(
-                slice_key="binary_network_security/uwf_zeek",
-                base_url=base_url,
-                max_rows_per_category=1,
-            ),
-            output_path=str(output_dir),
-        )
+        source=UwfZeekSampleSource(
+            slice_key="binary_network_security/uwf_zeek",
+            base_url=base_url,
+            max_rows_per_category=1,
+        ),
+        output_path=str(output_dir),
     )
 
     records = _read_jsonl_gz(output_dir / DEFAULT_OUTPUT_FILENAME)
