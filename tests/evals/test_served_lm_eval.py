@@ -6,9 +6,9 @@ from pathlib import Path
 from statistics import mean
 
 import pytest
-
 from marin.evaluation.served_lm_eval import LmEvalAdapter, LmEvalRun, build_lm_eval_model_args
 from marin.inference.served_model import OpenAIEndpoint, RunningModel
+
 from tests.evals.openai_stub import (
     DeterministicOpenAIStub,
     assert_chat_generation_contract,

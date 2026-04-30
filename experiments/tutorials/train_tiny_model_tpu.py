@@ -10,9 +10,9 @@ For GPU training, see train_tiny_model_gpu.py
 
 from fray import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main, versioned
+from marin.execution.executor import versioned
 
-from experiments.defaults import default_tokenize, default_train
+from experiments.defaults import default_tokenize, train
 from experiments.llama import llama_30m
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
@@ -50,25 +50,21 @@ small_train_config = SimpleTrainConfig(
     weight_decay=0.1,
 )
 
-# 4. Train the model
-tinystories_model_30m = default_train(
-    name="marin-tinystories-30m",
-    # Steps can depend on other steps: tinystories_model_30m depends on tinystories_tokenized
-    tokenized=tinystories_tokenized,
-    model_config=versioned(llama_30m),
-    train_config=small_train_config,
-    # wandb tags
-    tags=["llama", "30m", "tinystories", "tutorial"],
-    # We can run many [eval_harness](https://github.com/EleutherAI/lm-evaluation-harness) tasks in the loop
-    # during training, but there's no point in running evals on such a tiny model
-    eval_harness_tasks=[],
-    # to keep tutorial fast, skip default validation sets
-    use_default_validation=False,
-)
-
 if __name__ == "__main__":
-    executor_main(
-        steps=[
-            tinystories_model_30m,
-        ]
+    # 4. Submit the training job. `train` resolves the output path, bakes it
+    # into the trainer config, and blocks until the Iris job completes — a
+    # single call.
+    train(
+        name="marin-tinystories-30m",
+        # Steps can depend on other steps: the training job depends on tinystories_tokenized
+        tokenized=tinystories_tokenized,
+        model_config=versioned(llama_30m),
+        train_config=small_train_config,
+        # wandb tags
+        tags=["llama", "30m", "tinystories", "tutorial"],
+        # We can run many [eval_harness](https://github.com/EleutherAI/lm-evaluation-harness) tasks in the loop
+        # during training, but there's no point in running evals on such a tiny model
+        eval_harness_tasks=[],
+        # to keep tutorial fast, skip default validation sets
+        use_default_validation=False,
     )

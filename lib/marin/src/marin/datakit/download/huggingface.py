@@ -19,8 +19,7 @@ from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
 from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
-from zephyr import Dataset, ZephyrContext
-from zephyr.writers import atomic_rename
+from zephyr import Dataset, ZephyrContext, atomic_rename
 
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.execution.step_spec import StepSpec

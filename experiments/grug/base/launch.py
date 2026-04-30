@@ -21,13 +21,18 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import compute_output_path, resolve_local_placeholders, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.training.training import temporary_checkpoint_base_path
 
-from experiments.defaults import default_validation_sets
+from experiments.defaults import _submit_train_job, default_validation_sets
 from experiments.grug.base.model import GrugModelConfig
-from experiments.grug.base.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.base.train import (
+    GrugEvalConfig,
+    GrugRunConfig,
+    GrugTrainerConfig,
+    _run_grug_local,
+)
 from experiments.pretraining_datasets import nemotron_mix_block_shuffle
 
 
@@ -85,98 +90,151 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
     return tracker
 
 
-def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
-    # Map template launch knobs onto full Levanter TrainerConfig.
+def _build_grug_run_config(
+    launch: GrugBaseLaunchConfig,
+    *,
+    output_path: str,
+) -> GrugRunConfig:
+    """Map launch-knobs into the trainer's full ``GrugRunConfig``."""
     trainer = TrainerConfig(
-        id=config.run_id,
-        seed=config.seed,
-        train_batch_size=config.batch_size,
-        num_train_steps=config.steps,
+        id=launch.run_id,
+        seed=launch.seed,
+        train_batch_size=launch.batch_size,
+        num_train_steps=launch.steps,
         profiler=ProfilerConfig(enabled=False, start_step=5, num_steps=100, perfetto_link=False),
-        mp=jmp.get_policy(config.mp),
-        tracker=_resolve_tracker(config.tracker, config.run_id),
+        mp=jmp.get_policy(launch.mp),
+        tracker=_resolve_tracker(launch.tracker, launch.run_id),
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(
-            base_path=os.path.join(config.output_path, "checkpoints"),
-            temporary_base_path=temporary_checkpoint_base_path(config.output_path),
+            base_path=os.path.join(output_path, "checkpoints"),
+            temporary_base_path=temporary_checkpoint_base_path(output_path),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
             keep=[{"every": 1000}],
         ),
     )
 
-    grug_trainer = dataclasses.replace(config.grug_trainer, trainer=trainer)
+    grug_trainer = dataclasses.replace(launch.grug_trainer, trainer=trainer)
 
-    run_config = GrugRunConfig(
-        model=config.model,
-        data=config.data,
-        resources=config.resources,
-        optimizer=config.optimizer,
+    return GrugRunConfig(
+        model=launch.model,
+        data=launch.data,
+        resources=launch.resources,
+        output_path=output_path,
+        optimizer=launch.optimizer,
         trainer=grug_trainer,
-        eval=config.eval,
+        eval=launch.eval,
     )
-    run_grug(run_config)
+
+
+def _prepare_grug(
+    name: str,
+    launch: GrugBaseLaunchConfig,
+    *,
+    override_output_path: str | None = None,
+) -> tuple[str, GrugRunConfig, str]:
+    """Resolve output path and build a ``GrugRunConfig`` without submitting.
+
+    Returns:
+        (name, run_config, output_path) — the three values needed to submit the
+        job or inspect in tests.
+    """
+    output_path = compute_output_path(name, launch, override_output_path=override_output_path)
+
+    # Substitute OutputName placeholders in the launch config and unwrap
+    # VersionedValue wrappers. Upstream InputName / ExecutorStep references
+    # (data placeholders) are preserved for the worker's `materialize` call.
+    launch = resolve_local_placeholders(launch, output_path)
+
+    run_config = _build_grug_run_config(launch, output_path=output_path)
+    return name, run_config, output_path
+
+
+def train_grug(
+    name: str,
+    launch: GrugBaseLaunchConfig,
+    *,
+    override_output_path: str | None = None,
+    env_vars: dict[str, str] | None = None,
+) -> None:
+    """Build and immediately submit a grug training job to Iris.
+
+    Resolves the output path locally, bakes checkpoint paths into the config,
+    and blocks until the Iris job completes.
+
+    Args:
+        name: Human-readable identifier; forms the basis of the output path.
+        launch: Fully-specified launch config for the grug-base template.
+        override_output_path: Optional explicit output path, bypassing the hash-based one.
+        env_vars: Env vars to inject into the Iris worker at startup.
+    """
+    _, run_config, _output_path = _prepare_grug(name, launch, override_output_path=override_output_path)
+
+    _submit_train_job(
+        name=name,
+        train_config=run_config,
+        resources=run_config.resources,
+        env_vars=dict(env_vars or {}),
+        worker_fn=_run_grug_local,
+    )
 
 
 RESOLVED_RUN_ID = _resolve_run_id("grug-base-trial")
 
+# Shared between the launch config (where the trainer reads it to build the
+# Levanter mesh) and the _submit_train_job call (where the worker is
+# scheduled). Same object on both sides avoids drift.
+_GRUG_BASE_RESOURCES = ResourceConfig.with_tpu("v5p-8")
 
-grug_base_trial = ExecutorStep(
-    name="grug/base-trial",
-    fn=run_grug_base_trial,
-    config=GrugBaseLaunchConfig(
-        model=versioned(GRUG_130M_MODEL),
-        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-        # this_output_path() resolves to this step's output root (e.g. gs://.../grug/base-trial-<version>).
-        output_path=this_output_path(),
-        # Keep run id out of versioning so changing job metadata doesn't create a new output path.
-        run_id=RESOLVED_RUN_ID,
-        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-        steps=versioned(2_000),
-        batch_size=versioned(512),
-        seed=versioned(0),
-        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-        tracker=WandbConfig(
-            project="marin",
-            tags=["grug", "template"],
-            group="grug-base-trial",
-            name=None,  # filled from run_id in _resolve_tracker
-            replicate_path=this_output_path(),
-        ),
-        optimizer=versioned(
-            AdamConfig(
-                learning_rate=3e-3,
-                weight_decay=0.1,
-                lr_schedule="cosine",
-                decay=0.2,
-                min_lr_ratio=0.1,
-                warmup=1000,
-            )
-        ),
-        grug_trainer=versioned(
-            GrugTrainerConfig(
-                z_loss_weight=1e-4,
-                ema_beta=None,
-                log_every=1,
-            )
-        ),
-        eval=versioned(
-            GrugEvalConfig(
-                eval_batch_size=512,
-                steps_per_eval=1000,
-                max_eval_batches=8,
-                eval_current=True,
-                eval_ema=False,
-            )
-        ),
+
+grug_base_launch = GrugBaseLaunchConfig(
+    model=versioned(GRUG_130M_MODEL),
+    data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+    output_path=this_output_path(),
+    # Keep run id out of versioning so changing job metadata doesn't create a new output path.
+    run_id=RESOLVED_RUN_ID,
+    resources=versioned(_GRUG_BASE_RESOURCES),
+    steps=versioned(2_000),
+    batch_size=versioned(512),
+    seed=versioned(0),
+    mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+    tracker=WandbConfig(
+        project="marin",
+        tags=["grug", "template"],
+        group="grug-base-trial",
+        name=None,  # filled from run_id in _resolve_tracker
+        replicate_path=this_output_path(),
+    ),
+    optimizer=versioned(
+        AdamConfig(
+            learning_rate=3e-3,
+            weight_decay=0.1,
+            lr_schedule="cosine",
+            decay=0.2,
+            min_lr_ratio=0.1,
+            warmup=1000,
+        )
+    ),
+    grug_trainer=versioned(
+        GrugTrainerConfig(
+            z_loss_weight=1e-4,
+            ema_beta=None,
+            log_every=1,
+        )
+    ),
+    eval=versioned(
+        GrugEvalConfig(
+            eval_batch_size=512,
+            steps_per_eval=1000,
+            max_eval_batches=8,
+            eval_current=True,
+            eval_ema=False,
+        )
     ),
 )
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[grug_base_trial],
-        description="Template grug base 130M trial run (~2000 steps) on Nemotron mix.",
-    )
+    train_grug(name="grug/base-trial", launch=grug_base_launch)

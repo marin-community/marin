@@ -53,9 +53,6 @@ class JobInfo:
     constraints: list[Constraint] = field(default_factory=list)
     """Explicit job constraints for child job inheritance."""
 
-    worker_region: str | None = None
-    """Region of the worker running this task, for child region constraint inheritance."""
-
     @property
     def task_attempt(self) -> TaskAttempt:
         """Get the structured task identity (task_id + attempt_id)."""
@@ -119,7 +116,6 @@ def get_job_info() -> JobInfo | None:
             ports=_parse_ports_from_env(),
             env=job_env,
             constraints=constraints,
-            worker_region=os.environ.get("IRIS_WORKER_REGION"),
         )
         _job_info.set(info)
         return info

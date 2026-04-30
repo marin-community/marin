@@ -113,8 +113,9 @@ def initialize_jax(
     initialization is skipped — JAX works correctly without distributed
     init when there is only one process.
 
-    On TPU, JAX handles distributed init natively via the TPU runtime —
-    calling jax.distributed.initialize would conflict, so this is a no-op.
+    On TPU, JAX handles coordinator discovery via the TPU runtime, so this
+    function calls ``jax.distributed.initialize()`` with no arguments and
+    returns — the TPU runtime supplies all necessary addresses automatically.
 
     Args:
         port: Coordinator port. Overridden by IRIS_PORT_jax if allocated.
@@ -126,10 +127,13 @@ def initialize_jax(
     """
     import jax
 
-    # TPU has its own distributed init via the TPU runtime; skip the
-    # coordinator dance entirely to avoid conflicts.
+    # TPU has its own coordinator discovery via the TPU runtime, so avoid the
+    # Iris endpoint dance. We still call JAX distributed initialization to
+    # create the host-side distributed client used by Levanter multihost
+    # utilities.
     if os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get("JAX_PLATFORMS", "") == "tpu":
-        logger.info("TPU detected; skipping Iris JAX distributed init (TPU runtime handles it)")
+        logger.info("TPU detected; initializing JAX distributed via TPU runtime autodiscovery")
+        jax.distributed.initialize()
         return
 
     job_info = get_job_info()

@@ -8,13 +8,16 @@ This file represents the best practices for each stage of the pipeline.
 import dataclasses
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import timedelta
 from functools import lru_cache
 from typing import Any
 
 import jmp
+import levanter.main.train_lm as levanter_train_lm
 from fray import ResourceConfig
+from fray import client as fray_client
+from fray.types import Entrypoint, JobRequest, create_environment
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -31,6 +34,7 @@ from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
+from levanter.optim.model_averaging import EmaModelAveragingConfig
 from levanter.schedule import BatchSchedule
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -42,12 +46,15 @@ from marin.execution.executor import (
     ExecutorStep,
     InputName,
     VersionedValue,
+    compute_output_path,
     ensure_versioned,
+    materialize,
+    resolve_local_placeholders,
     this_output_path,
     unwrap_versioned_value,
     versioned,
 )
-from marin.execution.remote import remote
+from marin.execution.remote import _sanitize_job_name, remote
 from marin.processing.tokenize import (
     HfDatasetSpec,
     TokenizeConfig,
@@ -60,6 +67,11 @@ from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigB
 from marin.training.training import (
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
+    bake_output_path,
+    check_train_config_paths,
+    extras_for_resources,
+    impute_run_id,
+    resolve_training_env,
     run_levanter_train_dpo,
     run_levanter_train_lm,
 )
@@ -354,37 +366,27 @@ def simulated_epoching_train(
     )
 
 
-def default_train(
+def _build_train_lm_config(
     name: str,
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
+    *,
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
-    override_output_path: str | None = None,
-) -> ExecutorStep:
-    """
-    Train a language model using the default configuration.
+) -> tuple[str, TrainLmConfig]:
+    """Build the shared ``TrainLmConfig`` body used by ``default_train`` and ``prepare_lm_train``.
 
-    Args:
-        name:  The name of the training run. Will form the basis of the output path for the executor step.
-        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
-        model_config: Levanter LmConfig for the model to train.
-        train_config: SimpleTrainConfig for the training run.
-        tags: Any additional tags to add to the Wandb tracker.
-        use_default_validation: Whether to use the default validation sets (currently Paloma).
-        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
-        wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
-        wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
+    Returns:
+        (truncated_name, inner_config) where ``truncated_name`` is the W&B-safe
+        version of ``name`` and ``inner_config`` is the fully-populated config.
+        The caller is responsible for baking in a concrete ``output_path``,
+        resolving placeholders, and imputing a run id.
     """
-
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
-
-    tokenizer_name = unwrap_versioned_value(pretraining_data.tokenizer)
-    steps_per_export = train_config.steps_per_export
 
     if wandb_group is None:
         wandb_group = os.environ.get("WANDB_GROUP")
@@ -396,21 +398,17 @@ def default_train(
     else:
         harness_config = None
 
+    steps_per_export = train_config.steps_per_export
     steps_per_export_hf = _resolve_hf_export_steps(train_config.steps_per_hf_export, steps_per_export)
 
     model_averaging = None
     if train_config.ema_beta is not None:
-        from levanter.optim.model_averaging import EmaModelAveragingConfig
-
         model_averaging = EmaModelAveragingConfig(beta=train_config.ema_beta)
 
     if train_config.per_device_eval_parallelism is None:
         per_device_eval_parallelism = -1
     else:
         per_device_eval_parallelism = train_config.per_device_eval_parallelism
-
-    schedule = BatchSchedule(unwrap_versioned_value(train_config.train_batch_size))
-    total_examples = schedule.global_data_offset_by_step(unwrap_versioned_value(train_config.num_train_steps))
 
     checkpoint_path_to_load_from = train_config.initialize_from_checkpoint_path
     hf_checkpoint_path_to_load_from = train_config.initialize_from_hf
@@ -501,10 +499,55 @@ def default_train(
         eval_harness=harness_config,
     )
 
-    # Create the pod config
+    return name, inner_config
+
+
+def default_train(
+    name: str,
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    model_config: LmConfig,
+    train_config: SimpleTrainConfig,
+    tags: Sequence[str] = (),
+    use_default_validation: bool = True,
+    eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    wandb_name: str | None = None,
+    wandb_group: str | None = None,
+    override_output_path: str | None = None,
+) -> ExecutorStep:
+    """
+    Train a language model using the default configuration.
+
+    Args:
+        name:  The name of the training run. Will form the basis of the output path for the executor step.
+        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        model_config: Levanter LmConfig for the model to train.
+        train_config: SimpleTrainConfig for the training run.
+        tags: Any additional tags to add to the Wandb tracker.
+        use_default_validation: Whether to use the default validation sets (currently Paloma).
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
+        wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
+        wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
+    """
+    name, inner_config = _build_train_lm_config(
+        name,
+        tokenized,
+        model_config,
+        train_config,
+        tags=tags,
+        use_default_validation=use_default_validation,
+        eval_harness_tasks=eval_harness_tasks,
+        wandb_name=wandb_name,
+        wandb_group=wandb_group,
+    )
+
+    pretraining_data = inner_config.data
+    tokenizer_name = unwrap_versioned_value(pretraining_data.tokenizer)
+    train_length = unwrap_versioned_value(inner_config.train_seq_len)
+    schedule = BatchSchedule(unwrap_versioned_value(train_config.train_batch_size))
+    total_examples = schedule.global_data_offset_by_step(unwrap_versioned_value(train_config.num_train_steps))
+
     pod_config = train_config.resources
 
-    # Create the full config
     config = TrainLmOnPodConfig(
         train_config=inner_config,
         resources=pod_config,
@@ -524,8 +567,169 @@ def default_train(
             f"= {total_examples * train_length} tokens."
         ),
         fn=run_levanter_train_lm,
+        resources=train_config.resources,
         config=config,
         override_output_path=override_output_path,
+    )
+
+
+def _submit_train_job(
+    name: str,
+    train_config: Any,
+    resources: ResourceConfig,
+    env_vars: dict[str, str] | None,
+    worker_fn: Callable[[Any], None],
+) -> None:
+    """Resolve env, build a JobRequest, submit to Iris, block on completion.
+
+    Args:
+        name: Job name (used for the Iris job label after sanitization).
+        train_config: Trainer config object with a concrete ``output_path``
+            attribute already baked in. May contain ``InputName`` placeholders
+            resolved by ``materialize`` on the worker.
+        resources: TPU/GPU/CPU resources to request from Iris.
+        env_vars: Env vars injected into the Iris worker at startup. Values are
+            resolved in the caller's process.
+        worker_fn: Top-level callable invoked on the worker after materialization.
+    """
+    resolved_env_vars = dict(env_vars or {})
+    env = resolve_training_env(resolved_env_vars, resources)
+
+    job_request = JobRequest(
+        name=_sanitize_job_name(name),
+        entrypoint=Entrypoint.from_callable(
+            _run_training_on_worker,
+            args=[worker_fn, train_config],
+        ),
+        resources=resources,
+        environment=create_environment(env_vars=env, extras=extras_for_resources(resources)),
+    )
+
+    client = fray_client.current_client()
+    handle = client.submit(job_request)
+    handle.wait(raise_on_failure=True)
+
+
+def _run_training_on_worker(
+    worker_fn: Callable[[Any], None],
+    train_config: Any,
+) -> None:
+    """Resolve upstream ExecutorSteps in train_config, then run worker_fn.
+    Top-level so Fray can pickle it as a JobRequest entrypoint."""
+    train_config = materialize(train_config)
+    worker_fn(train_config)
+
+
+def prepare_lm_train(
+    name: str,
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    model_config: LmConfig,
+    train_config: SimpleTrainConfig,
+    *,
+    tags: Sequence[str] = (),
+    use_default_validation: bool = True,
+    eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    wandb_name: str | None = None,
+    wandb_group: str | None = None,
+    override_output_path: str | None = None,
+) -> tuple[str, TrainLmConfig, str]:
+    """Resolve the output path and bake all paths into the trainer config.
+
+    Returns:
+        (job_name, baked_config, output_path) where ``job_name`` is the
+        ``checkpoints/<truncated_name>`` string used for the Iris job label,
+        ``baked_config`` has all checkpointer and HF save paths filled in and a
+        stable run id stamped, and ``output_path`` is the concrete GCS (or
+        local) path the trainer writes to. Does NOT submit any Iris job.
+    """
+    truncated_name, inner_config = _build_train_lm_config(
+        name,
+        tokenized,
+        model_config,
+        train_config,
+        tags=tags,
+        use_default_validation=use_default_validation,
+        eval_harness_tasks=eval_harness_tasks,
+        wandb_name=wandb_name,
+        wandb_group=wandb_group,
+    )
+
+    job_name = os.path.join("checkpoints", truncated_name)
+    output_path = compute_output_path(
+        job_name,
+        inner_config,
+        override_output_path=override_output_path,
+    )
+    resources = train_config.resources
+    inner_config = resolve_local_placeholders(inner_config, output_path)
+    inner_config = bake_output_path(inner_config, output_path)
+    inner_config, _run_id = impute_run_id(inner_config, output_path=output_path)
+
+    # Disable accelerator requirement when running without GPU/TPU resources.
+    if resources.device.kind == "cpu":
+        inner_config = dataclasses.replace(
+            inner_config,
+            trainer=dataclasses.replace(inner_config.trainer, require_accelerator=False),
+        )
+
+    # Guard against cross-region GCS access; skip on CPU (no region to match).
+    check_train_config_paths(inner_config, resources)
+
+    return job_name, inner_config, output_path
+
+
+def train(
+    name: str,
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    model_config: LmConfig,
+    train_config: SimpleTrainConfig,
+    *,
+    tags: Sequence[str] = (),
+    use_default_validation: bool = True,
+    eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    wandb_name: str | None = None,
+    wandb_group: str | None = None,
+    override_output_path: str | None = None,
+) -> None:
+    """Build and immediately submit a Levanter LM training job to Iris.
+
+    Resolves the output path locally, bakes it into the trainer config, stamps
+    a stable run id, and blocks until the Iris job completes. This is the
+    single-call alternative to ``prepare_lm_train`` + ``_submit_train_job``.
+
+    Args:
+        name: Human-readable identifier; forms the basis of the output path.
+        tokenized: Tokenized data to train on (InputName, ExecutorStep, or
+            LMMixtureDatasetConfig).
+        model_config: Levanter LmConfig for the model architecture.
+        train_config: SimpleTrainConfig for the training run.
+        tags: Additional W&B tags.
+        use_default_validation: Whether to include the default Paloma validation sets.
+        eval_harness_tasks: Evaluation harness tasks. Defaults to CORE_TASKS.
+            Pass ``()`` or ``[]`` to disable.
+        wandb_name: Optional W&B display name. Defaults to W&B's auto-generated name.
+        wandb_group: Optional W&B group. Defaults to ``$WANDB_GROUP`` if unset.
+        override_output_path: Optional explicit output path, bypassing the hash-based one.
+    """
+    job_name, inner_config, _output_path = prepare_lm_train(
+        name,
+        tokenized,
+        model_config,
+        train_config,
+        tags=tags,
+        use_default_validation=use_default_validation,
+        eval_harness_tasks=eval_harness_tasks,
+        wandb_name=wandb_name,
+        wandb_group=wandb_group,
+        override_output_path=override_output_path,
+    )
+
+    _submit_train_job(
+        job_name,
+        inner_config,
+        train_config.resources,
+        dict(train_config.env_vars or {}),
+        levanter_train_lm.main,
     )
 
 
@@ -554,14 +758,12 @@ def default_sft(
     Returns:
         An ExecutorStep configured for supervised fine-tuning.
     """
-    # Set up common configurations
     if "sft" not in tags:
         tags = [*tags, "sft"]
 
     if sft_config.initialize_from_hf is not None and sft_config.initialize_from_checkpoint_path is not None:
         raise ValueError("Cannot specify both initialize_from_hf and initialize_from_checkpoint_path!")
 
-    # now we just shell out to default_train
     normal_train_config = SimpleTrainConfig(
         resources=sft_config.resources,
         train_batch_size=sft_config.train_batch_size,
@@ -592,7 +794,6 @@ def default_sft(
     if sft_config.reinit_tokens:
         raise NotImplementedError("reinit_tokens is not supported by default_train")
 
-    # Create and return the ExecutorStep
     return default_train(
         name=name,
         tokenized=tokenized,

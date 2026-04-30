@@ -9,22 +9,28 @@ from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
 from levanter.tracker import NoopConfig
 
-from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, run_grug_base_trial
+from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, _prepare_grug
 
 _DUMMY_DATA: Any = object()
 
 
-def test_grug_base_launch_sets_temporary_checkpoint_base_path():
+def test_prepare_grug_sets_temporary_checkpoint_base_path():
+    """``_prepare_grug`` wires the checkpointer's ``base_path`` and
+    ``temporary_base_path`` to paths derived from the resolved output_path,
+    so callers that pin ``override_output_path`` get stable, predictable
+    checkpoint locations.
+    """
+    output_path = "gs://marin-us-east5/experiments/grug/base-trial"
     with (
         patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
-        patch("experiments.grug.base.launch.run_grug") as run_grug,
     ):
-        run_grug_base_trial(
+        _, run_config, _ = _prepare_grug(
+            "grug-temp-path-test",
             GrugBaseLaunchConfig(
                 model=GRUG_130M_MODEL,
                 data=_DUMMY_DATA,
-                output_path="gs://marin-us-east5/experiments/grug/base-trial",
+                output_path=output_path,
                 run_id="grug-temp-path-test",
                 resources=ResourceConfig.with_cpu(),
                 steps=1,
@@ -34,10 +40,10 @@ def test_grug_base_launch_sets_temporary_checkpoint_base_path():
                 tracker=NoopConfig(),
                 optimizer=AdamConfig(),
                 eval=None,
-            )
+            ),
+            override_output_path=output_path,
         )
 
-    run_config = run_grug.call_args.args[0]
     checkpointer = run_config.trainer.trainer.checkpointer
     assert checkpointer.base_path == "gs://marin-us-east5/experiments/grug/base-trial/checkpoints"
     assert checkpointer.temporary_base_path == (

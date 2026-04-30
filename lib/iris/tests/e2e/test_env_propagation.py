@@ -31,7 +31,6 @@ def _parent_job_info(env: dict[str, str]) -> JobInfo:
         task_id=JobName.from_wire("/parent-job/0"),
         env=env,
         constraints=[],
-        worker_region=None,
     )
 
 
