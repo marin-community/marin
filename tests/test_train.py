@@ -5,11 +5,11 @@
 
 Coverage areas
 --------------
-- ``_prepare_lm_train``: output path is concrete (no OutputName placeholders),
+- ``prepare_lm_train``: output path is concrete (no OutputName placeholders),
   checkpointer paths are baked from it, tokenizer comes from the upstream
   tokenize step, and no Iris job is submitted.
 - ``train``: submits exactly one job via ``_submit_train_job`` with the expected
-  job name, config, output_path, resources, env_vars, and worker_fn.
+  job name, config, resources, env_vars, and worker_fn.
 - ``_submit_train_job`` integration: exercises the fray-client path via a
   recording stub.
 - ``materialize`` boundary: explicit ``output_path=`` kwarg resolves
@@ -27,7 +27,7 @@ from fray.types import ResourceConfig
 
 import experiments.defaults as defaults_module
 from experiments.defaults import (
-    _prepare_lm_train,
+    prepare_lm_train,
     _submit_train_job,
     train,
 )
@@ -50,7 +50,7 @@ class _LeafCfg:
 def fake_tokenized_step():
     """A minimal upstream ``ExecutorStep`` shaped like a real tokenize step.
 
-    ``_prepare_lm_train`` reads the tokenize step's ``tokenizer`` field via
+    ``prepare_lm_train`` reads the tokenize step's ``tokenizer`` field via
     ``_prepare_data_config``; we never invoke ``fn`` here so the fake's body
     is a no-op.
     """
@@ -88,16 +88,16 @@ def _local_marin_prefix(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# _prepare_lm_train
+# prepare_lm_train
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def make_prepared(small_train_config, fake_tokenized_step):
-    """Call ``_prepare_lm_train`` with the standard small-CPU shape."""
+    """Call ``prepare_lm_train`` with the standard small-CPU shape."""
 
     def _make(name: str = "my-run") -> tuple[str, object, str]:
-        return _prepare_lm_train(
+        return prepare_lm_train(
             name=name,
             tokenized=fake_tokenized_step,
             model_config=versioned(llama_30m),
@@ -135,11 +135,11 @@ def test_prepare_lm_train_tokenizer_from_upstream_step(make_prepared, fake_token
 
 
 def test_prepare_lm_train_no_iris_submission(make_prepared):
-    """``_prepare_lm_train`` must not submit any Iris jobs."""
+    """``prepare_lm_train`` must not submit any Iris jobs."""
 
     class _BangClient:
         def submit(self, request, adopt_existing: bool = True):  # pragma: no cover
-            raise AssertionError("_prepare_lm_train should not call IrisClient.submit")
+            raise AssertionError("prepare_lm_train should not call IrisClient.submit")
 
     with patch.object(fray_client_module, "current_client", lambda: _BangClient()):
         make_prepared(name="no-submit")
@@ -154,12 +154,11 @@ def test_train_calls_submit_train_job_once(tmp_path, small_train_config, fake_to
     """``train()`` calls ``_submit_train_job`` exactly once with expected args."""
     captured: list[dict] = []
 
-    def fake_submit(name, train_config, output_path, resources, env_vars, worker_fn):
+    def fake_submit(name, train_config, resources, env_vars, worker_fn):
         captured.append(
             dict(
                 name=name,
                 train_config=train_config,
-                output_path=output_path,
                 resources=resources,
                 env_vars=env_vars,
                 worker_fn=worker_fn,
@@ -181,9 +180,9 @@ def test_train_calls_submit_train_job_once(tmp_path, small_train_config, fake_to
     call = captured[0]
     assert "submit-once" in call["name"]
     assert call["resources"] == small_train_config.resources
-    # output_path must be a concrete local or GCS path — no OutputName placeholders
-    assert "OutputName" not in call["output_path"]
-    assert "submit-once" in call["output_path"]
+    # output_path is baked into the checkpointer base path
+    assert "submit-once" in call["train_config"].trainer.checkpointer.base_path
+    assert "OutputName" not in call["train_config"].trainer.checkpointer.base_path
     # worker_fn must be the levanter entry point
     import levanter.main.train_lm as levanter_train_lm
 
@@ -191,11 +190,11 @@ def test_train_calls_submit_train_job_once(tmp_path, small_train_config, fake_to
 
 
 def test_train_output_path_matches_prepare(small_train_config, fake_tokenized_step, monkeypatch):
-    """``train()`` and ``_prepare_lm_train()`` resolve to the same output_path."""
-    captured_path: list[str] = []
+    """``train()`` and ``prepare_lm_train()`` resolve to the same baked checkpointer path."""
+    captured_checkpointer_path: list[str] = []
 
-    def fake_submit(name, train_config, output_path, resources, env_vars, worker_fn):
-        captured_path.append(output_path)
+    def fake_submit(name, train_config, resources, env_vars, worker_fn):
+        captured_checkpointer_path.append(train_config.trainer.checkpointer.base_path)
 
     monkeypatch.setattr(defaults_module, "_submit_train_job", fake_submit)
 
@@ -208,7 +207,7 @@ def test_train_output_path_matches_prepare(small_train_config, fake_tokenized_st
         use_default_validation=False,
     )
 
-    _job_name, _cfg, expected_path = _prepare_lm_train(
+    _job_name, expected_cfg, _output_path = prepare_lm_train(
         name="path-parity",
         tokenized=fake_tokenized_step,
         model_config=versioned(llama_30m),
@@ -217,7 +216,7 @@ def test_train_output_path_matches_prepare(small_train_config, fake_tokenized_st
         use_default_validation=False,
     )
 
-    assert captured_path[0] == expected_path
+    assert captured_checkpointer_path[0] == expected_cfg.trainer.checkpointer.base_path
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +255,6 @@ def test_submit_train_job_submits_one_job(tmp_path, recording_client):
     _submit_train_job(
         name="job-shape",
         train_config=_LeafCfg(output_path=str(tmp_path / "out")),
-        output_path=str(tmp_path / "out"),
         resources=ResourceConfig.with_cpu(),
         env_vars={"USER_KEY": "user-value"},
         worker_fn=_trivial_worker,
@@ -283,7 +281,6 @@ def test_submit_train_job_extras_match_resource_class(
     _submit_train_job(
         name="extras-test",
         train_config=_LeafCfg(output_path=str(tmp_path / "out")),
-        output_path=str(tmp_path / "out"),
         resources=resources,
         env_vars={},
         worker_fn=_trivial_worker,
@@ -294,11 +291,12 @@ def test_submit_train_job_extras_match_resource_class(
 
 def test_submit_train_job_worker_entrypoint_calls_materialize_then_worker_fn(monkeypatch, tmp_path, recording_client):
     """The worker's captured callable runs `materialize` followed by
-    `worker_fn(materialised_config)`."""
+    `worker_fn(materialised_config)`, reading output_path from the config."""
     received: list = []
 
     def fake_materialize(config, *, output_path=None, prefix=None):
-        return ("materialized", config, output_path)
+        # output_path kwarg is no longer passed — materialize reads config.output_path
+        return ("materialized", config)
 
     def worker_fn(config):
         received.append(config)
@@ -311,7 +309,6 @@ def test_submit_train_job_worker_entrypoint_calls_materialize_then_worker_fn(mon
     _submit_train_job(
         name="worker-flow",
         train_config=train_config,
-        output_path=out_path,
         resources=ResourceConfig.with_cpu(),
         env_vars={"FAKE_ENV": "1"},
         worker_fn=worker_fn,
@@ -323,10 +320,9 @@ def test_submit_train_job_worker_entrypoint_calls_materialize_then_worker_fn(mon
     callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
 
     assert len(received) == 1
-    tag, original_cfg, materialise_out_path = received[0]
+    tag, original_cfg = received[0]
     assert tag == "materialized"
     assert original_cfg == train_config
-    assert materialise_out_path == out_path
 
 
 # ---------------------------------------------------------------------------
