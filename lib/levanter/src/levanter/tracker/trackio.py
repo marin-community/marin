@@ -13,6 +13,7 @@ import numpy as np
 from draccus import field
 
 from levanter.tracker import Tracker
+from levanter.tracker.background import BackgroundTracker
 from levanter.tracker.histogram import Histogram
 from levanter.tracker.tracker import NoopTracker, TrackerConfig
 
@@ -118,6 +119,13 @@ class TrackioConfig(TrackerConfig):
 
     resume: str = "auto"
 
+    background: bool = True
+    """If True (default), forward all log calls through a background thread that catches
+    exceptions from Trackio. Keeps training jobs alive across transient tracker failures."""
+
+    background_max_queue_size: int = 10000
+    background_finish_timeout: float = 120.0
+
     def init(self, run_id: Optional[str]) -> Tracker:
         import trackio
 
@@ -147,4 +155,11 @@ class TrackioConfig(TrackerConfig):
             resume=resume,
             embed=False,
         )
-        return TrackioTracker(r)
+        tracker: Tracker = TrackioTracker(r)
+        if self.background:
+            tracker = BackgroundTracker(
+                tracker,
+                max_queue_size=self.background_max_queue_size,
+                finish_timeout=self.background_finish_timeout,
+            )
+        return tracker
