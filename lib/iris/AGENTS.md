@@ -1,6 +1,6 @@
 # Iris Agent Notes
 
-Distributed job orchestration replacing Ray with simpler primitives. Start with the shared instructions in `/AGENTS.md`; only Iris-specific conventions are below.
+Distributed job orchestration for Marin. Start with the shared instructions in `/AGENTS.md`; only Iris-specific conventions are below.
 
 ## Key Docs
 

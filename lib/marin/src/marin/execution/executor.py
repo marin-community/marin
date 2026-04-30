@@ -674,7 +674,16 @@ def resolve_executor_step(
     # Short-circuit for StepSpec -> ExecutorStep -> StepSpec round-trip.
     original: StepSpec | None = getattr(step, "_original_step_spec", None)
     if original is not None:
-        return dataclasses.replace(original, deps=deps or [])
+        # ``as_executor_step()`` pins ``override_output_path=original.output_path``
+        # on the ExecutorStep so the executor preserves the original placement.
+        # Mirror that pin on the resolved StepSpec — otherwise replacing deps
+        # with executor-built stubs (which lack the originals' ``hash_attrs``)
+        # would change ``name_with_hash`` and silently shift ``output_path``.
+        return dataclasses.replace(
+            original,
+            deps=deps or list(original.deps),
+            override_output_path=original.output_path,
+        )
 
     remote_callable = step.fn if isinstance(step.fn, RemoteCallable) else None
     if remote_callable is not None:
@@ -1214,6 +1223,7 @@ class Executor:
         self.is_pseudo_dep: dict[ExecutorStep, bool] = {}
         self.version_strs: dict[ExecutorStep, str] = {}
         self.version_str_to_step: dict[str, ExecutorStep] = {}
+        self.hashed_versions: dict[ExecutorStep, str] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
         self.step_infos: list[ExecutorStepInfo] = []
@@ -1462,6 +1472,7 @@ class Executor:
         self.dependencies[step] = list(map(self.canonicalize, computed_deps.dependencies))
         self.versions[step] = version
         self.version_strs[step] = version_str
+        self.hashed_versions[step] = hashed_version
         self.output_paths[step] = output_path
         self.is_pseudo_dep[step] = is_pseudo_dep
 
@@ -1480,10 +1491,18 @@ class Executor:
         return depth
 
     def _dep_version(self, dep: ExecutorStep) -> dict[str, Any] | str:
-        """Full version dict for shallow deps, output path for deep ones."""
+        """Full version dict for shallow deps, region-stable name+hash for deep ones.
+
+        Using ``output_paths[dep]`` here would bake the bucket prefix
+        (e.g. ``gs://marin-us-central1``) into the hashed version, so the same
+        logical pipeline rehashed under a different ``MARIN_PREFIX`` would
+        produce a different identity. ``{name}-{hashed_version}`` is the
+        region-independent suffix that already encodes the dep's full transitive
+        version.
+        """
         if self._dep_depth(dep) <= self._MAX_INLINE_DEPTH:
             return self.versions[dep]
-        return self.output_paths[dep]
+        return f"{dep.name}-{self.hashed_versions[dep]}"
 
     def canonicalize(self, step: ExecutorStep) -> ExecutorStep:
         """Multiple instances of `ExecutorStep` might have the same version."""

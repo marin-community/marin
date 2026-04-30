@@ -26,6 +26,8 @@ from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 from rigging.filesystem import resolve_mirror_url
 
+from rigging.filesystem import record_transfer
+
 from levanter._debug_logging import flush_debug_output
 from levanter.utils import fsspec_utils, jax_utils
 
@@ -193,6 +195,12 @@ def tree_serialize_leaves_tensorstore(
     for path in paths:
         spec = _create_ocdbt_spec(checkpoint_dir, path)
         tspecs.append(spec)
+
+    # Pre-charge the cross-region transfer budget before kicking off the
+    # async writes — tensorstore bypasses fsspec, so the CrossRegionGuardedFS
+    # interceptor never sees these bytes.  No-op when checkpoint_dir is local
+    # or in the same region as the VM.
+    record_transfer(total_array_bytes, checkpoint_dir)
 
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize entering manager.serialize for %s", checkpoint_dir)
@@ -384,6 +392,20 @@ def tree_deserialize_leaves_tensorstore(
     """
     if manager is None:
         manager = array_ser.GlobalAsyncCheckpointManager()
+
+    # Pre-charge the cross-region transfer budget before kicking off the
+    # async reads.  Tensorstore bypasses fsspec, so the CrossRegionGuardedFS
+    # interceptor never sees these bytes.  We use the exemplar pytree's
+    # shapes/dtypes as an upper bound — if `allow_missing=True` and some
+    # leaves aren't on disk we'll over-charge slightly, but the common case
+    # (no missing arrays) is exact.  No-op when checkpoint_dir is local or
+    # in the same region as the VM.
+    estimated_bytes = sum(
+        _estimate_array_nbytes(leaf.array if is_named_array(leaf) else leaf)
+        for leaf in jtu.tree_leaves(pytree, is_leaf=_is_named_or_none)
+        if leaf is not None
+    )
+    record_transfer(estimated_bytes, checkpoint_dir)
 
     shardings: PyTree[Optional[Sharding]] = jtu.tree_map(
         partial(_sharding_from_leaf, axis_mapping=axis_mapping, mesh=mesh), pytree, is_leaf=_is_named_or_none

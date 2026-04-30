@@ -11,8 +11,8 @@ via ``StepRunner``. Per-source sample fractions are computed from
 math that the full ferry uses — so the subset actually reflects the
 requested target size rather than a blanket fraction.
 
-Outputs land in the region-local marin temp bucket
-(``gs://marin-tmp-us-central1/ttl=Nd/data/datakit/<RUN_ID>/sample/<src.name>``)
+Outputs land under the region-local marin temp prefix
+(``gs://marin-us-central1/tmp/ttl=Nd/data/datakit/<RUN_ID>/sample/<src.name>``)
 so they're auto-deleted after the configured TTL — no manual cleanup.
 """
 

@@ -124,7 +124,11 @@ class EvaluationConfig:
 
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
-    """Convert Marin eval task configs into Levanter task configs."""
+    """Convert Marin eval task configs into Levanter task configs.
+
+    Supported ``task_kwargs`` are mapped into ``TaskConfig`` so callers can pass
+    inline task-spec fields for tasks whose registered YAML needs patching.
+    """
     return [
         TaskConfig(
             task=task.name,

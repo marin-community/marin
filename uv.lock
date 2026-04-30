@@ -236,6 +236,7 @@ fork-strategy = "fewest"
 [manifest]
 members = [
     "marin",
+    "marin-finelog",
     "marin-fray",
     "marin-haliax",
     "marin-iris",
@@ -4976,6 +4977,55 @@ test = [
 ]
 
 [[package]]
+name = "marin-finelog"
+version = "0.1.0"
+source = { editable = "lib/finelog" }
+dependencies = [
+    { name = "click" },
+    { name = "connect-python" },
+    { name = "duckdb" },
+    { name = "fsspec" },
+    { name = "marin-rigging" },
+    { name = "protobuf" },
+    { name = "pyarrow" },
+    { name = "pyyaml" },
+    { name = "starlette" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "gcsfs" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.3.1" },
+    { name = "connect-python", specifier = ">=0.9.0" },
+    { name = "duckdb", specifier = ">=1.0.0" },
+    { name = "fsspec", specifier = ">=2024.0.0" },
+    { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "protobuf", specifier = ">=5.0" },
+    { name = "pyarrow", specifier = ">=19.0.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "starlette", specifier = ">=0.50.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "gcsfs", specifier = ">=2024.0.0" },
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[[package]]
 name = "marin-fray"
 version = "0.99"
 source = { editable = "lib/fray" }
@@ -5125,6 +5175,7 @@ dependencies = [
     { name = "grpcio" },
     { name = "httpx" },
     { name = "humanfriendly" },
+    { name = "marin-finelog" },
     { name = "marin-rigging" },
     { name = "pydantic" },
     { name = "pyjwt" },
@@ -5183,6 +5234,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0" },
+    { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "pyarrow", marker = "extra == 'controller'", specifier = ">=19.0.0" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -5470,6 +5522,7 @@ dependencies = [
     { name = "dupekit" },
     { name = "joblib" },
     { name = "marin" },
+    { name = "marin-finelog" },
     { name = "marin-fray" },
     { name = "marin-haliax" },
     { name = "marin-iris" },
@@ -5485,6 +5538,7 @@ requires-dist = [
     { name = "dupekit", specifier = ">=0.1.0" },
     { name = "joblib" },
     { name = "marin", editable = "lib/marin" },
+    { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },

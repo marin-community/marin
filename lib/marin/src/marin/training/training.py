@@ -5,9 +5,10 @@ import dataclasses
 import importlib
 import logging
 import os
+import urllib.parse
 from copy import deepcopy
-from dataclasses import dataclass, replace
 from collections.abc import Callable
+from dataclasses import dataclass, replace
 from typing import TypeVar
 
 import draccus
@@ -88,19 +89,32 @@ TrainOnPodConfigT = TypeVar("TrainOnPodConfigT", TrainLmOnPodConfig, TrainDpoOnP
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
-TEMPORARY_CHECKPOINTS_PREFIX = "checkpoints-temp"
+TEMPORARY_CHECKPOINT_TTL_DAYS = 14
+TEMPORARY_CHECKPOINTS_PATH = "checkpoints-temp"
 
 
 def _cli_helpers_module():
     return importlib.import_module("levanter.infra.cli_helpers")
 
 
-def _temporary_checkpoint_base_path(output_path: str) -> str:
-    """Return a temporary checkpoint namespace scoped to one executor output path."""
-    output_path_name = os.path.basename(output_path.rstrip("/"))
-    if not output_path_name:
-        raise ValueError(f"Could not derive temporary checkpoint namespace from output_path={output_path!r}")
-    return os.path.join(marin_temp_bucket(ttl_days=14, prefix=TEMPORARY_CHECKPOINTS_PREFIX), output_path_name)
+def _output_path_temp_component(output_path: str) -> str:
+    parsed = urllib.parse.urlparse(output_path)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.netloc}{parsed.path}".strip("/")
+    if parsed.scheme:
+        return f"{parsed.scheme}{parsed.path}".strip("/")
+    return output_path.strip("/")
+
+
+def temporary_checkpoint_base_path(output_path: str) -> str:
+    """Return the region-local temporary checkpoint base for an executor output path."""
+    output_component = _output_path_temp_component(output_path)
+    temp_prefix = os.path.join(TEMPORARY_CHECKPOINTS_PATH, output_component, DEFAULT_CHECKPOINTS_PATH)
+    return marin_temp_bucket(
+        ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
+        prefix=temp_prefix,
+        source_prefix=output_path,
+    )
 
 
 def _requires_eval_extra(config: TrainOnPodConfigT) -> bool:
@@ -126,7 +140,7 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
         checkpointer=replace(
             pod_config.train_config.trainer.checkpointer,
             base_path=os.path.join(pod_config.output_path, DEFAULT_CHECKPOINTS_PATH),
-            temporary_base_path=_temporary_checkpoint_base_path(pod_config.output_path),
+            temporary_base_path=temporary_checkpoint_base_path(pod_config.output_path),
         ),
     )
 
@@ -333,10 +347,9 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
 
 def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
-    """Run the Levanter DPO training main function on a Ray cluster.
+    """Run the Levanter DPO training main function through Fray.
 
     This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
-    It should also be run with a Ray cluster already running.
     """
     config, train_config, env, extras = _prepare_training_run(config)
 
@@ -371,7 +384,7 @@ def _add_default_env_variables(env: dict, default_env: dict | None):
         default_env = deepcopy(default_env)
         env = mergedeep.merge(default_env, env)
 
-    # Ray gets mad if the values aren't all strings, but e.g. ints
+    # Task environment values are serialized as strings.
     env = {str(k): str(v) for k, v in env.items()}
     return env
 

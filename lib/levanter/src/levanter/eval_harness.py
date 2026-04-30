@@ -282,7 +282,6 @@ class _LmEvalHarnessWorker:
                 weight=loss_weight,
                 logsumexp_weight=0.0,
                 return_argmax=True,
-                implementation="xla",
             )
 
             # We need to compute losses and also whether or not the completion is correct
@@ -1025,10 +1024,24 @@ class TaskConfig:
     """ String to insert between few-shot examples. defaults to "\\n\\n" """
     doc_to_text: str | None = None
     """Jinja2 template string to process a sample into the appropriate input for the model."""
-    doct_to_target: str | None = None
+    doc_to_target: str | None = None
     """Jinja2 template string to process a sample into the appropriate target for the model."""
     doc_to_choice: str | None = None
     """Jinja2 template string to process a sample into a list of possible string choices for multiple_choice tasks. """
+
+    # Inline task-spec fields. Set these when passing a full task definition whose `task` name is not
+    # in lm-eval's registry — lm-eval then builds the Entry straight from the dict instead of applying
+    # registered-task override semantics (which can silently drop fields like dataset_path).
+    dataset_path: str | None = None
+    dataset_name: str | None = None
+    output_type: str | None = None
+    test_split: str | None = None
+    training_split: str | None = None
+    validation_split: str | None = None
+    fewshot_split: str | None = None
+    metric_list: list[dict] | None = None
+    tag: list[str] | None = None
+    metadata: dict | None = None
 
     # Extra Levanter-only config to control generation stops per task
     additional_stop_strings: list[str] | None = None
@@ -1161,7 +1174,8 @@ class LmEvalHarnessConfig:
         return this_task
 
     def _rename_tasks_for_eval_harness(self, this_task, lm_eval_task_name, our_name):
-        import lm_eval.tasks as tasks
+        from lm_eval.api.group import ConfigurableGroup
+        from lm_eval.api.task import ConfigurableTask
 
         # hacky, but this allows us to run multiple instances of the same task with different fewshot settings
         if isinstance(this_task, dict):
@@ -1169,7 +1183,7 @@ class LmEvalHarnessConfig:
             for k, v in this_task.items():
                 v = self._rename_tasks_for_eval_harness(v, lm_eval_task_name, our_name)
 
-                if isinstance(k, tasks.ConfigurableGroup):
+                if isinstance(k, ConfigurableGroup):
                     k._config.group = self._replace_name_with_our_name(k.group, lm_eval_task_name, our_name)
                     out[k] = v
                 elif isinstance(k, str):
@@ -1179,7 +1193,7 @@ class LmEvalHarnessConfig:
                         # ok so inexplicably, lm_eval_harness doesn't wrap the key in a ConfigurableGroup when you pass
                         # in a task dict (it seems like a mistake), so we need to do that here
                         # subtask is the name of all of the child tasks in v
-                        group = tasks.ConfigurableGroup(config={"group": k, "task": subtask_list})
+                        group = ConfigurableGroup(config={"group": k, "task": subtask_list})
                         out[group] = v
                     else:
                         out[k] = v
@@ -1188,7 +1202,7 @@ class LmEvalHarnessConfig:
 
             return out
 
-        elif isinstance(this_task, tasks.ConfigurableTask):
+        elif isinstance(this_task, ConfigurableTask):
             this_task.config.task = self._replace_name_with_our_name(
                 this_task.config.task, lm_eval_task_name, our_name
             )
@@ -1210,11 +1224,11 @@ class LmEvalHarnessConfig:
         return lm_eval_name
 
     def _get_child_tasks(self, task_group):
-        import lm_eval.tasks as tasks
+        from lm_eval.api.group import ConfigurableGroup
 
         out = []
         for k, v in task_group.items():
-            if isinstance(k, tasks.ConfigurableGroup):
+            if isinstance(k, ConfigurableGroup):
                 subtask_or_tasks = k.config.task
                 if isinstance(subtask_or_tasks, str):
                     out.append(subtask_or_tasks)
@@ -1428,6 +1442,12 @@ def _compute_averages(outputs):
 
             metric_value = task_results.get(metric)
             if metric_value is None:
+                continue
+            # lm-eval occasionally emits string values for non-numeric metrics (e.g. task config
+            # echoes, error placeholders). np.mean over mixed strings blows up with a numpy dtype
+            # error, so only aggregate numerics.
+            if not isinstance(metric_value, (int, float, bool, np.number)):
+                logger.warning("Skipping non-numeric metric %s=%r for task %s", metric, metric_value, task_name)
                 continue
 
             valid_tasks.append((metric_value, sample_counts["effective"]))
@@ -1666,16 +1686,15 @@ def _adjust_config(task_dict, fewshot_random_seed=0):
     return adjusted_task_dict
 
 
-def _encode_batch_texts(tokenizer, texts: list[str]) -> list[list[int]]:
-    """Batch-tokenize text for Marin tokenizers and HF fast tokenizers."""
+def _encode_batch(tokenizer, texts: list[str]) -> list[list[int]]:
+    # MarinTokenizer returns list[list[int]]; bare tokenizers.Tokenizer returns list[Encoding];
+    # HF PreTrainedTokenizerFast has no encode_batch but supports __call__.
     if hasattr(tokenizer, "encode_batch"):
         encoded = tokenizer.encode_batch(texts)
         if encoded and hasattr(encoded[0], "ids"):
-            return [encoding.ids for encoding in encoded]
+            return [enc.ids for enc in encoded]
         return encoded
-
-    encoded = tokenizer(texts, add_special_tokens=False, truncation=False, padding=False)
-    return encoded["input_ids"]
+    return tokenizer(texts, add_special_tokens=False, truncation=False, padding=False)["input_ids"]
 
 
 def _iterate_tokenized_requests(
@@ -1697,8 +1716,8 @@ def _iterate_tokenized_requests(
         combined_batch = [combined_texts[i] for i in batch_indices]
         context_batch = [contexts[i] for i in batch_indices]
         # Tokenize batched inputs
-        combined_encodings = {"input_ids": _encode_batch_texts(tokenizer, combined_batch)}
-        context_encodings = {"input_ids": _encode_batch_texts(tokenizer, context_batch)}
+        combined_encodings = {"input_ids": _encode_batch(tokenizer, combined_batch)}
+        context_encodings = {"input_ids": _encode_batch(tokenizer, context_batch)}
 
         for off in range(len(batch_indices)):
             i = batch_indices[off]

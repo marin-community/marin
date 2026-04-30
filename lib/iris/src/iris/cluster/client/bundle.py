@@ -144,10 +144,10 @@ def create_workspace_dir(
     *,
     exclude: re.Pattern[str] | None = None,
 ) -> str:
-    """Copy workspace files into a temporary directory for Ray's working_dir.
+    """Copy workspace files into a temporary directory for upload.
 
-    Ray's JobSubmissionClient expects a directory path: it zips and uploads it
-    internally. The temp directory is cleaned up at process exit via atexit.
+    The Iris client zips and uploads the directory. The temp directory is
+    cleaned up at process exit via atexit.
     """
     workspace = Path(workspace)
     files = collect_workspace_files(workspace, exclude=exclude)

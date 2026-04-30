@@ -98,7 +98,12 @@ def evaluate_lm_evaluation_harness(
         model_name (str): Name of the model.
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
-        env_vars (dict[str, str] | None): Additional environment variables to set on the child worker.
+        env_vars (dict[str, str] | None): Extra env vars to set on the child iris worker.
+            Needed for vLLM-on-TPU bring-up (e.g. ``MARIN_VLLM_MODE=native``,
+            ``VLLM_ENABLE_V1_MULTIPROCESSING=0``) and code-eval-dependent tasks
+            like humaneval (``HF_ALLOW_CODE_EVAL=1``). The coordinator's own
+            ``os.environ`` does NOT propagate to iris-spawned children — these
+            vars must be threaded through ``remote()``.
     """
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness/{model_name}",

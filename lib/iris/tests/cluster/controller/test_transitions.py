@@ -42,7 +42,7 @@ from iris.cluster.controller.transitions import (
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
-from iris.rpc import logging_pb2
+from finelog.rpc import logging_pb2
 from rigging.timing import Duration, Timestamp
 
 from .conftest import (
@@ -1390,7 +1390,7 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
 
 def test_log_service_direct_push(state, log_service):
     """Log entries pushed via LogService are queryable."""
-    from iris.cluster.log_store import task_log_key
+    from iris.cluster.log_store_helpers import task_log_key
     from iris.cluster.types import TaskAttempt
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
@@ -1416,7 +1416,7 @@ def test_log_service_direct_push(state, log_service):
 def test_log_service_accumulates_pushes(state, log_service):
     """Multiple pushes accumulate logs in the service."""
 
-    from iris.cluster.log_store import task_log_key
+    from iris.cluster.log_store_helpers import task_log_key
     from iris.cluster.types import TaskAttempt
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
@@ -3072,6 +3072,37 @@ def test_prune_old_terminal_jobs(state):
 
     # Tasks for old job should also be gone (CASCADE)
     assert _query_task(state, old_tasks[0].task_id) is None
+
+
+def test_prune_evicts_status_text_cache(state):
+    """prune_old_data evicts _status_text entries for pruned jobs; other tasks are unaffected."""
+    wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
+
+    old_tasks = submit_job(state, "old-job", make_job_request("old-job"))
+    dispatch_task(state, old_tasks[0], wid)
+    transition_task(state, old_tasks[0].task_id, job_pb2.TASK_STATE_SUCCEEDED)
+
+    kept_tasks = submit_job(state, "kept-job", make_job_request("kept-job"))
+    dispatch_task(state, kept_tasks[0], wid)
+    transition_task(state, kept_tasks[0].task_id, job_pb2.TASK_STATE_SUCCEEDED)
+
+    old_job_id = JobName.root("test-user", "old-job")
+    state._db.execute(
+        "UPDATE jobs SET finished_at_ms = 1000 WHERE job_id = ?",
+        (old_job_id.to_wire(),),
+    )
+
+    state.record_task_status_text(old_tasks[0].task_id, "old status")
+    state.record_task_status_text(kept_tasks[0].task_id, "kept status")
+
+    state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        profile_retention=Duration.from_seconds(86400),
+    )
+
+    assert state._store.tasks.get_status_text(old_tasks[0].task_id.to_wire()) == ""
+    assert state._store.tasks.get_status_text(kept_tasks[0].task_id.to_wire()) == "kept status"
 
 
 def test_prune_old_inactive_workers(state):

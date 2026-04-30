@@ -4,7 +4,7 @@
 """
 Each `ExecutorStep` produces an `output_path`.
 We associate each `output_path` with:
-- A status file (`output_path/.executor_status`) containing simple text: SUCCESS, FAILURE, or RUNNING
+- A status file (`output_path/.executor_status`) containing simple text: SUCCESS, FAILED, DEP_FAILED, or RUNNING
 - A LOCK file (`output_path/.executor_status.lock`) for distributed locking
 
 The LOCK file contains JSON with {worker_id, timestamp} and is refreshed periodically.
@@ -50,9 +50,9 @@ class StatusFile:
     Two types of files:
     - LOCK file (JSON): Single file for distributed lock acquisition.
       Contains {worker_id, timestamp}. Must be refreshed periodically.
-    - Status file (simple text): Final state - SUCCESS, FAILURE, or RUNNING.
+    - Status file (simple text): Step state - SUCCESS, FAILED, DEP_FAILED, or RUNNING.
 
-    Lock acquisition delegates to ``rigging.distributed_lock``.
+    Lock acquisition and release delegate to ``rigging.distributed_lock``.
     """
 
     def __init__(self, output_path: str, worker_id: str):
@@ -108,10 +108,12 @@ class StatusFile:
         return last_status
 
     def write_status(self, status: str) -> None:
-        """Write status (SUCCESS/FAILURE/RUNNING).
+        """Write the status file without changing lock ownership.
 
-        For terminal statuses (SUCCESS/FAILED), the lock is released.
-        For RUNNING, the lock is maintained so heartbeat can continue refreshing it.
+        ``step_lock`` owns the lock lifetime: it stops the heartbeat before
+        releasing the lock. Keeping status writes separate from lock release
+        prevents the heartbeat from observing our own terminal cleanup as lease
+        loss.
         """
         parent = os.path.dirname(self.path)
         if not self.fs.exists(parent):
@@ -119,20 +121,13 @@ class StatusFile:
         with self.fs.open(self.path, "w") as f:
             f.write(status)
 
-        if status != STATUS_RUNNING:
-            logger.info(
-                "Releasing lock path=%s worker=%s reason=terminal_status:%s",
-                self._lock_path,
-                self.worker_id,
-                status,
-            )
-            self.release_lock()
         logger.debug("[%s] Wrote status %s to %s", self.worker_id, status, self.path)
 
     def refresh_lock(self) -> None:
         """Refresh a lock held by the current worker.
 
-        Raises ``LeaseLostError`` if another worker holds the lock.
+        Raises ``LeaseLostError`` if another worker holds the lock, or if the
+        lock disappeared before the heartbeat stopped.
         """
         self._lock.refresh()
 
@@ -227,7 +222,9 @@ def step_lock(output_path: str, step_label: str, *, force_run_failed: bool = Tru
     """Context manager that acquires a distributed lock with heartbeat refresh.
 
     Acquires the lock, starts a daemon heartbeat thread, yields the
-    ``StatusFile``, then tears down the heartbeat and releases the lock.
+    ``StatusFile``, then tears down the heartbeat and releases the lock. Status
+    writes inside the context do not release the lock; this context manager owns
+    release ordering so the heartbeat is stopped first.
 
     Raises ``StepAlreadyDone`` if another worker completed the step
     while we waited for the lock.

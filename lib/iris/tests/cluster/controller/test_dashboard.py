@@ -17,7 +17,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.log_server.server import LogServiceImpl
+from finelog.server import LogServiceImpl
 from iris.cluster.controller.db import (
     healthy_active_workers_with_attributes,
 )
@@ -849,7 +849,7 @@ def test_fetch_logs_for_missing_task_returns_empty_entries(client):
     """FetchLogs on LogService returns empty entries for a nonexistent task."""
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
-        "/iris.logging.LogService/FetchLogs",
+        "/finelog.logging.LogService/FetchLogs",
         json={"source": re.escape(task_id) + ":.*"},
         headers={"Content-Type": "application/json"},
     )
@@ -873,7 +873,7 @@ def test_fetch_logs_backward_compat_proxy(client):
 
 def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     """Old clients using default Connect proto encoding hit the compat endpoint."""
-    from iris.rpc import logging_pb2
+    from finelog.rpc import logging_pb2
 
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     req = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
@@ -886,6 +886,18 @@ def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     parsed = logging_pb2.FetchLogsResponse()
     parsed.ParseFromString(resp.content)
     assert list(parsed.entries) == []
+
+
+def test_fetch_logs_legacy_iris_logging_path(client):
+    """Pre-finelog-lift clients call /iris.logging.LogService/FetchLogs."""
+    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
+    resp = client.post(
+        "/iris.logging.LogService/FetchLogs",
+        json={"source": re.escape(task_id) + ":.*"},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("entries", []) == []
 
 
 # =============================================================================
