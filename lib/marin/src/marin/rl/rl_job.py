@@ -24,11 +24,11 @@ from levanter.optim import OptimizerConfig
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.trainer import TrainerConfig
 from marin.rl.curriculum import CurriculumConfig
-from marin.rl.objectives import ObjectiveSpec
 from marin.rl.environments.inference_ctx import (
     LevanterInferenceContextConfig,
     vLLMInferenceContextConfig,
 )
+from marin.rl.objectives import ObjectiveSpec
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig, RolloutWorkerConfig

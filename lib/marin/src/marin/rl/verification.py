@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 import numpy as np
-
 from marin.rl.traces import EpisodeTrace
 
 

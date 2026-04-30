@@ -9,7 +9,6 @@ from typing import Protocol
 import jax
 import jax.numpy as jnp
 from levanter.metrics import Metric, ReductionType
-
 from marin.rl.scoring import ScoreBundle, ScoreRequirements
 from marin.rl.types import SequenceBatch
 

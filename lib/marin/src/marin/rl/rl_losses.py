@@ -3,23 +3,21 @@
 
 """RL loss functions."""
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-import logging
 from typing import Protocol
 
 import equinox as eqx
-import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
-
+from levanter.metrics import Metric, ReductionType
+from levanter.models.lm_model import LmHeadModel
 from marin.rl.objectives.reductions import compute_dapo_loss
 from marin.rl.objectives.signals import compute_rloo_advantages_from_rewards
 from marin.rl.objectives.terms import compute_metadata_metrics, importance_sampling_ratio
 from marin.rl.scoring import LocalScoreSource, ModelRoles, ScoreRequirements, ScoreSource
-from levanter.metrics import Metric, ReductionType
-from levanter.models.lm_model import LmHeadModel
 from marin.rl.types import Rollout, TrainingBatch
 
 logger = logging.getLogger(__name__)

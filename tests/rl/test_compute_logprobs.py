@@ -5,7 +5,6 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import pytest
-
 from marin.rl.rl_losses import importance_sampling_ratio
 from marin.rl.scoring import (
     LocalScoreSource,

@@ -22,8 +22,8 @@ from marin.execution.artifact import PathMetadata
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName, output_path_of, this_output_path
 from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
-from marin.rl.objectives import ObjectiveSpec
 from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
+from marin.rl.objectives import ObjectiveSpec
 from marin.rl.placement import marin_prefix_for_region, resolve_launcher_region, singleton_region_list
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams

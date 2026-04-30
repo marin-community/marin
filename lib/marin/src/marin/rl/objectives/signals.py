@@ -12,7 +12,6 @@ import haliax.haxtyping as ht
 import jax.numpy as jnp
 import numpy as np
 from haliax import NamedArray
-
 from marin.rl.types import BatchInfo, SequenceBatch
 
 from .spec import NoRewardSignalConfig, RLOOSignalConfig, SignalConfig

@@ -7,11 +7,9 @@ from types import SimpleNamespace
 import fsspec
 import numpy as np
 import pytest
-from marin.rl.environments.spec import EnvironmentIdentity, EnvironmentSample
 from marin.rl.environments.inference_ctx.staging import stage_vllm_metadata_locally
 from marin.rl.environments.inference_ctx.vllm import VLLMSamplingConfig, vLLMInferenceContextConfig
-from marin.rl.run_state import RolloutTransferCounters
-from marin.rl.traces import EpisodeResponseTrace, EpisodeTrace
+from marin.rl.environments.spec import EnvironmentIdentity, EnvironmentSample
 from marin.rl.rollout_worker import (
     RolloutTracker,
     RolloutTrackerConfig,
@@ -21,6 +19,8 @@ from marin.rl.rollout_worker import (
     _should_run_micro_eval,
     create_inference_context,
 )
+from marin.rl.run_state import RolloutTransferCounters
+from marin.rl.traces import EpisodeResponseTrace, EpisodeTrace
 from marin.rl.types import Rollout, RolloutGroup
 
 

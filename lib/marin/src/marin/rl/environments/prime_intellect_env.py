@@ -11,9 +11,9 @@ from typing import Any, ClassVar, cast
 import jax.numpy as jnp
 import numpy as np
 from marin.rl.environments import MarinEnv
+from marin.rl.environments.inference_ctx import BaseInferenceContext
 from marin.rl.environments.process_vllm_results import process_vllm_chat_results
 from marin.rl.environments.spec import EnvironmentIdentity, EnvironmentSample
-from marin.rl.environments.inference_ctx import BaseInferenceContext
 from marin.rl.traces import EpisodeResponseTrace, EpisodeTrace
 from marin.rl.types import Rollout, RolloutGroup
 

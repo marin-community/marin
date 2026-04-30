@@ -10,7 +10,6 @@ import jax
 import jax.numpy as jnp
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmHeadModel
-
 from marin.rl.scoring import LocalScoreSource, ModelRoles, ScoreRequirements, ScoreSource
 from marin.rl.types import BatchInfo, SequenceBatch
 
