@@ -188,3 +188,80 @@ def test_load_parquet_no_dataset_api(tmp_path, monkeypatch):
     # Should succeed without pyarrow.dataset
     result = list(load_parquet(path))
     assert len(result) == len(RECORDS)
+
+
+# ---------------------------------------------------------------------------
+# DuckDB fallback for parquet-rs-written files PyArrow's thrift decoder rejects
+# ---------------------------------------------------------------------------
+
+
+_THRIFT_ERROR_MSG = "Couldn't deserialize thrift: No more data to read.\nDeserializing page header failed."
+
+
+def _patch_pyarrow_thrift_failure(monkeypatch) -> None:
+    """Make `pq.ParquetFile.read_row_group` raise the parquet-rs thrift error."""
+
+    def fail(self, *args, **kwargs):
+        raise OSError(_THRIFT_ERROR_MSG)
+
+    monkeypatch.setattr(pq.ParquetFile, "read_row_group", fail)
+
+
+def test_load_parquet_duckdb_fallback(tmp_path, monkeypatch):
+    """When PyArrow rejects the page header, fall back to DuckDB."""
+    path = str(tmp_path / "data.parquet")
+    _write_test_parquet(path, RECORDS)
+    _patch_pyarrow_thrift_failure(monkeypatch)
+
+    result = list(load_parquet(path))
+    assert result == RECORDS
+
+
+def test_load_parquet_duckdb_fallback_columns(tmp_path, monkeypatch):
+    """Column projection works through the fallback path."""
+    path = str(tmp_path / "data.parquet")
+    _write_test_parquet(path, RECORDS)
+    _patch_pyarrow_thrift_failure(monkeypatch)
+
+    spec = InputFileSpec(path=path, columns=["id", "name"])
+    result = list(load_parquet(spec))
+    assert result == [{"id": r["id"], "name": r["name"]} for r in RECORDS]
+
+
+def test_load_parquet_duckdb_fallback_row_range(tmp_path, monkeypatch):
+    """Row range slicing works through the fallback path."""
+    path = str(tmp_path / "data.parquet")
+    _write_test_parquet(path, RECORDS, row_group_size=3)
+    _patch_pyarrow_thrift_failure(monkeypatch)
+
+    spec = InputFileSpec(path=path, row_start=2, row_end=7)
+    result = list(load_parquet(spec))
+    assert [r["id"] for r in result] == [2, 3, 4, 5, 6]
+
+
+def test_iter_parquet_row_groups_duckdb_fallback_predicate(tmp_path, monkeypatch):
+    """Equality predicates apply post-slice through the fallback path."""
+    path = str(tmp_path / "scatter.parquet")
+    rows = [{"shard": s, "val": f"s{s}-{i}"} for s in range(3) for i in range(2)]
+    pq.write_table(pa.Table.from_pylist(rows), path, row_group_size=100)
+    _patch_pyarrow_thrift_failure(monkeypatch)
+
+    tables = list(iter_parquet_row_groups(path, equality_predicates={"shard": 1}))
+    assert len(tables) == 1
+    assert tables[0].column("val").to_pylist() == ["s1-0", "s1-1"]
+
+
+def test_load_parquet_non_thrift_oserror_propagates(tmp_path, monkeypatch):
+    """Only thrift-deserialize errors fall back; other OSErrors propagate."""
+    path = str(tmp_path / "data.parquet")
+    _write_test_parquet(path, RECORDS)
+
+    def fail(self, *args, **kwargs):
+        raise OSError("disk error")
+
+    monkeypatch.setattr(pq.ParquetFile, "read_row_group", fail)
+
+    import pytest
+
+    with pytest.raises(OSError, match="disk error"):
+        list(load_parquet(path))
