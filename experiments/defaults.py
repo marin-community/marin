@@ -65,16 +65,16 @@ from marin.processing.tokenize import (
 )
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
 from marin.training.training import (
-    DEFAULT_CHECKPOINTS_PATH,
-    DEFAULT_HF_CHECKPOINTS_PATH,
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
     _apply_env_to_process,
+    bake_output_path,
+    check_train_config_paths,
     extras_for_resources,
+    impute_run_id,
     resolve_training_env,
     run_levanter_train_dpo,
     run_levanter_train_lm,
-    temporary_checkpoint_base_path,
 )
 
 from experiments.evals.task_configs import CORE_TASKS
@@ -379,7 +379,7 @@ def _build_train_lm_config(
     wandb_name: str | None = None,
     wandb_group: str | None = None,
 ) -> tuple[str, TrainLmConfig]:
-    """Build the shared ``TrainLmConfig`` body used by ``default_train`` and ``_prepare_lm_train``.
+    """Build the shared ``TrainLmConfig`` body used by ``default_train`` and ``prepare_lm_train``.
 
     Returns:
         (truncated_name, inner_config) where ``truncated_name`` is the W&B-safe
@@ -574,44 +574,9 @@ def default_train(
     )
 
 
-def _bake_output_path_into_train_config(
-    train_config: TrainLmConfig,
-    output_path: str,
-) -> TrainLmConfig:
-    """Wire ``output_path`` into the trainer's checkpointer and HF save path."""
-    trainer = dataclasses.replace(
-        train_config.trainer,
-        checkpointer=dataclasses.replace(
-            train_config.trainer.checkpointer,
-            base_path=os.path.join(output_path, DEFAULT_CHECKPOINTS_PATH),
-            temporary_base_path=temporary_checkpoint_base_path(output_path),
-            # Output path already encodes the run identity; do NOT also append
-            # the run id again or checkpoints land at .../<run_id>/<run_id>/...
-            append_run_id_to_base_path=False,
-        ),
-    )
-    return dataclasses.replace(
-        train_config,
-        trainer=trainer,
-        hf_save_path=os.path.join(output_path, DEFAULT_HF_CHECKPOINTS_PATH),
-    )
-
-
-def _impute_run_id(output_path: str) -> str:
-    """Pick a run id for the trainer: ``RUN_ID`` from env, else the basename
-    of the output path. Stable across preemption so Levanter's checkpoint
-    resume picks up where it left off.
-    """
-    run_id = os.environ.get("RUN_ID")
-    if run_id:
-        return run_id
-    return os.path.basename(output_path.rstrip("/"))
-
-
 def _submit_train_job(
     name: str,
     train_config: Any,
-    output_path: str,
     resources: ResourceConfig,
     env_vars: dict[str, str] | None,
     worker_fn: Callable[[Any], None],
@@ -620,10 +585,9 @@ def _submit_train_job(
 
     Args:
         name: Job name (used for the Iris job label after sanitization).
-        train_config: Trainer config object. May contain ``InputName`` placeholders
+        train_config: Trainer config object with a concrete ``output_path``
+            attribute already baked in. May contain ``InputName`` placeholders
             resolved by ``materialize`` on the worker.
-        output_path: Concrete GCS path the trainer writes to; passed to
-            ``materialize`` on the worker as an anchor.
         resources: TPU/GPU/CPU resources to request from Iris.
         env_vars: Env vars injected into the Iris worker at startup. Values are
             resolved in the caller's process.
@@ -636,7 +600,7 @@ def _submit_train_job(
         name=_sanitize_job_name(name),
         entrypoint=Entrypoint.from_callable(
             _run_training_on_worker,
-            args=[worker_fn, train_config, output_path, env],
+            args=[worker_fn, train_config, env],
         ),
         resources=resources,
         environment=create_environment(env_vars=env, extras=extras_for_resources(resources)),
@@ -650,23 +614,27 @@ def _submit_train_job(
 def _run_training_on_worker(
     worker_fn: Callable[[Any], None],
     train_config: Any,
-    output_path: str,
     env_vars: dict[str, str],
 ) -> None:
     """Worker entrypoint for ``_submit_train_job``. Top-level so Fray can pickle it.
 
     Applies env vars, materialises any upstream ExecutorSteps embedded in
     ``train_config`` under the worker's region, then runs ``worker_fn``
-    directly. The caller must strip any ``OutputName`` placeholders from
-    ``train_config`` before submission; ``output_path`` is passed to
-    ``materialize`` only as a sanity-check anchor.
+    directly. ``output_path`` is read from ``train_config.output_path`` when
+    present; otherwise it is derived from the baked checkpointer path (for
+    config types such as ``TrainLmConfig`` that store it there).
     """
     _apply_env_to_process(env_vars)
+    output_path = getattr(train_config, "output_path", None)
+    if output_path is None:
+        # Configs like TrainLmConfig bake output_path into checkpointer.base_path
+        # as "<output_path>/checkpoints"; strip the suffix to recover the root.
+        output_path = os.path.dirname(train_config.trainer.checkpointer.base_path)
     train_config = materialize(train_config, output_path=output_path)
     worker_fn(train_config)
 
 
-def _prepare_lm_train(
+def prepare_lm_train(
     name: str,
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     model_config: LmConfig,
@@ -706,12 +674,21 @@ def _prepare_lm_train(
         inner_config,
         override_output_path=override_output_path,
     )
+    resources = train_config.resources
     inner_config = resolve_local_placeholders(inner_config, output_path)
-    inner_config = _bake_output_path_into_train_config(inner_config, output_path)
-    inner_config = dataclasses.replace(
-        inner_config,
-        trainer=dataclasses.replace(inner_config.trainer, id=_impute_run_id(output_path)),
-    )
+    inner_config = bake_output_path(inner_config, output_path)
+    inner_config, _run_id = impute_run_id(inner_config, output_path=output_path)
+
+    # Disable accelerator requirement when running without GPU/TPU resources.
+    if resources.device.kind == "cpu":
+        inner_config = dataclasses.replace(
+            inner_config,
+            trainer=dataclasses.replace(inner_config.trainer, require_accelerator=False),
+        )
+
+    # Guard against cross-region GCS access; skip on CPU (no region to match).
+    check_train_config_paths(inner_config, resources)
+
     return job_name, inner_config, output_path
 
 
@@ -732,7 +709,7 @@ def train(
 
     Resolves the output path locally, bakes it into the trainer config, stamps
     a stable run id, and blocks until the Iris job completes. This is the
-    single-call alternative to ``_prepare_lm_train`` + ``_submit_train_job``.
+    single-call alternative to ``prepare_lm_train`` + ``_submit_train_job``.
 
     Args:
         name: Human-readable identifier; forms the basis of the output path.
@@ -748,7 +725,7 @@ def train(
         wandb_group: Optional W&B group. Defaults to ``$WANDB_GROUP`` if unset.
         override_output_path: Optional explicit output path, bypassing the hash-based one.
     """
-    job_name, inner_config, output_path = _prepare_lm_train(
+    job_name, inner_config, _output_path = prepare_lm_train(
         name,
         tokenized,
         model_config,
@@ -764,7 +741,6 @@ def train(
     _submit_train_job(
         job_name,
         inner_config,
-        output_path,
         train_config.resources,
         dict(train_config.env_vars or {}),
         levanter_train_lm.main,

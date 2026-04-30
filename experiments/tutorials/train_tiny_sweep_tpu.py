@@ -4,23 +4,22 @@
 """
 Tutorial: hyper-parameter sweep over a tiny model on TinyStories using TPU hardware.
 
-The script defines a 9-element learning-rate by weight-decay grid. Each grid point
-becomes one ``SweepTarget`` whose payload is a ``(name, train_config)`` tuple;
-``claim_and_run`` races workers across processes / machines for unclaimed targets
-via the executor's distributed ``step_lock``.
+Plans are pre-baked at submission time; coordinators only race on ``step_lock``
+and submit child jobs — no per-target config building inside the worker.
+
+The script defines a 9-element learning-rate by weight-decay grid. Each grid
+point is fully resolved into a ``SweepTrial`` (output path baked, run id
+stamped) before any Iris job is submitted.  ``claim_and_run`` races worker
+tasks across processes / machines for unclaimed targets via the executor's
+distributed ``step_lock``.
 
 Submission model: a single ``iris job run`` invocation submits ONE Iris job
 whose ``ResourceConfig`` requests ``NUM_WORKERS`` CPU-only replicas (tasks).
 Each replica runs the same entrypoint, calls ``claim_and_run``, and loops over
 the target list — competing with its peers for the next unclaimed target via
-``step_lock``. Whichever worker wins a target calls ``train(...)`` directly,
+``step_lock``. Whichever worker wins a target calls ``_run_one`` directly,
 which submits a child Iris training job (TPU) and blocks on it; when that
 returns, the worker moves on to the next target.
-
-Each coordinator constructs the full training call at claim time. ``MARIN_PREFIX`` is pinned at submission so
-all CPU replicas resolve the same per-target output path regardless of where Iris
-schedules them — without this, replicas in different regions could disagree on
-``gs://marin-{region}/...`` paths and race-claim the same target twice.
 
 The number of workers is independent of the sweep size: workers run in a loop
 until the target list is exhausted. ``NUM_WORKERS = 3`` against 9 grid points
@@ -30,16 +29,19 @@ bump it to start a fresh sweep over the same grid.
 """
 import dataclasses
 import os
+from dataclasses import dataclass
 
+import levanter.main.train_lm as levanter_train_lm
 from fray import client as fray_client
 from fray.cluster import ResourceConfig
 from fray.types import Entrypoint, JobRequest, create_environment
 from rigging.filesystem import marin_prefix
 
+from levanter.main.train_lm import TrainLmConfig
 from marin.execution.executor import versioned
 from marin.execution.sweep import SweepTarget, claim_and_run
 
-from experiments.defaults import train
+from experiments.defaults import _submit_train_job, prepare_lm_train
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.llama import llama_30m
 from experiments.pretraining_datasets.simple import tokenized
@@ -78,32 +80,50 @@ sweep_configs = [
     for wd in [0.0, 0.1, 0.2]
 ]
 
-# Each target carries only the (name, train_config) pair that varies across the
-# sweep; tokenized, model_config, tags, and eval_harness_tasks are constant and
-# are hard-coded in _run_one below.
-targets = [
-    SweepTarget(
-        target_id=f"tutorial-slimpajama_6b-30m-sweep-lr{config.learning_rate}-wd{config.weight_decay}",
-        config=(
-            f"tutorial-slimpajama_6b-30m-sweep-lr{config.learning_rate}-wd{config.weight_decay}",
-            config,
-        ),
+
+@dataclass(frozen=True)
+class SweepTrial:
+    name: str
+    inner_config: TrainLmConfig
+    output_path: str
+    resources: ResourceConfig
+    env_vars: dict[str, str]
+
+
+# Build all trials at submission time so coordinators do no config work.
+trials = []
+for sc in sweep_configs:
+    _name = f"tutorial-slimpajama_6b-30m-sweep-lr{sc.learning_rate}-wd{sc.weight_decay}"
+    _job_name, _inner_config, _output_path = prepare_lm_train(
+        name=_name,
+        tokenized=tokenized["slimpajama_6b"],
+        model_config=versioned(llama_30m),
+        train_config=sc,
+        tags=["llama", "30m", "slimpajama_6b", "tutorial", "sweep", "test20251117"],
+        eval_harness_tasks=CORE_TASKS,
     )
-    for config in sweep_configs
-]
+    trials.append(
+        SweepTrial(
+            name=_job_name,
+            inner_config=_inner_config,
+            output_path=_output_path,
+            resources=sc.resources,
+            env_vars=dict(sc.env_vars or {}),
+        )
+    )
+
+targets = [SweepTarget(target_id=t.name, config=t) for t in trials]
 
 
 def _run_one(target: SweepTarget) -> None:
     """Submit one sweep trial as a child Iris training job and block on it."""
-    name, train_config = target.config
-    train(
-        name=name,
-        tokenized=tokenized["slimpajama_6b"],
-        model_config=versioned(llama_30m),
-        train_config=train_config,
-        # wandb tags
-        tags=["llama", "30m", "slimpajama_6b", "tutorial", "sweep", "test20251117"],
-        eval_harness_tasks=CORE_TASKS,
+    trial: SweepTrial = target.config
+    _submit_train_job(
+        name=trial.name,
+        train_config=trial.inner_config,
+        resources=trial.resources,
+        env_vars=trial.env_vars,
+        worker_fn=levanter_train_lm.main,
     )
 
 
@@ -113,25 +133,20 @@ def _sweep_worker_entrypoint(sweep_root: str) -> None:
     ``sweep_root`` is resolved once in the submitter (where ``marin_prefix()``
     reflects the user's region) and baked into the entrypoint args. All N CPU
     replicas thus contend on the same lock namespace regardless of where Iris
-    schedules them — without this, replicas in different regions would resolve
-    different ``gs://marin-{region}/sweeps/...`` paths and could race-claim
-    the same target twice.
+    schedules them.
     """
     claim_and_run(sweep_root, targets, _run_one)
 
 
 if __name__ == "__main__":
-    # Pin MARIN_PREFIX so all CPU replicas agree on the per-target output path
-    # regardless of which region Iris schedules them in.
-    pinned_prefix = marin_prefix()
-    sweep_root = os.path.join(pinned_prefix, "sweeps", SWEEP_NAME)
+    sweep_root = os.path.join(marin_prefix(), "sweeps", SWEEP_NAME)
     client = fray_client.current_client()
     handle = client.submit(
         JobRequest(
             name=SWEEP_NAME,
             entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[sweep_root]),
             resources=ResourceConfig.with_cpu(replicas=NUM_WORKERS),
-            environment=create_environment(env_vars={"MARIN_PREFIX": pinned_prefix}),
+            environment=create_environment(),
         )
     )
     handle.wait(raise_on_failure=True)

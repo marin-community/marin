@@ -122,6 +122,7 @@ def _build_grug_run_config(
         model=launch.model,
         data=launch.data,
         resources=launch.resources,
+        output_path=output_path,
         optimizer=launch.optimizer,
         trainer=grug_trainer,
         eval=launch.eval,
@@ -169,12 +170,11 @@ def train_grug(
         override_output_path: Optional explicit output path, bypassing the hash-based one.
         env_vars: Env vars to inject into the Iris worker at startup.
     """
-    _, run_config, output_path = _prepare_grug(name, launch, override_output_path=override_output_path)
+    _, run_config, _output_path = _prepare_grug(name, launch, override_output_path=override_output_path)
 
     _submit_train_job(
         name=name,
         train_config=run_config,
-        output_path=output_path,
         resources=run_config.resources,
         env_vars=dict(env_vars or {}),
         worker_fn=_run_grug_local,

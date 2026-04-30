@@ -104,6 +104,79 @@ def temporary_checkpoint_base_path(output_path: str) -> str:
     )
 
 
+def bake_output_path(train_config: TrainConfigT, output_path: str) -> TrainConfigT:
+    """Bake ``output_path`` into the trainer's checkpointer and HF save path.
+
+    Sets:
+    * ``trainer.checkpointer.base_path`` → ``<output_path>/checkpoints``
+    * ``trainer.checkpointer.temporary_base_path`` → region-local temp bucket
+    * ``hf_save_path`` → ``<output_path>/hf``
+
+    The ``append_run_id_to_base_path`` flag is NOT changed here; callers that
+    impute a run id from the output path should also set it to ``False`` via
+    ``impute_run_id``.
+    """
+    trainer = replace(
+        train_config.trainer,
+        checkpointer=replace(
+            train_config.trainer.checkpointer,
+            base_path=os.path.join(output_path, DEFAULT_CHECKPOINTS_PATH),
+            temporary_base_path=temporary_checkpoint_base_path(output_path),
+        ),
+    )
+    return replace(  # type: ignore[bad-specialization]
+        train_config,
+        trainer=trainer,
+        hf_save_path=os.path.join(output_path, DEFAULT_HF_CHECKPOINTS_PATH),
+    )
+
+
+def impute_run_id(
+    train_config: TrainConfigT,
+    *,
+    output_path: str | None,
+    env_run_id: str | None = None,
+    impute_from_output_path: bool = True,
+) -> tuple[TrainConfigT, str]:
+    """Pick a stable run id and stamp it into ``train_config``.
+
+    Priority:
+    1. ``train_config.trainer.id`` (already set by the caller)
+    2. ``env_run_id`` (e.g. from ``config.env_vars["RUN_ID"]``)
+    3. ``RUN_ID`` environment variable
+    4. ``basename(output_path)`` when ``impute_from_output_path`` is True
+    5. Random UID (last resort, logged as a warning)
+
+    When the run id is imputed from ``output_path`` (case 4), the path already
+    encodes identity so ``append_run_id_to_base_path`` is set to ``False`` to
+    avoid double-suffixing.  For all other cases it follows
+    ``not impute_from_output_path``.
+
+    Returns:
+        ``(updated_train_config, run_id)``
+    """
+    run_id = train_config.trainer.id
+
+    if run_id is None:
+        run_id = env_run_id or os.environ.get("RUN_ID")
+
+    from_output_path = False
+    if run_id is None and impute_from_output_path and output_path is not None:
+        path = output_path.rstrip("/")
+        run_id = os.path.basename(path)
+        from_output_path = True
+        logger.info(f"Imputing run ID from out path: {run_id}")
+
+    if not run_id:
+        run_id = _cli_helpers_module().default_run_id()
+        logger.warning(f"Run ID not set. Using default: {run_id}")
+
+    append_id_to_checkpoints = not (impute_from_output_path and from_output_path) and not impute_from_output_path
+    checkpointer_config = replace(train_config.trainer.checkpointer, append_run_id_to_base_path=append_id_to_checkpoints)
+    updated = replace(train_config, trainer=replace(train_config.trainer, id=run_id, checkpointer=checkpointer_config))  # type: ignore[bad-specialization]
+    return updated, run_id
+
+
 def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     """
     Update the config to use the out_path as the base output directory for training.
@@ -118,20 +191,7 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
     if pod_config.output_path is None:
         return pod_config
 
-    trainer = replace(
-        pod_config.train_config.trainer,
-        checkpointer=replace(
-            pod_config.train_config.trainer.checkpointer,
-            base_path=os.path.join(pod_config.output_path, DEFAULT_CHECKPOINTS_PATH),
-            temporary_base_path=temporary_checkpoint_base_path(pod_config.output_path),
-        ),
-    )
-
-    config = replace(
-        pod_config.train_config,
-        trainer=trainer,
-        hf_save_path=os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH),
-    )
+    config = bake_output_path(pod_config.train_config, pod_config.output_path)
     return replace(pod_config, train_config=config)
 
 
@@ -155,29 +215,14 @@ def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
         * environment variable RUN_ID
         * default to a random UID
     """
-    run_id = config.train_config.trainer.id
-
-    if run_id is None:
-        run_id = (config.env_vars or {}).get("RUN_ID", os.environ.get("RUN_ID"))
-
-    if run_id is None and config.impute_run_id_from_output_path and config.output_path is not None:
-        path = config.output_path
-        path = path.rstrip("/")
-        run_id = os.path.basename(path)
-        logger.info(f"Imputing run ID from out path: {run_id}")
-
-    if not run_id:
-        run_id = _cli_helpers_module().default_run_id()
-        logger.warning(f"Run ID not set. Using default: {run_id}")
-
-    append_id_to_checkpoints = not config.impute_run_id_from_output_path
-    checkpointer_config = replace(
-        config.train_config.trainer.checkpointer, append_run_id_to_base_path=append_id_to_checkpoints
+    env_run_id = (config.env_vars or {}).get("RUN_ID")
+    inner_config, run_id = impute_run_id(
+        config.train_config,
+        output_path=config.output_path,
+        env_run_id=env_run_id,
+        impute_from_output_path=config.impute_run_id_from_output_path,
     )
-
-    inner_config = replace(
-        config.train_config, trainer=replace(config.train_config.trainer, id=run_id, checkpointer=checkpointer_config)
-    )
+    logger.info(f"Using run ID: {run_id}")
     return replace(config, train_config=inner_config)
 
 
@@ -341,20 +386,34 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
     importlib.import_module("levanter.main.train_dpo").main(train_config)
 
 
-def _doublecheck_paths(config: TrainOnPodConfigT):
-    """
-    Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
-    Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.
+def check_train_config_paths(train_config: object, resources: ResourceConfig) -> None:
+    """Check that all GCS paths in ``train_config`` are in the same region as the VM.
 
-    This function recursively examines all strings/paths in the config to identify GCS paths and checks their regions.
-    """
-    local_ok = not isinstance(config.resources.device, TpuConfig)
+    Skips the check if ``resources.device`` is a CPU (local paths are always OK
+    on CPU workers, and there is no region to match against).
 
-    check_gcs_paths_same_region(
-        config.train_config,
-        local_ok=local_ok,
-    )
+    Args:
+        train_config: The inner Levanter train config (e.g. ``TrainLmConfig``).
+        resources: The resource config used for the training job.
+    """
+    if isinstance(resources.device, CpuConfig):
+        return
+    local_ok = not isinstance(resources.device, TpuConfig)
+    check_gcs_paths_same_region(train_config, local_ok=local_ok)
+
+
+def doublecheck_paths(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
+    """Check GCS path regions for a full ``TrainOnPodConfig``.
+
+    Delegates to ``check_train_config_paths`` after extracting the inner config
+    and resource config. Returns the config unchanged (for easy chaining).
+    """
+    check_train_config_paths(config.train_config, config.resources)
     return config
+
+
+# Keep the private alias so any internal call sites continue to work.
+_doublecheck_paths = doublecheck_paths
 
 
 def _add_default_env_variables(env: dict, default_env: dict | None):
