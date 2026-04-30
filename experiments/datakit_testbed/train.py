@@ -20,6 +20,7 @@ to preserve the per-source shares over the shortened horizon (see
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import logging
 import os
 from collections.abc import Sequence
@@ -60,6 +61,25 @@ DEFAULT_TARGET_STEPS: int = 2**14
 # zephyr workers; this coordinator actor only orchestrates and assembles
 # the per-bucket ledger. Bounded resources keep entrypoint memory flat.
 _TOKENIZE_COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="3g", preemptible=False)
+
+
+def _resolve_run_id(name: str) -> str:
+    """Resolve the wandb run id for one testbed config.
+
+    Mirrors :func:`experiments.grug.base.launch._resolve_run_id`'s
+    ``GRUG_RUN_ID`` override — operators can pin a specific id (e.g. to
+    intentionally resume a prior wandb run after a crash).
+
+    Diverges from grug in the fallback: grug's default is the bare
+    ``"datakit-testbed-{name}"`` which collides on every ad-hoc relaunch
+    and silently corrupts metrics under wandb's ``resume="allow"``. Here
+    we append a UTC timestamp when no override is set, so the default is
+    collision-proof.
+    """
+    default_run_id = f"datakit-testbed-{name}"
+    if "GRUG_RUN_ID" in os.environ:
+        return os.environ["GRUG_RUN_ID"]
+    return f"{default_run_id}-{datetime.datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
 
 
 def simulated_experiment_budget(*, train_batch_size: int, num_train_steps: int, seq_len: int) -> int:
@@ -168,6 +188,9 @@ def run_testbed_config(
         experiment_budget=experiment_budget,
     )
 
+    # NOT versioned() — keeps the executor cache key independent of wandb metadata.
+    run_id = _resolve_run_id(name)
+
     logger.info(
         "testbed config %s: budget=%.2e flops, H=%d, batch=%d, steps=%d, "
         "experiment_budget=%.2eB tokens over target_budget=%.2eB",
@@ -187,14 +210,15 @@ def run_testbed_config(
             model=versioned(model_cfg),
             data=data,
             output_path=this_output_path(),
-            run_id=f"datakit-testbed-{name}",
+            run_id=run_id,
             resources=versioned(ResourceConfig.with_tpu(tpu)),
             steps=versioned(steps),
             batch_size=versioned(batch_size),
             seed=versioned(seed),
             mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
             tracker=WandbConfig(
-                project="marin",
+                entity="marin-community",
+                project="datakit",
                 tags=list(wandb_tags),
                 group=wandb_group,
                 name=None,
