@@ -6,13 +6,15 @@
 Read-only queries do NOT belong here — callers use db.read_snapshot() directly.
 """
 
-import threading
-import time
 import json
 import logging
-from dataclasses import dataclass, field
+import threading
+import time
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import NamedTuple
+
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
 from iris.cluster.controller.codec import (
@@ -35,28 +37,28 @@ from iris.cluster.controller.db import (
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
+from iris.cluster.controller.schema import (
+    EndpointRow,
+    JobDetailRow,
+    WorkerDetailRow,
+)
 from iris.cluster.controller.stores import (
     ActiveTaskRow,
     ControllerStore,
     EndpointStore,
     JobConfigInsertParams,
     JobInsertParams,
-    ResourceUsageInsertParams,
     JobStore,
+    ResourceUsageInsertParams,
     TaskAttemptStore,
     TaskAttemptUpdateParams,
+    TaskInsertParams,
     TaskScope,
     TaskStateUpdateParams,
-    TaskInsertParams,
     TaskStore,
     WorkerAttributeParams,
     WorkerStore,
     WorkerUpsertParams,
-)
-from iris.cluster.controller.schema import (
-    EndpointRow,
-    JobDetailRow,
-    WorkerDetailRow,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
@@ -67,10 +69,8 @@ from iris.cluster.types import (
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

@@ -110,6 +110,7 @@ def test_moe_mlp_runs_without_ep_axis():
         )
         assert out.shape == (tokens, hidden_dim)
         assert jnp.isfinite(out).all()
+        assert getattr(out.sharding, "spec", None) == P("data")
 
         jit_fn = jax.jit(
             lambda x, sel, cw, up_gate, down: moe_mlp(

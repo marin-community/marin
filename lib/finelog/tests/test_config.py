@@ -9,7 +9,6 @@ import textwrap
 from pathlib import Path
 
 import pytest
-
 from finelog.deploy.config import (
     Deployment,
     FinelogConfig,

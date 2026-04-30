@@ -16,6 +16,7 @@ import secrets
 import time
 
 import jwt
+from rigging.timing import Timestamp
 
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import API_KEY_PROJECTION, ApiKeyRow
@@ -27,7 +28,6 @@ from iris.rpc.auth import (
     VerifiedIdentity,
     hash_token,
 )
-from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 

@@ -21,6 +21,7 @@ from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import (
     MAX_SHARD_FAILURES,
+    MAX_SHARD_INFRA_FAILURES,
     CounterSnapshot,
     ListShard,
     PickleDiskChunk,
@@ -33,57 +34,6 @@ from zephyr.execution import (
     zephyr_worker_ctx,
 )
 from zephyr.plan import compute_plan
-
-
-def test_counter_flusher(tmp_path):
-    """Counter file flushed during shard execution reflects actual counter increments."""
-    import cloudpickle
-    import zephyr.subprocess_worker as sw
-
-    from zephyr import counters
-    from zephyr.execution import ListShard, ShardTask
-    from zephyr.plan import Map
-    from zephyr.shuffle import MemChunk
-
-    original_interval = sw.SUBPROCESS_COUNTER_FLUSH_INTERVAL
-    sw.SUBPROCESS_COUNTER_FLUSH_INTERVAL = 0.01  # flush aggressively during the test
-
-    try:
-
-        def counting_map(stream):
-            for item in stream:
-                counters.increment("items", 1)
-                time.sleep(0.05)  # longer than flush interval — guarantees ≥1 flush
-                yield item
-
-        chunk_prefix = str(tmp_path / "chunks")
-        execution_id = "test-exec"
-        task = ShardTask(
-            shard_idx=0,
-            total_shards=1,
-            shard=ListShard(refs=[MemChunk([1, 2, 3])]),
-            operations=[Map(fn=counting_map)],
-            stage_name="test",
-        )
-
-        task_file = str(tmp_path / "task.pkl")
-        result_file = str(tmp_path / "result.pkl")
-        counter_file = f"{result_file}.counters"
-
-        with open(task_file, "wb") as f:
-            cloudpickle.dump((task, chunk_prefix, execution_id), f)
-
-        sw.execute_shard(task_file, result_file)
-
-        assert Path(counter_file).exists(), "counter file was never written — flusher did not run"
-        with open(counter_file, "rb") as f:
-            flushed = cloudpickle.load(f)
-        assert flushed.get("items", 0) > 0, (
-            f"counter file is empty ({flushed!r}); flusher likely held a dummy context "
-            "instead of the real one created from the task file"
-        )
-    finally:
-        sw.SUBPROCESS_COUNTER_FLUSH_INTERVAL = original_interval
 
 
 def test_simple_map(zephyr_ctx):
@@ -100,14 +50,14 @@ def test_filter(zephyr_ctx):
     assert sorted(results) == [4, 5]
 
 
-def test_subprocess_propagates_user_counters(zephyr_ctx):
-    """User counters incremented inside the shard subprocess flow back to the coordinator.
+def test_propagates_user_counters(zephyr_ctx):
+    """User counters incremented inside a shard flow back to the coordinator.
 
-    Each task runs in a fresh Python subprocess, so ``counters.increment`` writes
-    into a ``_SubprocessWorkerContext`` that lives only in the child. This test
-    verifies the result file ships those increments back to the parent worker,
-    which then forwards them to the coordinator via ``report_result``. Without
-    that round-trip, the coordinator's ``get_counters`` would silently report 0.
+    Each task runs in the worker's own process; ``counters.increment`` writes
+    into the per-task ``_InProcessWorkerContext``. This test verifies the
+    worker forwards the final counter dict to the coordinator via
+    ``report_result``, otherwise the coordinator's ``get_counters`` would
+    silently report 0.
 
     Uses a direct logging handler attachment (rather than ``caplog``) so the
     test works whether or not pytest's logging plugin is enabled.
@@ -147,22 +97,18 @@ def test_subprocess_propagates_user_counters(zephyr_ctx):
     assert "'doubled_sum': 30" in last, f"expected 'doubled_sum': 30 in {last!r}"
 
 
-def test_subprocess_exception_includes_subprocess_traceback(zephyr_ctx):
-    """Exceptions raised inside the shard subprocess surface with the original frame info.
+def test_exception_preserves_user_frame(zephyr_ctx):
+    """Exceptions raised inside a shard surface with the original frame info.
 
-    Cloudpickling an exception drops ``__traceback__`` so a naive re-raise in
-    the parent shows only the parent's stack at the re-raise site, not where
-    the exception actually happened in the user lambda. The subprocess
-    attaches the formatted traceback as a ``__notes__`` entry, which Python
-    prints inline when the exception finally propagates. Verify both the
-    original exception type AND a snippet from the user-code frame survive
-    the round-trip.
+    The worker's ``report_error`` ships a formatted traceback string up to
+    the coordinator, which wraps it in ``ZephyrWorkerError``. Verify either
+    the user function name or the exception text survives that round-trip
+    so failures are debuggable.
     """
 
     def buggy_index_lookup(x: int) -> int:
-        # Force a non-trivial subprocess-side exception with a recognizable
-        # source line. The parent should surface the function name and the
-        # offending statement, not just the bare `IndexError`.
+        # Recognizable user-frame source line. The parent should surface the
+        # function name and the offending statement, not just bare ``IndexError``.
         empty: tuple = ()
         return empty[x]
 
@@ -171,11 +117,7 @@ def test_subprocess_exception_includes_subprocess_traceback(zephyr_ctx):
     with pytest.raises(ZephyrWorkerError) as exc_info:
         zephyr_ctx.execute(ds)
 
-    rendered = str(exc_info.value) + "".join(getattr(exc_info.value, "__notes__", []))
-    # The wrapping ZephyrWorkerError should chain through the parent's
-    # report_error path. Either the chained cause or the notes payload
-    # must contain the user-frame breadcrumb.
-    chained = rendered
+    chained = str(exc_info.value) + "".join(getattr(exc_info.value, "__notes__", []))
     cur: BaseException | None = exc_info.value
     while cur is not None:
         chained += str(cur) + "".join(getattr(cur, "__notes__", []))
@@ -183,7 +125,7 @@ def test_subprocess_exception_includes_subprocess_traceback(zephyr_ctx):
 
     assert (
         "buggy_index_lookup" in chained or "tuple index out of range" in chained
-    ), f"subprocess traceback was not preserved through report_error; got: {chained!r}"
+    ), f"user-frame traceback was not preserved through report_error; got: {chained!r}"
 
 
 def test_shared_data(integration_client, tmp_path):
@@ -619,6 +561,47 @@ def test_heartbeat_timeouts_do_not_count_toward_shard_failures(actor_context, tm
     coord.report_result("worker-0", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
     assert coord._completed_shards == 1
     assert coord._fatal_error is None
+
+
+def test_repeated_infra_failures_on_same_shard_eventually_abort(actor_context, tmp_path):
+    """A shard that consistently crashes its worker must eventually abort the pipeline.
+
+    With in-process shard execution, a native SIGSEGV / OOM in shard code
+    takes down the whole worker actor. The coordinator sees that as an
+    INFRA failure (heartbeat timeout / re-registration). If the same shard
+    causes this repeatedly, it's deterministic — keep retrying forever and
+    the pipeline never converges. ``MAX_SHARD_INFRA_FAILURES`` bounds it.
+    """
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord._start_stage("test", 0, [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    # One short of the cap: still re-queues, no abort yet.
+    for _ in range(MAX_SHARD_INFRA_FAILURES - 1):
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        coord._last_seen["worker-0"] = 0.0
+        coord.check_heartbeats(timeout=0.0)
+        assert coord._fatal_error is None
+
+    # The next failure crosses the cap and aborts.
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    coord._last_seen["worker-0"] = 0.0
+    coord.check_heartbeats(timeout=0.0)
+
+    assert coord._fatal_error is not None
+    assert "Shard 0" in coord._fatal_error
+    assert "crashed its worker" in coord._fatal_error
 
 
 def test_worker_reregistration_does_not_count_toward_shard_failures(actor_context, tmp_path):

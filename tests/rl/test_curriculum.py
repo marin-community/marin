@@ -5,7 +5,6 @@
 
 import numpy as np
 import pytest
-
 from marin.rl.curriculum import (
     Curriculum,
     CurriculumConfig,

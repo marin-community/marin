@@ -10,7 +10,6 @@ import subprocess
 from unittest.mock import mock_open, patch
 
 import pytest
-
 from iris.cluster import endpoints
 from iris.cluster.endpoints import register_scheme, resolve_endpoint_uri
 

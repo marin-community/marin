@@ -258,7 +258,6 @@ def read_rowgroups_scatter_no_skip(path: str, limit: int | None = None) -> dict[
     row-group-level predicate pushdown.
     """
     import pyarrow.compute as pc
-
     from zephyr.readers import iter_parquet_row_groups
 
     target_shard = _NUM_SHARDS // 2

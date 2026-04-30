@@ -16,17 +16,20 @@ that point the loss started to increase again. I still don't know why.
 
 import dataclasses
 
+from fray.cluster import ResourceConfig
 from levanter.callbacks.watch import WatchConfig
+from marin.execution.executor import executor_main, output_path_of
+from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
-from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_sft, default_train
-from experiments.pretraining_datasets import tokenize_dolmino_subset
 from experiments.exp606_sft import tulu3_llama_data_old, tulu_sft_config
 from experiments.llama import llama_8b
 from experiments.posttrain.instruction_datasets import (
     tulu3_flat_llama_tokenized_as_train,
     tulu3_flat_llama_tokenized_as_validation,
 )
+from experiments.pretraining_datasets import tokenize_dolmino_subset
+from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.tootsie.exp600_tootsie import (
     PHASE_3_END,
     PHASE_3_START,
@@ -35,9 +38,6 @@ from experiments.tootsie.exp600_tootsie import (
     llama_8b_train_config_phase3,
     phase_3_tokenized,
 )
-from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main, output_path_of
-from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 # 3072 * 4096 * 10000 is 125B tokens
 COOLDOWN_LEN = 10000

@@ -5,8 +5,7 @@
 import pytest
 from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
 from .conftest import _make_controller_only_config

@@ -286,9 +286,8 @@ def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
 
 def test_replace_from_reattaches_profiles_db(tmp_path: Path) -> None:
     """replace_from() must re-attach the profiles DB so profile tables remain accessible."""
-    from rigging.timing import Timestamp
-
     from iris.cluster.controller.db import get_task_profiles, insert_task_profile
+    from rigging.timing import Timestamp
 
     db = ControllerDB(db_dir=tmp_path)
     insert_task_profile(db, "task-1", b"profile-data", Timestamp.now())

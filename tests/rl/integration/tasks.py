@@ -6,8 +6,8 @@
 import time
 
 import numpy as np
-
 from marin.rl.types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
+
 from tests.rl.integration.config import (
     DummyTokenizer,
     compute_model_logprobs,

@@ -42,9 +42,8 @@ import time
 from collections.abc import Iterator
 
 import click
-from rigging.log_setup import configure_logging
-
 from fray import ResourceConfig
+from rigging.log_setup import configure_logging
 from zephyr import Dataset
 from zephyr.dataset import ShardInfo
 from zephyr.execution import ZephyrContext

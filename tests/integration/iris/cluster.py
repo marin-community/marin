@@ -8,6 +8,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+from finelog.rpc import logging_pb2
 from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import Constraint
 from iris.cluster.types import (
@@ -17,7 +18,6 @@ from iris.cluster.types import (
     ReservationEntry,
     ResourceSpec,
 )
-from finelog.rpc import logging_pb2
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration
 

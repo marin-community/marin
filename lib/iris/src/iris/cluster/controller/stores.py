@@ -35,6 +35,8 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from threading import RLock
 
+from rigging.timing import Duration, Timestamp
+
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.codec import resource_spec_from_scalars
 from iris.cluster.controller.db import (
@@ -59,7 +61,6 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.types import TERMINAL_JOB_STATES, TERMINAL_TASK_STATES, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

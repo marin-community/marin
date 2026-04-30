@@ -18,13 +18,12 @@ Key simplifications:
 import argparse
 
 import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 from jax.sharding import Mesh
-
-import haliax as hax
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
 from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.models.llama import LlamaConfig
