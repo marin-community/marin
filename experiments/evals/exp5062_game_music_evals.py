@@ -23,7 +23,8 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
 )
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import executor_main
+from marin.execution.step_spec import StepSpec
 
 ISSUE_5062 = 5062
 EPIC_5005 = 5005
@@ -110,41 +111,56 @@ IRISHMAN_ABC_MANIFEST = IngestionSourceManifest(
     source_metadata={"hf_revision": IRISHMAN_REVISION, "split_filename": "validation.json", "text_key": "abc notation"},
 )
 
-LICHESS_PGN_RAW = ExecutorStep(
+LICHESS_PGN_RAW = StepSpec(
     name="evaluation/game_music/lichess_pgn_2013_01",
-    fn=stage_lichess_pgn_sample,
-    config=LichessPgnStagingConfig(
-        source_url=DEFAULT_LICHESS_URL,
-        output_path=this_output_path(),
-        source_label=LICHESS_PGN_2013_01_MANIFEST.source_label,
-        max_records=_required_max_records(LICHESS_PGN_2013_01_MANIFEST),
-        source_manifest=LICHESS_PGN_2013_01_MANIFEST,
-        manifest_fingerprint=LICHESS_PGN_2013_01_MANIFEST.fingerprint(),
+    fn=lambda output_path: stage_lichess_pgn_sample(
+        LichessPgnStagingConfig(
+            source_url=DEFAULT_LICHESS_URL,
+            output_path=output_path,
+            source_label=LICHESS_PGN_2013_01_MANIFEST.source_label,
+            max_records=_required_max_records(LICHESS_PGN_2013_01_MANIFEST),
+            source_manifest=LICHESS_PGN_2013_01_MANIFEST,
+            manifest_fingerprint=LICHESS_PGN_2013_01_MANIFEST.fingerprint(),
+        )
     ),
+    hash_attrs={
+        "source_url": DEFAULT_LICHESS_URL,
+        "manifest_fingerprint": LICHESS_PGN_2013_01_MANIFEST.fingerprint(),
+        "max_records": _required_max_records(LICHESS_PGN_2013_01_MANIFEST),
+    },
 )
 
-IRISHMAN_ABC_RAW = ExecutorStep(
+IRISHMAN_ABC_RAW = StepSpec(
     name="evaluation/game_music/irishman_abc",
-    fn=stage_hf_json_text_source,
-    config=HfJsonTextStagingConfig(
-        dataset_id=IRISHMAN_DATASET_ID,
-        revision=IRISHMAN_REVISION,
-        split_filename="validation.json",
-        text_key="abc notation",
-        output_path=this_output_path(),
-        source_label=IRISHMAN_ABC_MANIFEST.source_label,
-        max_examples=_required_max_examples(IRISHMAN_ABC_MANIFEST),
-        source_manifest=IRISHMAN_ABC_MANIFEST,
-        manifest_fingerprint=IRISHMAN_ABC_MANIFEST.fingerprint(),
+    fn=lambda output_path: stage_hf_json_text_source(
+        HfJsonTextStagingConfig(
+            dataset_id=IRISHMAN_DATASET_ID,
+            revision=IRISHMAN_REVISION,
+            split_filename="validation.json",
+            text_key="abc notation",
+            output_path=output_path,
+            source_label=IRISHMAN_ABC_MANIFEST.source_label,
+            max_examples=_required_max_examples(IRISHMAN_ABC_MANIFEST),
+            source_manifest=IRISHMAN_ABC_MANIFEST,
+            manifest_fingerprint=IRISHMAN_ABC_MANIFEST.fingerprint(),
+        )
     ),
+    hash_attrs={
+        "dataset_id": IRISHMAN_DATASET_ID,
+        "revision": IRISHMAN_REVISION,
+        "split_filename": "validation.json",
+        "text_key": "abc notation",
+        "manifest_fingerprint": IRISHMAN_ABC_MANIFEST.fingerprint(),
+        "max_examples": _required_max_examples(IRISHMAN_ABC_MANIFEST),
+    },
 )
 
 
 def game_music_raw_validation_sets(
     *,
     raw_root: str | None = None,
-    lichess_raw: ExecutorStep | None = None,
-    irishman_raw: ExecutorStep | None = None,
+    lichess_raw: StepSpec | None = None,
+    irishman_raw: StepSpec | None = None,
 ) -> dict[str, RawTextEvaluationDataset]:
     """Return first-pass manifest-backed game/music raw validation slices."""
 
@@ -154,13 +170,13 @@ def game_music_raw_validation_sets(
         irishman_raw = IRISHMAN_ABC_RAW
 
     if raw_root is not None:
-        lichess_source: str | ExecutorStep = posixpath.join(raw_root, "lichess/2013-01/data.jsonl.gz")
-        irishman_source: str | ExecutorStep = posixpath.join(raw_root, "music/abc/irishman/data.jsonl.gz")
+        lichess_source = posixpath.join(raw_root, "lichess/2013-01/data.jsonl.gz")
+        irishman_source = posixpath.join(raw_root, "music/abc/irishman/data.jsonl.gz")
     else:
         assert lichess_raw is not None
         assert irishman_raw is not None
-        lichess_source = lichess_raw.cd("data.jsonl.gz")
-        irishman_source = irishman_raw.cd("data.jsonl.gz")
+        lichess_source = lichess_raw.as_executor_step().cd("data.jsonl.gz")
+        irishman_source = irishman_raw.as_executor_step().cd("data.jsonl.gz")
 
     return {
         GAME_MUSIC_LICHESS_KEY: raw_text_dataset(
@@ -189,4 +205,4 @@ def game_music_raw_validation_sets(
 
 
 if __name__ == "__main__":
-    executor_main(steps=[LICHESS_PGN_RAW, IRISHMAN_ABC_RAW])
+    executor_main(steps=[LICHESS_PGN_RAW.as_executor_step(), IRISHMAN_ABC_RAW.as_executor_step()])
