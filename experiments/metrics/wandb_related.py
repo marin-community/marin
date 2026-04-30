@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import wandb
 from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
+
+import wandb
 
 logger = logging.getLogger(__name__)
 

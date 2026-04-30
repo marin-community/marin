@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import wandb
-
 from marin.profiling.schema import ProfileSummary, profile_summary_from_dict
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 

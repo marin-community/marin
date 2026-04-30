@@ -13,8 +13,8 @@ import os
 from collections.abc import Sequence
 
 import fsspec
-import wandb
 
+import wandb
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger(__name__)
