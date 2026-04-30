@@ -9,13 +9,13 @@ from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
 from levanter.tracker import NoopConfig
 
-from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, prepare_grug_trial
+from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, _prepare_grug
 
 _DUMMY_DATA: Any = object()
 
 
-def test_prepare_grug_trial_sets_temporary_checkpoint_base_path():
-    """``prepare_grug_trial`` wires the checkpointer's ``base_path`` and
+def test_prepare_grug_sets_temporary_checkpoint_base_path():
+    """``_prepare_grug`` wires the checkpointer's ``base_path`` and
     ``temporary_base_path`` to paths derived from the resolved output_path,
     so callers that pin ``override_output_path`` get stable, predictable
     checkpoint locations.
@@ -25,9 +25,9 @@ def test_prepare_grug_trial_sets_temporary_checkpoint_base_path():
         patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
     ):
-        plan = prepare_grug_trial(
-            name="grug-temp-path-test",
-            launch=GrugBaseLaunchConfig(
+        _, run_config, _ = _prepare_grug(
+            "grug-temp-path-test",
+            GrugBaseLaunchConfig(
                 model=GRUG_130M_MODEL,
                 data=_DUMMY_DATA,
                 output_path=output_path,
@@ -44,7 +44,6 @@ def test_prepare_grug_trial_sets_temporary_checkpoint_base_path():
             override_output_path=output_path,
         )
 
-    run_config = plan.train_config
     checkpointer = run_config.trainer.trainer.checkpointer
     assert checkpointer.base_path == "gs://marin-us-east5/experiments/grug/base-trial/checkpoints"
     assert checkpointer.temporary_base_path == (
