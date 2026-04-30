@@ -15,6 +15,7 @@ import os
 import re
 import time
 from collections.abc import Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 
 import braceexpand
 import draccus
@@ -49,6 +50,7 @@ MIN_GROUP_BYTES = 100_000_000  # 100 MB floor to avoid degenerate tiny shards
 # Empirical upper bound on the zephyr window size (see
 # https://github.com/marin-community/marin/issues/2829#issuecomment-3963661943).
 _MAX_WINDOW_SIZE = 64
+_LOCAL_METADATA_MAX_WORKERS = 32
 
 
 def _avg_parquet_row_group_rows(path: str) -> int | None:
@@ -70,6 +72,10 @@ def _compute_target_group_bytes(total_input_bytes: int, max_workers: int) -> int
     Applies a floor of MIN_GROUP_BYTES to avoid degenerate tiny shards.
     """
     return max(total_input_bytes // max_workers, MIN_GROUP_BYTES)
+
+
+def _local_metadata_workers(num_items: int) -> int:
+    return max(1, min(_LOCAL_METADATA_MAX_WORKERS, num_items))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -471,7 +477,10 @@ def tokenize(config: TokenizeConfigBase):
         tokenize_elapsed = time.monotonic() - tokenize_start
 
         # Build sharded ledger — each shard is directly readable, no consolidation needed.
-        shard_ledgers = [CacheLedger.load(p) for p in shard_paths]
+        # Loading per-shard ledgers is remote metadata I/O, so keep bounded
+        # parallelism in the local driver.
+        with ThreadPoolExecutor(max_workers=_local_metadata_workers(len(shard_paths))) as pool:
+            shard_ledgers = list(pool.map(CacheLedger.load, shard_paths))
         shard_rows = {}
         total_elements = 0
         field_counts: dict[str, int] = {}
