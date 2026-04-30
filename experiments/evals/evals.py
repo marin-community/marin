@@ -6,6 +6,7 @@ Canonical set of evals.
 """
 
 import logging
+import os
 import re
 from collections.abc import Sequence
 
@@ -44,6 +45,16 @@ EVAL_DEPENDENCY_GROUPS = ["eval", "vllm", "tpu"]
 EVALCHEMY_DEPENDENCY_GROUPS = ["evalchemy", "vllm", "tpu"]
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_harbor_vllm_mode_env() -> None:
+    mode = os.environ.get("MARIN_VLLM_MODE")
+    if mode is None or mode.strip().lower() in {"", "native"}:
+        return
+    raise ValueError(
+        "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
+        "Unset MARIN_VLLM_MODE or set it to 'native'."
+    )
 
 
 def evaluate_lm_evaluation_harness(
@@ -439,6 +450,9 @@ def evaluate_harbor(
         # SWE-bench Verified
         evaluate_harbor("claude-opus-4", None, "swebench-verified", "1.0", max_eval_instances=10)
     """
+
+    if model_path is not None:
+        _validate_harbor_vllm_mode_env()
 
     # Harbor config goes in engine_kwargs
     engine_kwargs = {
