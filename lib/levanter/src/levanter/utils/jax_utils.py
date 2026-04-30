@@ -512,12 +512,17 @@ def broadcast_one_to_all(in_tree: Any, is_source: bool | None = None) -> Any:
     pspec = PartitionSpec("processes")
 
     def pre_jit(x):
-        if is_source:
-            inp = x
-        else:
-            inp = np.zeros_like(x)
-        inp = np.expand_dims(inp, axis=0)
-        return host_local_array_to_global_array(inp, global_mesh, pspec)
+        # Materialize on host on every worker, not just the source. np.asarray on a
+        # jax.Array triggers a device->host transfer kernel; np.zeros_like on a
+        # jax.Array short-circuits to a pure-host numpy array (verified). Doing the
+        # transfer only on the source caused worker 0 to accumulate +1 TPU launches
+        # per call vs other workers, which eventually trips the TPU runtime's
+        # `scheckne` (sequence-check-not-equal) check on multi-host pods. Issue #5319.
+        host_inp = np.asarray(x)
+        if not is_source:
+            host_inp = np.zeros_like(host_inp)
+        host_inp = np.expand_dims(host_inp, axis=0)
+        return host_local_array_to_global_array(host_inp, global_mesh, pspec)
 
     def post_jit(x):
         return jax.device_get(x.addressable_data(0))
