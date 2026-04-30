@@ -15,9 +15,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import ClassVar
 
+from rigging.timing import Duration, Timestamp
+
 from iris.cluster.controller.autoscaler.models import SliceLifecycleState
 from iris.cluster.providers.types import CloudSliceState, RemoteWorkerHandle, SliceHandle
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

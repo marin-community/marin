@@ -29,6 +29,7 @@ from iris.cluster.constraints import (
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.controller.autoscaler.slice_lifecycle import CloudReady
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
@@ -50,7 +51,6 @@ from iris.cluster.controller.schema import (
     WorkerRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.autoscaler.slice_lifecycle import CloudReady
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (

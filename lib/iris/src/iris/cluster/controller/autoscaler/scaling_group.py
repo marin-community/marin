@@ -33,6 +33,8 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.controller.autoscaler.models import SliceLifecycleState, SliceState
 from iris.cluster.controller.autoscaler.slice_lifecycle import (
+    SHORT_LIVED_SLICE_THRESHOLD,
+    TRANSITIONS,
     BecameFailed,
     BecameReady,
     CloudFailed,
@@ -40,10 +42,8 @@ from iris.cluster.controller.autoscaler.slice_lifecycle import (
     IdleTimeout,
     InternalTransition,
     NoOp,
-    SHORT_LIVED_SLICE_THRESHOLD,
     SliceEvent,
     TransitionOutcome,
-    TRANSITIONS,
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.providers.protocols import WorkerInfraProvider

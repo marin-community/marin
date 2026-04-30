@@ -16,7 +16,6 @@ Organization:
 import threading
 
 import pytest
-
 from iris.cluster.controller.autoscaler.models import SliceLifecycleState, SliceState
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.autoscaler.slice_lifecycle import (
@@ -35,6 +34,7 @@ from iris.cluster.controller.autoscaler.slice_lifecycle import (
     WorkerFailure,
 )
 from rigging.timing import Duration, Timestamp
+
 from tests.cluster.controller.conftest import make_scale_group_config
 from tests.cluster.providers.conftest import make_fake_slice_handle, make_mock_platform
 
