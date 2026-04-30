@@ -12,7 +12,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, TypeVar, Union
+from typing import Any, Awaitable, Callable, Dict, Generator, Generic, List, Optional, Sequence, TypeVar, Union
 
 import deepdiff
 import jax
@@ -161,17 +161,17 @@ class TreeCache(AsyncDataset[T_co]):
         return True
 
 
-class _VirtualRead:
-    def __init__(self, read_async):
+class _VirtualRead(Generic[T]):
+    def __init__(self, read_async: Callable[[], Awaitable[T]]):
         self._read_async = read_async
 
-    def read(self):
+    def read(self) -> "_VirtualRead[T]":
         return self
 
-    def __await__(self):
+    def __await__(self) -> Generator[Any, None, T]:
         return self._read_async().__await__()
 
-    def result(self):
+    def result(self) -> T:
         return blocking_wait(self._read_async())
 
 
