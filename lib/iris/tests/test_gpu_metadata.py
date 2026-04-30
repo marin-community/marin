@@ -7,7 +7,6 @@ import uuid
 from unittest.mock import patch
 
 import pytest
-
 from iris.cluster.config import connect_cluster
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider

@@ -16,11 +16,11 @@ from datetime import datetime, timezone
 
 import pyarrow as pa
 import pytest
-
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.rpc import controller_pb2
 from rigging.timing import Timestamp
+
 from tests.cluster.controller.conftest import (
     MockController,
     make_controller_state,

@@ -16,8 +16,8 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from finelog.rpc.logging_connect import LogServiceWSGIApplication
 from finelog.rpc.finelog_stats_connect import StatsServiceWSGIApplication
+from finelog.rpc.logging_connect import LogServiceWSGIApplication
 from finelog.server.interceptors import ConcurrencyLimitInterceptor
 from finelog.server.service import LogServiceImpl
 from finelog.server.stats_service import StatsServiceImpl

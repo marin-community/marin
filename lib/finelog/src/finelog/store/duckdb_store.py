@@ -67,7 +67,6 @@ LOG_NAMESPACE_NAME = "log"
 SEGMENT_TARGET_BYTES = 100 * 1024 * 1024  # 100 MB
 
 # Background step cadences.
-DEFAULT_COMPACT_INTERVAL_SEC = 1.0
 DEFAULT_FLUSH_INTERVAL_SEC = 60.0
 DEFAULT_COMPACTION_INTERVAL_SEC = 600.0  # merge small tmp parquets into one archive
 
@@ -219,7 +218,6 @@ class DuckDBLogStore:
         remote_log_dir: str = "",
         max_local_segments: int = DEFAULT_MAX_LOCAL_SEGMENTS,
         max_local_bytes: int = DEFAULT_MAX_LOCAL_BYTES,
-        compact_interval_sec: float = DEFAULT_COMPACT_INTERVAL_SEC,
         flush_interval_sec: float = DEFAULT_FLUSH_INTERVAL_SEC,
         compaction_interval_sec: float = DEFAULT_COMPACTION_INTERVAL_SEC,
         max_tmp_segments_before_compact: int = DEFAULT_MAX_TMP_SEGMENTS_BEFORE_COMPACT,
@@ -248,7 +246,6 @@ class DuckDBLogStore:
         # Per-namespace constructor kwargs that don't depend on the schema.
         self._namespace_kwargs = dict(
             remote_log_dir=remote_log_dir,
-            compact_interval_sec=compact_interval_sec,
             flush_interval_sec=flush_interval_sec,
             compaction_interval_sec=compaction_interval_sec,
             max_tmp_segments_before_compact=max_tmp_segments_before_compact,
@@ -445,8 +442,8 @@ class DuckDBLogStore:
                 ns_snapshot = list(self._namespaces.items())
             for ns_name, ns in ns_snapshot:
                 ns_quoted = quote_ident(ns_name)
-                segments = ns.sealed_segments()
-                if not segments:
+                segments, ram_tables = ns.query_snapshot()
+                if not segments and not ram_tables:
                     cols_sql = ", ".join(
                         f"NULL::{duckdb_type_for(c)} AS {quote_ident(c.name)}" for c in ns.schema.columns
                     )
@@ -458,11 +455,10 @@ class DuckDBLogStore:
                 if parquet_paths:
                     paths_literal = "[" + ", ".join(quote_literal(p) for p in parquet_paths) + "]"
                     parts.append(f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)")
-                for i, s in enumerate(segments):
-                    if s.table is None:
-                        continue
-                    reg_name = f"_seg_{ns_name.replace('.', '_')}_{i}"
-                    con.register(reg_name, s.table)
+                arrow_tables = [s.table for s in segments if s.table is not None] + ram_tables
+                for table in arrow_tables:
+                    reg_name = f"_seg_{len(registered_names)}"
+                    con.register(reg_name, table)
                     registered_names.append(reg_name)
                     parts.append(f"SELECT * FROM {reg_name}")
                 con.execute(f"CREATE VIEW {ns_quoted} AS {' UNION ALL BY NAME '.join(parts)}")
@@ -650,7 +646,6 @@ class DuckDBLogStore:
         self._log_namespace._compact_step()
 
     def _force_flush(self) -> None:
-        self._log_namespace._compact_step()
         self._log_namespace._flush_step()
 
     def _wait_for_flush(self, timeout: float = 10.0) -> None:

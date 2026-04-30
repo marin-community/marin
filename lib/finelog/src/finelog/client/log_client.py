@@ -56,10 +56,10 @@ from finelog.client.errors import (
     SchemaValidationError,
     StatsError,
 )
-from finelog.rpc import logging_pb2
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
-from finelog.rpc.logging_connect import LogServiceClientSync
+from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
+from finelog.rpc.logging_connect import LogServiceClientSync
 from finelog.store.schema import (
     Column,
     ColumnType,
@@ -268,6 +268,7 @@ class Table:
         self._cond = threading.Condition()
         self._queue: deque[_PendingItem] = deque()
         self._queue_bytes = 0
+        self._closing = False
         self._closed = False
 
         self._pushed_seq = 0
@@ -302,7 +303,7 @@ class Table:
         if not rows_list:
             return
         with self._cond:
-            if self._closed:
+            if self._closing or self._closed:
                 raise RuntimeError(f"Table({self._namespace}) is closed")
             for row in rows_list:
                 size = self._size_estimator(row)
@@ -365,9 +366,12 @@ class Table:
         with self._cond:
             if self._closed:
                 return
-            self._closed = True
+            self._closing = True
             self._cond.notify_all()
         self._thread.join(timeout=max(self._flush_interval_s * 2, 10.0))
+        with self._cond:
+            self._closed = True
+            self._cond.notify_all()
 
     # ------------------------------------------------------------------
     # Internal — buffer management (caller holds ``_cond``).
@@ -418,9 +422,9 @@ class Table:
     # ------------------------------------------------------------------
 
     def _run(self) -> None:
-        while not self._closed:
+        while True:
             with self._cond:
-                while not self._closed and not self._queue:
+                while not self._closing and not self._queue:
                     self._cond.wait(timeout=self._flush_interval_s)
                 if not self._queue:
                     return
@@ -436,10 +440,15 @@ class Table:
                 continue
 
             with self._cond:
+                if self._closing:
+                    if unsent[-1].seq > self._processed_seq:
+                        self._processed_seq = unsent[-1].seq
+                        self._cond.notify_all()
+                    return
                 self._rebuffer_at_head_locked(unsent)
             deadline = time.monotonic() + self._backoff.next_interval()
             with self._cond:
-                while not self._closed:
+                while not self._closing:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         break

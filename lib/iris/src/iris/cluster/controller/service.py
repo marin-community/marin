@@ -91,8 +91,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     task_updates_from_proto,
 )
-from iris.cluster.log_store_helpers import build_log_source, worker_log_key
-from iris.cluster.worker.stats import WORKER_STATS_NAMESPACE, IrisWorkerStat
+from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
@@ -105,6 +104,7 @@ from iris.cluster.types import (
     get_tpu_count,
     is_job_finished,
 )
+from iris.cluster.worker.stats import WORKER_STATS_NAMESPACE, IrisWorkerStat
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc import logging_pb2 as iris_logging_pb2
 from iris.rpc.auth import (

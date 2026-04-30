@@ -100,7 +100,7 @@ def test_query_safe_against_concurrent_drop_table(store: DuckDBLogStore):
     iteration``.
 
     We hold the read side of the rwlock through the snapshot phase by
-    instrumenting ``sealed_segments`` to block on a barrier, then run
+    instrumenting ``query_snapshot`` to block on a barrier, then run
     ``drop_table`` on a *different* namespace from another thread. Drop
     waits on the rwlock write side (queued behind our read), but its
     insertion-lock window — which deletes from ``self._namespaces`` —
@@ -121,15 +121,15 @@ def test_query_safe_against_concurrent_drop_table(store: DuckDBLogStore):
     alpha_ns = store._namespaces["ns.alpha"]
     in_loop = threading.Event()
     proceed = threading.Event()
-    orig_sealed = alpha_ns.sealed_segments
+    orig_query_snapshot = alpha_ns.query_snapshot
 
-    def blocking_sealed():
+    def blocking_query_snapshot():
         in_loop.set()
         # Hold here while the dict mutation thread runs.
         proceed.wait(timeout=10.0)
-        return orig_sealed()
+        return orig_query_snapshot()
 
-    alpha_ns.sealed_segments = blocking_sealed  # type: ignore[method-assign]
+    alpha_ns.query_snapshot = blocking_query_snapshot  # type: ignore[method-assign]
 
     query_error: list[Exception] = []
     query_result: list[pa.Table] = []
@@ -158,7 +158,7 @@ def test_query_safe_against_concurrent_drop_table(store: DuckDBLogStore):
         drop_thread.join(timeout=10.0)
         assert not drop_thread.is_alive(), "drop_table did not complete"
     finally:
-        alpha_ns.sealed_segments = orig_sealed  # type: ignore[method-assign]
+        alpha_ns.query_snapshot = orig_query_snapshot  # type: ignore[method-assign]
 
     qt.join(timeout=10.0)
     assert not qt.is_alive(), "query thread did not complete"
