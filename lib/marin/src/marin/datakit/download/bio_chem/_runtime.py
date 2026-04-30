@@ -38,15 +38,15 @@ from marin.transform.bio_chem.splitters import (
 logger = logging.getLogger(__name__)
 
 
-class NotationFormat(str, enum.Enum):
+class NotationFormat(enum.StrEnum):
     """The record splitter to apply to a streamed source."""
 
-    FASTA = "fasta"
-    GFF = "gff"
-    SMILES = "smiles"
-    SDF = "sdf"
-    MMCIF = "mmcif"
-    UNIPROT_DAT = "uniprot_dat"
+    FASTA = enum.auto()
+    GFF = enum.auto()
+    SMILES = enum.auto()
+    SDF = enum.auto()
+    MMCIF = enum.auto()
+    UNIPROT_DAT = enum.auto()
 
 
 @dataclass(frozen=True)
