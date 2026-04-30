@@ -518,7 +518,7 @@ class ScatterWriter:
         key = self._key_fn(item)
         target = deterministic_hash(key) % self._num_output_shards
         self._buffers[target].append(item)
-        if self._chunk_size > 0 and len(self._buffers[target]) >= self._chunk_size:
+        if len(self._buffers[target]) >= self._chunk_size:
             self._flush(target, self._buffers[target])
             self._buffers[target] = []
 
