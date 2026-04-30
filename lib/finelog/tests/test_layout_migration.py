@@ -11,7 +11,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from finelog.store.layout_migration import (
     LOG_NAMESPACE_DIR,
     SENTINEL_FILENAME,

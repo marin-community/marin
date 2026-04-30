@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
-
 from iris.cluster.worker.stats import (
     WORKER_STATS_NAMESPACE,
     IrisWorkerStat,

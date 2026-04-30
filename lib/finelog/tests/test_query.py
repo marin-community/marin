@@ -54,6 +54,18 @@ def test_query_round_trip_via_sealed_segment(store: DuckDBLogStore):
     assert table.column("mem_bytes").to_pylist() == [100, 200]
 
 
+def test_query_sees_unflushed_rows(store: DuckDBLogStore):
+    store.register_table("iris.worker", _worker_schema())
+    store.write_rows(
+        "iris.worker",
+        _ipc_bytes(_worker_batch(["w-1", "w-2"], [100, 200], [1, 2])),
+    )
+
+    table = store.query('SELECT worker_id, mem_bytes FROM "iris.worker" ORDER BY worker_id')
+    assert table.column("worker_id").to_pylist() == ["w-1", "w-2"]
+    assert table.column("mem_bytes").to_pylist() == [100, 200]
+
+
 def test_query_against_namespace_with_zero_sealed_segments_returns_empty(store: DuckDBLogStore):
     # Register but never write/flush. The view should be a typed empty view
     # so SELECT * returns zero rows (not a DuckDB error).

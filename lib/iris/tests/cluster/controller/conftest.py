@@ -182,7 +182,6 @@ class _StateMirroringStatsTable:
         from datetime import datetime, timezone
 
         import pyarrow as pa
-
         from iris.cluster.controller.service import _worker_roster
 
         rows = _worker_roster(self._state._db)

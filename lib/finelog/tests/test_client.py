@@ -31,8 +31,8 @@ from finelog.client.errors import (
     SchemaConflictError,
     SchemaValidationError,
 )
-from finelog.rpc import logging_pb2
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
+from finelog.rpc import logging_pb2
 from finelog.store.schema import Column, ColumnType, Schema, schema_to_proto
 
 # ---------------------------------------------------------------------------
@@ -600,6 +600,37 @@ def test_table_close_drains_queue(tracked_clients):
     total = sum(_decode_ipc_row_count(w.arrow_ipc) for w in stats_clients[0].writes)
     assert total == 5
     client.close()
+
+
+def test_table_close_drains_queue_when_thread_starts_late(monkeypatch):
+    sent: list[list[object]] = []
+    thread_targets = []
+
+    class DeferredThread:
+        def __init__(self, *, target, name, daemon):
+            self._target = target
+            self.name = name
+            self.daemon = daemon
+            thread_targets.append(target)
+
+        def start(self):
+            pass
+
+        def join(self, timeout=None):
+            self._target()
+
+    monkeypatch.setattr(log_client_mod.threading, "Thread", DeferredThread)
+
+    table = log_client_mod.Table(
+        namespace="iris.worker",
+        schema=Schema(columns=()),
+        flusher=lambda _namespace, rows: sent.append(list(rows)),
+    )
+    table.write([{"worker_id": "w-1"}, {"worker_id": "w-2"}])
+    table.close()
+
+    assert len(thread_targets) == 1
+    assert sent == [[{"worker_id": "w-1"}, {"worker_id": "w-2"}]]
 
 
 def test_schema_from_proto_consistency():

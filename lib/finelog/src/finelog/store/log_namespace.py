@@ -4,9 +4,9 @@
 """Per-namespace log storage state.
 
 A :class:`LogNamespace` owns everything that used to be top-level state on
-``DuckDBLogStore``: the in-memory pending row list, the chunked Arrow tables,
-the in-flight sealed buffer, the local segment registry, the sequence
-counter, the background flush thread, and the registered Arrow schema.
+``DuckDBLogStore``: chunked Arrow tables, the in-flight sealed buffer, the
+local segment registry, the sequence counter, the background flush thread,
+and the registered Arrow schema.
 
 Every namespace carries its own registered
 :class:`finelog.store.schema.Schema`, and the flush / compaction pipeline
@@ -57,7 +57,7 @@ from finelog.store.schema import (
     duckdb_type_for,
     schema_to_arrow,
 )
-from finelog.types import _EST_BYTES_PER_ROW, REGEX_META_RE, LogReadResult, parse_attempt_id, str_to_log_level
+from finelog.types import REGEX_META_RE, LogReadResult, parse_attempt_id, str_to_log_level
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +258,6 @@ class LogNamespace:
         data_dir: Path | None,
         remote_log_dir: str,
         segment_target_bytes: int,
-        compact_interval_sec: float,
         flush_interval_sec: float,
         compaction_interval_sec: float,
         max_tmp_segments_before_compact: int,
@@ -301,10 +300,6 @@ class LogNamespace:
         self._read_pool = read_pool
 
         self._next_seq = 1 if self._in_memory else _recover_next_seq(data_dir)
-        # Pending log-row tuples (only populated for the log namespace via
-        # ``append_log_batch``). Stats namespaces append RecordBatches
-        # directly into ``_chunks``.
-        self._pending: list[tuple] = []
         self._chunks: list[pa.Table] = []
         self._flushing: _SealedBuffer | None = None
         self._local_segments: deque[LocalSegment] = deque()
@@ -335,14 +330,12 @@ class LogNamespace:
                     continue
                 self._local_segments.append(s)
 
-        self._compact_rl = RateLimiter(compact_interval_sec)
         self._flush_rl = RateLimiter(flush_interval_sec)
         self._compaction_rl = RateLimiter(compaction_interval_sec)
         # Mark all rate limiters as just-run so the bg loop doesn't fire a
         # spurious tick at startup. Without this, the very first iteration
         # would race the caller's first ``append_*`` and could compact a
         # partially-written set of tmp segments.
-        self._compact_rl.mark_run()
         self._flush_rl.mark_run()
         self._compaction_rl.mark_run()
         self._stop = threading.Event()
@@ -376,9 +369,11 @@ class LogNamespace:
                     continue
                 first_seq = self._next_seq
                 self._next_seq += len(entries)
-                self._pending.extend(
+                rows = [
                     (first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)
-                )
+                ]
+                self._chunks.append(_build_log_table(rows, self._arrow_schema))
+            self._chunks = _merge_chunks(self._chunks)
             needs_drain = self._ram_bytes_locked() >= self._segment_target_bytes
         if needs_drain:
             self._wake.set()
@@ -454,7 +449,6 @@ class LogNamespace:
         self._stop.set()
         self._wake.set()
         self._bg_thread.join()
-        self._compact_step()
         self._flush_step()
         self._compaction_step(compact_single=True)
 
@@ -502,7 +496,7 @@ class LogNamespace:
         """Total bytes across every in-RAM holder. Caller holds the insertion lock."""
         chunks_b = sum(t.nbytes for t in self._chunks)
         flushing_b = self._flushing.table.nbytes if self._flushing is not None else 0
-        return len(self._pending) * _EST_BYTES_PER_ROW + chunks_b + flushing_b
+        return chunks_b + flushing_b
 
     def _bg_loop(self) -> None:
         """Drive compact, flush, and compaction on rate-limited schedules."""
@@ -512,63 +506,45 @@ class LogNamespace:
                 tmp_count = sum(1 for s in self._local_segments if _is_tmp_path(s.path))
                 force_compaction = tmp_count > self._max_tmp_segments_before_compact
             if force_drain:
-                self._compact_step()
                 self._flush_step()
-                self._compact_rl.mark_run()
                 self._flush_rl.mark_run()
-            else:
-                if self._compact_rl.should_run():
-                    self._compact_step()
-                if self._flush_rl.should_run():
-                    self._flush_step()
+            elif self._flush_rl.should_run():
+                self._flush_step()
             if force_compaction or self._compaction_rl.should_run():
                 self._compaction_step()
                 self._compaction_rl.mark_run()
 
-            self._wake.wait(timeout=min(self._compact_rl.time_until_next(), 1.0))
+            self._wake.wait(timeout=min(self._flush_rl.time_until_next(), 1.0))
             self._wake.clear()
 
     def _compact_step(self) -> None:
-        """Drain log-row tuples into an Arrow chunk.
-
-        No-op for stats namespaces (whose ``_pending`` list stays empty).
-        """
-        with self._insertion_lock:
-            rows = self._pending
-            if not rows:
-                return
-            self._pending = []
-        table = _build_log_table(rows, self._arrow_schema)
-        with self._insertion_lock:
-            self._chunks.append(table)
-            self._chunks = _merge_chunks(self._chunks)
+        """Compatibility hook: appends already materialize Arrow chunks."""
 
     def _flush_step(self) -> None:
         """Seal any RAM data into a Parquet segment on disk."""
         with self._flush_lock:
             with self._insertion_lock:
-                if not self._chunks and not self._pending:
+                if not self._chunks:
                     return
                 tables = list(self._chunks)
-                if self._pending:
-                    tables.append(_build_log_table(self._pending, self._arrow_schema))
-                    self._pending = []
-
-            new_table = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
-            min_seq, max_seq = self._derive_seq_bounds(new_table)
-            new_table = self._sort_for_flush(new_table)
-            sealed = _SealedBuffer(table=new_table, min_seq=min_seq, max_seq=max_seq)
-
-            with self._insertion_lock:
                 self._chunks = []
-                self._flushing = sealed
+                visible_table = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
+                min_seq, max_seq = self._derive_seq_bounds_locked(visible_table)
+                visible = _SealedBuffer(table=visible_table, min_seq=min_seq, max_seq=max_seq)
+                self._flushing = visible
+
+            sealed = _SealedBuffer(
+                table=self._sort_for_flush(visible_table),
+                min_seq=min_seq,
+                max_seq=max_seq,
+            )
 
             try:
                 self._write_new_segment(sealed)
             except Exception:
                 logger.warning("Flush failed, restoring data to chunks", exc_info=True)
                 with self._insertion_lock:
-                    self._chunks.insert(0, sealed.table)
+                    self._chunks.insert(0, visible.table)
                     self._flushing = None
                 return
 
@@ -578,20 +554,19 @@ class LogNamespace:
 
             self._evict_hook()
 
-    def _derive_seq_bounds(self, table: pa.Table) -> tuple[int, int]:
+    def _derive_seq_bounds_locked(self, table: pa.Table) -> tuple[int, int]:
         """Choose ``(min_seq, max_seq)`` for the sealed buffer.
 
         For the log namespace, the seq column is per-row and bounds come
         from the column itself. For other namespaces, the filename counter
         is per-batch — bounds are derived from ``_next_seq`` and the table's
-        row count.
+        row count. Caller holds the insertion lock.
         """
         if "seq" in table.column_names:
             seq_col = table.column("seq")
             return pc.min(seq_col).as_py(), pc.max(seq_col).as_py()
-        with self._insertion_lock:
-            max_seq = self._next_seq - 1
-            min_seq = max_seq - table.num_rows + 1
+        max_seq = self._next_seq - 1
+        min_seq = max_seq - table.num_rows + 1
         return min_seq, max_seq
 
     def _sort_for_flush(self, table: pa.Table) -> pa.Table:
@@ -828,6 +803,20 @@ class LogNamespace:
         with self._insertion_lock:
             return [s for s in self._local_segments if not _is_tmp_path(s.path)]
 
+    def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]:
+        """Return all currently queryable local segments and RAM tables.
+
+        The stats SQL path should see rows as soon as ``write_rows`` accepts
+        them, not only after background flush/compaction. The caller holds the
+        registry's query-visibility read lock across query execution so parquet
+        files in the returned segment list cannot be unlinked mid-scan.
+        """
+        with self._insertion_lock:
+            ram_tables = list(self._chunks)
+            if self._flushing is not None:
+                ram_tables.append(self._flushing.table)
+            return list(self._local_segments), ram_tables
+
     def all_segments_unlocked(self) -> list[LocalSegment]:
         """Return a snapshot of every locally-tracked segment (tmp + sealed).
 
@@ -990,12 +979,6 @@ class LogNamespace:
             ram_tables: list[pa.Table] = list(self._chunks)
             if self._flushing is not None:
                 ram_tables.append(self._flushing.table)
-            # Log-namespace pending rows are committed in-process state;
-            # making them visible to reads matches the prior MemStore
-            # semantics ("appended rows immediately findable") and is
-            # safe because compaction never touches ``_pending`` directly.
-            if self._pending:
-                ram_tables.append(_build_log_table(self._pending, self._arrow_schema))
 
         segments = _cap_segments(segments)
         parquet_files = [s.path for s in segments if s.table is None]
