@@ -190,9 +190,11 @@ class _ShardedArray:
             if step != 1:
                 values = await self._read(slice(start, stop))
                 return values[::step]
-            pieces = []
-            for shard_index, local_slice in _split_slice_by_boundaries(start, stop, self._boundaries):
-                pieces.append(await self._arrays[shard_index][local_slice].read())
+            reads = [
+                self._arrays[shard_index][local_slice].read()
+                for shard_index, local_slice in _split_slice_by_boundaries(start, stop, self._boundaries)
+            ]
+            pieces = await asyncio.gather(*reads)
             return _concatenate_or_empty(pieces)
 
         index = item

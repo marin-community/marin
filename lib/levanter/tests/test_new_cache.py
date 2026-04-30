@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import os
 import tempfile
 from typing import Any, Dict, Iterator, Sequence
@@ -16,6 +17,7 @@ from levanter.store.cache import (
     CacheLedger,
     CacheMetadata,
     SerialCacheWriter,
+    _ShardedArray,
     ShardedTreeCache,
     TreeStore,
     build_or_load_cache,
@@ -373,6 +375,43 @@ def test_sharded_tree_cache_reads_across_shards():
         batch = cache.get_batch_sync(cross_indices)
         for idx, b in zip(cross_indices, batch):
             np.testing.assert_array_equal(b["data"], all_expected[idx]["data"])
+
+
+@pytest.mark.asyncio
+async def test_sharded_array_reads_slice_shards_concurrently():
+    started = 0
+    both_started = asyncio.Event()
+
+    class FakeRead:
+        def __init__(self, values: np.ndarray):
+            self._values = values
+
+        async def read(self):
+            nonlocal started
+            started += 1
+            if started == 2:
+                both_started.set()
+            await both_started.wait()
+            return self._values
+
+    class FakeArray:
+        def __init__(self, values: np.ndarray):
+            self._values = values
+
+        def __getitem__(self, item):
+            return FakeRead(self._values[item])
+
+    sharded = _ShardedArray(
+        [
+            FakeArray(np.asarray([0, 1, 2, 3])),
+            FakeArray(np.asarray([4, 5, 6, 7])),
+        ],
+        [4, 4],
+    )
+
+    values = await asyncio.wait_for(sharded[2:6], timeout=1)
+
+    np.testing.assert_array_equal(values, np.asarray([2, 3, 4, 5]))
 
 
 def test_sharded_tree_cache_via_load():
