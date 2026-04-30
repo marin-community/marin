@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 
 def load_module():

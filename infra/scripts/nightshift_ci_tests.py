@@ -6,18 +6,18 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import logging
 import os
-from pathlib import Path
 import re
 import secrets
 import subprocess
 import tempfile
+import zipfile
+from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
-import hashlib
-import zipfile
 
 logger = logging.getLogger(__name__)
 
