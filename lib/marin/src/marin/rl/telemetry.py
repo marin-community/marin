@@ -20,9 +20,8 @@ from enum import StrEnum
 from typing import Any
 
 from levanter.utils.fsspec_utils import join_path
-from rigging.filesystem import url_to_fs
-
 from marin.utilities.json_encoder import CustomJsonEncoder
+from rigging.filesystem import url_to_fs
 
 TELEMETRY_EVENT_SCHEMA_VERSION = "telemetry_event.v1"
 TRACKER_RUN_REF_SCHEMA_VERSION = "rl_tracker_run_ref.v1"

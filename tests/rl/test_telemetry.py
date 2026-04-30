@@ -5,7 +5,6 @@ from pathlib import Path
 
 import fsspec
 import pytest
-
 from marin.rl.telemetry import (
     EventShardWriter,
     StepProvenance,

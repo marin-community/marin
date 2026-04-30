@@ -30,8 +30,9 @@ def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
         def log(self, _metrics, step=None):
             pass
 
-        def log_artifact(self, artifact_path, name=None, artifact_type=None):
-            artifact_logs.append((artifact_path, name, artifact_type))
+        def log_artifact(self, artifact_path, name=None, artifact_type=None, **kwargs):
+            logged_artifact_type = artifact_type if artifact_type is not None else kwargs.get("type")
+            artifact_logs.append((artifact_path, name, logged_artifact_type))
 
         @property
         def summary(self):
