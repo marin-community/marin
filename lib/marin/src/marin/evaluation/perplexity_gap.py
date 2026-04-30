@@ -26,7 +26,7 @@ from levanter.tokenizers import TokenizerBackend
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.dag import ExecutorStep, InputName, VersionedValue, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, VersionedValue, this_output_path, versioned
 from marin.processing.tokenize import HfDatasetSpec
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 from marin.utilities.wandb_utils import init_wandb

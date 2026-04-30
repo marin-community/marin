@@ -9,7 +9,7 @@ import os.path
 from fray.types import ResourceConfig
 from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE
 from marin.datakit.download.nemotron_v1 import download_nemotron_v1_step
-from marin.execution.dag import ExecutorStep, InputName, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.execution.remote import remote
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep

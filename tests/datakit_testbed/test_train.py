@@ -20,12 +20,12 @@ _SMOKE_SOURCE = all_sources()["nemotron_cc_code_v1/all"]
 def test_tokenize_step_bridge_produces_training_ready_steps():
     """sample StepSpec -> ExecutorStep[TokenizeConfig] via the bridge helper.
 
-    Catches the StepSpec/ExecutorStep type gap that blocked training
-    end-to-end before the dag.py refactor: the bridge must produce real
+    Catches the StepSpec/ExecutorStep type gap that blocked training:
+    the bridge must produce real
     ``ExecutorStep[TokenizeConfig]`` (= ``TokenizerStep``), not a generic
     ExecutorStep wrapping ``_StepSpecMigrationConfig``.
     """
-    from marin.execution.dag import ExecutorStep
+    from marin.execution.executor import ExecutorStep
     from marin.processing.tokenize import TokenizeConfig
 
     steps = build_testbed_steps(sources=[_SMOKE_SOURCE])

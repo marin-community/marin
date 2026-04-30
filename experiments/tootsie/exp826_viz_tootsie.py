@@ -17,7 +17,7 @@ The cooldown seems to function as a kind of sharpening/annealing
 """
 
 from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
-from marin.execution.dag import ExecutorStep, versioned
+from marin.execution.executor import ExecutorStep, versioned
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 

@@ -39,7 +39,7 @@ from experiments.tootsie.exp600_tootsie import (
     phase_3_tokenized,
 )
 from fray.cluster import ResourceConfig
-from marin.execution.dag import output_path_of
+from marin.execution.executor import output_path_of
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 

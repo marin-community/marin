@@ -5,7 +5,7 @@
 
 import os.path
 
-from marin.execution.dag import ExecutorStep, InputName, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.datakit.download.dolma import DOLMA_DATASETS, download_dolma_step
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep

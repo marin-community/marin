@@ -19,7 +19,7 @@ import levanter.main.train_lm as levanter_train_lm
 from fray import ResourceConfig
 from fray import client as fray_client
 from fray.types import Entrypoint, JobRequest, create_environment
-from marin.execution.dag import (
+from marin.execution.executor import (
     ExecutorStep,
     InputName,
     VersionedValue,

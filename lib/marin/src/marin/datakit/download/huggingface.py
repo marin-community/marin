@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import huggingface_hub
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
-from marin.execution.dag import THIS_OUTPUT_PATH
+from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.execution.step_spec import StepSpec
 from marin.utilities.validation_utils import write_provenance_json
 

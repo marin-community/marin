@@ -45,7 +45,7 @@ from experiments.isoflop_sweep import (
 )
 from experiments.llama import llama3_tokenizer
 from experiments.scaling_law_sweeps.completed_adamh import completed_adamh_heuristic
-from marin.execution.dag import ExecutorStep, this_output_path
+from marin.execution.executor import ExecutorStep, this_output_path
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.scaling_laws import ScalingFit, predict_optimal_config

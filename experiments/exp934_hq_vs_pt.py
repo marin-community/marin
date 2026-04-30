@@ -10,7 +10,7 @@ datasets used by various training experiments.
 
 from marin.datakit.download.ar5iv import ar5iv_step
 from marin.datakit.download.wikipedia import download_wikipedia_step
-from marin.execution.dag import ExecutorStep, mirrored, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, mirrored, this_output_path, versioned
 from marin.execution.step_spec import StepSpec
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 from marin.schemas.web.selectors import ARXIV_BLACKLISTED_SELECTORS, WIKI_BLACKLISTED_SELECTORS

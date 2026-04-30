@@ -44,7 +44,7 @@ from levanter.utils.tree_utils import inference_mode
 from fray import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 
-from marin.execution.dag import ExecutorStep, InputName, this_output_path
+from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 logger = logging.getLogger(__name__)

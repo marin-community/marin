@@ -39,7 +39,7 @@ from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.dataset import FileEntry
 from zephyr.readers import InputFileSpec, load_file
 
-from marin.execution.dag import InputName, VersionedValue
+from marin.execution.executor import InputName, VersionedValue
 from marin.utils import fsspec_exists, fsspec_isdir
 
 logger = logging.getLogger(__name__)

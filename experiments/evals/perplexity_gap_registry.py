@@ -22,7 +22,7 @@ from experiments.defaults import default_raw_validation_sets
 from experiments.evals.fineweb2_multilingual import fineweb2_multilingual_raw_validation_sets
 from experiments.evals.long_tail_ppl_runnable import runnable_long_tail_raw_validation_sets
 from experiments.marin_models import marin_tokenizer
-from marin.execution.dag import ExecutorStep
+from marin.execution.executor import ExecutorStep
 from marin.evaluation.perplexity_gap import (
     GapFinderModelConfig,
     RawTextEvaluationDataset,
