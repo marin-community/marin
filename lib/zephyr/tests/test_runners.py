@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 
 import pytest
@@ -87,6 +88,42 @@ def test_exception_preserves_user_frame(local_client, tmp_path, runner_factory):
         chained += str(cur) + "".join(getattr(cur, "__notes__", []))
         cur = cur.__cause__ or cur.__context__
     assert "buggy" in chained or "tuple index out of range" in chained, chained
+
+
+def _record_worker_pid(x: int) -> int:
+    counters.increment(f"shard_pid_{os.getpid()}", 1)
+    return x
+
+
+@pytest.mark.parametrize(
+    "runner_cls",
+    [
+        pytest.param(InlineRunner, id="inline"),
+        pytest.param(
+            SubprocessRunner,
+            id="subprocess",
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="subprocess gives each shard a unique PID; strict=True catches silent fallback to inline.",
+            ),
+        ),
+    ],
+)
+def test_runner_parametrization_isolates_processes(local_client, tmp_path, runner_cls):
+    """Regression guard that subprocess parametrization actually spawns subprocesses.
+
+    Inline reuses the worker actor (≤ max_workers PIDs); subprocess gets one PID per shard.
+    """
+    ctx = _ctx(local_client, tmp_path, stage_runner_factory=runner_cls)
+    try:
+        ds = Dataset.from_list(list(range(5))).map(_record_worker_pid)
+        outcome = ctx.execute(ds)
+    finally:
+        ctx.shutdown()
+
+    pid_counters = {k: v for k, v in outcome.counters.items() if k.startswith("shard_pid_")}
+    assert sum(pid_counters.values()) == 5, pid_counters
+    assert len(pid_counters) <= 2, pid_counters
 
 
 def test_subprocess_runner_isolates_native_crash(local_client, tmp_path):
