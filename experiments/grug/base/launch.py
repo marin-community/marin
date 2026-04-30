@@ -25,7 +25,7 @@ from marin.execution.executor import compute_output_path, resolve_local_placehol
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.training.training import temporary_checkpoint_base_path
 
-from experiments.defaults import TrainingPlan, default_validation_sets, run_train
+from experiments.defaults import _submit_train_job, default_validation_sets
 from experiments.grug.base.model import GrugModelConfig
 from experiments.grug.base.train import (
     GrugEvalConfig,
@@ -128,18 +128,17 @@ def _build_grug_run_config(
     )
 
 
-def prepare_grug_trial(
+def _prepare_grug(
     name: str,
     launch: GrugBaseLaunchConfig,
     *,
     override_output_path: str | None = None,
-    env_vars: dict[str, str] | None = None,
-) -> TrainingPlan[GrugRunConfig]:
-    """Build a ``TrainingPlan`` for the grug-base template.
+) -> tuple[str, GrugRunConfig, str]:
+    """Resolve output path and build a ``GrugRunConfig`` without submitting.
 
-    Resolves ``output_path`` via the executor's version-hashing pass so
-    re-submissions of the same plan resume from the same checkpoint
-    directory, then builds the full ``GrugRunConfig`` with that path baked in.
+    Returns:
+        (name, run_config, output_path) — the three values needed to submit the
+        job or inspect in tests.
     """
     output_path = compute_output_path(name, launch, override_output_path=override_output_path)
 
@@ -149,21 +148,43 @@ def prepare_grug_trial(
     launch = resolve_local_placeholders(launch, output_path)
 
     run_config = _build_grug_run_config(launch, output_path=output_path)
+    return name, run_config, output_path
 
-    return TrainingPlan(
+
+def train_grug(
+    name: str,
+    launch: GrugBaseLaunchConfig,
+    *,
+    override_output_path: str | None = None,
+    env_vars: dict[str, str] | None = None,
+) -> None:
+    """Build and immediately submit a grug training job to Iris.
+
+    Resolves the output path locally, bakes checkpoint paths into the config,
+    and blocks until the Iris job completes.
+
+    Args:
+        name: Human-readable identifier; forms the basis of the output path.
+        launch: Fully-specified launch config for the grug-base template.
+        override_output_path: Optional explicit output path, bypassing the hash-based one.
+        env_vars: Env vars to inject into the Iris worker at startup.
+    """
+    _, run_config, output_path = _prepare_grug(name, launch, override_output_path=override_output_path)
+
+    _submit_train_job(
         name=name,
-        output_path=output_path,
         train_config=run_config,
-        worker_fn=_run_grug_local,
-        resources=launch.resources,
+        output_path=output_path,
+        resources=run_config.resources,
         env_vars=dict(env_vars or {}),
+        worker_fn=_run_grug_local,
     )
 
 
 RESOLVED_RUN_ID = _resolve_run_id("grug-base-trial")
 
 # Shared between the launch config (where the trainer reads it to build the
-# Levanter mesh) and the TrainingPlan dispatch field (where the worker is
+# Levanter mesh) and the _submit_train_job call (where the worker is
 # scheduled). Same object on both sides avoids drift.
 _GRUG_BASE_RESOURCES = ResourceConfig.with_tpu("v5p-8")
 
@@ -215,8 +236,5 @@ grug_base_launch = GrugBaseLaunchConfig(
 )
 
 
-grug_base_plan = prepare_grug_trial(name="grug/base-trial", launch=grug_base_launch)
-
-
 if __name__ == "__main__":
-    run_train(grug_base_plan)
+    train_grug(name="grug/base-trial", launch=grug_base_launch)

@@ -5,7 +5,7 @@
 Tutorial: hyper-parameter sweep over a tiny model on TinyStories using TPU hardware.
 
 The script defines a 9-element learning-rate by weight-decay grid. Each grid point
-becomes one ``SweepTarget`` whose payload is a fully-built ``TrainingPlan``;
+becomes one ``SweepTarget`` whose payload is a ``(name, train_config)`` tuple;
 ``claim_and_run`` races workers across processes / machines for unclaimed targets
 via the executor's distributed ``step_lock``.
 
@@ -13,9 +13,14 @@ Submission model: a single ``iris job run`` invocation submits ONE Iris job
 whose ``ResourceConfig`` requests ``NUM_WORKERS`` CPU-only replicas (tasks).
 Each replica runs the same entrypoint, calls ``claim_and_run``, and loops over
 the target list — competing with its peers for the next unclaimed target via
-``step_lock``. Whichever worker wins a target submits a child Iris training
-job (TPU) via ``run_train`` and blocks on it; when that returns, the worker
-moves on to the next target.
+``step_lock``. Whichever worker wins a target calls ``train(...)`` directly,
+which submits a child Iris training job (TPU) and blocks on it; when that
+returns, the worker moves on to the next target.
+
+Each coordinator constructs the full training call at claim time. ``MARIN_PREFIX`` is pinned at submission so
+all CPU replicas resolve the same per-target output path regardless of where Iris
+schedules them — without this, replicas in different regions could disagree on
+``gs://marin-{region}/...`` paths and race-claim the same target twice.
 
 The number of workers is independent of the sweep size: workers run in a loop
 until the target list is exhausted. ``NUM_WORKERS = 3`` against 9 grid points
@@ -34,7 +39,7 @@ from rigging.filesystem import marin_prefix
 from marin.execution.executor import versioned
 from marin.execution.sweep import SweepTarget, claim_and_run
 
-from experiments.defaults import prepare_train, run_train
+from experiments.defaults import train
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.llama import llama_30m
 from experiments.pretraining_datasets.simple import tokenized
@@ -73,31 +78,33 @@ sweep_configs = [
     for wd in [0.0, 0.1, 0.2]
 ]
 
-plans = []
-for config in sweep_configs:
-    lr, wd = config.learning_rate, config.weight_decay
-    plan = prepare_train(
-        # Marin will automatically create unique ids for runs b/c the model_config is versioned;
-        # the explicit name keeps each run identifiable in W&B.
-        name=f"tutorial-slimpajama_6b-30m-sweep-lr{lr}-wd{wd}",
-        tokenized=tokenized["slimpajama_6b"],
-        model_config=versioned(llama_30m),
-        train_config=config,
-        # wandb tags
-        tags=["llama", "30m", "slimpajama_6b", "tutorial", "sweep", "test20251117"],
-        eval_harness_tasks=CORE_TASKS,
+# Each target carries only the (name, train_config) pair that varies across the
+# sweep; tokenized, model_config, tags, and eval_harness_tasks are constant and
+# are hard-coded in _run_one below.
+targets = [
+    SweepTarget(
+        target_id=f"tutorial-slimpajama_6b-30m-sweep-lr{config.learning_rate}-wd{config.weight_decay}",
+        config=(
+            f"tutorial-slimpajama_6b-30m-sweep-lr{config.learning_rate}-wd{config.weight_decay}",
+            config,
+        ),
     )
-    plans.append(plan)
-
-# `prepare_train` names plans `checkpoints/<name>`; the slash is not a valid
-# path component for the lock root, so flatten it. The `(name, lr, wd)` tuple is
-# unique within the sweep so the resulting target_id is unique too.
-targets = [SweepTarget(target_id=plan.name.replace("/", "-"), config=plan) for plan in plans]
+    for config in sweep_configs
+]
 
 
 def _run_one(target: SweepTarget) -> None:
     """Submit one sweep trial as a child Iris training job and block on it."""
-    run_train(target.config)
+    name, train_config = target.config
+    train(
+        name=name,
+        tokenized=tokenized["slimpajama_6b"],
+        model_config=versioned(llama_30m),
+        train_config=train_config,
+        # wandb tags
+        tags=["llama", "30m", "slimpajama_6b", "tutorial", "sweep", "test20251117"],
+        eval_harness_tasks=CORE_TASKS,
+    )
 
 
 def _sweep_worker_entrypoint(sweep_root: str) -> None:
@@ -114,17 +121,17 @@ def _sweep_worker_entrypoint(sweep_root: str) -> None:
 
 
 if __name__ == "__main__":
-    # Single Iris submission, NUM_WORKERS gang-scheduled CPU replicas. Each
-    # replica runs `_sweep_worker_entrypoint` and competes with its peers via
-    # `step_lock` for the next unclaimed sweep target.
-    sweep_root = os.path.join(marin_prefix(), "sweeps", SWEEP_NAME)
+    # Pin MARIN_PREFIX so all CPU replicas agree on the per-target output path
+    # regardless of which region Iris schedules them in.
+    pinned_prefix = marin_prefix()
+    sweep_root = os.path.join(pinned_prefix, "sweeps", SWEEP_NAME)
     client = fray_client.current_client()
     handle = client.submit(
         JobRequest(
             name=SWEEP_NAME,
             entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[sweep_root]),
             resources=ResourceConfig.with_cpu(replicas=NUM_WORKERS),
-            environment=create_environment(),
+            environment=create_environment(env_vars={"MARIN_PREFIX": pinned_prefix}),
         )
     )
     handle.wait(raise_on_failure=True)

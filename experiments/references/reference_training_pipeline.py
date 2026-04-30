@@ -22,8 +22,8 @@ from marin.execution.remote import remote
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
-from experiments.defaults import default_tokenize, default_validation_sets, run_train
-from experiments.grug.base.launch import GrugBaseLaunchConfig, prepare_grug_trial
+from experiments.defaults import default_tokenize, default_validation_sets
+from experiments.grug.base.launch import GrugBaseLaunchConfig, train_grug
 from experiments.grug.base.model import GrugModelConfig
 from experiments.grug.base.train import GrugEvalConfig
 from experiments.marin_models import marin_tokenizer
@@ -109,8 +109,5 @@ training_launch = GrugBaseLaunchConfig(
     ),
 )
 
-training_plan = prepare_grug_trial(name="reference-pipeline", launch=training_launch)
-
-
 if __name__ == "__main__":
-    run_train(training_plan)
+    train_grug(name="reference-pipeline", launch=training_launch)
