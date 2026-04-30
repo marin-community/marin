@@ -32,7 +32,7 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
     preprocessor_for_format,
 )
-from levanter.store.cache import CacheLedger, CacheMetadata
+from levanter.store.cache import CacheLedger, CacheMetadata, _merge_ledgers
 from levanter.store.tree_store import TreeStore
 from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
 from rigging.filesystem import open_url, url_to_fs
@@ -486,26 +486,14 @@ def tokenize(config: TokenizeConfigBase):
         # parallelism in the local driver.
         with ThreadPoolExecutor(max_workers=_local_metadata_workers(len(shard_paths))) as pool:
             shard_ledgers = list(pool.map(CacheLedger.load, shard_paths))
-        shard_rows = {}
-        total_elements = 0
-        field_counts: dict[str, int] = {}
-        for path, sl in zip(shard_paths, shard_ledgers, strict=True):
-            shard_name = os.path.basename(path)
-            shard_rows[shard_name] = sl.total_num_rows
-            total_elements += sl.total_num_rows
-            for field, count in sl.field_counts.items():
-                field_counts[field] = field_counts.get(field, 0) + count
-
-        ledger = CacheLedger(
-            total_num_rows=total_elements,
-            shard_rows=shard_rows,
-            is_finished=True,
-            finished_shards=list(shard_rows.keys()),
-            field_counts=field_counts,
-            metadata=CacheMetadata.empty(),
+        ledger = _merge_ledgers(
+            prefix,
+            shard_paths,
+            shard_ledgers,
+            CacheMetadata.empty(),
             shard_paths=_shard_paths_for_ledger(prefix, shard_paths),
         )
-        ledger._serialize_and_commit(prefix)
+        total_elements = ledger.total_num_rows
 
         exemplar = {"input_ids": np.zeros(0, dtype=np.int32)}
 

@@ -709,10 +709,7 @@ def build_cache(
 
     shard_cache_paths = [s["path"] for s in shard_results]
     shard_ledgers = [s["ledger"] for s in shard_results]
-    ledger = _merge_ledgers(cache_dir, shard_cache_paths, shard_ledgers, metadata)
-    # Store shard paths so the reader can find them without consolidation
-    ledger.shard_paths = shard_cache_paths
-    ledger._serialize_and_commit(cache_dir)
+    ledger = _merge_ledgers(cache_dir, shard_cache_paths, shard_ledgers, metadata, shard_paths=shard_cache_paths)
     return ledger
 
 
@@ -873,7 +870,12 @@ def consolidate_shard_caches(
 
 
 def _merge_ledgers(
-    output_path: str, shard_cache_paths: list[str], shard_ledgers: list[CacheLedger], metadata: CacheMetadata
+    output_path: str,
+    shard_cache_paths: list[str],
+    shard_ledgers: list[CacheLedger],
+    metadata: CacheMetadata,
+    *,
+    shard_paths: list[str] | None = None,
 ) -> CacheLedger:
     final_ledger = CacheLedger(
         total_num_rows=0,
@@ -881,8 +883,9 @@ def _merge_ledgers(
         finished_shards=[],
         field_counts={},
         metadata=metadata,
+        shard_paths=shard_paths,
     )
-    for shard_path, ledger in zip(shard_cache_paths, shard_ledgers):
+    for shard_path, ledger in zip(shard_cache_paths, shard_ledgers, strict=True):
         shard_name = os.path.basename(shard_path)
         final_ledger.shard_rows[shard_name] = ledger.total_num_rows
         final_ledger.finished_shards.append(shard_name)
