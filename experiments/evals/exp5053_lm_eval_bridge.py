@@ -20,9 +20,10 @@ from marin.datakit.ingestion_manifest import (
     StagingMetadata,
     UsagePolicy,
 )
-from marin.datakit.download.huggingface import DownloadConfig as HfDownloadConfig, download_hf
+from marin.datakit.download.huggingface import download_hf_step
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from marin.execution.executor import executor_main
+from marin.execution.step_spec import StepSpec
 from marin.transform.evaluation.raw_lm_eval import (
     GSM8K_COT_DEFAULT_NUM_FEWSHOT,
     MMLU_DEFAULT_FEWSHOT_SPLIT,
@@ -53,28 +54,18 @@ def _eval_only_policy(provenance_notes: str) -> IngestionPolicy:
     )
 
 
-mmlu_raw = ExecutorStep(
-    name="raw/cais/mmlu",
-    fn=download_hf,
-    config=HfDownloadConfig(
-        hf_dataset_id=versioned(MMLU_DATASET_ID),
-        revision=versioned(MMLU_REVISION),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
+mmlu_raw = download_hf_step(
+    "raw/cais/mmlu",
+    hf_dataset_id=MMLU_DATASET_ID,
+    revision=MMLU_REVISION,
+    hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
-gsm8k_raw = ExecutorStep(
-    name="raw/openai/gsm8k",
-    fn=download_hf,
-    config=HfDownloadConfig(
-        hf_dataset_id=versioned(GSM8K_DATASET_ID),
-        revision=versioned(GSM8K_REVISION),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
+gsm8k_raw = download_hf_step(
+    "raw/openai/gsm8k",
+    hf_dataset_id=GSM8K_DATASET_ID,
+    revision=GSM8K_REVISION,
+    hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
 
@@ -145,27 +136,42 @@ LM_EVAL_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
 }
 
 
-def _stage_step(dataset_key: str, raw_step: ExecutorStep, manifest: IngestionSourceManifest) -> ExecutorStep:
-    return ExecutorStep(
+def _stage_step(dataset_key: str, raw_step: StepSpec, manifest: IngestionSourceManifest) -> StepSpec:
+    metadata = manifest.staging.metadata or {}
+    num_fewshot = int(metadata.get("num_fewshot", 0))
+    fewshot_split = metadata.get("fewshot_split")
+    return StepSpec(
         name=f"evaluation/{dataset_key}",
-        fn=stage_lm_eval_source,
-        config=LmEvalRawStagingConfig(
-            input_path=output_path_of(raw_step),
-            output_path=this_output_path(),
-            source_label=manifest.source_label,
-            renderer_name=LmEvalRawRenderer(manifest.staging.serializer_name or ""),
-            split=manifest.staging.split or "train",
-            subset=manifest.staging.subset,
-            max_examples=manifest.sample_caps.max_examples,
-            num_fewshot=int((manifest.staging.metadata or {}).get("num_fewshot", 0)),
-            fewshot_split=(manifest.staging.metadata or {}).get("fewshot_split"),
-            source_manifest=manifest,
-            content_fingerprint=manifest.fingerprint(),
+        deps=[raw_step],
+        fn=lambda output_path: stage_lm_eval_source(
+            LmEvalRawStagingConfig(
+                input_path=raw_step.output_path,
+                output_path=output_path,
+                source_label=manifest.source_label,
+                renderer_name=LmEvalRawRenderer(manifest.staging.serializer_name or ""),
+                split=manifest.staging.split or "train",
+                subset=manifest.staging.subset,
+                max_examples=manifest.sample_caps.max_examples,
+                num_fewshot=num_fewshot,
+                fewshot_split=fewshot_split,
+                source_manifest=manifest,
+                content_fingerprint=manifest.fingerprint(),
+            )
         ),
+        hash_attrs={
+            "dataset_key": dataset_key,
+            "manifest_fingerprint": manifest.fingerprint(),
+            "renderer": manifest.staging.serializer_name,
+            "split": manifest.staging.split,
+            "subset": manifest.staging.subset,
+            "max_examples": manifest.sample_caps.max_examples,
+            "num_fewshot": num_fewshot,
+            "fewshot_split": fewshot_split,
+        },
     )
 
 
-LM_EVAL_STAGED: dict[str, ExecutorStep] = {
+LM_EVAL_STAGED: dict[str, StepSpec] = {
     "lm_eval/mmlu_auxiliary_train": _stage_step(
         "lm_eval/mmlu_auxiliary_train",
         mmlu_raw,
@@ -188,7 +194,7 @@ def lm_eval_bridge_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
     """Return the staged raw-text bridge datasets for perplexity-gap reports."""
     return {
         key: raw_text_dataset(
-            step.cd("staged.jsonl.gz"),
+            step.as_executor_step().cd("staged.jsonl.gz"),
             tags=("lm_eval_bridge", f"epic:{LONG_TAIL_PPL_EPIC_ISSUE}", f"issue:{LM_EVAL_BRIDGE_ISSUE}", key),
         )
         for key, step in LM_EVAL_STAGED.items()
@@ -196,4 +202,10 @@ def lm_eval_bridge_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
 
 
 if __name__ == "__main__":
-    executor_main(steps=[mmlu_raw, gsm8k_raw, *LM_EVAL_STAGED.values()])
+    executor_main(
+        steps=[
+            mmlu_raw.as_executor_step(),
+            gsm8k_raw.as_executor_step(),
+            *[step.as_executor_step() for step in LM_EVAL_STAGED.values()],
+        ]
+    )
