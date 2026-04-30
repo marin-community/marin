@@ -23,8 +23,8 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
 )
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import executor_main
 from marin.execution.step_spec import StepSpec
+from marin.execution.step_runner import StepRunner
 
 ISSUE_5062 = 5062
 EPIC_5005 = 5005
@@ -205,4 +205,4 @@ def game_music_raw_validation_sets(
 
 
 if __name__ == "__main__":
-    executor_main(steps=[LICHESS_PGN_RAW.as_executor_step(), IRISHMAN_ABC_RAW.as_executor_step()])
+    StepRunner().run([LICHESS_PGN_RAW, IRISHMAN_ABC_RAW])
