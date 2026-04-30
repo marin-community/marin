@@ -14,6 +14,7 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Protocol
 
 import fsspec
 from datasets import load_dataset
@@ -21,8 +22,9 @@ from fray.v2 import ResourceConfig
 from levanter.utils import fsspec_utils
 
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.executor import this_output_path
 from marin.execution.remote import remote
+from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import HfDatasetSpec
 
 ASR_OCR_NOISY_DATASET_ROOT = "asr_ocr_noisy_ppl"
@@ -34,6 +36,10 @@ DEFAULT_RAW_SHARD_NAME = "data-00000-of-00001.jsonl.gz"
 class NoisyTextFamily(StrEnum):
     ASR = "asr"
     OCR = "ocr"
+
+
+class _SupportsCd(Protocol):
+    def cd(self, path: str) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -152,35 +158,57 @@ def materialize_noisy_asr_ocr_raw(config: NoisyAsrOcrRawConfig) -> None:
                 sink.write("\n")
 
 
-noisy_asr_ocr_raw = ExecutorStep(
+_MATERIALIZE_NOISY_ASR_OCR = remote(
+    materialize_noisy_asr_ocr_raw,
+    resources=ResourceConfig.with_cpu(cpu=4, ram="32g", disk="40g"),
+    pip_dependency_groups=["cpu"],
+)
+
+noisy_asr_ocr_raw = StepSpec(
     name=os.path.join("raw", "evals", ASR_OCR_NOISY_DATASET_ROOT),
-    description="Materialize paired ASR/OCR noisy-clean raw eval slices from Hugging Face.",
-    fn=remote(
-        materialize_noisy_asr_ocr_raw,
-        resources=ResourceConfig.with_cpu(cpu=4, ram="32g", disk="40g"),
-        pip_dependency_groups=["cpu"],
-    ),
-    config=NoisyAsrOcrRawConfig(),
+    fn=lambda output_path: _MATERIALIZE_NOISY_ASR_OCR(NoisyAsrOcrRawConfig(output_path=output_path)),
+    hash_attrs={
+        "dataset_root": ASR_OCR_NOISY_DATASET_ROOT,
+        "slices": [
+            {
+                "registry_name": slice_.registry_name,
+                "family": slice_.family.value,
+                "source_url": slice_.source_url,
+                "hf_dataset": {"id": slice_.hf_dataset.id, "name": slice_.hf_dataset.name},
+                "split": slice_.split,
+                "noisy_key": slice_.noisy_key,
+                "clean_key": slice_.clean_key,
+                "max_rows": slice_.max_rows,
+                "notes": slice_.notes,
+            }
+            for slice_ in ASR_OCR_NOISY_SLICES
+        ],
+    },
 )
 
 
 def noisy_asr_ocr_raw_validation_sets(
     *,
-    noisy_asr_ocr_raw: ExecutorStep = noisy_asr_ocr_raw,
+    noisy_asr_ocr_raw: StepSpec | _SupportsCd = noisy_asr_ocr_raw,
 ) -> dict[str, RawTextEvaluationDataset]:
     """Register clean and noisy variants for each ASR/OCR raw slice."""
     datasets: dict[str, RawTextEvaluationDataset] = {}
     for slice_ in ASR_OCR_NOISY_SLICES:
         raw_pattern = os.path.join(slice_.registry_name, "data-*.jsonl.gz")
         key_root = os.path.join(ASR_OCR_NOISY_DATASET_ROOT, slice_.registry_name)
+        raw_input = (
+            noisy_asr_ocr_raw.as_executor_step().cd(raw_pattern)
+            if isinstance(noisy_asr_ocr_raw, StepSpec)
+            else noisy_asr_ocr_raw.cd(raw_pattern)
+        )
 
         datasets[os.path.join(key_root, "noisy")] = raw_text_dataset(
-            noisy_asr_ocr_raw.cd(raw_pattern),
+            raw_input,
             text_key=NOISY_TEXT_FIELD,
             tags=(*slice_.tags, "variant:noisy"),
         )
         datasets[os.path.join(key_root, "clean")] = raw_text_dataset(
-            noisy_asr_ocr_raw.cd(raw_pattern),
+            raw_input,
             text_key=CLEAN_TEXT_FIELD,
             tags=(*slice_.tags, "variant:clean"),
         )
