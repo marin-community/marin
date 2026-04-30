@@ -255,5 +255,11 @@ def davinci_dev_env_native_normalize_steps() -> tuple[StepSpec, ...]:
     processed = download_davinci_dev_env_native_step()
     return (
         processed,
-        normalize_step(name="normalized/davinci-dev-env-native", download=processed),
+        normalize_step(
+            name="normalized/davinci-dev-env-native",
+            download=processed,
+            # Transform emits one ~3 GB parquet; nested message structs blow up
+            # the default 16 GiB worker on load. Bump to 64 GiB.
+            worker_resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),
+        ),
     )
