@@ -13,11 +13,12 @@ from contextlib import closing
 import requests
 import urllib3
 import zstandard
-from marin.datakit.normalize import normalize_step
-from marin.execution.step_spec import StepSpec
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext, counters
+
+from marin.datakit.normalize import normalize_step
+from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
