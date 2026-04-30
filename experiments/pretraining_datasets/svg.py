@@ -3,10 +3,11 @@
 
 """SVG (nyuuzyou/svgfind) dataset download, normalization, and tokenization."""
 
-from experiments.marin_models import marin_tokenizer
 from marin.datakit.download.svgfind import svgfind_creativecommons_normalize_steps
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
+
+from experiments.marin_models import marin_tokenizer
 
 svg_normalized = svgfind_creativecommons_normalize_steps()[-1].as_executor_step()
 
