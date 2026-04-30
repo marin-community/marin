@@ -19,29 +19,28 @@ import logging
 import os
 import pickle
 import sys
-from datetime import datetime, timezone
 import threading
 import time
 import traceback
 import uuid
 from collections import Counter, defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 import cloudpickle
-from rigging.filesystem import open_url, url_to_fs
 from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from fray.client import JobHandle
 from fray.types import Entrypoint, JobRequest
-from rigging.filesystem import marin_temp_bucket
-from rigging.timing import ExponentialBackoff, log_time
-
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from rigging.filesystem import marin_temp_bucket, open_url, url_to_fs
+from rigging.timing import ExponentialBackoff, log_time
+
 from zephyr.dataset import Dataset
 from zephyr.plan import (
     Join,

@@ -12,16 +12,17 @@ They focus on:
 
 import threading
 
-
+from finelog.rpc import logging_pb2
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
-from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import (
     ControllerDB,
     EndpointQuery,
     attempt_is_terminal,
 )
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
     JOB_DETAIL_PROJECTION,
@@ -29,41 +30,52 @@ from iris.cluster.controller.schema import (
     WORKER_DETAIL_PROJECTION,
     EndpointRow,
 )
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
+    MAX_REPLICAS_PER_JOB,
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
-    MAX_REPLICAS_PER_JOB,
     PruneResult,
     TaskUpdate,
 )
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
-from finelog.rpc import logging_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
 
 from .conftest import (
     building_counts as _building_counts,
+)
+from .conftest import (
     check_task_can_be_scheduled,
     check_task_is_finished,
     dispatch_task,
     fail_worker,
     healthy_active_workers,
     make_job_request,
-    make_test_entrypoint as _make_test_entrypoint,
     make_worker_metadata,
-    query_job as _query_job,
-    query_task as _query_task,
-    query_tasks_for_job as _query_tasks_for_job,
-    query_worker as _query_worker,
     register_worker,
-    schedulable_tasks as _schedulable_tasks,
     submit_job,
     transition_task,
     worker_running_tasks,
+)
+from .conftest import (
+    make_test_entrypoint as _make_test_entrypoint,
+)
+from .conftest import (
+    query_job as _query_job,
+)
+from .conftest import (
+    query_task as _query_task,
+)
+from .conftest import (
+    query_tasks_for_job as _query_tasks_for_job,
+)
+from .conftest import (
+    query_worker as _query_worker,
+)
+from .conftest import (
+    schedulable_tasks as _schedulable_tasks,
 )
 
 # =============================================================================

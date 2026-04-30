@@ -7,8 +7,6 @@ import json
 
 import pytest
 from huggingface_hub.errors import HfHubHTTPError
-from requests import Response
-
 from marin.datakit.download import huggingface as hf_download
 from marin.datakit.download.huggingface import (
     DownloadConfig,
@@ -16,6 +14,7 @@ from marin.datakit.download.huggingface import (
     download_hf,
     stream_file_to_fsspec,
 )
+from requests import Response
 
 
 def _write(root, relative_path: str, content: bytes) -> None:

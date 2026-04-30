@@ -1,12 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import logging
+import os
 
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
-
 from marin.rl.environments.inference_ctx.vllm import InferenceMode, vLLMInferenceContext, vLLMInferenceContextConfig
 
 logger = logging.getLogger(__name__)

@@ -62,6 +62,8 @@ Launch via iris:
 """
 
 from fray.cluster import ResourceConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.execution.executor import ExecutorStep, InputName, executor_main
 
 from experiments.evals.evals import (
     evaluate_levanter_lm_evaluation_harness,
@@ -83,8 +85,6 @@ from experiments.models import (
     qwen3_8b_base,
     qwen3_14b_base,
 )
-from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, InputName, executor_main
 
 # Env vars plumbed through to each iris child worker running ``vllm serve``.
 # The coordinator's ``os.environ`` does NOT propagate to iris-spawned children;

@@ -12,7 +12,6 @@ from unittest.mock import patch
 
 import pytest
 import yaml
-
 from iris.cluster.controller.main import LOG_SERVER_ENDPOINT_NAME, _resolve_cluster_endpoints
 from iris.rpc import config_pb2
 

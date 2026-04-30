@@ -11,39 +11,38 @@ import re
 from unittest.mock import Mock
 
 import pytest
-from starlette.testclient import TestClient
-
+from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.dashboard import ControllerDashboard
-from finelog.server import LogServiceImpl
 from iris.cluster.controller.db import (
     healthy_active_workers_with_attributes,
 )
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     EndpointRow,
 )
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
-from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import config_pb2, vm_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
+from starlette.testclient import TestClient
 
 from .conftest import (
     check_task_can_be_scheduled,
     make_test_entrypoint,
     make_worker_metadata,
-    query_tasks_with_attempts as _query_tasks_with_attempts,
     register_worker,
+)
+from .conftest import (
+    query_tasks_with_attempts as _query_tasks_with_attempts,
 )
 
 # =============================================================================

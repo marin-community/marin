@@ -7,8 +7,6 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 from fray import LocalClient, set_current_client
-from zephyr import write_parquet_file
-
 from marin.datakit.normalize import NormalizedData, generate_id, normalize_to_parquet
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs
 from marin.processing.classification.deduplication.fuzzy_minhash import (
@@ -16,6 +14,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashParams,
     compute_minhash_attrs,
 )
+from zephyr import write_parquet_file
 
 TEST_MINHASH_PARAMS = MinHashParams(num_perms=286, num_bands=26, ngram_size=5, seed=42)
 

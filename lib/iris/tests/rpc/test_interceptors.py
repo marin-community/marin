@@ -10,7 +10,6 @@ from unittest.mock import Mock
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-
 from iris.rpc.errors import extract_error_details
 from iris.rpc.interceptors import ConcurrencyLimitInterceptor, RequestTimingInterceptor
 

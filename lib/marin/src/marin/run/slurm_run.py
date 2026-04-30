@@ -45,9 +45,8 @@ import sys
 import tempfile
 import time
 
-from huggingface_hub import HfFolder
-
 import wandb
+from huggingface_hub import HfFolder
 from rigging.log_setup import configure_logging
 
 # Setup logger

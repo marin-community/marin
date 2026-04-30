@@ -7,9 +7,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from rigging.timing import Timestamp
+
 from iris.cluster.controller.autoscaler.models import RoutingDecision, ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, SliceLifecycleState
-from rigging.timing import Timestamp
 
 
 @dataclass(frozen=True)

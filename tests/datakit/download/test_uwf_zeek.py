@@ -5,9 +5,8 @@ import gzip
 import json
 from pathlib import Path
 
-import pytest
-
 import marin.datakit.download.uwf_zeek as uwf_zeek
+import pytest
 from marin.datakit.download.uwf_zeek import (
     DEFAULT_OUTPUT_FILENAME,
     UwfZeekSampleSource,

@@ -2,23 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Pytest fixtures for zephyr tests."""
-import tempfile
-
 import atexit
 import os
 import sys
+import tempfile
 import threading
 import time
 import traceback
 import warnings
 from pathlib import Path
 
-from rigging.timing import ExponentialBackoff
-
 import pytest
 from fray import ResourceConfig
 from fray.iris_backend import FrayIrisClient
 from fray.local_backend import LocalClient
+from rigging.timing import ExponentialBackoff
 from zephyr import load_file
 from zephyr.execution import ZephyrContext
 
@@ -32,7 +30,7 @@ IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "test.
 @pytest.fixture(scope="session")
 def iris_cluster():
     """Start local Iris cluster for testing - reused across all tests."""
-    from iris.cluster.config import load_config, make_local_config, connect_cluster
+    from iris.cluster.config import connect_cluster, load_config, make_local_config
 
     config = load_config(IRIS_CONFIG)
     config = make_local_config(config)

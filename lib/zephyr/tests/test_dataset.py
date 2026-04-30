@@ -8,7 +8,6 @@ from functools import partial
 from pathlib import Path
 
 import pytest
-
 from fray import ResourceConfig
 from fray.local_backend import LocalClient
 from zephyr import Dataset, load_file, load_parquet

@@ -13,8 +13,8 @@ Integration tests with real GcpWorkerProvider are in test_autoscaler_integration
 import time
 
 import pytest
-
-from iris.cluster.controller.autoscaler import Autoscaler, DEFAULT_UNRESOLVABLE_TIMEOUT
+from iris.cluster.constraints import DeviceType, WellKnownAttribute
+from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Autoscaler
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
@@ -23,23 +23,27 @@ from iris.cluster.providers.types import (
     QuotaExhaustedError,
     SliceStatus,
 )
+from iris.cluster.types import WorkerStatus
+from iris.rpc import config_pb2, vm_pb2
+from iris.time_proto import duration_to_proto
+from rigging.timing import Duration, Timestamp
+
 from tests.cluster.providers.conftest import (
     FakeSliceHandle,
     make_mock_platform,
     make_mock_slice_handle,
     make_mock_worker_handle,
 )
-from iris.cluster.constraints import DeviceType, WellKnownAttribute
-from iris.cluster.types import WorkerStatus
-from iris.rpc import config_pb2, vm_pb2
-from iris.time_proto import duration_to_proto
-from rigging.timing import Duration, Timestamp
 
 from .conftest import (
     make_autoscaler,
     make_demand_entries,
-    make_big_demand_entries as _make_big_demand_entries,
     make_scale_group_config,
+)
+from .conftest import (
+    make_big_demand_entries as _make_big_demand_entries,
+)
+from .conftest import (
     mark_discovered_ready as _mark_discovered_ready,
 )
 

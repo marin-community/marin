@@ -3,7 +3,7 @@
 
 """Protobuf enum utilities."""
 
-from iris.rpc import vm_pb2, job_pb2, config_pb2
+from iris.rpc import config_pb2, job_pb2, vm_pb2
 
 
 def vm_state_name(state: int) -> str:

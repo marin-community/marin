@@ -4,7 +4,6 @@
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
 from iris.cluster.controller.budget import UserBudgetDefaults, compute_effective_band
-from iris.cluster.controller.transitions import RESERVATION_HOLDER_JOB_NAME, _resolve_task_failure_state
 from iris.cluster.controller.controller import (
     PreemptionCandidate,
     RunningTaskInfo,
@@ -12,11 +11,15 @@ from iris.cluster.controller.controller import (
     _run_preemption_pass,
 )
 from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
+from iris.cluster.controller.transitions import (
+    RESERVATION_HOLDER_JOB_NAME,
+    Assignment,
+    HeartbeatApplyRequest,
+    TaskUpdate,
+    _resolve_task_failure_state,
+)
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
-
-from iris.cluster.controller.transitions import Assignment, HeartbeatApplyRequest, TaskUpdate
+from iris.rpc import controller_pb2, job_pb2
 
 from .conftest import (
     ControllerTestHarness,

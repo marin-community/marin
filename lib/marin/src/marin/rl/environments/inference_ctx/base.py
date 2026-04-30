@@ -12,11 +12,10 @@ import logging
 from typing import Any
 
 import numpy as np
+from levanter.models.lm_model import LmHeadModel
+from marin.rl.types import Rollout
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
-from marin.rl.types import Rollout
-
-from levanter.models.lm_model import LmHeadModel
 
 logger = logging.getLogger(__name__)
 

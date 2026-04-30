@@ -1,9 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 import itertools
+import logging
+from collections.abc import Iterator
 from typing import Any, TypeVar
 
-from collections.abc import Iterator
+import dupekit
+import pyarrow as pa
+from fray import ResourceConfig
+from zephyr import ZephyrContext, counters, write_parquet_file
+from zephyr.dataset import Dataset
+
 from marin.processing.classification.deduplication.dedup_commons import (
     DEFAULT_FILETYPES,
     DedupMode,
@@ -16,13 +23,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
     group_files,
     make_document_dedup_aggregator,
 )
-import dupekit
 from marin.utils import rebase_file_path
-import pyarrow as pa
-import logging
-from fray import ResourceConfig
-from zephyr import ZephyrContext, counters, write_parquet_file
-from zephyr.dataset import Dataset
 
 logger = logging.getLogger(__name__)
 

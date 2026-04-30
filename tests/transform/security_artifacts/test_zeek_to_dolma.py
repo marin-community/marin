@@ -9,7 +9,6 @@ import gzip
 import json
 from pathlib import Path
 
-
 from marin.transform.security_artifacts.zeek_to_dolma import (
     ZEEK_RENDER_TAG,
     ZeekToDolmaConfig,
