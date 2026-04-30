@@ -43,8 +43,15 @@ from rigging.filesystem import open_url
 from urllib3.util import Retry
 from zephyr.writers import atomic_rename
 
+from marin.datakit.ingestion_manifest import (
+    IngestionSourceManifest,
+    JsonValue,
+    MaterializedOutputMetadata,
+    write_ingestion_metadata_json,
+)
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.execution.step_spec import StepSpec
+from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 
@@ -65,39 +72,52 @@ _VALID_CONTENT_MODES: frozenset[str] = frozenset({RAW_FILE_CONTENT_MODE, JSONL_T
 
 @dataclass(frozen=True)
 class ArchiveSourceConfig:
-    """Describes one upstream archive and how to filter it into JSONL records.
+    """Manifest-backed description of one upstream archive slice."""
 
-    Attributes:
-        slice_key: Grouped slice identifier, e.g. ``"formal_methods/smt_lib"``. The ``/`` drives
-            per-family aggregation in the perplexity-gap reporter (see
-            ``levanter.analysis.perplexity_gap.register_dataset``).
-        url: Direct upstream URL of the archive.
-        archive_format: One of ``tar``, ``tar.gz``, ``tar.bz2``, ``tar.xz``, ``tar.zst``, ``zip``.
-        include_globs: fnmatch patterns (matched against full archive member path); member is
-            kept if **any** include matches.
-        exclude_globs: fnmatch patterns; member is dropped if **any** exclude matches.
-        content_mode: ``raw_file`` (default) or ``jsonl_text_column``.
-        jsonl_text_column: For ``jsonl_text_column``, the record column to read.
-        max_compressed_bytes: Cap on compressed JSONL output size.
-        max_files: Optional hard cap on number of records emitted.
-        source_label: Embedded in each record's ``source`` field (defaults to ``slice_key``).
-        license_note: Free-text note on upstream license; documented for auditability.
-    """
+    manifest: IngestionSourceManifest
 
-    slice_key: str
-    url: str
-    archive_format: str
-    include_globs: tuple[str, ...]
-    exclude_globs: tuple[str, ...] = ()
-    content_mode: str = RAW_FILE_CONTENT_MODE
-    jsonl_text_column: str | None = None
-    max_compressed_bytes: int = DEFAULT_MAX_COMPRESSED_BYTES
-    max_files: int | None = None
-    source_label: str = ""
-    license_note: str = ""
+    @property
+    def slice_key(self) -> str:
+        return self.manifest.slice_key
+
+    @property
+    def archive_url(self) -> str:
+        if not self.manifest.source_urls:
+            raise ValueError("source_urls must contain the primary archive URL")
+        return self.manifest.source_urls[0]
+
+    @property
+    def archive_format(self) -> str:
+        return _required_metadata_str(self.manifest, "archive_format")
+
+    @property
+    def include_globs(self) -> tuple[str, ...]:
+        return _required_metadata_str_tuple(self.manifest, "include_globs")
+
+    @property
+    def exclude_globs(self) -> tuple[str, ...]:
+        return _optional_metadata_str_tuple(self.manifest, "exclude_globs")
+
+    @property
+    def content_mode(self) -> str:
+        value = _optional_metadata_str(self.manifest, "content_mode", default=RAW_FILE_CONTENT_MODE)
+        assert value is not None
+        return value
+
+    @property
+    def jsonl_text_column(self) -> str | None:
+        return _optional_metadata_str(self.manifest, "jsonl_text_column")
+
+    @property
+    def max_compressed_bytes(self) -> int:
+        return self.manifest.sample_caps.max_bytes_per_source or DEFAULT_MAX_COMPRESSED_BYTES
+
+    @property
+    def max_files(self) -> int | None:
+        return self.manifest.sample_caps.max_files
 
     def resolved_source_label(self) -> str:
-        return self.source_label or self.slice_key
+        return self.manifest.source_label or self.slice_key
 
     def validate(self) -> None:
         if self.content_mode not in _VALID_CONTENT_MODES:
@@ -129,6 +149,46 @@ class _SourceFile:
 
 
 _ARCHIVE_FORMATS: frozenset[str] = frozenset({"tar", "tar.gz", "tgz", "tar.bz2", "tar.xz", "tar.zst", "zip"})
+
+
+def _required_metadata(manifest: IngestionSourceManifest, key: str) -> JsonValue:
+    if key not in manifest.staging.metadata:
+        raise ValueError(f"staging.metadata[{key!r}] must be set")
+    return manifest.staging.metadata[key]
+
+
+def _required_metadata_str(manifest: IngestionSourceManifest, key: str) -> str:
+    value = _required_metadata(manifest, key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"staging.metadata[{key!r}] must be a non-empty string")
+    return value
+
+
+def _required_metadata_str_tuple(manifest: IngestionSourceManifest, key: str) -> tuple[str, ...]:
+    value = _required_metadata(manifest, key)
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"staging.metadata[{key!r}] must be a non-empty string list")
+    if not all(isinstance(item, str) and item for item in value):
+        raise ValueError(f"staging.metadata[{key!r}] must contain only non-empty strings")
+    return tuple(value)
+
+
+def _optional_metadata_str_tuple(manifest: IngestionSourceManifest, key: str) -> tuple[str, ...]:
+    value = manifest.staging.metadata.get(key, [])
+    if not isinstance(value, list):
+        raise ValueError(f"staging.metadata[{key!r}] must be a string list")
+    if not all(isinstance(item, str) and item for item in value):
+        raise ValueError(f"staging.metadata[{key!r}] must contain only non-empty strings")
+    return tuple(value)
+
+
+def _optional_metadata_str(manifest: IngestionSourceManifest, key: str, *, default: str | None = None) -> str | None:
+    value = manifest.staging.metadata.get(key, default)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"staging.metadata[{key!r}] must be a non-empty string")
+    return value
 
 
 def _tar_mode(archive_format: str) -> str:
@@ -262,6 +322,33 @@ def _fetch_archive_bytes(url: str, timeout_seconds: int) -> bytes:
         return fh.read()
 
 
+def _write_source_metadata(
+    *,
+    source: ArchiveSourceConfig,
+    output_path: str,
+    output_file: str,
+    record_count: int,
+    bytes_written: int,
+) -> str:
+    return write_ingestion_metadata_json(
+        manifest=source.manifest,
+        materialized_output=MaterializedOutputMetadata(
+            input_path=source.archive_url,
+            output_path=output_path,
+            output_file=output_file,
+            record_count=record_count,
+            bytes_written=bytes_written,
+            metadata={
+                "archive_format": source.archive_format,
+                "include_globs": list(source.include_globs),
+                "exclude_globs": list(source.exclude_globs),
+                "content_mode": source.content_mode,
+                "jsonl_text_column": source.jsonl_text_column,
+            },
+        ),
+    )
+
+
 def _write_budgeted_jsonl_gz(
     records: Iterable[tuple[str, str]],
     *,
@@ -306,18 +393,28 @@ def download_archive_slice(cfg: DownloadArchiveSliceConfig) -> dict[str, Any]:
     Returns a metadata dict suitable for step hash attributes and audit output.
     """
     cfg.source.validate()
-    archive_bytes = _fetch_archive_bytes(cfg.source.url, cfg.http_timeout_seconds)
+    output_path = str(cfg.output_path)
+    fsspec_mkdirs(output_path, exist_ok=True)
+    archive_bytes = _fetch_archive_bytes(cfg.source.archive_url, cfg.http_timeout_seconds)
     members = _iter_archive_members(archive_bytes, cfg.source.archive_format)
     filtered = _filter_members(members, cfg.source.include_globs, cfg.source.exclude_globs)
     records = _emit_records(cfg.source, filtered)
-    output_file = posixpath.join(str(cfg.output_path), cfg.output_filename)
-    return _write_budgeted_jsonl_gz(
+    output_file = posixpath.join(output_path, cfg.output_filename)
+    result = _write_budgeted_jsonl_gz(
         records,
         output_path=output_file,
         source_label=cfg.source.resolved_source_label(),
         max_compressed_bytes=cfg.source.max_compressed_bytes,
         max_files=cfg.source.max_files,
     )
+    result["metadata_path"] = _write_source_metadata(
+        source=cfg.source,
+        output_path=output_path,
+        output_file=output_file,
+        record_count=result["records"],
+        bytes_written=result["compressed_bytes"],
+    )
+    return result
 
 
 def archive_slice_step(
@@ -339,15 +436,7 @@ def archive_slice_step(
             )
         ),
         hash_attrs={
-            "slice_key": source.slice_key,
-            "url": source.url,
-            "archive_format": source.archive_format,
-            "include_globs": source.include_globs,
-            "exclude_globs": source.exclude_globs,
-            "content_mode": source.content_mode,
-            "jsonl_text_column": source.jsonl_text_column,
-            "max_compressed_bytes": source.max_compressed_bytes,
-            "max_files": source.max_files,
+            "manifest_content_fingerprint": source.manifest.fingerprint(),
             "output_filename": output_filename,
         },
     )

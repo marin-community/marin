@@ -24,9 +24,20 @@ from pathlib import Path
 
 import pytest
 
+from marin.datakit.ingestion_manifest import (
+    IdentityTreatment,
+    IngestionPolicy,
+    IngestionSourceManifest,
+    SampleCapConfig,
+    SecretRedaction,
+    StagingMetadata,
+    UsagePolicy,
+)
 from marin.datakit.download.formal_methods_evals import (
     ArchiveSourceConfig,
     DownloadArchiveSliceConfig,
+    JSONL_TEXT_COLUMN_CONTENT_MODE,
+    RAW_FILE_CONTENT_MODE,
     archive_slice_step,
     download_archive_slice,
 )
@@ -98,6 +109,55 @@ def _read_jsonl_gz(path: Path) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
+def _test_source(
+    *,
+    slice_key: str,
+    archive_url: str,
+    archive_format: str,
+    include_globs: tuple[str, ...],
+    exclude_globs: tuple[str, ...] = (),
+    content_mode: str = RAW_FILE_CONTENT_MODE,
+    jsonl_text_column: str | None = None,
+    max_compressed_bytes: int = 40 * 1024 * 1024,
+    max_files: int | None = None,
+) -> ArchiveSourceConfig:
+    return ArchiveSourceConfig(
+        manifest=IngestionSourceManifest(
+            dataset_key=slice_key.replace("/", "_"),
+            slice_key=slice_key,
+            source_label=slice_key,
+            source_urls=(archive_url,),
+            source_license="test",
+            source_format=f"{archive_format}_archive",
+            surface_form="raw_file_text" if content_mode == RAW_FILE_CONTENT_MODE else "jsonl_text_column",
+            policy=IngestionPolicy(
+                usage_policy=UsagePolicy.EVAL_ONLY,
+                use_policy="test",
+                requires_sanitization=False,
+                identity_treatment=IdentityTreatment.PRESERVE,
+                secret_redaction=SecretRedaction.NONE,
+            ),
+            staging=StagingMetadata(
+                transform_name="download_archive_slice",
+                serializer_name="archive_member_jsonl",
+                metadata={
+                    "archive_format": archive_format,
+                    "include_globs": list(include_globs),
+                    "exclude_globs": list(exclude_globs),
+                    "content_mode": content_mode,
+                    "jsonl_text_column": jsonl_text_column,
+                    "output_filename": "data.jsonl.gz",
+                    "provenance_fields": ["id", "source", "filename"],
+                },
+            ),
+            sample_caps=SampleCapConfig(
+                max_bytes_per_source=max_compressed_bytes,
+                max_files=max_files,
+            ),
+        )
+    )
+
+
 def test_zip_raw_file_mode_preserves_bytes(make_zip_archive, tmp_path: Path) -> None:
     archive = make_zip_archive(
         "smt.zip",
@@ -110,9 +170,9 @@ def test_zip_raw_file_mode_preserves_bytes(make_zip_archive, tmp_path: Path) -> 
     output_dir = tmp_path / "out"
     output_dir.mkdir()
     cfg = DownloadArchiveSliceConfig(
-        source=ArchiveSourceConfig(
+        source=_test_source(
             slice_key="formal_methods/smt_lib_test",
-            url=f"file://{archive}",
+            archive_url=f"file://{archive}",
             archive_format="zip",
             include_globs=("*.smt2",),
         ),
@@ -122,6 +182,7 @@ def test_zip_raw_file_mode_preserves_bytes(make_zip_archive, tmp_path: Path) -> 
     result = download_archive_slice(cfg)
 
     assert result["records"] == 2
+    assert result["metadata_path"] == str(output_dir / "metadata.json")
     records = _read_jsonl_gz(output_dir / "data.jsonl.gz")
     texts_by_filename = {r["filename"]: r["text"] for r in records}
     # README excluded by glob.
@@ -132,6 +193,9 @@ def test_zip_raw_file_mode_preserves_bytes(make_zip_archive, tmp_path: Path) -> 
     # Slice key is embedded in source label and id prefix.
     assert all(r["source"] == "formal_methods/smt_lib_test" for r in records)
     assert all(r["id"].startswith("formal_methods/smt_lib_test#") for r in records)
+    metadata = json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["source_manifest"]["slice_key"] == "formal_methods/smt_lib_test"
+    assert metadata["materialized_output"]["record_count"] == 2
 
 
 def test_tar_gz_raw_file_mode_preserves_bytes(make_tar_gz_archive, tmp_path: Path) -> None:
@@ -146,9 +210,9 @@ def test_tar_gz_raw_file_mode_preserves_bytes(make_tar_gz_archive, tmp_path: Pat
     output_dir = tmp_path / "out"
     output_dir.mkdir()
     cfg = DownloadArchiveSliceConfig(
-        source=ArchiveSourceConfig(
+        source=_test_source(
             slice_key="formal_methods/tptp_test",
-            url=f"file://{archive}",
+            archive_url=f"file://{archive}",
             archive_format="tar.gz",
             include_globs=("*.p",),
         ),
@@ -175,9 +239,9 @@ def test_exclude_globs_drop_members(make_zip_archive, tmp_path: Path) -> None:
     output_dir = tmp_path / "out"
     output_dir.mkdir()
     cfg = DownloadArchiveSliceConfig(
-        source=ArchiveSourceConfig(
+        source=_test_source(
             slice_key="formal_methods/coqgym_test",
-            url=f"file://{archive}",
+            archive_url=f"file://{archive}",
             archive_format="zip",
             include_globs=("*.v",),
             exclude_globs=("*/node_modules/*", "*/.git/*"),
@@ -200,9 +264,9 @@ def test_byte_budget_truncates(make_zip_archive, tmp_path: Path) -> None:
     output_dir.mkdir()
 
     cfg = DownloadArchiveSliceConfig(
-        source=ArchiveSourceConfig(
+        source=_test_source(
             slice_key="formal_methods/dimacs_test",
-            url=f"file://{archive}",
+            archive_url=f"file://{archive}",
             archive_format="zip",
             include_globs=("*.cnf",),
             max_compressed_bytes=4_096,
@@ -225,9 +289,9 @@ def test_max_files_cap(make_zip_archive, tmp_path: Path) -> None:
     output_dir.mkdir()
 
     cfg = DownloadArchiveSliceConfig(
-        source=ArchiveSourceConfig(
+        source=_test_source(
             slice_key="hardware_rtl/verilog_eval_test",
-            url=f"file://{archive}",
+            archive_url=f"file://{archive}",
             archive_format="zip",
             include_globs=("*.v",),
             max_files=3,
@@ -256,12 +320,12 @@ def test_jsonl_text_column_mode(make_zip_archive, tmp_path: Path) -> None:
     output_dir.mkdir()
 
     cfg = DownloadArchiveSliceConfig(
-        source=ArchiveSourceConfig(
+        source=_test_source(
             slice_key="hardware_rtl/rtl_coder_test",
-            url=f"file://{archive}",
+            archive_url=f"file://{archive}",
             archive_format="zip",
             include_globs=("*.jsonl",),
-            content_mode="jsonl_text_column",
+            content_mode=JSONL_TEXT_COLUMN_CONTENT_MODE,
             jsonl_text_column="code",
         ),
         output_path=str(output_dir),
@@ -291,12 +355,12 @@ def test_json_array_and_list_text_column_mode(make_zip_archive, tmp_path: Path) 
     output_dir.mkdir()
 
     cfg = DownloadArchiveSliceConfig(
-        source=ArchiveSourceConfig(
+        source=_test_source(
             slice_key="hardware_rtl/rtl_coder_test",
-            url=f"file://{archive}",
+            archive_url=f"file://{archive}",
             archive_format="zip",
             include_globs=("*.json",),
-            content_mode="jsonl_text_column",
+            content_mode=JSONL_TEXT_COLUMN_CONTENT_MODE,
             jsonl_text_column="Response",
         ),
         output_path=str(output_dir),
@@ -311,6 +375,9 @@ def test_json_array_and_list_text_column_mode(make_zip_archive, tmp_path: Path) 
         "module b(); endmodule",
         "module c(); endmodule",
     ]
+    metadata = json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["materialized_output"]["metadata"]["content_mode"] == JSONL_TEXT_COLUMN_CONTENT_MODE
+    assert metadata["materialized_output"]["metadata"]["jsonl_text_column"] == "Response"
 
 
 def test_jsonl_text_column_mode_rejects_malformed_json(make_zip_archive, tmp_path: Path) -> None:
@@ -322,12 +389,12 @@ def test_jsonl_text_column_mode_rejects_malformed_json(make_zip_archive, tmp_pat
     output_dir.mkdir()
 
     cfg = DownloadArchiveSliceConfig(
-        source=ArchiveSourceConfig(
+        source=_test_source(
             slice_key="hardware_rtl/broken_test",
-            url=f"file://{archive}",
+            archive_url=f"file://{archive}",
             archive_format="zip",
             include_globs=("*.jsonl",),
-            content_mode="jsonl_text_column",
+            content_mode=JSONL_TEXT_COLUMN_CONTENT_MODE,
             jsonl_text_column="code",
         ),
         output_path=str(output_dir),
@@ -339,9 +406,9 @@ def test_jsonl_text_column_mode_rejects_malformed_json(make_zip_archive, tmp_pat
 
 def test_validate_rejects_unknown_format() -> None:
     with pytest.raises(ValueError, match="unsupported archive_format"):
-        ArchiveSourceConfig(
+        _test_source(
             slice_key="x/y",
-            url="file:///nowhere",
+            archive_url="file:///nowhere",
             archive_format="rar",
             include_globs=("*",),
         ).validate()
@@ -349,29 +416,29 @@ def test_validate_rejects_unknown_format() -> None:
 
 def test_validate_requires_jsonl_text_column() -> None:
     with pytest.raises(ValueError, match="jsonl_text_column"):
-        ArchiveSourceConfig(
+        _test_source(
             slice_key="x/y",
-            url="file:///nowhere",
+            archive_url="file:///nowhere",
             archive_format="zip",
             include_globs=("*.jsonl",),
-            content_mode="jsonl_text_column",
+            content_mode=JSONL_TEXT_COLUMN_CONTENT_MODE,
         ).validate()
 
 
 def test_validate_requires_non_empty_include_globs() -> None:
     with pytest.raises(ValueError, match="include_globs"):
-        ArchiveSourceConfig(
+        _test_source(
             slice_key="x/y",
-            url="file:///nowhere",
+            archive_url="file:///nowhere",
             archive_format="zip",
             include_globs=(),
         ).validate()
 
 
 def test_archive_slice_step_has_deterministic_name() -> None:
-    source = ArchiveSourceConfig(
+    source = _test_source(
         slice_key="formal_methods/smt_lib",
-        url="file:///tmp/unused",
+        archive_url="file:///tmp/unused",
         archive_format="zip",
         include_globs=("*.smt2",),
     )
@@ -382,20 +449,22 @@ def test_archive_slice_step_has_deterministic_name() -> None:
 def test_exp5060_sources_match_expected_formats() -> None:
     source_by_key = {source.slice_key: source for source in (*FORMAL_METHODS_SOURCES, *HARDWARE_RTL_SOURCES)}
 
-    assert source_by_key["formal_methods/tptp"].url == "https://tptp.org/TPTP/Archive/TPTP-v8.2.0.tgz"
+    assert source_by_key["formal_methods/tptp"].archive_url == "https://tptp.org/TPTP/Archive/TPTP-v8.2.0.tgz"
     assert source_by_key["formal_methods/dimacs_cnf"].archive_format == "tar.gz"
     assert source_by_key["formal_methods/dimacs_cnf"].include_globs == ("*.cnf",)
-    assert "refs/heads" not in source_by_key["formal_methods/smt_lib"].url
-    assert "refs/heads" not in source_by_key["formal_methods/coqgym"].url
+    assert "refs/heads" not in source_by_key["formal_methods/smt_lib"].archive_url
+    assert "refs/heads" not in source_by_key["formal_methods/coqgym"].archive_url
+    assert source_by_key["formal_methods/smt_lib"].manifest.staging.transform_name == "download_archive_slice"
+    assert source_by_key["formal_methods/smt_lib"].manifest.policy.eval_only is True
 
     rtl_repo = source_by_key["hardware_rtl/rtl_repo"]
     assert rtl_repo.content_mode == "jsonl_text_column"
     assert rtl_repo.jsonl_text_column == "label"
     assert rtl_repo.include_globs == ("predictions/*.jsonl",)
-    assert "refs/heads" not in rtl_repo.url
+    assert "refs/heads" not in rtl_repo.archive_url
 
     rtl_coder = source_by_key["hardware_rtl/rtl_coder"]
     assert rtl_coder.content_mode == "jsonl_text_column"
     assert rtl_coder.jsonl_text_column == "Response"
     assert rtl_coder.include_globs == ("dataset/*.json", "data_generation/data_sample.json")
-    assert "refs/heads" not in rtl_coder.url
+    assert "refs/heads" not in rtl_coder.archive_url
