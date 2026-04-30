@@ -90,11 +90,6 @@ def test_exception_preserves_user_frame(local_client, tmp_path, runner_factory):
     assert "buggy" in chained or "tuple index out of range" in chained, chained
 
 
-def _record_worker_pid(x: int) -> int:
-    counters.increment(f"shard_pid_{os.getpid()}", 1)
-    return x
-
-
 @pytest.mark.parametrize(
     "runner_cls",
     [
@@ -104,6 +99,7 @@ def _record_worker_pid(x: int) -> int:
             id="subprocess",
             marks=pytest.mark.xfail(
                 strict=True,
+                raises=AssertionError,
                 reason="subprocess gives each shard a unique PID; strict=True catches silent fallback to inline.",
             ),
         ),
@@ -114,9 +110,14 @@ def test_runner_parametrization_isolates_processes(local_client, tmp_path, runne
 
     Inline reuses the worker actor (≤ max_workers PIDs); subprocess gets one PID per shard.
     """
+
+    def record_pid(x: int) -> int:
+        counters.increment(f"shard_pid_{os.getpid()}", 1)
+        return x
+
     ctx = _ctx(local_client, tmp_path, stage_runner_factory=runner_cls)
     try:
-        ds = Dataset.from_list(list(range(5))).map(_record_worker_pid)
+        ds = Dataset.from_list(list(range(5))).map(record_pid)
         outcome = ctx.execute(ds)
     finally:
         ctx.shutdown()
