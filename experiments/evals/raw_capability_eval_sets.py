@@ -14,7 +14,7 @@ import hashlib
 import json
 import os
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from enum import StrEnum
 from functools import lru_cache
@@ -23,7 +23,8 @@ from typing import Any
 from experiments.marin_models import MARIN_CHAT_TEMPLATE
 from levanter.data.text import ChatLmDatasetFormat, DatasetComponent, UrlDatasetSourceConfig
 from marin.evaluation.perplexity_gap import raw_text_dataset
-from marin.execution.executor import ExecutorStep, InputName, this_output_path
+from marin.execution.executor import InputName, this_output_path
+from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
 from rigging.filesystem import open_url
 
@@ -118,12 +119,17 @@ def render_capability_eval_dataset(config: CapabilityEvalDatasetConfig) -> None:
 
 def capability_oai_eval_sets() -> dict[str, InputName]:
     """Reusable OAI-chat eval artifacts for the default capability slices."""
-    return {name: step.cd("oai/data-*.jsonl.gz") for name, step in _default_capability_eval_steps().items()}
+    return {
+        name: step.as_executor_step().cd("oai/data-*.jsonl.gz")
+        for name, step in _default_capability_eval_steps().items()
+    }
 
 
 def opt_in_capability_oai_eval_sets() -> dict[str, InputName]:
     """Reusable OAI-chat eval artifacts for gated or otherwise non-default slices."""
-    return {name: step.cd("oai/data-*.jsonl.gz") for name, step in _opt_in_capability_eval_steps().items()}
+    return {
+        name: step.as_executor_step().cd("oai/data-*.jsonl.gz") for name, step in _opt_in_capability_eval_steps().items()
+    }
 
 
 def capability_chat_validation_components() -> dict[str, DatasetComponent]:
@@ -141,19 +147,19 @@ def capability_raw_validation_sets() -> dict[str, Any]:
     steps = _default_capability_eval_steps()
     return {
         "chat/wildchat": raw_text_dataset(
-            steps["chat/wildchat"].cd("raw_text/data-*.jsonl.gz"),
+            steps["chat/wildchat"].as_executor_step().cd("raw_text/data-*.jsonl.gz"),
             tags=DEFAULT_CAPABILITY_TAGS["chat/wildchat"],
         ),
         "agent_traces/openhands_swe_rebench": raw_text_dataset(
-            steps["agent_traces/openhands_swe_rebench"].cd("raw_text/data-*.jsonl.gz"),
+            steps["agent_traces/openhands_swe_rebench"].as_executor_step().cd("raw_text/data-*.jsonl.gz"),
             tags=DEFAULT_CAPABILITY_TAGS["agent_traces/openhands_swe_rebench"],
         ),
         "reasoning_icl/gsm8k_main": raw_text_dataset(
-            steps["reasoning_icl/gsm8k_main"].cd("raw_text/data-*.jsonl.gz"),
+            steps["reasoning_icl/gsm8k_main"].as_executor_step().cd("raw_text/data-*.jsonl.gz"),
             tags=DEFAULT_CAPABILITY_TAGS["reasoning_icl/gsm8k_main"],
         ),
         "reasoning_icl/global_mgsm_en": raw_text_dataset(
-            steps["reasoning_icl/global_mgsm_en"].cd("raw_text/data-*.jsonl.gz"),
+            steps["reasoning_icl/global_mgsm_en"].as_executor_step().cd("raw_text/data-*.jsonl.gz"),
             tags=DEFAULT_CAPABILITY_TAGS["reasoning_icl/global_mgsm_en"],
         ),
     }
@@ -164,18 +170,18 @@ def opt_in_capability_raw_validation_sets() -> dict[str, Any]:
     steps = _opt_in_capability_eval_steps()
     return {
         "chat/lima_train": raw_text_dataset(
-            steps["chat/lima_train"].cd("raw_text/data-*.jsonl.gz"),
+            steps["chat/lima_train"].as_executor_step().cd("raw_text/data-*.jsonl.gz"),
             tags=OPT_IN_CAPABILITY_TAGS["chat/lima_train"],
         ),
         "chat/lmsys_chat_1m": raw_text_dataset(
-            steps["chat/lmsys_chat_1m"].cd("raw_text/data-*.jsonl.gz"),
+            steps["chat/lmsys_chat_1m"].as_executor_step().cd("raw_text/data-*.jsonl.gz"),
             tags=OPT_IN_CAPABILITY_TAGS["chat/lmsys_chat_1m"],
         ),
     }
 
 
 @lru_cache
-def _default_capability_eval_steps() -> dict[str, ExecutorStep]:
+def _default_capability_eval_steps() -> dict[str, StepSpec]:
     return {
         "chat/wildchat": _rendered_dataset_step(
             "chat/wildchat",
@@ -213,7 +219,7 @@ def _default_capability_eval_steps() -> dict[str, ExecutorStep]:
 
 
 @lru_cache
-def _opt_in_capability_eval_steps() -> dict[str, ExecutorStep]:
+def _opt_in_capability_eval_steps() -> dict[str, StepSpec]:
     return {
         "chat/lima_train": _rendered_dataset_step(
             "chat/lima_train",
@@ -234,13 +240,13 @@ def _opt_in_capability_eval_steps() -> dict[str, ExecutorStep]:
 
 
 def _chat_validation_components(
-    steps: Mapping[str, ExecutorStep],
+    steps: Mapping[str, StepSpec],
     tags_by_name: Mapping[str, tuple[str, ...]],
 ) -> dict[str, DatasetComponent]:
     return {name: _chat_validation_component(step, tags=tags_by_name[name]) for name, step in steps.items()}
 
 
-def _chat_validation_component(step: ExecutorStep, *, tags: tuple[str, ...]) -> DatasetComponent:
+def _chat_validation_component(step: StepSpec, *, tags: tuple[str, ...]) -> DatasetComponent:
     dataset_format = ChatLmDatasetFormat(
         messages_field="messages",
         chat_template=MARIN_CHAT_TEMPLATE,
@@ -249,7 +255,7 @@ def _chat_validation_component(step: ExecutorStep, *, tags: tuple[str, ...]) -> 
     return DatasetComponent(
         source=UrlDatasetSourceConfig(
             train_urls=[],
-            validation_urls=[step.cd("oai/data-*.jsonl.gz")],  # type: ignore[list-item]
+            validation_urls=[step.as_executor_step().cd("oai/data-*.jsonl.gz")],  # type: ignore[list-item]
         ),
         format=dataset_format,
         tags=list(tags),
@@ -265,22 +271,33 @@ def _rendered_dataset_step(
     renderer: CapabilityEvalRenderer,
     dataset_name: str | None = None,
     max_rows: int | None = None,
-) -> ExecutorStep:
-    config = CapabilityEvalDatasetConfig(
-        dataset_id=dataset_id,
-        dataset_name=dataset_name,
-        revision=revision,
-        split=split,
-        renderer=renderer,
-        max_rows=max_rows,
-    )
+) -> StepSpec:
     slug = _directory_safe_name(name)
-    suffix = _config_suffix(config)
-    return ExecutorStep(
+    hash_attrs = {
+        "dataset_id": dataset_id,
+        "dataset_name": dataset_name,
+        "revision": revision,
+        "split": split,
+        "renderer": renderer.value,
+        "max_rows": max_rows,
+        "rendering_version": RENDERING_VERSION,
+    }
+    suffix = _hash_suffix(hash_attrs)
+    return StepSpec(
         name=f"documents/capability_eval/{name}",
-        fn=render_capability_eval_dataset,
-        config=config,
         override_output_path=f"documents/capability_eval/{slug}-{suffix}",
+        fn=lambda output_path: render_capability_eval_dataset(
+            CapabilityEvalDatasetConfig(
+                dataset_id=dataset_id,
+                dataset_name=dataset_name,
+                revision=revision,
+                split=split,
+                renderer=renderer,
+                max_rows=max_rows,
+                output_path=output_path,
+            )
+        ),
+        hash_attrs=hash_attrs,
     )
 
 
@@ -652,11 +669,8 @@ def _stable_hash(*parts: str) -> str:
     return digest.hexdigest()
 
 
-def _config_suffix(config: CapabilityEvalDatasetConfig) -> str:
-    config_dict = asdict(config)
-    config_dict["renderer"] = config.renderer.value
-    config_dict.pop("output_path", None)
-    payload = json.dumps(config_dict, sort_keys=True)
+def _hash_suffix(hash_attrs: Mapping[str, Any]) -> str:
+    payload = json.dumps(hash_attrs, sort_keys=True)
     return hashlib.md5(payload.encode("utf-8")).hexdigest()[:6]
 
 
