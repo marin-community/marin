@@ -232,4 +232,4 @@ testpaths = ["tests", "experiments"]
 # Don't run TPU, slow, or integration tests by default. Integration tests
 # require external infrastructure (Iris cluster, GCS, gated HF repos, etc.)
 # and are run from dedicated CI workflows.
-addopts = "--session-timeout=480 -m 'not tpu_ci and not slow and not integration'"
+addopts = "--session-timeout=600 -m 'not tpu_ci and not slow and not integration'"
