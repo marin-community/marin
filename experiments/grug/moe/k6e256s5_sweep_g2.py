@@ -23,7 +23,7 @@ from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 GATE2_CONFIGS: list[tuple[int, float]] = [
     (1024, 9.00e18),
-    (1280, 2.83e19),
+    # (1280, 2.83e19),  # narrowed for issue #5319 diagnosis
 ]
 
 

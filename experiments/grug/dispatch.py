@@ -37,7 +37,23 @@ def _with_jax_distributed_init(fn: Callable[[ConfigT], None], config: ConfigT) -
     On multi-host TPU, Fray's fn_thunk subprocess doesn't auto-initialize
     JAX distributed. Calling jax.distributed.initialize() without args
     lets JAX auto-detect the TPU topology. On single-host this is a no-op.
+
+    Also enables faulthandler so SIGABRT/SIGSEGV from libtpu (which can hard-abort
+    the process when the TPU runtime detects launch-group/scheckne mismatches)
+    print a Python traceback to stderr instead of dying silently. Diagnostic for
+    issue #5319.
     """
+    import faulthandler
+    import signal
+    import sys
+
+    faulthandler.enable(file=sys.stderr, all_threads=True)
+    for sig in (signal.SIGABRT, signal.SIGSEGV, signal.SIGFPE, signal.SIGBUS, signal.SIGILL):
+        try:
+            faulthandler.register(sig, file=sys.stderr, all_threads=True, chain=True)
+        except Exception:
+            pass
+
     import jax
 
     if not jax.distributed.is_initialized():
