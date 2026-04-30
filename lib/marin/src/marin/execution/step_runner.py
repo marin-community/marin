@@ -13,7 +13,6 @@ easy to follow and debug.
 from __future__ import annotations
 
 import contextvars
-from datetime import timedelta
 import json
 import logging
 import os
@@ -21,15 +20,16 @@ import time
 import uuid
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from typing import Any
 
 import levanter.utils.fsspec_utils as fsspec_utils
-from rigging.filesystem import open_url, url_to_fs
-
 from fray import client as fray_client
 from fray.client import JobHandle, JobStatus
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from rigging.filesystem import open_url, url_to_fs
+
 from marin.execution.artifact import Artifact
 
 # Re-export for backward compatibility
@@ -46,8 +46,6 @@ from marin.execution.executor_step_status import (
 from marin.execution.remote import RemoteCallable, _sanitize_job_name
 from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
-
-from marin.execution.executor_step_status import PreviousTaskFailedError, worker_id
 
 logger = logging.getLogger(__name__)
 

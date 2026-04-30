@@ -41,9 +41,6 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
 
-from fray import current_client
-from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
-
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 

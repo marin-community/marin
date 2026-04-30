@@ -108,16 +108,13 @@ from rigging.filesystem import (
 )
 from rigging.log_setup import configure_logging
 
-from marin.execution.step_spec import StepSpec, _is_relative_path
-from marin.execution.step_runner import StepRunner, worker_id
-from marin.execution.remote import RemoteCallable
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
 )
 from marin.execution.remote import RemoteCallable
 from marin.execution.step_runner import StepRunner, worker_id
-from marin.execution.step_spec import StepSpec
+from marin.execution.step_spec import StepSpec, _is_relative_path
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger(__name__)

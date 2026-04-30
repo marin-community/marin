@@ -21,7 +21,6 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-from rigging.filesystem import open_url
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import fsspec_glob
 from rigging.filesystem import open_url

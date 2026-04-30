@@ -18,7 +18,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.fsspec_utils import join_path
 from levanter.utils.mesh import MeshConfig
-
+from marin.execution.artifact import PathMetadata
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName, output_path_of, this_output_path
 from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
