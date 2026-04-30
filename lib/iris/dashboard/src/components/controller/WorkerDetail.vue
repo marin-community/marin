@@ -193,7 +193,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
         <MetricCard
           :value="diskDisplay"
           label="Disk"
-          :variant="diskFreePercent !== null && diskFreePercent < 10 ? 'danger' : 'default'"
+          :variant="diskFreePercent !== null && diskFreePercent < 10 ? 'warning' : 'default'"
         />
         <MetricCard :value="formatWorkerDevice(worker?.metadata)" label="Accelerator" />
       </div>

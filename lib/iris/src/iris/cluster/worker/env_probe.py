@@ -506,11 +506,6 @@ def _read_net_dev_bytes() -> tuple[int, int]:
 
 MIN_DISK_FREE_FRACTION = 0.05
 MIN_DISK_FREE_BYTES = 10 * 1024**3
-"""Worker is unhealthy when the work volume has both <5% free AND <10 GiB free.
-
-Either condition alone is tolerable: a small tmpfs can never reach 10 GiB free
-but stays usable above 5%; a large boot disk with <5% free is still safe if the
-absolute headroom exceeds 10 GiB. Both must fail to flag the worker."""
 
 
 @dataclass(frozen=True)
