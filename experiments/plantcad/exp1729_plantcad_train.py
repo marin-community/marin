@@ -10,7 +10,7 @@ import logging
 import jax
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import versioned, executor_main
+from marin.execution.executor import executor_main, versioned
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main, versioned
 
