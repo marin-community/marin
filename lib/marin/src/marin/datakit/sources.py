@@ -27,6 +27,7 @@ from marin.datakit.download.davinci_dev import (
 from marin.datakit.download.diagnostic_logs import GHALOGS_ROUGH_TOKENS_B, ghalogs_public_normalize_steps
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_normalize_steps
+from marin.datakit.download.hermes_agent_reasoning_traces import hermes_agent_reasoning_traces_normalize_steps
 from marin.datakit.download.hplt import hplt_v3_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
 from marin.datakit.download.massive import massive_normalize_steps
@@ -149,6 +150,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
         ("ghalogs/public", ghalogs_public_normalize_steps, GHALOGS_ROUGH_TOKENS_B),
         ("gpt-oss-rollouts", gpt_oss_rollouts_normalize_steps, 3.20),
+        ("hermes-agent-reasoning-traces", hermes_agent_reasoning_traces_normalize_steps, 0.38),
         ("hplt_v3", hplt_v3_normalize_steps, 612.7),
         ("institutional_books", institutional_books_normalize_steps, 203.63),
         ("massive_function_calling", massive_normalize_steps, 11.39),
