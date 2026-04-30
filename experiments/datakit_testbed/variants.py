@@ -45,7 +45,12 @@ MAX_STEP_CONCURRENCY = 20
 _SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 _FUZZY_DUPS_MAX_PARALLELISM = 128
 _MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
-_FUZZY_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
+# Bumped from 5g → 16g: at 5g the global Reduce→Scatter workers hit the cap
+# (peak ~5113 MB observed), causing rolling OOM-and-retry churn (~30% of shards
+# on attempt 2-3 within a few hours). External-sort spills to GCS already
+# offload most state, but per-shard sort buffers + GCS writers occasionally
+# spike past 5g.
+_FUZZY_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g")
 _CONSOLIDATE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 
 
