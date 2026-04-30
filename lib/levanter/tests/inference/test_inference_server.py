@@ -23,7 +23,6 @@ try:
 
     from levanter.inference.engine import (
         InferenceEngineConfig,
-        TokenSequenceLogprobs,
         score_token_sequence_logprobs,
     )
     from levanter.inference.openai import InferenceResponse, InferenceServer, InferenceServerConfig
@@ -184,6 +183,8 @@ class _OpenAITestTokenizer:
     def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
         if add_special_tokens:
             raise ValueError("The test tokenizer does not define special tokens.")
+        if text == "A":
+            return [0]
         if text == "A B":
             return [0, 1]
         if text == " X":
@@ -220,13 +221,11 @@ class _DeterministicCompletionScoringModel(eqx.Module):
 
 
 class _FakeCompletionContext:
-    def __init__(self):
-        self.config = InferenceServerConfig()
+    def __init__(self, max_seq_len: int = 4096):
+        self.config = InferenceServerConfig(service=InferenceEngineConfig(max_seq_len=max_seq_len))
         self.model = _DeterministicCompletionScoringModel()
         self.tokenizer = _OpenAITestTokenizer()
-
-    def score_token_logprobs(self, token_ids: list[int], top_k: int) -> TokenSequenceLogprobs:
-        return score_token_sequence_logprobs(self.model, token_ids, top_k)
+        self.submitted_requests = 0
 
     def submit_request(
         self,
@@ -237,6 +236,7 @@ class _FakeCompletionContext:
         seed: int | None,
         future,
         n_generations: int = 1,
+        echo_logprobs_top_k: int | None = None,
     ) -> str:
         if (
             prompt_tokens != [0, 1]
@@ -245,8 +245,11 @@ class _FakeCompletionContext:
             or stop_tokens is not None
             or seed != 1234
             or n_generations != 1
+            or echo_logprobs_top_k != 1
         ):
             raise ValueError("The deterministic test context only supports one fixed completion request.")
+        self.submitted_requests += 1
+        echo_token_ids = prompt_tokens + [3]
         future.set_result(
             [
                 InferenceResponse(
@@ -256,6 +259,8 @@ class _FakeCompletionContext:
                     prompt_tokens=len(prompt_tokens),
                     completion_tokens=1,
                     logprobs=[-123.0],
+                    echo_token_ids=echo_token_ids,
+                    echo_logprobs=score_token_sequence_logprobs(self.model, echo_token_ids, echo_logprobs_top_k),
                 )
             ]
         )
@@ -295,6 +300,29 @@ def test_completion_echo_logprobs_are_lm_eval_aligned():
     assert logprobs["top_logprobs"][0] == {"A": 0.0}
     assert logprobs["top_logprobs"][1][" B"] == pytest.approx(expected_prompt_logprob)
     assert logprobs["top_logprobs"][2][" X"] == pytest.approx(expected_completion_logprob)
+
+
+def test_completion_echo_logprobs_rejects_prompt_truncation():
+    ctx = _FakeCompletionContext(max_seq_len=1)
+    app = InferenceServer._create_app(ctx)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/completions",
+            json={
+                "model": "gpt2",
+                "prompt": ["A", "A B"],
+                "temperature": 0,
+                "max_tokens": 1,
+                "logprobs": 1,
+                "seed": 1234,
+                "echo": True,
+            },
+        )
+
+    assert response.status_code == 400, response.text
+    assert "echo logprobs" in response.json()["detail"]
+    assert ctx.submitted_requests == 0
 
 
 @pytest.mark.slow

@@ -87,6 +87,7 @@ class InferenceRequest:
     seed: int | None
     future: asyncio.Future
     n_generations: int = 1
+    echo_logprobs_top_k: int | None = None
 
 
 @dataclass
@@ -99,6 +100,8 @@ class InferenceResponse:
     prompt_tokens: int
     completion_tokens: int
     logprobs: Optional[List[float]] = None
+    echo_token_ids: List[int] | None = None
+    echo_logprobs: TokenSequenceLogprobs | None = None
 
 
 class InferenceBatch(list):
@@ -203,17 +206,6 @@ class InferenceContext:
                 elapsed = time.time() - start
             logger.info(f"Model reloaded in {elapsed:.2f}s")
 
-    def score_token_logprobs(self, token_ids: List[int], top_k: int) -> TokenSequenceLogprobs:
-        """Score a full token sequence under the current model."""
-        with (
-            self.model_lock,
-            hax.partitioning.set_mesh(self.config.trainer.device_mesh),
-            hax.axis_mapping(self.config.trainer.compute_axis_mapping),
-        ):
-            if self.engine is None:
-                raise RuntimeError("Inference model is not initialized.")
-            return self.engine.score_token_logprobs(token_ids, top_k)
-
     def submit_request(
         self,
         prompt_tokens: List[int],
@@ -223,6 +215,7 @@ class InferenceContext:
         seed: int | None,
         future: asyncio.Future,
         n_generations: int = 1,
+        echo_logprobs_top_k: int | None = None,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -238,6 +231,7 @@ class InferenceContext:
             seed=seed,
             future=future,
             n_generations=n_generations,
+            echo_logprobs_top_k=echo_logprobs_top_k,
         )
 
         logger.info("Enqueuing request %s", request)
@@ -371,6 +365,14 @@ class InferenceContext:
                         text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
                         result_logprobs = result.logprobs[output_idx] if result.logprobs is not None else None
+                        echo_token_ids = None
+                        echo_logprobs = None
+                        if req.echo_logprobs_top_k is not None:
+                            echo_token_ids = req.prompt_tokens + generated_tokens
+                            echo_logprobs = self.engine.score_token_logprobs(
+                                echo_token_ids,
+                                req.echo_logprobs_top_k,
+                            )
 
                         req_outputs.append(
                             InferenceResponse(
@@ -380,6 +382,8 @@ class InferenceContext:
                                 prompt_tokens=len(req.prompt_tokens),
                                 completion_tokens=len(generated_tokens),
                                 request_id=req.request_id,
+                                echo_token_ids=echo_token_ids,
+                                echo_logprobs=echo_logprobs,
                             )
                         )
                         output_idx += 1
@@ -477,9 +481,18 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
         for prompt in prompts:
             # Tokenize prompt
             prompt_tokens = ctx.tokenizer.encode(prompt, add_special_tokens=False)
+            if request.echo and request.logprobs and len(prompt_tokens) > ctx.config.service.max_seq_len:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "echo logprobs are not supported for prompts longer than "
+                        f"max_seq_len={ctx.config.service.max_seq_len}"
+                    ),
+                )
             prompt_token_lists.append(prompt_tokens)
             total_prompt_tokens += len(prompt_tokens)
 
+        for prompt_tokens in prompt_token_lists:
             # Create future for this request
             future: asyncio.Future = asyncio.Future()
             futures.append(future)
@@ -493,6 +506,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 seed=request.seed,
                 future=future,
                 n_generations=request.n or 1,
+                echo_logprobs_top_k=int(request.logprobs) if request.echo and request.logprobs else None,
             )
 
         # Wait for all results
@@ -500,7 +514,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
 
         # Format responses
         choice_idx = 0
-        for prompt, prompt_tokens, result in zip(prompts, prompt_token_lists, results, strict=True):
+        for prompt, result in zip(prompts, results, strict=True):
             for generation in result:
                 choice_text = f"{prompt}{generation.text}" if request.echo else generation.text
 
@@ -508,9 +522,13 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 logprobs = None
                 if request.logprobs:
                     if request.echo:
-                        scored_token_ids = prompt_tokens + generation.tokens
-                        sequence_logprobs = ctx.score_token_logprobs(scored_token_ids, int(request.logprobs))
-                        echo_logprobs = _completion_logprobs(ctx.tokenizer, scored_token_ids, sequence_logprobs)
+                        if generation.echo_token_ids is None or generation.echo_logprobs is None:
+                            raise RuntimeError("Echo logprobs requested but missing from generation result.")
+                        echo_logprobs = _completion_logprobs(
+                            ctx.tokenizer,
+                            generation.echo_token_ids,
+                            generation.echo_logprobs,
+                        )
                         logprobs = Logprobs(
                             tokens=echo_logprobs.tokens,
                             token_logprobs=echo_logprobs.token_logprobs,
@@ -562,6 +580,8 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
             ),
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Error in completion.", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
