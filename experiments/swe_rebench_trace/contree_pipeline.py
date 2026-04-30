@@ -769,7 +769,8 @@ def main() -> None:
 
     ctx = ZephyrContext(
         max_workers=MAX_WORKERS,
-        resources=ResourceConfig(cpu=1, ram=WORKER_RAM),
+        resources=ResourceConfig(cpu=1, ram=WORKER_RAM, preemptible=True),
+        coordinator_resources=ResourceConfig(cpu=1, ram="2g", preemptible=True),
         name="swe-rebench-contree",
     )
 
