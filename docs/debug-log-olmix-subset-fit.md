@@ -113,9 +113,62 @@ Confirmed:
 
 Conclusion: the optimizer parameterization is not the main source of the bad Olmix subset validations. Once the surrogate is fit, our current softmax + L-BFGS-B solve and a paper-faithful two-phase CVXPY solve converge to essentially the same deployment on this packet. The remaining instability is in the surrogate fit / basin selection, not in the final solve.
 
+## Hypothesis 5
+
+The good Olmix trajectory in the baseline-scaling plots and the bad full-swarm Olmix point in the raw-optimum convergence plot are different artifacts with the same informal label.
+
+## Changes to make
+
+Trace the deployed `baseline_olmix_loglinear_uncheatable_bpb` run lineage, find the saved fit artifact, and compare it with the subset-optimum benchmark artifact used in the convergence plot.
+
+## Results
+
+Confirmed:
+
+- The deployed scaling-plot Olmix run is `baseline_olmix_loglinear_uncheatable_bpb`, defined in `experiments/domain_phase_mix/two_phase_many_olmix_loglinear_uncheatable.py`.
+- It was launched by `experiments/domain_phase_mix/launch_two_phase_many_olmix_uncheatable_bpb_baseline.py`, which fit the Olmix surrogate at launch time, wrote a fit summary, then trained exactly those phase weights.
+- The launch-time fit summary exists at `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_olmix_uncheatable_bpb/fit_summary-e50206/olmix_uncheatable_fit_summary.json`.
+- That saved fit summary is sane and dense:
+  - predicted objective `1.059208`
+  - regularized objective `1.068907`
+  - best observed run `run_00125`, value `1.057199`
+  - nearest observed run `baseline_proportional`, value `1.091835`, nearest TV `0.382463`
+  - phase-0 max weight `0.194080`, phase-0 support below `1e-4`: `0/39`
+  - phase-1 max weight `0.359690`, phase-1 support below `1e-4`: `0/39`
+- The baseline-scaling plot uses this deployed run name at every scale:
+  - 20M/2.6B: `1.076860`
+  - 60M/1.2B: `1.068716`
+  - 100M/6B: `0.956062`
+  - 340M/10.4B: `0.871321`
+  - 900M/24B: `0.809275`
+- The bad convergence-plot point is not that run. It is the separate subset-optimum artifact `baseline_olmix_loglinear_optimum_k242_uncheatable_bpb`, produced by `experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_olmix_loglinear_subset_optima.py` and deployed through `experiments/domain_phase_mix/two_phase_many_olmix_loglinear_subset_optima.py`.
+- The `k242` subset-optimum artifact is a collapsed raw optimum:
+  - predicted optimum `0.807187`
+  - regularized objective `0.874994`
+  - validated BPB `2.534581`
+  - nearest observed `run_00125`, nearest TV `0.691218`
+  - phase-0 support below `1e-4`: `3/39`
+  - phase-1 support below `1e-4`: `37/39`
+  - phase-1 max weight `0.990925`
+
+Conclusion: the good Olmix baseline did not come from the bad `k242` raw-optimum convergence artifact. It came from a launch-time saved fit summary with dense phase weights. The `k242` convergence result is still valid evidence that Olmix raw continuous optima can be unstable, but it should not be interpreted as the deployed Olmix baseline.
+
+Paper-facing conclusion:
+
+- Olmix-style log-linear fitting is a useful learned baseline, but its unconstrained raw optimum is highly fit/optimizer-basin sensitive in this two-phase 39-domain setting.
+- For baseline-scaling comparisons, use the stable saved Olmix fit that was actually launched and replayed across scales.
+- Do not claim that generic unconstrained Olmix optimization is stable here; the stronger claim is only that a good Olmix-style selected fit is a reasonable learned baseline comparison.
+
+Additional risk:
+
+- `qsplit240_replay.py` and `build_two_phase_many_all_60m_1p2b.py` still recompute `baseline_olmix_loglinear_uncheatable_bpb` phase weights from local code/data instead of loading the saved launch-time fit summary.
+- This is unsafe because historical metrics and recomputed phase weights can become decoupled. The saved fit summary should be treated as the source of truth for this deployed baseline unless we intentionally rerun and relaunch Olmix.
+
 ## Future Work
 
 - [ ] Fix `build_two_phase_many_all_60m_1p2b.py` so validated Olmix rows use the historical run's actual phase weights or saved fit summary, not a fresh local recomputation.
+- [ ] Fix `qsplit240_replay.py` so replay panels use the saved `baseline_olmix_loglinear_uncheatable_bpb` fit summary or frozen phase weights, not a fresh local recomputation.
+- [ ] Add a local mirrored copy or embedded digest of `olmix_uncheatable_fit_summary.json` so paper-plot and packet code can reproduce the deployed Olmix mixture without depending on live GCS.
 - [ ] Make the Olmix benchmark multi-start / multi-seed and select a solution with explicit support / TV guards instead of freezing one seed-0 basin.
 - [ ] Distinguish clearly in tables between the old MMLU-fitted Olmix baseline and the uncheatable-refit Olmix baseline.
 - [ ] Consider treating Olmix as an observed-run ranker only unless the raw optimum is constrained by support / TV regularization.

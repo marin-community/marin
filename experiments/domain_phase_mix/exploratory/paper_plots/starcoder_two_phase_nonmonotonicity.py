@@ -3,7 +3,7 @@
 
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["matplotlib", "numpy", "pandas"]
+# dependencies = ["matplotlib", "numpy", "pandas", "plotly"]
 # ///
 """Render the two-phase StarCoder non-monotonicity figure for the paper."""
 
@@ -17,7 +17,6 @@ import numpy as np
 import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.colors import Normalize
-from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
 from mpl_toolkits.mplot3d import Axes3D, proj3d
 
@@ -34,7 +33,6 @@ SLICE_OUTPUT_STEM = IMG_DIR / "starcoder_two_phase_slice"
 LANDSCAPE_FIGSIZE = (4.7, 4.3)
 SLICE_FIGSIZE = (4.7, 3.85)
 DPI = 300
-MONO_FONT = FontProperties(family=["IBM Plex Mono", "Menlo", "DejaVu Sans Mono", "monospace"])
 
 
 def _projected_marker(
@@ -172,8 +170,8 @@ def _plot_landscape(ax: Axes3D, frame: pd.DataFrame, slice_rows: pd.DataFrame) -
                 markeredgecolor="white",
                 markeredgewidth=0.75,
                 markersize=6.3,
-                label=rf"global min: $p_0={global_min['phase_0_starcoder']:.2f}$, "
-                rf"$p_1={global_min['phase_1_starcoder']:.2f}$",
+                label=rf"global min: $p^{{(0)}}={global_min['phase_0_starcoder']:.2f}$, "
+                rf"$p^{{(1)}}={global_min['phase_1_starcoder']:.2f}$",
             ),
             Line2D(
                 [0],
@@ -184,7 +182,7 @@ def _plot_landscape(ax: Axes3D, frame: pd.DataFrame, slice_rows: pd.DataFrame) -
                 markeredgecolor="white",
                 markeredgewidth=0.75,
                 markersize=10.5,
-                label=rf"$p_0=0$ slice min: $p_1={slice_min['phase_1_starcoder']:.2f}$",
+                label=rf"$p^{{(0)}}=0$ slice min: $p^{{(1)}}={slice_min['phase_1_starcoder']:.2f}$",
             ),
         ],
         loc="upper left",
@@ -205,8 +203,8 @@ def _plot_landscape(ax: Axes3D, frame: pd.DataFrame, slice_rows: pd.DataFrame) -
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
     ax.set_zlim(float(z.min()) - 0.04, float(z.max()) + 0.08)
-    ax.set_xlabel(r"Phase 0 StarCoder ($p_0$)", fontsize=9.5, color=PAPER_TEXT, labelpad=4)
-    ax.set_ylabel(r"Phase 1 StarCoder ($p_1$)", fontsize=9.5, color=PAPER_TEXT, labelpad=4)
+    ax.set_xlabel(r"Phase 0 StarCoder ($p^{(0)}$)", fontsize=9.5, color=PAPER_TEXT, labelpad=4)
+    ax.set_ylabel(r"Phase 1 StarCoder ($p^{(1)}$)", fontsize=9.5, color=PAPER_TEXT, labelpad=4)
     ax.set_zlabel("")
     ax.set_title("")
     ax.view_init(elev=25, azim=-141)
@@ -257,7 +255,7 @@ def _plot_slice(
     )
     ax.axvline(slice_min_x, color=UNIFORM_COLOR, linewidth=1.3, linestyle=":", alpha=0.95, zorder=2)
     ax.annotate(
-        rf"slice minimum at $p_1={slice_min_x:.2f}$" "\n" f"({slice_min_epochs:.1f} StarCoder epochs)",
+        rf"slice minimum at $p^{{(1)}}={slice_min_x:.2f}$" "\n" f"({slice_min_epochs:.1f} StarCoder epochs)",
         xy=(slice_min_x, slice_min_y),
         xytext=(0.47, 1.56),
         textcoords="data",
@@ -276,10 +274,8 @@ def _plot_slice(
 
     ax.set_xlim(-0.02, 1.02)
     ax.set_ylim(float(y.min()) - 0.05, float(y.max()) + 0.06)
-    ax.set_xlabel(r"Phase 1 StarCoder weight ($p_1$)", fontsize=11, color=PAPER_TEXT)
+    ax.set_xlabel(r"Phase 1 StarCoder weight ($p^{(1)}$)", fontsize=11, color=PAPER_TEXT)
     ax.set_ylabel("Code BPB", fontsize=11, color=PAPER_TEXT)
-    ax.set_title("More code eventually hurts code loss", fontsize=13, color=PAPER_TEXT, pad=10)
-
     top_axis = ax.secondary_xaxis(
         "top",
         functions=(
@@ -315,18 +311,7 @@ def main() -> None:
     )
 
     landscape_figure = plt.figure(figsize=LANDSCAPE_FIGSIZE, constrained_layout=False)
-    landscape_figure.subplots_adjust(left=0.02, right=0.98, bottom=0.09, top=0.86)
-    landscape_figure.suptitle("Two-phase loss landscape", y=0.985, fontsize=13, color=PAPER_TEXT)
-    landscape_figure.text(
-        0.5,
-        0.925,
-        "loss: paloma/dolma_100_programing_languages/bpb",
-        ha="center",
-        va="top",
-        fontsize=6.4,
-        fontproperties=MONO_FONT,
-        color=PAPER_TEXT,
-    )
+    landscape_figure.subplots_adjust(left=0.02, right=0.98, bottom=0.09, top=0.96)
     landscape_axis = landscape_figure.add_subplot(1, 1, 1, projection="3d")
     _plot_landscape(landscape_axis, frame, slice_rows)
     landscape_figure.savefig(LANDSCAPE_OUTPUT_STEM.with_suffix(".png"), dpi=DPI, bbox_inches="tight", pad_inches=0.24)

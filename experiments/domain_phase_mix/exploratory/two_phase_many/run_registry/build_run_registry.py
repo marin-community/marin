@@ -36,6 +36,14 @@ from experiments.domain_phase_mix.launch_baseline_scaling_cell import (
     baseline_scaling_source_experiment,
     build_baseline_scaling_run_spec,
 )
+from experiments.domain_phase_mix.launch_single_phase_average_fit_swarm_60m_1p2b import (
+    NAME as SINGLE_PHASE_EXPOSURE_AVERAGE_SOURCE_EXPERIMENT,
+    build_run_specs as build_single_phase_exposure_average_run_specs,
+)
+from experiments.domain_phase_mix.launch_single_phase_average_grp_no_l2_60m_1p2b import (
+    NAME as SINGLE_PHASE_GRP_NO_L2_SOURCE_EXPERIMENT,
+    build_run_spec as build_single_phase_grp_no_l2_run_spec,
+)
 from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b import (
     NAME as PENALTY_300M_SOURCE_EXPERIMENT,
 )
@@ -263,6 +271,22 @@ FAMILY_METADATA = {
         objective_metric=OBJECTIVE_METRIC,
         resubmit_supported=True,
     ),
+    "single_phase_exposure_average_60m_1p2b": FamilyMetadata(
+        family="single_phase_exposure_average_60m_1p2b",
+        scale="60m_1p2b",
+        launcher_module="experiments.domain_phase_mix.launch_single_phase_average_fit_swarm_60m_1p2b",
+        resubmit_scope="family",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
+    "single_phase_grp_no_l2_60m_1p2b": FamilyMetadata(
+        family="single_phase_grp_no_l2_60m_1p2b",
+        scale="60m_1p2b",
+        launcher_module="experiments.domain_phase_mix.launch_single_phase_average_grp_no_l2_60m_1p2b",
+        resubmit_scope="family",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
     "regmix_raw_subset_optima": FamilyMetadata(
         family="regmix_raw_subset_optima",
         scale="60m_1p2b",
@@ -322,6 +346,34 @@ FAMILY_METADATA = {
 }
 
 TRACKED_LIVE_JOBS = (
+    LiveJobSpec(
+        job_id="/calvinxu/dm-single-phase-exposure-average-60m-1p2b-retry-20260428-054710",
+        label="single-phase-avg-60m",
+        family="single_phase_exposure_average_60m_1p2b",
+        launcher_module="experiments.domain_phase_mix.launch_single_phase_average_fit_swarm_60m_1p2b",
+        resubmit_hint=(
+            "submit remotely with parent resources 4cpu/32GB/20GB in us-east5-a: "
+            "iris job run --priority batch --cpu 4 --memory 32GB --disk 20GB "
+            "--region us-east5 --zone us-east5-a --enable-extra-resources "
+            "--env-vars MARIN_PREFIX gs://marin-us-east5 "
+            "-- python -m experiments.domain_phase_mix.launch_single_phase_average_fit_swarm_60m_1p2b "
+            "--max-concurrent 256"
+        ),
+    ),
+    LiveJobSpec(
+        job_id="/calvinxu/dm-single-phase-grp-no-l2-60m-1p2b-20260428-023318",
+        label="single-phase-grp-no-l2-60m",
+        family="single_phase_grp_no_l2_60m_1p2b",
+        launcher_module="experiments.domain_phase_mix.launch_single_phase_average_grp_no_l2_60m_1p2b",
+        resubmit_hint=(
+            "submit remotely with parent resources 4cpu/32GB/20GB in us-east5-a: "
+            "iris job run --priority batch --cpu 4 --memory 32GB --disk 20GB "
+            "--region us-east5 --zone us-east5-a --enable-extra-resources "
+            "--env-vars MARIN_PREFIX gs://marin-us-east5 "
+            "-- python -m experiments.domain_phase_mix.launch_single_phase_average_grp_no_l2_60m_1p2b "
+            "--max-concurrent 1"
+        ),
+    ),
     LiveJobSpec(
         job_id="/calvinxu/dm-genericfamily-penalty-raw-optima-300m-6b-20260414-174514",
         label="penalty-300m",
@@ -602,6 +654,63 @@ def _scan_checkpoint_attempts(
                 }
             )
     return attempts
+
+
+def _checkpoint_run_name(checkpoint_root: str, expected_run_names: tuple[str, ...]) -> str | None:
+    checkpoint_name = checkpoint_root.rstrip("/").rsplit("/", 1)[-1]
+    for run_name in expected_run_names:
+        if checkpoint_name.startswith(f"{run_name}-"):
+            return run_name
+    return None
+
+
+def _scan_checkpoint_attempts_for_run_names(
+    *,
+    family: str,
+    source_experiment: str,
+    run_ids_by_name: dict[str, int],
+    objective_metric: str,
+) -> dict[str, list[dict[str, Any]]]:
+    expected_run_names = tuple(sorted(run_ids_by_name, key=len, reverse=True))
+    attempts_by_run_name: dict[str, list[dict[str, Any]]] = {run_name: [] for run_name in expected_run_names}
+    for region in CHECKPOINT_REGIONS:
+        pattern = f"gs://marin-{region}/checkpoints/{source_experiment}/*/.executor_status"
+        fs, _, _ = fsspec.get_fs_token_paths(pattern)
+        for match in sorted(fs.glob(pattern)):
+            status_path = match if str(match).startswith("gs://") else f"gs://{match}"
+            checkpoint_root = status_path.removesuffix("/.executor_status")
+            run_name = _checkpoint_run_name(checkpoint_root, expected_run_names)
+            if run_name is None:
+                continue
+            with fsspec.open(status_path, "r") as handle:
+                executor_status = handle.read().strip()
+            metrics_payload = _read_optional_jsonl_last_record(f"{checkpoint_root}/checkpoints/eval_metrics.jsonl")
+            tracker_summary = _read_optional_tracker_summary(f"{checkpoint_root}/tracker_metrics.jsonl")
+            objective_metric_value = None
+            if metrics_payload is not None and isinstance(metrics_payload.get(objective_metric), int | float):
+                objective_metric_value = float(metrics_payload[objective_metric])
+            elif tracker_summary is not None and isinstance(tracker_summary.get(objective_metric), int | float):
+                objective_metric_value = float(tracker_summary[objective_metric])
+            attempts_by_run_name[run_name].append(
+                {
+                    "registry_id": f"{family}:{run_name}",
+                    "family": family,
+                    "source_experiment": source_experiment,
+                    "run_name": run_name,
+                    "run_id": run_ids_by_name[run_name],
+                    "attempt_root": checkpoint_root,
+                    "checkpoint_root": checkpoint_root,
+                    "wandb_run_id": _wandb_run_id_from_checkpoint_root(checkpoint_root),
+                    "region": _extract_region_from_gcs_path(checkpoint_root),
+                    "executor_status": executor_status,
+                    "status_updated": _status_updated(fs, status_path),
+                    "has_eval_metrics": metrics_payload is not None,
+                    "max_checkpoint_step": _max_checkpoint_step(checkpoint_root),
+                    "objective_metric": objective_metric,
+                    "objective_metric_value": objective_metric_value,
+                }
+            )
+    return attempts_by_run_name
 
 
 def _attempt_sort_key(row: dict[str, Any]) -> tuple[int, str, str]:
@@ -1130,6 +1239,166 @@ def _baseline_scaling_cell_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     return pd.DataFrame(logical_rows), all_attempts
 
 
+def _flatten_phase_weights(phase_weights: dict[str, dict[str, float]]) -> dict[str, float]:
+    rows: dict[str, float] = {}
+    for phase_name, domain_weights in phase_weights.items():
+        for domain_name, weight in domain_weights.items():
+            rows[f"{phase_name}_{domain_name}"] = float(weight)
+    return rows
+
+
+def _single_phase_exposure_average_resubmit_hint() -> tuple[str, str]:
+    selector = "--max-concurrent 256"
+    hint = "--max-concurrent 256 --tpu-type v5p-8 --tpu-region us-east5 " "--tpu-zone us-east5-a"
+    return selector, hint
+
+
+def _single_phase_exposure_average_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    family = "single_phase_exposure_average_60m_1p2b"
+    metadata = FAMILY_METADATA[family]
+    logical_rows: list[dict[str, Any]] = []
+    all_attempts: list[dict[str, Any]] = []
+    selector, resubmit_hint = _single_phase_exposure_average_resubmit_hint()
+    specs = build_single_phase_exposure_average_run_specs()
+    attempts_by_run_name = _scan_checkpoint_attempts_for_run_names(
+        family=family,
+        source_experiment=SINGLE_PHASE_EXPOSURE_AVERAGE_SOURCE_EXPERIMENT,
+        run_ids_by_name={spec.run_name: spec.run_id for spec in specs},
+        objective_metric=metadata.objective_metric,
+    )
+    for spec in specs:
+        attempts = attempts_by_run_name[spec.run_name]
+        all_attempts.extend(attempts)
+        canonical = _canonical_attempt(attempts)
+        logical_rows.append(
+            {
+                "registry_id": f"{family}:{spec.run_name}",
+                "family": family,
+                "scale": metadata.scale,
+                "source_experiment": SINGLE_PHASE_EXPOSURE_AVERAGE_SOURCE_EXPERIMENT,
+                "source_name_prefix": SINGLE_PHASE_EXPOSURE_AVERAGE_SOURCE_EXPERIMENT,
+                "run_id": spec.run_id,
+                "run_name": spec.run_name,
+                "wandb_run_id": None if canonical is None else canonical["wandb_run_id"],
+                "checkpoint_root": None if canonical is None else canonical["checkpoint_root"],
+                "objective_metric": metadata.objective_metric,
+                "objective_metric_value": None if canonical is None else canonical["objective_metric_value"],
+                "canonical_attempt_root": None if canonical is None else canonical["attempt_root"],
+                "attempt_count": len(attempts),
+                "successful_attempt_count": sum(1 for attempt in attempts if attempt["executor_status"] == "SUCCESS"),
+                "launcher_module": metadata.launcher_module,
+                "resubmit_supported": metadata.resubmit_supported,
+                "resubmit_scope": metadata.resubmit_scope,
+                "resubmit_selector": selector,
+                "resubmit_hint": resubmit_hint,
+                "logical_status": (
+                    "planned" if canonical is None else _normalize_logical_status(str(canonical["executor_status"]))
+                ),
+                "source_status": None if canonical is None else canonical["executor_status"],
+                "experiment_budget": spec.experiment_budget,
+                "realized_experiment_budget": spec.realized_experiment_budget,
+                "target_budget": spec.target_budget,
+                "target_budget_multiplier": spec.target_budget_multiplier,
+                "num_train_steps": spec.num_train_steps,
+                "target_final_checkpoint_step": spec.target_final_checkpoint_step,
+                "model_family": spec.model_family,
+                "trainer_seed": spec.trainer_seed,
+                "data_seed": spec.data_seed,
+                "simulated_epoch_subset_seed": spec.simulated_epoch_subset_seed,
+                "cohort": spec.cohort,
+                "source_run_id": spec.source_run_id,
+                "source_run_name": spec.source_run_name,
+                "source_two_phase_experiment": spec.source_two_phase_experiment,
+                "candidate_run_id": spec.candidate_run_id,
+                "candidate_run_name": spec.candidate_run_name,
+                "candidate_source_experiment": spec.candidate_source_experiment,
+                "single_phase_strategy": spec.single_phase_strategy,
+                "priority_rank": spec.priority_rank,
+                "priority_tier": spec.priority_tier,
+                "phase_tv": spec.phase_tv,
+                "source_60m_bpb": spec.source_60m_bpb,
+                "source_60m_rank": spec.source_60m_rank,
+                "source_100m_bpb": spec.source_100m_bpb,
+                "source_100m_rank": spec.source_100m_rank,
+                "rank_shift": spec.rank_shift,
+                "study_panel": "single_phase_ablation",
+                "study_cohort": spec.single_phase_strategy,
+                **_flatten_phase_weights(spec.phase_weights),
+            }
+        )
+    return pd.DataFrame(logical_rows), all_attempts
+
+
+def _single_phase_grp_no_l2_resubmit_hint() -> tuple[str, str]:
+    selector = "--max-concurrent 1"
+    hint = "--max-concurrent 1 --tpu-type v5p-8 --tpu-region us-east5 " "--tpu-zone us-east5-a"
+    return selector, hint
+
+
+def _single_phase_grp_no_l2_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    family = "single_phase_grp_no_l2_60m_1p2b"
+    metadata = FAMILY_METADATA[family]
+    spec = build_single_phase_grp_no_l2_run_spec()
+    selector, resubmit_hint = _single_phase_grp_no_l2_resubmit_hint()
+    attempts_by_run_name = _scan_checkpoint_attempts_for_run_names(
+        family=family,
+        source_experiment=SINGLE_PHASE_GRP_NO_L2_SOURCE_EXPERIMENT,
+        run_ids_by_name={spec.run_name: spec.run_id},
+        objective_metric=metadata.objective_metric,
+    )
+    attempts = attempts_by_run_name[spec.run_name]
+    canonical = _canonical_attempt(attempts)
+    row = {
+        "registry_id": f"{family}:{spec.run_name}",
+        "family": family,
+        "scale": metadata.scale,
+        "source_experiment": SINGLE_PHASE_GRP_NO_L2_SOURCE_EXPERIMENT,
+        "source_name_prefix": SINGLE_PHASE_GRP_NO_L2_SOURCE_EXPERIMENT,
+        "run_id": spec.run_id,
+        "run_name": spec.run_name,
+        "wandb_run_id": None if canonical is None else canonical["wandb_run_id"],
+        "checkpoint_root": None if canonical is None else canonical["checkpoint_root"],
+        "objective_metric": metadata.objective_metric,
+        "objective_metric_value": None if canonical is None else canonical["objective_metric_value"],
+        "canonical_attempt_root": None if canonical is None else canonical["attempt_root"],
+        "attempt_count": len(attempts),
+        "successful_attempt_count": sum(1 for attempt in attempts if attempt["executor_status"] == "SUCCESS"),
+        "launcher_module": metadata.launcher_module,
+        "resubmit_supported": metadata.resubmit_supported,
+        "resubmit_scope": metadata.resubmit_scope,
+        "resubmit_selector": selector,
+        "resubmit_hint": resubmit_hint,
+        "logical_status": (
+            "planned" if canonical is None else _normalize_logical_status(str(canonical["executor_status"]))
+        ),
+        "source_status": None if canonical is None else canonical["executor_status"],
+        "experiment_budget": spec.experiment_budget,
+        "realized_experiment_budget": spec.realized_experiment_budget,
+        "target_budget": spec.target_budget,
+        "target_budget_multiplier": spec.target_budget_multiplier,
+        "num_train_steps": spec.num_train_steps,
+        "target_final_checkpoint_step": spec.target_final_checkpoint_step,
+        "model_family": spec.model_family,
+        "trainer_seed": spec.trainer_seed,
+        "data_seed": spec.data_seed,
+        "simulated_epoch_subset_seed": spec.simulated_epoch_subset_seed,
+        "cohort": spec.cohort,
+        "source_run_id": spec.source_run_id,
+        "source_run_name": spec.source_run_name,
+        "source_two_phase_experiment": spec.source_two_phase_experiment,
+        "candidate_run_id": spec.candidate_run_id,
+        "candidate_run_name": spec.candidate_run_name,
+        "candidate_source_experiment": spec.candidate_source_experiment,
+        "source_variant": spec.source_variant,
+        "single_phase_strategy": spec.single_phase_strategy,
+        "phase_tv": spec.phase_tv,
+        "study_panel": "single_phase_ablation_validation",
+        "study_cohort": spec.single_phase_strategy,
+        **_flatten_phase_weights(spec.phase_weights),
+    }
+    return pd.DataFrame([row]), attempts
+
+
 def _no_l2_subset_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     summaries = [summary.__dict__ for summary in genericfamily_power_family_penalty_no_l2_raw_subset_optima_summaries()]
     return _family_rows_from_attempt_scan(
@@ -1615,6 +1884,8 @@ def build_registry(
         _penalty520m_rows,
         _penalty1_2b_rows,
         _baseline_scaling_cell_rows,
+        _single_phase_exposure_average_rows,
+        _single_phase_grp_no_l2_rows,
         _no_l2_subset_rows,
         _olmix_subset_rows,
         _metric_objective_raw_optima_rows,

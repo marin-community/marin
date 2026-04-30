@@ -8,21 +8,17 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 from scipy.stats import qmc
 
-from experiments.domain_phase_mix.config import WeightConfig
-from experiments.domain_phase_mix.experiment import MixtureExperiment
 from experiments.domain_phase_mix.exploratory.dsre_ceq_tools import (
     DsreCeqArtifacts,
     fit_dsre_ceq_artifacts,
 )
 from experiments.domain_phase_mix.exploratory.general_scaling_models import DatasetSpec
-from experiments.domain_phase_mix.nextgen.contracts import LoopConfig, RunRecord
-from experiments.domain_phase_mix.nextgen.dataset_metadata import resolve_dataset_epoch_metadata
 
 DEFAULT_INFO_RIDGE = 1e-3
 FEATURE_EPS = 1e-8
@@ -59,7 +55,7 @@ class ScheduleFeatureBundle:
     center_distances: np.ndarray
 
 
-def run_records_to_dataframe(runs: Sequence[RunRecord]) -> pd.DataFrame:
+def run_records_to_dataframe(runs: Sequence[Any]) -> pd.DataFrame:
     """Convert run records into a flat dataframe with phase columns and metrics."""
     rows: list[dict[str, float | str | int | None]] = []
     for run in runs:
@@ -84,7 +80,7 @@ def build_dataset_spec_from_frame(
     *,
     objective_metric: str,
     name: str,
-    loop: LoopConfig | None = None,
+    loop: Any | None = None,
 ) -> DatasetSpec:
     """Construct a DatasetSpec from a run dataframe using StarCoder metadata when available."""
     if objective_metric not in df.columns:
@@ -114,6 +110,8 @@ def build_dataset_spec_from_frame(
     for phase_idx, phase_name in enumerate(phase_names):
         for domain_idx, domain_name in enumerate(domain_names):
             weights[:, phase_idx, domain_idx] = model_df[f"{phase_name}_{domain_name}"].to_numpy(dtype=float)
+
+    from experiments.domain_phase_mix.nextgen.dataset_metadata import resolve_dataset_epoch_metadata
 
     epoch_multipliers, small_domains = resolve_dataset_epoch_metadata(
         loop=loop,
@@ -768,14 +766,14 @@ def retrospective_generic_selection(
 
 
 def sobol_weight_configs(
-    experiment: MixtureExperiment,
+    experiment: Any,
     *,
     n: int,
     seed: int,
-    existing_configs: Sequence[WeightConfig] | None = None,
+    existing_configs: Sequence[Any] | None = None,
     oversample_factor: int = 4,
     min_accepted: int | None = None,
-) -> list[WeightConfig]:
+) -> list[Any]:
     """Generate quasi-random simplex schedules that respect experiment constraints.
 
     When `min_accepted` is provided, the generator may return fewer than `n`
@@ -783,9 +781,11 @@ def sobol_weight_configs(
     """
     del oversample_factor
 
+    from experiments.domain_phase_mix.config import WeightConfig
+
     sampler = experiment.create_weight_sampler(seed=seed)
     existing = list(existing_configs) if existing_configs else []
-    accepted: list[WeightConfig] = []
+    accepted: list[Any] = []
     seen_hashes: set[str] = set()
     min_dist = sampler.params.min_config_distance
     total_dims = sampler.n_phases * sampler.n_domains
@@ -837,7 +837,7 @@ def sobol_weight_configs(
 
 
 def weight_configs_to_tensor(
-    configs: Sequence[WeightConfig],
+    configs: Sequence[Any],
     *,
     phase_names: Sequence[str],
     domain_names: Sequence[str],
@@ -853,15 +853,15 @@ def weight_configs_to_tensor(
 
 def prospective_d_optimal_selection(
     spec: DatasetSpec,
-    experiment: MixtureExperiment,
+    experiment: Any,
     *,
     n_select: int,
     seed: int,
     pool_size: int,
-    existing_configs: Sequence[WeightConfig] | None = None,
+    existing_configs: Sequence[Any] | None = None,
     anchor_artifacts: DsreCeqArtifacts | None = None,
     ridge: float = DEFAULT_INFO_RIDGE,
-) -> tuple[list[WeightConfig], SelectionResult]:
+) -> tuple[list[Any], SelectionResult]:
     """Select new schedules from a Sobol candidate pool using D-optimal gains."""
     anchor = anchor_artifacts or fit_anchor_artifacts(spec, seed=seed)
     pool_configs = sobol_weight_configs(
@@ -902,15 +902,15 @@ def prospective_d_optimal_selection(
 
 def prospective_generic_selection(
     spec: DatasetSpec,
-    experiment: MixtureExperiment,
+    experiment: Any,
     *,
     method: GenericSelectionMethod,
     n_select: int,
     seed: int,
     pool_size: int,
-    existing_configs: Sequence[WeightConfig] | None = None,
+    existing_configs: Sequence[Any] | None = None,
     ridge: float = DEFAULT_INFO_RIDGE,
-) -> tuple[list[WeightConfig], SelectionResult]:
+) -> tuple[list[Any], SelectionResult]:
     """Select new schedules from a Sobol candidate pool using a generic selector."""
     pool_configs = sobol_weight_configs(
         experiment,
@@ -988,7 +988,7 @@ def replay_proposals_to_observed(
 
 def sampler_replay_selection(
     spec: DatasetSpec,
-    experiment: MixtureExperiment,
+    experiment: Any,
     *,
     n_select: int,
     seed: int,

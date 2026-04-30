@@ -20,6 +20,7 @@ References:
 
 """
 
+import copy
 import dataclasses
 import json
 import logging
@@ -1150,7 +1151,7 @@ class LmEvalHarnessConfig:
 
         task_name = task if isinstance(task, str) else task["task"]
 
-        task_dict = _call_with_retry(lambda: tasks.get_task_dict([task], manager))
+        task_dict = _call_with_retry(lambda: tasks.get_task_dict([copy.deepcopy(task)], manager))
         assert len(task_dict) == 1, f"Expected 1 task, got {len(task_dict)}"
         try:
             this_task = self._rename_tasks_for_eval_harness(task_dict, task_name, our_name)

@@ -1,10 +1,10 @@
 {
-  "attempt_count": 271,
+  "attempt_count": 514,
   "live_jobs_by_state": {
-    "skipped": 13
+    "skipped": 15
   },
-  "live_watch_count": 13,
-  "logical_run_count": 707,
+  "live_watch_count": 15,
+  "logical_run_count": 950,
   "logical_runs_by_family": {
     "baseline_scaling_cells": 6,
     "grp_no_l2_metric_objective_raw_optima": 2,
@@ -16,6 +16,8 @@
     "qsplit240_300m_6b": 241,
     "regmix_raw_subset_optima": 9,
     "run00097_300m_6b_fixed_subset": 10,
+    "single_phase_exposure_average_60m_1p2b": 242,
+    "single_phase_grp_no_l2_60m_1p2b": 1,
     "stratified_300m_6b": 1,
     "strong_tier_qsplit_baselines3_holdout": 3,
     "strong_tier_qsplit_representative12": 108,
@@ -24,10 +26,10 @@
     "two_phase_many_60m_export": 294
   },
   "logical_runs_by_status": {
-    "completed": 691,
-    "failed": 8,
+    "completed": 937,
+    "failed": 6,
     "planned": 2,
-    "running": 6
+    "running": 5
   },
   "qsplit240_300m_active_recovery_runs": [],
   "qsplit240_300m_incomplete_runs": [
@@ -43,9 +45,7 @@
     "1_2b_24b|stratified_holdout|completed": 1,
     "300m_6b|qsplit_representative12|completed": 36,
     "300m_6b|stratified|completed": 3,
-    "520m_10p4b|qsplit_representative12|completed": 33,
-    "520m_10p4b|qsplit_representative12|failed": 2,
-    "520m_10p4b|qsplit_representative12|running": 1,
+    "520m_10p4b|qsplit_representative12|completed": 36,
     "520m_10p4b|stratified|completed": 3
   },
   "strong_tier_checkpoint_backed_objective_rows": 121,
@@ -64,9 +64,7 @@
     "1_2b_24b|stratified_holdout|completed": 1,
     "300m_6b|qsplit_representative12|completed": 36,
     "300m_6b|stratified|completed": 3,
-    "520m_10p4b|qsplit_representative12|completed": 33,
-    "520m_10p4b|qsplit_representative12|failed": 2,
-    "520m_10p4b|qsplit_representative12|running": 1,
+    "520m_10p4b|qsplit_representative12|completed": 36,
     "520m_10p4b|stratified|completed": 3
   },
   "strong_tier_logical_runs_by_study_path": {
@@ -82,10 +80,9 @@
     "1_2b_24b|qsplit_baselines3_holdout|completed": 3,
     "300m_6b|qsplit_representative12|completed": 36,
     "300m_6b|stratified|completed": 3,
-    "520m_10p4b|qsplit_representative12|completed": 33,
-    "520m_10p4b|qsplit_representative12|failed": 2
+    "520m_10p4b|qsplit_representative12|completed": 36
   },
-  "strong_tier_perplexity_ready_rows": 116,
+  "strong_tier_perplexity_ready_rows": 117,
   "strong_tier_tracked_parent_job_ids": [
     "/calvinxu/dm-strong-tier-scaling-study-20260415-235849",
     "/calvinxu/dm-strong-tier-scaling-study-20260416-1115"

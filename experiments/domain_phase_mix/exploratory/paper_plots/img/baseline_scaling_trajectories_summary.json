@@ -65,7 +65,7 @@
   "default_metric": "eval/uncheatable_eval/bpb",
   "diagnostic_cells": 0,
   "expected_cells": 25,
-  "include_diagnostics": true,
+  "include_diagnostics": false,
   "manifest_rows": 25,
   "metric_cell_counts": {
     "eval/bpb": 25,

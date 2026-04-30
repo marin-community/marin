@@ -7,8 +7,8 @@
 # ///
 """Render the central 1x baseline scaling trajectory plot.
 
-The plot tracks five fixed mixtures across the corrected scale ladder:
-20M/2.6B, 60M/1.2B, 100M/6B, 340M/10.4B, and 900M/24B. Solid markers are
+The plot tracks five fixed mixtures across the nominal scale ladder:
+130M/2.6B, 60M/1.2B, 300M/6B, 520M/10.4B, and 1.2B/24B. Solid markers are
 reserved for rows with a committed checkpoint-backed perplexity metric. Hollow
 markers show non-target-ready rows that are useful for auditing but should not
 be treated as final paper points.
@@ -87,7 +87,11 @@ DIRECT_TARGET_OVERRIDES = {
 
 @dataclass(frozen=True)
 class ScaleSpec:
-    """Corrected metadata for one scale rung."""
+    """Metadata for one scale rung.
+
+    The display label follows the paper convention: nominal model size first,
+    with non-embedding parameters in parentheses for scaling plots.
+    """
 
     scale: str
     label: str
@@ -110,11 +114,11 @@ class MethodSpec:
 
 
 SCALES = (
-    ScaleSpec("130m_2p6b", "20M/2.6B", 22_813_184, 2_599_944_192),
-    ScaleSpec("60m_1p2b", "60M/1.2B", 58_998_528, 1_199_833_088),
-    ScaleSpec("300m_6b", "100M/6B", 102_648_576, 5_999_951_872),
-    ScaleSpec("520m_10p4b", "340M/10.4B", 339_788_800, 10_399_776_768),
-    ScaleSpec("1_2b_24b", "900M/24B", 906_037_248, 23_999_807_488),
+    ScaleSpec("130m_2p6b", "130M (23M)/2.6B", 22_813_184, 2_599_944_192),
+    ScaleSpec("60m_1p2b", "60M (59M)/1.2B", 58_998_528, 1_199_833_088),
+    ScaleSpec("300m_6b", "300M (103M)/6B", 102_648_576, 5_999_951_872),
+    ScaleSpec("520m_10p4b", "520M (340M)/10.4B", 339_788_800, 10_399_776_768),
+    ScaleSpec("1_2b_24b", "1.2B (906M)/24B", 906_037_248, 23_999_807_488),
 )
 
 METHODS = (
@@ -638,9 +642,9 @@ def _hover_text(row: pd.Series, metric_column: str) -> str:
         f"<b>{row['method']}</b><br>"
         f"Run: {row.get('run_name', '')}<br>"
         f"Scale key: {row['scale']}<br>"
-        f"Corrected scale: {row['scale_label']}<br>"
-        f"N: {int(row['non_embedding_params']):,}<br>"
-        f"D: {int(row['realized_train_tokens']):,}<br>"
+        f"Scale: {row['scale_label']}<br>"
+        f"Non-embedding params: {int(row['non_embedding_params']):,}<br>"
+        f"Training tokens: {int(row['realized_train_tokens']):,}<br>"
         f"{_metric_label(metric_column)}: {metric_value:.6f}<br>"
         f"{primary_line}"
         f"Status: {row.get('status', '')}<br>"
@@ -650,6 +654,89 @@ def _hover_text(row: pd.Series, metric_column: str) -> str:
         f"Max checkpoint step: {row.get('max_checkpoint_step', '')}<br>"
         f"Checkpoint: {checkpoint_line}<extra></extra>"
     )
+
+
+def _anchor_box_shape() -> dict[str, object]:
+    """Return the background box for the 1.2B/24B anchor inset."""
+    return {
+        "type": "rect",
+        "xref": "paper",
+        "yref": "paper",
+        "x0": 0.80,
+        "x1": 0.985,
+        "y0": 0.735,
+        "y1": 0.975,
+        "line": {"color": "rgba(168,162,154,0.72)", "width": 1},
+        "fillcolor": "rgba(255,255,255,0.90)",
+        "layer": "above",
+    }
+
+
+def _anchor_annotations(points: pd.DataFrame, metric_column: str) -> list[dict[str, object]]:
+    """Return compact 1.2B/24B anchor-value annotations for one metric."""
+    anchor = points.loc[
+        points["scale"].astype(str).eq("1_2b_24b")
+        & points["target_ready"].astype(bool)
+        & pd.to_numeric(points[metric_column], errors="coerce").notna()
+    ].copy()
+    if anchor.empty:
+        return []
+    anchor[metric_column] = pd.to_numeric(anchor[metric_column], errors="coerce")
+    anchor = anchor.sort_values(metric_column)
+
+    name_rows = []
+    value_rows = []
+    short_names = {
+        "GRP no-L2": "GRP",
+        "Proportional": "Proportional",
+        "Olmix": "Olmix",
+        "Uniform": "Uniform",
+        "UniMax": "UniMax",
+    }
+    for _, row in anchor.iterrows():
+        color = method_color(str(row["method_id"]))
+        name = short_names.get(str(row["method"]), str(row["method"]))
+        value = float(row[metric_column])
+        name_rows.append(f"<span style='color:{color}'>●</span> {name}")
+        value_rows.append(f"{value:.4f}")
+
+    base = {
+        "xref": "paper",
+        "yref": "paper",
+        "showarrow": False,
+        "font": {"size": 13},
+        "bgcolor": "rgba(255,255,255,0)",
+        "borderwidth": 0,
+    }
+    return [
+        {
+            **base,
+            "x": 0.892,
+            "y": 0.955,
+            "xanchor": "center",
+            "yanchor": "top",
+            "align": "center",
+            "text": "<b>1.2B/24B Uncheatable Eval BPBs</b>",
+        },
+        {
+            **base,
+            "x": 0.81,
+            "y": 0.91,
+            "xanchor": "left",
+            "yanchor": "top",
+            "align": "left",
+            "text": "<br>".join(name_rows),
+        },
+        {
+            **base,
+            "x": 0.975,
+            "y": 0.91,
+            "xanchor": "right",
+            "yanchor": "top",
+            "align": "right",
+            "text": "<br>".join(value_rows),
+        },
+    ]
 
 
 def render_plot(points: pd.DataFrame, *, include_diagnostics: bool) -> go.Figure:
@@ -740,6 +827,11 @@ def render_plot(points: pd.DataFrame, *, include_diagnostics: bool) -> go.Figure
                 trace_showlegend.append(True)
 
     buttons = []
+    annotation_by_metric = {
+        metric_column: annotations
+        for metric_column in metric_columns
+        if (annotations := _anchor_annotations(points, metric_column))
+    }
     for metric_column in metric_columns:
         visible = [trace_metric_column == metric_column for trace_metric_column in trace_metric_columns]
         buttons.append(
@@ -767,6 +859,7 @@ def render_plot(points: pd.DataFrame, *, include_diagnostics: bool) -> go.Figure
                         "yaxis": {
                             "title": _metric_label(metric_column),
                         },
+                        "annotations": annotation_by_metric.get(metric_column, []),
                     },
                 ],
             }
@@ -776,7 +869,7 @@ def render_plot(points: pd.DataFrame, *, include_diagnostics: bool) -> go.Figure
         fig,
         title=f"1x Chinchilla baseline scaling trajectories<br><sup>{_metric_label(default_metric)}</sup>",
         y_title=_metric_label(default_metric),
-        x_title="Scale (non-embedding params / training tokens)",
+        x_title="Scale (nominal model size; non-embedding params in parentheses / training tokens)",
     )
     fig.update_layout(
         updatemenus=[
@@ -791,6 +884,8 @@ def render_plot(points: pd.DataFrame, *, include_diagnostics: bool) -> go.Figure
                 "pad": {"r": 0, "t": 0},
             }
         ],
+        shapes=[_anchor_box_shape()],
+        annotations=annotation_by_metric.get(default_metric, []),
     )
     fig.update_xaxes(categoryorder="array", categoryarray=x_values)
     return fig
@@ -831,7 +926,7 @@ def write_outputs(manifest: pd.DataFrame, points: pd.DataFrame, *, include_diagn
     configure_static_layout(
         static_fig,
         y_title=_metric_label(summary["default_metric"]),
-        x_title="Scale (non-embedding params / training tokens)",
+        x_title="Scale (nominal model size; non-embedding params in parentheses / training tokens)",
     )
     write_static_images(static_fig, IMG_DIR / "baseline_scaling_trajectories")
 

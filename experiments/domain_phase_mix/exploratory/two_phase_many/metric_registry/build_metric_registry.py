@@ -64,6 +64,12 @@ STRONG_TIER_FAMILIES = {
     "strong_tier_qsplit_baselines3_holdout",
     "strong_tier_stratified_holdout",
 }
+SINGLE_PHASE_EXPOSURE_AVERAGE_FAMILY = "single_phase_exposure_average_60m_1p2b"
+SINGLE_PHASE_GRP_NO_L2_FAMILY = "single_phase_grp_no_l2_60m_1p2b"
+SINGLE_PHASE_FAMILIES = {
+    SINGLE_PHASE_EXPOSURE_AVERAGE_FAMILY,
+    SINGLE_PHASE_GRP_NO_L2_FAMILY,
+}
 STRONG_TIER_COHORT_BY_PATH = {
     ScalingStudyPath.QSPLIT_REPRESENTATIVE12.value: "representative12",
     ScalingStudyPath.STRATIFIED.value: "stratified",
@@ -115,6 +121,16 @@ LOCAL_SOURCE_CSVS = (
         "local_wandb_collect",
     ),
 )
+LOCAL_COLLECTED_EVAL_CSVS = (
+    (
+        "local_300m_gsm8k_humaneval_completion",
+        SCRIPT_DIR / "300m_gsm8k_humaneval_completion" / "300m_gsm8k_humaneval_eval_results.csv",
+        "300m_6b",
+        "signal",
+        120,
+        "local_collected_downstream_eval",
+    ),
+)
 
 METRIC_PREFIXES = ("eval/", "lm_eval/")
 AMBIGUOUS_METRIC_PREFIXES = ("lm_eval/averages/",)
@@ -146,6 +162,17 @@ KNOWN_ID_COLUMNS = (
     "candidate_source_experiment",
     "candidate_run_id",
     "candidate_run_name",
+    "source_run_id",
+    "source_two_phase_experiment",
+    "single_phase_strategy",
+    "priority_rank",
+    "priority_tier",
+    "phase_tv",
+    "source_60m_bpb",
+    "source_60m_rank",
+    "source_100m_bpb",
+    "source_100m_rank",
+    "rank_shift",
     "has_objective_metric_value",
     "has_checkpoint_root",
     "has_checkpoint_backed_objective",
@@ -182,6 +209,17 @@ RUN_FIRST_VALUE_COLUMNS = (
     "candidate_source_experiment",
     "candidate_run_id",
     "candidate_run_name",
+    "source_run_id",
+    "source_two_phase_experiment",
+    "single_phase_strategy",
+    "priority_rank",
+    "priority_tier",
+    "phase_tv",
+    "source_60m_bpb",
+    "source_60m_rank",
+    "source_100m_bpb",
+    "source_100m_rank",
+    "rank_shift",
     "has_objective_metric_value",
     "has_checkpoint_root",
     "has_checkpoint_backed_objective",
@@ -390,6 +428,22 @@ def _source_frames(*, include_gcs: bool) -> list[SourceFrame]:
             )
         )
 
+    for source_name, path, scale, default_cohort, priority, source_kind in LOCAL_COLLECTED_EVAL_CSVS:
+        if not path.exists():
+            continue
+        sources.append(
+            SourceFrame(
+                source_name=source_name,
+                source_uri=str(path),
+                source_kind=source_kind,
+                scale=scale,
+                default_cohort=default_cohort,
+                source_priority=priority,
+                frame=_read_local_csv(path),
+                default_status="completed",
+            )
+        )
+
     if STRICT_300M_SUCCESS_CSV.exists():
         sources.append(
             SourceFrame(
@@ -405,6 +459,7 @@ def _source_frames(*, include_gcs: bool) -> list[SourceFrame]:
         )
 
     sources.extend(_strong_tier_source_frames())
+    sources.extend(_single_phase_exposure_average_source_frames())
 
     if not include_gcs:
         return sources
@@ -602,6 +657,33 @@ def _strong_tier_source_frames() -> list[SourceFrame]:
                 source_kind="run_registry_checkpoint_metrics",
                 scale=str(scale),
                 default_cohort=str(cohort),
+                source_priority=95,
+                frame=group.reset_index(drop=True),
+            )
+        )
+    return sources
+
+
+def _single_phase_exposure_average_source_frames() -> list[SourceFrame]:
+    if not RUN_REGISTRY_LOGICAL_RUNS_CSV.exists():
+        return []
+
+    logical_runs = pd.read_csv(RUN_REGISTRY_LOGICAL_RUNS_CSV, low_memory=False)
+    frame = logical_runs.loc[logical_runs["family"].isin(SINGLE_PHASE_FAMILIES)].copy()
+    if frame.empty:
+        return []
+
+    frame["status"] = frame["logical_status"].fillna("planned")
+    frame = _hydrate_checkpoint_eval_metrics(frame)
+    sources: list[SourceFrame] = []
+    for family, group in frame.groupby("family", sort=True):
+        sources.append(
+            SourceFrame(
+                source_name=f"run_registry_{family}",
+                source_uri=str(RUN_REGISTRY_LOGICAL_RUNS_CSV),
+                source_kind="run_registry_checkpoint_metrics",
+                scale="60m_1p2b",
+                default_cohort=str(group["cohort"].dropna().iloc[0]) if group["cohort"].notna().any() else family,
                 source_priority=95,
                 frame=group.reset_index(drop=True),
             )

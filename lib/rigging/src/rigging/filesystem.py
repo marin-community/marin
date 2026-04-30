@@ -78,11 +78,23 @@ REGION_TO_DATA_BUCKET: dict[str, str] = {
     "europe-west4": "marin-eu-west4",
 }
 
+
 # Reverse lookup: bucket name → canonical GCP region.
 # Derived from REGION_TO_DATA_BUCKET so that region_from_prefix can return
 # canonical region names even when the bucket uses abbreviated naming
 # (e.g. "marin-eu-west4" → "europe-west4" instead of "eu-west4").
-_BUCKET_TO_REGION: dict[str, str] = {bucket: region for region, bucket in REGION_TO_DATA_BUCKET.items()}
+def _canonical_region(region: str) -> str:
+    """Normalize legacy region aliases to canonical GCP region names."""
+    if region == "eu-west4":
+        return "europe-west4"
+    return region
+
+
+_BUCKET_TO_REGION: dict[str, str] = {
+    bucket: _canonical_region(region) for region, bucket in REGION_TO_DATA_BUCKET.items()
+}
+for region, bucket in REGION_TO_TMP_BUCKET.items():
+    _BUCKET_TO_REGION.setdefault(bucket, _canonical_region(region))
 
 
 # ---------------------------------------------------------------------------
@@ -247,9 +259,12 @@ def check_path_in_region(key: str, path: str, region: str, local_ok: bool = Fals
             return
         else:
             raise ValueError(f"{key} must be a GCS path, not {path}")
+    bucket_name = split_gcs_path(path)[0]
     try:
-        bucket_region = get_bucket_location(path)
-        if region.lower() != bucket_region.lower():
+        bucket_region = _BUCKET_TO_REGION.get(bucket_name)
+        if bucket_region is None:
+            bucket_region = get_bucket_location(path)
+        if not _regions_match(region, bucket_region):
             raise ValueError(
                 f"{key} is not in the same region ({bucket_region}) as the VM ({region}). "
                 f"This can cause performance issues and billing surprises."

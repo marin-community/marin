@@ -17,6 +17,7 @@ from marin.training.training import (
     _doublecheck_paths,
     _prepare_training_run,
     _update_config_to_use_out_path,
+    run_levanter_train_lm,
 )
 
 
@@ -144,6 +145,25 @@ def test_prepare_training_run_adds_eval_extra_for_lm_eval_harness(trainer_config
         _, _, _, extras = _prepare_training_run(config)
 
     assert extras == ["tpu", "eval"]
+
+
+def test_run_levanter_train_lm_uses_configured_child_job_name(trainer_config):
+    config = TrainLmOnPodConfig(
+        train_config=train_lm.TrainLmConfig(
+            data=MockDataConfig(cache_dir="gs://bucket/path"),
+            trainer=trainer_config,
+        ),
+        resources=ResourceConfig.with_tpu("v4-8"),
+        job_name="train_lm_custom",
+    )
+
+    with (
+        patch("marin.training.training._prepare_training_run", return_value=(config, config.train_config, {}, [])),
+        patch("marin.training.training._submit_training_job") as submit_training_job,
+    ):
+        run_levanter_train_lm(config)
+
+    assert submit_training_job.call_args.kwargs["job_name"] == "train_lm_custom"
 
 
 def test_output_path_scopes_temporary_checkpoints(trainer_config):

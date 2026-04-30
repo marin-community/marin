@@ -56,10 +56,25 @@ PRESERVED_MANIFEST_METADATA_KEYS = (
     "candidate_run_id",
     "candidate_run_name",
     "candidate_source_experiment",
+    "source_run_id",
+    "source_two_phase_experiment",
     "ladder",
     "model_family",
     "experiment_budget",
+    "realized_experiment_budget",
+    "target_budget",
+    "target_budget_multiplier",
     "num_train_steps",
+    "target_final_checkpoint_step",
+    "single_phase_strategy",
+    "priority_rank",
+    "priority_tier",
+    "phase_tv",
+    "source_60m_bpb",
+    "source_60m_rank",
+    "source_100m_bpb",
+    "source_100m_rank",
+    "rank_shift",
 )
 CHECKPOINT_EVAL_METRICS_PATH = "checkpoints/eval_metrics.jsonl"
 
@@ -370,7 +385,9 @@ def _ordered_fit_dataset_columns(df: pd.DataFrame) -> list[str]:
         "data_seed",
         "simulated_epoch_subset_seed",
         "cohort",
+        "source_run_id",
         "source_run_name",
+        "source_two_phase_experiment",
     ]
     ordered = [column for column in prefix_columns if column in df.columns]
     ordered.extend(column for column in df.columns if column not in ordered)

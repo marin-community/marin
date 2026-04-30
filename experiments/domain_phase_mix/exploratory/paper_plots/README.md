@@ -9,8 +9,11 @@ Conventions:
 - Rendered artifacts live under `img/`.
 - One-off debugging plots should stay near their experiment output directory,
   not here.
-- Corrected scale labels must show both non-embedding parameter count `N` and
-  realized training tokens `D`; do not present these as N-only scaling curves.
+- Paper-facing plots use nominal model-size labels by default. Scaling plots
+  additionally show the non-embedding parameter count in parentheses, e.g.
+  `130M (23M)/2.6B`, so readers can see both the Chinchilla-style nominal scale
+  and the modeling-relevant non-embedding count. Do not present scale plots as
+  N-only curves without the realized token budget.
 - Prefer Plotly for refreshed paper plots and use `RdYlGn_r` when a continuous
   color scale is needed.
 
@@ -37,3 +40,8 @@ Current plots:
   outputs are interactive and include per-eval metric dropdowns, while the PNG
   and PDF outputs render each eval's default headline metric without
   interactive controls for paper use.
+- `f9_subset_fit_metrics.py`: provisional 60M many-domain subset-fit diagnostic
+  for deterministic GRP no-L2, bootstrapped random-subset GRP no-L2, and Olmix.
+  It reads cached subset-curve CSVs from `two_phase_many/`, writes normalized
+  points under `img/`, and renders both a 12-panel metric grid and an
+  interactive metric picker for deciding the final F9 paper figure.

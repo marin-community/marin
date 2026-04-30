@@ -377,8 +377,8 @@ def _hover_text(row: pd.Series, metric_column: str) -> str:
         [
             f"Method: {row['method']}",
             f"Scale: {row['scale_label']}",
-            f"N: {float(row['non_embedding_params']) / 1_000_000:.1f}M",
-            f"D: {float(row['realized_train_tokens']) / 1_000_000_000:.1f}B",
+            f"Non-embedding params: {float(row['non_embedding_params']) / 1_000_000:.1f}M",
+            f"Training tokens: {float(row['realized_train_tokens']) / 1_000_000_000:.1f}B",
             f"{_y_title(metric_column)}: {_display_value(metric_column, value):.4g}",
             *extra_metric_context,
             f"Source: {source}",
@@ -456,7 +456,7 @@ def render_plot(metrics: pd.DataFrame, spec: EvalPlotSpec) -> go.Figure:
         fig,
         title=f"{spec.title}<br><sup>{_metric_label(default_metric)}</sup>",
         y_title=_y_title(default_metric),
-        x_title="Scale (non-embedding params / training tokens)",
+        x_title="Scale (nominal model size; non-embedding params in parentheses / training tokens)",
     )
     fig.update_layout(
         updatemenus=[
@@ -499,7 +499,7 @@ def main() -> None:
         configure_static_layout(
             static_fig,
             y_title=_y_title(default_metric),
-            x_title="Scale (non-embedding params / training tokens)",
+            x_title="Scale (nominal model size; non-embedding params in parentheses / training tokens)",
         )
         write_static_images(static_fig, IMG_DIR / spec.output_stem)
         available = _numeric_column(metrics, default_metric).notna()

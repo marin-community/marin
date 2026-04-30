@@ -107,6 +107,12 @@ UNCHEATABLE_BPB = "eval/uncheatable_eval/bpb"
 PALOMA_MACRO_BPB = "eval/paloma/macro_bpb"
 GSM8K_ACC = "lm_eval/gsm8k/exact_match,flexible-extract"
 HUMANEVAL_PASS = "lm_eval/humaneval/pass@1,create_test"
+GSM8K_HUMANEVAL_ACCURACY_MEAN = "gsm8k_humaneval_accuracy_mean"
+BENCHMARK_ACCURACY_MEAN = "benchmark_accuracy_mean"
+OLMO_BASE_EASY_OVERLAP_NO_MMLU_ACCURACY_MEAN = "olmo_base_easy_overlap_no_mmlu_accuracy_mean"
+OLMO_BASE_EASY_OVERLAP_NO_MMLU_BPB_MEAN = "olmo_base_easy_overlap_no_mmlu_bpb_mean"
+ALL_SUITE_ACCURACY_MEAN = "all_suite_accuracy_mean"
+ALL_SUITE_BPB_MEAN = "all_suite_bpb_mean"
 OLMO_BASE_EASY_OVERLAP_MACRO_BPB = "lm_eval/olmo_base_easy_overlap/macro_bpb"
 OLMO_BASE_EASY_OVERLAP_ACCURACY_COLUMNS = (
     MMLU_ACC,
@@ -377,7 +383,8 @@ def _load_fit_swarm_metrics(downstream_results_csvs: list[str]) -> pd.DataFrame:
 
 def _add_aggregate_targets(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.copy()
-    out["benchmark_accuracy_mean"] = out[[MMLU_ACC, GSM8K_ACC, HUMANEVAL_PASS]].mean(axis=1, skipna=False)
+    out[GSM8K_HUMANEVAL_ACCURACY_MEAN] = out[[GSM8K_ACC, HUMANEVAL_PASS]].mean(axis=1, skipna=False)
+    out[BENCHMARK_ACCURACY_MEAN] = out[[MMLU_ACC, GSM8K_ACC, HUMANEVAL_PASS]].mean(axis=1, skipna=False)
     out["benchmark_accuracy_available_mean"] = out[[MMLU_ACC, GSM8K_ACC, HUMANEVAL_PASS]].mean(axis=1, skipna=True)
     out["benchmark_accuracy_available_count"] = out[[MMLU_ACC, GSM8K_ACC, HUMANEVAL_PASS]].notna().sum(axis=1)
     if all(column in out.columns for column in OLMO_BASE_EASY_OVERLAP_ACCURACY_COLUMNS):
@@ -403,6 +410,16 @@ def _add_aggregate_targets(frame: pd.DataFrame) -> pd.DataFrame:
             transformed.loc[non_null] = ndtri(np.clip(quantiles, ACCURACY_AGGREGATE_EPS, 1.0 - ACCURACY_AGGREGATE_EPS))
             rank_normalized[column] = transformed
         out["olmo_base_easy_overlap_accuracy_task_rank_zmean"] = rank_normalized.mean(axis=1, skipna=False)
+        non_mmlu_accuracy_columns = [column for column in easy_accuracy_columns if column != MMLU_ACC]
+        out[OLMO_BASE_EASY_OVERLAP_NO_MMLU_ACCURACY_MEAN] = out[non_mmlu_accuracy_columns].mean(axis=1, skipna=False)
+        non_mmlu_bpb_columns = [
+            f"{column.rsplit('/', 1)[0]}/bpb"
+            for column in non_mmlu_accuracy_columns
+            if f"{column.rsplit('/', 1)[0]}/bpb" in out.columns
+        ]
+        out[OLMO_BASE_EASY_OVERLAP_NO_MMLU_BPB_MEAN] = (
+            out[non_mmlu_bpb_columns].mean(axis=1, skipna=False) if non_mmlu_bpb_columns else np.nan
+        )
     else:
         out["olmo_base_easy_overlap_accuracy_mean"] = np.nan
         out["olmo_base_easy_overlap_accuracy_available_mean"] = np.nan
@@ -411,26 +428,58 @@ def _add_aggregate_targets(frame: pd.DataFrame) -> pd.DataFrame:
         out["olmo_base_easy_overlap_accuracy_task_probit_mean"] = np.nan
         out["olmo_base_easy_overlap_accuracy_zmean"] = np.nan
         out["olmo_base_easy_overlap_accuracy_task_rank_zmean"] = np.nan
+        out[OLMO_BASE_EASY_OVERLAP_NO_MMLU_ACCURACY_MEAN] = np.nan
+        out[OLMO_BASE_EASY_OVERLAP_NO_MMLU_BPB_MEAN] = np.nan
+    out[ALL_SUITE_ACCURACY_MEAN] = out[
+        [MMLU_ACC, GSM8K_ACC, HUMANEVAL_PASS, OLMO_BASE_EASY_OVERLAP_NO_MMLU_ACCURACY_MEAN]
+    ].mean(axis=1, skipna=False)
+    if MMLU_BPB in out.columns and OLMO_BASE_EASY_OVERLAP_NO_MMLU_BPB_MEAN in out.columns:
+        out[ALL_SUITE_BPB_MEAN] = out[[MMLU_BPB, OLMO_BASE_EASY_OVERLAP_NO_MMLU_BPB_MEAN]].mean(axis=1, skipna=False)
+    else:
+        out[ALL_SUITE_BPB_MEAN] = np.nan
     return out
 
 
-def _objective_specs(frame: pd.DataFrame) -> tuple[AggregateObjective, ...]:
-    specs = [
+def _accuracy_specs(slug_prefix: str, source_column: str, display_name: str) -> list[AggregateObjective]:
+    return [
         AggregateObjective(
-            slug="mmlu_acc_raw",
-            source_column=MMLU_ACC,
-            display_name="MMLU 5-shot accuracy raw-probability",
+            slug=f"{slug_prefix}_raw",
+            source_column=source_column,
+            display_name=f"{display_name} raw-probability",
             family="accuracy",
             higher_is_better=True,
             transform="raw_probability",
         ),
         AggregateObjective(
-            slug="mmlu_acc_logit",
-            source_column=MMLU_ACC,
-            display_name="MMLU 5-shot accuracy logit-probability",
+            slug=f"{slug_prefix}_logit",
+            source_column=source_column,
+            display_name=f"{display_name} logit-probability",
             family="accuracy",
             higher_is_better=True,
             transform="logit_probability",
+        ),
+    ]
+
+
+def _objective_specs(frame: pd.DataFrame) -> tuple[AggregateObjective, ...]:
+    specs = [
+        *_accuracy_specs("mmlu_acc", MMLU_ACC, "MMLU 5-shot accuracy"),
+        *_accuracy_specs("gsm8k_acc", GSM8K_ACC, "GSM8K 5-shot exact-match flexible"),
+        *_accuracy_specs("humaneval_pass", HUMANEVAL_PASS, "HumanEval 10-shot pass@1"),
+        *_accuracy_specs(
+            "gsm8k_humaneval_accuracy_mean",
+            GSM8K_HUMANEVAL_ACCURACY_MEAN,
+            "Mean(GSM8K, HumanEval) accuracy",
+        ),
+        *_accuracy_specs(
+            "benchmark_accuracy_mean",
+            BENCHMARK_ACCURACY_MEAN,
+            "Mean(MMLU, GSM8K, HumanEval) accuracy",
+        ),
+        *_accuracy_specs(
+            "all_suite_accuracy_mean",
+            ALL_SUITE_ACCURACY_MEAN,
+            "Mean(OLMoBase easy-overlap without MMLU, MMLU, GSM8K, HumanEval) suite accuracy",
         ),
         AggregateObjective(
             slug="mmlu_bpb",
@@ -448,28 +497,15 @@ def _objective_specs(frame: pd.DataFrame) -> tuple[AggregateObjective, ...]:
             higher_is_better=True,
             transform="identity",
         ),
+        AggregateObjective(
+            slug="all_suite_bpb_mean",
+            source_column=ALL_SUITE_BPB_MEAN,
+            display_name="Mean(MMLU, OLMoBase easy-overlap without MMLU) BPB",
+            family="bpb",
+            higher_is_better=False,
+            transform="identity",
+        ),
     ]
-    if frame["benchmark_accuracy_mean"].notna().sum() >= MIN_OBJECTIVE_ROWS:
-        specs.extend(
-            [
-                AggregateObjective(
-                    slug="benchmark_accuracy_mean_raw",
-                    source_column="benchmark_accuracy_mean",
-                    display_name="Mean(MMLU, GSM8K, HumanEval) raw-probability",
-                    family="accuracy",
-                    higher_is_better=True,
-                    transform="raw_probability",
-                ),
-                AggregateObjective(
-                    slug="benchmark_accuracy_mean_logit",
-                    source_column="benchmark_accuracy_mean",
-                    display_name="Mean(MMLU, GSM8K, HumanEval) logit-probability",
-                    family="accuracy",
-                    higher_is_better=True,
-                    transform="logit_probability",
-                ),
-            ]
-        )
     if (
         OLMO_BASE_EASY_OVERLAP_MACRO_BPB in frame.columns
         and frame[OLMO_BASE_EASY_OVERLAP_MACRO_BPB].notna().sum() >= MIN_OBJECTIVE_ROWS
@@ -487,6 +523,22 @@ def _objective_specs(frame: pd.DataFrame) -> tuple[AggregateObjective, ...]:
     if frame["olmo_base_easy_overlap_accuracy_mean"].notna().sum() >= MIN_OBJECTIVE_ROWS:
         specs.extend(
             [
+                AggregateObjective(
+                    slug="olmo_base_easy_overlap_no_mmlu_accuracy_raw",
+                    source_column=OLMO_BASE_EASY_OVERLAP_NO_MMLU_ACCURACY_MEAN,
+                    display_name="OLMoBaseEval easy-overlap mean accuracy excluding MMLU raw-probability",
+                    family="accuracy",
+                    higher_is_better=True,
+                    transform="raw_probability",
+                ),
+                AggregateObjective(
+                    slug="olmo_base_easy_overlap_no_mmlu_accuracy_logit",
+                    source_column=OLMO_BASE_EASY_OVERLAP_NO_MMLU_ACCURACY_MEAN,
+                    display_name="OLMoBaseEval easy-overlap mean accuracy excluding MMLU logit-probability",
+                    family="accuracy",
+                    higher_is_better=True,
+                    transform="logit_probability",
+                ),
                 AggregateObjective(
                     slug="olmo_base_easy_overlap_accuracy_raw",
                     source_column="olmo_base_easy_overlap_accuracy_mean",
@@ -929,7 +981,15 @@ def _write_report(summary: pd.DataFrame, targets: pd.DataFrame) -> None:
         MMLU_ACC: int(targets[MMLU_ACC].notna().sum()) if MMLU_ACC in targets else 0,
         GSM8K_ACC: int(targets[GSM8K_ACC].notna().sum()) if GSM8K_ACC in targets else 0,
         HUMANEVAL_PASS: int(targets[HUMANEVAL_PASS].notna().sum()) if HUMANEVAL_PASS in targets else 0,
-        "benchmark_accuracy_mean": int(targets["benchmark_accuracy_mean"].notna().sum()),
+        GSM8K_HUMANEVAL_ACCURACY_MEAN: int(targets[GSM8K_HUMANEVAL_ACCURACY_MEAN].notna().sum()),
+        BENCHMARK_ACCURACY_MEAN: int(targets[BENCHMARK_ACCURACY_MEAN].notna().sum()),
+        OLMO_BASE_EASY_OVERLAP_NO_MMLU_ACCURACY_MEAN: int(
+            targets[OLMO_BASE_EASY_OVERLAP_NO_MMLU_ACCURACY_MEAN].notna().sum()
+        ),
+        ALL_SUITE_ACCURACY_MEAN: int(targets[ALL_SUITE_ACCURACY_MEAN].notna().sum()),
+        MMLU_BPB: int(targets[MMLU_BPB].notna().sum()) if MMLU_BPB in targets else 0,
+        OLMO_BASE_EASY_OVERLAP_NO_MMLU_BPB_MEAN: int(targets[OLMO_BASE_EASY_OVERLAP_NO_MMLU_BPB_MEAN].notna().sum()),
+        ALL_SUITE_BPB_MEAN: int(targets[ALL_SUITE_BPB_MEAN].notna().sum()),
         OLMO_BASE_EASY_OVERLAP_MACRO_BPB: (
             int(targets[OLMO_BASE_EASY_OVERLAP_MACRO_BPB].notna().sum())
             if OLMO_BASE_EASY_OVERLAP_MACRO_BPB in targets
@@ -982,8 +1042,14 @@ def _write_report(summary: pd.DataFrame, targets: pd.DataFrame) -> None:
         "## Notes",
         "",
         "- MMLU is already complete for the 242-row fit swarm.",
-        "- Full benchmark mean is only fit once MMLU, GSM8K, and HumanEval are non-null for every row.",
-        "- Accuracy objectives include both raw probability and logit-probability fits when complete.",
+        "- GSM8K and HumanEval are generation-task accuracy metrics; this collection does not expose "
+        "BPB/logprob for them.",
+        "- Accuracy objectives include raw probability and logit-probability fits.",
+        "- The full benchmark accuracy mean is suite-level: MMLU, GSM8K, and HumanEval receive one vote each.",
+        "- The all-suite accuracy mean is suite-level: OLMoBase easy-overlap excluding MMLU, MMLU, "
+        "GSM8K, and HumanEval receive one vote each.",
+        "- The all-suite BPB mean averages MMLU BPB with the available non-MMLU OLMoBase easy-overlap "
+        "BPB tasks; GSM8K/HumanEval BPB is unavailable.",
         "- OLMoBaseEval easy-overlap metrics are read from the qsplit240 and selected-baseline reruns when available.",
         "- OLMoBaseEval objectives use the rows covered by qsplit240, selected-baseline, and optional Olmix BPB reruns.",
         "",
@@ -1007,6 +1073,7 @@ def main() -> None:
     param_rows: list[dict[str, Any]] = []
     for family_scheme in family_schemes:
         for spec in specs:
+            print(f"fitting {spec.slug} family_scheme={family_scheme}", flush=True)
             summary, params = _fit_objective(
                 frame,
                 spec,
