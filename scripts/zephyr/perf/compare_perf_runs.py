@@ -78,6 +78,7 @@ def compare(
     gate: str,
     pr: int,
     thresholds: dict[str, float],
+    assessment: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str]:
     reasons_fail: list[str] = []
     reasons_warn: list[str] = []
@@ -144,6 +145,7 @@ def compare(
         total_delta=total_delta,
         reasons_fail=reasons_fail,
         reasons_warn=reasons_warn,
+        assessment=assessment,
     )
     return summary, markdown
 
@@ -177,6 +179,7 @@ def _render_markdown(
     total_delta: float | None,
     reasons_fail: list[str],
     reasons_warn: list[str],
+    assessment: dict[str, Any] | None = None,
 ) -> str:
     icon = {"pass": "✅ pass", "warn": "⚠ warn", "fail": "❌ fail"}[verdict]
     gate_label = GATE_LABELS.get(gate, f"Gate {gate}")
@@ -192,6 +195,10 @@ def _render_markdown(
     if reasons_warn:
         lines.append("**Warns:** " + "; ".join(reasons_warn))
     if reasons_fail or reasons_warn:
+        lines.append("")
+
+    if assessment:
+        lines.extend(_render_assessment(assessment))
         lines.append("")
 
     lines.append("| | Control | Treatment |")
@@ -254,6 +261,50 @@ def _link(url: str | None) -> str:
     return f"[link]({url})" if url else "—"
 
 
+_ASSESSMENT_DIMS = (
+    ("trivial", "trivial"),
+    ("shuffle", "shuffle"),
+    ("memory", "memory"),
+    ("cpu", "CPU"),
+    ("design", "design"),
+)
+
+
+def _render_assessment(assessment: dict[str, Any]) -> list[str]:
+    """Render the agent's pre-run impact assessment as a markdown block.
+
+    Schema (see SKILL.md → step 2):
+        {"gate": "1"|"2"|"skip", "rationale": "...",
+         "per_file": {<path>: {"trivial": bool, "shuffle": bool, "memory": bool,
+                               "cpu": bool, "design": bool, "summary": "..."}}}
+    """
+    out: list[str] = ["### Diff assessment"]
+    rationale = assessment.get("rationale")
+    chosen = assessment.get("gate")
+    if chosen or rationale:
+        bits = []
+        if chosen:
+            bits.append(f"chose **{chosen}**")
+        if rationale:
+            bits.append(rationale)
+        out.append("_" + "; ".join(bits) + "_")
+        out.append("")
+
+    per_file = assessment.get("per_file") or {}
+    if not per_file:
+        return out
+
+    out.append("| File | trivial | shuffle | memory | CPU | design | summary |")
+    out.append("|---|---|---|---|---|---|---|")
+    for path, dims in sorted(per_file.items()):
+        cells = [f"`{path}`"]
+        for key, _ in _ASSESSMENT_DIMS:
+            cells.append("✓" if dims.get(key) else "")
+        cells.append(dims.get("summary", ""))
+        out.append("| " + " | ".join(cells) + " |")
+    return out
+
+
 def _load_thresholds(path: str | None) -> dict[str, float]:
     if not path:
         return dict(DEFAULT_THRESHOLDS)
@@ -273,6 +324,10 @@ def main() -> int:
     parser.add_argument("--gate", required=True, choices=sorted(GATE_LABELS))
     parser.add_argument("--pr", required=True, type=int)
     parser.add_argument("--thresholds", help="YAML overriding default thresholds.")
+    parser.add_argument(
+        "--assessment",
+        help="JSON file with the agent's pre-run impact assessment (see SKILL.md step 2).",
+    )
     parser.add_argument("--markdown-out", required=True)
     parser.add_argument("--verdict-out", required=True)
     args = parser.parse_args()
@@ -281,6 +336,10 @@ def main() -> int:
         control = json.load(f)
     with open(args.treatment) as f:
         treatment = json.load(f)
+    assessment: dict[str, Any] | None = None
+    if args.assessment:
+        with open(args.assessment) as f:
+            assessment = json.load(f)
 
     thresholds = _load_thresholds(args.thresholds)
     summary, markdown = compare(
@@ -289,6 +348,7 @@ def main() -> int:
         gate=args.gate,
         pr=args.pr,
         thresholds=thresholds,
+        assessment=assessment,
     )
 
     with open(args.verdict_out, "w") as f:

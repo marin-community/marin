@@ -1,15 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Decide whether a PR is in scope for the zephyr perf gate, and which gate to run.
+"""Decide whether a PR is in scope for the zephyr perf gate.
+
+This script is intentionally **advisory** — it does the mechanical part
+(in-scope filtering + flagging hot files) and leaves the gate-vs-gate
+decision to the agent. A trivial whitespace fix in ``shuffle.py`` should not
+trigger an overnight nemotron run, and a one-line tweak elsewhere can still
+move memory or CPU; only the agent reading the actual diff can tell the
+difference.
 
 In scope = at least one non-test file under ``lib/zephyr/src/zephyr/**``.
 Datakit / dedup / normalize / tokenize live under ``lib/marin/...`` and are
-explicitly out of scope; ``lib/fray/**`` is also out of scope (flagged in the
-reason but not auto-gated).
+explicitly out of scope. ``lib/fray/**`` is also out of scope (flagged in the
+output but not auto-gated).
 
-Gate 2 (full nemotron) is selected when the diff touches any file in
-``HEAVY_PATHS``; otherwise Gate 1 (fineweb smoke).
+``hot_files_touched`` lists in-scope files with higher prior likelihood of
+shuffle / memory / CPU impact (scatter pipeline, planner, executor, sort,
+spill). The agent should inspect these first when assessing the diff.
 
 Output is JSON on stdout. Exit code is always 0 unless the PR cannot be read.
 """
@@ -37,7 +45,7 @@ EXCLUDE_GLOBS = (
     "**/*.md",
 )
 
-HEAVY_PATHS = frozenset(
+HOT_FILES = frozenset(
     {
         "lib/zephyr/src/zephyr/shuffle.py",
         "lib/zephyr/src/zephyr/plan.py",
@@ -71,31 +79,44 @@ def _changed_files_from_diff(merge_base: str, head: str) -> list[str]:
 
 
 def classify(changed: list[str]) -> dict[str, object]:
-    """Pure, side-effect-free classification.
+    """Pure, side-effect-free in-scope classification.
 
-    Exposed as a function so callers (CI, the orchestrator, tests) can pass an
-    explicit file list without shelling out to git/gh.
+    The script does **not** decide the gate — the agent does that, after
+    reading the diff and assessing impact along the dimensions in
+    ``.agents/skills/zephyr-perf/SKILL.md``. Output here is structured input
+    for that assessment: which files matter, which are likely-hot, and a hint
+    when a non-zephyr backend (fray) is also touched.
     """
-    zephyr_internals = [p for p in changed if _matches_any(p, INCLUDE_GLOBS) and not _matches_any(p, EXCLUDE_GLOBS)]
+    zephyr_internals = sorted(
+        p for p in changed if _matches_any(p, INCLUDE_GLOBS) and not _matches_any(p, EXCLUDE_GLOBS)
+    )
+    fray_files = sorted(p for p in changed if fnmatch.fnmatch(p, FRAY_GLOB))
+    hot_files = sorted(set(zephyr_internals) & HOT_FILES)
 
     if not zephyr_internals:
         return {
             "in_scope": False,
-            "gate": None,
             "reason": "no non-test files under lib/zephyr/src/zephyr/** in diff",
             "touched_zephyr_files": [],
-            "touched_fray_files": [p for p in changed if fnmatch.fnmatch(p, FRAY_GLOB)],
+            "touched_fray_files": fray_files,
+            "hot_files_touched": [],
+            "next_step": "skip — out of scope for zephyr perf gate.",
         }
 
-    heavy_hits = sorted(set(zephyr_internals) & HEAVY_PATHS)
-    gate = "2" if heavy_hits else "1"
-    reason = f"heavy path(s) touched: {heavy_hits}" if heavy_hits else "non-heavy zephyr internals only"
+    if hot_files:
+        next_step = (
+            "Read the diff for the hot files first, then the rest. " "Assess along the SKILL dimensions and pick a gate."
+        )
+    else:
+        next_step = "Read the diff. Assess along the SKILL dimensions and pick a gate."
+
     return {
         "in_scope": True,
-        "gate": gate,
-        "reason": reason,
-        "touched_zephyr_files": sorted(zephyr_internals),
-        "touched_fray_files": sorted(p for p in changed if fnmatch.fnmatch(p, FRAY_GLOB)),
+        "reason": "zephyr internals touched; agent must assess the diff to choose a gate",
+        "touched_zephyr_files": zephyr_internals,
+        "touched_fray_files": fray_files,
+        "hot_files_touched": hot_files,
+        "next_step": next_step,
     }
 
 

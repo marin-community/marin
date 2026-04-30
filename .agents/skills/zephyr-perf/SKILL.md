@@ -24,8 +24,10 @@ The agent may, without asking:
 - Submit Iris ferry jobs at production priority for both runs.
 - Poll job state and pull coordinator logs.
 - Post **one** canonical comment on the PR (sentinel-marked, idempotent).
-- Open a regression issue when the verdict is `❌ fail` (label
-  `zephyr-perf-regression` + `agent-generated`).
+
+The agent does **not** open follow-up issues — even on `❌ fail`. The PR
+comment is the artifact; the author owns the response (revert, fix, or accept
+with rationale).
 
 The agent must ask before:
 
@@ -57,30 +59,28 @@ When unsure, run `select_gate.py` and trust its `in_scope` field.
 
 ## Gate ladder
 
-| Gate | Ferry | Wall-time | Default for | Notes |
-|---|---|---|---|---|
-| **1 — fineweb smoke** | `experiments.ferries.datakit_ferry` (FineWeb-Edu sample/10BT) | ~30–60 min | every in-scope PR | Cheap; runs scatter, dedup, consolidate, tokenize end-to-end at small scale. |
-| **2 — full nemotron** | `experiments.ferries.datakit_nemotron_ferry` (Nemotron-CC medium, ~3.4 TiB) | overnight (≤24 h) | PRs touching the high-blast-radius set below | Expensive; requires reviewer approval. |
+| Gate | Ferry | Wall-time | Notes |
+|---|---|---|---|
+| **skip** | — | — | All-trivial diff (e.g. comments, docstrings, type hints, renames). Reviewer must concur. |
+| **1 — fineweb smoke** | `experiments.ferries.datakit_ferry` (FineWeb-Edu sample/10BT) | ~30–60 min | Default. Cheap; runs scatter, dedup, consolidate, tokenize end-to-end at small scale. |
+| **2 — full nemotron** | `experiments.ferries.datakit_nemotron_ferry` (Nemotron-CC medium, ~3.4 TiB) | overnight (≤24 h) | Reach for this when the diff materially affects shuffle, memory, CPU, or zephyr design. Expensive; reviewer approval required. |
 
-**Gate 2 trigger paths** (any one of these in the diff escalates to Gate 2):
+The gate is **not** chosen mechanically from file paths. The agent reads the
+diff and judges (see *Assess the diff* below). A one-character fix in
+`shuffle.py` should not trigger an overnight run; a five-line tweak elsewhere
+that flips a buffer size should.
 
-- `lib/zephyr/src/zephyr/shuffle.py` (scatter pipeline)
-- `lib/zephyr/src/zephyr/plan.py` (operation fusion)
-- `lib/zephyr/src/zephyr/execution.py` (coord/worker loop)
-- `lib/zephyr/src/zephyr/external_sort.py` (k-way merge)
-- `lib/zephyr/src/zephyr/spill.py` (on-disk spill)
-
-Reviewer can promote/demote with PR labels `perf-gate:1` / `perf-gate:2` /
-`perf-gate:skip`.
+Reviewer always overrides via PR labels `zephyr-perf-gate:skip` /
+`zephyr-perf-gate:1` / `zephyr-perf-gate:2`.
 
 A medium tier ("Nemotron 1-slice", ~few hours) is intentionally **not** in this
 ladder yet — there is no script for it. Track as future work; for now, in-scope
-PRs go to Gate 1 by default and escalate straight to Gate 2 when the path set
-fires.
+PRs are Gate 1 by default and escalate to Gate 2 when the assessment flags any
+of the impact dimensions.
 
 ## Workflow
 
-### 1. Decide scope and gate
+### 1. Mechanical scope check
 
 ```bash
 uv run python scripts/zephyr/perf/select_gate.py --pr <PR_NUMBER>
@@ -89,14 +89,71 @@ uv run python scripts/zephyr/perf/select_gate.py --pr <PR_NUMBER>
 Output is JSON:
 
 ```json
-{"in_scope": true, "gate": "1", "reason": "...", "touched_zephyr_files": [...]}
+{
+  "in_scope": true,
+  "touched_zephyr_files": ["lib/zephyr/src/zephyr/shuffle.py"],
+  "touched_fray_files": [],
+  "hot_files_touched": ["lib/zephyr/src/zephyr/shuffle.py"],
+  "next_step": "Read the diff for the hot files first, ..."
+}
 ```
 
-If `in_scope` is `false`, stop here and post nothing. If `gate` is `"2"`,
-confirm with the reviewer (or check for the `perf-gate:2` label) before
-launching.
+If `in_scope` is `false`, stop here and post nothing. The script does **not**
+choose the gate — go to the next step.
 
-### 2. Resolve SHAs
+`hot_files_touched` is a *hint* (scatter / planner / executor / sort / spill)
+about which files have higher prior likelihood of perf impact. Read those
+first; do not treat their presence as an automatic Gate-2 trigger.
+
+### 2. Assess the diff
+
+Read the actual diff, not just the file list:
+
+```bash
+gh pr diff <PR_NUMBER>          # PRs
+git diff <merge_base>...<head>  # local
+```
+
+For each touched zephyr file, answer five yes/no questions and write the
+answers to a small JSON file (used later in the PR comment):
+
+| # | Question | Yes if… |
+|---|---|---|
+| 1 | Trivial? | comment-only, docstring-only, whitespace, rename, pure type-hint, log-string text, dead-code removal with no callers. |
+| 2 | Affects shuffle? | scatter pipeline (hashing, fanout, combiner, byte-range sidecar), partitioning, k-way merge, chunk routing. |
+| 3 | Affects memory consumption? | buffer sizes, in-memory accumulation, chunk shapes, spill thresholds, retained references in coord/worker, RPC payload size. |
+| 4 | Affects CPU utilization? | hot loops, serialization paths, sort/merge inner loops, polling intervals, lock contention, JSON/parquet read/write. |
+| 5 | Changes zephyr design in an important way? | new public API, changed actor protocol, changed stage semantics, changed `.result()` ordering, changed retry/error classification, changed plan/fusion rules. |
+
+**Decision:**
+
+- All-trivial (q1 yes for every file, q2–q5 no everywhere) → propose
+  `zephyr-perf-gate:skip` and ask the reviewer to confirm before posting.
+- Any of q2 / q3 / q4 / q5 = yes anywhere → **Gate 2**.
+- Otherwise → **Gate 1**.
+
+Record the answers and the agent's one-line rationale per file:
+
+```json
+{
+  "gate": "2",
+  "rationale": "shuffle.py: changes scatter combiner from per-key to per-shard buffer (memory + CPU)",
+  "per_file": {
+    "lib/zephyr/src/zephyr/shuffle.py": {
+      "trivial": false, "shuffle": true, "memory": true, "cpu": true, "design": false,
+      "summary": "scatter combiner buffering changed"
+    }
+  }
+}
+```
+
+This file is consumed by `compare_perf_runs.py` (via `--assessment`) so the
+posted comment shows the agent's reasoning, not just the timings.
+
+If a `zephyr-perf-gate:skip|1|2` label is set on the PR, that label wins —
+record the override in `rationale`.
+
+### 3. Resolve SHAs
 
 ```bash
 gh pr view <PR_NUMBER> --json headRefOid,baseRefOid,baseRefName -q '...'
@@ -109,37 +166,49 @@ Re-running control at the PR's merge-base is the default. Reusing a recent
 weekly nemotron ferry as control is a future optimization — do not skip control
 in v1.
 
-### 3. Set up worktrees
+### 4. Set up worktrees
 
 Iris bundles the working directory; submit each run from a worktree at the
-right SHA.
+right SHA. Use the shared `../.zephyr_perf_worktrees/` directory and a
+single timestamp per run so the two legs are clearly paired and easy to
+clean up later:
 
 ```bash
-git worktree add ../zephyr-perf-control "$CONTROL_SHA"
-git worktree add ../zephyr-perf-treatment "$TREATMENT_SHA"
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+WT_DIR="../.zephyr_perf_worktrees"
+mkdir -p "$WT_DIR"
+CONTROL_WT="$WT_DIR/${PR_NUMBER}-${TS}-control"
+TREATMENT_WT="$WT_DIR/${PR_NUMBER}-${TS}-treatment"
+git worktree add "$CONTROL_WT"   "$CONTROL_SHA"
+git worktree add "$TREATMENT_WT" "$TREATMENT_SHA"
 ```
 
-### 4. Submit both ferries
+Resulting paths look like
+`../.zephyr_perf_worktrees/5199-20260430T134522Z-control`. Stale runs from a
+prior gate execution can be wiped with
+`git worktree remove ../.zephyr_perf_worktrees/${PR_NUMBER}-*`.
+
+### 5. Submit both ferries
 
 ```bash
 uv run python scripts/zephyr/perf/submit_perf_run.py \
   --gate 1 \
   --label control \
-  --cwd ../zephyr-perf-control \
+  --cwd "$CONTROL_WT" \
   --pr <PR_NUMBER> \
   --status-out gs://marin-us-central1/tmp/ttl=7d/zephyr-perf/<PR>/control.json
 
 uv run python scripts/zephyr/perf/submit_perf_run.py \
   --gate 1 \
   --label treatment \
-  --cwd ../zephyr-perf-treatment \
+  --cwd "$TREATMENT_WT" \
   --pr <PR_NUMBER> \
   --status-out gs://marin-us-central1/tmp/ttl=7d/zephyr-perf/<PR>/treatment.json
 ```
 
 The script prints the Iris job ID and writes the status JSON path to stdout.
 
-### 5. Babysit
+### 6. Babysit
 
 Both runs babysat with the **babysit-zephyr** skill (or **babysit-job** for the
 outer Iris job). Do not poll in a tight loop — Gate 1 is ~30–60 min, Gate 2 is
@@ -150,7 +219,7 @@ If a run fails (worker pool wedged, coordinator zombie), escalate to
 underlying issue is understood. Never silently retry — a flaky run masks a real
 regression.
 
-### 6. Collect metrics
+### 7. Collect metrics
 
 ```bash
 uv run python scripts/zephyr/perf/collect_perf_metrics.py \
@@ -167,16 +236,21 @@ the final counter snapshot via `iris actor call`, and the worker-pool death
 count from `iris rpc controller list-tasks`. Only post the comment after both
 runs reach a terminal state (`SUCCEEDED` or `FAILED`).
 
-### 7. Compare and verdict
+### 8. Compare and verdict
 
 ```bash
 uv run python scripts/zephyr/perf/compare_perf_runs.py \
   --control /tmp/zephyr-perf/<PR>/control_metrics.json \
   --treatment /tmp/zephyr-perf/<PR>/treatment_metrics.json \
+  --assessment /tmp/zephyr-perf/<PR>/assessment.json \
   --gate 1 \
   --markdown-out /tmp/zephyr-perf/<PR>/comment.md \
   --verdict-out /tmp/zephyr-perf/<PR>/verdict.json
 ```
+
+The assessment JSON from step 2 is included in the rendered comment so the
+reviewer sees both the verdict (timings + OOMs) and the agent's reasoning
+(what the diff was judged to affect).
 
 Default thresholds (overridable via `--thresholds <yaml>`):
 
@@ -190,30 +264,41 @@ Default thresholds (overridable via `--thresholds <yaml>`):
 Verdict precedence: any hard-fail → `❌ fail`; otherwise any warn → `⚠ warn`;
 otherwise `✅ pass`.
 
-### 8. Post one canonical comment
+### 9. Post one canonical comment
+
+The comment is sentinel-marked so re-runs replace the prior comment instead of
+stacking. Two `gh api` calls — find the existing comment, then patch or post:
 
 ```bash
-uv run python scripts/zephyr/perf/post_pr_comment.py \
-  --pr <PR_NUMBER> \
-  --body /tmp/zephyr-perf/<PR>/comment.md
+PR=<PR_NUMBER>
+REPO=marin-community/marin
+BODY=/tmp/zephyr-perf/$PR/comment.md
+EXISTING=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+  --jq '.[] | select(.body | startswith("<!-- zephyr-perf-gate -->")) | .id' | head -1)
+
+if [ -n "$EXISTING" ]; then
+  gh api --method PATCH "repos/$REPO/issues/comments/$EXISTING" -F "body=@$BODY"
+else
+  gh api --method POST  "repos/$REPO/issues/$PR/comments"      -F "body=@$BODY"
+fi
 ```
 
-The script upserts a comment marked with `<!-- zephyr-perf-gate -->` so re-runs
-replace the prior comment instead of stacking. Open a regression issue when the
-verdict is `❌ fail`:
+The comment is the only output — no separate issue is filed on `❌ fail`. The
+author decides next steps (revert, fix, or accept with rationale).
+
+### 10. Clean up
 
 ```bash
-gh issue create \
-  --title "[zephyr-perf] regression on #<PR_NUMBER>" \
-  --label zephyr-perf-regression --label agent-generated \
-  --body-file /tmp/zephyr-perf/<PR>/comment.md
+git worktree remove "$CONTROL_WT"
+git worktree remove "$TREATMENT_WT"
 ```
 
-### 9. Clean up
+To wipe stale worktrees from earlier runs:
 
 ```bash
-git worktree remove ../zephyr-perf-control
-git worktree remove ../zephyr-perf-treatment
+for wt in ../.zephyr_perf_worktrees/${PR_NUMBER}-*; do
+  git worktree remove --force "$wt"
+done
 ```
 
 ## Comment format (canonical)
@@ -265,21 +350,20 @@ The comment **must** begin with `🤖` per repo convention (see
 - **Control flakes, treatment passes**: re-submit control; do not call the gate
   pass on a single run.
 - **Both flake at the same stage**: not a regression — a real environmental
-  problem. Open an `agent-generated` issue and ping the reviewer; do not post a
-  pass/fail verdict.
+  problem. Post a comment on the PR explaining the flake and ping the reviewer;
+  do not post a pass/fail verdict and do not file an issue.
 - **Treatment OOMs at a stage that control survives**: hard fail. Always
   surface the worker-pool death log with the OOM line in the comment so the
   author can act without re-pulling logs.
 - **`select_gate.py` says out-of-scope but the reviewer disagrees**: reviewer
-  applies `perf-gate:1` or `perf-gate:2` label; the agent re-runs with the
-  forced gate.
+  applies `zephyr-perf-gate:1` or `zephyr-perf-gate:2` label; the agent re-runs
+  with the forced gate.
 
 ## Composes with
 
 - `babysit-zephyr` — for monitoring each run while in flight.
 - `babysit-job` — for the outer Iris job lifecycle.
 - `debug-infra` — when a leg flakes and the cause is unclear.
-- `file-issue` — for the regression issue path.
 
 ## Open questions
 
