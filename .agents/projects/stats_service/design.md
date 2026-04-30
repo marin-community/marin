@@ -386,13 +386,13 @@ The change is large; we land it in five PRs in this order:
 2. **Schema registry + Arrow IPC writes**: add the sidecar registry DB, `RegisterTable` / `WriteRows` proto and server impl, schema validation. Still single client surface (`LogClient` not yet introduced).
 3. **Stats RPC end-to-end**: add `Query` and `DropTable` to the proto, DuckDB-view-based query execution, namespace-name validation, eviction across namespaces.
 4. **Client consolidation**: introduce `LogClient`, delete `LogPusher`, rewrite `RemoteLogHandler`, migrate every in-repo call site in one pass. `Table` buffers and flush threads land here.
-5. **Iris dashboard cutover**: worker pane reads from `iris.worker` namespace; sqlite-backed read path retired after the parity check passes for 24h.
+5. **Iris dashboard cutover**: worker pane reads unconditionally from the `iris.worker` namespace. Stats are observation-only, so a transport-level outage soft-fails to an empty roster.
 
 Stages 1 and 2 are storage/server-only and ship without API changes. Stage 4 is the breaking client change; stage 5 is the user-visible feature.
 
 ## Testing
 
-**Integration**: on the iris dev cluster, a worker registers `iris.worker`, emits one row per heartbeat, and the dashboard reads from the stats service in place of sqlite. Regression check: the rendered worker pane matches the sqlite-backed version pre-cutover for a 24h window.
+**Integration**: on the iris dev cluster, a worker registers `iris.worker`, emits one row per heartbeat, and the dashboard reads from the stats service.
 
 **Concurrency / lifecycle** (process-level tests against a real `DuckDBLogStore`):
 

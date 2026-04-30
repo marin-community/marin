@@ -165,7 +165,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 
 
 @pytest.fixture
-def service(state, scheduler, tmp_path):
+def service(state, scheduler, stats_log_client, tmp_path):
     controller_mock = _make_controller_mock(state, scheduler)
     log_service = LogServiceImpl()
     return ControllerServiceImpl(
@@ -174,6 +174,7 @@ def service(state, scheduler, tmp_path):
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
+        stats_log_client=stats_log_client,
     )
 
 
@@ -184,7 +185,7 @@ def client(service):
 
 
 @pytest.fixture
-def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
+def service_with_autoscaler(state, scheduler, mock_autoscaler, stats_log_client, tmp_path):
     """Service with autoscaler enabled for tests."""
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
     log_service = LogServiceImpl()
@@ -194,6 +195,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
+        stats_log_client=stats_log_client,
     )
 
 
@@ -1053,19 +1055,23 @@ def test_coscheduling_failure_reason_insufficient_group(client, state):
 
 
 def test_worker_attributes_in_list_workers(client, state):
-    """ListWorkers RPC returns worker attributes in metadata."""
+    """ListWorkers RPC surfaces the worker's metadata. The iris.worker stats
+    schema carries the well-known fields directly (tpu_name, gce_instance_name,
+    cpu_count, memory_bytes); arbitrary attributes are not part of this schema
+    bump. See ``IrisWorkerStat`` in ``iris/cluster/worker/stats.py``.
+    """
     meta = make_worker_metadata()
-    meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(job_pb2.AttributeValue(string_value="v5litepod-16"))
-    meta.attributes[WellKnownAttribute.TPU_WORKER_ID].CopyFrom(job_pb2.AttributeValue(int_value=0))
+    meta.tpu_name = "v5litepod-16"
+    meta.cpu_count = 64
     register_worker(state, "tpu-worker", "h1:8080", meta)
 
     resp = rpc_post(client, "ListWorkers")
     workers = resp.get("workers", [])
     assert len(workers) == 1
 
-    attrs = workers[0].get("metadata", {}).get("attributes", {})
-    assert attrs["tpu-name"]["stringValue"] == "v5litepod-16"
-    assert int(attrs["tpu-worker-id"]["intValue"]) == 0
+    metadata = workers[0].get("metadata", {})
+    assert metadata.get("tpuName") == "v5litepod-16"
+    assert int(metadata.get("cpuCount", 0)) == 64
 
 
 # =============================================================================

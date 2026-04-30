@@ -165,8 +165,90 @@ def log_service(state, tmp_path) -> LogServiceImpl:
     svc.close()
 
 
+class _StateMirroringStatsTable:
+    """Test stand-in for a finelog Table that synthesizes ``iris.worker``
+    rows from the controller's live worker state at query time.
+
+    Production wires the controller to a real finelog stats client; workers
+    emit one row per heartbeat. In unit tests there's no worker process —
+    this fake fills the gap by reading workers directly out of the state DB
+    and shaping the result like the production SQL would.
+    """
+
+    def __init__(self, state) -> None:
+        self._state = state
+
+    def query(self, sql: str, *, max_rows: int = 100_000):
+        from datetime import datetime, timezone
+
+        import pyarrow as pa
+
+        from iris.cluster.controller.service import _worker_roster
+
+        rows = _worker_roster(self._state._db)
+        now = datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
+        cols: dict[str, list] = {
+            "worker_id": [],
+            "ts": [],
+            "status": [],
+            "address": [],
+            "healthy": [],
+            "cpu_pct": [],
+            "mem_bytes": [],
+            "mem_total_bytes": [],
+            "disk_used_bytes": [],
+            "disk_total_bytes": [],
+            "running_task_count": [],
+            "total_process_count": [],
+            "device_type": [],
+            "device_variant": [],
+            "cpu_count": [],
+            "memory_bytes": [],
+            "tpu_name": [],
+            "gce_instance_name": [],
+            "zone": [],
+        }
+        for r in rows:
+            cols["worker_id"].append(str(r.worker_id))
+            cols["ts"].append(now)
+            cols["status"].append("IDLE")
+            cols["address"].append(r.address)
+            cols["healthy"].append(bool(r.healthy))
+            cols["cpu_pct"].append(0.0)
+            cols["mem_bytes"].append(0)
+            cols["mem_total_bytes"].append(int(r.md_memory_bytes))
+            cols["disk_used_bytes"].append(0)
+            cols["disk_total_bytes"].append(int(r.md_disk_bytes))
+            cols["running_task_count"].append(0)
+            cols["total_process_count"].append(0)
+            cols["device_type"].append(r.device_type)
+            cols["device_variant"].append(r.device_variant)
+            cols["cpu_count"].append(int(r.md_cpu_count))
+            cols["memory_bytes"].append(int(r.md_memory_bytes))
+            cols["tpu_name"].append(r.md_tpu_name)
+            cols["gce_instance_name"].append(r.md_gce_instance_name)
+            cols["zone"].append(r.md_gce_zone)
+        return pa.table(cols)
+
+
+class _StateMirroringStatsClient:
+    """LogClient stand-in returning a state-mirroring Table per namespace."""
+
+    def __init__(self, state) -> None:
+        self._state = state
+
+    def get_table(self, namespace: str, schema):
+        return _StateMirroringStatsTable(self._state)
+
+
 @pytest.fixture
-def controller_service(state, log_service, mock_controller, tmp_path) -> ControllerServiceImpl:
+def stats_log_client(state):
+    """In-test stats client backed by the controller's live worker state."""
+    return _StateMirroringStatsClient(state)
+
+
+@pytest.fixture
+def controller_service(state, log_service, mock_controller, stats_log_client, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl with fresh DB, log service, and mock controller."""
     return ControllerServiceImpl(
         state,
@@ -174,6 +256,7 @@ def controller_service(state, log_service, mock_controller, tmp_path) -> Control
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
+        stats_log_client=stats_log_client,
     )
 
 
