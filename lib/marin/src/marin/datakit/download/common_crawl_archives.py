@@ -114,16 +114,6 @@ class CommonCrawlArchiveSource:
             raise ValueError("max_files must be positive")
 
 
-@dataclass
-class DownloadCommonCrawlSampleConfig:
-    """Runtime config for :func:`download_common_crawl_sample`."""
-
-    source: CommonCrawlArchiveSource
-    output_path: str = THIS_OUTPUT_PATH
-    output_filename: str = COMMON_CRAWL_OUTPUT_FILENAME
-    http_timeout: int = COMMON_CRAWL_HTTP_TIMEOUT
-
-
 @dataclass(frozen=True)
 class _WarcRecord:
     version_line: str
@@ -400,13 +390,18 @@ def _write_source_metadata(
     )
 
 
-def download_common_crawl_sample(config: DownloadCommonCrawlSampleConfig) -> dict[str, Any]:
+def download_common_crawl_sample(
+    *,
+    source: CommonCrawlArchiveSource,
+    output_path: str = THIS_OUTPUT_PATH,
+    output_filename: str = COMMON_CRAWL_OUTPUT_FILENAME,
+    http_timeout: int = COMMON_CRAWL_HTTP_TIMEOUT,
+) -> dict[str, Any]:
     """Download a tiny deterministic Common Crawl WARC/WAT sample."""
 
-    source = config.source
     source.validate()
-    output_path = str(config.output_path)
-    output_file = posixpath.join(output_path, config.output_filename)
+    output_path = str(output_path)
+    output_file = posixpath.join(output_path, output_filename)
     fsspec_mkdirs(output_path, exist_ok=True)
 
     counters = {
@@ -419,16 +414,15 @@ def download_common_crawl_sample(config: DownloadCommonCrawlSampleConfig) -> dic
     bytes_written = 0
     record_types: dict[str, int] = {}
 
-    session = _build_session()
-    try:
-        selected_paths = _selected_archive_paths(session, source, http_timeout=config.http_timeout)
+    with _build_session() as session:
+        selected_paths = _selected_archive_paths(session, source, http_timeout=http_timeout)
         with atomic_rename(output_file) as temp_path:
             with open_url(temp_path, "wt", encoding="utf-8", compression="gzip") as writer:
                 for relative_path in selected_paths:
                     archive_url = urljoin(source.base_url, relative_path)
                     counters["files_opened"] += 1
                     logger.info("Streaming %s archive %s", source.archive_kind.value, archive_url)
-                    with session.get(archive_url, stream=True, timeout=config.http_timeout) as response:
+                    with session.get(archive_url, stream=True, timeout=http_timeout) as response:
                         response.raise_for_status()
                         with gzip.GzipFile(fileobj=response.raw) as gz:
                             for record_index, record in enumerate(_iter_warc_records(gz)):
@@ -484,9 +478,6 @@ def download_common_crawl_sample(config: DownloadCommonCrawlSampleConfig) -> dic
                                 bytes_written += serialized_bytes
                                 warc_type = payload["warc_type"] or "<missing>"
                                 record_types[str(warc_type)] = record_types.get(str(warc_type), 0) + 1
-    finally:
-        session.close()
-
     metadata_path = _write_source_metadata(
         source=source,
         output_path=output_path,
@@ -530,11 +521,9 @@ def common_crawl_sample_step(
     return StepSpec(
         name=step_name,
         fn=lambda output_path: download_common_crawl_sample(
-            DownloadCommonCrawlSampleConfig(
-                source=source,
-                output_path=output_path,
-                http_timeout=http_timeout,
-            )
+            source=source,
+            output_path=output_path,
+            http_timeout=http_timeout,
         ),
         hash_attrs={
             "slice_key": source.manifest.slice_key,

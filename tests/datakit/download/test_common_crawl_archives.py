@@ -16,7 +16,6 @@ from marin.datakit.download.common_crawl_archives import (
     COMMON_CRAWL_WARC_SOURCE,
     COMMON_CRAWL_WAT_SOURCE,
     CommonCrawlArchiveKind,
-    DownloadCommonCrawlSampleConfig,
     download_common_crawl_sample,
 )
 
@@ -119,12 +118,7 @@ def test_download_common_crawl_warc_streams_selected_segments_and_skips_binary(
 
     output_dir = tmp_path / "output"
     source = replace(COMMON_CRAWL_WARC_SOURCE, base_url=base_url, max_files=2)
-    result = download_common_crawl_sample(
-        DownloadCommonCrawlSampleConfig(
-            source=source,
-            output_path=str(output_dir),
-        )
-    )
+    result = download_common_crawl_sample(source=source, output_path=str(output_dir))
 
     records = _read_jsonl_gz(output_dir / "data.jsonl.gz")
     metadata = json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))
@@ -185,12 +179,7 @@ def test_download_common_crawl_wat_preserves_json_and_honors_output_cap(
         max_files=1,
         max_output_bytes=1_500,
     )
-    result = download_common_crawl_sample(
-        DownloadCommonCrawlSampleConfig(
-            source=source,
-            output_path=str(output_dir),
-        )
-    )
+    result = download_common_crawl_sample(source=source, output_path=str(output_dir))
 
     records = _read_jsonl_gz(output_dir / "data.jsonl.gz")
     metadata = json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))
