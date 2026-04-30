@@ -18,7 +18,6 @@ import itertools
 import logging
 import os
 import pickle
-import signal
 import sys
 from datetime import datetime, timezone
 import threading
@@ -60,10 +59,17 @@ from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
-# Max explicit task errors (report_error) per shard before aborting. Preemption
-# requeues (re-registration, heartbeat timeout) do not count — they retry
-# unbounded. `_check_worker_group` backstops if workers fully exhaust Iris retries.
+# Max explicit task errors (report_error) per shard before aborting.
 MAX_SHARD_FAILURES = 3
+
+# Max infra failures observed *while the same shard was in flight* on the
+# crashing worker before treating that shard as a deterministic crasher and
+# aborting. Genuine preemption distributes across all in-flight shards, so
+# the same shard hitting this cap is strong evidence the shard payload is
+# what's killing the worker (e.g. native SIGSEGV from Arrow / JAX, or an
+# OOM that brings the host down). Set well above realistic preemption
+# storms for any one shard in a multi-shard pipeline.
+MAX_SHARD_INFRA_FAILURES = 20
 
 ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/stage/{stage_name}/item_count"
 ZEPHYR_STAGE_BYTES_PROCESSED_KEY = "zephyr/stage/{stage_name}/bytes_processed"
@@ -309,6 +315,41 @@ def zephyr_worker_ctx() -> WorkerContext:
     if ctx is None:
         raise RuntimeError("zephyr_worker_ctx() called outside of a worker task")
     return ctx
+
+
+class StageRunner(Protocol):
+    """Strategy a worker uses to execute a single shard. See ``zephyr.runners``."""
+
+    def execute(
+        self,
+        task: ShardTask,
+        chunk_prefix: str,
+        execution_id: str,
+    ) -> tuple[TaskResult, dict[str, int]]: ...
+
+    def live_counters(self) -> dict[str, int]: ...
+
+
+def _default_stage_runner_factory_for(client: Client) -> Callable[[], StageRunner]:
+    """Pick the default ``stage_runner_factory`` based on the client type.
+
+    ``LocalClient`` is the dev/test backend — workers are threads in a
+    single process, so per-shard subprocess isolation adds latency without
+    delivering meaningful isolation. Distributed clients run each worker
+    actor as its own VM where subprocess-per-shard gives real protection
+    against native crashes and per-shard memory growth. Callers that want
+    the other behavior pass ``stage_runner_factory=...`` explicitly.
+    """
+    from fray.local_backend import LocalClient
+
+    if isinstance(client, LocalClient):
+        from zephyr.runners import InlineRunner
+
+        return InlineRunner
+
+    from zephyr.runners import SubprocessRunner
+
+    return SubprocessRunner
 
 
 # ---------------------------------------------------------------------------
@@ -560,9 +601,9 @@ class ZephyrCoordinator:
             dead,
         )
 
-        # Map-only stages don't yield through StatisticsGenerator and never
+        # Map-only stages don't yield through ``_StageStatsGenerator`` and never
         # populate these counters. Drop the items/bytes_processed segment for
-        # those stages — see ``subprocess_worker._periodic_status_logger``.
+        # those stages.
         if item_key in totals or byte_key in totals:
             items = totals.get(item_key, 0)
             bytes_processed = totals.get(byte_key, 0)
@@ -591,7 +632,13 @@ class ZephyrCoordinator:
         kind: ShardFailureKind,
         error_info: str | None = None,
     ) -> bool:
-        """Requeue the worker's in-flight shard; abort only if TASK errors hit MAX_SHARD_FAILURES.
+        """Requeue the worker's in-flight shard; abort if a per-shard cap is hit.
+
+        TASK errors are bounded by ``MAX_SHARD_FAILURES``. INFRA failures
+        observed while the *same* shard was in flight are bounded by
+        ``MAX_SHARD_INFRA_FAILURES`` so a payload that deterministically
+        crashes its worker (native SIGSEGV, OOM) doesn't loop forever now
+        that shard execution is in-process.
 
         Must be called with lock held. Returns True if the pipeline was aborted.
         """
@@ -642,14 +689,35 @@ class ZephyrCoordinator:
                 MAX_SHARD_FAILURES,
             )
         else:
+            self._task_infra_attempts[shard_idx] += 1
+            infra_attempts = self._task_infra_attempts[shard_idx]
+            if infra_attempts >= MAX_SHARD_INFRA_FAILURES:
+                logger.error(
+                    "Shard %d has been in flight during %d infra failures (max %d); "
+                    "treating as a deterministic crasher (likely native SIGSEGV / OOM in shard "
+                    "code) and aborting pipeline. Last failure on worker %s.",
+                    shard_idx,
+                    infra_attempts,
+                    MAX_SHARD_INFRA_FAILURES,
+                    worker_id,
+                )
+                self._fatal_error = (
+                    f"Shard {shard_idx} crashed its worker {infra_attempts} times "
+                    f"(max {MAX_SHARD_INFRA_FAILURES} infra failures while in flight); "
+                    f"last failure on worker {worker_id}."
+                )
+                return True
+
             logger.warning(
-                "Shard %d requeued from worker %s due to infra failure (preemption/heartbeat); "
-                "infra retries are unbounded. Total generation: %d, task errors so far: %d/%d.",
+                "Shard %d requeued from worker %s due to infra failure (preemption/heartbeat). "
+                "Total generation: %d, task errors so far: %d/%d, infra-while-in-flight: %d/%d.",
                 shard_idx,
                 worker_id,
                 self._task_attempts[shard_idx],
                 self._task_error_attempts[shard_idx],
                 MAX_SHARD_FAILURES,
+                infra_attempts,
+                MAX_SHARD_INFRA_FAILURES,
             )
 
         self._task_queue.append(task)
@@ -846,6 +914,11 @@ class ZephyrCoordinator:
             self._in_flight = {}
             self._task_attempts = {task.shard_idx: 0 for task in tasks}
             self._task_error_attempts = {task.shard_idx: 0 for task in tasks}
+            # Counts INFRA failures observed while this specific shard was in
+            # flight on the dying worker — bounded by MAX_SHARD_INFRA_FAILURES
+            # so a shard that deterministically crashes its worker (native
+            # SIGSEGV, OOM) eventually aborts instead of retrying forever.
+            self._task_infra_attempts = {task.shard_idx: 0 for task in tasks}
             self._shard_errors = {}
             self._fatal_error = None
             self._is_last_stage = is_last_stage
@@ -1082,8 +1155,21 @@ class ZephyrWorker:
     without restart.
     """
 
-    def __init__(self, coordinator_handle: ActorHandle):
+    def __init__(
+        self,
+        coordinator_handle: ActorHandle,
+        stage_runner_factory: Callable[[], StageRunner] | None = None,
+    ):
         from fray import current_actor
+
+        # ZephyrContext normally pre-resolves this via _CoordinatorJobConfig;
+        # the fallback here covers callers that construct a worker directly
+        # (mostly internal tests). Default to InlineRunner since direct
+        # construction is a dev/test path.
+        if stage_runner_factory is None:
+            from zephyr.runners import InlineRunner
+
+            stage_runner_factory = InlineRunner
 
         self._coordinator = coordinator_handle
         self._shutdown_event = threading.Event()
@@ -1091,7 +1177,9 @@ class ZephyrWorker:
         self._execution_id: str = ""
         self._counter_generation: int = 0
         self._last_reported_counters: dict[str, int] = {}
-        self._subprocess_counter_file: str | None = None
+        # Each worker owns its runner instance; the heartbeat thread polls
+        # ``live_counters()`` off it while a task is in flight.
+        self._stage_runner: StageRunner = stage_runner_factory()
 
         # Capture shutdown_event from the actor context while the ContextVar
         # is still set (child threads in Python <3.12 don't inherit it).
@@ -1112,30 +1200,15 @@ class ZephyrWorker:
         self._polling_thread.start()
 
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
-        """Read the live subprocess counter file and return a snapshot if changed.
+        """Snapshot the running task's counters, or None when idle/unchanged.
 
-        Called once per heartbeat. While ``_subprocess_counter_file`` is set,
-        the subprocess flushes its counter dict to that path every
-        ``SUBPROCESS_COUNTER_FLUSH_INTERVAL`` seconds via an atomic temp-write
-        + rename. We re-read it on each beat, compare to the last reported
-        value, and emit a fresh ``CounterSnapshot`` only when something has
-        actually changed — heartbeats with ``None`` are cheap on the
-        coordinator side. A missing or partially-written counter file (race
-        against the atomic rename, file already cleaned up post-task) is
-        treated as an empty snapshot; the post-shard ``report_result`` call
+        Delegates to the configured ``StageRunner.live_counters``: the inline
+        runner exposes its in-memory ctx; the subprocess runner reads the
+        child's flush file. Skipping when nothing has changed keeps
+        heartbeat traffic cheap on the coordinator side. ``report_result``
         is the source of truth for the final per-task values.
         """
-        counter_file = self._subprocess_counter_file
-        current: dict[str, int] = {}
-        if counter_file is not None:
-            try:
-                with open(counter_file, "rb") as f:
-                    current = cloudpickle.load(f)
-            except (FileNotFoundError, EOFError, pickle.UnpicklingError):
-                pass
-            except Exception:
-                logger.warning("Failed to read counter file %s", counter_file, exc_info=True)
-
+        current = self._stage_runner.live_counters()
         if current == self._last_reported_counters:
             return None
         self._last_reported_counters = current
@@ -1291,93 +1364,34 @@ class ZephyrWorker:
                 ).result()
 
     def _execute_shard(self, task: ShardTask, config: dict) -> tuple[TaskResult, dict[str, int]]:
-        """Execute a stage's operations in a child process for memory isolation.
+        """Hand the task to the configured ``StageRunner``.
 
-        Serializes the task via cloudpickle, runs it in a subprocess via
-        ``python -m zephyr.subprocess_worker``, and returns
-        ``(TaskResult, counters)`` — the latter is the user counter dict
-        accumulated inside the subprocess, which the caller hands straight
-        to ``coordinator.report_result``. All child memory (page cache,
-        Arrow pool, Python heap) is reclaimed when the child exits, so
-        successive tasks on the same worker actor do not accumulate state.
+        The runner owns the worker-context lifetime and decides whether to
+        execute inline or in a subprocess; this method just plumbs the
+        per-execution config and surfaces the final ``(TaskResult, counters)``
+        for ``report_result``.
         """
-        import subprocess as sp
-        import tempfile
-
-        # Update config for this execution
-        self._chunk_prefix = config["chunk_prefix"]
-        self._execution_id = config["execution_id"]
+        chunk_prefix = config["chunk_prefix"]
+        execution_id = config["execution_id"]
+        self._chunk_prefix = chunk_prefix
+        self._execution_id = execution_id
 
         logger.info(
             "[%s] [shard %d/%d] Starting stage=%s, %d ops",
-            self._execution_id,
+            execution_id,
             task.shard_idx,
             task.total_shards,
             task.stage_name,
             len(task.operations),
         )
 
-        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
-            cloudpickle.dump((task, self._chunk_prefix, self._execution_id), f)
-            task_file = f.name
-        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
-            result_file = f.name
-        counters_file = f"{result_file}.counters"
-        self._subprocess_counter_file = counters_file
-
-        try:
-            # ``-u`` keeps the child's stdout/stderr unbuffered so any traceback
-            # written by ``faulthandler`` (or by Python on a normal exception)
-            # actually reaches the parent's log before the process dies.
-            proc = sp.run(
-                [sys.executable, "-u", "-m", "zephyr.subprocess_worker", task_file, result_file],
-                stdout=sys.stdout,
-                stderr=sys.stderr,
-            )
-
-            if proc.returncode != 0:
-                # Linux OOM-killer sends SIGKILL → returncode == -9. There's no
-                # in-process way to catch it (the kernel kills the child before
-                # any handler runs), so we infer OOM from the signal here and
-                # raise a typed MemoryError instead of a generic RuntimeError so
-                # callers / retries can distinguish memory pressure from other
-                # crashes.
-                if proc.returncode == -signal.SIGKILL:
-                    raise MemoryError(
-                        f"Subprocess for shard {task.shard_idx} was killed by SIGKILL "
-                        f"(returncode {proc.returncode}); most likely OOM-killed by the kernel. "
-                        f"See worker stderr above."
-                    )
-                raise RuntimeError(
-                    f"Subprocess for shard {task.shard_idx} exited with code {proc.returncode}; "
-                    f"see worker stderr above for the faulthandler traceback"
-                )
-
-            with open(result_file, "rb") as f:
-                result_or_error, child_counters = cloudpickle.load(f)
-
-            # Clear the counter file pointer BEFORE returning so any heartbeat
-            # racing between this point and the report_result call in
-            # _poll_loop reads an empty snapshot rather than stale subprocess
-            # data — otherwise the live counters would be double-counted on
-            # top of the final ones the caller is about to ship via
-            # report_result.
-            self._subprocess_counter_file = None
-
-            if isinstance(result_or_error, Exception):
-                raise result_or_error
-
-            logger.info(
-                "[shard %d] Complete: %d refs produced",
-                task.shard_idx,
-                len(result_or_error.shard.refs),
-            )
-            return result_or_error, dict(child_counters)
-        finally:
-            self._subprocess_counter_file = None
-            for p in (task_file, result_file, counters_file, f"{counters_file}.tmp"):
-                with suppress(FileNotFoundError):
-                    os.unlink(p)
+        result, counters = self._stage_runner.execute(task, chunk_prefix, execution_id)
+        logger.info(
+            "[shard %d] Complete: %d refs produced",
+            task.shard_idx,
+            len(result.shard.refs),
+        )
+        return result, counters
 
     def __repr__(self) -> str:
         return f"ZephyrWorker(id={self._worker_id})"
@@ -1462,6 +1476,10 @@ class _CoordinatorJobConfig:
     worker_resources: ResourceConfig
     name: str
     pipeline_id: int
+    # None → workers fall back to InlineRunner (default). The factory is
+    # cloudpickled and re-invoked once per worker actor, so per-runner
+    # mutable state is per-worker.
+    stage_runner_factory: Callable[[], StageRunner] | None = None
 
 
 def _run_coordinator_job(config_path: str, result_path: str) -> None:
@@ -1520,6 +1538,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
         worker_group = client.create_actor_group(
             ZephyrWorker,
             coordinator,
+            config.stage_runner_factory,
             name=worker_name,
             count=actual_workers,
             resources=config.worker_resources,
@@ -1603,6 +1622,13 @@ class ZephyrContext:
         max_execution_retries: Maximum number of times to retry a pipeline execution after
             an infrastructure failure (e.g., coordinator VM preemption). Application errors
             (ZephyrWorkerError) are never retried. Defaults to 100.
+        stage_runner_factory: Zero-arg callable returning a fresh ``StageRunner``
+            for each worker. If left ``None``, the default depends on the
+            client: ``LocalClient`` (dev/test) gets ``InlineRunner`` so shards
+            run in-process for speed; distributed clients (Iris) get
+            ``SubprocessRunner`` so each shard is isolated against native
+            crashes and per-shard memory growth. Pass an explicit factory to
+            override.
     """
 
     client: Client | None = None
@@ -1616,6 +1642,7 @@ class ZephyrContext:
     no_workers_timeout: float | None = None
     # NOTE: 100 is fairly aggressive but it fits the preemptible env better
     max_execution_retries: int = 100
+    stage_runner_factory: Callable[[], StageRunner] | None = None
 
     # Shared data staged by put(), uploaded to disk at the start of execute()
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -1646,6 +1673,9 @@ class ZephyrContext:
         if self.chunk_storage_prefix is None:
             # TODO: consider increasing TTL for long-running pipelines (e.g. multi-day fuzzy dedup)
             self.chunk_storage_prefix = marin_temp_bucket(ttl_days=1, prefix="zephyr")
+
+        if self.stage_runner_factory is None:
+            self.stage_runner_factory = _default_stage_runner_factory_for(self.client)
 
         # make sure each context is unique
         self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"
@@ -1734,6 +1764,7 @@ class ZephyrContext:
                     worker_resources=self.resources,
                     name=self.name,
                     pipeline_id=self._pipeline_id,
+                    stage_runner_factory=self.stage_runner_factory,
                 )
                 ensure_parent_dir(config_path)
                 with open_url(config_path, "wb") as f:

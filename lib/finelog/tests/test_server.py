@@ -118,3 +118,38 @@ def test_push_then_fetch_round_trip(tmp_path: Path):
         assert [e["data"] for e in entries] == ["hello", "world"]
     finally:
         svc.close()
+
+
+def test_legacy_iris_logging_path_compat():
+    """Pre-#5212 workers send to /iris.logging.LogService/* (the package was
+    renamed when finelog was extracted from iris). The wire format is
+    identical between iris.logging and finelog.logging — same field numbers
+    on PushLogsRequest/LogEntry/etc — so a server-side path rewrite restores
+    delivery without any worker-side change. Removable once those workers
+    have rotated out.
+    """
+    from finelog.store.mem_store import MemStore
+
+    svc = LogServiceImpl(log_store=MemStore())
+    try:
+        app = build_log_server_asgi(svc)
+        with TestClient(app) as client:
+            push_resp = client.post(
+                "/iris.logging.LogService/PushLogs",
+                json={
+                    "key": "/legacy/probe",
+                    "entries": [{"source": "stdout", "data": "old-worker", "timestamp": {"epoch_ms": 1}}],
+                },
+                headers={"Content-Type": "application/json"},
+            )
+            assert push_resp.status_code == 200
+
+            fetch_resp = client.post(
+                "/iris.logging.LogService/FetchLogs",
+                json={"source": "/legacy/probe"},
+                headers={"Content-Type": "application/json"},
+            )
+            assert fetch_resp.status_code == 200
+            assert [e["data"] for e in fetch_resp.json().get("entries", [])] == ["old-worker"]
+    finally:
+        svc.close()
