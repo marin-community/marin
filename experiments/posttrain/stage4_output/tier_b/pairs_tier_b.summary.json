@@ -1,0 +1,3202 @@
+[
+  {
+    "pair_id": "assume_best_intentions__avoid_info_hazards",
+    "tp": 5,
+    "variant_idx": 0,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_best_intentions__avoid_info_hazards",
+    "tp": 5,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_best_intentions__avoid_info_hazards",
+    "tp": 5,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_best_intentions__avoid_info_hazards",
+    "tp": 5,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_best_intentions__avoid_info_hazards",
+    "tp": 5,
+    "variant_idx": 4,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_best_intentions__avoid_info_hazards",
+    "tp": 5,
+    "variant_idx": 5,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "assume_best_intentions__avoid_info_hazards",
+    "tp": 5,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_best_intentions__avoid_info_hazards",
+    "tp": 5,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_best_intentions__avoid_info_hazards",
+    "tp": 5,
+    "variant_idx": 8,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_best_intentions__avoid_info_hazards",
+    "tp": 5,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_objective_pov__be_kind",
+    "tp": 6,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_objective_pov__be_kind",
+    "tp": 6,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_objective_pov__be_kind",
+    "tp": 6,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_objective_pov__be_kind",
+    "tp": 6,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_objective_pov__be_kind",
+    "tp": 6,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_objective_pov__be_kind",
+    "tp": 6,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_objective_pov__be_kind",
+    "tp": 6,
+    "variant_idx": 6,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__be_kind",
+    "tp": 6,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_objective_pov__be_kind",
+    "tp": 6,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_objective_pov__be_kind",
+    "tp": 6,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 0,
+    "variant_idx": 0,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 0,
+    "variant_idx": 1,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 0,
+    "variant_idx": 2,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 0,
+    "variant_idx": 3,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 0,
+    "variant_idx": 4,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 0,
+    "variant_idx": 5,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 0,
+    "variant_idx": 6,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 0,
+    "variant_idx": 7,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 0,
+    "variant_idx": 8,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 0,
+    "variant_idx": 9,
+    "n_chosens": 0,
+    "n_rejecteds": 3,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 3,
+    "variant_idx": 0,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 3,
+    "variant_idx": 1,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 3,
+    "variant_idx": 2,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 3,
+    "variant_idx": 3,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 3,
+    "variant_idx": 4,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 3,
+    "variant_idx": 5,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 3,
+    "variant_idx": 6,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 3,
+    "variant_idx": 7,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 3,
+    "variant_idx": 8,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_encourage_self_harm",
+    "tp": 3,
+    "variant_idx": 9,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_facilitate_illicit_behavior",
+    "tp": 5,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_facilitate_illicit_behavior",
+    "tp": 5,
+    "variant_idx": 1,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_facilitate_illicit_behavior",
+    "tp": 5,
+    "variant_idx": 2,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_facilitate_illicit_behavior",
+    "tp": 5,
+    "variant_idx": 3,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_facilitate_illicit_behavior",
+    "tp": 5,
+    "variant_idx": 4,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_facilitate_illicit_behavior",
+    "tp": 5,
+    "variant_idx": 5,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_facilitate_illicit_behavior",
+    "tp": 5,
+    "variant_idx": 6,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_facilitate_illicit_behavior",
+    "tp": 5,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_facilitate_illicit_behavior",
+    "tp": 5,
+    "variant_idx": 8,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "assume_objective_pov__do_not_facilitate_illicit_behavior",
+    "tp": 5,
+    "variant_idx": 9,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "avoid_abuse__avoid_overstepping",
+    "tp": 4,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__avoid_overstepping",
+    "tp": 4,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__avoid_overstepping",
+    "tp": 4,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__avoid_overstepping",
+    "tp": 4,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__avoid_overstepping",
+    "tp": 4,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__avoid_overstepping",
+    "tp": 4,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__avoid_overstepping",
+    "tp": 4,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__avoid_overstepping",
+    "tp": 4,
+    "variant_idx": 7,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_abuse__avoid_overstepping",
+    "tp": 4,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__avoid_overstepping",
+    "tp": 4,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__be_rationally_optimistic",
+    "tp": 3,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__be_rationally_optimistic",
+    "tp": 3,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__be_rationally_optimistic",
+    "tp": 3,
+    "variant_idx": 2,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "avoid_abuse__be_rationally_optimistic",
+    "tp": 3,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__be_rationally_optimistic",
+    "tp": 3,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__be_rationally_optimistic",
+    "tp": 3,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__be_rationally_optimistic",
+    "tp": 3,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__be_rationally_optimistic",
+    "tp": 3,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__be_rationally_optimistic",
+    "tp": 3,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__be_rationally_optimistic",
+    "tp": 3,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__letter_and_spirit",
+    "tp": 2,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__letter_and_spirit",
+    "tp": 2,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 2,
+    "n_pairs": 6
+  },
+  {
+    "pair_id": "avoid_abuse__letter_and_spirit",
+    "tp": 2,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__letter_and_spirit",
+    "tp": 2,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__letter_and_spirit",
+    "tp": 2,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__letter_and_spirit",
+    "tp": 2,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__letter_and_spirit",
+    "tp": 2,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__letter_and_spirit",
+    "tp": 2,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_abuse__letter_and_spirit",
+    "tp": 2,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 2,
+    "n_pairs": 6
+  },
+  {
+    "pair_id": "avoid_abuse__letter_and_spirit",
+    "tp": 2,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_being_condescending__letter_and_spirit",
+    "tp": 5,
+    "variant_idx": 0,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_being_condescending__letter_and_spirit",
+    "tp": 5,
+    "variant_idx": 1,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_being_condescending__letter_and_spirit",
+    "tp": 5,
+    "variant_idx": 2,
+    "n_chosens": 0,
+    "n_rejecteds": 4,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_being_condescending__letter_and_spirit",
+    "tp": 5,
+    "variant_idx": 3,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_being_condescending__letter_and_spirit",
+    "tp": 5,
+    "variant_idx": 4,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_being_condescending__letter_and_spirit",
+    "tp": 5,
+    "variant_idx": 5,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_being_condescending__letter_and_spirit",
+    "tp": 5,
+    "variant_idx": 6,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_being_condescending__letter_and_spirit",
+    "tp": 5,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_being_condescending__letter_and_spirit",
+    "tp": 5,
+    "variant_idx": 8,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_being_condescending__letter_and_spirit",
+    "tp": 5,
+    "variant_idx": 9,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_errors__avoid_info_hazards",
+    "tp": 2,
+    "variant_idx": 0,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_errors__avoid_info_hazards",
+    "tp": 2,
+    "variant_idx": 1,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "avoid_errors__avoid_info_hazards",
+    "tp": 2,
+    "variant_idx": 2,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_errors__avoid_info_hazards",
+    "tp": 2,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_errors__avoid_info_hazards",
+    "tp": 2,
+    "variant_idx": 4,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "avoid_errors__avoid_info_hazards",
+    "tp": 2,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_errors__avoid_info_hazards",
+    "tp": 2,
+    "variant_idx": 6,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "avoid_errors__avoid_info_hazards",
+    "tp": 2,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_errors__avoid_info_hazards",
+    "tp": 2,
+    "variant_idx": 8,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "avoid_errors__avoid_info_hazards",
+    "tp": 2,
+    "variant_idx": 9,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "avoid_errors__be_thorough_but_efficient",
+    "tp": 6,
+    "variant_idx": 0,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "avoid_errors__be_thorough_but_efficient",
+    "tp": 6,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_errors__be_thorough_but_efficient",
+    "tp": 6,
+    "variant_idx": 2,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_errors__be_thorough_but_efficient",
+    "tp": 6,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_errors__be_thorough_but_efficient",
+    "tp": 6,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_errors__be_thorough_but_efficient",
+    "tp": 6,
+    "variant_idx": 5,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_errors__be_thorough_but_efficient",
+    "tp": 6,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_errors__be_thorough_but_efficient",
+    "tp": 6,
+    "variant_idx": 7,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_errors__be_thorough_but_efficient",
+    "tp": 6,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_errors__be_thorough_but_efficient",
+    "tp": 6,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_errors__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_errors__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_errors__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_errors__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 2,
+    "n_pairs": 6
+  },
+  {
+    "pair_id": "avoid_errors__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_errors__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_errors__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_errors__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_errors__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_errors__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_hateful_content__be_rationally_optimistic",
+    "tp": 5,
+    "variant_idx": 0,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "avoid_hateful_content__be_rationally_optimistic",
+    "tp": 5,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 1,
+    "n_pairs": 3
+  },
+  {
+    "pair_id": "avoid_hateful_content__be_rationally_optimistic",
+    "tp": 5,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_hateful_content__be_rationally_optimistic",
+    "tp": 5,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 2,
+    "n_pairs": 6
+  },
+  {
+    "pair_id": "avoid_hateful_content__be_rationally_optimistic",
+    "tp": 5,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_hateful_content__be_rationally_optimistic",
+    "tp": 5,
+    "variant_idx": 5,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_hateful_content__be_rationally_optimistic",
+    "tp": 5,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 2,
+    "n_pairs": 6
+  },
+  {
+    "pair_id": "avoid_hateful_content__be_rationally_optimistic",
+    "tp": 5,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_hateful_content__be_rationally_optimistic",
+    "tp": 5,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_hateful_content__be_rationally_optimistic",
+    "tp": 5,
+    "variant_idx": 9,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_hateful_content__present_perspectives",
+    "tp": 3,
+    "variant_idx": 0,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_hateful_content__present_perspectives",
+    "tp": 3,
+    "variant_idx": 1,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_hateful_content__present_perspectives",
+    "tp": 3,
+    "variant_idx": 2,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "avoid_hateful_content__present_perspectives",
+    "tp": 3,
+    "variant_idx": 3,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "avoid_hateful_content__present_perspectives",
+    "tp": 3,
+    "variant_idx": 4,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_hateful_content__present_perspectives",
+    "tp": 3,
+    "variant_idx": 5,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_hateful_content__present_perspectives",
+    "tp": 3,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_hateful_content__present_perspectives",
+    "tp": 3,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_hateful_content__present_perspectives",
+    "tp": 3,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_hateful_content__present_perspectives",
+    "tp": 3,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_regulated_advice__no_agenda",
+    "tp": 1,
+    "variant_idx": 0,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_regulated_advice__no_agenda",
+    "tp": 1,
+    "variant_idx": 1,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_regulated_advice__no_agenda",
+    "tp": 1,
+    "variant_idx": 2,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_regulated_advice__no_agenda",
+    "tp": 1,
+    "variant_idx": 3,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_regulated_advice__no_agenda",
+    "tp": 1,
+    "variant_idx": 4,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_regulated_advice__no_agenda",
+    "tp": 1,
+    "variant_idx": 5,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_regulated_advice__no_agenda",
+    "tp": 1,
+    "variant_idx": 6,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_regulated_advice__no_agenda",
+    "tp": 1,
+    "variant_idx": 7,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_regulated_advice__no_agenda",
+    "tp": 1,
+    "variant_idx": 8,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_regulated_advice__no_agenda",
+    "tp": 1,
+    "variant_idx": 9,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__be_kind",
+    "tp": 0,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__be_kind",
+    "tp": 0,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__be_kind",
+    "tp": 0,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__be_kind",
+    "tp": 0,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__be_kind",
+    "tp": 0,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 3,
+    "n_pairs": 9
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__be_kind",
+    "tp": 0,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__be_kind",
+    "tp": 0,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__be_kind",
+    "tp": 0,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__be_kind",
+    "tp": 0,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 3,
+    "n_pairs": 9
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__be_kind",
+    "tp": 0,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__do_not_lie",
+    "tp": 0,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__do_not_lie",
+    "tp": 0,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__do_not_lie",
+    "tp": 0,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__do_not_lie",
+    "tp": 0,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__do_not_lie",
+    "tp": 0,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__do_not_lie",
+    "tp": 0,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__do_not_lie",
+    "tp": 0,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__do_not_lie",
+    "tp": 0,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__do_not_lie",
+    "tp": 0,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "avoid_targeted_political_manipulation__do_not_lie",
+    "tp": 0,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_clear__no_agenda",
+    "tp": 6,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_clear__no_agenda",
+    "tp": 6,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_clear__no_agenda",
+    "tp": 6,
+    "variant_idx": 2,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "be_clear__no_agenda",
+    "tp": 6,
+    "variant_idx": 3,
+    "n_chosens": 2,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "be_clear__no_agenda",
+    "tp": 6,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_clear__no_agenda",
+    "tp": 6,
+    "variant_idx": 5,
+    "n_chosens": 2,
+    "n_rejecteds": 1,
+    "n_pairs": 2
+  },
+  {
+    "pair_id": "be_clear__no_agenda",
+    "tp": 6,
+    "variant_idx": 6,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "be_clear__no_agenda",
+    "tp": 6,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_clear__no_agenda",
+    "tp": 6,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_clear__no_agenda",
+    "tp": 6,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "be_creative__be_professional",
+    "tp": 5,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__be_professional",
+    "tp": 5,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__be_professional",
+    "tp": 5,
+    "variant_idx": 2,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "be_creative__be_professional",
+    "tp": 5,
+    "variant_idx": 3,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "be_creative__be_professional",
+    "tp": 5,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__be_professional",
+    "tp": 5,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__be_professional",
+    "tp": 5,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__be_professional",
+    "tp": 5,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__be_professional",
+    "tp": 5,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__be_professional",
+    "tp": 5,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__do_not_lie",
+    "tp": 2,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__do_not_lie",
+    "tp": 2,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__do_not_lie",
+    "tp": 2,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__do_not_lie",
+    "tp": 2,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__do_not_lie",
+    "tp": 2,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__do_not_lie",
+    "tp": 2,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__do_not_lie",
+    "tp": 2,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__do_not_lie",
+    "tp": 2,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__do_not_lie",
+    "tp": 2,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__do_not_lie",
+    "tp": 2,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__highlight_misalignments",
+    "tp": 4,
+    "variant_idx": 0,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "be_creative__highlight_misalignments",
+    "tp": 4,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__highlight_misalignments",
+    "tp": 4,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__highlight_misalignments",
+    "tp": 4,
+    "variant_idx": 3,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "be_creative__highlight_misalignments",
+    "tp": 4,
+    "variant_idx": 4,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "be_creative__highlight_misalignments",
+    "tp": 4,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__highlight_misalignments",
+    "tp": 4,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__highlight_misalignments",
+    "tp": 4,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_creative__highlight_misalignments",
+    "tp": 4,
+    "variant_idx": 8,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "be_creative__highlight_misalignments",
+    "tp": 4,
+    "variant_idx": 9,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "be_kind__no_topic_off_limits",
+    "tp": 0,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_kind__no_topic_off_limits",
+    "tp": 0,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_kind__no_topic_off_limits",
+    "tp": 0,
+    "variant_idx": 2,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "be_kind__no_topic_off_limits",
+    "tp": 0,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "be_kind__no_topic_off_limits",
+    "tp": 0,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_kind__no_topic_off_limits",
+    "tp": 0,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_kind__no_topic_off_limits",
+    "tp": 0,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 3,
+    "n_pairs": 9
+  },
+  {
+    "pair_id": "be_kind__no_topic_off_limits",
+    "tp": 0,
+    "variant_idx": 7,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "be_kind__no_topic_off_limits",
+    "tp": 0,
+    "variant_idx": 8,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "be_kind__no_topic_off_limits",
+    "tp": 0,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 3,
+    "n_pairs": 9
+  },
+  {
+    "pair_id": "be_kind__uphold_fairness",
+    "tp": 1,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_kind__uphold_fairness",
+    "tp": 1,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_kind__uphold_fairness",
+    "tp": 1,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_kind__uphold_fairness",
+    "tp": 1,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_kind__uphold_fairness",
+    "tp": 1,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_kind__uphold_fairness",
+    "tp": 1,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 2,
+    "n_pairs": 6
+  },
+  {
+    "pair_id": "be_kind__uphold_fairness",
+    "tp": 1,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "be_kind__uphold_fairness",
+    "tp": 1,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_kind__uphold_fairness",
+    "tp": 1,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_kind__uphold_fairness",
+    "tp": 1,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_rationally_optimistic__do_not_lie",
+    "tp": 6,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_rationally_optimistic__do_not_lie",
+    "tp": 6,
+    "variant_idx": 1,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "be_rationally_optimistic__do_not_lie",
+    "tp": 6,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_rationally_optimistic__do_not_lie",
+    "tp": 6,
+    "variant_idx": 3,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "be_rationally_optimistic__do_not_lie",
+    "tp": 6,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_rationally_optimistic__do_not_lie",
+    "tp": 6,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_rationally_optimistic__do_not_lie",
+    "tp": 6,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 3,
+    "n_pairs": 9
+  },
+  {
+    "pair_id": "be_rationally_optimistic__do_not_lie",
+    "tp": 6,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 4,
+    "n_pairs": 12
+  },
+  {
+    "pair_id": "be_rationally_optimistic__do_not_lie",
+    "tp": 6,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "be_rationally_optimistic__do_not_lie",
+    "tp": 6,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 4,
+    "n_pairs": 12
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 5,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 5,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 5,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 2,
+    "n_pairs": 6
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 5,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 5,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 5,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 1,
+    "n_pairs": 3
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 5,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 5,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 5,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 2,
+    "n_pairs": 6
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 5,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 6,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 6,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 1,
+    "n_pairs": 3
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 6,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 6,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 4,
+    "n_pairs": 12
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 6,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 6,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 6,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 6,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 3,
+    "n_pairs": 9
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 6,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 1,
+    "n_pairs": 3
+  },
+  {
+    "pair_id": "comply_with_laws__no_agenda",
+    "tp": 6,
+    "variant_idx": 9,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "comply_with_laws__transformation_exception",
+    "tp": 5,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "comply_with_laws__transformation_exception",
+    "tp": 5,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "comply_with_laws__transformation_exception",
+    "tp": 5,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 1,
+    "n_pairs": 3
+  },
+  {
+    "pair_id": "comply_with_laws__transformation_exception",
+    "tp": 5,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "comply_with_laws__transformation_exception",
+    "tp": 5,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 1,
+    "n_pairs": 3
+  },
+  {
+    "pair_id": "comply_with_laws__transformation_exception",
+    "tp": 5,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 2,
+    "n_pairs": 6
+  },
+  {
+    "pair_id": "comply_with_laws__transformation_exception",
+    "tp": 5,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "comply_with_laws__transformation_exception",
+    "tp": 5,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "comply_with_laws__transformation_exception",
+    "tp": 5,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 4,
+    "n_pairs": 12
+  },
+  {
+    "pair_id": "comply_with_laws__transformation_exception",
+    "tp": 5,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__no_agenda",
+    "tp": 0,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__no_agenda",
+    "tp": 0,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__no_agenda",
+    "tp": 0,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__no_agenda",
+    "tp": 0,
+    "variant_idx": 3,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__no_agenda",
+    "tp": 0,
+    "variant_idx": 4,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__no_agenda",
+    "tp": 0,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__no_agenda",
+    "tp": 0,
+    "variant_idx": 6,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__no_agenda",
+    "tp": 0,
+    "variant_idx": 7,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__no_agenda",
+    "tp": 0,
+    "variant_idx": 8,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__no_agenda",
+    "tp": 0,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__protect_privacy",
+    "tp": 0,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__protect_privacy",
+    "tp": 0,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__protect_privacy",
+    "tp": 0,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__protect_privacy",
+    "tp": 0,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__protect_privacy",
+    "tp": 0,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__protect_privacy",
+    "tp": 0,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__protect_privacy",
+    "tp": 0,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__protect_privacy",
+    "tp": 0,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__protect_privacy",
+    "tp": 0,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "do_not_facilitate_illicit_behavior__protect_privacy",
+    "tp": 0,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "express_uncertainty__prevent_imminent_harm",
+    "tp": 5,
+    "variant_idx": 0,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "express_uncertainty__prevent_imminent_harm",
+    "tp": 5,
+    "variant_idx": 1,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "express_uncertainty__prevent_imminent_harm",
+    "tp": 5,
+    "variant_idx": 2,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "express_uncertainty__prevent_imminent_harm",
+    "tp": 5,
+    "variant_idx": 3,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "express_uncertainty__prevent_imminent_harm",
+    "tp": 5,
+    "variant_idx": 4,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "express_uncertainty__prevent_imminent_harm",
+    "tp": 5,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "express_uncertainty__prevent_imminent_harm",
+    "tp": 5,
+    "variant_idx": 6,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "express_uncertainty__prevent_imminent_harm",
+    "tp": 5,
+    "variant_idx": 7,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "express_uncertainty__prevent_imminent_harm",
+    "tp": 5,
+    "variant_idx": 8,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "express_uncertainty__prevent_imminent_harm",
+    "tp": 5,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "formatting__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "formatting__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "formatting__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "formatting__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 3,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "formatting__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "formatting__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "formatting__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "formatting__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 7,
+    "n_chosens": 2,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "formatting__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "formatting__letter_and_spirit",
+    "tp": 4,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "highlight_misalignments__no_agenda",
+    "tp": 5,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "highlight_misalignments__no_agenda",
+    "tp": 5,
+    "variant_idx": 1,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "highlight_misalignments__no_agenda",
+    "tp": 5,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "highlight_misalignments__no_agenda",
+    "tp": 5,
+    "variant_idx": 3,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "highlight_misalignments__no_agenda",
+    "tp": 5,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "highlight_misalignments__no_agenda",
+    "tp": 5,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "highlight_misalignments__no_agenda",
+    "tp": 5,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "highlight_misalignments__no_agenda",
+    "tp": 5,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "highlight_misalignments__no_agenda",
+    "tp": 5,
+    "variant_idx": 8,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "highlight_misalignments__no_agenda",
+    "tp": 5,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "highlight_misalignments__support_programmatic_use",
+    "tp": 3,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "highlight_misalignments__support_programmatic_use",
+    "tp": 3,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "highlight_misalignments__support_programmatic_use",
+    "tp": 3,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "highlight_misalignments__support_programmatic_use",
+    "tp": 3,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 2,
+    "n_pairs": 6
+  },
+  {
+    "pair_id": "highlight_misalignments__support_programmatic_use",
+    "tp": 3,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "highlight_misalignments__support_programmatic_use",
+    "tp": 3,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 1,
+    "n_pairs": 3
+  },
+  {
+    "pair_id": "highlight_misalignments__support_programmatic_use",
+    "tp": 3,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "highlight_misalignments__support_programmatic_use",
+    "tp": 3,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "highlight_misalignments__support_programmatic_use",
+    "tp": 3,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 1,
+    "n_pairs": 3
+  },
+  {
+    "pair_id": "highlight_misalignments__support_programmatic_use",
+    "tp": 3,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "letter_and_spirit__prevent_imminent_harm",
+    "tp": 4,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "letter_and_spirit__prevent_imminent_harm",
+    "tp": 4,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "letter_and_spirit__prevent_imminent_harm",
+    "tp": 4,
+    "variant_idx": 2,
+    "n_chosens": 1,
+    "n_rejecteds": 3,
+    "n_pairs": 3
+  },
+  {
+    "pair_id": "letter_and_spirit__prevent_imminent_harm",
+    "tp": 4,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "letter_and_spirit__prevent_imminent_harm",
+    "tp": 4,
+    "variant_idx": 4,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "letter_and_spirit__prevent_imminent_harm",
+    "tp": 4,
+    "variant_idx": 5,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "letter_and_spirit__prevent_imminent_harm",
+    "tp": 4,
+    "variant_idx": 6,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "letter_and_spirit__prevent_imminent_harm",
+    "tp": 4,
+    "variant_idx": 7,
+    "n_chosens": 0,
+    "n_rejecteds": 3,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "letter_and_spirit__prevent_imminent_harm",
+    "tp": 4,
+    "variant_idx": 8,
+    "n_chosens": 0,
+    "n_rejecteds": 4,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "letter_and_spirit__prevent_imminent_harm",
+    "tp": 4,
+    "variant_idx": 9,
+    "n_chosens": 2,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "letter_and_spirit__transformation_exception",
+    "tp": 3,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "letter_and_spirit__transformation_exception",
+    "tp": 3,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "letter_and_spirit__transformation_exception",
+    "tp": 3,
+    "variant_idx": 2,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "letter_and_spirit__transformation_exception",
+    "tp": 3,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "letter_and_spirit__transformation_exception",
+    "tp": 3,
+    "variant_idx": 4,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "letter_and_spirit__transformation_exception",
+    "tp": 3,
+    "variant_idx": 5,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "letter_and_spirit__transformation_exception",
+    "tp": 3,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "letter_and_spirit__transformation_exception",
+    "tp": 3,
+    "variant_idx": 7,
+    "n_chosens": 2,
+    "n_rejecteds": 5,
+    "n_pairs": 10
+  },
+  {
+    "pair_id": "letter_and_spirit__transformation_exception",
+    "tp": 3,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 1,
+    "n_pairs": 3
+  },
+  {
+    "pair_id": "letter_and_spirit__transformation_exception",
+    "tp": 3,
+    "variant_idx": 9,
+    "n_chosens": 1,
+    "n_rejecteds": 5,
+    "n_pairs": 5
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 3,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 3,
+    "n_pairs": 9
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 3,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 2,
+    "n_pairs": 6
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 3,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 1,
+    "n_pairs": 3
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 3,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 1,
+    "n_pairs": 3
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 3,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 3,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 3,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 3,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 3,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 3,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 4,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 4,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 4,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 4,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 4,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 4,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 4,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 0,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 4,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 4,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_agenda__respect_creators",
+    "tp": 4,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_topic_off_limits__respect_creators",
+    "tp": 4,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_topic_off_limits__respect_creators",
+    "tp": 4,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_topic_off_limits__respect_creators",
+    "tp": 4,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_topic_off_limits__respect_creators",
+    "tp": 4,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_topic_off_limits__respect_creators",
+    "tp": 4,
+    "variant_idx": 4,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "no_topic_off_limits__respect_creators",
+    "tp": 4,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_topic_off_limits__respect_creators",
+    "tp": 4,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_topic_off_limits__respect_creators",
+    "tp": 4,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "no_topic_off_limits__respect_creators",
+    "tp": 4,
+    "variant_idx": 8,
+    "n_chosens": 0,
+    "n_rejecteds": 5,
+    "n_pairs": 0
+  },
+  {
+    "pair_id": "no_topic_off_limits__respect_creators",
+    "tp": 4,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "prevent_imminent_harm__support_programmatic_use",
+    "tp": 1,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "prevent_imminent_harm__support_programmatic_use",
+    "tp": 1,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "prevent_imminent_harm__support_programmatic_use",
+    "tp": 1,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "prevent_imminent_harm__support_programmatic_use",
+    "tp": 1,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "prevent_imminent_harm__support_programmatic_use",
+    "tp": 1,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "prevent_imminent_harm__support_programmatic_use",
+    "tp": 1,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "prevent_imminent_harm__support_programmatic_use",
+    "tp": 1,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "prevent_imminent_harm__support_programmatic_use",
+    "tp": 1,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "prevent_imminent_harm__support_programmatic_use",
+    "tp": 1,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "prevent_imminent_harm__support_programmatic_use",
+    "tp": 1,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "protect_privacy__support_mental_health",
+    "tp": 4,
+    "variant_idx": 0,
+    "n_chosens": 3,
+    "n_rejecteds": 3,
+    "n_pairs": 9
+  },
+  {
+    "pair_id": "protect_privacy__support_mental_health",
+    "tp": 4,
+    "variant_idx": 1,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "protect_privacy__support_mental_health",
+    "tp": 4,
+    "variant_idx": 2,
+    "n_chosens": 3,
+    "n_rejecteds": 4,
+    "n_pairs": 12
+  },
+  {
+    "pair_id": "protect_privacy__support_mental_health",
+    "tp": 4,
+    "variant_idx": 3,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "protect_privacy__support_mental_health",
+    "tp": 4,
+    "variant_idx": 4,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "protect_privacy__support_mental_health",
+    "tp": 4,
+    "variant_idx": 5,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "protect_privacy__support_mental_health",
+    "tp": 4,
+    "variant_idx": 6,
+    "n_chosens": 3,
+    "n_rejecteds": 4,
+    "n_pairs": 12
+  },
+  {
+    "pair_id": "protect_privacy__support_mental_health",
+    "tp": 4,
+    "variant_idx": 7,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "protect_privacy__support_mental_health",
+    "tp": 4,
+    "variant_idx": 8,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  },
+  {
+    "pair_id": "protect_privacy__support_mental_health",
+    "tp": 4,
+    "variant_idx": 9,
+    "n_chosens": 3,
+    "n_rejecteds": 5,
+    "n_pairs": 15
+  }
+]

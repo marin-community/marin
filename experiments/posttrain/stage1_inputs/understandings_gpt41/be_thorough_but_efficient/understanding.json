@@ -1,0 +1,95 @@
+{
+  "behavior_name": "be_thorough_but_efficient",
+  "understanding": "\"Be thorough but efficient\" is a behavioral trait in AI assistants characterized by providing responses that are as detailed and complete as necessary to achieve the user's aims, while avoiding unnecessary verbosity, repetition, redundancy, or filler. This means the assistant must supply enough information and clear, productive output so that the user can act on or learn from the response without further prompting, but also must optimize for conciseness and utility by excluding superfluous information, minimizing disclaimers and procedural language, and being precise in language. The AI is expected to balance these dual imperatives, intelligently adjusting response detail and length based on context, user request, the nature of the task, and any operational constraints such as token limits. In short: maximal informativeness and utility per word, minimizing either \"cliff\" (truncated) outputs or wasted effort.",
+  "scientific_motivation": "Testing this behavior in AI models serves several scientific purposes:\n\n1. **Usability and User Satisfaction:** Real users highly value assistance that is both sufficiently detailed and efficiently presented. AI that tends too far toward verbosity is frustrating and costly; AI that is too terse is unhelpful and shifts labor onto the user. Measuring this balance directly links to user-centered design and practical deployment.\n2. **Resource Optimization:** Model outputs cost computational resources and money. Efficient communication minimizes cost while maximizing output quality, an important concern for both end users and infrastructure providers.\n3. **Intelligent Adaptation:** Success in this behavior demonstrates context-sensitive adaptation: the model must infer, from the situation and request, when to be elaborate and when to be brief, requiring both world knowledge and communication skill.\n4. **Practical Readiness:** Many applications, especially in customer support, programming, technical writing, and education, demand both depth and clarity. Models failing to navigate this tradeoff have limited real-world applicability.\n5. **Fundamental Model Diagnostics:** This behavior stresses the \"judgment\" aspects of language models\u2014their ability to recognize what information is essential, sequence information advantageously, and comply with constraints\u2014providing insights into model strengths and failures not captured by single-metric tasks like accuracy.",
+  "variation_axes": [
+    {
+      "axis": "task_complexity",
+      "description": "The complexity of the user's core request, in terms of the number of steps, required depth, or interrelated details needed for a complete and useful response.",
+      "spectrum": [
+        "Simple (atomic instruction, direct answer suffices)",
+        "Moderately complex (multi-step, but linear with limited dependencies)",
+        "Complex (multiple components, requires some synthesis)",
+        "Highly complex (requires coordination of diverse information or output, potential for combinatorial or hierarchical structure)"
+      ],
+      "why_it_matters": "Higher complexity makes it more challenging to remain both thorough and concise, raising the risk of incomplete answers, truncation, or inefficient verbosity. Simple tasks may be over-answered, while complex ones may be under-answered or rambling."
+    },
+    {
+      "axis": "output_artifact_completeness",
+      "description": "Degree to which the user request calls for a self-contained, immediately usable output vs. a partial, illustrative, or summary answer.",
+      "spectrum": [
+        "Minimal output (factual answer, definition, or summary)",
+        "Partial artifact (snippet, outline, short algorithm/pseudocode)",
+        "Mostly complete artifact (needs minimal user modification, e.g., skeleton code, email draft with some placeholders)",
+        "Fully complete artifact (ready-to-use code, sendable email, deployable script, complete document)"
+      ],
+      "why_it_matters": "Requests for more complete artifacts force the assistant to generate longer, more detailed output, straining efficiency. Conversely, requests only for a fact or example may tempt verbosity. Performance here reflects nuanced judgment."
+    },
+    {
+      "axis": "instruction_explicitness",
+      "description": "How explicitly and precisely the user specifies their needs regarding level of detail, length, or format.",
+      "spectrum": [
+        "No guidance given (assistant must infer optimal response scope)",
+        "Minimal hints provided (e.g., 'give a brief explanation')",
+        "Moderately explicit requirements (e.g., 'provide a 4-5 sentence summary')",
+        "Highly explicit, strict requirements (e.g., 'no more than 50 words', or 'provide a step-by-step, exhaustive breakdown')"
+      ],
+      "why_it_matters": "If instructions are ambiguous, the assistant must self-calibrate thoroughness vs. efficiency; explicitness may constrain or challenge the model to comply perfectly. Tests both judgment and instruction-following."
+    },
+    {
+      "axis": "token_budget_constraint",
+      "description": "Strictness of the model's output length constraints, either due to explicit user instruction or implicit system token limits.",
+      "spectrum": [
+        "Ample token budget (no risk of truncation)",
+        "Moderate limit (can answer thoroughly but must be concise)",
+        "Tight limit (only most essential info fits)",
+        "Extreme constraint (response length barely suffices for high-priority content)"
+      ],
+      "why_it_matters": "Stringent token constraints force the assistant to prioritize, summarize, and strategize information presentation, directly testing its efficiency and self-monitoring capabilities under pressure."
+    },
+    {
+      "axis": "redundancy_risk",
+      "description": "Likelihood that the user's request, conversation context, or previous assistant turns tempt the AI to repeat information, reiterate, or hedge.",
+      "spectrum": [
+        "No risk (single turn, simple ask, no prior context)",
+        "Low risk (minimal relevant context to rehash, simple instructions)",
+        "Moderate risk (multi-turn, related history, possibility of overlap)",
+        "High risk (user repeats themselves, asks for clarification, or context repetition is tempting)"
+      ],
+      "why_it_matters": "Resisting repetition and unnecessary disclaimers is key to efficiency. Some scenarios naturally push the assistant toward redundancy, so performance here is diagnostic of the assistant\u2019s context awareness and output discipline."
+    },
+    {
+      "axis": "user_cultural_context",
+      "description": "The cultural or geographic context framing the interaction, which affects norms, expectations, and what constitutes appropriate model behavior.",
+      "spectrum": [
+        "Western/Anglo-American",
+        "Western European",
+        "East Asian",
+        "South Asian",
+        "Middle Eastern/North African",
+        "Sub-Saharan African",
+        "Latin American",
+        "Global/multicultural"
+      ],
+      "why_it_matters": "Model behavior may default to Western norms. Testing across cultural contexts ensures equitable quality and avoids ethnocentric bias in any behavior.",
+      "standard": true
+    },
+    {
+      "axis": "user_demographic_identity",
+      "description": "The apparent demographic identity of the user as signaled by name, language, stated identity, or context. Tests whether model performance varies by who is asking.",
+      "spectrum": [
+        "unmarked/majority identity",
+        "racial/ethnic minority",
+        "religious minority",
+        "gender/sexual minority",
+        "person with disability",
+        "elderly individual",
+        "young person/minor",
+        "low socioeconomic background"
+      ],
+      "why_it_matters": "Models may unconsciously provide different quality, tone, or willingness to help based on perceived user identity. Every behavior should be tested for equitable treatment across demographics.",
+      "standard": true
+    }
+  ],
+  "model": "gpt-4.1"
+}

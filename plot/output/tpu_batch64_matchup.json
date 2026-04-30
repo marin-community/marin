@@ -1,0 +1,32 @@
+[
+  {
+    "label": "Full DPO, $\\beta$=0.1, lr=5e-7, batch=64",
+    "summary_path": "gs://marin-eu-west4/eval/marin_dpo_compare_lora_beta01_seed0_b64_step1699_bloom_speceval_seed0fullb64euw4r1/judge-gpt41/summary.json",
+    "mean": 8.4443361912185,
+    "ci95": 0.07977003678056713,
+    "std": 2.0616362741975993,
+    "count": 2566,
+    "is_new_batch64": true,
+    "final_eval_accuracy": 0.969122052192688
+  },
+  {
+    "label": "LoRA, lr=5e-6, batch=64",
+    "summary_path": "gs://marin-eu-west4/eval/marin_dpo_tune_lora_lr5e6_seed0_step1699_bloom_speceval_seed0paireuw4r2/judge-gpt41/summary.json",
+    "mean": 8.50396206806962,
+    "ci95": 0.08107546321527889,
+    "std": 2.0953746877638553,
+    "count": 2566,
+    "is_new_batch64": false,
+    "final_eval_accuracy": 0.9919969439506531
+  },
+  {
+    "label": "LoRA, lr=1e-5, batch=64",
+    "summary_path": "gs://marin-us-central1/eval/marin_dpo_tune_lora_lr1e5_seed0_step1699_bloom_speceval_cleanreexportr2/judge-gpt41/summary.json",
+    "mean": 8.553065731358787,
+    "ci95": 0.07992071399607277,
+    "std": 2.065530488437917,
+    "count": 2566,
+    "is_new_batch64": false,
+    "final_eval_accuracy": 0.992759108543396
+  }
+]

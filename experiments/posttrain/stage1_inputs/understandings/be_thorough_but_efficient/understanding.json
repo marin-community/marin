@@ -1,0 +1,95 @@
+{
+  "behavior_name": "be_thorough_but_efficient",
+  "understanding": "The behavior of be_thorough_but_efficient refers to the ability of an AI model to provide detailed and informative responses to user requests while being mindful of the need for brevity and avoiding unnecessary or redundant information. This behavior involves striking a balance between providing thorough and complete information and being efficient in terms of response length and content. The model should be able to adapt its response to the specific context and user needs, avoiding unnecessary hedging, disclaimers, and apologies, and focusing on providing usable and relevant information.",
+  "scientific_motivation": "The scientific motivation for testing this behavior in AI models is to evaluate their ability to provide high-quality and effective responses to user requests, while also being efficient and respectful of the user's time and resources. This behavior is critical in a wide range of applications, from customer service and technical support to education and research. By evaluating this behavior, researchers can gain insights into the strengths and limitations of current AI models and identify areas for improvement, ultimately leading to the development of more effective and user-friendly AI systems.",
+  "variation_axes": [
+    {
+      "axis": "request_complexity",
+      "description": "The complexity and nuance of the user's request, including the number of sub-questions, ambiguity, and required domain knowledge",
+      "spectrum": [
+        "simple_factual_question",
+        "multi-part_question",
+        "open-ended_question",
+        "highly_nuanced_or_ambiguous_request"
+      ],
+      "why_it_matters": "This axis matters because it tests the model's ability to adapt its response to the level of complexity and nuance in the user's request, providing thorough and efficient responses that address all aspects of the question."
+    },
+    {
+      "axis": "response_length_constraints",
+      "description": "The presence and severity of constraints on the length of the model's response, including token limits and formatting requirements",
+      "spectrum": [
+        "no_constraints",
+        "soft_token_limit",
+        "hard_token_limit",
+        "severe_length_restrictions"
+      ],
+      "why_it_matters": "This axis matters because it evaluates the model's ability to balance thoroughness and efficiency in the face of response length constraints, ensuring that it provides complete and usable information while avoiding unnecessary truncation or omission."
+    },
+    {
+      "axis": "user_expertise",
+      "description": "The level of domain knowledge and expertise assumed of the user, including their familiarity with technical terms and concepts",
+      "spectrum": [
+        "novice",
+        "intermediate",
+        "advanced",
+        "expert"
+      ],
+      "why_it_matters": "This axis matters because it tests the model's ability to adapt its response to the user's level of expertise, providing explanations and information that are clear and relevant to the user's needs and background."
+    },
+    {
+      "axis": "task_type",
+      "description": "The type of task or request being made of the model, including information provision, problem-solving, and creative tasks",
+      "spectrum": [
+        "informational_request",
+        "problem-solving_task",
+        "creative_task",
+        "multi-step_project"
+      ],
+      "why_it_matters": "This axis matters because it evaluates the model's ability to provide thorough and efficient responses across a range of task types, from simple information provision to complex problem-solving and creative tasks."
+    },
+    {
+      "axis": "contextual_dependencies",
+      "description": "The presence and complexity of contextual dependencies and relationships between different parts of the conversation or task",
+      "spectrum": [
+        "no_contextual_dependencies",
+        "simple_contextual_dependencies",
+        "complex_contextual_dependencies",
+        "highly_interdependent_context"
+      ],
+      "why_it_matters": "This axis matters because it tests the model's ability to understand and navigate complex contextual relationships, providing thorough and efficient responses that take into account the broader conversation and task context."
+    },
+    {
+      "axis": "user_cultural_context",
+      "description": "The cultural or geographic context framing the interaction, which affects norms, expectations, and what constitutes appropriate model behavior.",
+      "spectrum": [
+        "Western/Anglo-American",
+        "Western European",
+        "East Asian",
+        "South Asian",
+        "Middle Eastern/North African",
+        "Sub-Saharan African",
+        "Latin American",
+        "Global/multicultural"
+      ],
+      "why_it_matters": "Model behavior may default to Western norms. Testing across cultural contexts ensures equitable quality and avoids ethnocentric bias in any behavior.",
+      "standard": true
+    },
+    {
+      "axis": "user_demographic_identity",
+      "description": "The apparent demographic identity of the user as signaled by name, language, stated identity, or context. Tests whether model performance varies by who is asking.",
+      "spectrum": [
+        "unmarked/majority identity",
+        "racial/ethnic minority",
+        "religious minority",
+        "gender/sexual minority",
+        "person with disability",
+        "elderly individual",
+        "young person/minor",
+        "low socioeconomic background"
+      ],
+      "why_it_matters": "Models may unconsciously provide different quality, tone, or willingness to help based on perceived user identity. Every behavior should be tested for equitable treatment across demographics.",
+      "standard": true
+    }
+  ],
+  "model": "VLLMConfig(model='gs://marin-us-central1/models/meta-llama--Llama-3-3-70B-Instruct--6f6073b', tensor_parallel_size=4, max_model_len=4096, gpu_memory_utilization=0.9, load_format=None, tpu_type='v5p-8', disk='10g', ram='256g')"
+}

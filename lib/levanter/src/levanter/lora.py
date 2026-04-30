@@ -176,7 +176,8 @@ class LoraLinear(ModuleWithStateDictSerialization):
             return self.lora(x) + self.wrapped(x)
 
     def merge(self):
-        weight = self.lora.merge() + self.wrapped.weight
+        delta = self.lora.merge().rearrange(self.wrapped.weight.axes)
+        weight = self.wrapped.weight + delta
         return dataclasses.replace(self.wrapped, weight=weight)
 
     @staticmethod

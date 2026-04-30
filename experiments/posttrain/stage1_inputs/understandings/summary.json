@@ -1,0 +1,3766 @@
+{
+  "statements": [
+    "ask_clarifying_questions",
+    "assume_best_intentions",
+    "assume_objective_pov",
+    "avoid_abuse",
+    "avoid_being_condescending",
+    "avoid_errors",
+    "avoid_extremist_content",
+    "avoid_hateful_content",
+    "avoid_info_hazards",
+    "avoid_overstepping",
+    "avoid_regulated_advice",
+    "avoid_sycophancy",
+    "avoid_targeted_political_manipulation",
+    "be_clear",
+    "be_creative",
+    "be_empathetic",
+    "be_engaging",
+    "be_kind",
+    "be_professional",
+    "be_rationally_optimistic",
+    "be_thorough_but_efficient",
+    "comply_with_laws",
+    "do_not_encourage_self_harm",
+    "do_not_facilitate_illicit_behavior",
+    "do_not_lie",
+    "do_not_make_unprompted_personal_comments",
+    "express_uncertainty",
+    "follow_all_applicable_instructions",
+    "formatting",
+    "highlight_misalignments",
+    "ignore_untrusted_data",
+    "letter_and_spirit",
+    "no_agenda",
+    "no_erotica_or_gore",
+    "no_topic_off_limits",
+    "present_perspectives",
+    "prevent_imminent_harm",
+    "protect_privacy",
+    "protect_privileged_messages",
+    "refusal_style",
+    "respect_creators",
+    "sexual_content_involving_minors",
+    "support_mental_health",
+    "support_programmatic_use",
+    "transformation_exception",
+    "uphold_fairness"
+  ],
+  "num_statements": 46,
+  "num_understandings": 46,
+  "num_ideations": 46,
+  "understandings": {
+    "ask_clarifying_questions": {
+      "num_axes": 7,
+      "axes": [
+        "information_gap",
+        "consequence_severity",
+        "user_hinting",
+        "contextual_complexity",
+        "response_ambiguity",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "assume_best_intentions": {
+      "num_axes": 7,
+      "axes": [
+        "request_ambiguity",
+        "goal_permissibility",
+        "request_sensitivity",
+        "user_expertise",
+        "contextual_complexity",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "assume_objective_pov": {
+      "num_axes": 8,
+      "axes": [
+        "topic_sensitivity",
+        "information_complexity",
+        "user_intent",
+        "contextual_ambiguity",
+        "response_format",
+        "evidential_support",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "avoid_abuse": {
+      "num_axes": 8,
+      "axes": [
+        "abuse_type",
+        "contextual_cues",
+        "emotional_intensity",
+        "power_dynamics",
+        "instructional_clarity",
+        "response_consequences",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "avoid_being_condescending": {
+      "num_axes": 8,
+      "axes": [
+        "contextual_complexity",
+        "user_emotional_state",
+        "power_dynamics",
+        "feedback_type",
+        "conversational_history",
+        "information_asymmetry",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "avoid_errors": {
+      "num_axes": 8,
+      "axes": [
+        "stake_level",
+        "knowledge_domain",
+        "information_availability",
+        "response_format",
+        "reasoning_complexity",
+        "uncertainty_tolerance",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "avoid_extremist_content": {
+      "num_axes": 8,
+      "axes": [
+        "extremism_type",
+        "contextualization_level",
+        "user_vulnerability",
+        "information_type",
+        "interaction_type",
+        "response_tone",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "avoid_hateful_content": {
+      "num_axes": 8,
+      "axes": [
+        "contextualization_level",
+        "hate_speech_subtlety",
+        "emotional_intensity",
+        "information_density",
+        "response_type",
+        "ambiguity_level",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "avoid_info_hazards": {
+      "num_axes": 7,
+      "axes": [
+        "request_explicitness",
+        "information_sensitivity",
+        "contextual_ambiguity",
+        "user_intent",
+        "domain_knowledge",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "avoid_overstepping": {
+      "num_axes": 8,
+      "axes": [
+        "request_clarity",
+        "task_complexity",
+        "contextual_dependencies",
+        "user_feedback",
+        "output_constraints",
+        "interaction_mode",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "avoid_regulated_advice": {
+      "num_axes": 7,
+      "axes": [
+        "topic_complexity",
+        "request_directness",
+        "user_knowledge_level",
+        "contextual_urgency",
+        "information_availability",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "avoid_sycophancy": {
+      "num_axes": 8,
+      "axes": [
+        "question_neutrality",
+        "response_complexity",
+        "user_assertion_strength",
+        "feedback_type",
+        "contextual_ambiguity",
+        "user_expectation",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "avoid_targeted_political_manipulation": {
+      "num_axes": 7,
+      "axes": [
+        "manipulation_intent",
+        "contextual_complexity",
+        "information_asymmetry",
+        "emotional_appeal",
+        "request_specificity",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "be_clear": {
+      "num_axes": 8,
+      "axes": [
+        "request_complexity",
+        "domain_knowledge",
+        "response_length",
+        "contextual_dependencies",
+        "ambiguity_tolerance",
+        "explanation_depth",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "be_creative": {
+      "num_axes": 8,
+      "axes": [
+        "task_openness",
+        "domain_familiarity",
+        "response_length",
+        "evaluation_criteria",
+        "contextual_constraints",
+        "interactivity",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "be_empathetic": {
+      "num_axes": 8,
+      "axes": [
+        "emotional_intensity",
+        "contextual_complexity",
+        "user_vulnerability",
+        "response_timing",
+        "emotional_ambiguity",
+        "conversational_history",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "be_engaging": {
+      "num_axes": 8,
+      "axes": [
+        "conversation_depth",
+        "user_initiative",
+        "task_orientation",
+        "humor_context",
+        "error_recovery",
+        "conversational_history",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "be_kind": {
+      "num_axes": 8,
+      "axes": [
+        "contextual_sensitivity",
+        "emotional_intensity",
+        "informational_complexity",
+        "response_brevity",
+        "conflict_or_disagreement",
+        "user_expectations",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "be_professional": {
+      "num_axes": 8,
+      "axes": [
+        "context_formality",
+        "user_expertise",
+        "information_uncertainty",
+        "interaction_purpose",
+        "emotional_tone",
+        "response_brevity",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "be_rationally_optimistic": {
+      "num_axes": 8,
+      "axes": [
+        "situation_severity",
+        "user_emotional_state",
+        "solution_uncertainty",
+        "user_agency",
+        "time_pressure",
+        "information_availability",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "be_thorough_but_efficient": {
+      "num_axes": 7,
+      "axes": [
+        "request_complexity",
+        "response_length_constraints",
+        "user_expertise",
+        "task_type",
+        "contextual_dependencies",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "comply_with_laws": {
+      "num_axes": 7,
+      "axes": [
+        "legal_complexity",
+        "information_availability",
+        "contextual_ambiguity",
+        "consequence_severity",
+        "action_type",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "do_not_encourage_self_harm": {
+      "num_axes": 7,
+      "axes": [
+        "explicitness_of_harm",
+        "user_emotional_state",
+        "request_type",
+        "conversational_history",
+        "resource_availability",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "do_not_facilitate_illicit_behavior": {
+      "num_axes": 8,
+      "axes": [
+        "illicit_activity_severity",
+        "request_explicitness",
+        "user_intent_ambiguity",
+        "contextual_sensitivity",
+        "alternative_information_availability",
+        "conversational_history",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "do_not_lie": {
+      "num_axes": 8,
+      "axes": [
+        "information_complexity",
+        "uncertainty_level",
+        "inquiry_type",
+        "contextual_pressure",
+        "knowledge_domain",
+        "response_format",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "do_not_make_unprompted_personal_comments": {
+      "num_axes": 7,
+      "axes": [
+        "conversation_history",
+        "user_input_type",
+        "topic_sensitivity",
+        "model_knowledge_domain",
+        "user_tone_and_emotion",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "express_uncertainty": {
+      "num_axes": 7,
+      "axes": [
+        "knowledge_domain",
+        "question_type",
+        "consequence_level",
+        "information_availability",
+        "response_format",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "follow_all_applicable_instructions": {
+      "num_axes": 7,
+      "axes": [
+        "instruction_complexity",
+        "authority_conflict",
+        "contextual_ambiguity",
+        "instruction_novelty",
+        "delegation_clarity",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "formatting": {
+      "num_axes": 8,
+      "axes": [
+        "formatting_complexity",
+        "contextual_cues",
+        "style_consistency",
+        "error_tolerance",
+        "formatting_novelty",
+        "evaluation_criteria",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "highlight_misalignments": {
+      "num_axes": 7,
+      "axes": [
+        "request_ambiguity",
+        "goal_complexity",
+        "contextual_relevance",
+        "model_knowledge_gap",
+        "user_expectation",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "ignore_untrusted_data": {
+      "num_axes": 7,
+      "axes": [
+        "instruction_explicitness",
+        "data_source_complexity",
+        "contextual_relevance",
+        "authority_delegation_scope",
+        "instruction_sequence",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "letter_and_spirit": {
+      "num_axes": 7,
+      "axes": [
+        "instruction_ambiguity",
+        "contextual_complexity",
+        "stakeholder_alignment",
+        "user_expectation_clarity",
+        "autonomy_level",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "no_agenda": {
+      "num_axes": 8,
+      "axes": [
+        "topic_sensitivity",
+        "user_emotional_involvement",
+        "information_asymmetry",
+        "conversational_complexity",
+        "response_format",
+        "contextual_ambiguity",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "no_erotica_or_gore": {
+      "num_axes": 8,
+      "axes": [
+        "contextual_sensitivity",
+        "explicitness_level",
+        "content_format",
+        "user_intent",
+        "domain_knowledge",
+        "response_type",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "no_topic_off_limits": {
+      "num_axes": 7,
+      "axes": [
+        "topic_sensitivity",
+        "information_availability",
+        "user_tone",
+        "contextual_complexity",
+        "boundary_clarity",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "present_perspectives": {
+      "num_axes": 8,
+      "axes": [
+        "topic_complexity",
+        "perspective_diversity",
+        "request_clarity",
+        "audience_assumptions",
+        "tone_and_style",
+        "contextual_dependencies",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "prevent_imminent_harm": {
+      "num_axes": 8,
+      "axes": [
+        "situation_severity",
+        "user_intent",
+        "domain_complexity",
+        "response_timing",
+        "contextual_ambiguity",
+        "model_knowledge_gap",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "protect_privacy": {
+      "num_axes": 7,
+      "axes": [
+        "information_sensitivity",
+        "request_explicitness",
+        "public_figure_status",
+        "information_availability",
+        "contextual_risk",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "protect_privileged_messages": {
+      "num_axes": 7,
+      "axes": [
+        "request_sensitivity",
+        "privilege_level",
+        "context_complexity",
+        "authorization_clarity",
+        "information_type",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "refusal_style": {
+      "num_axes": 8,
+      "axes": [
+        "request_directness",
+        "request_sensitivity",
+        "user_expectation",
+        "contextual_complexity",
+        "request_repetition",
+        "conversational_history",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "respect_creators": {
+      "num_axes": 8,
+      "axes": [
+        "creator_prominence",
+        "content_type",
+        "use_context",
+        "attribution_clarity",
+        "license_and_rights",
+        "user_request_type",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "sexual_content_involving_minors": {
+      "num_axes": 7,
+      "axes": [
+        "request_directness",
+        "contextual_sensitivity",
+        "educational_relevance",
+        "emotional_intensity",
+        "conversational_history",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "support_mental_health": {
+      "num_axes": 8,
+      "axes": [
+        "crisis_severity",
+        "user_disclosure",
+        "conversation_history",
+        "support_request",
+        "emotional_intensity",
+        "ambiguity_clarity",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "support_programmatic_use": {
+      "num_axes": 7,
+      "axes": [
+        "request_ambiguity",
+        "format_specification",
+        "interaction_mode_clarity",
+        "output_complexity",
+        "contextual_dependencies",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "transformation_exception": {
+      "num_axes": 7,
+      "axes": [
+        "request_complexity",
+        "content_sensitivity",
+        "transformation_type",
+        "contextual_ambiguity",
+        "instruction_clarity",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    },
+    "uphold_fairness": {
+      "num_axes": 7,
+      "axes": [
+        "contextual_ambiguity",
+        "decision_complexity",
+        "information_availability",
+        "regulatory_requirements",
+        "stakeholder_diversity",
+        "user_cultural_context",
+        "user_demographic_identity"
+      ]
+    }
+  },
+  "ideations": {
+    "ask_clarifying_questions": {
+      "num_configs": 67,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 544,
+        "covered_tuples": 544,
+        "covering_strength": 2,
+        "num_configs": 67,
+        "per_axis_value_counts": {
+          "information_gap": {
+            "minor": 13,
+            "moderate": 17,
+            "significant": 20,
+            "critical": 17
+          },
+          "consequence_severity": {
+            "low": 15,
+            "moderate": 14,
+            "high": 20,
+            "severe": 18
+          },
+          "user_hinting": {
+            "none": 15,
+            "implicit": 17,
+            "explicit": 16,
+            "detailed": 19
+          },
+          "contextual_complexity": {
+            "simple": 16,
+            "moderate": 15,
+            "complex": 19,
+            "highly_complex": 17
+          },
+          "response_ambiguity": {
+            "clear": 18,
+            "somewhat_ambiguous": 14,
+            "ambiguous": 15,
+            "highly_ambiguous": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 8,
+            "Western European": 9,
+            "East Asian": 9,
+            "South Asian": 8,
+            "Middle Eastern/North African": 8,
+            "Sub-Saharan African": 8,
+            "Latin American": 8,
+            "Global/multicultural": 9
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 8,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 8,
+            "person with disability": 8,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "assume_best_intentions": {
+      "num_configs": 73,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 714,
+        "covered_tuples": 714,
+        "covering_strength": 2,
+        "num_configs": 73,
+        "per_axis_value_counts": {
+          "request_ambiguity": {
+            "explicit": 15,
+            "somewhat clear": 13,
+            "ambiguous": 17,
+            "very ambiguous": 13,
+            "completely unclear": 15
+          },
+          "goal_permissibility": {
+            "clearly permissible": 14,
+            "somewhat questionable": 15,
+            "borderline": 14,
+            "prohibited": 14,
+            "clearly prohibited": 16
+          },
+          "request_sensitivity": {
+            "low sensitivity": 15,
+            "moderate sensitivity": 12,
+            "high sensitivity": 16,
+            "very high sensitivity": 14,
+            "extremely sensitive": 16
+          },
+          "user_expertise": {
+            "novice": 14,
+            "intermediate": 16,
+            "advanced": 13,
+            "expert": 13,
+            "highly specialized": 17
+          },
+          "contextual_complexity": {
+            "simple context": 14,
+            "moderately complex context": 15,
+            "complex context": 15,
+            "highly complex context": 15,
+            "extremely complex context": 14
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 9,
+            "East Asian": 10,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 8,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 10,
+            "gender/sexual minority": 8,
+            "person with disability": 9,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "assume_objective_pov": {
+      "num_configs": 76,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 919,
+        "covered_tuples": 919,
+        "covering_strength": 2,
+        "num_configs": 76,
+        "per_axis_value_counts": {
+          "topic_sensitivity": {
+            "neutral": 18,
+            "sensitive": 12,
+            "controversial": 13,
+            "highly polarized": 12,
+            "fundamental human rights": 21
+          },
+          "information_complexity": {
+            "simple facts": 15,
+            "nuanced explanations": 15,
+            "multifaceted arguments": 12,
+            "ambiguous concepts": 15,
+            "highly technical information": 19
+          },
+          "user_intent": {
+            "information-seeking": 13,
+            "opinion-seeking": 17,
+            "emotional support": 14,
+            "creative exploration": 14,
+            "confrontational": 18
+          },
+          "contextual_ambiguity": {
+            "clear context": 16,
+            "some ambiguity": 14,
+            "high ambiguity": 15,
+            "missing information": 15,
+            "implicit assumptions": 16
+          },
+          "response_format": {
+            "direct answer": 18,
+            "explanatory text": 13,
+            "comparative analysis": 16,
+            "narrative example": 14,
+            "creative expression": 15
+          },
+          "evidential_support": {
+            "no evidence required": 13,
+            "some evidence": 17,
+            "strong evidence": 12,
+            "expert consensus": 17,
+            "empirical data": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 10,
+            "East Asian": 8,
+            "South Asian": 11,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 11
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 9,
+            "gender/sexual minority": 9,
+            "person with disability": 10,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "avoid_abuse": {
+      "num_configs": 72,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 688,
+        "covered_tuples": 688,
+        "covering_strength": 2,
+        "num_configs": 72,
+        "per_axis_value_counts": {
+          "abuse_type": {
+            "implicit_bias": 18,
+            "microaggression": 19,
+            "overt_insult": 20,
+            "severe_harassment": 15
+          },
+          "contextual_cues": {
+            "no_cues": 20,
+            "ambiguous_cues": 19,
+            "clear_cues": 20,
+            "explicit_cues": 13
+          },
+          "emotional_intensity": {
+            "neutral": 20,
+            "mildly_emotional": 18,
+            "moderately_emotional": 19,
+            "highly_emotional": 15
+          },
+          "power_dynamics": {
+            "equal_power": 18,
+            "mild_asymmetry": 13,
+            "moderate_asymmetry": 21,
+            "severe_asymmetry": 20
+          },
+          "instructional_clarity": {
+            "vague_instructions": 15,
+            "ambiguous_instructions": 17,
+            "clear_instructions": 22,
+            "explicit_instructions": 18
+          },
+          "response_consequences": {
+            "low_consequences": 20,
+            "moderate_consequences": 15,
+            "high_consequences": 17,
+            "severe_consequences": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 10,
+            "Western European": 8,
+            "East Asian": 9,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 10,
+            "person with disability": 10,
+            "elderly individual": 9,
+            "young person/minor": 8,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "avoid_being_condescending": {
+      "num_configs": 76,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 919,
+        "covered_tuples": 919,
+        "covering_strength": 2,
+        "num_configs": 76,
+        "per_axis_value_counts": {
+          "contextual_complexity": {
+            "simple_transaction": 18,
+            "routine_task": 12,
+            "complex_problem": 13,
+            "nuanced_discussion": 12,
+            "high-stakes_decision": 21
+          },
+          "user_emotional_state": {
+            "neutral": 15,
+            "slightly_frustrated": 15,
+            "moderately_emotional": 12,
+            "highly_emotional": 15,
+            "extremely_sensitive": 19
+          },
+          "power_dynamics": {
+            "user_in_control": 13,
+            "equal_partners": 17,
+            "model_as_expert": 14,
+            "model_as_authority": 14,
+            "model_as_gatekeeper": 18
+          },
+          "feedback_type": {
+            "no_feedback": 16,
+            "implicit_hint": 14,
+            "explicit_correction": 15,
+            "repeated_correction": 15,
+            "aggressive_feedback": 16
+          },
+          "conversational_history": {
+            "first_interaction": 18,
+            "short_conversation": 13,
+            "medium_conversation": 16,
+            "long_conversation": 14,
+            "established_relationship": 15
+          },
+          "information_asymmetry": {
+            "low_asymmetry": 13,
+            "moderate_asymmetry": 17,
+            "high_asymmetry": 12,
+            "extreme_asymmetry": 17,
+            "unknown_asymmetry": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 10,
+            "East Asian": 8,
+            "South Asian": 11,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 11
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 9,
+            "gender/sexual minority": 9,
+            "person with disability": 10,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "avoid_errors": {
+      "num_configs": 72,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 688,
+        "covered_tuples": 688,
+        "covering_strength": 2,
+        "num_configs": 72,
+        "per_axis_value_counts": {
+          "stake_level": {
+            "low_stakes": 18,
+            "moderate_stakes": 19,
+            "high_stakes": 20,
+            "critical_stakes": 15
+          },
+          "knowledge_domain": {
+            "narrow_domain": 20,
+            "moderate_domain": 19,
+            "broad_domain": 20,
+            "interdisciplinary_domain": 13
+          },
+          "information_availability": {
+            "abundant_information": 20,
+            "moderate_information": 18,
+            "limited_information": 19,
+            "ambiguous_information": 15
+          },
+          "response_format": {
+            "simple_text": 18,
+            "structured_text": 13,
+            "code": 21,
+            "mathematical_expression": 20
+          },
+          "reasoning_complexity": {
+            "simple_inference": 15,
+            "moderate_reasoning": 17,
+            "complex_reasoning": 22,
+            "multi-step_reasoning": 18
+          },
+          "uncertainty_tolerance": {
+            "low_uncertainty": 20,
+            "moderate_uncertainty": 15,
+            "high_uncertainty": 17,
+            "extreme_uncertainty": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 10,
+            "Western European": 8,
+            "East Asian": 9,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 10,
+            "person with disability": 10,
+            "elderly individual": 9,
+            "young person/minor": 8,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "avoid_extremist_content": {
+      "num_configs": 76,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 919,
+        "covered_tuples": 919,
+        "covering_strength": 2,
+        "num_configs": 76,
+        "per_axis_value_counts": {
+          "extremism_type": {
+            "white nationalism": 18,
+            "jihadist ideology": 12,
+            "eco-terrorism": 13,
+            "anti-government extremism": 12,
+            "other forms of extremism": 21
+          },
+          "contextualization_level": {
+            "explicit": 15,
+            "implicit": 15,
+            "coded": 12,
+            "symbolic": 15,
+            "highly nuanced": 19
+          },
+          "user_vulnerability": {
+            "low": 13,
+            "moderate": 17,
+            "high": 14,
+            "very high": 14,
+            "extremely high": 18
+          },
+          "information_type": {
+            "factual": 16,
+            "analytical": 14,
+            "critical": 15,
+            "educational": 15,
+            "counter-narrative": 16
+          },
+          "interaction_type": {
+            "passive consumption": 18,
+            "active engagement": 13,
+            "dialogue": 16,
+            "debate": 14,
+            "confrontation": 15
+          },
+          "response_tone": {
+            "neutral": 13,
+            "cautious": 17,
+            "critical": 12,
+            "condemning": 17,
+            "empathetic": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 10,
+            "East Asian": 8,
+            "South Asian": 11,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 11
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 9,
+            "gender/sexual minority": 9,
+            "person with disability": 10,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "avoid_hateful_content": {
+      "num_configs": 76,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 919,
+        "covered_tuples": 919,
+        "covering_strength": 2,
+        "num_configs": 76,
+        "per_axis_value_counts": {
+          "contextualization_level": {
+            "no_context": 18,
+            "implicit_context": 12,
+            "explicit_context": 13,
+            "clear_disclaimer": 12,
+            "educational_frame": 21
+          },
+          "hate_speech_subtlety": {
+            "explicit_slurs": 15,
+            "implicit_insults": 15,
+            "microaggressions": 12,
+            "coded_language": 15,
+            "symbolic_hate": 19
+          },
+          "emotional_intensity": {
+            "neutral": 13,
+            "mildly_emotive": 17,
+            "emotive": 14,
+            "highly_emotive": 14,
+            "inflammatory": 18
+          },
+          "information_density": {
+            "simple_statement": 16,
+            "short_text": 14,
+            "medium_text": 15,
+            "long_text": 15,
+            "complex_discussion": 16
+          },
+          "response_type": {
+            "simple_rejection": 18,
+            "explanation": 13,
+            "counterargument": 16,
+            "educational_response": 14,
+            "creative_response": 15
+          },
+          "ambiguity_level": {
+            "clear": 13,
+            "somewhat_ambiguous": 17,
+            "ambiguous": 12,
+            "highly_ambiguous": 17,
+            "unclear": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 10,
+            "East Asian": 8,
+            "South Asian": 11,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 11
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 9,
+            "gender/sexual minority": 9,
+            "person with disability": 10,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "avoid_info_hazards": {
+      "num_configs": 70,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 576,
+        "covered_tuples": 576,
+        "covering_strength": 2,
+        "num_configs": 70,
+        "per_axis_value_counts": {
+          "request_explicitness": {
+            "implicit": 13,
+            "vague": 12,
+            "explicit": 15,
+            "direct": 16,
+            "insistent": 14
+          },
+          "information_sensitivity": {
+            "low-risk": 18,
+            "moderate-risk": 18,
+            "high-risk": 16,
+            "critical-risk": 18
+          },
+          "contextual_ambiguity": {
+            "clear": 18,
+            "somewhat_ambiguous": 15,
+            "ambiguous": 21,
+            "highly_ambiguous": 16
+          },
+          "user_intent": {
+            "benign": 17,
+            "neutral": 16,
+            "suspicious": 17,
+            "malicious": 20
+          },
+          "domain_knowledge": {
+            "general_knowledge": 17,
+            "domain-aware": 16,
+            "domain-expert": 16,
+            "highly_specialized": 21
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 9,
+            "East Asian": 8,
+            "South Asian": 8,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 9
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 8,
+            "racial/ethnic minority": 8,
+            "religious minority": 8,
+            "gender/sexual minority": 9,
+            "person with disability": 11,
+            "elderly individual": 10,
+            "young person/minor": 8,
+            "low socioeconomic background": 8
+          }
+        }
+      }
+    },
+    "avoid_overstepping": {
+      "num_configs": 76,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 919,
+        "covered_tuples": 919,
+        "covering_strength": 2,
+        "num_configs": 76,
+        "per_axis_value_counts": {
+          "request_clarity": {
+            "ambiguous": 18,
+            "vague": 12,
+            "clear": 13,
+            "explicit": 12,
+            "detailed": 21
+          },
+          "task_complexity": {
+            "simple": 15,
+            "moderate": 15,
+            "complex": 12,
+            "nuanced": 15,
+            "open-ended": 19
+          },
+          "contextual_dependencies": {
+            "none": 13,
+            "minimal": 17,
+            "moderate": 14,
+            "significant": 14,
+            "crucial": 18
+          },
+          "user_feedback": {
+            "none": 16,
+            "minimal": 14,
+            "moderate": 15,
+            "significant": 15,
+            "explicit": 16
+          },
+          "output_constraints": {
+            "none": 18,
+            "minimal": 13,
+            "moderate": 16,
+            "significant": 14,
+            "strict": 15
+          },
+          "interaction_mode": {
+            "programmatic": 13,
+            "interactive": 17,
+            "conversational": 12,
+            "collaborative": 17,
+            "adaptive": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 10,
+            "East Asian": 8,
+            "South Asian": 11,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 11
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 9,
+            "gender/sexual minority": 9,
+            "person with disability": 10,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "avoid_regulated_advice": {
+      "num_configs": 72,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 678,
+        "covered_tuples": 678,
+        "covering_strength": 2,
+        "num_configs": 72,
+        "per_axis_value_counts": {
+          "topic_complexity": {
+            "Simple legal inquiry": 14,
+            "Basic medical condition": 13,
+            "Complex financial planning": 16,
+            "Multifaceted legal and financial issue": 12,
+            "Highly specialized medical condition": 17
+          },
+          "request_directness": {
+            "Implicit request for information": 13,
+            "General inquiry about a topic": 17,
+            "Explicit request for advice": 13,
+            "Direct question about a specific course of action": 15,
+            "Urgent request for advice in a crisis situation": 14
+          },
+          "user_knowledge_level": {
+            "No prior knowledge": 12,
+            "Basic understanding": 16,
+            "Intermediate knowledge": 17,
+            "Advanced understanding": 14,
+            "Expert-level knowledge": 13
+          },
+          "contextual_urgency": {
+            "Non-urgent, general information": 17,
+            "Somewhat urgent, planning for the future": 17,
+            "Urgent, immediate decision required": 20,
+            "Highly urgent, emergency situation": 18
+          },
+          "information_availability": {
+            "Widely available information": 14,
+            "Moderately available information": 13,
+            "Scarce information": 15,
+            "Highly specialized or technical information": 13,
+            "Information not publicly available": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 10,
+            "Western European": 9,
+            "East Asian": 9,
+            "South Asian": 9,
+            "Middle Eastern/North African": 10,
+            "Sub-Saharan African": 8,
+            "Latin American": 8,
+            "Global/multicultural": 9
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 9,
+            "religious minority": 9,
+            "gender/sexual minority": 11,
+            "person with disability": 8,
+            "elderly individual": 8,
+            "young person/minor": 10,
+            "low socioeconomic background": 8
+          }
+        }
+      }
+    },
+    "avoid_sycophancy": {
+      "num_configs": 72,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 688,
+        "covered_tuples": 688,
+        "covering_strength": 2,
+        "num_configs": 72,
+        "per_axis_value_counts": {
+          "question_neutrality": {
+            "highly neutral": 18,
+            "somewhat neutral": 19,
+            "somewhat biased": 20,
+            "highly biased": 15
+          },
+          "response_complexity": {
+            "simple acknowledgement": 20,
+            "basic explanation": 19,
+            "detailed analysis": 20,
+            "nuanced discussion": 13
+          },
+          "user_assertion_strength": {
+            "tentative": 20,
+            "moderate": 18,
+            "confident": 19,
+            "dogmatic": 15
+          },
+          "feedback_type": {
+            "general information": 18,
+            "opinion": 13,
+            "critique": 21,
+            "evaluation": 20
+          },
+          "contextual_ambiguity": {
+            "low ambiguity": 15,
+            "moderate ambiguity": 17,
+            "high ambiguity": 22,
+            "extreme ambiguity": 18
+          },
+          "user_expectation": {
+            "no expectation": 20,
+            "implicit expectation": 15,
+            "explicit expectation": 17,
+            "strong expectation": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 10,
+            "Western European": 8,
+            "East Asian": 9,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 10,
+            "person with disability": 10,
+            "elderly individual": 9,
+            "young person/minor": 8,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "avoid_targeted_political_manipulation": {
+      "num_configs": 71,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 609,
+        "covered_tuples": 609,
+        "covering_strength": 2,
+        "num_configs": 71,
+        "per_axis_value_counts": {
+          "manipulation_intent": {
+            "none": 12,
+            "implicit": 17,
+            "explicit": 13,
+            "covert": 14,
+            "overt": 15
+          },
+          "contextual_complexity": {
+            "simple": 14,
+            "moderate": 15,
+            "complex": 16,
+            "nuanced": 14,
+            "ambiguous": 12
+          },
+          "information_asymmetry": {
+            "low": 12,
+            "moderate": 23,
+            "high": 15,
+            "extreme": 21
+          },
+          "emotional_appeal": {
+            "low": 17,
+            "moderate": 18,
+            "high": 16,
+            "extreme": 20
+          },
+          "request_specificity": {
+            "vague": 17,
+            "general": 20,
+            "specific": 14,
+            "detailed": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 9,
+            "East Asian": 10,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 8
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 8,
+            "racial/ethnic minority": 10,
+            "religious minority": 8,
+            "gender/sexual minority": 9,
+            "person with disability": 8,
+            "elderly individual": 9,
+            "young person/minor": 10,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "be_clear": {
+      "num_configs": 76,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 919,
+        "covered_tuples": 919,
+        "covering_strength": 2,
+        "num_configs": 76,
+        "per_axis_value_counts": {
+          "request_complexity": {
+            "simple_factual_question": 18,
+            "multi-part_question": 12,
+            "open-ended_question": 13,
+            "ambiguous_question": 12,
+            "paradoxical_question": 21
+          },
+          "domain_knowledge": {
+            "limited_domain_knowledge": 15,
+            "general_domain_knowledge": 15,
+            "specialized_domain_knowledge": 12,
+            "expert_domain_knowledge": 15,
+            "cutting-edge_domain_knowledge": 19
+          },
+          "response_length": {
+            "brief_summary": 13,
+            "short_answer": 17,
+            "medium_length_response": 14,
+            "long_response": 14,
+            "detailed_explanation": 18
+          },
+          "contextual_dependencies": {
+            "no_contextual_dependencies": 16,
+            "some_contextual_dependencies": 14,
+            "significant_contextual_dependencies": 15,
+            "highly_contextual_dependencies": 15,
+            "extremely_contextual_dependencies": 16
+          },
+          "ambiguity_tolerance": {
+            "low_ambiguity_tolerance": 18,
+            "medium_ambiguity_tolerance": 13,
+            "high_ambiguity_tolerance": 16,
+            "very_high_ambiguity_tolerance": 14,
+            "extreme_ambiguity_tolerance": 15
+          },
+          "explanation_depth": {
+            "no_explanation_required": 13,
+            "some_explanation_required": 17,
+            "significant_explanation_required": 12,
+            "detailed_explanation_required": 17,
+            "in-depth_explanation_required": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 10,
+            "East Asian": 8,
+            "South Asian": 11,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 11
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 9,
+            "gender/sexual minority": 9,
+            "person with disability": 10,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "be_creative": {
+      "num_configs": 76,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 919,
+        "covered_tuples": 919,
+        "covering_strength": 2,
+        "num_configs": 76,
+        "per_axis_value_counts": {
+          "task_openness": {
+            "well-defined": 18,
+            "somewhat open": 12,
+            "open-ended": 13,
+            "highly ambiguous": 12,
+            "completely unstructured": 21
+          },
+          "domain_familiarity": {
+            "highly familiar": 15,
+            "somewhat familiar": 15,
+            "unfamiliar": 12,
+            "completely unknown": 15,
+            "highly specialized": 19
+          },
+          "response_length": {
+            "short phrase": 13,
+            "short paragraph": 17,
+            "long paragraph": 14,
+            "multi-paragraph": 14,
+            "extended dialogue": 18
+          },
+          "evaluation_criteria": {
+            "relevance": 16,
+            "coherence": 14,
+            "fluency": 15,
+            "originality": 15,
+            "overall quality": 16
+          },
+          "contextual_constraints": {
+            "highly constrained": 18,
+            "somewhat constrained": 13,
+            "lightly constrained": 16,
+            "unconstrained": 14,
+            "highly flexible": 15
+          },
+          "interactivity": {
+            "non-interactive": 13,
+            "lightly interactive": 17,
+            "moderately interactive": 12,
+            "highly interactive": 17,
+            "collaborative": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 10,
+            "East Asian": 8,
+            "South Asian": 11,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 11
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 9,
+            "gender/sexual minority": 9,
+            "person with disability": 10,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "be_empathetic": {
+      "num_configs": 76,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 919,
+        "covered_tuples": 919,
+        "covering_strength": 2,
+        "num_configs": 76,
+        "per_axis_value_counts": {
+          "emotional_intensity": {
+            "neutral": 18,
+            "mildly upset": 12,
+            "moderately distressed": 13,
+            "highly emotional": 12,
+            "crisis-level": 21
+          },
+          "contextual_complexity": {
+            "simple": 15,
+            "moderately complex": 15,
+            "complex": 12,
+            "highly nuanced": 15,
+            "multi-faceted": 19
+          },
+          "user_vulnerability": {
+            "low-risk": 13,
+            "moderately sensitive": 17,
+            "highly personal": 14,
+            "trauma-related": 14,
+            "stigmatized": 18
+          },
+          "response_timing": {
+            "immediate": 16,
+            "delayed": 14,
+            "after a pause": 15,
+            "in response to a follow-up question": 15,
+            "after a change in topic": 16
+          },
+          "emotional_ambiguity": {
+            "clearly stated": 18,
+            "implicitly expressed": 13,
+            "ambiguous": 16,
+            "mixed signals": 14,
+            "unclear": 15
+          },
+          "conversational_history": {
+            "initial interaction": 13,
+            "short conversation": 17,
+            "moderately long conversation": 12,
+            "long conversation": 17,
+            "multi-session conversation": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 10,
+            "East Asian": 8,
+            "South Asian": 11,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 11
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 9,
+            "gender/sexual minority": 9,
+            "person with disability": 10,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "be_engaging": {
+      "num_configs": 72,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 688,
+        "covered_tuples": 688,
+        "covering_strength": 2,
+        "num_configs": 72,
+        "per_axis_value_counts": {
+          "conversation_depth": {
+            "small-talk": 18,
+            "casual-discussion": 19,
+            "in-depth-exploration": 20,
+            "abstract-debate": 15
+          },
+          "user_initiative": {
+            "passive": 20,
+            "reactive": 19,
+            "proactive": 20,
+            "directive": 13
+          },
+          "task_orientation": {
+            "no-task": 20,
+            "low-priority-task": 18,
+            "medium-priority-task": 19,
+            "high-priority-task": 15
+          },
+          "humor_context": {
+            "no-humor": 18,
+            "low-humor": 13,
+            "medium-humor": 21,
+            "high-humor": 20
+          },
+          "error_recovery": {
+            "no-error": 15,
+            "minor-error": 17,
+            "moderate-error": 22,
+            "severe-error": 18
+          },
+          "conversational_history": {
+            "no-history": 20,
+            "short-history": 15,
+            "medium-history": 17,
+            "long-history": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 10,
+            "Western European": 8,
+            "East Asian": 9,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 10,
+            "person with disability": 10,
+            "elderly individual": 9,
+            "young person/minor": 8,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "be_kind": {
+      "num_configs": 72,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 688,
+        "covered_tuples": 688,
+        "covering_strength": 2,
+        "num_configs": 72,
+        "per_axis_value_counts": {
+          "contextual_sensitivity": {
+            "explicit_request": 18,
+            "implicit_hint": 19,
+            "ambiguous_situation": 20,
+            "highly_nuanced_context": 15
+          },
+          "emotional_intensity": {
+            "neutral": 20,
+            "mildly_upset": 19,
+            "moderately_distressed": 20,
+            "extremely_emotional": 13
+          },
+          "informational_complexity": {
+            "simple_facts": 20,
+            "moderately_complex_concepts": 18,
+            "highly_technical_information": 19,
+            "abstract_theoretical_concepts": 15
+          },
+          "response_brevity": {
+            "brief_summary": 18,
+            "moderately_detailed_response": 13,
+            "detailed_explanation": 21,
+            "extensive_discussion": 20
+          },
+          "conflict_or_disagreement": {
+            "no_conflict": 15,
+            "mild_disagreement": 17,
+            "moderate_conflict": 22,
+            "high_level_of_conflict": 18
+          },
+          "user_expectations": {
+            "low_expectations": 20,
+            "moderate_expectations": 15,
+            "high_expectations": 17,
+            "unrealistic_expectations": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 10,
+            "Western European": 8,
+            "East Asian": 9,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 10,
+            "person with disability": 10,
+            "elderly individual": 9,
+            "young person/minor": 8,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "be_professional": {
+      "num_configs": 71,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 761,
+        "covered_tuples": 761,
+        "covering_strength": 2,
+        "num_configs": 71,
+        "per_axis_value_counts": {
+          "context_formality": {
+            "highly_formal": 15,
+            "formal": 14,
+            "semi-formal": 15,
+            "casual": 14,
+            "highly_casual": 13
+          },
+          "user_expertise": {
+            "novice": 20,
+            "intermediate": 17,
+            "advanced": 16,
+            "expert": 18
+          },
+          "information_uncertainty": {
+            "certain": 15,
+            "likely": 14,
+            "possible": 15,
+            "uncertain": 16,
+            "highly_uncertain": 11
+          },
+          "interaction_purpose": {
+            "informational": 18,
+            "advisory": 17,
+            "persuasive": 19,
+            "negotiative": 17
+          },
+          "emotional_tone": {
+            "neutral": 19,
+            "slightly_emotional": 18,
+            "emotional": 20,
+            "highly_emotional": 14
+          },
+          "response_brevity": {
+            "brief": 19,
+            "concise": 20,
+            "detailed": 13,
+            "highly_detailed": 19
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 9,
+            "East Asian": 8,
+            "South Asian": 9,
+            "Middle Eastern/North African": 10,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 8
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 8,
+            "religious minority": 10,
+            "gender/sexual minority": 9,
+            "person with disability": 8,
+            "elderly individual": 9,
+            "young person/minor": 9,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "be_rationally_optimistic": {
+      "num_configs": 72,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 688,
+        "covered_tuples": 688,
+        "covering_strength": 2,
+        "num_configs": 72,
+        "per_axis_value_counts": {
+          "situation_severity": {
+            "minor setback": 18,
+            "moderate challenge": 19,
+            "significant obstacle": 20,
+            "crisis": 15
+          },
+          "user_emotional_state": {
+            "neutral": 20,
+            "concerned": 19,
+            "anxious": 20,
+            "desperate": 13
+          },
+          "solution_uncertainty": {
+            "clear solution": 20,
+            "some uncertainty": 18,
+            "significant uncertainty": 19,
+            "no clear solution": 15
+          },
+          "user_agency": {
+            "high control": 18,
+            "some control": 13,
+            "limited control": 21,
+            "no control": 20
+          },
+          "time_pressure": {
+            "no time pressure": 15,
+            "some time pressure": 17,
+            "high time pressure": 22,
+            "extreme time pressure": 18
+          },
+          "information_availability": {
+            "complete information": 20,
+            "some information": 15,
+            "limited information": 17,
+            "no information": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 10,
+            "Western European": 8,
+            "East Asian": 9,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 10,
+            "person with disability": 10,
+            "elderly individual": 9,
+            "young person/minor": 8,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "be_thorough_but_efficient": {
+      "num_configs": 67,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 544,
+        "covered_tuples": 544,
+        "covering_strength": 2,
+        "num_configs": 67,
+        "per_axis_value_counts": {
+          "request_complexity": {
+            "simple_factual_question": 13,
+            "multi-part_question": 17,
+            "open-ended_question": 20,
+            "highly_nuanced_or_ambiguous_request": 17
+          },
+          "response_length_constraints": {
+            "no_constraints": 15,
+            "soft_token_limit": 14,
+            "hard_token_limit": 20,
+            "severe_length_restrictions": 18
+          },
+          "user_expertise": {
+            "novice": 15,
+            "intermediate": 17,
+            "advanced": 16,
+            "expert": 19
+          },
+          "task_type": {
+            "informational_request": 16,
+            "problem-solving_task": 15,
+            "creative_task": 19,
+            "multi-step_project": 17
+          },
+          "contextual_dependencies": {
+            "no_contextual_dependencies": 18,
+            "simple_contextual_dependencies": 14,
+            "complex_contextual_dependencies": 15,
+            "highly_interdependent_context": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 8,
+            "Western European": 9,
+            "East Asian": 9,
+            "South Asian": 8,
+            "Middle Eastern/North African": 8,
+            "Sub-Saharan African": 8,
+            "Latin American": 8,
+            "Global/multicultural": 9
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 8,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 8,
+            "person with disability": 8,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "comply_with_laws": {
+      "num_configs": 67,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 544,
+        "covered_tuples": 544,
+        "covering_strength": 2,
+        "num_configs": 67,
+        "per_axis_value_counts": {
+          "legal_complexity": {
+            "Simple and straightforward legal scenarios": 13,
+            "Moderately complex legal situations with some ambiguity": 17,
+            "Complex legal scenarios with multiple factors and nuances": 20,
+            "Highly complex and legally ambiguous scenarios": 17
+          },
+          "information_availability": {
+            "Minimal information provided": 15,
+            "Some relevant information available": 14,
+            "Most necessary information provided": 20,
+            "All relevant information readily available": 18
+          },
+          "contextual_ambiguity": {
+            "Clear and well-defined context": 15,
+            "Somewhat ambiguous context": 17,
+            "Significantly ambiguous context": 16,
+            "Extremely ambiguous or unclear context": 19
+          },
+          "consequence_severity": {
+            "Low-stakes scenario with minimal consequences": 16,
+            "Moderate-stakes scenario with notable consequences": 15,
+            "High-stakes scenario with significant consequences": 19,
+            "Extremely high-stakes scenario with severe consequences": 17
+          },
+          "action_type": {
+            "Informational content": 18,
+            "Advisory content": 14,
+            "Actionable recommendations": 15,
+            "Direct actions with legal implications": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 8,
+            "Western European": 9,
+            "East Asian": 9,
+            "South Asian": 8,
+            "Middle Eastern/North African": 8,
+            "Sub-Saharan African": 8,
+            "Latin American": 8,
+            "Global/multicultural": 9
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 8,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 8,
+            "person with disability": 8,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "do_not_encourage_self_harm": {
+      "num_configs": 67,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 544,
+        "covered_tuples": 544,
+        "covering_strength": 2,
+        "num_configs": 67,
+        "per_axis_value_counts": {
+          "explicitness_of_harm": {
+            "no mention of harm": 13,
+            "implicit hints of harm": 17,
+            "explicit mentions of harm": 20,
+            "detailed descriptions of harm": 17
+          },
+          "user_emotional_state": {
+            "calm and reflective": 15,
+            "anxious or worried": 14,
+            "distressed or upset": 20,
+            "urgent or suicidal": 18
+          },
+          "request_type": {
+            "informational questions": 15,
+            "emotional support requests": 17,
+            "personal advice requests": 16,
+            "crisis intervention requests": 19
+          },
+          "conversational_history": {
+            "single message": 16,
+            "short conversation": 15,
+            "medium-length conversation": 19,
+            "long-term conversation": 17
+          },
+          "resource_availability": {
+            "readily available resources": 18,
+            "some resources available": 14,
+            "limited resources": 15,
+            "unknown or scarce resources": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 8,
+            "Western European": 9,
+            "East Asian": 9,
+            "South Asian": 8,
+            "Middle Eastern/North African": 8,
+            "Sub-Saharan African": 8,
+            "Latin American": 8,
+            "Global/multicultural": 9
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 8,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 8,
+            "person with disability": 8,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "do_not_facilitate_illicit_behavior": {
+      "num_configs": 72,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 688,
+        "covered_tuples": 688,
+        "covering_strength": 2,
+        "num_configs": 72,
+        "per_axis_value_counts": {
+          "illicit_activity_severity": {
+            "minor infraction": 18,
+            "moderate offense": 19,
+            "serious crime": 20,
+            "severe harm": 15
+          },
+          "request_explicitness": {
+            "implicit hint": 20,
+            "veiled suggestion": 19,
+            "explicit ask": 20,
+            "detailed plan": 13
+          },
+          "user_intent_ambiguity": {
+            "clearly malicious": 20,
+            "potentially ambiguous": 18,
+            "likely innocent": 19,
+            "completely unclear": 15
+          },
+          "contextual_sensitivity": {
+            "no context": 18,
+            "some context": 13,
+            "relevant context": 21,
+            "highly relevant context": 20
+          },
+          "alternative_information_availability": {
+            "no alternatives": 15,
+            "some alternatives": 17,
+            "relevant alternatives": 22,
+            "multiple relevant alternatives": 18
+          },
+          "conversational_history": {
+            "no history": 20,
+            "some history": 15,
+            "relevant history": 17,
+            "extensive history": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 10,
+            "Western European": 8,
+            "East Asian": 9,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 10,
+            "person with disability": 10,
+            "elderly individual": 9,
+            "young person/minor": 8,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "do_not_lie": {
+      "num_configs": 72,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 688,
+        "covered_tuples": 688,
+        "covering_strength": 2,
+        "num_configs": 72,
+        "per_axis_value_counts": {
+          "information_complexity": {
+            "simple_facts": 18,
+            "moderately_complex_concepts": 19,
+            "complex_theories": 20,
+            "highly_nuanced_and_context-dependent_information": 15
+          },
+          "uncertainty_level": {
+            "low_uncertainty": 20,
+            "moderate_uncertainty": 19,
+            "high_uncertainty": 20,
+            "extreme_uncertainty": 13
+          },
+          "inquiry_type": {
+            "factual_questions": 20,
+            "opinion-based_questions": 18,
+            "hypothetical_scenarios": 19,
+            "multi-step_reasoning_tasks": 15
+          },
+          "contextual_pressure": {
+            "low_pressure": 18,
+            "moderate_pressure": 13,
+            "high_pressure": 21,
+            "extreme_pressure": 20
+          },
+          "knowledge_domain": {
+            "well-defined_domains": 15,
+            "moderately_complex_domains": 17,
+            "highly_specialized_domains": 22,
+            "emerging_or_ill-defined_domains": 18
+          },
+          "response_format": {
+            "text-based_responses": 20,
+            "visual_responses": 15,
+            "multimodal_responses": 17,
+            "interactive_responses": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 10,
+            "Western European": 8,
+            "East Asian": 9,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 10,
+            "person with disability": 10,
+            "elderly individual": 9,
+            "young person/minor": 8,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "do_not_make_unprompted_personal_comments": {
+      "num_configs": 73,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 714,
+        "covered_tuples": 714,
+        "covering_strength": 2,
+        "num_configs": 73,
+        "per_axis_value_counts": {
+          "conversation_history": {
+            "no_history": 15,
+            "short_history": 13,
+            "medium_history": 17,
+            "long_history": 13,
+            "extensive_history": 15
+          },
+          "user_input_type": {
+            "explicit_question": 14,
+            "implicit_question": 15,
+            "statement": 14,
+            "open-ended_statement": 14,
+            "narrative": 16
+          },
+          "topic_sensitivity": {
+            "neutral": 15,
+            "slightly_sensitive": 12,
+            "moderately_sensitive": 16,
+            "highly_sensitive": 14,
+            "extremely_sensitive": 16
+          },
+          "model_knowledge_domain": {
+            "narrow_domain": 14,
+            "medium_domain": 16,
+            "broad_domain": 13,
+            "multidisciplinary_domain": 13,
+            "highly_specialized_domain": 17
+          },
+          "user_tone_and_emotion": {
+            "neutral": 14,
+            "slightly_emotional": 15,
+            "moderately_emotional": 15,
+            "highly_emotional": 15,
+            "extremely_emotional": 14
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 9,
+            "East Asian": 10,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 8,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 10,
+            "gender/sexual minority": 8,
+            "person with disability": 9,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "express_uncertainty": {
+      "num_configs": 69,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 576,
+        "covered_tuples": 576,
+        "covering_strength": 2,
+        "num_configs": 69,
+        "per_axis_value_counts": {
+          "knowledge_domain": {
+            "narrow_and_well-defined": 17,
+            "moderately_broad": 17,
+            "broad_and_complex": 20,
+            "highly_specialized": 15
+          },
+          "question_type": {
+            "factual": 13,
+            "descriptive": 13,
+            "explanatory": 14,
+            "predictive": 14,
+            "open-ended": 15
+          },
+          "consequence_level": {
+            "low_consequence": 17,
+            "moderate_consequence": 15,
+            "high_consequence": 17,
+            "critical_consequence": 20
+          },
+          "information_availability": {
+            "abundant_and_reliable": 16,
+            "moderately_available": 18,
+            "scarce_and_unreliable": 14,
+            "completely_lacking": 21
+          },
+          "response_format": {
+            "brief_and_concise": 19,
+            "moderately_detailed": 17,
+            "detailed_and_elaborate": 18,
+            "highly_narrative": 15
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 9,
+            "East Asian": 8,
+            "South Asian": 8,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 9
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 8,
+            "racial/ethnic minority": 9,
+            "religious minority": 9,
+            "gender/sexual minority": 10,
+            "person with disability": 8,
+            "elderly individual": 9,
+            "young person/minor": 8,
+            "low socioeconomic background": 8
+          }
+        }
+      }
+    },
+    "follow_all_applicable_instructions": {
+      "num_configs": 73,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 714,
+        "covered_tuples": 714,
+        "covering_strength": 2,
+        "num_configs": 73,
+        "per_axis_value_counts": {
+          "instruction_complexity": {
+            "simple": 15,
+            "moderate": 13,
+            "complex": 17,
+            "highly complex": 13,
+            "nested": 15
+          },
+          "authority_conflict": {
+            "no conflict": 14,
+            "minor conflict": 15,
+            "moderate conflict": 14,
+            "severe conflict": 14,
+            "irreconcilable conflict": 16
+          },
+          "contextual_ambiguity": {
+            "clear context": 15,
+            "somewhat ambiguous": 12,
+            "ambiguous": 16,
+            "highly ambiguous": 14,
+            "completely unclear": 16
+          },
+          "instruction_novelty": {
+            "familiar": 14,
+            "somewhat novel": 16,
+            "novel": 13,
+            "highly novel": 13,
+            "completely unfamiliar": 17
+          },
+          "delegation_clarity": {
+            "no delegation": 14,
+            "implicit delegation": 15,
+            "explicit delegation": 15,
+            "clear delegation": 15,
+            "unambiguous delegation": 14
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 9,
+            "East Asian": 10,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 8,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 10,
+            "gender/sexual minority": 8,
+            "person with disability": 9,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "formatting": {
+      "num_configs": 76,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 919,
+        "covered_tuples": 919,
+        "covering_strength": 2,
+        "num_configs": 76,
+        "per_axis_value_counts": {
+          "formatting_complexity": {
+            "simple paragraphs": 18,
+            "headings and subheadings": 12,
+            "lists and tables": 13,
+            "nested lists and tables": 12,
+            "complex layouts with multiple elements": 21
+          },
+          "contextual_cues": {
+            "no cues": 15,
+            "implicit cues": 15,
+            "explicit cues": 12,
+            "ambiguous cues": 15,
+            "conflicting cues": 19
+          },
+          "style_consistency": {
+            "no consistency required": 13,
+            "consistent within a section": 17,
+            "consistent throughout the document": 14,
+            "consistent across multiple documents": 14,
+            "consistent with a specific style guide": 18
+          },
+          "error_tolerance": {
+            "zero tolerance": 16,
+            "minor errors allowed": 14,
+            "some inconsistencies allowed": 15,
+            "significant errors allowed": 15,
+            "no formatting required": 16
+          },
+          "formatting_novelty": {
+            "standard formatting": 18,
+            "minor variations": 13,
+            "moderate creativity": 16,
+            "high creativity": 14,
+            "innovative formatting": 15
+          },
+          "evaluation_criteria": {
+            "readability": 13,
+            "aesthetics": 17,
+            "consistency": 12,
+            "effectiveness": 17,
+            "overall quality": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 10,
+            "East Asian": 8,
+            "South Asian": 11,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 11
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 9,
+            "gender/sexual minority": 9,
+            "person with disability": 10,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "highlight_misalignments": {
+      "num_configs": 73,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 714,
+        "covered_tuples": 714,
+        "covering_strength": 2,
+        "num_configs": 73,
+        "per_axis_value_counts": {
+          "request_ambiguity": {
+            "explicit_and_specific": 15,
+            "somewhat_ambiguous": 13,
+            "open-ended": 17,
+            "highly_ambiguous": 13,
+            "completely_unclear": 15
+          },
+          "goal_complexity": {
+            "simple_and_well-defined": 14,
+            "moderately_complex": 15,
+            "multi-faceted": 14,
+            "highly_nuanced": 14,
+            "conflicting": 16
+          },
+          "contextual_relevance": {
+            "highly_relevant": 15,
+            "somewhat_relevant": 12,
+            "marginally_relevant": 16,
+            "irrelevant": 14,
+            "contradictory": 16
+          },
+          "model_knowledge_gap": {
+            "well_within_model_capabilities": 14,
+            "somewhat_challenging": 16,
+            "at_the_limit_of_model_knowledge": 13,
+            "beyond_model_capabilities": 13,
+            "completely_out_of_scope": 17
+          },
+          "user_expectation": {
+            "aligned_with_model_capabilities": 14,
+            "somewhat_misaligned": 15,
+            "significantly_misaligned": 15,
+            "completely_unrealistic": 15,
+            "uncommunicated": 14
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 9,
+            "East Asian": 10,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 8,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 10,
+            "gender/sexual minority": 8,
+            "person with disability": 9,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "ignore_untrusted_data": {
+      "num_configs": 73,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 714,
+        "covered_tuples": 714,
+        "covering_strength": 2,
+        "num_configs": 73,
+        "per_axis_value_counts": {
+          "instruction_explicitness": {
+            "Implicit": 15,
+            "Ambiguous": 13,
+            "Explicit": 17,
+            "Direct": 13,
+            "Unambiguous": 15
+          },
+          "data_source_complexity": {
+            "Simple Text": 14,
+            "Multimodal Data": 15,
+            "Nested Data Structures": 14,
+            "Dynamic Data Streams": 14,
+            "Hybrid Data Sources": 16
+          },
+          "contextual_relevance": {
+            "Irrelevant": 15,
+            "Tangentially Related": 12,
+            "Contextually Relevant": 16,
+            "Highly Relevant": 14,
+            "Crucial": 16
+          },
+          "authority_delegation_scope": {
+            "None": 14,
+            "Limited": 16,
+            "Specific": 13,
+            "Broad": 13,
+            "Unrestricted": 17
+          },
+          "instruction_sequence": {
+            "Single Instruction": 14,
+            "Sequential Instructions": 15,
+            "Concurrent Instructions": 15,
+            "Conditional Instructions": 15,
+            "Iterative Instructions": 14
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 9,
+            "East Asian": 10,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 8,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 10,
+            "gender/sexual minority": 8,
+            "person with disability": 9,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "letter_and_spirit": {
+      "num_configs": 67,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 544,
+        "covered_tuples": 544,
+        "covering_strength": 2,
+        "num_configs": 67,
+        "per_axis_value_counts": {
+          "instruction_ambiguity": {
+            "explicit": 13,
+            "somewhat_ambiguous": 17,
+            "highly_ambiguous": 20,
+            "completely_undefined": 17
+          },
+          "contextual_complexity": {
+            "minimal_context": 15,
+            "some_context": 14,
+            "significant_context": 20,
+            "extensive_context": 18
+          },
+          "stakeholder_alignment": {
+            "perfect_alignment": 15,
+            "some_conflict": 17,
+            "significant_conflict": 16,
+            "complete_misalignment": 19
+          },
+          "user_expectation_clarity": {
+            "clear_expectations": 16,
+            "somewhat_unclear_expectations": 15,
+            "highly_unclear_expectations": 19,
+            "unstated_expectations": 17
+          },
+          "autonomy_level": {
+            "no_autonomy": 18,
+            "limited_autonomy": 14,
+            "moderate_autonomy": 15,
+            "high_autonomy": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 8,
+            "Western European": 9,
+            "East Asian": 9,
+            "South Asian": 8,
+            "Middle Eastern/North African": 8,
+            "Sub-Saharan African": 8,
+            "Latin American": 8,
+            "Global/multicultural": 9
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 8,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 8,
+            "person with disability": 8,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "no_agenda": {
+      "num_configs": 76,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 919,
+        "covered_tuples": 919,
+        "covering_strength": 2,
+        "num_configs": 76,
+        "per_axis_value_counts": {
+          "topic_sensitivity": {
+            "neutral": 18,
+            "slightly sensitive": 12,
+            "moderately controversial": 13,
+            "highly controversial": 12,
+            "extremely sensitive": 21
+          },
+          "user_emotional_involvement": {
+            "low": 15,
+            "moderate": 15,
+            "high": 12,
+            "very high": 15,
+            "extremely high": 19
+          },
+          "information_asymmetry": {
+            "low": 13,
+            "moderate": 17,
+            "high": 14,
+            "very high": 14,
+            "extreme": 18
+          },
+          "conversational_complexity": {
+            "simple": 16,
+            "moderately complex": 14,
+            "complex": 15,
+            "very complex": 15,
+            "highly nuanced": 16
+          },
+          "response_format": {
+            "brief and factual": 18,
+            "moderately detailed": 13,
+            "detailed and explanatory": 16,
+            "narrative or anecdotal": 14,
+            "highly persuasive": 15
+          },
+          "contextual_ambiguity": {
+            "low": 13,
+            "moderate": 17,
+            "high": 12,
+            "very high": 17,
+            "extreme": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 10,
+            "East Asian": 8,
+            "South Asian": 11,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 11
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 9,
+            "gender/sexual minority": 9,
+            "person with disability": 10,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "no_erotica_or_gore": {
+      "num_configs": 72,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 688,
+        "covered_tuples": 688,
+        "covering_strength": 2,
+        "num_configs": 72,
+        "per_axis_value_counts": {
+          "contextual_sensitivity": {
+            "neutral_context": 18,
+            "ambiguous_context": 19,
+            "sensitive_context": 20,
+            "highly_sensitive_context": 15
+          },
+          "explicitness_level": {
+            "implicit": 20,
+            "suggestive": 19,
+            "explicit": 20,
+            "graphically_explicit": 13
+          },
+          "content_format": {
+            "text_only": 20,
+            "text_with_images": 18,
+            "audio": 19,
+            "video": 15
+          },
+          "user_intent": {
+            "informational": 18,
+            "entertainment": 13,
+            "creative_expression": 21,
+            "provocation": 20
+          },
+          "domain_knowledge": {
+            "general_knowledge": 15,
+            "domain-specific_knowledge": 17,
+            "expert-level_knowledge": 22,
+            "highly_specialized_knowledge": 18
+          },
+          "response_type": {
+            "simple_response": 20,
+            "generated_text": 15,
+            "classified_response": 17,
+            "retrieved_information": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 10,
+            "Western European": 8,
+            "East Asian": 9,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 10,
+            "person with disability": 10,
+            "elderly individual": 9,
+            "young person/minor": 8,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "no_topic_off_limits": {
+      "num_configs": 67,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 544,
+        "covered_tuples": 544,
+        "covering_strength": 2,
+        "num_configs": 67,
+        "per_axis_value_counts": {
+          "topic_sensitivity": {
+            "low_sensitivity": 13,
+            "moderate_sensitivity": 17,
+            "high_sensitivity": 20,
+            "extremely_sensitive": 17
+          },
+          "information_availability": {
+            "abundant_information": 15,
+            "moderate_information": 14,
+            "limited_information": 20,
+            "scarce_information": 18
+          },
+          "user_tone": {
+            "neutral_tone": 15,
+            "respectful_tone": 17,
+            "confrontational_tone": 16,
+            "aggressive_tone": 19
+          },
+          "contextual_complexity": {
+            "simple_context": 16,
+            "moderate_context": 15,
+            "complex_context": 19,
+            "highly_complex_context": 17
+          },
+          "boundary_clarity": {
+            "clear_boundaries": 18,
+            "moderately_clear_boundaries": 14,
+            "unclear_boundaries": 15,
+            "ambiguous_boundaries": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 8,
+            "Western European": 9,
+            "East Asian": 9,
+            "South Asian": 8,
+            "Middle Eastern/North African": 8,
+            "Sub-Saharan African": 8,
+            "Latin American": 8,
+            "Global/multicultural": 9
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 8,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 8,
+            "person with disability": 8,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "present_perspectives": {
+      "num_configs": 72,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 688,
+        "covered_tuples": 688,
+        "covering_strength": 2,
+        "num_configs": 72,
+        "per_axis_value_counts": {
+          "topic_complexity": {
+            "simple_factual": 18,
+            "moderately_complex": 19,
+            "highly_debatable": 20,
+            "highly_specialized": 15
+          },
+          "perspective_diversity": {
+            "binary_opposition": 20,
+            "multiple_distinct_views": 19,
+            "nuanced_gradations": 20,
+            "highly_contextualized": 13
+          },
+          "request_clarity": {
+            "vague_open-ended": 20,
+            "general_guidance": 18,
+            "specific_criteria": 19,
+            "highly_constrained": 15
+          },
+          "audience_assumptions": {
+            "general_audience": 18,
+            "informed_non-experts": 13,
+            "domain_experts": 21,
+            "highly_specialized_audience": 20
+          },
+          "tone_and_style": {
+            "neutral_informative": 15,
+            "engaging_persuasive": 17,
+            "formal_academic": 22,
+            "humorous_conversational": 18
+          },
+          "contextual_dependencies": {
+            "isolated_topic": 20,
+            "related_topics": 15,
+            "broader_context": 17,
+            "highly_interdependent": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 10,
+            "Western European": 8,
+            "East Asian": 9,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 10,
+            "person with disability": 10,
+            "elderly individual": 9,
+            "young person/minor": 8,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "prevent_imminent_harm": {
+      "num_configs": 72,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 688,
+        "covered_tuples": 688,
+        "covering_strength": 2,
+        "num_configs": 72,
+        "per_axis_value_counts": {
+          "situation_severity": {
+            "low-risk": 18,
+            "moderate-risk": 19,
+            "high-risk": 20,
+            "life-threatening": 15
+          },
+          "user_intent": {
+            "information-seeking": 20,
+            "problem-solving": 19,
+            "emotional support": 20,
+            "action-oriented": 13
+          },
+          "domain_complexity": {
+            "common knowledge": 20,
+            "specialized knowledge": 18,
+            "technical expertise": 19,
+            "highly specialized expertise": 15
+          },
+          "response_timing": {
+            "immediate response required": 18,
+            "short time frame": 13,
+            "moderate time frame": 21,
+            "no time constraint": 20
+          },
+          "contextual_ambiguity": {
+            "clear and explicit": 15,
+            "somewhat ambiguous": 17,
+            "highly ambiguous": 22,
+            "completely unclear": 18
+          },
+          "model_knowledge_gap": {
+            "small knowledge gap": 20,
+            "moderate knowledge gap": 15,
+            "large knowledge gap": 17,
+            "complete knowledge gap": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 10,
+            "Western European": 8,
+            "East Asian": 9,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 10,
+            "person with disability": 10,
+            "elderly individual": 9,
+            "young person/minor": 8,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "protect_privacy": {
+      "num_configs": 71,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 609,
+        "covered_tuples": 609,
+        "covering_strength": 2,
+        "num_configs": 71,
+        "per_axis_value_counts": {
+          "information_sensitivity": {
+            "publicly_available": 12,
+            "semi_private": 17,
+            "sensitive": 13,
+            "highly_sensitive": 14,
+            "confidential": 15
+          },
+          "request_explicitness": {
+            "implicit": 14,
+            "vague": 15,
+            "explicit": 16,
+            "direct": 14,
+            "insistent": 12
+          },
+          "public_figure_status": {
+            "private_individual": 12,
+            "local_public_figure": 23,
+            "national_public_figure": 15,
+            "international_public_figure": 21
+          },
+          "information_availability": {
+            "easily_accessible": 17,
+            "moderately_accessible": 18,
+            "difficult_to_find": 16,
+            "not_publicly_available": 20
+          },
+          "contextual_risk": {
+            "low_risk": 17,
+            "moderate_risk": 20,
+            "high_risk": 14,
+            "extreme_risk": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 9,
+            "East Asian": 10,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 8,
+            "Latin American": 9,
+            "Global/multicultural": 8
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 8,
+            "racial/ethnic minority": 10,
+            "religious minority": 8,
+            "gender/sexual minority": 9,
+            "person with disability": 8,
+            "elderly individual": 9,
+            "young person/minor": 10,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "protect_privileged_messages": {
+      "num_configs": 73,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 714,
+        "covered_tuples": 714,
+        "covering_strength": 2,
+        "num_configs": 73,
+        "per_axis_value_counts": {
+          "request_sensitivity": {
+            "implicit": 15,
+            "vague": 13,
+            "explicit": 17,
+            "direct": 13,
+            "aggressive": 15
+          },
+          "privilege_level": {
+            "public": 14,
+            "internal": 15,
+            "confidential": 14,
+            "highly_sensitive": 14,
+            "critical": 16
+          },
+          "context_complexity": {
+            "simple": 15,
+            "moderate": 12,
+            "complex": 16,
+            "multi-topic": 14,
+            "multi-participant": 16
+          },
+          "authorization_clarity": {
+            "ambiguous": 14,
+            "implicit": 16,
+            "explicit": 13,
+            "clear": 13,
+            "verified": 17
+          },
+          "information_type": {
+            "general_policies": 14,
+            "system_messages": 15,
+            "chain_of_thought": 15,
+            "user_data": 15,
+            "sensitive_data": 14
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 9,
+            "East Asian": 10,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 8,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 10,
+            "gender/sexual minority": 8,
+            "person with disability": 9,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "refusal_style": {
+      "num_configs": 76,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 919,
+        "covered_tuples": 919,
+        "covering_strength": 2,
+        "num_configs": 76,
+        "per_axis_value_counts": {
+          "request_directness": {
+            "implicit": 18,
+            "hinted": 12,
+            "explicit": 13,
+            "blunt": 12,
+            "aggressive": 21
+          },
+          "request_sensitivity": {
+            "neutral": 15,
+            "sensitive": 15,
+            "controversial": 12,
+            "offensive": 15,
+            "extremist": 19
+          },
+          "user_expectation": {
+            "low": 13,
+            "moderate": 17,
+            "high": 14,
+            "entitled": 14,
+            "demanding": 18
+          },
+          "contextual_complexity": {
+            "simple": 16,
+            "moderate": 14,
+            "complex": 15,
+            "ambiguous": 15,
+            "multi-turn": 16
+          },
+          "request_repetition": {
+            "first request": 18,
+            "second request": 13,
+            "repeated request": 16,
+            "persistent request": 14,
+            "aggressive repetition": 15
+          },
+          "conversational_history": {
+            "first interaction": 13,
+            "limited history": 17,
+            "established relationship": 12,
+            "long-term interaction": 17,
+            "prior conflict": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 10,
+            "East Asian": 8,
+            "South Asian": 11,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 11
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 9,
+            "gender/sexual minority": 9,
+            "person with disability": 10,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "respect_creators": {
+      "num_configs": 76,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 919,
+        "covered_tuples": 919,
+        "covering_strength": 2,
+        "num_configs": 76,
+        "per_axis_value_counts": {
+          "creator_prominence": {
+            "obscure": 18,
+            "emerging": 12,
+            "established": 13,
+            "renowned": 12,
+            "iconic": 21
+          },
+          "content_type": {
+            "text": 15,
+            "image": 15,
+            "audio": 12,
+            "video": 15,
+            "multimedia": 19
+          },
+          "use_context": {
+            "personal": 13,
+            "educational": 17,
+            "non-profit": 14,
+            "commercial": 14,
+            "promotional": 18
+          },
+          "attribution_clarity": {
+            "implicit": 16,
+            "partial": 14,
+            "clear": 15,
+            "detailed": 15,
+            "exhaustive": 16
+          },
+          "license_and_rights": {
+            "public_domain": 18,
+            "open-source": 13,
+            "creative_commons": 16,
+            "copyrighted": 14,
+            "restricted": 15
+          },
+          "user_request_type": {
+            "informational": 13,
+            "transformative": 17,
+            "derivative": 12,
+            "reproductive": 17,
+            "generative": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 10,
+            "East Asian": 8,
+            "South Asian": 11,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 11
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 9,
+            "gender/sexual minority": 9,
+            "person with disability": 10,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "sexual_content_involving_minors": {
+      "num_configs": 67,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 544,
+        "covered_tuples": 544,
+        "covering_strength": 2,
+        "num_configs": 67,
+        "per_axis_value_counts": {
+          "request_directness": {
+            "implicit": 13,
+            "hinted": 17,
+            "explicit": 20,
+            "persistent": 17
+          },
+          "contextual_sensitivity": {
+            "no context": 15,
+            "some context": 14,
+            "relevant context": 20,
+            "detailed context": 18
+          },
+          "educational_relevance": {
+            "not relevant": 15,
+            "tangentially relevant": 17,
+            "relevant": 16,
+            "highly relevant": 19
+          },
+          "emotional_intensity": {
+            "neutral": 16,
+            "concerned": 15,
+            "distressed": 19,
+            "urgent": 17
+          },
+          "conversational_history": {
+            "first interaction": 18,
+            "some history": 14,
+            "established relationship": 15,
+            "long-term interaction": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 8,
+            "Western European": 9,
+            "East Asian": 9,
+            "South Asian": 8,
+            "Middle Eastern/North African": 8,
+            "Sub-Saharan African": 8,
+            "Latin American": 8,
+            "Global/multicultural": 9
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 8,
+            "racial/ethnic minority": 8,
+            "religious minority": 9,
+            "gender/sexual minority": 8,
+            "person with disability": 8,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "support_mental_health": {
+      "num_configs": 76,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 919,
+        "covered_tuples": 919,
+        "covering_strength": 2,
+        "num_configs": 76,
+        "per_axis_value_counts": {
+          "crisis_severity": {
+            "low-risk conversation": 18,
+            "mild distress": 12,
+            "moderate crisis": 13,
+            "severe crisis": 12,
+            "imminent harm": 21
+          },
+          "user_disclosure": {
+            "vague concerns": 15,
+            "general symptoms": 15,
+            "specific struggles": 12,
+            "personal experiences": 15,
+            "explicit emotions": 19
+          },
+          "conversation_history": {
+            "initial conversation": 13,
+            "some context": 17,
+            "established relationship": 14,
+            "long-term support": 14,
+            "complex history": 18
+          },
+          "support_request": {
+            "general information": 16,
+            "emotional support": 14,
+            "practical advice": 15,
+            "referrals": 15,
+            "immediate intervention": 16
+          },
+          "emotional_intensity": {
+            "neutral tone": 18,
+            "mild emotions": 13,
+            "strong emotions": 16,
+            "intense emotions": 14,
+            "overwhelming emotions": 15
+          },
+          "ambiguity_clarity": {
+            "clear and direct": 13,
+            "somewhat ambiguous": 17,
+            "ambiguous": 12,
+            "very ambiguous": 17,
+            "unclear": 17
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 10,
+            "East Asian": 8,
+            "South Asian": 11,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 11
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 9,
+            "gender/sexual minority": 9,
+            "person with disability": 10,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    },
+    "support_programmatic_use": {
+      "num_configs": 68,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 609,
+        "covered_tuples": 609,
+        "covering_strength": 2,
+        "num_configs": 68,
+        "per_axis_value_counts": {
+          "request_ambiguity": {
+            "explicit": 16,
+            "somewhat_ambiguous": 14,
+            "ambiguous": 12,
+            "highly_ambiguous": 13,
+            "completely_undefined": 13
+          },
+          "format_specification": {
+            "no_format_specified": 19,
+            "partial_format_specified": 12,
+            "complete_format_specified": 18,
+            "complex_format_specified": 19
+          },
+          "interaction_mode_clarity": {
+            "explicitly_interactive": 15,
+            "implicitly_interactive": 17,
+            "ambiguous": 13,
+            "implicitly_programmatic": 11,
+            "explicitly_programmatic": 12
+          },
+          "output_complexity": {
+            "simple_output": 20,
+            "moderately_complex_output": 18,
+            "complex_output": 13,
+            "highly_complex_output": 17
+          },
+          "contextual_dependencies": {
+            "no_contextual_dependencies": 16,
+            "simple_contextual_dependencies": 21,
+            "moderately_complex_contextual_dependencies": 13,
+            "complex_contextual_dependencies": 18
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 8,
+            "Western European": 8,
+            "East Asian": 8,
+            "South Asian": 8,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 9
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 8,
+            "religious minority": 8,
+            "gender/sexual minority": 9,
+            "person with disability": 9,
+            "elderly individual": 8,
+            "young person/minor": 8,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "transformation_exception": {
+      "num_configs": 71,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 643,
+        "covered_tuples": 643,
+        "covering_strength": 2,
+        "num_configs": 71,
+        "per_axis_value_counts": {
+          "request_complexity": {
+            "simple_translation": 16,
+            "text_summarization": 14,
+            "content_rewriting": 13,
+            "multi-step_analysis": 15,
+            "open-ended_transformation": 13
+          },
+          "content_sensitivity": {
+            "publicly_available": 14,
+            "restricted_but_not_sensitive": 16,
+            "sensitive_but_not_harmful": 15,
+            "potentially_harmful": 14,
+            "explicitly_prohibited": 12
+          },
+          "transformation_type": {
+            "translation": 16,
+            "summarization": 9,
+            "paraphrasing": 16,
+            "text_generation": 16,
+            "content_rewriting": 14
+          },
+          "contextual_ambiguity": {
+            "clear_and_explicit": 19,
+            "somewhat_ambiguous": 17,
+            "highly_ambiguous": 18,
+            "completely_unclear": 17
+          },
+          "instruction_clarity": {
+            "explicit_and_detailed": 15,
+            "somewhat_clear": 17,
+            "vague": 19,
+            "completely_lacking": 20
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 10,
+            "Western European": 8,
+            "East Asian": 8,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 9,
+            "Global/multicultural": 9
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 9,
+            "religious minority": 8,
+            "gender/sexual minority": 9,
+            "person with disability": 8,
+            "elderly individual": 10,
+            "young person/minor": 9,
+            "low socioeconomic background": 9
+          }
+        }
+      }
+    },
+    "uphold_fairness": {
+      "num_configs": 73,
+      "covering_strength": 2,
+      "coverage_stats": {
+        "total_tuples": 714,
+        "covered_tuples": 714,
+        "covering_strength": 2,
+        "num_configs": 73,
+        "per_axis_value_counts": {
+          "contextual_ambiguity": {
+            "explicit_context": 15,
+            "clear_context": 13,
+            "ambiguous_context": 17,
+            "implicit_context": 13,
+            "missing_context": 15
+          },
+          "decision_complexity": {
+            "simple_decision": 14,
+            "moderate_decision": 15,
+            "complex_decision": 14,
+            "high-stakes_decision": 14,
+            "multi-factor_decision": 16
+          },
+          "information_availability": {
+            "complete_information": 15,
+            "sufficient_information": 12,
+            "limited_information": 16,
+            "incomplete_information": 14,
+            "missing_information": 16
+          },
+          "regulatory_requirements": {
+            "no_regulations": 14,
+            "lenient_regulations": 16,
+            "standard_regulations": 13,
+            "strict_regulations": 13,
+            "highly_regulated": 17
+          },
+          "stakeholder_diversity": {
+            "single_stakeholder": 14,
+            "few_stakeholders": 15,
+            "multiple_stakeholders": 15,
+            "diverse_stakeholders": 15,
+            "conflicting_stakeholders": 14
+          },
+          "user_cultural_context": {
+            "Western/Anglo-American": 9,
+            "Western European": 9,
+            "East Asian": 10,
+            "South Asian": 9,
+            "Middle Eastern/North African": 9,
+            "Sub-Saharan African": 9,
+            "Latin American": 8,
+            "Global/multicultural": 10
+          },
+          "user_demographic_identity": {
+            "unmarked/majority identity": 9,
+            "racial/ethnic minority": 10,
+            "religious minority": 10,
+            "gender/sexual minority": 8,
+            "person with disability": 9,
+            "elderly individual": 8,
+            "young person/minor": 9,
+            "low socioeconomic background": 10
+          }
+        }
+      }
+    }
+  }
+}

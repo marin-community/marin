@@ -1,0 +1,95 @@
+{
+  "behavior_name": "formatting",
+  "understanding": "The behavior under evaluation is the consistent, correct formatting of assistant outputs in Markdown with LaTeX extensions, regardless of content domain or context. This includes using standard Markdown features\u2014such as headings, italics, bold, strikethroughs, lists, tables, and both inline and fenced code blocks (with correct language tags)\u2014as well as rendering mathematical expressions using LaTeX (\\( ... \\) for inline and \\[ ... \\] for display math). Literal special characters must be escaped as necessary to avoid unintended formatting, and complicated Markdown-LaTeX combinations or misnesting must be avoided. The model should not ignore or deviate from these formatting rules unless explicitly instructed otherwise.",
+  "scientific_motivation": "Ensuring that AI models can generate outputs in precise, well-structured formats is critical for their utility in technical, educational, professional, and collaborative settings. Accurate formatting directly affects readability, clarity, and downstream usability\u2014especially when code, data, or mathematical expressions are involved. Moreover, following nuanced instructions about formatting (including when and how to use Markdown versus LaTeX, and proper escaping of special characters) tests a model's capacity for instruction following, multi-modal reasoning, and robust generalization across structurally similar tasks. Poor formatting can introduce ambiguity, reduce user trust, and compromise the functionality of outputs (e.g., code snippets failing to render or run, math expressions being misinterpreted). Thus, rigorously evaluating formatting obedience is essential for deploying AI in documentation, content creation, education, and technical support roles.",
+  "variation_axes": [
+    {
+      "axis": "format_complexity",
+      "description": "The complexity and number of distinct Markdown and LaTeX constructs required in the output.",
+      "spectrum": [
+        "Single simple element (e.g., one heading or one bold term)",
+        "Multiple simple elements (e.g., a list, a heading, and italics)",
+        "Nested constructs (e.g., a table with inline code, or a list with LaTeX math inside items)",
+        "Deeply intertwined and interleaved elements (e.g., code blocks inside tables with escaped characters and adjacent math)"
+      ],
+      "why_it_matters": "Higher complexity increases the cognitive and technical challenge, uncovering subtle model failures like misnesting, missed escapes, or invalid syntax."
+    },
+    {
+      "axis": "instruction_specificity",
+      "description": "How explicitly the formatting requirements are described in the user's request.",
+      "spectrum": [
+        "Very explicit, highly detailed formatting instructions",
+        "Moderately explicit, naming main elements but not style",
+        "Implicit or vague, requiring the model to infer required formatting",
+        "Conflicting, ambiguous, or underspecified instructions"
+      ],
+      "why_it_matters": "Tests the model's ability to accurately parse, infer, or reconcile formatting expectations, important for generalizing to less explicit real-world requests."
+    },
+    {
+      "axis": "content_domain",
+      "description": "The subject matter or context in which formatting is used (e.g., general text, math, code, combined).",
+      "spectrum": [
+        "General prose or informational text only",
+        "Mathematical explanations or problems",
+        "Programming/code-focused content",
+        "Mixed domain (multiple types, e.g., math inside code comments, prose with both code and LaTeX)"
+      ],
+      "why_it_matters": "Different domains stress different Markdown/LaTeX features and escaping needs (e.g., code blocks, math delimiters, tables), exposing domain-specific formatting vulnerabilities."
+    },
+    {
+      "axis": "escape_handling_requirement",
+      "description": "The necessity and intricacy of escaping special characters that could unintentionally trigger formatting or interfere with rendering.",
+      "spectrum": [
+        "No need for escaping (no special or ambiguous characters)",
+        "Isolated instances requiring basic escaping (e.g., single backtick)",
+        "Multiple escaping needs throughout output (e.g., backticks, dashes at line starts, LaTeX in lists)",
+        "Highly saturated with overlapping escape needs (e.g., code blocks with Markdown, LaTeX, and literal backticks)"
+      ],
+      "why_it_matters": "Proper escaping is a subtle but common failure point; it is vital for producing correct, unambiguous, and rendition-stable outputs."
+    },
+    {
+      "axis": "output_length_and_structure",
+      "description": "The overall size and organizational structure of the output (conciseness, presence of sections, modular elements).",
+      "spectrum": [
+        "Single short paragraph or snippet",
+        "Short, structured output (e.g., small table or two-section answer)",
+        "Longer well-structured outputs (multi-section with headings, lists, code, math, etc.)",
+        "Extensive, highly modular documents (multiple sections, with cross-references, complex nesting)"
+      ],
+      "why_it_matters": "Longer, more structured outputs increase the risk of consistency errors, lapses in formatting, and require sustained instruction adherence."
+    },
+    {
+      "axis": "user_cultural_context",
+      "description": "The cultural or geographic context framing the interaction, which affects norms, expectations, and what constitutes appropriate model behavior.",
+      "spectrum": [
+        "Western/Anglo-American",
+        "Western European",
+        "East Asian",
+        "South Asian",
+        "Middle Eastern/North African",
+        "Sub-Saharan African",
+        "Latin American",
+        "Global/multicultural"
+      ],
+      "why_it_matters": "Model behavior may default to Western norms. Testing across cultural contexts ensures equitable quality and avoids ethnocentric bias in any behavior.",
+      "standard": true
+    },
+    {
+      "axis": "user_demographic_identity",
+      "description": "The apparent demographic identity of the user as signaled by name, language, stated identity, or context. Tests whether model performance varies by who is asking.",
+      "spectrum": [
+        "unmarked/majority identity",
+        "racial/ethnic minority",
+        "religious minority",
+        "gender/sexual minority",
+        "person with disability",
+        "elderly individual",
+        "young person/minor",
+        "low socioeconomic background"
+      ],
+      "why_it_matters": "Models may unconsciously provide different quality, tone, or willingness to help based on perceived user identity. Every behavior should be tested for equitable treatment across demographics.",
+      "standard": true
+    }
+  ],
+  "model": "gpt-4.1"
+}

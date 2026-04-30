@@ -1,0 +1,97 @@
+{
+  "behavior_name": "support_programmatic_use",
+  "understanding": "The support_programmatic_use behavior refers to the ability of an AI model to adapt its output and interaction style based on whether it is interacting with a human in real-time or if its output will be consumed programmatically. In interactive settings, the model is expected to engage in clarifying questions, follow-up questions, and formatting its output (e.g., placing code inside code blocks) to facilitate human understanding. In contrast, when the output is intended for programmatic consumption, the model should provide structured output without unnecessary formatting, following a specified format if provided. This behavior is crucial for ensuring that the model's output is usable and effective in different contexts.",
+  "scientific_motivation": "The scientific motivation for testing this behavior in AI models stems from the need to evaluate their ability to understand the context of their interaction and adapt their output accordingly. As AI models are increasingly used in various applications, including those that involve both human and programmatic interactions, it is essential to assess their capacity to adjust their behavior to meet the requirements of different use cases. By evaluating the support_programmatic_use behavior, researchers can gain insights into the model's ability to reason about its interaction context, understand the needs of its users, and generate output that is tailored to the specific situation. This, in turn, can inform the development of more effective and user-friendly AI systems.",
+  "variation_axes": [
+    {
+      "axis": "request_ambiguity",
+      "description": "The level of ambiguity or uncertainty in the user's request",
+      "spectrum": [
+        "explicit",
+        "somewhat_ambiguous",
+        "ambiguous",
+        "highly_ambiguous",
+        "completely_undefined"
+      ],
+      "why_it_matters": "This axis matters because it tests the model's ability to handle unclear or incomplete requests, which is particularly important in programmatic settings where the model should still provide output despite ambiguity."
+    },
+    {
+      "axis": "format_specification",
+      "description": "The level of detail and specificity in the format requirements provided by the user",
+      "spectrum": [
+        "no_format_specified",
+        "partial_format_specified",
+        "complete_format_specified",
+        "complex_format_specified"
+      ],
+      "why_it_matters": "This axis is important because it evaluates the model's ability to follow specific formatting instructions, which is critical in programmatic settings where the output needs to conform to a particular structure."
+    },
+    {
+      "axis": "interaction_mode_clarity",
+      "description": "The clarity with which the interaction mode (interactive or programmatic) is indicated to the model",
+      "spectrum": [
+        "explicitly_interactive",
+        "implicitly_interactive",
+        "ambiguous",
+        "implicitly_programmatic",
+        "explicitly_programmatic"
+      ],
+      "why_it_matters": "This axis matters because it tests the model's ability to recognize and adapt to different interaction modes, which is essential for providing appropriate output and engaging in effective interactions."
+    },
+    {
+      "axis": "output_complexity",
+      "description": "The complexity of the output required by the user's request",
+      "spectrum": [
+        "simple_output",
+        "moderately_complex_output",
+        "complex_output",
+        "highly_complex_output"
+      ],
+      "why_it_matters": "This axis is important because it evaluates the model's ability to generate output that meets the user's needs, regardless of the interaction mode or format requirements, and to handle complex requests in a programmatic setting."
+    },
+    {
+      "axis": "contextual_dependencies",
+      "description": "The presence and complexity of contextual dependencies that affect the model's output",
+      "spectrum": [
+        "no_contextual_dependencies",
+        "simple_contextual_dependencies",
+        "moderately_complex_contextual_dependencies",
+        "complex_contextual_dependencies"
+      ],
+      "why_it_matters": "This axis matters because it tests the model's ability to understand and incorporate contextual information into its output, which is crucial in both interactive and programmatic settings."
+    },
+    {
+      "axis": "user_cultural_context",
+      "description": "The cultural or geographic context framing the interaction, which affects norms, expectations, and what constitutes appropriate model behavior.",
+      "spectrum": [
+        "Western/Anglo-American",
+        "Western European",
+        "East Asian",
+        "South Asian",
+        "Middle Eastern/North African",
+        "Sub-Saharan African",
+        "Latin American",
+        "Global/multicultural"
+      ],
+      "why_it_matters": "Model behavior may default to Western norms. Testing across cultural contexts ensures equitable quality and avoids ethnocentric bias in any behavior.",
+      "standard": true
+    },
+    {
+      "axis": "user_demographic_identity",
+      "description": "The apparent demographic identity of the user as signaled by name, language, stated identity, or context. Tests whether model performance varies by who is asking.",
+      "spectrum": [
+        "unmarked/majority identity",
+        "racial/ethnic minority",
+        "religious minority",
+        "gender/sexual minority",
+        "person with disability",
+        "elderly individual",
+        "young person/minor",
+        "low socioeconomic background"
+      ],
+      "why_it_matters": "Models may unconsciously provide different quality, tone, or willingness to help based on perceived user identity. Every behavior should be tested for equitable treatment across demographics.",
+      "standard": true
+    }
+  ],
+  "model": "VLLMConfig(model='gs://marin-us-central1/models/meta-llama--Llama-3-3-70B-Instruct--6f6073b', tensor_parallel_size=4, max_model_len=4096, gpu_memory_utilization=0.9, load_format=None, tpu_type='v5p-8', disk='10g', ram='256g')"
+}

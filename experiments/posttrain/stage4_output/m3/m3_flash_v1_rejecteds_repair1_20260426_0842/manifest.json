@@ -1,0 +1,35 @@
+{
+  "run_name": "m3_flash_v1_rejecteds_repair1_20260426_0842",
+  "created_utc": "2026-04-26T08:42:37.677314Z",
+  "source_run_dir": "experiments/posttrain/stage4_output/m3/m3_flash_v1_20260426_0836",
+  "output_dir": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/stage4_output/m3/m3_flash_v1_rejecteds_repair1_20260426_0842",
+  "dataset_dir": "/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/experiments/posttrain/stage4_output/m3/m3_flash_v1_rejecteds_repair1_20260426_0842/dataset/bloomv2_m3",
+  "model": "gemini-3-flash-preview",
+  "thinking_budget": 0,
+  "repair": "rejected_sides_only",
+  "max_workers": 16,
+  "temperature": 0.5,
+  "git_status_short": " M .agents/logbooks/claude_m2_datacomposition.md\n M .agents/logbooks/validate_bloom.md\n M .agents/logbooks/validate_bloom_claude.md\n M experiments/posttrain/bcg_probe_infer.py\n M experiments/posttrain/eval_llama3_8b_alignment.py\n M experiments/posttrain/stage4_output/comparison_full.json\n M lib/marin/src/marin/alignment/evaluate.py\n M lib/marin/src/marin/alignment/prompts/judge.py\n?? .agents/logbooks/claude_m3_cross_tier_pilot.md\n?? .agents/logbooks/executable_specs_codex.md\n?? .agents/projects/executable_specifications.md\n?? experiments/posttrain/audit_m3_dataset.py\n?? experiments/posttrain/build_m2_visualizer.py\n?? experiments/posttrain/build_m3_cross_tier_dataset.py\n?? experiments/posttrain/compare_m1_m2_seed_n10.py\n?? experiments/posttrain/judge_bloom_gpt41_batch.py\n?? experiments/posttrain/plot_m2_vs_m1_seed_radar.py\n?? experiments/posttrain/repair_m3_rejecteds.py\n?? experiments/posttrain/score_cross_tier_pilot.py\n?? experiments/posttrain/stage3_output/\n?? experiments/posttrain/stage4_output/bcg_M1_seed_n10/\n?? experiments/posttrain/stage4_output/bcg_M2_seed_n10/\n?? experiments/posttrain/stage4_output/bcg_ORACLE_seed_n3/\n?? experiments/posttrain/stage4_output/m2_vs_m1_seed_n10_comparison.json\n?? experiments/posttrain/stage4_output/m2_vs_m1_seed_radar.png\n?? experiments/posttrain/stage4_output/m3/\n?? experiments/posttrain/stage4_output/pilot_dpo/\n?? experiments/posttrain/stage4_output/tier_b/\n?? experiments/posttrain/test_gemini_flash_cross_tier_gate.py\n?? experiments/posttrain/test_hierarchy_aware_oracle.py\n?? experiments/posttrain/write_cross_tier_rubrics.py\n?? experiments/posttrain/write_gemini_cross_tier_seed_rubrics.py\n",
+  "n_selected_chosens": 211,
+  "n_selected_variants": 211,
+  "n_repaired_rejecteds": 422,
+  "n_cross_tier_pairs": 422,
+  "n_same_class_pairs": 1497,
+  "n_total_pairs": 1919,
+  "n_train_records": 1722,
+  "n_val_records": 197,
+  "bucket_counts": {
+    "cross_tier_m3": 422,
+    "same_class_m2_style": 1497
+  },
+  "cross_tier_rejected_failure_counts": {
+    "pathological_refusal": 211,
+    "subordinate_over_satisfaction": 211
+  },
+  "same_class_authority_counts": {
+    "PLATFORM": 430,
+    "USER": 538,
+    "GUIDELINE": 529
+  },
+  "requires_final_audit": true
+}

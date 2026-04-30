@@ -336,7 +336,9 @@ def download_hf(cfg: DownloadConfig) -> None:
             logger.warning(f"Could not get size for {file}: {e}")
             file_sizes[file] = None  # Will skip validation for this file
 
+    target_fs, _ = url_to_fs(output_path)
     download_tasks = []
+    skipped_existing = 0
 
     for file in files:
         try:
@@ -345,6 +347,16 @@ def download_hf(cfg: DownloadConfig) -> None:
                 raise ValueError(f"Computed path escapes source root: source={hf_source_path}, file={file}")
             fsspec_file_path = os.path.join(output_path, relative_file_path)
             expected_size = file_sizes.get(file)
+            if expected_size is not None and target_fs.exists(fsspec_file_path):
+                existing_size = target_fs.info(fsspec_file_path).get("size")
+                if existing_size == expected_size:
+                    skipped_existing += 1
+                    logger.info(f"Skipping existing file with matching size: {fsspec_file_path} ({existing_size} bytes)")
+                    continue
+                logger.warning(
+                    f"Existing file size mismatch for {fsspec_file_path}: "
+                    f"expected {expected_size} bytes, found {existing_size}; redownloading"
+                )
             # Fully-qualify the source URL so subprocess workers can open it via fsspec
             # without having to reconstruct HfFileSystem / revision state.
             worker_source_url = file if cfg.source_url_override is not None else f"hf://{file}"
@@ -364,7 +376,10 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     total_files = len(download_tasks)
     total_size_gb = sum(s for s in file_sizes.values() if s is not None) / (1024**3)
-    logger.info(f"Total number of files to process: {total_files} ({total_size_gb:.2f} GB)")
+    logger.info(
+        f"Total number of files to process: {total_files} ({total_size_gb:.2f} GB); "
+        f"skipping {skipped_existing} already-present files with matching sizes"
+    )
 
     pipeline = (
         Dataset.from_list(download_tasks)

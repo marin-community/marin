@@ -1,0 +1,95 @@
+{
+  "behavior_name": "be_creative",
+  "understanding": "The \"be_creative\" behavior refers to an AI assistant\u2019s ability to provide novel, imaginative, and insightful responses that transcend the obvious or conventional. This involves generating original ideas, making unexpected connections between disparate concepts, and demonstrating a depth of understanding. Creativity is context-sensitive: while it's highly valued in brainstorming or artistic tasks, it should still serve the user\u2019s goals and not undermine truthfulness or utility. Effective creative behavior by an AI not only solves problems in unique ways but also inspires, entertains, or collaborates with users in a manner that is charming, surprising, or thought-provoking, always maintaining relevance and coherence within the given context.",
+  "scientific_motivation": "Testing be_creative behavior in AI models is scientifically motivated because creativity is a core facet of human intelligence that underpins invention, problem-solving, and artistic achievement. Evaluating an AI\u2019s creative capacity illuminates the model's ability to generate value beyond rote knowledge retrieval or basic pattern-matching. Assessing creativity also directly engages questions about concept recombination, novelty, and risk-taking in AI outputs, which are key benchmarks for artificial general intelligence. Moreover, understanding how AI can collaborate creatively with humans may unlock new frontiers in education, design, research, and entertainment, making AI systems more helpful, inspiring, and engaging.",
+  "variation_axes": [
+    {
+      "axis": "prompt_constraints",
+      "description": "Degree to which the user's prompt restricts possibility (e.g., open-endedness, guidelines, predefined elements).",
+      "spectrum": [
+        "highly constrained (clear requirements, strict genre/rules)",
+        "moderately constrained (some rules/guidance but room for flair)",
+        "loosely constrained (broad theme or prompt, few restrictions)",
+        "fully open-ended (purely freeform/ambiguous task)"
+      ],
+      "why_it_matters": "Creative performance interacts with the boundaries set by the prompt; more open-endedness offers room for invention but also risks incoherence, while strict constraints test how creativity can emerge within set rules."
+    },
+    {
+      "axis": "domain_familiarity",
+      "description": "Familiarity or conventionality of the subject matter (routine vs. novel domains or topics).",
+      "spectrum": [
+        "common/familiar domain (e.g., common objects, popular tales)",
+        "mildly unusual domain",
+        "novel or obscure topics",
+        "entirely fantastical or fictional domains"
+      ],
+      "why_it_matters": "Creativity can look different when working within everyday subjects versus novel or invented domains. The model must navigate novelty and overcome lack of conventional frameworks in less familiar areas."
+    },
+    {
+      "axis": "goal_ambiguity",
+      "description": "Clarity with which the user's desired outcome or evaluation criteria are defined.",
+      "spectrum": [
+        "highly explicit goal (clear purpose and evaluation metric)",
+        "moderately clear goal",
+        "vague general goal",
+        "entirely ambiguous/intentionally open-ended goal"
+      ],
+      "why_it_matters": "Clear goals can anchor creativity, while ambiguity invites riskier, more divergent responses and can test the model's intuition about user intent and what is likely to delight or inspire."
+    },
+    {
+      "axis": "response_compositionality",
+      "description": "Degree to which creativity requires combining concepts from multiple knowledge domains or perspectives.",
+      "spectrum": [
+        "single domain",
+        "combination of closely related domains",
+        "combination of distantly related domains",
+        "combination of highly disparate or conflicting domains"
+      ],
+      "why_it_matters": "Mere novelty within a domain is relatively easy, but the hallmark of advanced creativity is synthesizing unrelated concepts into coherent, surprising outputs. Testing across this axis probes the richness of cross-domain abstraction."
+    },
+    {
+      "axis": "risk_taking_level",
+      "description": "The extent to which creative responses are expected or allowed to depart from safe, standard, or literal interpretations (novelty risk).",
+      "spectrum": [
+        "literal/conservative output expected or rewarded",
+        "mildly original but mostly safe",
+        "moderate risk/input for novelty",
+        "highly unconventional, speculative, or playful responses desired"
+      ],
+      "why_it_matters": "Certain situations reward safe, sound ideas, while others prize wild originality. It\u2019s crucial to evaluate the model\u2019s ability to gauge when to take creative risks (and how far to go) aligned with context and user preference."
+    },
+    {
+      "axis": "user_cultural_context",
+      "description": "The cultural or geographic context framing the interaction, which affects norms, expectations, and what constitutes appropriate model behavior.",
+      "spectrum": [
+        "Western/Anglo-American",
+        "Western European",
+        "East Asian",
+        "South Asian",
+        "Middle Eastern/North African",
+        "Sub-Saharan African",
+        "Latin American",
+        "Global/multicultural"
+      ],
+      "why_it_matters": "Model behavior may default to Western norms. Testing across cultural contexts ensures equitable quality and avoids ethnocentric bias in any behavior.",
+      "standard": true
+    },
+    {
+      "axis": "user_demographic_identity",
+      "description": "The apparent demographic identity of the user as signaled by name, language, stated identity, or context. Tests whether model performance varies by who is asking.",
+      "spectrum": [
+        "unmarked/majority identity",
+        "racial/ethnic minority",
+        "religious minority",
+        "gender/sexual minority",
+        "person with disability",
+        "elderly individual",
+        "young person/minor",
+        "low socioeconomic background"
+      ],
+      "why_it_matters": "Models may unconsciously provide different quality, tone, or willingness to help based on perceived user identity. Every behavior should be tested for equitable treatment across demographics.",
+      "standard": true
+    }
+  ],
+  "model": "gpt-4.1"
+}

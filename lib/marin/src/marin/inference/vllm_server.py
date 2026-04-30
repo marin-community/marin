@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
 import glob
 import logging
 import os
@@ -9,7 +10,9 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
+import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -27,6 +30,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_VLLM_TPU_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
 DEFAULT_VLLM_GPU_DOCKER_IMAGE: str = "nvcr.io/nvidia/vllm:25.12.post1-py3"
 VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu",)
+GPT_OSS_REASONING_PARSER = "openai_gptoss"
 
 _SENSITIVE_ENV_KEYS = frozenset(
     {
@@ -163,9 +167,15 @@ class VllmServerBackend(ABC):
 
 
 class DockerVllmServerBackend(VllmServerBackend):
-    def __init__(self, docker_image: str | None, docker_run_args: list[str] | None) -> None:
+    def __init__(
+        self,
+        docker_image: str | None,
+        docker_run_args: list[str] | None,
+        env_overrides: dict[str, str] | None,
+    ) -> None:
         self._docker_image = docker_image
         self._docker_run_args = docker_run_args
+        self._env_overrides = env_overrides or {}
 
     def start(
         self,
@@ -184,6 +194,7 @@ class DockerVllmServerBackend(VllmServerBackend):
             extra_cli_args=extra_cli_args,
             docker_image=self._docker_image,
             docker_run_args=self._docker_run_args,
+            env_overrides=self._env_overrides,
         )
 
     def logs_tail(self, handle: VllmServerHandle, *, max_lines: int = 200) -> str:
@@ -203,6 +214,14 @@ class DockerVllmServerBackend(VllmServerBackend):
 
 
 class NativeVllmServerBackend(VllmServerBackend):
+    def __init__(
+        self,
+        env_overrides: dict[str, str] | None,
+        native_stderr_mode: Literal["file", "tee"],
+    ) -> None:
+        self._env_overrides = env_overrides or {}
+        self._native_stderr_mode = native_stderr_mode
+
     def start(
         self,
         *,
@@ -218,6 +237,8 @@ class NativeVllmServerBackend(VllmServerBackend):
             port=port,
             timeout_seconds=timeout_seconds,
             extra_cli_args=extra_cli_args,
+            env_overrides=self._env_overrides,
+            native_stderr_mode=self._native_stderr_mode,
         )
 
     def logs_tail(self, handle: VllmServerHandle, *, max_lines: int = 200) -> str:
@@ -251,11 +272,13 @@ def _resolve_vllm_backend(
     *,
     docker_image: str | None,
     docker_run_args: list[str] | None,
+    env_overrides: dict[str, str] | None,
+    native_stderr_mode: Literal["file", "tee"],
 ) -> VllmServerBackend:
     if mode == "docker":
-        return DockerVllmServerBackend(docker_image, docker_run_args)
+        return DockerVllmServerBackend(docker_image, docker_run_args, env_overrides)
     if mode == "native":
-        return NativeVllmServerBackend()
+        return NativeVllmServerBackend(env_overrides, native_stderr_mode)
     raise ValueError(f"Unknown vLLM mode {mode!r}; expected 'native' or 'docker'.")
 
 
@@ -282,9 +305,21 @@ def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
 
 def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     args: list[str] = []
+    tokenizer = engine_kwargs.get("tokenizer")
+    if tokenizer is not None:
+        args.extend(["--tokenizer", str(tokenizer)])
+    hf_overrides = engine_kwargs.get("hf_overrides")
+    if hf_overrides is not None:
+        args.extend(["--hf-overrides", json.dumps(hf_overrides, sort_keys=True)])
+    additional_config = engine_kwargs.get("additional_config")
+    if additional_config is not None:
+        args.extend(["--additional-config", json.dumps(additional_config, sort_keys=True)])
     load_format = engine_kwargs.get("load_format")
     if load_format is not None:
         args.extend(["--load-format", load_format])
+    tensor_parallel_size = engine_kwargs.get("tensor_parallel_size")
+    if tensor_parallel_size is not None:
+        args.extend(["--tensor-parallel-size", str(tensor_parallel_size)])
     max_model_len = engine_kwargs.get("max_model_len")
     if max_model_len is not None:
         args.extend(["--max-model-len", str(max_model_len)])
@@ -292,6 +327,41 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     if gpu_memory_utilization is not None:
         args.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
     return args
+
+
+def _looks_like_gpt_oss_model(*candidates: str | None) -> bool:
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if "gpt-oss" in candidate.lower():
+            return True
+    return False
+
+
+def _has_cli_flag(args: list[str], flag: str) -> bool:
+    return flag in args
+
+
+def _gpt_oss_engine_kwarg_candidates(engine_kwargs: dict[str, object]) -> list[str]:
+    candidates: list[str] = []
+
+    tokenizer = engine_kwargs.get("tokenizer")
+    if isinstance(tokenizer, str):
+        candidates.append(tokenizer)
+
+    hf_overrides = engine_kwargs.get("hf_overrides")
+    if not isinstance(hf_overrides, dict):
+        return candidates
+
+    model_type = hf_overrides.get("model_type")
+    if isinstance(model_type, str):
+        candidates.append(model_type)
+
+    architectures = hf_overrides.get("architectures")
+    if isinstance(architectures, list):
+        candidates.extend(arch for arch in architectures if isinstance(arch, str))
+
+    return candidates
 
 
 def _poll_until_ready(
@@ -362,6 +432,8 @@ class VllmEnvironment:
         docker_image: str | None = None,
         docker_run_args: list[str] | None = None,
         extra_args: list[str] | None = None,
+        env_overrides: dict[str, str] | None = None,
+        native_stderr_mode: Literal["file", "tee"] = "file",
     ) -> None:
         self.model_name_or_path, self.model = resolve_model_name_or_path(model)
         self.mode = resolve_vllm_mode(mode)
@@ -370,11 +442,21 @@ class VllmEnvironment:
         self.timeout_seconds = timeout_seconds
         self.docker_image = docker_image
         self.docker_run_args = docker_run_args
+        self.env_overrides = env_overrides or {}
+        self.native_stderr_mode = native_stderr_mode
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
+        if _looks_like_gpt_oss_model(
+            self.model_name_or_path,
+            self.model.name,
+            *_gpt_oss_engine_kwarg_candidates(self.model.engine_kwargs),
+        ) and not _has_cli_flag(self.extra_cli_args, "--reasoning-parser"):
+            self.extra_cli_args.extend(["--reasoning-parser", GPT_OSS_REASONING_PARSER])
         self._backend = _resolve_vllm_backend(
             self.mode,
             docker_image=self.docker_image,
             docker_run_args=self.docker_run_args,
+            env_overrides=self.env_overrides,
+            native_stderr_mode=self.native_stderr_mode,
         )
 
         self.vllm_server: VllmServerHandle | None = None
@@ -446,6 +528,7 @@ class VllmEnvironment:
             "docker_container_name": self.vllm_server.docker_container_name if self.vllm_server else None,
             "docker_image": self.vllm_server.docker_image if self.vllm_server else self.docker_image,
             "docker_run_cmd": self.vllm_server.docker_run_cmd if self.vllm_server else None,
+            "native_stderr_mode": self.native_stderr_mode,
         }
 
     def logs_tail(self, *, max_lines: int = 200) -> str:
@@ -643,6 +726,7 @@ def _start_vllm_docker_server(
     docker_image: str | None = None,
     docker_run_args: list[str] | None = None,
     container_name: str | None = None,
+    env_overrides: dict[str, str] | None = None,
 ) -> VllmServerHandle:
     """Start a vLLM server in a sibling Docker container and wait until it is ready.
 
@@ -664,12 +748,10 @@ def _start_vllm_docker_server(
             )
         logger.info(f"No docker_image specified; defaulting to {docker_image} for {resource_type}.")
 
-    env: dict[str, str] = _build_vllm_env_dict()
+    env: dict[str, str] = _build_vllm_env_dict(env_overrides=env_overrides)
     explain_cache_misses = os.environ.get("JAX_EXPLAIN_CACHE_MISSES")
     if explain_cache_misses is not None:
         env["JAX_EXPLAIN_CACHE_MISSES"] = explain_cache_misses
-    env["TPU_MIN_LOG_LEVEL"] = os.environ.get("TPU_MIN_LOG_LEVEL", "3")
-    env["TPU_STDERR_LOG_LEVEL"] = os.environ.get("TPU_STDERR_LOG_LEVEL", "3")
     for key in ("HF_TOKEN", "WANDB_API_KEY"):
         value = os.environ.get(key)
         if value:
@@ -763,6 +845,7 @@ _VLLM_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
     # architectures. flax_nnx currently fails without an auto mesh context, so
     # default to the vllm implementation unless the user overrides it.
     ("MODEL_IMPL_TYPE", "vllm"),
+    # Reduce TPU runtime logging noise by default (match training defaults).
     ("TPU_MIN_LOG_LEVEL", "3"),
     ("TPU_STDERR_LOG_LEVEL", "3"),
     ("JAX_ENABLE_COMPILATION_CACHE", "1"),
@@ -776,10 +859,11 @@ _VLLM_PASSTHROUGH_KEYS: tuple[str, ...] = (
 )
 
 
-def _build_vllm_env_dict() -> dict[str, str]:
+def _build_vllm_env_dict(*, env_overrides: dict[str, str] | None = None) -> dict[str, str]:
     """Build the canonical vLLM environment dict (fresh, not inheriting os.environ).
 
-    Used by the Docker backend which passes an explicit env dict.
+    Used by the Docker backend which passes an explicit env dict. Optional
+    ``env_overrides`` are applied last.
     """
     cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir())
     env: dict[str, str] = {
@@ -797,19 +881,49 @@ def _build_vllm_env_dict() -> dict[str, str]:
         value = os.environ.get(key)
         if value is not None:
             env[key] = value
+    if env_overrides:
+        env.update(env_overrides)
     return env
 
 
-def _vllm_env() -> dict[str, str]:
+def _vllm_env(*, env_overrides: dict[str, str] | None = None) -> dict[str, str]:
     """Build the vLLM environment for the native (subprocess) backend.
 
-    Starts from ``os.environ`` and applies the canonical defaults.
+    Starts from ``os.environ`` and applies the canonical defaults, then
+    overlays any explicit ``env_overrides``.
     """
+
     env = dict(os.environ)
     canonical = _build_vllm_env_dict()
     for key, value in canonical.items():
         env.setdefault(key, value)
+    if env_overrides:
+        env.update(env_overrides)
     return env
+
+
+def _mirror_file_to_stderr(
+    *,
+    process: subprocess.Popen[str],
+    stderr_path: str,
+    poll_interval_seconds: float = 0.5,
+) -> None:
+    with open(stderr_path, "r", errors="replace") as stderr_reader:
+        while True:
+            line = stderr_reader.readline()
+            if line:
+                sys.stderr.write(line)
+                sys.stderr.flush()
+                continue
+
+            if process.poll() is not None:
+                remainder = stderr_reader.read()
+                if remainder:
+                    sys.stderr.write(remainder)
+                    sys.stderr.flush()
+                return
+
+            time.sleep(poll_interval_seconds)
 
 
 def _start_vllm_native_server(
@@ -819,6 +933,8 @@ def _start_vllm_native_server(
     port: int | None = None,
     timeout_seconds: int = 3600,
     extra_cli_args: list[str] | None = None,
+    env_overrides: dict[str, str] | None = None,
+    native_stderr_mode: Literal["file", "tee"] = "file",
 ) -> VllmServerHandle:
     """Start `vllm serve` in-process and wait until `/v1/models` responds."""
 
@@ -842,13 +958,19 @@ def _start_vllm_native_server(
     stderr_path = os.path.join(log_dir, "stderr.log")
     stdout_f = open(stdout_path, "w")
     stderr_f = open(stderr_path, "w")
-    native_env = _vllm_env()
+    native_env = _vllm_env(env_overrides=env_overrides)
     logger.info(
         "Starting vLLM native server with "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
         f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
     )
     process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True, env=native_env)
+    if native_stderr_mode == "tee":
+        threading.Thread(
+            target=_mirror_file_to_stderr,
+            kwargs={"process": process, "stderr_path": stderr_path},
+            daemon=True,
+        ).start()
 
     server_url: str = f"http://{host}:{resolved_port}/v1"
 

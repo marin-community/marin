@@ -1,0 +1,18 @@
+{
+  "batch_id": "batch_69e5c0efca748190bd5cfc6da4dbb212",
+  "input_file_id": "file-2voQyw1tuu4mA8X2n1cjsM",
+  "status": "completed",
+  "num_requests": 200,
+  "submitted_at": "2026-04-20T06:00:16.304916Z",
+  "metadata": {
+    "project": "m2_stage4_bcg",
+    "stage": "generate",
+    "model": "gpt-5.1",
+    "n_samples": "4",
+    "rubrics_file": "experiments/posttrain/stage3_output/paired_rubrics_50.jsonl"
+  },
+  "endpoint": "/v1/chat/completions",
+  "completion_window": "24h",
+  "output_file_id": "file-CifyZ6QwvDNyGFeC8mKg3v",
+  "error_file_id": "file-Ue4sZcAwp7WFMjacbESYNW"
+}

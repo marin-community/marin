@@ -1,0 +1,25 @@
+{
+  "counts_by_contract": {
+    "guideline_override": 94,
+    "platform_override_attempt": 64
+  },
+  "gemini_gate_status": "not_started",
+  "max_user_prompts": 2,
+  "model_generation_status": "not_started",
+  "n_records": 158,
+  "n_statements_by_contract": {
+    "guideline_override": 26,
+    "platform_override_attempt": 18
+  },
+  "records_path": "experiments/posttrain/stage4_output/m4_override_draft/override_prompts.jsonl",
+  "skipped_statement_ids_without_examples": {
+    "guideline_override": [
+      "no_agenda"
+    ],
+    "platform_override_attempt": [
+      "comply_with_laws"
+    ]
+  },
+  "spec_path": "experiments/posttrain/specs/openai_model_spec.jsonl",
+  "training_status": "not_started"
+}

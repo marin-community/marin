@@ -1,0 +1,112 @@
+{
+  "behavior_name": "formatting",
+  "understanding": "The behavior being evaluated is formatting, which refers to the arrangement and presentation of text in a way that makes it easy to read and understand. This includes the use of headings, paragraphs, lists, tables, and other visual elements to organize and structure content. In the context of AI models, formatting behavior involves the ability to generate text that is well-structured, visually appealing, and consistent in its formatting conventions.",
+  "scientific_motivation": "The scientific motivation for testing formatting behavior in AI models is to evaluate their ability to generate high-quality, human-like text that is easy to read and understand. This is important because well-formatted text can improve comprehension, engagement, and overall user experience. Additionally, formatting behavior can be an indicator of a model's ability to understand the context and purpose of the text, as well as its ability to adapt to different styles and conventions. By evaluating formatting behavior, researchers can gain insights into the strengths and limitations of AI models and develop more effective methods for generating high-quality text.",
+  "variation_axes": [
+    {
+      "axis": "formatting_complexity",
+      "description": "The level of complexity in the formatting requirements",
+      "spectrum": [
+        "simple paragraphs",
+        "headings and subheadings",
+        "lists and tables",
+        "nested lists and tables",
+        "complex layouts with multiple elements"
+      ],
+      "why_it_matters": "This axis matters because it tests the model's ability to handle increasingly complex formatting requirements, which can be challenging even for human writers."
+    },
+    {
+      "axis": "contextual_cues",
+      "description": "The presence and clarity of contextual cues that guide formatting decisions",
+      "spectrum": [
+        "no cues",
+        "implicit cues",
+        "explicit cues",
+        "ambiguous cues",
+        "conflicting cues"
+      ],
+      "why_it_matters": "This axis matters because it evaluates the model's ability to understand and respond to contextual information that influences formatting decisions, such as the purpose of the text or the target audience."
+    },
+    {
+      "axis": "style_consistency",
+      "description": "The level of consistency required in formatting styles and conventions",
+      "spectrum": [
+        "no consistency required",
+        "consistent within a section",
+        "consistent throughout the document",
+        "consistent across multiple documents",
+        "consistent with a specific style guide"
+      ],
+      "why_it_matters": "This axis matters because it tests the model's ability to maintain consistency in formatting styles and conventions, which is essential for creating professional-looking documents."
+    },
+    {
+      "axis": "error_tolerance",
+      "description": "The level of tolerance for formatting errors or inconsistencies",
+      "spectrum": [
+        "zero tolerance",
+        "minor errors allowed",
+        "some inconsistencies allowed",
+        "significant errors allowed",
+        "no formatting required"
+      ],
+      "why_it_matters": "This axis matters because it evaluates the model's ability to balance the need for perfect formatting with the need for efficient and effective communication, and to prioritize formatting decisions accordingly."
+    },
+    {
+      "axis": "formatting_novelty",
+      "description": "The level of novelty or creativity required in formatting decisions",
+      "spectrum": [
+        "standard formatting",
+        "minor variations",
+        "moderate creativity",
+        "high creativity",
+        "innovative formatting"
+      ],
+      "why_it_matters": "This axis matters because it tests the model's ability to think outside the box and come up with novel formatting solutions that are effective and engaging."
+    },
+    {
+      "axis": "evaluation_criteria",
+      "description": "The criteria used to evaluate the quality of the formatting",
+      "spectrum": [
+        "readability",
+        "aesthetics",
+        "consistency",
+        "effectiveness",
+        "overall quality"
+      ],
+      "why_it_matters": "This axis matters because it evaluates the model's ability to prioritize different evaluation criteria and make formatting decisions that balance competing demands."
+    },
+    {
+      "axis": "user_cultural_context",
+      "description": "The cultural or geographic context framing the interaction, which affects norms, expectations, and what constitutes appropriate model behavior.",
+      "spectrum": [
+        "Western/Anglo-American",
+        "Western European",
+        "East Asian",
+        "South Asian",
+        "Middle Eastern/North African",
+        "Sub-Saharan African",
+        "Latin American",
+        "Global/multicultural"
+      ],
+      "why_it_matters": "Model behavior may default to Western norms. Testing across cultural contexts ensures equitable quality and avoids ethnocentric bias in any behavior.",
+      "standard": true
+    },
+    {
+      "axis": "user_demographic_identity",
+      "description": "The apparent demographic identity of the user as signaled by name, language, stated identity, or context. Tests whether model performance varies by who is asking.",
+      "spectrum": [
+        "unmarked/majority identity",
+        "racial/ethnic minority",
+        "religious minority",
+        "gender/sexual minority",
+        "person with disability",
+        "elderly individual",
+        "young person/minor",
+        "low socioeconomic background"
+      ],
+      "why_it_matters": "Models may unconsciously provide different quality, tone, or willingness to help based on perceived user identity. Every behavior should be tested for equitable treatment across demographics.",
+      "standard": true
+    }
+  ],
+  "model": "VLLMConfig(model='gs://marin-us-central1/models/meta-llama--Llama-3-3-70B-Instruct--6f6073b', tensor_parallel_size=4, max_model_len=4096, gpu_memory_utilization=0.9, load_format=None, tpu_type='v5p-8', disk='10g', ram='256g')"
+}

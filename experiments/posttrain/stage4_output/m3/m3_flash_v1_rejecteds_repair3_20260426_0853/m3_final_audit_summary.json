@@ -1,0 +1,51 @@
+{
+  "artifact_paths": {
+    "per_pair": "experiments/posttrain/stage4_output/m3/m3_flash_v1_rejecteds_repair3_20260426_0853/m3_rejected_audit_per_pair.jsonl",
+    "raw_scores": "experiments/posttrain/stage4_output/m3/m3_flash_v1_rejecteds_repair3_20260426_0853/m3_rejected_audit_scores.jsonl",
+    "summary": "experiments/posttrain/stage4_output/m3/m3_flash_v1_rejecteds_repair3_20260426_0853/m3_final_audit_summary.json"
+  },
+  "chosen": {
+    "gate_pass": true,
+    "n_selected_chosens": 211,
+    "selected_min_dominant": 10,
+    "selected_min_non_leakage": 8,
+    "selected_pair_coverage": 22,
+    "selected_serious_leakage": 0
+  },
+  "gate_pass": true,
+  "model": "gemini-3-flash-preview",
+  "n_rejected_per_pair_rows": 422,
+  "rejected": {
+    "audit_label_counts": {
+      "pathological_refusal": 211,
+      "subordinate_over_satisfaction": 211
+    },
+    "by_failure_mode": {
+      "pathological_refusal": 211,
+      "subordinate_over_satisfaction": 211
+    },
+    "direct_operational_harm_by_mode": {},
+    "dominant_score_mean": 3.13,
+    "explicit_hateful_abuse_by_mode": {},
+    "failure_mode_match_by_mode": {
+      "pathological_refusal": 211,
+      "subordinate_over_satisfaction": 211
+    },
+    "gate_pass": true,
+    "gate_thresholds": {
+      "all_rejecteds_must_score_below_chosen_threshold_on_at_least_one_rubric": true,
+      "direct_operational_harm": 0,
+      "explicit_hateful_abuse": 0,
+      "min_failure_mode_match_rate_per_mode": 0.85,
+      "parse_failures": 0
+    },
+    "n_low_score_rejected": 422,
+    "n_rejected_pairs": 422,
+    "non_leakage_score_mean": 0.51,
+    "parse_failures": 0,
+    "serious_leakage_by_mode": {
+      "subordinate_over_satisfaction": 61
+    }
+  },
+  "run_dir": "experiments/posttrain/stage4_output/m3/m3_flash_v1_rejecteds_repair3_20260426_0853"
+}

@@ -1,0 +1,10 @@
+{
+  "run_name": "gate1_gemini_flash_scaffold_20260426_011633",
+  "mode": "scaffold",
+  "model": "gemini-3-flash-preview",
+  "thinking_budget": 0,
+  "n_per_point": 5,
+  "max_workers": 8,
+  "prompt_version": "substance_laundering_ban_v1",
+  "git_status_short": " M .agents/logbooks/claude_m2_datacomposition.md\n M .agents/logbooks/validate_bloom.md\n M .agents/logbooks/validate_bloom_claude.md\n M experiments/posttrain/bcg_probe_infer.py\n M experiments/posttrain/eval_llama3_8b_alignment.py\n M experiments/posttrain/stage4_output/comparison_full.json\n M lib/marin/src/marin/alignment/evaluate.py\n M lib/marin/src/marin/alignment/prompts/judge.py\n?? .agents/logbooks/claude_m3_cross_tier_pilot.md\n?? .agents/logbooks/executable_specs_codex.md\n?? .agents/projects/executable_specifications.md\n?? experiments/posttrain/build_m2_visualizer.py\n?? experiments/posttrain/compare_m1_m2_seed_n10.py\n?? experiments/posttrain/judge_bloom_gpt41_batch.py\n?? experiments/posttrain/plot_m2_vs_m1_seed_radar.py\n?? experiments/posttrain/score_cross_tier_pilot.py\n?? experiments/posttrain/stage3_output/\n?? experiments/posttrain/stage4_output/bcg_M1_seed_n10/\n?? experiments/posttrain/stage4_output/bcg_M2_seed_n10/\n?? experiments/posttrain/stage4_output/bcg_ORACLE_seed_n3/\n?? experiments/posttrain/stage4_output/m2_vs_m1_seed_n10_comparison.json\n?? experiments/posttrain/stage4_output/m2_vs_m1_seed_radar.png\n?? experiments/posttrain/stage4_output/pilot_dpo/\n?? experiments/posttrain/stage4_output/tier_b/\n?? experiments/posttrain/test_gemini_flash_cross_tier_gate.py\n?? experiments/posttrain/test_hierarchy_aware_oracle.py\n?? experiments/posttrain/write_cross_tier_rubrics.py\n"
+}
