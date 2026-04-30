@@ -305,6 +305,13 @@ def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Ite
     # load_tokenizer is @lru_cache, so this only loads once per worker process.
     tokenizer: MarinTokenizer = load_tokenizer(name, backend=backend)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
+    # Levanter's BatchTokenizer ships ``long_string_workaround`` opt-in but the
+    # behavior is desirable always: per-record texts above ``_workaround_len``
+    # (10K chars) get split at safe whitespace boundaries before the underlying
+    # ``encode_batch`` is called, then merged back. No-op for short records.
+    # Without this, a single multi-MB outlier passes one giant string to the
+    # Rust tokenizer and OOMs the worker.
+    batch_processor._long_string_workaround = True
 
     batch_count = 0
     record_count = 0

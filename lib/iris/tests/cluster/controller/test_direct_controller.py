@@ -10,7 +10,7 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
 )
 from iris.cluster.types import JobName
-from iris.rpc import logging_pb2
+from finelog.rpc import logging_pb2
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 

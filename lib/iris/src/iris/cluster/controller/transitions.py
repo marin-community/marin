@@ -2075,6 +2075,7 @@ class ControllerTransitions:
                 # Invalidate endpoint cache BEFORE the CASCADE so the cache
                 # drops rows SQLite is about to delete for us.
                 self._store.endpoints.remove_by_job_ids(cur, [job_name])
+                self._store.tasks.remove_status_text_by_job_ids([job_name])
                 self._store.jobs.delete(cur, job_name)
             log_event("job_pruned", job_name.to_wire())
             jobs_deleted += 1
@@ -2226,6 +2227,12 @@ class ControllerTransitions:
                     metadata=cfg.metadata,
                     ts=now,
                 )
+
+    # --- Task Status Text ---
+
+    def record_task_status_text(self, task_id: JobName, status_text_md: str) -> None:
+        """Update the task's markdown status text for UI display (held in memory only)."""
+        self._store.tasks.set_status_text(task_id.to_wire(), status_text_md)
 
     # --- Endpoint Management ---
 

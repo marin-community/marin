@@ -236,7 +236,11 @@ class NativeVllmServerBackend(VllmServerBackend):
 
 
 def resolve_vllm_mode(mode: Literal["native", "docker"] | None) -> Literal["native", "docker"]:
-    mode_str = (mode if mode is not None else os.environ.get("MARIN_VLLM_MODE", "docker")).lower()
+    # Default to native vLLM. The Docker sidecar path requires a mounted
+    # /var/run/docker.sock (docker-alongside-docker), which Iris workers do not
+    # provide. Set MARIN_VLLM_MODE=docker to opt in for Ray-era flows that still
+    # need the sidecar.
+    mode_str = (mode if mode is not None else os.environ.get("MARIN_VLLM_MODE", "native")).lower()
     if mode_str not in ("native", "docker"):
         raise ValueError(f"Unknown MARIN_VLLM_MODE={mode_str!r}; expected 'native' or 'docker'.")
     return mode_str  # type: ignore[return-value]
@@ -287,6 +291,9 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     gpu_memory_utilization = engine_kwargs.get("gpu_memory_utilization")
     if gpu_memory_utilization is not None:
         args.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
+    max_num_batched_tokens = engine_kwargs.get("max_num_batched_tokens")
+    if max_num_batched_tokens is not None:
+        args.extend(["--max-num-batched-tokens", str(max_num_batched_tokens)])
     return args
 
 

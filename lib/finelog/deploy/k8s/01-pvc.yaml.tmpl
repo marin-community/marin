@@ -1,0 +1,19 @@
+# finelog PersistentVolumeClaim.
+#
+# Storage scales with the local segment cache. With remote_log_dir set,
+# segments offload to GCS and 10–50Gi is comfortable; without it, size
+# the PVC for full retention.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ name }}-cache
+  namespace: {{ namespace }}
+  labels:
+    app: {{ name }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{ storage_class_block }}
+  resources:
+    requests:
+      storage: {{ storage_gb }}Gi
