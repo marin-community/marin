@@ -6,7 +6,6 @@ Canonical set of evals.
 """
 
 import logging
-import os
 import re
 from collections.abc import Sequence
 
@@ -24,6 +23,7 @@ from marin.execution.executor import (
     versioned,
 )
 from marin.execution.remote import remote
+from marin.inference.vllm_server import validate_vllm_mode_env
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
 from experiments.evals.evalchemy_results_compiler import compile_evalchemy_results_fn
@@ -45,16 +45,6 @@ EVAL_DEPENDENCY_GROUPS = ["eval", "vllm", "tpu"]
 EVALCHEMY_DEPENDENCY_GROUPS = ["evalchemy", "vllm", "tpu"]
 
 logger = logging.getLogger(__name__)
-
-
-def _validate_harbor_vllm_mode_env() -> None:
-    mode = os.environ.get("MARIN_VLLM_MODE")
-    if mode is None or mode.strip().lower() in {"", "native"}:
-        return
-    raise ValueError(
-        "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
-        "Unset MARIN_VLLM_MODE or set it to 'native'."
-    )
 
 
 def evaluate_lm_evaluation_harness(
@@ -452,7 +442,7 @@ def evaluate_harbor(
     """
 
     if model_path is not None:
-        _validate_harbor_vllm_mode_env()
+        validate_vllm_mode_env()
 
     # Harbor config goes in engine_kwargs
     engine_kwargs = {

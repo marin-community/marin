@@ -63,7 +63,7 @@ def _native_logs_tail(log_dir: str | None, *, max_lines: int = 200) -> str:
     )
 
 
-def _validate_removed_vllm_mode_env() -> None:
+def validate_vllm_mode_env() -> None:
     mode = os.environ.get("MARIN_VLLM_MODE")
     if mode is None or mode.strip().lower() in {"", "native"}:
         return
@@ -181,7 +181,7 @@ class VllmEnvironment:
         timeout_seconds: int = 3600,
         extra_args: list[str] | None = None,
     ) -> None:
-        _validate_removed_vllm_mode_env()
+        validate_vllm_mode_env()
         self.model_name_or_path, self.model = resolve_model_name_or_path(model)
         self.host = host
         self.port = port
