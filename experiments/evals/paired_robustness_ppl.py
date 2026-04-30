@@ -15,8 +15,9 @@ from enum import StrEnum
 import datasets
 from fray.v2 import ResourceConfig
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.executor import this_output_path
 from marin.execution.remote import remote
+from marin.execution.step_spec import StepSpec
 from zephyr import write_jsonl_file
 
 logger = logging.getLogger(__name__)
@@ -266,17 +267,34 @@ def paired_robustness_raw_steps(
     slices: Sequence[PairedRobustnessSlice] = PAIRED_ROBUSTNESS_SLICES,
     name_prefix: str = "raw/paired_robustness_ppl",
     resources: ResourceConfig | None = None,
-) -> dict[str, ExecutorStep]:
+) -> dict[str, StepSpec]:
     if resources is None:
         resources = ResourceConfig.with_cpu(cpu=4, ram="16g", disk="30g")
 
-    steps: dict[str, ExecutorStep] = {}
+    materialize = remote(materialize_paired_robustness_slice, resources=resources, pip_dependency_groups=["cpu"])
+    steps: dict[str, StepSpec] = {}
     for slice_ in slices:
-        steps[slice_.raw_step_key] = ExecutorStep(
+        steps[slice_.raw_step_key] = StepSpec(
             name=posixpath.join(name_prefix, slice_.family.value, slice_.name, slice_.split),
-            description=f"Materialize capped held-out paired robustness eval records for {slice_.name}/{slice_.split}.",
-            fn=remote(materialize_paired_robustness_slice, resources=resources, pip_dependency_groups=["cpu"]),
-            config=_materialize_config(slice_),
+            fn=lambda output_path, slice_=slice_: materialize(_materialize_config(slice_, output_path=output_path)),
+            hash_attrs={
+                "raw_step_key": slice_.raw_step_key,
+                "family": slice_.family.value,
+                "source_url": slice_.source_url,
+                "hf_dataset_id": slice_.hf_dataset_id,
+                "hf_dataset_name": slice_.hf_dataset_name,
+                "split": slice_.split,
+                "source_field": slice_.source_field,
+                "target_field": slice_.target_field,
+                "source_label": slice_.source_label,
+                "target_label": slice_.target_label,
+                "max_pairs": slice_.max_pairs,
+                "trust_remote_code": slice_.trust_remote_code,
+                "label_field": slice_.label_field,
+                "required_label": slice_.required_label,
+                "notes": slice_.notes,
+                "shard_size": DEFAULT_SHARD_SIZE,
+            },
         )
     return steps
 
@@ -285,7 +303,7 @@ def paired_robustness_raw_validation_sets(
     *,
     slices: Sequence[PairedRobustnessSlice] = PAIRED_ROBUSTNESS_SLICES,
     include_views: Sequence[PairedTextView] = ALL_PAIRED_TEXT_VIEWS,
-    raw_steps: Mapping[str, ExecutorStep] | None = None,
+    raw_steps: Mapping[str, StepSpec] | None = None,
 ) -> dict[str, RawTextEvaluationDataset]:
     if raw_steps is None:
         raw_steps = paired_robustness_raw_steps(slices=slices)
@@ -296,13 +314,15 @@ def paired_robustness_raw_validation_sets(
         raw_step = raw_steps[slice_.raw_step_key]
         for view in selected_views:
             datasets_out[slice_.dataset_key(view)] = raw_text_dataset(
-                raw_step.cd(posixpath.join(view.value, "shard-*.jsonl.gz")),
+                raw_step.as_executor_step().cd(posixpath.join(view.value, "shard-*.jsonl.gz")),
                 tags=slice_.tags_for_view(view),
             )
     return datasets_out
 
 
-def _materialize_config(slice_: PairedRobustnessSlice) -> PairedRobustnessMaterializeConfig:
+def _materialize_config(
+    slice_: PairedRobustnessSlice, *, output_path: str | None = None
+) -> PairedRobustnessMaterializeConfig:
     return PairedRobustnessMaterializeConfig(
         name=slice_.name,
         family=slice_.family,
@@ -319,6 +339,7 @@ def _materialize_config(slice_: PairedRobustnessSlice) -> PairedRobustnessMateri
         label_field=slice_.label_field,
         required_label=slice_.required_label,
         notes=slice_.notes,
+        output_path=this_output_path() if output_path is None else output_path,
     )
 
 
