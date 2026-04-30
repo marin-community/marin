@@ -28,15 +28,12 @@ def test_drop_table_removes_namespace(store: DuckDBLogStore):
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
     _seal(store, "iris.worker")
 
-    seg_dir = store._data_dir / "iris.worker"
-    assert seg_dir.exists()
-    assert any(seg_dir.glob("*.parquet"))
+    ns = store._namespaces["iris.worker"]
+    assert ns.sealed_segments(), "expected at least one sealed segment after _seal"
 
     store.drop_table("iris.worker")
 
     assert "iris.worker" not in store._namespaces
-    # Local dir is gone.
-    assert not seg_dir.exists()
 
 
 def test_drop_table_then_query_raises(store: DuckDBLogStore):

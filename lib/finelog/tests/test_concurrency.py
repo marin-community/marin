@@ -33,7 +33,6 @@ def test_drop_during_concurrent_write_is_safe(store: DuckDBLogStore):
     visibility / dropped-namespace cleanup.
     """
     store.register_table("iris.worker", _worker_schema())
-    seg_dir = store._data_dir / "iris.worker"
     payload = _ipc_bytes(_worker_batch(["w-1"], [100], [1]))
 
     write_results: list[Exception | int] = []
@@ -76,11 +75,9 @@ def test_drop_during_concurrent_write_is_safe(store: DuckDBLogStore):
             successes += 1
 
     if drop_succeeded:
-        # Namespace was dropped: local dir is gone and no remnants
-        # remain on disk. Successful writes' in-memory chunks
-        # evaporated by design (the explicit drop contract).
+        # Namespace was dropped: local state is gone. Successful writes'
+        # in-memory chunks evaporated by design (the explicit drop contract).
         assert "iris.worker" not in store._namespaces
-        assert not seg_dir.exists()
     else:
         # Drop lost the race: namespace survives. Successful writes
         # are durable — flush-then-compact and assert the rows are

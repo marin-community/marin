@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import logging
 import re
-import tempfile
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -157,8 +156,11 @@ class _ConnectionPool:
         self._compaction_conn.close()
 
 
-def _validate_namespace_name(name: str, data_dir: Path) -> Path:
-    """Validate ``name`` and return its on-disk subdirectory.
+def _validate_namespace_name(name: str, data_dir: Path | None) -> Path | None:
+    """Validate ``name`` and return its on-disk subdirectory (or ``None``).
+
+    In-memory mode (``data_dir is None``) only enforces the regex; there
+    is no path-containment check because there is no filesystem to escape.
 
     Raises:
         InvalidNamespaceError: name fails the regex or its resolved path
@@ -166,6 +168,8 @@ def _validate_namespace_name(name: str, data_dir: Path) -> Path:
     """
     if not _NAMESPACE_NAME_RE.match(name):
         raise InvalidNamespaceError(f"namespace {name!r} does not match {_NAMESPACE_NAME_RE.pattern}")
+    if data_dir is None:
+        return None
     target = (data_dir / name).resolve()
     base = data_dir.resolve()
     try:
@@ -201,6 +205,11 @@ class DuckDBLogStore:
     Layout: callers pass ``log_dir`` as the finelog data directory. Per
     namespace: ``{log_dir}/{name}/``. Schema sidecar:
     ``{log_dir}/_finelog_registry.duckdb``.
+
+    ``log_dir=None`` selects in-memory mode: no tempdir, no parquet
+    files, no sidecar registry file. Segments live as Arrow tables on
+    the namespace and the registry DB runs in ``:memory:``. GCS offload
+    is disabled. State vanishes on ``close()``.
     """
 
     def __init__(
@@ -217,13 +226,9 @@ class DuckDBLogStore:
         segment_target_bytes: int = SEGMENT_TARGET_BYTES,
         duckdb_memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
     ):
-        self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
+        self._data_dir: Path | None = log_dir
         if log_dir is not None:
-            self._data_dir = log_dir
-        else:
-            self._temp_dir = tempfile.TemporaryDirectory(prefix="finelog_data_")
-            self._data_dir = Path(self._temp_dir.name)
-        self._data_dir.mkdir(parents=True, exist_ok=True)
+            log_dir.mkdir(parents=True, exist_ok=True)
 
         self._insertion_lock = Lock()
         self._query_visibility_lock = RWLock()
@@ -267,10 +272,15 @@ class DuckDBLogStore:
     # ------------------------------------------------------------------
 
     def _rehydrate_from_registry(self) -> None:
-        """Instantiate a LogNamespace per row in the sidecar registry DB."""
+        """Instantiate a LogNamespace per row in the sidecar registry DB.
+
+        In-memory mode: list_all() returns an empty dict (the registry DB
+        is fresh ``:memory:``) so this loop is a no-op.
+        """
         for name, schema in self._registry_db.list_all().items():
             namespace_dir = self._namespace_dir(name)
-            namespace_dir.mkdir(parents=True, exist_ok=True)
+            if namespace_dir is not None:
+                namespace_dir.mkdir(parents=True, exist_ok=True)
             self._namespaces[name] = LogNamespace(
                 name=name,
                 schema=schema,
@@ -291,8 +301,11 @@ class DuckDBLogStore:
         """
         if LOG_NAMESPACE_NAME in self._namespaces:
             return
-        log_dir = self._data_dir / LOG_NAMESPACE_DIR
-        log_dir.mkdir(parents=True, exist_ok=True)
+        if self._data_dir is not None:
+            log_dir = self._data_dir / LOG_NAMESPACE_DIR
+            log_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            log_dir = None
         with self._insertion_lock:
             self._registry_db.upsert(
                 LOG_NAMESPACE_NAME,
@@ -307,7 +320,12 @@ class DuckDBLogStore:
             )
             self._namespace_registered_at.setdefault(LOG_NAMESPACE_NAME, len(self._namespace_registered_at))
 
-    def _namespace_dir(self, name: str) -> Path:
+    def _namespace_dir(self, name: str) -> Path | None:
+        if self._data_dir is None:
+            # Still validate the name regex so in-memory stores match the
+            # on-disk store's naming contract.
+            _validate_namespace_name(name, None)
+            return None
         if name == LOG_NAMESPACE_NAME:
             return self._data_dir / LOG_NAMESPACE_DIR
         return _validate_namespace_name(name, self._data_dir)
@@ -333,7 +351,8 @@ class DuckDBLogStore:
             existing_ns = self._namespaces.get(name)
             if existing_ns is None:
                 effective = schema
-                namespace_dir.mkdir(parents=True, exist_ok=True)
+                if namespace_dir is not None:
+                    namespace_dir.mkdir(parents=True, exist_ok=True)
                 self._registry_db.upsert(name, effective, resolved_key)
                 self._namespaces[name] = LogNamespace(
                     name=name,
@@ -393,22 +412,27 @@ class DuckDBLogStore:
     def query(self, sql: str) -> pa.Table:
         """Execute ``sql`` against a DuckDB view of every registered namespace.
 
-        Each namespace gets a view named after the namespace; the view's
-        source is its sealed Parquet segments via ``read_parquet`` with a
-        literal path list (DuckDB's ``CREATE VIEW`` does not accept prepared
-        parameters). Namespaces with zero sealed segments get a typed empty
-        view so user queries against them return zero rows instead of erroring.
+        Each namespace gets a view named after the namespace. The view
+        source is built per-segment: parquet-backed sealed segments come
+        in via ``read_parquet([…])``; in-memory sealed segments are
+        registered on the connection and referenced by name, then
+        ``UNION ALL``ed together. Namespaces with zero sealed segments
+        get a typed empty view so user queries against them return zero
+        rows instead of erroring.
 
-        The query-visibility read lock is held across both ``CREATE VIEW``
-        and ``fetch_arrow_table()`` because DuckDB opens Parquet files
-        lazily during execution: dropping the lock before fetch would let
-        compaction unlink files mid-scan.
+        The query-visibility read lock is held across the whole call
+        because DuckDB opens Parquet files lazily during execution:
+        dropping the lock before fetch would let compaction unlink files
+        mid-scan. (In-memory segments are immune to that race but we
+        keep one lock discipline for both backings.)
 
-        ``DropTable``-style errors (unknown namespace referenced in the SQL)
-        surface as DuckDB's own ``CatalogException`` — the view doesn't
-        exist, so the user's ``FROM "ns.unknown"`` resolves to nothing.
+        ``DropTable``-style errors (unknown namespace referenced in the
+        SQL) surface as DuckDB's own ``CatalogException`` — the view
+        doesn't exist, so the user's ``FROM "ns.unknown"`` resolves to
+        nothing.
         """
         con = duckdb.connect()
+        registered_names: list[str] = []
         self._query_visibility_lock.read_acquire()
         try:
             # Snapshot the namespace dict under the insertion lock so a
@@ -421,19 +445,34 @@ class DuckDBLogStore:
                 ns_snapshot = list(self._namespaces.items())
             for ns_name, ns in ns_snapshot:
                 ns_quoted = quote_ident(ns_name)
-                paths = ns.sealed_segments()
-                if paths:
-                    paths_literal = "[" + ", ".join(quote_literal(str(p)) for p in paths) + "]"
-                    con.execute(
-                        f"CREATE VIEW {ns_quoted} AS " f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)"
-                    )
-                else:
+                segments = ns.sealed_segments()
+                if not segments:
                     cols_sql = ", ".join(
                         f"NULL::{duckdb_type_for(c)} AS {quote_ident(c.name)}" for c in ns.schema.columns
                     )
                     con.execute(f"CREATE VIEW {ns_quoted} AS SELECT {cols_sql} WHERE FALSE")
+                    continue
+
+                parts: list[str] = []
+                parquet_paths = [s.path for s in segments if s.table is None]
+                if parquet_paths:
+                    paths_literal = "[" + ", ".join(quote_literal(p) for p in parquet_paths) + "]"
+                    parts.append(f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)")
+                for i, s in enumerate(segments):
+                    if s.table is None:
+                        continue
+                    reg_name = f"_seg_{ns_name.replace('.', '_')}_{i}"
+                    con.register(reg_name, s.table)
+                    registered_names.append(reg_name)
+                    parts.append(f"SELECT * FROM {reg_name}")
+                con.execute(f"CREATE VIEW {ns_quoted} AS {' UNION ALL BY NAME '.join(parts)}")
             return con.execute(sql).fetch_arrow_table()
         finally:
+            for name in registered_names:
+                try:
+                    con.unregister(name)
+                except Exception:
+                    pass
             self._query_visibility_lock.read_release()
             con.close()
 
@@ -598,8 +637,6 @@ class DuckDBLogStore:
             ns.close()
         self._pool.close()
         self._registry_db.close()
-        if self._temp_dir is not None:
-            self._temp_dir.cleanup()
 
     # ------------------------------------------------------------------
     # Test hooks. Forward to the single registered "log" namespace.

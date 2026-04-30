@@ -10,7 +10,6 @@ the ASGI layer.
 from __future__ import annotations
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 from finelog.store.duckdb_store import DuckDBLogStore
 from finelog.store.schema import (
@@ -22,7 +21,7 @@ from finelog.store.schema import (
     SchemaValidationError,
 )
 
-from tests.conftest import _ipc_bytes, _worker_schema
+from tests.conftest import _ipc_bytes, _seal, _worker_schema
 
 # ---------------------------------------------------------------------------
 # WriteRows: happy path + validation
@@ -49,13 +48,12 @@ def test_write_rows_append_round_trip(store: DuckDBLogStore):
     n = store.write_rows("iris.worker", _ipc_bytes(batch))
     assert n == 2
 
-    # Parquet on disk has the registered schema.
-    store._namespaces["iris.worker"]._flush_step()
-    seg_dir = store._data_dir / "iris.worker"
-    parquet_files = sorted(seg_dir.glob("*.parquet"))
-    assert len(parquet_files) >= 1
-    table = pq.read_table(parquet_files[-1])
+    # Sealed segment carries the registered schema in registered column order.
+    _seal(store, "iris.worker")
+    table = store.query('SELECT * FROM "iris.worker" ORDER BY timestamp_ms')
     assert sorted(table.column_names) == ["mem_bytes", "timestamp_ms", "worker_id"]
+    assert table.column("worker_id").to_pylist() == ["w-1", "w-2"]
+    assert table.column("mem_bytes").to_pylist() == [100, 200]
 
 
 def test_write_rows_unknown_namespace_raises(store: DuckDBLogStore):
@@ -84,12 +82,10 @@ def test_write_rows_missing_nullable_column_filled_with_null(store: DuckDBLogSto
         ),
     )
     store.write_rows("iris.worker", _ipc_bytes(batch))
-    store._namespaces["iris.worker"]._flush_step()
-    seg_dir = store._data_dir / "iris.worker"
-    table = pq.read_table(sorted(seg_dir.glob("*.parquet"))[-1])
+    _seal(store, "iris.worker")
+    table = store.query('SELECT * FROM "iris.worker"')
     assert "note" in table.column_names
-    note_col = table.column("note")
-    assert note_col[0].as_py() is None
+    assert table.column("note")[0].as_py() is None
 
 
 def test_write_rows_missing_non_nullable_column_rejected(store: DuckDBLogStore):
@@ -149,10 +145,9 @@ def test_write_rows_dictionary_encoded_column_decoded(store: DuckDBLogStore):
     )
     n = store.write_rows("iris.worker", _ipc_bytes(batch))
     assert n == 3
-    store._namespaces["iris.worker"]._flush_step()
-    parquet_files = sorted((store._data_dir / "iris.worker").glob("*.parquet"))
-    table = pq.read_table(parquet_files[-1])
-    # Decoded to plain string on disk.
+    _seal(store, "iris.worker")
+    table = store.query('SELECT worker_id FROM "iris.worker" ORDER BY timestamp_ms')
+    # Decoded to plain string after the storage round-trip.
     assert table.schema.field("worker_id").type == pa.string()
     assert table.column("worker_id").to_pylist() == ["w-1", "w-2", "w-1"]
 

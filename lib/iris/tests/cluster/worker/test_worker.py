@@ -1088,11 +1088,11 @@ def test_stop_preserve_containers_does_not_kill_tasks(mock_worker, mock_runtime)
     assert task.status == job_pb2.TASK_STATE_RUNNING
 
 
-def test_start_wires_log_pusher_into_adopted_attempts(mock_bundle_store, mock_runtime, tmp_path):
+def test_start_wires_log_client_into_adopted_attempts(mock_bundle_store, mock_runtime, tmp_path):
     """Regression for #5261.
 
-    Worker.start() must construct the LogPusher *before* adopting containers,
-    otherwise adopted TaskAttempts capture ``log_pusher=None`` permanently
+    Worker.start() must construct the LogClient *before* adopting containers,
+    otherwise adopted TaskAttempts capture ``log_client=None`` permanently
     and silently drop every container log line for the rest of the task.
     """
     container = _make_discovered_container()
@@ -1112,11 +1112,11 @@ def test_start_wires_log_pusher_into_adopted_attempts(mock_bundle_store, mock_ru
     try:
         worker.start()
 
-        assert worker._log_pusher is not None
+        assert worker._log_client is not None
         task = worker.get_task(container.task_id, container.attempt_id)
         assert task is not None
-        # The adopted attempt must reference the worker's live pusher, not None.
-        assert task._log_pusher is worker._log_pusher
+        # The adopted attempt must reference the worker's live client, not None.
+        assert task._log_client is worker._log_client
     finally:
         worker.stop()
 

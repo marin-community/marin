@@ -11,7 +11,6 @@ this module by the test files that need them.
 from __future__ import annotations
 
 import io
-from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.ipc as paipc
@@ -56,16 +55,12 @@ def _worker_batch(worker_ids: list[str], mem_bytes: list[int], ts: list[int]) ->
     )
 
 
-def _make_store(tmp_path: Path, **kwargs) -> DuckDBLogStore:
-    return DuckDBLogStore(log_dir=tmp_path / "data", **kwargs)
-
-
 def _seal(store: DuckDBLogStore, namespace: str) -> None:
     """Force a flush + compaction so the namespace's data is queryable.
 
-    The query path reads only sealed (``logs_*.parquet``) segments; a
-    fresh ``_flush_step`` produces a ``tmp_*.parquet`` which is
-    deliberately invisible to queries until compaction promotes it.
+    The query path reads only sealed segments; a fresh ``_flush_step``
+    produces a tmp segment which is deliberately invisible to queries
+    until compaction promotes it.
     """
     ns = store._namespaces[namespace]
     ns._flush_step()
@@ -73,7 +68,13 @@ def _seal(store: DuckDBLogStore, namespace: str) -> None:
 
 
 @pytest.fixture()
-def store(tmp_path: Path):
-    s = _make_store(tmp_path)
+def store():
+    """In-memory ``DuckDBLogStore`` — no tempdir, no parquet on disk.
+
+    Tests that need on-disk persistence (registry rehydration across
+    restarts, parquet-specific behaviors) construct
+    ``DuckDBLogStore(log_dir=...)`` directly.
+    """
+    s = DuckDBLogStore()
     yield s
     s.close()

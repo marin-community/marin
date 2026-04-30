@@ -34,18 +34,19 @@ import re
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Condition, Lock
 from typing import Protocol
-from collections.abc import Callable
 
 import duckdb
 import fsspec.core
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+from rigging.timing import RateLimiter
 
 from finelog.rpc import logging_pb2
 from finelog.store.rwlock import RWLock
@@ -57,7 +58,6 @@ from finelog.store.schema import (
     schema_to_arrow,
 )
 from finelog.types import _EST_BYTES_PER_ROW, REGEX_META_RE, LogReadResult, parse_attempt_id, str_to_log_level
-from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,19 @@ def _log_filename(min_seq: int) -> str:
 
 
 def _is_tmp_path(path: str) -> bool:
+    # ``Path.name`` strips the synthetic ``<mem>/`` prefix used for
+    # in-memory segments, so the same check works for both backings.
     return Path(path).name.startswith(_TMP_PREFIX)
+
+
+# Synthetic path scheme for in-memory segments. The basename matches the
+# on-disk filename scheme so ``_is_tmp_path`` and the segment-ordering
+# logic don't need to know about the storage backing.
+_MEM_PATH_PREFIX = "<mem>/"
+
+
+def _mem_segment_path(filename: str) -> str:
+    return _MEM_PATH_PREFIX + filename
 
 
 def _min_seq_from_filename(name: str) -> int | None:
@@ -183,12 +195,20 @@ class _SealedBuffer:
 
 @dataclass
 class LocalSegment:
-    """Metadata for a Parquet file on local disk."""
+    """Metadata for a sealed segment.
+
+    Backed either by a Parquet file (``table is None``, ``path`` is the
+    filesystem path) or by an in-memory Arrow table (``table`` set,
+    ``path`` is a synthetic ``mem:tmp_…`` / ``mem:logs_…`` identifier
+    used purely for ``_is_tmp_path`` checks and as a stable key for
+    eviction).
+    """
 
     path: str
     size_bytes: int
     min_seq: int = 0
     max_seq: int = 0
+    table: pa.Table | None = None
 
 
 def _build_log_table(buffer: list[tuple], arrow_schema: pa.Schema) -> pa.Table:
@@ -235,7 +255,7 @@ class LogNamespace:
         *,
         name: str,
         schema: Schema,
-        data_dir: Path,
+        data_dir: Path | None,
         remote_log_dir: str,
         segment_target_bytes: int,
         compact_interval_sec: float,
@@ -251,10 +271,18 @@ class LogNamespace:
         self.name = name
         self.schema = schema
         self._arrow_schema = schema_to_arrow(schema)
+        # ``data_dir is None`` selects in-memory mode: segments are held as
+        # Arrow tables in :class:`LocalSegment.table`, no parquet files are
+        # written, GCS offload is forced off. The compaction and eviction
+        # machinery is otherwise unchanged.
         self._data_dir = data_dir
-        self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._in_memory = data_dir is None
+        if data_dir is not None:
+            data_dir.mkdir(parents=True, exist_ok=True)
 
-        self._remote_log_dir = remote_log_dir
+        # Force-off GCS in memory mode: archiving in-memory segments would
+        # require materializing them, which defeats the purpose.
+        self._remote_log_dir = "" if self._in_memory else remote_log_dir
         self._segment_target_bytes = segment_target_bytes
         self._max_tmp_segments_before_compact = max_tmp_segments_before_compact
         self._evict_hook = evict_hook
@@ -272,7 +300,7 @@ class LogNamespace:
         self._compaction_conn = compaction_conn
         self._read_pool = read_pool
 
-        self._next_seq = _recover_next_seq(self._data_dir)
+        self._next_seq = 1 if self._in_memory else _recover_next_seq(data_dir)
         # Pending log-row tuples (only populated for the log namespace via
         # ``append_log_batch``). Stats namespaces append RecordBatches
         # directly into ``_chunks``.
@@ -281,30 +309,31 @@ class LogNamespace:
         self._flushing: _SealedBuffer | None = None
         self._local_segments: deque[LocalSegment] = deque()
 
-        # Drop stale tmp segments left behind by a prior compaction that
-        # crashed between rename and unlink: any tmp whose [min, max] is
-        # fully covered by a logs_ segment is a duplicate.
-        discovered: list[LocalSegment] = []
-        for p in _discover_segments(self._data_dir):
-            min_seq, max_seq = _read_seq_bounds(p)
-            discovered.append(
-                LocalSegment(
-                    path=str(p),
-                    size_bytes=p.stat().st_size,
-                    min_seq=min_seq,
-                    max_seq=max_seq,
+        if not self._in_memory:
+            # Drop stale tmp segments left behind by a prior compaction that
+            # crashed between rename and unlink: any tmp whose [min, max] is
+            # fully covered by a logs_ segment is a duplicate.
+            discovered: list[LocalSegment] = []
+            for p in _discover_segments(data_dir):
+                min_seq, max_seq = _read_seq_bounds(p)
+                discovered.append(
+                    LocalSegment(
+                        path=str(p),
+                        size_bytes=p.stat().st_size,
+                        min_seq=min_seq,
+                        max_seq=max_seq,
+                    )
                 )
-            )
-        log_ranges = [(s.min_seq, s.max_seq) for s in discovered if not _is_tmp_path(s.path)]
-        for s in discovered:
-            if _is_tmp_path(s.path) and any(lo <= s.min_seq and s.max_seq <= hi for lo, hi in log_ranges):
-                logger.info("Dropping stale tmp segment %s covered by compacted logs_ range", s.path)
-                try:
-                    Path(s.path).unlink()
-                except Exception:
-                    logger.warning("Failed to unlink stale tmp segment %s", s.path, exc_info=True)
-                continue
-            self._local_segments.append(s)
+            log_ranges = [(s.min_seq, s.max_seq) for s in discovered if not _is_tmp_path(s.path)]
+            for s in discovered:
+                if _is_tmp_path(s.path) and any(lo <= s.min_seq and s.max_seq <= hi for lo, hi in log_ranges):
+                    logger.info("Dropping stale tmp segment %s covered by compacted logs_ range", s.path)
+                    try:
+                        Path(s.path).unlink()
+                    except Exception:
+                        logger.warning("Failed to unlink stale tmp segment %s", s.path, exc_info=True)
+                    continue
+                self._local_segments.append(s)
 
         self._compact_rl = RateLimiter(compact_interval_sec)
         self._flush_rl = RateLimiter(flush_interval_sec)
@@ -577,24 +606,34 @@ class LogNamespace:
 
     def _write_new_segment(self, sealed: _SealedBuffer) -> None:
         filename = _tmp_filename(sealed.min_seq)
-        filepath = self._data_dir / filename
         write_start = time.monotonic()
-        tmp_path = filepath.with_suffix(".parquet.tmp")
-        pq.write_table(
-            sealed.table,
-            tmp_path,
-            compression="zstd",
-            row_group_size=_ROW_GROUP_SIZE,
-            write_page_index=True,
-        )
-        tmp_path.rename(filepath)
 
-        seg = LocalSegment(
-            path=str(filepath),
-            size_bytes=filepath.stat().st_size,
-            min_seq=sealed.min_seq,
-            max_seq=sealed.max_seq,
-        )
+        if self._in_memory:
+            seg = LocalSegment(
+                path=_mem_segment_path(filename),
+                size_bytes=sealed.table.nbytes,
+                min_seq=sealed.min_seq,
+                max_seq=sealed.max_seq,
+                table=sealed.table,
+            )
+        else:
+            filepath = self._data_dir / filename
+            tmp_path = filepath.with_suffix(".parquet.tmp")
+            pq.write_table(
+                sealed.table,
+                tmp_path,
+                compression="zstd",
+                row_group_size=_ROW_GROUP_SIZE,
+                write_page_index=True,
+            )
+            tmp_path.rename(filepath)
+            seg = LocalSegment(
+                path=str(filepath),
+                size_bytes=filepath.stat().st_size,
+                min_seq=sealed.min_seq,
+                max_seq=sealed.max_seq,
+            )
+
         with self._insertion_lock:
             self._local_segments.append(seg)
             self._flushing = None
@@ -621,30 +660,38 @@ class LogNamespace:
         min_seq = tmps[0].min_seq
         max_seq = max(t.max_seq for t in tmps)
         merged_filename = _log_filename(min_seq)
-        merged_path = self._data_dir / merged_filename
-        staging_path = merged_path.with_suffix(".parquet.tmp")
-
         compaction_start = time.monotonic()
-        sql = self._build_compaction_sql([Path(t.path) for t in tmps], staging_path)
-        try:
-            with self._insertion_lock:
-                self._compaction_conn.execute(sql)
-        except Exception:
-            logger.warning("Compaction failed, leaving tmp segments in place", exc_info=True)
-            staging_path.unlink(missing_ok=True)
-            return
 
-        merged_seg = LocalSegment(
-            path=str(merged_path),
-            size_bytes=staging_path.stat().st_size,
-            min_seq=min_seq,
-            max_seq=max_seq,
-        )
+        if self._in_memory:
+            merged_seg = self._compact_in_memory(tmps, min_seq, max_seq, merged_filename)
+            if merged_seg is None:
+                return
+            merged_target = "<memory>"
+        else:
+            merged_path = self._data_dir / merged_filename
+            staging_path = merged_path.with_suffix(".parquet.tmp")
+            sql = self._build_compaction_sql([Path(t.path) for t in tmps], staging_path)
+            try:
+                with self._insertion_lock:
+                    self._compaction_conn.execute(sql)
+            except Exception:
+                logger.warning("Compaction failed, leaving tmp segments in place", exc_info=True)
+                staging_path.unlink(missing_ok=True)
+                return
+            merged_seg = LocalSegment(
+                path=str(merged_path),
+                size_bytes=staging_path.stat().st_size,
+                min_seq=min_seq,
+                max_seq=max_seq,
+            )
+            merged_target = str(merged_path)
+
         tmp_paths = {t.path for t in tmps}
 
         self._query_visibility_lock.write_acquire()
         try:
-            staging_path.rename(merged_path)
+            if not self._in_memory:
+                staging_path.rename(merged_path)
             with self._insertion_lock:
                 new_segments: deque[LocalSegment] = deque()
                 merged_inserted = False
@@ -658,11 +705,12 @@ class LogNamespace:
                 if not merged_inserted:
                     new_segments.append(merged_seg)
                 self._local_segments = new_segments
-            for t in tmps:
-                try:
-                    Path(t.path).unlink(missing_ok=True)
-                except Exception:
-                    logger.warning("Failed to unlink tmp segment %s", t.path, exc_info=True)
+            if not self._in_memory:
+                for t in tmps:
+                    try:
+                        Path(t.path).unlink(missing_ok=True)
+                    except Exception:
+                        logger.warning("Failed to unlink tmp segment %s", t.path, exc_info=True)
         finally:
             self._query_visibility_lock.write_release()
 
@@ -679,8 +727,42 @@ class LogNamespace:
             max_seq,
             int((time.monotonic() - compaction_start) * 1000),
         )
-        self._offload_to_gcs(merged_filename, merged_path)
+        if not self._in_memory:
+            self._offload_to_gcs(merged_filename, Path(merged_target))
         self._evict_hook()
+
+    def _compact_in_memory(
+        self,
+        tmps: list[LocalSegment],
+        min_seq: int,
+        max_seq: int,
+        merged_filename: str,
+    ) -> LocalSegment | None:
+        """Concat + project + sort the input tables; return one merged segment.
+
+        Mirrors ``_build_compaction_sql`` semantics: columns missing from a
+        given input are filled with NULL, the output is projected to the
+        registered schema's column order, and rows are ordered by the
+        compaction key.
+        """
+        target_schema = self._arrow_schema
+        try:
+            with self._insertion_lock:
+                aligned = [_project_to_schema(t.table, target_schema) for t in tmps if t.table is not None]
+            if not aligned:
+                return None
+            merged = pa.concat_tables(aligned)
+            merged = self._sort_for_flush(merged)
+        except Exception:
+            logger.warning("In-memory compaction failed, leaving tmp segments in place", exc_info=True)
+            return None
+        return LocalSegment(
+            path=_mem_segment_path(merged_filename),
+            size_bytes=merged.nbytes,
+            min_seq=min_seq,
+            max_seq=max_seq,
+            table=merged,
+        )
 
     def _build_compaction_sql(self, input_paths: list[Path], staging_path: Path) -> str:
         """Compose the COPY statement that compacts ``input_paths`` to ``staging_path``.
@@ -732,15 +814,19 @@ class LogNamespace:
         order_col = _sql_quote_ident(self.schema.key_column or "timestamp_ms")
         return f"ORDER BY {order_col}"
 
-    def sealed_segments(self) -> list[Path]:
-        """Return paths of flushed (logs_*) segments only, oldest first.
+    def sealed_segments(self) -> list[LocalSegment]:
+        """Return flushed (logs_*) segments only, oldest first.
 
         Caller must hold the registry's query-visibility read lock so the
         list isn't mutated mid-snapshot. Tmp segments are deliberately
         excluded — queries see only flushed/compacted data.
+
+        Each returned segment is either parquet-backed (``table is None``,
+        ``path`` is the filesystem path) or in-memory backed (``table``
+        set; ``path`` is a synthetic ``<mem>/...`` identifier).
         """
         with self._insertion_lock:
-            return [Path(s.path) for s in self._local_segments if not _is_tmp_path(s.path)]
+            return [s for s in self._local_segments if not _is_tmp_path(s.path)]
 
     def all_segments_unlocked(self) -> list[LocalSegment]:
         """Return a snapshot of every locally-tracked segment (tmp + sealed).
@@ -767,10 +853,11 @@ class LogNamespace:
                     continue
                 new.append(s)
             self._local_segments = new
-        try:
-            Path(path).unlink(missing_ok=True)
-        except Exception:
-            logger.warning("Failed to delete evicted segment %s", path, exc_info=True)
+        if not self._in_memory:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except Exception:
+                logger.warning("Failed to delete evicted segment %s", path, exc_info=True)
         return removed_bytes
 
     def remove_local_storage(self) -> None:
@@ -780,7 +867,13 @@ class LogNamespace:
         lock; the namespace must already be detached from the registry
         (the bg flush thread joined, the registry row removed) so no
         concurrent code holds a reference to this namespace.
+
+        In-memory mode: just clear the segment list — there is no
+        directory or files to remove.
         """
+        if self._in_memory:
+            self._local_segments.clear()
+            return
         for s in list(self._local_segments):
             try:
                 Path(s.path).unlink(missing_ok=True)
@@ -897,9 +990,19 @@ class LogNamespace:
             ram_tables: list[pa.Table] = list(self._chunks)
             if self._flushing is not None:
                 ram_tables.append(self._flushing.table)
+            # Log-namespace pending rows are committed in-process state;
+            # making them visible to reads matches the prior MemStore
+            # semantics ("appended rows immediately findable") and is
+            # safe because compaction never touches ``_pending`` directly.
+            if self._pending:
+                ram_tables.append(_build_log_table(self._pending, self._arrow_schema))
 
         segments = _cap_segments(segments)
-        parquet_files = [s.path for s in segments]
+        parquet_files = [s.path for s in segments if s.table is None]
+        # In-memory segments come into the query as registered views,
+        # alongside the in-flight RAM tables. Order is irrelevant — the
+        # final SQL is a UNION ALL.
+        mem_segment_tables = [s.table for s in segments if s.table is not None]
 
         where_clause = " AND ".join(where_parts)
         select_cols = (
@@ -908,7 +1011,7 @@ class LogNamespace:
         order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
         limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
 
-        with self._read_pool.checkout(ram_tables) as (conn, ram_names):
+        with self._read_pool.checkout(ram_tables + mem_segment_tables) as (conn, ram_names):
             source = _build_union_source(parquet_files, ram_names, self._arrow_schema)
             sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
             return conn.execute(sql, params).fetchall()
@@ -990,6 +1093,26 @@ def _add_common_filters(
     if min_level_enum > 0:
         where_parts.append("(level = 0 OR level >= $min_level)")
         params["min_level"] = min_level_enum
+
+
+def _project_to_schema(table: pa.Table, target: pa.Schema) -> pa.Table:
+    """Cast/extend ``table`` to match ``target`` column order, filling NULL.
+
+    Mirrors :meth:`LogNamespace._build_compaction_sql` for in-memory
+    compaction: columns absent from ``table`` are added as nulls; columns
+    present are cast to the target type if needed; columns not in
+    ``target`` are dropped.
+    """
+    cols = []
+    for field in target:
+        if field.name in table.schema.names:
+            col = table.column(field.name)
+            if col.type != field.type:
+                col = col.cast(field.type)
+            cols.append(col)
+        else:
+            cols.append(pa.nulls(table.num_rows, type=field.type))
+    return pa.Table.from_arrays(cols, schema=target)
 
 
 def _build_union_source(parquet_files: list[str], ram_table_names: list[str], arrow_schema: pa.Schema) -> str:

@@ -182,10 +182,14 @@ def test_query_blocks_concurrent_compaction_commit(store: DuckDBLogStore):
     # finishes promptly.
     t.join(timeout=5.0)
     assert compaction_done.is_set()
-    # Compaction completed: a single logs_ file replaces the two tmps.
-    seg_dir = store._data_dir / "iris.worker"
-    assert sorted(p.name for p in seg_dir.glob("tmp_*.parquet")) == []
-    assert len(list(seg_dir.glob("logs_*.parquet"))) == 1
+    # Compaction completed: a single sealed segment replaces the two tmps.
+    ns = store._namespaces["iris.worker"]
+    sealed = ns.sealed_segments()
+    assert len(sealed) == 1
+    all_segments = ns.all_segments_unlocked()
+    from finelog.store.log_namespace import _is_tmp_path
+
+    assert not any(_is_tmp_path(s.path) for s in all_segments)
 
 
 def test_query_completes_on_snapshot_during_compaction(store: DuckDBLogStore):

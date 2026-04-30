@@ -81,15 +81,10 @@ def test_fetch_logs_concurrency_cap_enforced_by_interceptor(service: LogServiceI
 
 
 def test_push_then_fetch_round_trip(tmp_path: Path):
-    """End-to-end: push entries via RPC, then fetch them back.
+    """End-to-end: push entries via RPC, then fetch them back."""
+    from finelog.store.duckdb_store import DuckDBLogStore
 
-    Uses an in-memory MemStore directly so the round trip is synchronous —
-    the LogStore default factory may resolve to DuckDB if the env probe
-    happens before PYTEST_CURRENT_TEST is set (xdist worker startup).
-    """
-    from finelog.store.mem_store import MemStore
-
-    svc = LogServiceImpl(log_store=MemStore())
+    svc = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
     try:
         app = build_log_server_asgi(svc)
         with TestClient(app) as client:
@@ -127,9 +122,9 @@ def test_legacy_iris_logging_path_compat():
     delivery without any worker-side change. Removable once those workers
     have rotated out.
     """
-    from finelog.store.mem_store import MemStore
+    from finelog.store.duckdb_store import DuckDBLogStore
 
-    svc = LogServiceImpl(log_store=MemStore())
+    svc = LogServiceImpl(log_store=DuckDBLogStore())
     try:
         app = build_log_server_asgi(svc)
         with TestClient(app) as client:
