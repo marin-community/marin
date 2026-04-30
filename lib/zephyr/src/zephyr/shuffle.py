@@ -85,6 +85,7 @@ class ListShard:
 # ---------------------------------------------------------------------------
 
 _SCATTER_META_SUFFIX = ".scatter_meta"
+# Suffix for the scatter data file written alongside the .scatter_meta sidecar.
 _SCATTER_DATA_SUFFIX = ".shuffle"
 
 # Number of parallel sidecar reads each reducer issues when building its
