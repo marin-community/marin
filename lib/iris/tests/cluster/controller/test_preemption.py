@@ -583,8 +583,9 @@ def test_preemption_picks_cheapest_victim():
     assert preemptions[0][1] == cheap_victim.task_id
 
 
-def test_get_running_tasks_skips_claimed_workers():
-    """_get_running_tasks_with_band_and_value skips tasks on reservation-claimed workers."""
+def test_get_running_tasks_keeps_cpu_only_tasks_on_claimed_workers():
+    """CPU-only tasks on reservation-claimed workers stay preemption-eligible
+    so reservation owners can reclaim host CPU/RAM."""
     with make_controller_state() as state:
         harness = ControllerTestHarness(state)
         w1 = harness.add_worker("w1", cpu=4)
@@ -596,14 +597,50 @@ def test_get_running_tasks_skips_claimed_workers():
         harness.dispatch(tasks1[0], w1)
         harness.dispatch(tasks2[0], w2)
 
-        # w1 is claimed by reservation
+        # w1 is claimed by reservation; the CPU-only opportunistic task
+        # running on it must still be returned as a preemption candidate.
         claimed = {w1}
         running = _get_running_tasks_with_band_and_value(state._db, claimed)
 
-        # Only tasks on w2 should be returned
         task_ids = {r.task_id for r in running}
+        assert tasks1[0].task_id in task_ids
         assert tasks2[0].task_id in task_ids
-        assert tasks1[0].task_id not in task_ids
+
+
+def test_get_running_tasks_skips_device_tasks_on_claimed_workers():
+    """Device-bearing tasks on claimed workers belong to the reservation owner
+    (or its descendants) and are not preemption candidates."""
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        w1 = harness.add_worker("w1", cpu=4, tpu_name="v5p-8")
+        w2 = harness.add_worker("w2", cpu=4)
+
+        # Device-bearing task on the claimed worker (reservation owner).
+        device_req = controller_pb2.Controller.LaunchJobRequest(
+            name="/alice/tpu-job",
+            entrypoint=make_test_entrypoint(),
+            resources=job_pb2.ResourceSpecProto(
+                cpu_millicores=1000,
+                memory_bytes=1024**3,
+                device=job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5p-8", count=8)),
+            ),
+            environment=job_pb2.EnvironmentConfig(),
+            replicas=1,
+        )
+        device_tasks = submit_job(state, "/alice/tpu-job", device_req)
+        cpu_tasks = harness.submit("/bob/job2", cpu=1)
+
+        harness.dispatch(device_tasks[0], w1)
+        harness.dispatch(cpu_tasks[0], w2)
+
+        # w1 is claimed by reservation; the TPU task running there is the
+        # reservation owner and must NOT be returned as a preemption victim.
+        claimed = {w1}
+        running = _get_running_tasks_with_band_and_value(state._db, claimed)
+
+        task_ids = {r.task_id for r in running}
+        assert device_tasks[0].task_id not in task_ids
+        assert cpu_tasks[0].task_id in task_ids
 
 
 def test_over_budget_user_tasks_preemptible():

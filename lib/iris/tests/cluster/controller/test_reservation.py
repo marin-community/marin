@@ -623,19 +623,23 @@ def test_taint_injection_does_not_mutate_original():
 # =============================================================================
 
 
-def _make_job_requirements() -> JobRequirements:
+def _make_job_requirements(device: job_pb2.DeviceConfig | None = None) -> JobRequirements:
+    """Build a CPU-only JobRequirements unless a device is supplied."""
+    spec = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
+    if device is not None:
+        spec.device.CopyFrom(device)
     return JobRequirements(
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        resources=spec,
         constraints=[],
         is_coscheduled=False,
         coscheduling_group_by=None,
     )
 
 
-def test_taint_constraint_added_to_non_reservation_jobs():
-    """Non-reservation jobs get a NOT_EXISTS reservation-job constraint."""
+def test_taint_constraint_added_to_non_reservation_device_jobs():
+    """Non-reservation jobs that request a TPU/GPU get a NOT_EXISTS constraint."""
     jobs = {
-        JobName.root("test-user", "regular"): _make_job_requirements(),
+        JobName.root("test-user", "regular"): _make_job_requirements(_gpu_device("H100")),
     }
     has_reservation: set[JobName] = set()
 
@@ -645,6 +649,20 @@ def test_taint_constraint_added_to_non_reservation_jobs():
     not_exists = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(not_exists) == 1
     assert not_exists[0].op == ConstraintOp.NOT_EXISTS
+
+
+def test_taint_constraint_skipped_for_cpu_only_non_reservation_jobs():
+    """CPU-only non-reservation jobs skip the taint constraint and run opportunistically."""
+    jobs = {
+        JobName.root("test-user", "cpu-job"): _make_job_requirements(),
+    }
+    has_reservation: set[JobName] = set()
+
+    result = _inject_taint_constraints(jobs, has_reservation)
+
+    constraints = result[JobName.root("test-user", "cpu-job")].constraints
+    taint = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
+    assert taint == []
 
 
 def test_taint_constraint_not_added_to_reservation_jobs():
@@ -666,14 +684,17 @@ def test_taint_constraint_not_added_to_reservation_jobs():
 
 
 def test_taint_constraint_mixed_jobs():
-    """Direct reservation gets EQ, descendant gets nothing, regular gets NOT_EXISTS."""
+    """Direct reservation gets EQ, descendant gets nothing, device-bearing regular gets
+    NOT_EXISTS, CPU-only regular gets nothing."""
     res_job = JobName.root("test-user", "reserved")
     descendant_job = JobName.from_string("/test-user/reserved/child")
-    reg_job = JobName.root("test-user", "regular")
+    device_reg_job = JobName.root("test-user", "regular-gpu")
+    cpu_reg_job = JobName.root("test-user", "regular-cpu")
     jobs = {
         res_job: _make_job_requirements(),
         descendant_job: _make_job_requirements(),
-        reg_job: _make_job_requirements(),
+        device_reg_job: _make_job_requirements(_gpu_device("H100")),
+        cpu_reg_job: _make_job_requirements(),
     }
     has_reservation = {res_job, descendant_job}
     has_direct_reservation = {res_job}
@@ -690,10 +711,14 @@ def test_taint_constraint_mixed_jobs():
     desc_constraints = [c for c in result[descendant_job].constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(desc_constraints) == 0
 
-    # Regular job: NOT_EXISTS constraint
-    reg_constraints = [c for c in result[reg_job].constraints if c.key == RESERVATION_TAINT_KEY]
-    assert len(reg_constraints) == 1
-    assert reg_constraints[0].op == ConstraintOp.NOT_EXISTS
+    # Device-bearing regular job: NOT_EXISTS constraint
+    device_reg_constraints = [c for c in result[device_reg_job].constraints if c.key == RESERVATION_TAINT_KEY]
+    assert len(device_reg_constraints) == 1
+    assert device_reg_constraints[0].op == ConstraintOp.NOT_EXISTS
+
+    # CPU-only regular job: no taint constraint (opportunistic)
+    cpu_reg_constraints = [c for c in result[cpu_reg_job].constraints if c.key == RESERVATION_TAINT_KEY]
+    assert cpu_reg_constraints == []
 
 
 def test_taint_constraint_preserves_existing_constraints():
@@ -701,7 +726,11 @@ def test_taint_constraint_preserves_existing_constraints():
     existing = Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-central1")
     jobs = {
         JobName.root("test-user", "regular"): JobRequirements(
-            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            resources=job_pb2.ResourceSpecProto(
+                cpu_millicores=1000,
+                memory_bytes=1024**3,
+                device=_gpu_device("H100"),
+            ),
             constraints=[existing],
             is_coscheduled=False,
             coscheduling_group_by=None,
@@ -1347,6 +1376,42 @@ def test_unrelated_job_blocked_when_all_workers_claimed(ctrl):
     not_exists = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(not_exists) == 1
     assert not_exists[0].op == job_pb2.CONSTRAINT_OP_NOT_EXISTS
+
+
+def test_cpu_only_unrelated_job_runs_opportunistically_on_claimed_workers(ctrl):
+    """CPU-only non-reservation jobs skip the taint and run opportunistically
+    on the idle CPU/RAM of reservation-claimed workers."""
+    _register_worker(ctrl.state, "w1", _gpu_metadata("H100"))
+    _register_worker(ctrl.state, "w2", _gpu_metadata("H100"))
+
+    parent_req = _make_job_request_with_reservation(
+        reservation_entries=[
+            _make_reservation_entry(_gpu_device("H100")),
+            _make_reservation_entry(_gpu_device("H100")),
+        ],
+    )
+    _submit_job(ctrl.state, "res-parent", parent_req)
+    ctrl._claim_workers_for_reservations()
+    assert len(ctrl.reservation_claims) == 2
+
+    # Unrelated CPU-only job (no device).
+    unrelated_jid = JobName.root("test-user", "cpu-only")
+    unrelated_req = JobRequirements(
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        constraints=[],
+        is_coscheduled=False,
+        coscheduling_group_by=None,
+    )
+
+    jobs = {unrelated_jid: unrelated_req}
+    has_reservation: set[JobName] = set()
+
+    modified_jobs = _inject_taint_constraints(jobs, has_reservation)
+    constraints = modified_jobs[unrelated_jid].constraints
+    taint = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
+    # No taint constraint — the job is free to land on claimed workers'
+    # idle CPU. Capacity accounting still gates whether it actually fits.
+    assert taint == []
 
 
 # =============================================================================

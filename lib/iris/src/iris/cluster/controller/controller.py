@@ -172,9 +172,14 @@ _SCHEDULING_TRACE_INTERVAL = 50
 BUNDLED_LOG_SERVER_MAX_ROWS = 200_000
 
 # Taint attribute injected onto claimed workers to prevent non-reservation
-# jobs from landing on them.  Non-reservation jobs get a NOT_EXISTS constraint
-# for this key; reservation jobs do not, so they naturally prefer claimed
-# workers (which appear first in the worker list).
+# jobs whose work depends on the reserved device from landing on them.
+# Non-reservation jobs that request a TPU/GPU device get a NOT_EXISTS
+# constraint for this key; reservation jobs do not, so they naturally prefer
+# claimed workers (which appear first in the worker list). Non-reservation
+# jobs that do NOT request a device (CPU-only) skip the constraint entirely
+# and may run opportunistically on idle CPU/memory of reservation-claimed
+# hosts — they remain preemptible when the reservation owner needs that
+# capacity.
 RESERVATION_TAINT_KEY = "reservation-job"
 
 
@@ -457,7 +462,12 @@ def _get_running_tasks_with_band_and_value(
 ) -> list[RunningTaskInfo]:
     """Query running tasks with band, worker, resource spec, and coscheduling status.
 
-    Skips tasks on reservation-claimed workers since those workers are spoken for.
+    On reservation-claimed workers, skips device-bearing tasks (the reservation
+    owner / its descendants own those workers' TPU/GPU exclusively) but
+    includes CPU-only tasks. CPU-only tasks on claimed workers are
+    opportunistic tenants and remain preemption-eligible so reservation owners
+    can reclaim host CPU/memory when their work arrives.
+
     When ``user_spend`` and ``user_budget_limits`` are provided, the effective band
     is computed so over-budget users' tasks are treated as BATCH for preemption.
     Users without a budget row fall back to ``user_budget_defaults``.
@@ -483,14 +493,17 @@ def _get_running_tasks_with_band_and_value(
     result: list[RunningTaskInfo] = []
     for row in rows:
         wid = row.worker_id
-        if wid in claimed_workers:
-            continue
         resources = resource_spec_from_scalars(
             row.res_cpu_millicores,
             row.res_memory_bytes,
             row.res_disk_bytes,
             row.res_device_json,
         )
+        # Tasks on claimed workers are owned by the reservation if they hold
+        # a TPU/GPU; CPU-only tasks on claimed workers are opportunistic
+        # tenants that the reservation owner may preempt to reclaim CPU/RAM.
+        if wid in claimed_workers and _resources_request_device(resources):
+            continue
         band = compute_effective_band(row.priority_band, row.task_id.user, _spend, _limits, _defaults)
         result.append(
             RunningTaskInfo(
@@ -821,6 +834,27 @@ def _inject_reservation_taints(
     return claimed + unclaimed
 
 
+def _resources_request_device(resources: job_pb2.ResourceSpecProto) -> bool:
+    """Return True if the resource spec requests a TPU or GPU device.
+
+    Used to decide whether a job needs the ``reservation-job`` taint
+    constraint and whether a running task on a claimed worker is the
+    reservation owner. Device-bearing jobs are excluded from claimed workers
+    (the reserved device belongs to its claim holder); CPU-only jobs may run
+    opportunistically on a claimed host's idle CPU/memory.
+
+    Uses ``HasField`` rather than ``get_*_count`` because protos with the
+    ``tpu`` submessage set but no explicit ``count`` are still device jobs.
+    """
+    device = resources.device
+    return device.HasField("tpu") or device.HasField("gpu")
+
+
+def _job_requests_device(req: JobRequirements) -> bool:
+    """Return True if the job requests a TPU or GPU device."""
+    return _resources_request_device(req.resources)
+
+
 def _inject_taint_constraints(
     jobs: dict[JobName, JobRequirements],
     has_reservation: set[JobName],
@@ -828,13 +862,18 @@ def _inject_taint_constraints(
 ) -> dict[JobName, JobRequirements]:
     """Add reservation taint constraints to jobs.
 
-    Three-way logic:
+    Four-way logic:
     - Direct reservation jobs (has_direct_reservation): get an EQ constraint
       forcing them onto their claimed workers only.
     - Descendants of reservation jobs (has_reservation minus direct): no
       constraint — they can use both claimed and unclaimed workers.
-    - Non-reservation jobs: get a NOT_EXISTS constraint blocking them from
-      claimed workers.
+    - Non-reservation jobs that request a TPU/GPU device: get a NOT_EXISTS
+      constraint blocking them from claimed workers (the reserved device
+      belongs to its claim holder).
+    - Non-reservation CPU-only jobs: no constraint — they may run
+      opportunistically on idle CPU/memory of reservation-claimed hosts.
+      Such tasks remain preemption-eligible when reservation owners need
+      capacity (see ``_get_running_tasks_with_band_and_value``).
     """
     if not has_reservation and not jobs:
         return jobs
@@ -858,11 +897,14 @@ def _inject_taint_constraints(
             )
         elif job_id in has_reservation:
             modified[job_id] = req
-        else:
+        elif _job_requests_device(req):
             modified[job_id] = replace(
                 req,
                 constraints=[*list(req.constraints), taint_constraint],
             )
+        else:
+            # CPU-only non-reservation job: opportunistic on claimed hosts.
+            modified[job_id] = req
     return modified
 
 
