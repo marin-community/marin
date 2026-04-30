@@ -1218,6 +1218,46 @@ class TestPerGroupWorkerConfig:
         assert wc is not None
         assert wc.worker_attributes["team"] == "euw4"
 
+    def test_worker_cache_dir_override_applied(self):
+        """WorkerSettings.cache_dir overrides the base WorkerConfig.cache_dir."""
+        base_wc = config_pb2.WorkerConfig(
+            docker_image="test:latest",
+            port=10001,
+            controller_address="controller:10000",
+            cache_dir="/dev/shm/iris",
+        )
+        sg_config = make_scale_group_config(name="cpu-group", max_slices=5)
+        sg_config.worker.cache_dir = "/var/lib/iris-cache"
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"cpu-group": group}, base_worker_config=base_wc)
+
+        wc = autoscaler._per_group_worker_config(group)
+
+        assert wc is not None
+        assert wc.cache_dir == "/var/lib/iris-cache"
+        # base is unchanged
+        assert base_wc.cache_dir == "/dev/shm/iris"
+
+    def test_worker_cache_dir_falls_through_when_unset(self):
+        """When WorkerSettings.cache_dir is empty, base cache_dir is preserved."""
+        base_wc = config_pb2.WorkerConfig(
+            docker_image="test:latest",
+            port=10001,
+            controller_address="controller:10000",
+            cache_dir="/dev/shm/iris",
+        )
+        sg_config = make_scale_group_config(name="tpu-group", max_slices=5)
+        sg_config.worker.attributes["custom-label"] = "value"
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"tpu-group": group}, base_worker_config=base_wc)
+
+        wc = autoscaler._per_group_worker_config(group)
+
+        assert wc is not None
+        assert wc.cache_dir == "/dev/shm/iris"
+
     def test_derives_region_and_zone_from_scale_group_when_missing(self):
         """Derived region and zone are injected when worker attrs omit them."""
         base_wc = config_pb2.WorkerConfig(

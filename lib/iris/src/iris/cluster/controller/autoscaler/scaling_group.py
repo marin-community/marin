@@ -195,6 +195,8 @@ def build_worker_config_for_group(
     if group_config.HasField("worker"):
         for k, v in group_config.worker.attributes.items():
             wc.worker_attributes[k] = v
+        if group_config.worker.cache_dir:
+            wc.cache_dir = group_config.worker.cache_dir
 
     template = group_config.slice_template
     region = _region_from_template(template)
