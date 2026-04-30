@@ -113,8 +113,9 @@ def initialize_jax(
     initialization is skipped — JAX works correctly without distributed
     init when there is only one process.
 
-    On TPU, JAX handles distributed init natively via the TPU runtime —
-    calling jax.distributed.initialize would conflict, so this is a no-op.
+    On TPU, JAX handles coordinator discovery via the TPU runtime, so this
+    function calls ``jax.distributed.initialize()`` with no arguments and
+    returns — the TPU runtime supplies all necessary addresses automatically.
 
     Args:
         port: Coordinator port. Overridden by IRIS_PORT_jax if allocated.

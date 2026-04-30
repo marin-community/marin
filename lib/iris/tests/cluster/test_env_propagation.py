@@ -70,13 +70,11 @@ def parent_context(capturing_client):
 def _parent_job_info(
     env: dict[str, str],
     constraints: list[Constraint] | None = None,
-    worker_region: str | None = None,
 ) -> JobInfo:
     return JobInfo(
         task_id=JobName.from_wire("/parent-job/0"),
         env=env,
         constraints=constraints or [],
-        worker_region=worker_region,
     )
 
 
@@ -170,52 +168,4 @@ def test_child_explicit_constraints_override_parent(capturing_client, parent_con
     )
     assert not any(
         c.key == WellKnownAttribute.REGION and c.value.string_value == "us-west4" for c in stub.captured_constraints
-    )
-
-
-def test_child_does_not_inherit_worker_region(capturing_client, parent_context):
-    """A parent's worker_region must not auto-pin a child job's region.
-
-    Region pinning is opt-in via explicit `regions=[...]` on the child's
-    resources or via the executor's GCS-path inference.
-    """
-    client, stub = capturing_client
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-
-    with (
-        iris_ctx_scope(parent_context),
-        patch(
-            "iris.client.client.get_job_info",
-            return_value=_parent_job_info({}, worker_region="us-central1"),
-        ),
-    ):
-        client.submit(entrypoint, "child-no-region-inherit", resources)
-
-    region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
-    assert region_constraints == []
-
-
-def test_child_explicit_region_preserved(capturing_client, parent_context):
-    """A child's explicit region constraint is preserved verbatim — independent
-    of whatever region the parent worker happens to be in."""
-    client, stub = capturing_client
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-    child_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
-
-    with (
-        iris_ctx_scope(parent_context),
-        patch(
-            "iris.client.client.get_job_info",
-            return_value=_parent_job_info({}, worker_region="us-central1"),
-        ),
-    ):
-        client.submit(entrypoint, "child-explicit-region", resources, constraints=child_constraints)
-
-    assert any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "europe-west4" for c in stub.captured_constraints
-    )
-    assert not any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-central1" for c in stub.captured_constraints
     )

@@ -67,7 +67,6 @@ from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigB
 from marin.training.training import (
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
-    _apply_env_to_process,
     bake_output_path,
     check_train_config_paths,
     extras_for_resources,
@@ -600,7 +599,7 @@ def _submit_train_job(
         name=_sanitize_job_name(name),
         entrypoint=Entrypoint.from_callable(
             _run_training_on_worker,
-            args=[worker_fn, train_config, env],
+            args=[worker_fn, train_config],
         ),
         resources=resources,
         environment=create_environment(env_vars=env, extras=extras_for_resources(resources)),
@@ -614,23 +613,10 @@ def _submit_train_job(
 def _run_training_on_worker(
     worker_fn: Callable[[Any], None],
     train_config: Any,
-    env_vars: dict[str, str],
 ) -> None:
-    """Worker entrypoint for ``_submit_train_job``. Top-level so Fray can pickle it.
-
-    Applies env vars, materialises any upstream ExecutorSteps embedded in
-    ``train_config`` under the worker's region, then runs ``worker_fn``
-    directly. ``output_path`` is read from ``train_config.output_path`` when
-    present; otherwise it is derived from the baked checkpointer path (for
-    config types such as ``TrainLmConfig`` that store it there).
-    """
-    _apply_env_to_process(env_vars)
-    output_path = getattr(train_config, "output_path", None)
-    if output_path is None:
-        # Configs like TrainLmConfig bake output_path into checkpointer.base_path
-        # as "<output_path>/checkpoints"; strip the suffix to recover the root.
-        output_path = os.path.dirname(train_config.trainer.checkpointer.base_path)
-    train_config = materialize(train_config, output_path=output_path)
+    """Resolve upstream ExecutorSteps in train_config, then run worker_fn.
+    Top-level so Fray can pickle it as a JobRequest entrypoint."""
+    train_config = materialize(train_config)
     worker_fn(train_config)
 
 
