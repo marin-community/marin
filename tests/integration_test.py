@@ -32,8 +32,7 @@ from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import Artifact
-from marin.execution.executor import ExecutorStep, this_output_path
-from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.execution.executor import ExecutorStep, this_output_path, ExecutorMainConfig, executor_main
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph

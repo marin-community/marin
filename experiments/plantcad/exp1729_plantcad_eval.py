@@ -22,8 +22,7 @@ from datasets import Dataset, load_dataset
 from huggingface_hub import HfApi
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
-from marin.execution.executor import executor_main
+from marin.execution.executor import ExecutorStep, this_output_path, versioned, executor_main
 from marin.utilities.json_encoder import CustomJsonEncoder
 from rigging.filesystem import open_url
 from transformers import AutoModelForCausalLM, AutoTokenizer
