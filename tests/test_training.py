@@ -11,7 +11,6 @@ from fray import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.main import train_lm
 from levanter.trainer import TrainerConfig
-
 from marin.training.training import (
     TrainLmOnPodConfig,
     _doublecheck_paths,
@@ -73,7 +72,7 @@ def test_temporary_checkpoint_base_path_follows_output_path_region():
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
     ):
         assert temporary_checkpoint_base_path("gs://marin-us-east5/experiments/grug/base-trial") == (
-            "gs://marin-tmp-us-east5/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
+            "gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
         )
 
 
@@ -95,7 +94,7 @@ def test_update_config_to_use_out_path_sets_run_specific_temp_checkpoints(traine
         checkpointer = updated.train_config.trainer.checkpointer
         assert checkpointer.base_path == "gs://marin-us-east5/experiments/grug/base-trial/checkpoints"
         assert checkpointer.temporary_base_path == (
-            "gs://marin-tmp-us-east5/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
+            "gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
         )
 
 

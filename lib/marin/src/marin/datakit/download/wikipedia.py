@@ -17,10 +17,11 @@ from collections.abc import Iterable
 
 import requests
 from rigging.filesystem import open_url
-from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_size
 from tqdm_loggable.auto import tqdm
 from zephyr import Dataset, ZephyrContext, atomic_rename, load_jsonl
+
+from marin.execution.step_spec import StepSpec
+from marin.utils import fsspec_size
 
 logger = logging.getLogger(__name__)
 

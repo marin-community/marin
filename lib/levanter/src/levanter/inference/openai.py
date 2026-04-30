@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Optional, Union
+from typing import List, Optional, Union
 
 import haliax as hax
 import jax.numpy as jnp
@@ -33,98 +33,21 @@ from openai.types.chat.chat_completion import ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
-from pydantic import BaseModel, Field
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.openai_protocol import (
+    ChatCompletionRequest,
+    ChatMessage,
+    CompletionRequest,
+    TokenList,
+    TokensRequest,
+    TokensResponse,
+)
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import TrainerConfig
 
 logger = logging.getLogger(__name__)
-
-
-# OpenAI requests are all defined as TypedDicts, which FastAPI struggles to
-# encode in a useful way. Since we control this half of the API, we'll define
-# our own equivalent Pydantic models here.
-
-
-class ChatMessage(BaseModel):
-    """A single chat message in the conversation."""
-
-    role: Literal["system", "user", "assistant", "tool", "function", "developer"]
-    content: Optional[str] = None
-    name: Optional[str] = None
-    tool_calls: Optional[List[Dict]] = None
-    tool_call_id: Optional[str] = None
-    function_call: Optional[Dict] = None
-
-
-class ChatCompletionRequest(BaseModel):
-    """Request model for chat completions endpoint."""
-
-    model: str
-    messages: List[ChatMessage]
-    frequency_penalty: Optional[float] = None
-    logit_bias: Optional[Dict[str, int]] = None
-    logprobs: bool = Field(default=False, description="Whether to include logprobs in the response")
-    top_logprobs: Optional[int] = None
-    max_tokens: int = Field(default=1024, description="Maximum number of tokens to generate")
-    n: Optional[int] = None
-    presence_penalty: Optional[float] = None
-    response_format: Optional[Dict] = None
-    seed: Optional[int] = None
-    service_tier: Optional[str] = None
-    stop: Optional[Union[str, List[str]]] = None
-    stream: Optional[bool] = None
-    stream_options: Optional[Dict] = None
-    temperature: float = Field(default=1.0, description="Sampling temperature")
-    top_p: Optional[float] = None
-    tools: Optional[List[Dict]] = None
-    tool_choice: Optional[Union[str, Dict]] = None
-    parallel_tool_calls: Optional[bool] = None
-    user: Optional[str] = None
-
-
-class CompletionRequest(BaseModel):
-    """Request model for text completions endpoint."""
-
-    model: str
-    prompt: Union[str, List[str]]
-    best_of: Optional[int] = None
-    echo: Optional[bool] = None
-    frequency_penalty: Optional[float] = None
-    logit_bias: Optional[Dict[str, int]] = None
-    logprobs: Optional[int] = None
-    max_tokens: int = Field(default=1024, description="Maximum number of tokens to generate")
-    n: Optional[int] = None
-    presence_penalty: Optional[float] = None
-    seed: Optional[int] = None
-    stop: Optional[Union[str, List[str]]] = None
-    stream: Optional[bool] = None
-    stream_options: Optional[Dict] = None
-    suffix: Optional[str] = None
-    temperature: float = Field(default=1.0, description="Sampling temperature")
-    top_p: Optional[float] = None
-    user: Optional[str] = None
-
-
-class TokensRequest(BaseModel):
-    """Request tokens from the given prompts after system prompt injection and encoding."""
-
-    model: str = "marin-default"
-    message_list: list[list[ChatMessage]]  # List of messages dicts representing prompts
-
-
-class TokenList(BaseModel):
-    """List of token IDs."""
-
-    tokens: list[int]
-
-
-class TokensResponse(BaseModel):
-    """Response containing tokenized prompts."""
-
-    results: list[TokenList]
 
 
 @dataclass

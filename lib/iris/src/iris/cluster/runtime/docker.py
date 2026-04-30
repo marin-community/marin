@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from rigging.timing import Timestamp
+
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.env import write_workdir_files
 from iris.cluster.runtime.profile import (
@@ -51,7 +53,6 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import job_pb2
-from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 

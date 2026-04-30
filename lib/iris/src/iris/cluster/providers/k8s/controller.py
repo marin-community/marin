@@ -20,12 +20,13 @@ from contextlib import AbstractContextManager
 from datetime import datetime
 from urllib.parse import urlparse
 
+from rigging.timing import Deadline
+
 from iris.cluster.config import config_to_dict
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.types import InfraError, Labels
 from iris.rpc import config_pb2
-from rigging.timing import Deadline
 
 logger = logging.getLogger(__name__)
 

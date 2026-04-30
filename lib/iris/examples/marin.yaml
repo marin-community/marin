@@ -1,6 +1,8 @@
 # Iris production configuration for Marin cluster
 # Usage: uv run iris --cluster=marin cluster start
 
+log_server_config: marin
+
 platform:
   label_prefix: marin
   gcp:

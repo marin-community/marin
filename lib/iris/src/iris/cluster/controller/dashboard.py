@@ -29,6 +29,9 @@ from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
 import httpx
+from finelog.client import LogServiceProxy
+from finelog.rpc.logging_connect import LogServiceWSGIApplication
+from finelog.server import LogServiceImpl
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
@@ -47,9 +50,6 @@ from iris.cluster.dashboard_common import (
     requires_auth,
     static_files_mount,
 )
-from finelog.client import LogServiceProxy
-from finelog.rpc.logging_connect import LogServiceWSGIApplication
-from finelog.server import LogServiceImpl
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.controller_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, ConcurrencyLimitInterceptor, RequestTimingInterceptor

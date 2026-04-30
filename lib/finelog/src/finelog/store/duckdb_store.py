@@ -63,16 +63,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Condition, Lock
 
-
 import duckdb
 import fsspec.core
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+from rigging.timing import RateLimiter
 
 from finelog.rpc import logging_pb2
 from finelog.types import _EST_BYTES_PER_ROW, REGEX_META_RE, LogReadResult, parse_attempt_id, str_to_log_level
-from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
 

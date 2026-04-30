@@ -4,7 +4,6 @@
 import logging
 
 import pytest
-
 from rigging.log_setup import (
     BufferedLogRecord,
     LevelPrefixFormatter,

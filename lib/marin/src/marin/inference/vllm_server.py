@@ -26,7 +26,7 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 logger = logging.getLogger(__name__)
 DEFAULT_VLLM_TPU_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
 DEFAULT_VLLM_GPU_DOCKER_IMAGE: str = "nvcr.io/nvidia/vllm:25.12.post1-py3"
-VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu",)
+VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu==0.18.0", "tpu-inference==0.18.0")
 
 _SENSITIVE_ENV_KEYS = frozenset(
     {
@@ -291,6 +291,9 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     gpu_memory_utilization = engine_kwargs.get("gpu_memory_utilization")
     if gpu_memory_utilization is not None:
         args.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
+    max_num_batched_tokens = engine_kwargs.get("max_num_batched_tokens")
+    if max_num_batched_tokens is not None:
+        args.extend(["--max-num-batched-tokens", str(max_num_batched_tokens)])
     return args
 
 

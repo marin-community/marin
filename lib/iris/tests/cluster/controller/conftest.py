@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 import pytest
-
+from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     Constraint,
@@ -52,7 +52,6 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.stores import ControllerStore
-from finelog.server import LogServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -64,11 +63,10 @@ from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId, is_job_finished
-from iris.rpc import config_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
+
 from tests.cluster.providers.conftest import make_mock_platform
 
 check_task_can_be_scheduled = task_row_can_be_scheduled

@@ -6,7 +6,6 @@
 import hashlib
 
 import pytest
-
 from iris.cluster.bundle import BundleStore
 
 
