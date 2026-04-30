@@ -3,6 +3,7 @@
 
 from experiments.evals.paired_robustness_ppl import (
     DEFAULT_SAMPLE_CAP,
+    ALL_PAIRED_TEXT_VIEWS,
     PairedRobustnessFamily,
     PairedTextView,
     linearized_text_views_for_example,
@@ -13,13 +14,19 @@ from experiments.evals.paired_robustness_ppl import (
 from marin.execution.executor import InputName
 
 
-def test_paired_robustness_slices_are_held_out_and_capped():
-    paraphrase_slices = paired_robustness_slices(family=PairedRobustnessFamily.PARAPHRASE)
-    translation_slices = paired_robustness_slices(family=PairedRobustnessFamily.TRANSLATION)
+def test_paired_robustness_slices_define_expected_held_out_inventory():
+    slices = paired_robustness_slices()
 
-    assert {slice_.split for slice_ in paraphrase_slices} == {"validation", "test"}
-    assert {slice_.split for slice_ in translation_slices} == {"dev", "devtest"}
-    assert all(slice_.max_pairs <= DEFAULT_SAMPLE_CAP for slice_ in (*paraphrase_slices, *translation_slices))
+    assert {(slice_.family, slice_.name, slice_.split) for slice_ in slices} == {
+        (PairedRobustnessFamily.PARAPHRASE, "paws_labeled_final", "validation"),
+        (PairedRobustnessFamily.PARAPHRASE, "paws_labeled_final", "test"),
+        (PairedRobustnessFamily.TRANSLATION, "flores_eng_deu", "dev"),
+        (PairedRobustnessFamily.TRANSLATION, "flores_eng_deu", "devtest"),
+    }
+    assert all(slice_.max_pairs <= DEFAULT_SAMPLE_CAP for slice_ in slices)
+    assert all(
+        slice_.tags_for_view(PairedTextView.TARGET_GIVEN_SOURCE)[0] == "paired_robustness_ppl" for slice_ in slices
+    )
 
 
 def test_paws_linearization_uses_stable_labels_and_filters_negative_pairs():
@@ -53,7 +60,7 @@ def test_paws_linearization_uses_stable_labels_and_filters_negative_pairs():
     assert linearized_text_views_for_example(paws_validation, negative_example) is None
 
 
-def test_paired_raw_validation_sets_register_conditional_view_paths_and_tags():
+def test_paired_raw_validation_sets_register_every_view_for_selected_slices():
     slices = tuple(
         slice_
         for slice_ in paired_robustness_slices()
@@ -63,15 +70,11 @@ def test_paired_raw_validation_sets_register_conditional_view_paths_and_tags():
     raw_steps = paired_robustness_raw_steps(slices=slices)
     datasets = paired_robustness_raw_validation_sets(slices=slices, raw_steps=raw_steps)
 
-    paws_key = "paired_robustness_ppl/paraphrase/paws_labeled_final/validation/target_given_source"
-    flores_key = "paired_robustness_ppl/translation/flores_eng_deu/devtest/source"
+    assert set(datasets) == {slice_.dataset_key(view) for slice_ in slices for view in ALL_PAIRED_TEXT_VIEWS}
 
-    assert isinstance(datasets[paws_key].input_path, InputName)
-    assert datasets[paws_key].input_path.name == "target_given_source/shard-*.jsonl.gz"
-    assert "split:validation" in datasets[paws_key].tags
-    assert "view:target_given_source" in datasets[paws_key].tags
-
-    assert isinstance(datasets[flores_key].input_path, InputName)
-    assert datasets[flores_key].input_path.name == "source/shard-*.jsonl.gz"
-    assert "split:devtest" in datasets[flores_key].tags
-    assert "family:translation" in datasets[flores_key].tags
+    for slice_ in slices:
+        for view in ALL_PAIRED_TEXT_VIEWS:
+            dataset = datasets[slice_.dataset_key(view)]
+            assert isinstance(dataset.input_path, InputName)
+            assert dataset.input_path.name == f"{view.value}/shard-*.jsonl.gz"
+            assert set(slice_.tags_for_view(view)).issubset(dataset.tags)
