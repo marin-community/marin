@@ -11,7 +11,6 @@ import logging
 import os
 from collections.abc import Sequence
 
-from experiments.models import qwen3_8b as qwen3_8b_checkpoint
 from levanter.models.qwen import Qwen3Config
 from marin.execution.executor import executor_main
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
@@ -25,6 +24,8 @@ from marin.rl.rl_experiment_utils import (
 )
 from marin.rl.rl_losses import RLOOLoss
 from marin.training.run_environment import resolve_required_env_vars
+
+from experiments.models import qwen3_8b as qwen3_8b_checkpoint
 
 logger = logging.getLogger(__name__)
 

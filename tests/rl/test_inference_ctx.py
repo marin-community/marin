@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock
 
+import marin.rl.environments.inference_ctx.vllm as vllm_module
 import numpy as np
 import pytest
 from levanter.inference.openai import ChatMessage
 from marin.rl.decoding import DecodingConfig
-import marin.rl.environments.inference_ctx.vllm as vllm_module
 from marin.rl.environments.inference_ctx import (
     MODEL_MAPPINGS,
     MODEL_TRANSPOSE_KEYS,

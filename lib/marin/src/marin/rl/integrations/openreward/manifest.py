@@ -5,8 +5,6 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
-from rigging.filesystem import open_url
-
 from marin.rl.integrations.openreward.client import load_openreward_client
 from marin.rl.integrations.openreward.models import (
     OpenRewardPromptBlock,
@@ -16,6 +14,7 @@ from marin.rl.integrations.openreward.models import (
     OpenRewardToolSpec,
     SecretsMapping,
 )
+from rigging.filesystem import open_url
 
 
 class OpenRewardTaskLike(Protocol):
