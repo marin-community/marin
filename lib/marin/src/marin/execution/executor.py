@@ -161,492 +161,6 @@ T_co = TypeVar("T_co", covariant=True)
 ExecutorFunction = Callable | None
 
 
-############################################################
-# Placeholder data shapes
-############################################################
-
-
-@dataclass(frozen=True)
-class ExecutorStep(Generic[ConfigT_co]):
-    """
-    An `ExecutorStep` represents a single step of a larger pipeline (e.g.,
-    transforming HTML to text).  It is specified by:
-     - a name (str), which is used to determine the `output_path`.
-     - a function `fn` (Callable), and
-     - a configuration `config` which gets passed into `fn`.
-     - a pip dependencies list (Optional[list[str]]) which are the pip dependencies required for the step.
-     These can be keys of project.optional-dependencies in the project's pyproject.toml file or any other pip package.
-
-    When a step is run, we compute the following two things for each step:
-    - `version`: represents all the upstream dependencies of the step
-    - `output_path`: the path where the output of the step are stored, based on
-    the name and a hash of the version.
-
-    The `config` is a dataclass object that recursively might have special
-    values of the following form:
-    - `InputName(step, name)`: a dependency on another `step`, resolve to the step.output_path / name
-    - `OutputName(name)`: resolves to the output_path / name
-    - `VersionedValue(value)`: a value that should be part of the version
-    The `config` is instantiated by replacing these special values with the
-    actual paths during execution.
-
-    Note: `step: ExecutorStep` is interpreted as `InputName(step, None)`.
-    """
-
-    name: str
-    fn: ExecutorFunction
-    config: ConfigT_co
-    description: str | None = None
-
-    override_output_path: str | None = None
-    """Specifies the `output_path` that should be used.  Print warning if it
-    doesn't match the automatically computed one."""
-
-    resources: ResourceConfig | None = None
-    """If set, this step is submitted as its own Fray job using these
-    resources. ``fn`` is invoked inside the submitted job.
-
-    If ``None``, behavior is determined by ``fn``: a ``RemoteCallable``
-    submits as a Fray job; a plain callable runs inline in-process.
-    """
-
-    def cd(self, name: str) -> "InputName":
-        """Refer to the `name` under `self`'s output_path."""
-        return InputName(self, name=name)
-
-    def __truediv__(self, other: str) -> "InputName":
-        """Alias for `cd`. That looks more Pythonic."""
-        return InputName(self, name=other)
-
-    def __hash__(self):
-        """Hash based on the ID (every object is different)."""
-        return hash(id(self))
-
-    def with_output_path(self, output_path: str) -> "ExecutorStep":
-        """Return a copy of the step with the given output_path."""
-        return replace(self, override_output_path=output_path)
-
-    def as_input_name(self) -> "InputName":
-        return InputName(step=self, name=None)
-
-
-@dataclass(frozen=True)
-class InputName:
-    """To be interpreted as a previous `step`'s output_path joined with `name`."""
-
-    step: ExecutorStep | None
-    name: str | None
-    block_on_step: bool = True
-    """
-    If False, the step that uses this InputName
-    will not block (or attempt to execute) `step`. We use this for
-    documenting dependencies in the config, but where that step might not have technically finished...
-
-    For instance, we sometimes use training checkpoints before the training step has finished.
-
-    These "pseudo-dependencies" still impact the hash of the step, but they don't block execution.
-    """
-
-    def cd(self, name: str) -> "InputName":
-        return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
-
-    def __truediv__(self, other: str) -> "InputName":
-        """Alias for `cd` that looks more Pythonic."""
-        return self.cd(other)
-
-    @staticmethod
-    def hardcoded(path: str) -> "InputName":
-        """
-        Sometimes we want to specify a path that is not part of the pipeline but is still relative to the prefix.
-        Try to use this sparingly.
-        """
-        return InputName(None, name=path)
-
-    def nonblocking(self) -> "InputName":
-        """
-        the step will not block on (or attempt to execute) the parent step.
-
-         (Note that if another step depends on the parent step, it will still block on it.)
-        """
-        return dataclasses.replace(self, block_on_step=False)
-
-
-def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
-    """
-    Helper function to extract the ExecutorStep from an InputName or ExecutorStep.
-
-    Args:
-        run (ExecutorStep | InputName): The input to extract the step from.
-
-    Returns:
-        ExecutorStep: The extracted step.
-    """
-    if isinstance(run, ExecutorStep):
-        return run
-    elif isinstance(run, InputName):
-        step = run.step
-        if step is None:
-            raise ValueError(f"Hardcoded path {run.name} is not part of the pipeline")
-        return step
-    else:
-        raise ValueError(f"Unexpected type {type(run)} for run: {run}")
-
-
-def output_path_of(step: ExecutorStep, name: str | None = None) -> InputName:
-    return InputName(step=step, name=name)
-
-
-if TYPE_CHECKING:
-
-    class OutputName(str):
-        """Type-checking stub treated as a string so defaults like THIS_OUTPUT_PATH fit `str`."""
-
-        name: str | None
-
-else:
-
-    @dataclass(frozen=True)
-    class OutputName:
-        """To be interpreted as part of this step's output_path joined with `name`."""
-
-        name: str | None
-
-
-def this_output_path(name: str | None = None):
-    return OutputName(name=name)
-
-
-# constant so we can use it in fields of dataclasses
-THIS_OUTPUT_PATH = OutputName(None)
-
-
-@dataclass(frozen=True)
-class VersionedValue(Generic[T_co]):
-    """Wraps a value, to signal that this value (part of a config) should be part of the version."""
-
-    value: T_co
-
-
-def versioned(value: T_co) -> VersionedValue[T_co]:
-    if isinstance(value, VersionedValue):
-        raise ValueError("Can't nest VersionedValue")
-    elif isinstance(value, InputName):
-        # TODO: We have also run into Versioned([InputName(...), ...])
-        raise ValueError("Can't version an InputName")
-
-    return VersionedValue(value)
-
-
-def ensure_versioned(value: VersionedValue[T_co] | T_co) -> VersionedValue[T_co]:
-    """
-    Ensure that the value is wrapped in a VersionedValue. If it is already wrapped, return it as is.
-    """
-    return value if isinstance(value, VersionedValue) else VersionedValue(value)
-
-
-def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
-    """
-    Unwrap the value if it is a VersionedValue, otherwise return the value as is.
-
-    Recurses into dataclasses, dicts and lists to unwrap any nested VersionedValue instances.
-    This method cannot handle InputName, OutputName, or ExecutorStep instances inside VersionedValue as
-    their values depend on execution results.
-    """
-
-    def recurse(obj: Any):
-        if isinstance(obj, MirroredValue):
-            return recurse(obj.value)
-        if isinstance(obj, VersionedValue):
-            return recurse(obj.value)
-        if isinstance(obj, OutputName | InputName | ExecutorStep):
-            raise ValueError(f"Cannot unwrap VersionedValue containing {type(obj)}: {obj}")
-        if is_dataclass(obj):
-            result = {}
-            for field in fields(obj):
-                val = getattr(obj, field.name)
-                result[field.name] = recurse(val)
-            return replace(obj, **result)
-        if isinstance(obj, dict):
-            return {k: recurse(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [recurse(x) for x in obj]
-        return obj
-
-    return recurse(value)  # type: ignore
-
-
-@dataclass(frozen=True)
-class MirroredValue(Generic[T_co]):
-    """Wraps a path value to signal that it should be mirrored from any marin regional bucket.
-
-    At config instantiation time, the path is resolved to the local marin prefix.
-    Before step execution, the executor copies the data from whichever region has it.
-    """
-
-    value: T_co
-    budget_gb: float = 10
-
-
-def mirrored(value: str | VersionedValue[str], budget_gb: float = 10) -> MirroredValue:
-    """Mark a path for cross-region mirroring with a transfer budget.
-
-    Usage: input_path=mirrored(versioned("documents/stackexchange/..."), budget_gb=50)
-    """
-    if isinstance(value, MirroredValue):
-        raise ValueError("Can't nest MirroredValue")
-    return MirroredValue(value=value, budget_gb=budget_gb)
-
-
-############################################################
-# Walker
-############################################################
-
-
-@dataclass(frozen=True)
-class InputNameEvent:
-    """Emitted when the walker encounters an `InputName` (or a bare
-    `ExecutorStep`, which is canonicalized to `InputName(step=step, name=None)`
-    before yielding).
-
-    `prefix` is the dotted path from the root config to this reference,
-    matching the version-string keys used by
-    `collect_dependencies_and_version` (e.g. `"data.cache_dir"`).
-    """
-
-    prefix: str
-    input_name: InputName
-
-
-@dataclass(frozen=True)
-class VersionedEvent:
-    """Emitted at a concrete `VersionedValue`. `prefix` is the dotted path."""
-
-    prefix: str
-    value: Any
-
-
-_Event = InputNameEvent | VersionedEvent
-
-
-def walk_config(obj: Any) -> Iterator[_Event]:
-    """Walk `obj` in deterministic order, yielding `InputNameEvent` and
-    `VersionedEvent` instances.
-
-    Order:
-      - Dataclasses: `dataclasses.fields` declaration order.
-      - Dicts: insertion order (values only; keys must be `str`).
-      - Lists, tuples, sets, frozensets: iteration order.
-
-    `MirroredValue` is unwrapped transparently. `None` and primitives are
-    leaves.
-    """
-    yield from _walk(obj, "")
-
-
-def _walk(obj: Any, prefix: str) -> Iterator[_Event]:
-    new_prefix = prefix + "." if prefix else ""
-
-    if obj is None:
-        return
-
-    if isinstance(obj, ExecutorStep):
-        # Canonicalize a bare ExecutorStep to InputName(step=step, name=None)
-        # so consumers only need to handle one shape.
-        yield InputNameEvent(prefix, output_path_of(obj, None))
-        return
-
-    if isinstance(obj, InputName):
-        yield InputNameEvent(prefix, obj)
-        return
-
-    if isinstance(obj, MirroredValue):
-        yield from _walk(obj.value, prefix)
-        return
-
-    if isinstance(obj, VersionedValue):
-        yield VersionedEvent(prefix, obj.value)
-        return
-
-    if is_dataclass(obj) and not isinstance(obj, type):
-        for field in fields(obj):
-            yield from _walk(getattr(obj, field.name), new_prefix + field.name)
-        return
-
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if not isinstance(key, str):
-                raise ValueError(f"dict keys must be strs, but got {key} (type: {type(key)})")
-            yield from _walk(value, new_prefix + key)
-        return
-
-    if isinstance(obj, list):
-        for i, item in enumerate(obj):
-            yield from _walk(item, new_prefix + f"[{i}]")
-        return
-
-    if isinstance(obj, (tuple, set, frozenset)):
-        # sets/frozensets are unordered; callers must not put hashing-relevant
-        # types inside them since iteration order would affect emitted prefixes.
-        for i, item in enumerate(obj):
-            yield from _walk(item, new_prefix + f"[{i}]")
-        return
-
-    # Primitives and unrecognized types are leaves.
-
-
-def upstream_steps(obj: Any) -> list[ExecutorStep]:
-    """Recursively walk `obj` and return every `ExecutorStep` referenced from it.
-
-    Walks dataclasses (via `dataclasses.fields`), dicts (values),
-    lists/tuples/sets (elements), and `ExecutorStep` instances themselves. The
-    same step appearing multiple times in the object graph is returned exactly
-    once. Order is deterministic (depth-first, fields/keys/elements in
-    declaration order).
-
-    Does NOT walk into the returned steps' configs — it returns the steps the
-    caller's `obj` references directly. Transitive dependencies are discovered
-    by `Executor.run()` itself, which already walks step configs to build its
-    dependency graph.
-
-    Args:
-        obj: Any object — typically a config dataclass like
-            `GrugBaseLaunchConfig`, but accepts any value.
-
-    Returns:
-        Deterministically ordered list of unique `ExecutorStep` instances.
-    """
-    seen: set[int] = set()
-    result: list[ExecutorStep] = []
-    for event in walk_config(obj):
-        if not isinstance(event, InputNameEvent):
-            continue
-        step = event.input_name.step
-        if step is None:
-            # `InputName.hardcoded(path)` — no upstream step, nothing to track.
-            continue
-        key = id(step)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(step)
-    return result
-
-
-############################################################
-# Substitution
-############################################################
-
-
-def _make_prefix_absolute_path(prefix: str, override_path: str) -> str:
-    if _is_relative_path(override_path):
-        override_path = os.path.join(prefix, override_path)
-    return override_path
-
-
-def instantiate_config(config: Any, output_path: str | None, output_paths: dict[ExecutorStep, str], prefix: str) -> Any:
-    """
-    Return a "real" config where all the special values (e.g., `InputName`,
-    `OutputName`, and `VersionedValue`) have been replaced with
-    the actual paths that they represent.
-    `output_path`: represents the output path of the current step.
-    `output_paths`: a dict from `ExecutorStep` to their output paths.
-    """
-
-    def join_path(output_path: str, name: str | None) -> str:
-        return os.path.join(output_path, name) if name else output_path
-
-    def recurse(obj: Any):
-        if obj is None:
-            return None
-
-        if isinstance(obj, ExecutorStep):
-            obj = output_path_of(obj)
-
-        if isinstance(obj, MirroredValue):
-            inner = recurse(obj.value)
-            # Resolve to mirror:// protocol — MirrorFileSystem handles cross-region copying
-            if isinstance(inner, str) and not inner.startswith("mirror://"):
-                return f"mirror://{inner}"
-            return inner
-
-        if isinstance(obj, InputName):
-            if obj.step is None:
-                return _make_prefix_absolute_path(prefix, obj.name)
-            else:
-                return join_path(output_paths[obj.step], obj.name)
-        elif isinstance(obj, OutputName):
-            if output_path is None:
-                raise ValueError(
-                    f"materialize: cannot resolve OutputName({obj.name!r}) — config has no "
-                    "output_path attribute and no explicit output_path was passed. "
-                    "Resolve OutputName placeholders in the submitter before calling materialize."
-                )
-            return join_path(output_path, obj.name)
-        elif isinstance(obj, VersionedValue):
-            return obj.value
-        elif is_dataclass(obj):
-            # Recurse through dataclasses
-            result = {}
-            for field in fields(obj):
-                value = getattr(obj, field.name)
-                result[field.name] = recurse(value)
-            return replace(obj, **result)
-        elif isinstance(obj, list):
-            # Recurse through lists
-            return [recurse(x) for x in obj]
-        elif isinstance(obj, dict):
-            # Recurse through dicts
-            return dict((i, recurse(x)) for i, x in obj.items())
-        else:
-            return obj
-
-    return recurse(config)
-
-
-def resolve_local_placeholders(config: ConfigT, output_path: str) -> ConfigT:
-    """Resolve every placeholder that the *caller* can resolve locally:
-    ``OutputName`` substitutions and ``VersionedValue`` unwrapping.
-
-    ``InputName(step=…)`` and bare ``ExecutorStep`` references are deferred
-    for the worker's ``materialize`` call (which resolves them under the
-    worker's region). ``MirroredValue`` is preserved (rebuilt around its
-    recursed inner value); its meaning is region-aware so resolution belongs
-    on the worker.
-
-    Use this when the caller needs a config it can read concrete values out
-    of (e.g. ``launch.mp``, ``launch.batch_size``) to assemble a downstream
-    config tree before submission.
-    """
-
-    def join_path(name: str | None) -> str:
-        return os.path.join(output_path, name) if name else output_path
-
-    def recurse(obj: Any) -> Any:
-        if obj is None:
-            return None
-        if isinstance(obj, OutputName):
-            return join_path(obj.name)
-        if isinstance(obj, MirroredValue):
-            return replace(obj, value=recurse(obj.value))
-        if isinstance(obj, VersionedValue):
-            # Version tracking only matters for hash assembly, which the
-            # caller has already performed via the executor's version pass;
-            # unwrap fully here.
-            return recurse(obj.value)
-        if isinstance(obj, (InputName, ExecutorStep)):
-            return obj
-        if is_dataclass(obj) and not isinstance(obj, type):
-            updates = {field.name: recurse(getattr(obj, field.name)) for field in fields(obj)}
-            return replace(obj, **updates)
-        if isinstance(obj, list):
-            return [recurse(x) for x in obj]
-        if isinstance(obj, dict):
-            return {k: recurse(v) for k, v in obj.items()}
-        return obj
-
-    return recurse(config)
-
-
 _NON_REGIONAL_BUCKET_LOCATIONS = {"us", "eu", "asia", "nam4", "eur4", "asia1"}
 _GCP_REGION_PATTERN = re.compile(r"^[a-z]+-[a-z0-9]+[0-9]$")
 
@@ -966,6 +480,7 @@ def _component_tpu_pins(
                 adjacency[step].add(dep)
                 adjacency[dep].add(step)
 
+    inherited_region_pin = _iris_worker_region_pin()
     chosen_region_by_step: dict[ExecutorStep, str | None] = {step: None for step in steps}
     visited: set[ExecutorStep] = set()
 
@@ -1009,7 +524,16 @@ def _component_tpu_pins(
         if not component_regions:
             continue
 
-        chosen_region = sorted(component_regions)[0]
+        if inherited_region_pin is not None:
+            chosen_region = inherited_region_pin.lower()
+            if chosen_region not in component_regions:
+                component_step_names = ", ".join(sorted(s.name for s in component))
+                raise ValueError(
+                    f"TPU-connected executor steps {component_step_names} require one of "
+                    f"{sorted(component_regions)}, but inherited Iris region is {chosen_region!r}."
+                )
+        else:
+            chosen_region = sorted(component_regions)[0]
 
         for component_step in component:
             chosen_region_by_step[component_step] = chosen_region
@@ -1028,6 +552,15 @@ def _iris_backend_is_active() -> bool:
     return isinstance(client, FrayIrisClient)
 
 
+def _iris_worker_region_pin() -> str | None:
+    from iris.cluster.client.job_info import get_job_info
+
+    job_info = get_job_info()
+    if job_info is None:
+        return None
+    return job_info.worker_region
+
+
 def _maybe_attach_inferred_region_constraint(
     *,
     step_name: str,
@@ -1040,6 +573,8 @@ def _maybe_attach_inferred_region_constraint(
 ) -> RemoteCallable:
     if not _iris_backend_is_active():
         return remote_fn
+
+    inherited_region_pin = _iris_worker_region_pin()
 
     allowed_regions = _allowed_regions_for_step(
         step_name=step_name,
@@ -1056,15 +591,36 @@ def _maybe_attach_inferred_region_constraint(
                 f"Executor step {step_name!r} cannot be pinned to {pinned_region!r}; "
                 f"allowed regions are {sorted(allowed_regions)}."
             )
+        if inherited_region_pin is not None and inherited_region_pin.lower() != pinned_region:
+            raise ValueError(
+                f"Executor step {step_name!r} must run in {pinned_region!r}, "
+                f"but inherited Iris region is {inherited_region_pin.lower()!r}."
+            )
         return dataclasses.replace(
             remote_fn,
             resources=dataclasses.replace(remote_fn.resources, regions=[pinned_region]),
         )
 
     if remote_fn.resources.regions is not None:
+        if inherited_region_pin is not None and allowed_regions is not None:
+            pinned_region = inherited_region_pin.lower()
+            if pinned_region not in allowed_regions:
+                raise ValueError(
+                    f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
+                    f"but inferred regions are {sorted(allowed_regions)}."
+                )
         return remote_fn
 
     if allowed_regions is None:
+        return remote_fn
+
+    if inherited_region_pin is not None:
+        pinned_region = inherited_region_pin.lower()
+        if pinned_region not in allowed_regions:
+            raise ValueError(
+                f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
+                f"but inferred regions are {sorted(allowed_regions)}."
+            )
         return remote_fn
 
     logger.info(
@@ -1113,18 +669,21 @@ def resolve_executor_step(
     """Convert an ExecutorStep into a StepSpec.
 
     ``config`` should already be instantiated (no InputName / OutputName /
-    VersionedValue markers). The ExecutorStep convention is ``fn(config)``;
-    we wrap that into a ``fn(output_path)`` closure expected by ``StepRunner``.
+    VersionedValue markers).  The old executor called ``fn(config)``; we wrap
+    that into a ``fn(output_path)`` closure expected by ``StepRunner``.
 
     If *step* was created by :meth:`StepSpec.as_executor_step`, the original
     ``StepSpec`` is returned directly (with deps replaced by the resolved
     versions), preserving round-trip identity.
     """
+    # Short-circuit for StepSpec -> ExecutorStep -> StepSpec round-trip.
     original: StepSpec | None = getattr(step, "_original_step_spec", None)
     if original is not None:
-        # Pin override_output_path so replacing deps with executor-built stubs
-        # (which lack the originals' hash_attrs) doesn't shift name_with_hash
-        # and silently change output_path.
+        # ``as_executor_step()`` pins ``override_output_path=original.output_path``
+        # on the ExecutorStep so the executor preserves the original placement.
+        # Mirror that pin on the resolved StepSpec — otherwise replacing deps
+        # with executor-built stubs (which lack the originals' ``hash_attrs``)
+        # would change ``name_with_hash`` and silently shift ``output_path``.
         return dataclasses.replace(
             original,
             deps=deps or list(original.deps),
@@ -1146,9 +705,9 @@ def resolve_executor_step(
     step_fn = remote_callable.fn if remote_callable is not None else step.fn
     assert step_fn is not None, f"Step {step.name} has no callable"
 
-    # ExecutorStep functions take the resolved config as their only argument.
-    # The output_path is already baked into the config, so the StepRunner-style
-    # output_path argument is ignored here.
+    # Old-style ExecutorStep functions accept the resolved config as their only
+    # argument. The config already contains the output path, so we ignore the
+    # output_path parameter that StepRunner passes.
     captured_fn = step_fn
     captured_config = config
     captured_budget = mirror_budget_gb
@@ -1161,8 +720,9 @@ def resolve_executor_step(
                 return captured_fn(captured_config)
         return captured_fn(captured_config)
 
-    # Preserve the RemoteCallable wrapper for @remote-decorated fns so Fray
-    # dispatch is retained; plain functions run inline in the runner thread.
+    # If the original fn was decorated with @remote, propagate the
+    # RemoteCallable wrapper (with updated inner fn) so Fray dispatch
+    # is preserved.  Plain functions run locally in-thread.
     final_fn: Callable = resolved_fn
     if remote_callable is not None:
         final_fn = dataclasses.replace(remote_callable, fn=resolved_fn)
@@ -1172,8 +732,323 @@ def resolve_executor_step(
         deps=deps or [],
         override_output_path=output_path,
         fn=final_fn,
-        resources=step.resources,
     )
+
+
+@dataclass(frozen=True)
+class ExecutorStep(Generic[ConfigT_co]):
+    """
+    An `ExecutorStep` represents a single step of a larger pipeline (e.g.,
+    transforming HTML to text).  It is specified by:
+     - a name (str), which is used to determine the `output_path`.
+     - a function `fn` (Callable), and
+     - a configuration `config` which gets passed into `fn`.
+     - a pip dependencies list (Optional[list[str]]) which are the pip dependencies required for the step.
+     These can be keys of project.optional-dependencies in the project's pyproject.toml file or any other pip package.
+
+    When a step is run, we compute the following two things for each step:
+    - `version`: represents all the upstream dependencies of the step
+    - `output_path`: the path where the output of the step are stored, based on
+    the name and a hash of the version.
+
+    The `config` is a dataclass object that recursively might have special
+    values of the following form:
+    - `InputName(step, name)`: a dependency on another `step`, resolve to the step.output_path / name
+    - `OutputName(name)`: resolves to the output_path / name
+    - `VersionedValue(value)`: a value that should be part of the version
+    The `config` is instantiated by replacing these special values with the
+    actual paths during execution.
+
+    Note: `step: ExecutorStep` is interpreted as `InputName(step, None)`.
+    """
+
+    name: str
+    fn: ExecutorFunction
+    config: ConfigT_co
+    description: str | None = None
+
+    override_output_path: str | None = None
+    """Specifies the `output_path` that should be used.  Print warning if it
+    doesn't match the automatically computed one."""
+
+    resources: ResourceConfig | None = None
+    """If set, this step is submitted as its own Fray job using these
+    resources. ``fn`` is invoked inside the submitted job.
+
+    If ``None``, behavior is determined by ``fn``: a ``RemoteCallable``
+    submits as a Fray job; a plain callable runs inline in-process.
+    """
+
+    def cd(self, name: str) -> "InputName":
+        """Refer to the `name` under `self`'s output_path."""
+        return InputName(self, name=name)
+
+    def __truediv__(self, other: str) -> "InputName":
+        """Alias for `cd`. That looks more Pythonic."""
+        return InputName(self, name=other)
+
+    def __hash__(self):
+        """Hash based on the ID (every object is different)."""
+        return hash(id(self))
+
+    def with_output_path(self, output_path: str) -> "ExecutorStep":
+        """Return a copy of the step with the given output_path."""
+        return replace(self, override_output_path=output_path)
+
+    def as_input_name(self) -> "InputName":
+        return InputName(step=self, name=None)
+
+
+@dataclass(frozen=True)
+class InputName:
+    """To be interpreted as a previous `step`'s output_path joined with `name`."""
+
+    step: ExecutorStep | None
+    name: str | None
+    block_on_step: bool = True
+    """
+    If False, the step that uses this InputName
+    will not block (or attempt to execute) `step`. We use this for
+    documenting dependencies in the config, but where that step might not have technically finished...
+
+    For instance, we sometimes use training checkpoints before the training step has finished.
+
+    These "pseudo-dependencies" still impact the hash of the step, but they don't block execution.
+    """
+
+    def cd(self, name: str) -> "InputName":
+        return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
+
+    def __truediv__(self, other: str) -> "InputName":
+        """Alias for `cd` that looks more Pythonic."""
+        return self.cd(other)
+
+    @staticmethod
+    def hardcoded(path: str) -> "InputName":
+        """
+        Sometimes we want to specify a path that is not part of the pipeline but is still relative to the prefix.
+        Try to use this sparingly.
+        """
+        return InputName(None, name=path)
+
+    def nonblocking(self) -> "InputName":
+        """
+        the step will not block on (or attempt to execute) the parent step.
+
+         (Note that if another step depends on the parent step, it will still block on it.)
+        """
+        return dataclasses.replace(self, block_on_step=False)
+
+
+def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
+    """
+    Helper function to extract the ExecutorStep from an InputName or ExecutorStep.
+
+    Args:
+        run (ExecutorStep | InputName): The input to extract the step from.
+
+    Returns:
+        ExecutorStep: The extracted step.
+    """
+    if isinstance(run, ExecutorStep):
+        return run
+    elif isinstance(run, InputName):
+        step = run.step
+        if step is None:
+            raise ValueError(f"Hardcoded path {run.name} is not part of the pipeline")
+        return step
+    else:
+        raise ValueError(f"Unexpected type {type(run)} for run: {run}")
+
+
+def output_path_of(step: ExecutorStep, name: str | None = None) -> InputName:
+    return InputName(step=step, name=name)
+
+
+if TYPE_CHECKING:
+
+    class OutputName(str):
+        """Type-checking stub treated as a string so defaults like THIS_OUTPUT_PATH fit `str`."""
+
+        name: str | None
+
+else:
+
+    @dataclass(frozen=True)
+    class OutputName:
+        """To be interpreted as part of this step's output_path joined with `name`."""
+
+        name: str | None
+
+
+def this_output_path(name: str | None = None):
+    return OutputName(name=name)
+
+
+# constant so we can use it in fields of dataclasses
+THIS_OUTPUT_PATH = OutputName(None)
+
+
+@dataclass(frozen=True)
+class VersionedValue(Generic[T_co]):
+    """Wraps a value, to signal that this value (part of a config) should be part of the version."""
+
+    value: T_co
+
+
+def versioned(value: T_co) -> VersionedValue[T_co]:
+    if isinstance(value, VersionedValue):
+        raise ValueError("Can't nest VersionedValue")
+    elif isinstance(value, InputName):
+        # TODO: We have also run into Versioned([InputName(...), ...])
+        raise ValueError("Can't version an InputName")
+
+    return VersionedValue(value)
+
+
+def ensure_versioned(value: VersionedValue[T_co] | T_co) -> VersionedValue[T_co]:
+    """
+    Ensure that the value is wrapped in a VersionedValue. If it is already wrapped, return it as is.
+    """
+    return value if isinstance(value, VersionedValue) else VersionedValue(value)
+
+
+def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
+    """
+    Unwrap the value if it is a VersionedValue, otherwise return the value as is.
+
+    Recurses into dataclasses, dicts and lists to unwrap any nested VersionedValue instances.
+    This method cannot handle InputName, OutputName, or ExecutorStep instances inside VersionedValue as
+    their values depend on execution results.
+    """
+
+    def recurse(obj: Any):
+        if isinstance(obj, MirroredValue):
+            return recurse(obj.value)
+        if isinstance(obj, VersionedValue):
+            return recurse(obj.value)
+        if isinstance(obj, OutputName | InputName | ExecutorStep):
+            raise ValueError(f"Cannot unwrap VersionedValue containing {type(obj)}: {obj}")
+        if is_dataclass(obj):
+            result = {}
+            for field in fields(obj):
+                val = getattr(obj, field.name)
+                result[field.name] = recurse(val)
+            return replace(obj, **result)
+        if isinstance(obj, dict):
+            return {k: recurse(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [recurse(x) for x in obj]
+        return obj
+
+    return recurse(value)  # type: ignore
+
+
+@dataclass(frozen=True)
+class MirroredValue(Generic[T_co]):
+    """Wraps a path value to signal that it should be mirrored from any marin regional bucket.
+
+    At config instantiation time, the path is resolved to the local marin prefix.
+    Before step execution, the executor copies the data from whichever region has it.
+    """
+
+    value: T_co
+    budget_gb: float = 10
+
+
+def mirrored(value: str | VersionedValue[str], budget_gb: float = 10) -> MirroredValue:
+    """Mark a path for cross-region mirroring with a transfer budget.
+
+    Usage: input_path=mirrored(versioned("documents/stackexchange/..."), budget_gb=50)
+    """
+    if isinstance(value, MirroredValue):
+        raise ValueError("Can't nest MirroredValue")
+    return MirroredValue(value=value, budget_gb=budget_gb)
+
+
+############################################################
+# Typed-event walker over placeholder configs.
+#
+# `walk_config` yields one event per placeholder occurrence; downstream
+# consumers (`upstream_steps`, `collect_dependencies_and_version`) iterate
+# instead of writing their own recursive descent.
+############################################################
+
+
+@dataclass(frozen=True)
+class InputNameEvent:
+    prefix: str
+    input_name: "InputName"
+
+
+@dataclass(frozen=True)
+class VersionedEvent:
+    prefix: str
+    value: Any
+
+
+_Event = InputNameEvent | VersionedEvent
+
+
+def walk_config(obj: Any) -> Iterator[_Event]:
+    """Yield one event per `InputName` / `VersionedValue` placeholder reached
+    while recursively walking dataclasses, lists, and dicts inside ``obj``.
+
+    Bare `ExecutorStep`s are normalized to `InputName(step, None)` events.
+    `MirroredValue`s recurse into their inner value (no event of their own).
+    """
+    yield from _walk(obj, "")
+
+
+def _walk(obj: Any, prefix: str) -> Iterator[_Event]:
+    new_prefix = prefix + "." if prefix else ""
+
+    if obj is None:
+        return
+
+    if isinstance(obj, ExecutorStep):
+        yield InputNameEvent(prefix=prefix, input_name=output_path_of(obj, None))
+        return
+
+    if isinstance(obj, InputName):
+        yield InputNameEvent(prefix=prefix, input_name=obj)
+        return
+
+    if isinstance(obj, MirroredValue):
+        yield from _walk(obj.value, prefix)
+        return
+
+    if isinstance(obj, VersionedValue):
+        yield VersionedEvent(prefix=prefix, value=obj.value)
+        return
+
+    if is_dataclass(obj) and not isinstance(obj, type):
+        for field in fields(obj):
+            yield from _walk(getattr(obj, field.name), new_prefix + field.name)
+        return
+
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if not isinstance(k, str):
+                raise ValueError(f"dict keys must be strs, but got {k} (type: {type(k)})")
+            yield from _walk(v, new_prefix + k)
+        return
+
+    if isinstance(obj, list | tuple | set | frozenset):
+        for i, item in enumerate(obj):
+            yield from _walk(item, new_prefix + f"[{i}]")
+
+
+def upstream_steps(obj: Any) -> list[ExecutorStep]:
+    """Return the unique `ExecutorStep`s referenced by placeholders in ``obj``,
+    preserving discovery order.
+    """
+    seen: dict[int, ExecutorStep] = {}
+    for event in walk_config(obj):
+        if isinstance(event, InputNameEvent) and event.input_name.step is not None:
+            step = event.input_name.step
+            seen.setdefault(id(step), step)
+    return list(seen.values())
 
 
 ############################################################
@@ -1268,11 +1143,6 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
 
     Along the way, compute the list of dependencies.
 
-    Each ``InputName`` with ``step is not None`` gets a ``DEP[i]`` slot in
-    the version string, where ``i`` is the index in the combined
-    ``dependencies + pseudo_dependencies`` list at the moment the dep is
-    discovered.
-
     Returns:
         - dependencies: list of `ExecutorStep`s that are dependencies of the
           current step.
@@ -1335,6 +1205,102 @@ def _max_mirror_budget(config: Any) -> float | None:
     return max_budget
 
 
+def instantiate_config(config: Any, output_path: str | None, output_paths: dict[ExecutorStep, str], prefix: str) -> Any:
+    """
+    Return a "real" config where all the special values (e.g., `InputName`,
+    `OutputName`, and `VersionedValue`) have been replaced with
+    the actual paths that they represent.
+    `output_path`: represents the output path of the current step.
+    `output_paths`: a dict from `ExecutorStep` to their output paths.
+    """
+
+    def join_path(output_path: str, name: str | None) -> str:
+        return os.path.join(output_path, name) if name else output_path
+
+    def recurse(obj: Any):
+        if obj is None:
+            return None
+
+        if isinstance(obj, ExecutorStep):
+            obj = output_path_of(obj)
+
+        if isinstance(obj, MirroredValue):
+            inner = recurse(obj.value)
+            # Resolve to mirror:// protocol — MirrorFileSystem handles cross-region copying
+            if isinstance(inner, str) and not inner.startswith("mirror://"):
+                return f"mirror://{inner}"
+            return inner
+
+        if isinstance(obj, InputName):
+            if obj.step is None:
+                return _make_prefix_absolute_path(prefix, obj.name)
+            else:
+                return join_path(output_paths[obj.step], obj.name)
+        elif isinstance(obj, OutputName):
+            if output_path is None:
+                raise ValueError(
+                    f"materialize: cannot resolve OutputName({obj.name!r}) — config has no "
+                    "output_path attribute and no explicit output_path was passed. "
+                    "Resolve OutputName placeholders in the submitter before calling materialize."
+                )
+            return join_path(output_path, obj.name)
+        elif isinstance(obj, VersionedValue):
+            return obj.value
+        elif is_dataclass(obj):
+            # Recurse through dataclasses
+            result = {}
+            for field in fields(obj):
+                value = getattr(obj, field.name)
+                result[field.name] = recurse(value)
+            return replace(obj, **result)
+        elif isinstance(obj, list):
+            # Recurse through lists
+            return [recurse(x) for x in obj]
+        elif isinstance(obj, dict):
+            # Recurse through dicts
+            return dict((i, recurse(x)) for i, x in obj.items())
+        else:
+            return obj
+
+    return recurse(config)
+
+
+def resolve_local_placeholders(config: ConfigT, output_path: str) -> ConfigT:
+    """Resolve every placeholder that the *caller* can resolve locally:
+    ``OutputName`` substitutions and ``VersionedValue`` unwrapping.
+
+    ``InputName(step=…)`` and bare ``ExecutorStep`` references are deferred
+    for the worker's ``materialize`` call (which resolves them under the
+    worker's region). ``MirroredValue`` is preserved (rebuilt around its
+    recursed inner value); its meaning is region-aware so resolution belongs
+    on the worker.
+    """
+
+    def join_path(name: str | None) -> str:
+        return os.path.join(output_path, name) if name else output_path
+
+    def recurse(obj: Any) -> Any:
+        if obj is None:
+            return None
+        if isinstance(obj, OutputName):
+            return join_path(obj.name)
+        if isinstance(obj, MirroredValue):
+            return replace(obj, value=recurse(obj.value))
+        if isinstance(obj, VersionedValue):
+            return recurse(obj.value)
+        if isinstance(obj, InputName | ExecutorStep):
+            return obj
+        if is_dataclass(obj) and not isinstance(obj, type):
+            return replace(obj, **{f.name: recurse(getattr(obj, f.name)) for f in fields(obj)})
+        if isinstance(obj, list):
+            return [recurse(x) for x in obj]
+        if isinstance(obj, dict):
+            return {k: recurse(v) for k, v in obj.items()}
+        return obj
+
+    return recurse(config)
+
+
 class Executor:
     """
     Performs the execution of a pipeline of `ExecutorStep`s.
@@ -1390,9 +1356,7 @@ class Executor:
         Returns:
             Mapping from every known `ExecutorStep` (including transitive
             dependencies discovered while walking `steps`) to its concrete
-            output path. The returned dict is the same `self.output_paths`
-            reference, so its keys may include steps that were not in the
-            originally-passed `steps` list.
+            output path.
         """
         if max_concurrent is not None and max_concurrent < 1:
             raise ValueError(f"max_concurrent must be a positive integer, got {max_concurrent}")
@@ -1626,11 +1590,12 @@ class Executor:
     def _dep_version(self, dep: ExecutorStep) -> dict[str, Any] | str:
         """Full version dict for shallow deps, region-stable name+hash for deep ones.
 
-        Avoids ``output_paths[dep]`` because that would bake the bucket prefix
-        (e.g. ``gs://marin-us-central1``) into the hashed version, making the
-        same logical pipeline hash differently under a different
-        ``MARIN_PREFIX``. ``{name}-{hashed_version}`` is the region-independent
-        suffix that already encodes the dep's full transitive version.
+        Using ``output_paths[dep]`` here would bake the bucket prefix
+        (e.g. ``gs://marin-us-central1``) into the hashed version, so the same
+        logical pipeline rehashed under a different ``MARIN_PREFIX`` would
+        produce a different identity. ``{name}-{hashed_version}`` is the
+        region-independent suffix that already encodes the dep's full transitive
+        version.
         """
         if self._dep_depth(dep) <= self._MAX_INLINE_DEPTH:
             return self.versions[dep]
@@ -1812,6 +1777,12 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     logger.info(f"View the experiment at {executor.get_experiment_url()}")
 
 
+def _make_prefix_absolute_path(prefix, override_path):
+    if _is_relative_path(override_path):
+        override_path = os.path.join(prefix, override_path)
+    return override_path
+
+
 ############################################################
 # Materialize: helpers that drive an Executor instance to resolve
 # placeholder configs at runtime.
@@ -1841,10 +1812,6 @@ def compute_output_path(
         prefix=resolved_prefix,
         executor_info_base_path=executor_info_base_path,
     )
-    # Build a transient ExecutorStep purely as input to compute_version. The
-    # step is never submitted; only its name + config + override_output_path
-    # are read to derive the path. Keeping this private to compute_output_path
-    # means callers don't have to construct a fake step they never run.
     step = ExecutorStep(
         name=name,
         fn=_noop_step_fn,
@@ -1856,7 +1823,7 @@ def compute_output_path(
 
 
 def _noop_step_fn(config: Any) -> None:
-    """Placeholder fn for the transient step built inside ``compute_output_path``.
+    """Placeholder fn used by ``compute_output_path``.
 
     The step is discarded after path computation; this fn is never called.
     """
@@ -1876,9 +1843,7 @@ def materialize(
 
       1. ``upstream_steps(config)`` — find embedded ``ExecutorStep``s.
       2. ``Executor(prefix=...).run(steps)`` — submit them as sub-jobs and
-         block on completion. The distributed ``step_lock`` keeps concurrent
-         callers (sweep members, multi-VM TPU tasks) coordinated; only one
-         actually runs each step, the rest read ``STATUS_SUCCESS`` and skip.
+         block on completion.
       3. ``instantiate_config(config, output_path=<resolved>,
          output_paths=executor.output_paths, prefix=prefix)`` — substitute
          ``InputName`` / ``OutputName`` / ``VersionedValue`` / ``ExecutorStep``
@@ -1907,9 +1872,8 @@ def materialize(
 
     # Idempotence guard: if no sub-steps reference the config, skip the
     # `Executor.run` path entirely. `Executor.run([])` would otherwise still
-    # write out an executor-info JSON to GCS (`write_infos` runs unconditionally
-    # in `executor.run`), which is both pointless and an unwanted I/O side
-    # effect for a placeholder-free config.
+    # write out an executor-info JSON to GCS, which is both pointless and an
+    # unwanted I/O side effect for a placeholder-free config.
     if steps:
         executor_info_base_path = os.path.join(resolved_prefix, "experiments")
         executor = Executor(
