@@ -10,7 +10,6 @@ that matters to K8sTaskProvider and CoreWeave controller consumers.
 from __future__ import annotations
 
 import pytest
-
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError
 

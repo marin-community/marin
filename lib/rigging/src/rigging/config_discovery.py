@@ -10,9 +10,10 @@ marin sub-package.
 
 import functools
 import logging
-import tomllib
 from collections.abc import Sequence
 from pathlib import Path
+
+import tomllib
 
 logger = logging.getLogger(__name__)
 

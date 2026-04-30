@@ -20,22 +20,24 @@ import tempfile
 import threading
 from pathlib import Path
 
+from rigging.timing import Duration, Timestamp
+
 from iris.cluster.config import make_local_config
 from iris.cluster.constraints import worker_attributes_from_resources
 from iris.cluster.controller.auth import create_api_key, create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.controller import (
-    Controller,
-    ControllerConfig,
-)
-from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.vm_lifecycle import ControllerStatus
 from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_DOWN_RATE_LIMIT,
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
+from iris.cluster.controller.controller import (
+    Controller,
+    ControllerConfig,
+)
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.vm_lifecycle import ControllerStatus
+from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import find_free_port
@@ -45,7 +47,6 @@ from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.rpc.auth import hash_token
 from iris.time_proto import duration_from_proto
-from rigging.timing import Duration, Timestamp
 
 
 def create_local_autoscaler(

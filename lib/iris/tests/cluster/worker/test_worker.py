@@ -11,7 +11,6 @@ from unittest.mock import Mock
 
 import pytest
 from connectrpc.request import RequestContext
-
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
     ContainerErrorKind,
@@ -22,21 +21,21 @@ from iris.cluster.runtime.types import (
     ExecutionStage,
 )
 from iris.cluster.types import Entrypoint, JobName
-from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
+from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import job_pb2
-from iris.rpc import worker_pb2
-from rigging.timing import Duration
 from iris.cluster.worker.worker_types import LogLine
+from iris.rpc import job_pb2, worker_pb2
+from iris.test_util import wait_for_condition
+from rigging.timing import Duration
+
 from tests.cluster.worker.conftest import (
     FakeContainerHandle,
     FakeLogReader,
     create_mock_container_handle,
     create_run_task_request,
 )
-from iris.test_util import wait_for_condition
 
 pytestmark = pytest.mark.timeout(10)
 

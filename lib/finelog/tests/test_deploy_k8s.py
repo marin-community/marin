@@ -5,9 +5,7 @@
 
 from __future__ import annotations
 
-
 import pytest
-
 from finelog.deploy._k8s import _K8S_MANIFEST_DIR, _MANIFESTS, _render_manifest
 from finelog.deploy.config import Deployment, FinelogConfig, K8sDeployment
 

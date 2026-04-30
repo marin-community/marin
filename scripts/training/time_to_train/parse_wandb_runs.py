@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import pytz
-import wandb
+from datetime import datetime
 
 import pandas as pd
-from datetime import datetime
+import pytz
+import wandb
 
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "stanford-mercury")
 WANDB_PROJECT = "marin"

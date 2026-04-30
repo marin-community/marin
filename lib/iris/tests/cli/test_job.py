@@ -5,7 +5,6 @@
 
 import click
 import pytest
-
 from iris.cli.job import (
     _parse_tpu_alternatives,
     _render_job_summary_text,
@@ -16,7 +15,6 @@ from iris.cli.job import (
     validate_extra_resources,
     validate_region_zone,
 )
-from iris.rpc import job_pb2 as _job_pb2
 from iris.cluster.constraints import (
     Constraint,
     WellKnownAttribute,
@@ -25,6 +23,7 @@ from iris.cluster.constraints import (
     region_constraint,
 )
 from iris.rpc import config_pb2
+from iris.rpc import job_pb2 as _job_pb2
 
 
 def _make_config_with_zones(zones: list[str]) -> config_pb2.IrisClusterConfig:

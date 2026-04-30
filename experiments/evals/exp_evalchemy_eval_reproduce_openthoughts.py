@@ -8,7 +8,8 @@ Evalchemy (https://github.com/mlfoundations/evalchemy) provides specialized
 reasoning tasks including AIME24/25, MATH500, HumanEval+, MBPP+, and more.
 """
 
-from experiments.evals.evals import run_evalchemy_experiment
+from fray.cluster import ResourceConfig
+
 from experiments.evals.evalchemy_task_configs import (
     AIME24,
     AIME25,
@@ -22,7 +23,7 @@ from experiments.evals.evalchemy_task_configs import (
     LIVECODEBENCH,
     MATH500,
 )
-from fray.cluster import ResourceConfig
+from experiments.evals.evals import run_evalchemy_experiment
 
 # =============================================================================
 # Model Configuration

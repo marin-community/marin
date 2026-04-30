@@ -18,8 +18,8 @@ from dataclasses import dataclass
 
 import draccus
 import numpy as np
-from rigging.filesystem import open_url
 from marin.utilities.validation_utils import compute_global_mean_std, summarize_document
+from rigging.filesystem import open_url
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
 

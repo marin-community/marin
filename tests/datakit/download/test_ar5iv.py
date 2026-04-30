@@ -6,8 +6,8 @@ import json
 import zipfile
 
 import pytest
-
-from marin.datakit.download.ar5iv import Ar5ivDownloadConfig as DownloadConfig, download
+from marin.datakit.download.ar5iv import Ar5ivDownloadConfig as DownloadConfig
+from marin.datakit.download.ar5iv import download
 
 
 @pytest.fixture

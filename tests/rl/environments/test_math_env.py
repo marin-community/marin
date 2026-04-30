@@ -6,13 +6,12 @@
 import jax.random
 import numpy as np
 import pytest
+from marin.rl.environments.inference_ctx import LevanterInferenceContext
+from marin.rl.environments.math_env import MathEnv
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_usage import CompletionUsage
-
-from marin.rl.environments.math_env import MathEnv
-from marin.rl.environments.inference_ctx import LevanterInferenceContext
 
 
 def create_mock_chat_completion(tokenizer) -> ChatCompletion:

@@ -6,10 +6,10 @@
 For the full IrisContext with client/registry/resolver, use iris.client.
 """
 
-import json
-import os
 import getpass
+import json
 import logging
+import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 

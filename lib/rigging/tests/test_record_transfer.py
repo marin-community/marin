@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 from rigging import filesystem as rfs
 from rigging.filesystem import TransferBudget, TransferBudgetExceeded, record_transfer
 

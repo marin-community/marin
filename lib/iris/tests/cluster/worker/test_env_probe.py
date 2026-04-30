@@ -6,9 +6,8 @@
 import sys
 import time
 
-import pytest
-
 import iris.cluster.worker.env_probe as env_probe
+import pytest
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.worker.env_probe import (
     DefaultEnvironmentProvider,
