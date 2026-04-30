@@ -20,19 +20,19 @@ from marin.evaluation.perplexity_gap import (
     raw_text_dataset,
 )
 from marin.execution.executor import (
+    Executor,
     ExecutorStep,
     InputName,
+    _get_info_path,
+    collect_dependencies_and_version,
+    compute_output_path,
     instantiate_config,
+    materialize,
     mirrored,
     output_path_of,
     this_output_path,
     upstream_steps,
     versioned,
-    Executor,
-    _get_info_path,
-    collect_dependencies_and_version,
-    compute_output_path,
-    materialize,
 )
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,

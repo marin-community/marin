@@ -14,7 +14,7 @@ For CPU training, see train_tiny_model_cpu.py
 
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import versioned, executor_main
+from marin.execution.executor import executor_main, versioned
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_nano

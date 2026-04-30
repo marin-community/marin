@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact, PathMetadata
-from marin.execution.executor import ExecutorStep, Executor, _dag_tpu_regions, resolve_executor_step
+from marin.execution.executor import Executor, ExecutorStep, _dag_tpu_regions, resolve_executor_step
 from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
