@@ -11,7 +11,6 @@ aggregated from task states.
 import dataclasses
 import json
 import logging
-import os
 import re
 import secrets
 import threading
@@ -122,55 +121,10 @@ from iris.time_proto import timestamp_to_proto
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Stats-service worker pane cutover.
-#
-# Until the parity check passes for 24h on a deployed cluster, ``list_workers``
-# can be flipped between three modes via the ``IRIS_STATS_SERVICE_WORKER_PANE``
-# env var. After the cutover this whole branch — flag, constants, and the
-# sqlite read path — gets deleted (see design.md "Implementation stages" 5).
-# ---------------------------------------------------------------------------
-
-STATS_PANE_FLAG_ENV = "IRIS_STATS_SERVICE_WORKER_PANE"
-
-STATS_PANE_OFF = "off"
-"""Read sqlite. Same path that's been live until this PR."""
-
-STATS_PANE_SHADOW = "shadow"
-"""Query both sources; log the diff; return the sqlite result. The 24h
-parity-check vehicle."""
-
-STATS_PANE_ON = "on"
-"""Read the stats service. On query failure, return an empty roster
-(soft failure — matches the design's "stats unavailable" contract)."""
-
-_STATS_PANE_VALID = (STATS_PANE_OFF, STATS_PANE_SHADOW, STATS_PANE_ON)
-
 # How far back the latest-row-per-worker query looks. Workers heartbeat at
 # ~5s; 5 minutes gives plenty of room for one missed heartbeat without
 # losing the worker from the pane, while still bounding the SQL.
 _STATS_PANE_LOOKBACK_MINUTES = 5
-
-
-def _resolve_stats_pane_mode(value: str | None) -> str:
-    """Normalize an env-var value to one of ``_STATS_PANE_VALID``.
-
-    Empty/missing → ``off``. Unknown → ``off`` with a warning, so a typo'd
-    flag does not silently shift a controller into a different read path.
-    """
-    if not value:
-        return STATS_PANE_OFF
-    candidate = value.strip().lower()
-    if candidate not in _STATS_PANE_VALID:
-        logger.warning(
-            "%s=%r is not one of %s — defaulting to %r",
-            STATS_PANE_FLAG_ENV,
-            value,
-            _STATS_PANE_VALID,
-            STATS_PANE_OFF,
-        )
-        return STATS_PANE_OFF
-    return candidate
 
 
 # Latest-row-per-worker query. We use ``QUALIFY ROW_NUMBER()`` rather than a
@@ -195,36 +149,6 @@ FROM (
 WHERE _rn = 1
 ORDER BY worker_id
 """.strip()
-
-
-def _log_parity_diff(
-    sqlite_response: "controller_pb2.Controller.ListWorkersResponse",
-    stats_response: "controller_pb2.Controller.ListWorkersResponse",
-) -> None:
-    """Log row-count and worker_id-set differences between the two sources.
-
-    Shadow-mode signal: empty diff for 24h is the cutover gate. We
-    deliberately log the worker-id sets (not full rows) — the dashboard
-    pane is identity-keyed by ``worker_id`` and large diffs would dominate
-    the log otherwise.
-    """
-    sqlite_ids = {w.worker_id for w in sqlite_response.workers}
-    stats_ids = {w.worker_id for w in stats_response.workers}
-    only_sqlite = sqlite_ids - stats_ids
-    only_stats = stats_ids - sqlite_ids
-    if only_sqlite or only_stats:
-        logger.info(
-            "stats pane shadow diff: sqlite=%d stats=%d only_sqlite=%s only_stats=%s",
-            len(sqlite_ids),
-            len(stats_ids),
-            sorted(only_sqlite),
-            sorted(only_stats),
-        )
-    else:
-        logger.debug(
-            "stats pane shadow diff: rosters match (n=%d)",
-            len(sqlite_ids),
-        )
 
 
 def _stats_status_message(*, healthy: bool, ts: Any) -> str:
@@ -1232,7 +1156,6 @@ class ControllerServiceImpl:
         system_endpoints: dict[str, str] | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
         stats_log_client: LogClient | None = None,
-        stats_pane_mode: str | None = None,
     ):
         self._transitions = transitions
         self._store = store
@@ -1244,17 +1167,9 @@ class ControllerServiceImpl:
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
-        # Stats-service cutover. Off by default until the 24h parity check
-        # passes on a deployed cluster (see design.md). The mode can be
-        # forced by the caller (tests, explicit config); otherwise the
-        # IRIS_STATS_SERVICE_WORKER_PANE env var picks the mode.
         self._stats_log_client = stats_log_client
-        if stats_pane_mode is not None and stats_pane_mode in _STATS_PANE_VALID:
-            self._stats_pane_mode: str = stats_pane_mode
-        else:
-            self._stats_pane_mode = _resolve_stats_pane_mode(os.environ.get(STATS_PANE_FLAG_ENV))
-        # Cached stats Table; lazily resolved on first non-off list_workers
-        # call so a misbehaving stats service can't break controller startup.
+        # Cached stats Table; lazily resolved on the first list_workers call
+        # so a misbehaving stats service can't break controller startup.
         self._stats_worker_table = None
         # Short-TTL cache of the worker roster. Dashboards call ListWorkers
         # and GetAutoscalerStatus back-to-back; both enumerate every worker.
@@ -1903,64 +1818,27 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.ListWorkersResponse:
         """List all workers with their running task counts.
 
-        The data source depends on ``self._stats_pane_mode``:
-
-        * ``off`` — read sqlite (today's path).
-        * ``shadow`` — read both, log a parity diff, return the sqlite result.
-        * ``on`` — read the stats service. Returns an empty roster on stats
-          query failure (the dashboard renders this as a soft failure per
-          design.md "Availability").
+        The worker pane reads unconditionally from the ``iris.worker`` stats
+        namespace. Stats are observation-only; on transport / stats-protocol
+        failure the response is an empty roster so the Vue layer renders a
+        soft failure (see design.md "Availability") rather than crashing.
         """
         if self._controller.has_direct_provider:
             return controller_pb2.Controller.ListWorkersResponse()
 
-        mode = self._stats_pane_mode
-        sqlite_response = self._list_workers_sqlite()
-        if mode == STATS_PANE_OFF:
-            return sqlite_response
+        response = self._list_workers()
+        if response is None:
+            return controller_pb2.Controller.ListWorkersResponse()
+        return response
 
-        if mode == STATS_PANE_ON:
-            stats_response = self._list_workers_stats_safe()
-            if stats_response is None:
-                # Soft failure path: empty roster lets the Vue layer render
-                # without breaking the rest of the page.
-                return controller_pb2.Controller.ListWorkersResponse()
-            return stats_response
-
-        # Shadow mode.
-        stats_response = self._list_workers_stats_safe()
-        if stats_response is None:
-            logger.info("stats pane shadow: stats query unavailable, sqlite-only this tick")
-        else:
-            _log_parity_diff(sqlite_response, stats_response)
-        return sqlite_response
-
-    def _list_workers_sqlite(self) -> controller_pb2.Controller.ListWorkersResponse:
-        """Build the worker list from the controller sqlite (today's path)."""
-        workers = []
-        worker_rows = self._worker_roster_cached()
-        running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in worker_rows})
-        for worker in worker_rows:
-            workers.append(
-                controller_pb2.Controller.WorkerHealthStatus(
-                    worker_id=worker.worker_id,
-                    healthy=worker.healthy,
-                    consecutive_failures=worker.consecutive_failures,
-                    last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
-                    running_job_ids=[task_id.to_wire() for task_id in running_by_worker.get(worker.worker_id, [])],
-                    address=worker.address,
-                    metadata=_worker_metadata_to_proto(worker),
-                    status_message=worker_status_message(worker),
-                )
-            )
-        return controller_pb2.Controller.ListWorkersResponse(workers=workers)
-
-    def _list_workers_stats_safe(self) -> controller_pb2.Controller.ListWorkersResponse | None:
+    def _list_workers(self) -> controller_pb2.Controller.ListWorkersResponse | None:
         """Build the worker list from the stats service, soft-failing to None.
 
         Returns ``None`` if the stats client is missing, the namespace can't
-        be registered, or the SQL query raises. Caller decides whether to
-        fall back to sqlite (shadow) or return empty (on).
+        be registered, or the SQL query raises a transport-level error.
+        Schema-mapping bugs (KeyError / TypeError / AttributeError out of
+        ``_stats_table_to_list_response``) are deliberately not caught — they
+        must surface so operators can see and fix them.
         """
         if self._stats_log_client is None:
             return None
@@ -1970,11 +1848,6 @@ class ControllerServiceImpl:
                 return None
             result = table.query(_LATEST_WORKER_ROW_SQL.format(minutes=_STATS_PANE_LOOKBACK_MINUTES))
         except (StatsError, ConnectError, ConnectionError, OSError, TimeoutError) as exc:
-            # Soft-fail only on transport / stats-protocol failures. We
-            # explicitly do NOT catch ``Exception`` here: a KeyError,
-            # TypeError, or AttributeError out of the response-mapping path
-            # is a schema-mapping bug that operators must see during the
-            # staged rollout — silently returning empty would hide it.
             logger.warning("stats pane query failed: %s: %s", type(exc).__name__, exc)
             return None
         return _stats_table_to_list_response(result)
