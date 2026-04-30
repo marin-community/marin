@@ -1635,7 +1635,7 @@ class ZephyrContext:
     max_workers: int | None = None
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
     coordinator_resources: ResourceConfig = field(
-        default_factory=lambda: ResourceConfig(cpu=1, ram="2g", preemptible=True)
+        default_factory=lambda: ResourceConfig(cpu=1, ram="2g", preemptible=False)
     )
     chunk_storage_prefix: str | None = None
     name: str = ""
