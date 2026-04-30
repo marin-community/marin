@@ -4,7 +4,7 @@
 import dataclasses
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
-from marin.execution.dag import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.execution.executor import executor_main
 from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
 

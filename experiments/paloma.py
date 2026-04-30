@@ -14,7 +14,7 @@ from marin.datakit.download.huggingface import download_hf
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
-from marin.execution.dag import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep

@@ -11,7 +11,7 @@ pipelines.
 
 import os.path
 
-from marin.execution.dag import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.datakit.download.nemotron_v2 import (
     NEMOTRON_V2_DATASETS,
     download_nemotron_v2_step,

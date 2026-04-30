@@ -32,7 +32,7 @@ from experiments.posttrain.instruction_datasets import (
 from experiments.simple_sft_config import SimpleSFTConfig
 from fray.cluster import ResourceConfig
 from levanter.data.text import ChatLmDatasetFormat
-from marin.execution.dag import ExecutorStep
+from marin.execution.executor import ExecutorStep
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 

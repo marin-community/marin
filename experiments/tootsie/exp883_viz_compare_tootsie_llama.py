@@ -9,7 +9,7 @@ The goal was to see if there were any structural differences in the log probabil
 """
 
 from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
-from marin.execution.dag import ExecutorStep, versioned
+from marin.execution.executor import ExecutorStep, versioned
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 

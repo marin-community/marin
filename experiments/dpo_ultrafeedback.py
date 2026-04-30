@@ -17,7 +17,7 @@ from experiments.models import llama_3_1_8b
 from experiments.posttrain.preference_datasets import get_preference_dataset
 from experiments.simple_dpo_config import SimpleDPOConfig
 from fray.cluster import ResourceConfig
-from marin.execution.dag import output_path_of
+from marin.execution.executor import output_path_of
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_data_config
 

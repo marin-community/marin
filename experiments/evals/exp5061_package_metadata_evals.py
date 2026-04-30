@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import posixpath
 
-from marin.execution.dag import ExecutorStep
+from marin.execution.executor import ExecutorStep
 from marin.datakit.download.npm_registry_metadata import (
     NPM_REGISTRY_SLICE_KEY,
     NpmRegistryMetadataSource,

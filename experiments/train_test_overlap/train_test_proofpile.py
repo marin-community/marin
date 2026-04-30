@@ -14,7 +14,7 @@ Usage:
 
 import logging
 
-from marin.execution.dag import ExecutorStep, this_output_path
+from marin.execution.executor import ExecutorStep, this_output_path
 from marin.execution.executor import executor_main
 from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 

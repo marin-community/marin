@@ -29,7 +29,7 @@ from experiments.tootsie.exp600_tootsie import (
     phase_3_data_mixture,
 )
 from fray.cluster import ResourceConfig
-from marin.execution.dag import output_path_of
+from marin.execution.executor import output_path_of
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import add_validation_sets_to_mixture
 

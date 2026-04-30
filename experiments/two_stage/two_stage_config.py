@@ -21,7 +21,7 @@ from marin.processing.tokenize.data_configs import lm_varying_mixture_data_confi
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 from experiments.defaults import _prepare_data_config
-from marin.execution.dag import ExecutorStep, this_output_path
+from marin.execution.executor import ExecutorStep, this_output_path
 from marin.evaluation.evaluation_config import convert_to_levanter_task_config
 from experiments.two_stage.data import data_dict
 from experiments.two_stage.models import model_dict

@@ -26,7 +26,7 @@ from collections.abc import Sequence
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.dag import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import (
     TokenizeConfig,

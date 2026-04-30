@@ -23,7 +23,7 @@ from experiments.defaults import (
 )
 from experiments.llama import llama_30m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.dag import ExecutorStep, OutputName, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, OutputName, this_output_path, versioned
 from marin.execution.executor import materialize
 from marin.execution.sweep import SweepTarget, claim_and_run
 from marin.processing.tokenize.tokenize import TokenizeConfig

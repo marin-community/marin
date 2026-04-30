@@ -31,7 +31,7 @@ from rigging.filesystem import open_url, url_to_fs
 from urllib3.util import Retry
 from zephyr.writers import atomic_rename
 
-from marin.execution.dag import ExecutorStep, THIS_OUTPUT_PATH, VersionedValue, versioned
+from marin.execution.executor import ExecutorStep, THIS_OUTPUT_PATH, VersionedValue, versioned
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
