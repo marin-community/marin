@@ -172,3 +172,37 @@ def test_stage_lm_eval_source_loads_downloaded_parquet_split(tmp_path: Path):
     assert result["record_count"] == 1
     records = _read_staged_records(output_dir)
     assert records[0]["id"] == "mmlu:test:dev:00000000"
+
+
+def test_stage_lm_eval_source_restricts_subset_parquet_scan_to_requested_subset(tmp_path: Path):
+    input_dir = tmp_path / "raw"
+    output_dir = tmp_path / "staged"
+    all_dir = input_dir / "all"
+    subject_dir = input_dir / "abstract_algebra"
+    all_dir.mkdir(parents=True)
+    subject_dir.mkdir()
+    Dataset.from_list([_mmlu_fixture()]).to_parquet(all_dir / "dev-00000-of-00001.parquet")
+    Dataset.from_list(
+        [
+            {
+                **_mmlu_fixture(),
+                "question": "Sibling subject row that should not be loaded",
+                "subject": "abstract_algebra",
+            }
+        ]
+    ).to_parquet(subject_dir / "dev-00000-of-00001.parquet")
+
+    cfg = LmEvalRawStagingConfig(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        source_label="mmlu:test",
+        renderer_name=LmEvalRawRenderer.MMLU,
+        split="dev",
+        subset="all",
+    )
+    result = stage_lm_eval_source(cfg)
+
+    assert result["record_count"] == 1
+    records = _read_staged_records(output_dir)
+    assert "What is 2 + 2?" in records[0]["text"]
+    assert "Sibling subject row that should not be loaded" not in records[0]["text"]

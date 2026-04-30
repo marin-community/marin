@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from datasets import load_dataset
 from rigging.filesystem import open_url, url_to_fs
 from zephyr.writers import atomic_rename
 
@@ -125,7 +126,8 @@ def _find_split_parquet_files(input_path: str, split: str, subset: str | None) -
         subset_root = posixpath.join(root, subset)
         if fs.exists(subset_root):
             roots.append(subset_root)
-    roots.append(root)
+    if not roots:
+        roots.append(root)
 
     matches: list[str] = []
     for candidate_root in roots:
@@ -144,8 +146,6 @@ def _find_split_parquet_files(input_path: str, split: str, subset: str | None) -
 
 
 def _load_hf_iterable(input_path: str, split: str, subset: str | None) -> Iterable[dict[str, Any]]:
-    from datasets import load_dataset
-
     data_files = _find_split_parquet_files(input_path, split, subset)
     dataset = load_dataset("parquet", data_files={split: data_files}, split=split, streaming=True)
     return dataset
