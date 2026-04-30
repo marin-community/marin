@@ -30,7 +30,6 @@ from experiments.pretraining_datasets.nemotron import (
     NEMOTRON_LLAMA3_OVERRIDES,
     NEMOTRON_WEIGHTS,
     nemotron_mix,
-    nemotron_mix_block_shuffle,
     tokenize_nemotron,
     tokenize_nemotron_subset,
 )
@@ -54,7 +53,6 @@ __all__ = [
     "NEMOTRON_V2_DATASETS",
     "NEMOTRON_WEIGHTS",
     "nemotron_mix",
-    "nemotron_mix_block_shuffle",
     "nsf_awards_download",
     "nsf_awards_tokenized",
     "tokenize_dolma",

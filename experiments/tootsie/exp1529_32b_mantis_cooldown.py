@@ -8,7 +8,8 @@ Cooldown run for the 32B Tootsie model using MegaMath in place of the Dolmino ma
 """
 
 # NOTE: This historical file originally used linear permutation through Marin's old mixture helpers.
-# Marin now always uses Feistel permutation, so exact reproduction is no longer possible.
+# Marin's LM mixture helpers now default to hierarchical block shuffle with Feistel as the permutation type, so exact
+# reproduction is no longer possible.
 
 import dataclasses
 
