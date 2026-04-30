@@ -5,7 +5,7 @@
 
 from experiments.marin_models import marin_tokenizer
 from marin.datakit.download.svgfind import svgfind_creativecommons_normalize_steps
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 svg_normalized = svgfind_creativecommons_normalize_steps()[-1].as_executor_step()
@@ -20,3 +20,7 @@ svg_tokenized = ExecutorStep(
         tokenizer=versioned(marin_tokenizer),
     ),
 )
+
+
+if __name__ == "__main__":
+    executor_main(steps=[svg_tokenized])
