@@ -67,6 +67,7 @@ class MuonSearchSettings:
     batch_multiplier: int = 1
     optimizer_family: str = "muon"
     matrix_lr_multiplier_name: str = "muon_lr_multiplier"
+    split_moe_gate_up_for_ortho: bool = False
 
     def study_id(self, scale: MuonSearchScale) -> str:
         return f"{self.experiment_name}-{scale.name}"
@@ -244,7 +245,10 @@ def _extract_muon_hparams(suggestion: dict[str, object], matrix_lr_multiplier_na
     if not isinstance(parameters, Mapping):
         raise ValueError(f"Expected suggestion parameters mapping, got {type(parameters)!r}")
     required = (matrix_lr_multiplier_name, "adam_lr_multiplier", "momentum", "beta1", "beta2")
-    return {name: float(parameters[name]) for name in required}
+    hparams = {name: float(parameters[name]) for name in required}
+    if "warmup" in parameters:
+        hparams["warmup"] = float(parameters["warmup"])
+    return hparams
 
 
 def _trial_optimizer(
@@ -252,14 +256,16 @@ def _trial_optimizer(
     hparams: dict[str, float],
     matrix_lr_multiplier_name: str,
 ) -> SearchOptimizerConfig:
-    return replace(
-        base_optimizer,
-        learning_rate=base_optimizer.learning_rate * hparams[matrix_lr_multiplier_name],
-        adam_lr=base_optimizer.adam_lr * hparams["adam_lr_multiplier"],
-        momentum=hparams["momentum"],
-        beta1=hparams["beta1"],
-        beta2=hparams["beta2"],
-    )
+    optimizer_updates = {
+        "learning_rate": base_optimizer.learning_rate * hparams[matrix_lr_multiplier_name],
+        "adam_lr": base_optimizer.adam_lr * hparams["adam_lr_multiplier"],
+        "momentum": hparams["momentum"],
+        "beta1": hparams["beta1"],
+        "beta2": hparams["beta2"],
+    }
+    if "warmup" in hparams:
+        optimizer_updates["warmup"] = hparams["warmup"]
+    return replace(base_optimizer, **optimizer_updates)
 
 
 def _build_base_launch_config(scale: MuonSearchScale) -> tuple[GrugMoeLaunchConfig, SearchOptimizerConfig]:
@@ -268,6 +274,8 @@ def _build_base_launch_config(scale: MuonSearchScale) -> tuple[GrugMoeLaunchConf
         hidden_dim=scale.hidden_dim,
         target_steps=SWEEP.target_steps,
     )
+    if SWEEP.split_moe_gate_up_for_ortho:
+        model_cfg = replace(model_cfg, split_moe_gate_up_for_ortho=True)
     if SWEEP.batch_multiplier < 1:
         raise ValueError(f"batch_multiplier must be >= 1, got {SWEEP.batch_multiplier}")
     baseline_tokens = num_steps * batch_size * SWEEP.seq_len
@@ -381,6 +389,8 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
             f"scale={config.scale_name}",
         ]
     )
+    if "warmup" in hparams:
+        tags.append(f"warmup={hparams['warmup']}")
 
     launch_config = replace(
         base,

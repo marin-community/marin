@@ -73,6 +73,7 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     moe_implementation: MoeImplementation | None = None
+    split_moe_gate_up_for_ortho: bool = False
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -314,7 +315,9 @@ class MoEMLP(eqx.Module):
 
     router: jax.Array
     router_bias: jax.Array
-    w_gate_up: jax.Array
+    w_gate_up: jax.Array | None
+    w_gate: jax.Array | None
+    w_up: jax.Array | None
     w_down: jax.Array
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -330,15 +333,23 @@ class MoEMLP(eqx.Module):
         d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
         w_gate = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
         w_up = _init_weight(k_up, (e, d, i), cfg.initializer_std)
-        # TODO: Explore whether concatenating gate/up at init (instead of keeping separate params)
-        # is (1) a meaningful MFU speedup and (2) a meaningful perf hit due to AdamH treating the
-        # concatenated tensor as a single parameter for its scale-invariant norm computation.
-        w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
+        if cfg.split_moe_gate_up_for_ortho:
+            w_gate_up = None
+            w_gate = reshard(w_gate, P("expert", "data", "model"))
+            w_up = reshard(w_up, P("expert", "data", "model"))
+        else:
+            # Keep the fused parameter for the baseline path. Split runs keep gate/up
+            # as separate leaves so Muon/MuonH orthogonalize them independently.
+            w_gate_up = reshard(jnp.concatenate([w_gate, w_up], axis=-1), P("expert", "data", "model"))
+            w_gate = None
+            w_up = None
 
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
-            w_gate_up=reshard(w_gate_up, P("expert", "data", "model")),
+            w_gate_up=w_gate_up,
+            w_gate=w_gate,
+            w_up=w_up,
             w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
             cfg=cfg,
         )
@@ -391,11 +402,18 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
+        if self.w_gate_up is None:
+            if self.w_gate is None or self.w_up is None:
+                raise ValueError("split_moe_gate_up_for_ortho requires w_gate and w_up parameters")
+            w_gate_up = reshard(jnp.concatenate([self.w_gate, self.w_up], axis=-1), P("expert", "data", "model"))
+        else:
+            w_gate_up = self.w_gate_up
+
         routed_flat = moe_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
-            self.w_gate_up,
+            w_gate_up,
             self.w_down,
             activation=ActivationFunctionEnum.silu,
             implementation=self.cfg.moe_implementation,
