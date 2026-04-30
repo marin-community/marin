@@ -33,7 +33,7 @@ import posixpath
 import tarfile
 import zipfile
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import requests
@@ -42,7 +42,8 @@ from rigging.filesystem import open_url
 from urllib3.util import Retry
 from zephyr.writers import atomic_rename
 
-from marin.execution.executor import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, versioned
+from marin.execution.executor import THIS_OUTPUT_PATH
+from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
@@ -112,13 +113,12 @@ class ArchiveSourceConfig:
 
 @dataclass
 class DownloadArchiveSliceConfig:
-    """ExecutorStep config for :func:`download_archive_slice`."""
+    """Runtime config for :func:`download_archive_slice`."""
 
     source: ArchiveSourceConfig
-    output_path: str | VersionedValue[str] = THIS_OUTPUT_PATH
+    output_path: str = THIS_OUTPUT_PATH
     output_filename: str = DEFAULT_OUTPUT_FILENAME
     http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS
-    cache_key: dict[str, Any] | VersionedValue[dict[str, Any]] = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True)
@@ -300,7 +300,7 @@ def _write_budgeted_jsonl_gz(
 def download_archive_slice(cfg: DownloadArchiveSliceConfig) -> dict[str, Any]:
     """Download, filter, and write one archive source into ``<output_path>/<output_filename>``.
 
-    Returns a metadata dict suitable for ExecutorStep consumption.
+    Returns a metadata dict suitable for step hash attributes and audit output.
     """
     cfg.source.validate()
     archive_bytes = _fetch_archive_bytes(cfg.source.url, cfg.http_timeout_seconds)
@@ -322,28 +322,29 @@ def archive_slice_step(
     *,
     name: str | None = None,
     output_filename: str = DEFAULT_OUTPUT_FILENAME,
-) -> ExecutorStep[DownloadArchiveSliceConfig]:
-    """Build an ExecutorStep that downloads ``source`` and writes ``output_filename``."""
+) -> StepSpec:
+    """Build a StepSpec that downloads ``source`` and writes ``output_filename``."""
     source.validate()
     step_name = name or f"raw/{source.slice_key}"
-    return ExecutorStep(
+    return StepSpec(
         name=step_name,
-        fn=download_archive_slice,
-        config=DownloadArchiveSliceConfig(
-            source=source,
-            output_filename=output_filename,
-            cache_key=versioned(
-                {
-                    "slice_key": source.slice_key,
-                    "url": source.url,
-                    "archive_format": source.archive_format,
-                    "include_globs": source.include_globs,
-                    "exclude_globs": source.exclude_globs,
-                    "content_mode": source.content_mode,
-                    "jsonl_text_column": source.jsonl_text_column,
-                    "max_compressed_bytes": source.max_compressed_bytes,
-                    "max_files": source.max_files,
-                }
-            ),
+        fn=lambda output_path: download_archive_slice(
+            DownloadArchiveSliceConfig(
+                source=source,
+                output_path=output_path,
+                output_filename=output_filename,
+            )
         ),
+        hash_attrs={
+            "slice_key": source.slice_key,
+            "url": source.url,
+            "archive_format": source.archive_format,
+            "include_globs": source.include_globs,
+            "exclude_globs": source.exclude_globs,
+            "content_mode": source.content_mode,
+            "jsonl_text_column": source.jsonl_text_column,
+            "max_compressed_bytes": source.max_compressed_bytes,
+            "max_files": source.max_files,
+            "output_filename": output_filename,
+        },
     )

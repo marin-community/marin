@@ -52,6 +52,7 @@ from marin.evaluation.perplexity_gap import (
     raw_text_dataset,
 )
 from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
@@ -140,19 +141,19 @@ HARDWARE_RTL_SOURCES: tuple[ArchiveSourceConfig, ...] = (
 SKIPPED_BINARY_SOURCES: tuple[str, ...] = ("hardware_rtl/aiger_hwmcc",)
 
 
-# --- ExecutorStep registration ---------------------------------------------------------------
+# --- StepSpec registration -------------------------------------------------------------------
 
 
-def _build_steps(sources: tuple[ArchiveSourceConfig, ...]) -> dict[str, ExecutorStep]:
+def _build_steps(sources: tuple[ArchiveSourceConfig, ...]) -> dict[str, StepSpec]:
     return {source.slice_key: archive_slice_step(source) for source in sources}
 
 
-FORMAL_METHODS_STEPS: dict[str, ExecutorStep] = _build_steps(FORMAL_METHODS_SOURCES)
-HARDWARE_RTL_STEPS: dict[str, ExecutorStep] = _build_steps(HARDWARE_RTL_SOURCES)
+FORMAL_METHODS_STEPS: dict[str, StepSpec] = _build_steps(FORMAL_METHODS_SOURCES)
+HARDWARE_RTL_STEPS: dict[str, StepSpec] = _build_steps(HARDWARE_RTL_SOURCES)
 
 
 def _raw_validation_sets(
-    steps: dict[str, ExecutorStep],
+    steps: dict[str, StepSpec],
     *,
     family_tag: str,
 ) -> dict[str, RawTextEvaluationDataset]:
@@ -164,7 +165,7 @@ def _raw_validation_sets(
     datasets: dict[str, RawTextEvaluationDataset] = {}
     for slice_key, step in steps.items():
         tags = (family_tag, f"issue:{5060}", slice_key)
-        datasets[slice_key] = raw_text_dataset(step.cd("data.jsonl.gz"), tags=tags)
+        datasets[slice_key] = raw_text_dataset(step.as_executor_step().cd("data.jsonl.gz"), tags=tags)
     return datasets
 
 
@@ -254,7 +255,8 @@ def main() -> None:
         logger.info("Skipping experiment execution on CI environment; needs network + HF access.")
         return
     # Downloads materialize the per-source JSONL.gz; gap-report steps consume them.
-    download_steps = list(FORMAL_METHODS_STEPS.values()) + list(HARDWARE_RTL_STEPS.values())
+    download_steps = [step.as_executor_step() for step in FORMAL_METHODS_STEPS.values()]
+    download_steps.extend(step.as_executor_step() for step in HARDWARE_RTL_STEPS.values())
     executor_main(
         steps=[*download_steps, MARIN_VS_LLAMA, MARIN_VS_QWEN3],
         description=(
