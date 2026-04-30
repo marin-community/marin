@@ -19,6 +19,8 @@ so they're auto-deleted after the configured TTL — no manual cleanup.
 import logging
 import os
 
+from marin.datakit.sources import all_sources
+from marin.execution.step_runner import StepRunner, check_cache
 from rigging.filesystem import marin_temp_bucket
 from rigging.log_setup import configure_logging
 
@@ -26,8 +28,6 @@ from experiments.datakit_testbed.sampler import (
     proportional_sample_fractions,
     sample_normalized_shards_step,
 )
-from marin.datakit.sources import all_sources
-from marin.execution.step_runner import StepRunner, check_cache
 
 logger = logging.getLogger(__name__)
 

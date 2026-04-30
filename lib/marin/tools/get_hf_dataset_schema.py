@@ -14,7 +14,7 @@ import os
 import warnings
 
 import requests
-from datasets import load_dataset, get_dataset_split_names, get_dataset_config_names
+from datasets import get_dataset_config_names, get_dataset_split_names, load_dataset
 from datasets.utils.info_utils import VerificationMode
 
 HF_DATASET_SIZE_URL = "https://datasets-server.huggingface.co/size"

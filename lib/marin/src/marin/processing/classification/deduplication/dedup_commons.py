@@ -1,18 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Callable, Iterator
-from enum import StrEnum, auto
 import logging
 import os
+from collections.abc import Callable, Iterator
+from enum import StrEnum, auto
+
 import pyarrow as pa
 import pyarrow.json as pa_json
 import wandb
+from zephyr import counters, write_parquet_file
+from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
 
 from marin.utilities.wandb_utils import init_wandb
 from marin.utils import fsspec_glob, rebase_file_path
-from zephyr import counters, write_parquet_file
-from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
 
 logger = logging.getLogger(__name__)
 

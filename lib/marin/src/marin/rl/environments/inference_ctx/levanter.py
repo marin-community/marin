@@ -9,20 +9,21 @@ as well as methods for tokenization and logprob extraction from an OpenAI ChatCo
 """
 
 import asyncio
-from dataclasses import dataclass
 import logging
 import threading
+from dataclasses import dataclass
+
+import haliax as hax
 from jax.sharding import Mesh
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
-from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletion
-from levanter.tokenizers import MarinTokenizer
 from levanter.models.lm_model import LmHeadModel
-import haliax as hax
+from levanter.tokenizers import MarinTokenizer
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
 # TODO(chris): use a different weight transfer method update model, take it out from here
 from marin.rl.weight_transfer.arrow_flight import update_model
+from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletion
 
 logger = logging.getLogger(__name__)
 

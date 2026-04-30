@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 from experiments.swe_rebench_trace.run_one import (
     SANDBOX_ENTRYPOINT_PATH,
     SANDBOX_TRACER_PATH,

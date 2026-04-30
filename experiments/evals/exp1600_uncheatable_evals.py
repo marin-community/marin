@@ -10,16 +10,12 @@ This experiment evaluates models' perplexity on diverse, high-quality, and fresh
 Reference: https://github.com/Jellyfish042/uncheatable_eval
 """
 
+import logging
 import os
 import os.path
-import logging
 from dataclasses import dataclass
 from functools import lru_cache
 
-
-from experiments.defaults import default_tokenize
-from experiments.llama import llama3_tokenizer
-from experiments.models import ModelConfig as HFModelConfig, download_model_step
 from fray.cluster import ResourceConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from marin.datakit.download.uncheatable_eval import make_uncheatable_eval_step
@@ -27,6 +23,11 @@ from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep, mixture_for_evaluation
+
+from experiments.defaults import default_tokenize
+from experiments.llama import llama3_tokenizer
+from experiments.models import ModelConfig as HFModelConfig
+from experiments.models import download_model_step
 
 logger = logging.getLogger(__name__)
 

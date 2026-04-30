@@ -13,11 +13,10 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from rigging.timing import Timestamp
-
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
+from rigging.timing import Timestamp
 
 from tests.cluster.controller.replay.db_dump import deterministic_dump
 from tests.cluster.controller.replay.scenarios import SCENARIO_NAMES, SCENARIOS, frozen_clock

@@ -13,9 +13,10 @@ import resource
 import sys
 import threading
 
+from rigging.timing import Timer
+
 from iris.cluster.runtime.process import _read_proc_cpu_millicores
 from iris.rpc import job_pb2
-from rigging.timing import Timer
 
 # Persistent CPU sampling state so delta-based measurement works across requests.
 _prev_cpu_total: float = 0.0

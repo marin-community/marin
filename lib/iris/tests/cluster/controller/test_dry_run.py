@@ -6,10 +6,10 @@
 from unittest.mock import MagicMock
 
 import pytest
-
 from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
+
 from tests.cluster.controller.conftest import (
     make_job_request,
     make_worker_metadata,
