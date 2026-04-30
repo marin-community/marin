@@ -62,6 +62,9 @@ const cpuHistory = computed(() => resourceHistory.value.map((s) => s.hostCpuPerc
 const memoryHistory = computed(() =>
   resourceHistory.value.map((s) => parseInt(s.memoryUsedBytes ?? '0', 10))
 )
+const diskHistory = computed(() =>
+  resourceHistory.value.map((s) => parseInt(s.diskUsedBytes ?? '0', 10))
+)
 
 const runningTaskCount = computed(() => worker.value?.runningJobIds?.length ?? 0)
 
@@ -78,6 +81,24 @@ const memoryDisplay = computed(() => {
   const total = parseInt(cr.memoryTotalBytes ?? '0', 10)
   if (total) return `${formatBytes(used)} / ${formatBytes(total)}`
   return formatBytes(used)
+})
+
+const diskDisplay = computed(() => {
+  const cr = currentResources.value
+  if (!cr?.diskUsedBytes) return '-'
+  const used = parseInt(cr.diskUsedBytes, 10)
+  const total = parseInt(cr.diskTotalBytes ?? '0', 10)
+  if (total) return `${formatBytes(used)} / ${formatBytes(total)}`
+  return formatBytes(used)
+})
+
+const diskFreePercent = computed(() => {
+  const cr = currentResources.value
+  if (!cr?.diskUsedBytes || !cr?.diskTotalBytes) return null
+  const used = parseInt(cr.diskUsedBytes, 10)
+  const total = parseInt(cr.diskTotalBytes, 10)
+  if (!total) return null
+  return Math.round((1 - used / total) * 100)
 })
 
 const taskColumns: Column[] = [
@@ -169,6 +190,11 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
         />
         <MetricCard :value="cpuDisplay" label="CPU Usage" />
         <MetricCard :value="memoryDisplay" label="Memory" />
+        <MetricCard
+          :value="diskDisplay"
+          label="Disk"
+          :variant="diskFreePercent !== null && diskFreePercent < 10 ? 'warning' : 'default'"
+        />
         <MetricCard :value="formatWorkerDevice(worker?.metadata)" label="Accelerator" />
       </div>
 
@@ -227,6 +253,12 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
               {{ formatBytes(parseInt(worker.metadata.memoryBytes, 10)) }}
             </span>
           </InfoRow>
+          <InfoRow v-if="diskDisplay !== '-'" label="Disk Usage">
+            <span class="font-mono" :class="diskFreePercent !== null && diskFreePercent < 10 ? 'text-status-danger' : ''">
+              {{ diskDisplay }}
+              <span v-if="diskFreePercent !== null" class="text-text-muted ml-1">({{ diskFreePercent }}% free)</span>
+            </span>
+          </InfoRow>
           <InfoRow label="Accelerator">
             {{ formatWorkerDevice(worker?.metadata) }}
           </InfoRow>
@@ -261,6 +293,17 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             <Sparkline :data="memoryHistory" :height="40" color="var(--color-status-purple, #8b5cf6)" />
             <div class="text-xs font-mono text-text-muted mt-1">
               {{ memoryDisplay }}
+            </div>
+          </div>
+          <div
+            v-if="diskHistory.some((v) => v > 0)"
+            class="rounded-lg border border-surface-border bg-surface p-3"
+          >
+            <div class="text-xs text-text-secondary mb-2">Disk</div>
+            <Sparkline :data="diskHistory" :height="40" color="var(--color-status-orange, #f97316)" />
+            <div class="text-xs font-mono mt-1" :class="diskFreePercent !== null && diskFreePercent < 10 ? 'text-status-danger' : 'text-text-muted'">
+              {{ diskDisplay }}
+              <span v-if="diskFreePercent !== null" class="ml-1">({{ diskFreePercent }}% free)</span>
             </div>
           </div>
           <div

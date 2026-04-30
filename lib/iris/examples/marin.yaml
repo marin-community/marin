@@ -172,6 +172,11 @@ scale_groups:
     resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
     buffer_slices: 0
     max_slices: 6
+    # Override the default /dev/shm tmpfs so disk health and metrics reflect the
+    # 100 GB boot disk. n2-highmem-2 only has 16 GiB RAM, so a tmpfs cache_dir
+    # would expose ~7.8 GiB to workers and clip image pulls / workdirs.
+    worker:
+      cache_dir: /var/lib/iris-cache
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com

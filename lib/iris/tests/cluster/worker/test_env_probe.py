@@ -389,6 +389,46 @@ def test_health_check_writable_dir(tmp_path):
     assert result.healthy
 
 
+def test_health_check_low_pct_but_high_absolute_free_is_healthy(tmp_path, monkeypatch):
+    """A large disk with <5% free but >=10 GiB free is still healthy."""
+    total = 1_000 * 1024**3
+    used = total - (12 * 1024**3)  # 1.2% free, 12 GiB free
+    monkeypatch.setattr(
+        env_probe.shutil,
+        "disk_usage",
+        lambda _: env_probe.shutil._ntuple_diskusage(total=total, used=used, free=total - used),
+    )
+    result = check_worker_health(disk_path=str(tmp_path))
+    assert result.healthy
+
+
+def test_health_check_high_pct_but_low_absolute_free_is_healthy(tmp_path, monkeypatch):
+    """A small tmpfs with >5% free but <10 GiB free is still healthy."""
+    total = 8 * 1024**3
+    used = int(total * 0.5)  # 50% free, 4 GiB free
+    monkeypatch.setattr(
+        env_probe.shutil,
+        "disk_usage",
+        lambda _: env_probe.shutil._ntuple_diskusage(total=total, used=used, free=total - used),
+    )
+    result = check_worker_health(disk_path=str(tmp_path))
+    assert result.healthy
+
+
+def test_health_check_low_pct_and_low_absolute_free_is_unhealthy(tmp_path, monkeypatch):
+    """Failing both <5% and <10 GiB triggers unhealthy."""
+    total = 200 * 1024**3
+    used = total - (5 * 1024**3)  # 2.5% free, 5 GiB free
+    monkeypatch.setattr(
+        env_probe.shutil,
+        "disk_usage",
+        lambda _: env_probe.shutil._ntuple_diskusage(total=total, used=used, free=total - used),
+    )
+    result = check_worker_health(disk_path=str(tmp_path))
+    assert not result.healthy
+    assert "5%" in result.error and "10" in result.error
+
+
 def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):
     """Network collection silently returns 0 on systems without /proc/net/dev."""
     monkeypatch.setattr(env_probe, "_read_net_dev_bytes", lambda: (_ for _ in ()).throw(OSError("no /proc/net/dev")))

@@ -505,7 +505,7 @@ def _read_net_dev_bytes() -> tuple[int, int]:
 
 
 MIN_DISK_FREE_FRACTION = 0.05
-"""Worker is unhealthy if the work volume has less than 5% free space."""
+MIN_DISK_FREE_BYTES = 10 * 1024**3
 
 
 @dataclass(frozen=True)
@@ -554,12 +554,15 @@ def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
         return HealthCheckResult(healthy=False, error=f"disk usage check failed: {e}")
 
     if usage.total > 0:
-        free_fraction = (usage.total - usage.used) / usage.total
-        if free_fraction < MIN_DISK_FREE_FRACTION:
-            pct = free_fraction * 100
+        free = usage.total - usage.used
+        free_fraction = free / usage.total
+        if free_fraction < MIN_DISK_FREE_FRACTION and free < MIN_DISK_FREE_BYTES:
             return HealthCheckResult(
                 healthy=False,
-                error=f"disk free space {pct:.1f}% below threshold {MIN_DISK_FREE_FRACTION * 100:.0f}%",
+                error=(
+                    f"disk free {free / 1024**3:.1f} GiB ({free_fraction * 100:.1f}%) below threshold "
+                    f"({MIN_DISK_FREE_FRACTION * 100:.0f}% AND {MIN_DISK_FREE_BYTES // 1024**3} GiB)"
+                ),
             )
     return HealthCheckResult(healthy=True)
 
