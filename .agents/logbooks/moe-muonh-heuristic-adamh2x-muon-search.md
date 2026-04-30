@@ -101,3 +101,22 @@
   - MuonH 2x Vizier parent: `/pc0618/iris-run-job-20260428-214334`
   - Muon 2x Vizier parent: `/pc0618/iris-run-job-20260428-214351`
 - Interpretation: both parents are running. The loop-0 suggest steps succeeded for both scales, and all eight loop-0 training trials per optimizer are running on v5p-8.
+
+### 2026-04-29 - split gate/up + warmup 2x-batch Vizier follow-ups
+- Hypothesis: keeping expert `w_gate` and `w_up` as separate parameter leaves lets Muon/MuonH orthogonalize each projection independently instead of orthogonalizing the concatenated `w_gate_up` tensor. Adding warmup to the Vizier search may recover stability at the higher 2x-batch learning-rate settings.
+- Command:
+  - `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe.muon_vizier_split_warmup_batch2x_gate1`
+  - `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe.muonh_vizier_split_warmup_batch2x_gate1`
+- Config:
+  - Branch: `research/moe-split-warmup-vizier`
+  - Commit: `cf1ad9085`
+  - Muon split+warmup 2x Vizier prefix: `moe-muon-vizier-split-warmup-batch2x`
+  - MuonH split+warmup 2x Vizier prefix: `moe-muonh-vizier-split-warmup-batch2x`
+  - Scales: exact gate-1 `d512-gate1` at `2.19e17` FLOPs and `d768-gate1` at `1.70e18` FLOPs.
+  - Batch sizes and steps: `d512` batch `64`, steps `3194`; `d768` batch `128`, steps `5172`, preserving gate-1 token counts.
+  - Search space: matrix LR multiplier in `[0.5, 3.0]`, Adam fallback LR multiplier in `[0.5, 3.0]`, momentum in `[0.92, 0.99]`, beta1 in `[0.70, 0.95]`, beta2 in `[0.95, 0.999]`, warmup fraction in `[0.0, 0.05]`.
+  - Muon uses AOL coefficients; MuonH uses quintic coefficients.
+- Result: validation passed; Iris parent jobs submitted.
+  - Muon split+warmup 2x Vizier parent: `/pc0618/iris-run-job-20260430-041032`
+  - MuonH split+warmup 2x Vizier parent: `/pc0618/iris-run-job-20260430-041052`
+- Interpretation: both parents are running; both v5p-8 reservations are pending capacity at submission time.
