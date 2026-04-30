@@ -188,7 +188,50 @@ Resulting paths look like
 prior gate execution can be wiped with
 `git worktree remove ../.zephyr_perf_worktrees/${PR_NUMBER}-*`.
 
-### 5. Submit both ferries
+### 5. Run zephyr tests on the treatment worktree
+
+Before paying for ferries, confirm the treatment compiles, type-checks, and
+passes the zephyr unit/integration suite. A broken test is much cheaper to
+catch here than after a 30-minute Gate 1 (or an overnight Gate 2).
+
+```bash
+( cd "$TREATMENT_WT" && \
+  ./infra/pre-commit.py lib/zephyr/ && \
+  uv run pyrefly && \
+  uv run pytest lib/zephyr/tests/ )
+```
+
+Treatment-only by default — control is the merge-base on `main` and is
+assumed green from CI. If the treatment suite passes but ferry verdicts look
+suspicious, sanity-check control by running the same command in
+`$CONTROL_WT`.
+
+If any of these fail, **stop here**. Do not submit ferries. Post a halt
+comment using the same sentinel as the verdict (so re-runs upsert in place):
+
+```bash
+PR=<PR_NUMBER>
+REPO=marin-community/marin
+BODY=$(mktemp)
+cat > "$BODY" <<EOF
+<!-- zephyr-perf-gate -->
+🤖 ## Zephyr perf gate — halted (local tests failed)
+
+Treatment worktree (\`$TREATMENT_SHA\`) failed lint / pyrefly / zephyr tests.
+Ferries were not submitted.
+
+Fix the failing tests and the gate will re-run.
+EOF
+EXISTING=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+  --jq '.[] | select(.body | startswith("<!-- zephyr-perf-gate -->")) | .id' | head -1)
+if [ -n "$EXISTING" ]; then
+  gh api --method PATCH "repos/$REPO/issues/comments/$EXISTING" -F "body=@$BODY"
+else
+  gh api --method POST  "repos/$REPO/issues/$PR/comments"      -F "body=@$BODY"
+fi
+```
+
+### 6. Submit both ferries
 
 ```bash
 uv run python scripts/zephyr/perf/submit_perf_run.py \
@@ -208,7 +251,7 @@ uv run python scripts/zephyr/perf/submit_perf_run.py \
 
 The script prints the Iris job ID and writes the status JSON path to stdout.
 
-### 6. Babysit
+### 7. Babysit
 
 Both runs babysat with the **babysit-zephyr** skill (or **babysit-job** for the
 outer Iris job). Do not poll in a tight loop — Gate 1 is ~30–60 min, Gate 2 is
@@ -219,7 +262,7 @@ If a run fails (worker pool wedged, coordinator zombie), escalate to
 underlying issue is understood. Never silently retry — a flaky run masks a real
 regression.
 
-### 7. Collect metrics
+### 8. Collect metrics
 
 ```bash
 uv run python scripts/zephyr/perf/collect_perf_metrics.py \
@@ -236,7 +279,7 @@ the final counter snapshot via `iris actor call`, and the worker-pool death
 count from `iris rpc controller list-tasks`. Only post the comment after both
 runs reach a terminal state (`SUCCEEDED` or `FAILED`).
 
-### 8. Compare and verdict
+### 9. Compare and verdict
 
 ```bash
 uv run python scripts/zephyr/perf/compare_perf_runs.py \
@@ -264,7 +307,7 @@ Default thresholds (overridable via `--thresholds <yaml>`):
 Verdict precedence: any hard-fail → `❌ fail`; otherwise any warn → `⚠ warn`;
 otherwise `✅ pass`.
 
-### 9. Post one canonical comment
+### 10. Post one canonical comment
 
 The comment is sentinel-marked so re-runs replace the prior comment instead of
 stacking. Two `gh api` calls — find the existing comment, then patch or post:
@@ -286,7 +329,7 @@ fi
 The comment is the only output — no separate issue is filed on `❌ fail`. The
 author decides next steps (revert, fix, or accept with rationale).
 
-### 10. Clean up
+### 11. Clean up
 
 ```bash
 git worktree remove "$CONTROL_WT"
