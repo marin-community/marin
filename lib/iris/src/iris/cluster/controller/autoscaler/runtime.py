@@ -31,7 +31,6 @@ from iris.cluster.controller.autoscaler.models import (
     ScalingAction,
     ScalingDecision,
 )
-from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.controller.autoscaler.planning import ScalePlan, build_scale_plan
 from iris.cluster.controller.autoscaler.recovery import (
     load_autoscaler_checkpoint,
@@ -55,6 +54,7 @@ from iris.cluster.controller.autoscaler.slice_lifecycle import (
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import (
     QuotaExhaustedError,

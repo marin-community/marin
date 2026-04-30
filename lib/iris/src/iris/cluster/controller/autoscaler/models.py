@@ -5,14 +5,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import enum
+from dataclasses import dataclass, field
 from enum import Enum, StrEnum
+
+from rigging.timing import Timestamp
 
 from iris.cluster.constraints import Constraint, PlacementRequirements
 from iris.cluster.providers.types import SliceHandle
 from iris.rpc import job_pb2
-from rigging.timing import Timestamp
 
 
 class SliceLifecycleState(StrEnum):
