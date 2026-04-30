@@ -150,8 +150,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
         ("superior-reasoning", superior_reasoning_normalize_steps, 7.08),
-        # Token count is a rough estimate from a 100-row sample: ~1700 chars/doc, ~3.5 chars/tok.
-        ("svg", svgfind_creativecommons_normalize_steps, 1.70),
+        ("svg", svgfind_creativecommons_normalize_steps, 8.95),
         ("swe-rebench-openhands", swe_rebench_openhands_normalize_steps, 2.47),
         ("synthetic-1", synthetic1_normalize_steps, 7.32),
     )
