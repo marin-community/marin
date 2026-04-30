@@ -25,7 +25,7 @@ import csv
 import json
 import logging
 import posixpath
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import StringIO
 from typing import Any
@@ -37,7 +37,8 @@ from rigging.filesystem import open_url
 from urllib3.util import Retry
 from zephyr.writers import atomic_rename
 
-from marin.execution.executor import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, versioned
+from marin.execution.executor import THIS_OUTPUT_PATH
+from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
@@ -73,13 +74,12 @@ class UwfZeekSampleSource:
 
 @dataclass
 class DownloadUwfZeekSampleConfig:
-    """Executor config for :func:`download_uwf_zeek_sample`."""
+    """Runtime config for :func:`download_uwf_zeek_sample`."""
 
     source: UwfZeekSampleSource
-    output_path: str | VersionedValue[str] = THIS_OUTPUT_PATH
+    output_path: str = THIS_OUTPUT_PATH
     output_filename: str = DEFAULT_OUTPUT_FILENAME
     http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS
-    cache_key: dict[str, Any] | VersionedValue[dict[str, Any]] = field(default_factory=dict, repr=False)
 
 
 class _HrefParser(HTMLParser):
@@ -239,25 +239,25 @@ def uwf_zeek_sample_step(
     *,
     name: str | None = None,
     http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS,
-) -> ExecutorStep[DownloadUwfZeekSampleConfig]:
-    """Create the executor step that materializes the bounded UWF Zeek eval sample."""
+) -> StepSpec:
+    """Create the StepSpec that materializes the bounded UWF Zeek eval sample."""
 
     source.validate()
     step_name = name or f"raw/{source.slice_key}"
-    return ExecutorStep(
+    return StepSpec(
         name=step_name,
-        fn=download_uwf_zeek_sample,
-        config=DownloadUwfZeekSampleConfig(
-            source=source,
-            http_timeout_seconds=http_timeout_seconds,
-            cache_key=versioned(
-                {
-                    "slice_key": source.slice_key,
-                    "base_url": source.base_url,
-                    "categories": list(source.categories),
-                    "max_rows_per_category": source.max_rows_per_category,
-                    "http_timeout_seconds": http_timeout_seconds,
-                }
-            ),
+        fn=lambda output_path: download_uwf_zeek_sample(
+            DownloadUwfZeekSampleConfig(
+                source=source,
+                output_path=output_path,
+                http_timeout_seconds=http_timeout_seconds,
+            )
         ),
+        hash_attrs={
+            "slice_key": source.slice_key,
+            "base_url": source.base_url,
+            "categories": list(source.categories),
+            "max_rows_per_category": source.max_rows_per_category,
+            "http_timeout_seconds": http_timeout_seconds,
+        },
     )

@@ -16,7 +16,7 @@ import posixpath
 
 from marin.datakit.download.uwf_zeek import UwfZeekSampleSource, uwf_zeek_sample_step
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import ExecutorStep
+from marin.execution.step_spec import StepSpec
 
 ISSUE_5057 = 5057
 EPIC_5005 = 5005
@@ -29,7 +29,7 @@ UWF_ZEEK_RAW = uwf_zeek_sample_step(UWF_ZEEK_SOURCE)
 def binary_network_security_raw_validation_sets(
     *,
     raw_root: str | None = None,
-    binary_network_security_raw: ExecutorStep | None = None,
+    binary_network_security_raw: StepSpec | None = None,
 ) -> dict[str, RawTextEvaluationDataset]:
     """Return the first-pass binary/network/security raw validation slices."""
 
@@ -37,10 +37,10 @@ def binary_network_security_raw_validation_sets(
         binary_network_security_raw = UWF_ZEEK_RAW
 
     if raw_root is not None:
-        source: str | ExecutorStep = posixpath.join(raw_root, "binary/uwf/zeek.jsonl.gz")
+        source = posixpath.join(raw_root, "binary/uwf/zeek.jsonl.gz")
     else:
         assert binary_network_security_raw is not None
-        source = binary_network_security_raw.cd("data.jsonl.gz")
+        source = binary_network_security_raw.as_executor_step().cd("data.jsonl.gz")
 
     return {
         UWF_ZEEK_SLICE_KEY: raw_text_dataset(
