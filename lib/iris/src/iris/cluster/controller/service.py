@@ -90,7 +90,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     task_updates_from_proto,
 )
-from iris.cluster.log_store_helpers import build_log_source, worker_log_key
+from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
@@ -876,36 +876,42 @@ def _live_user_stats(db: ControllerDB) -> list[UserStats]:
     return list(by_user.values())
 
 
-def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) -> list[TaskDetailRow]:
+def _attempts_for_worker(
+    db: ControllerDB, worker_id: WorkerId, limit: int = 50
+) -> list[controller_pb2.Controller.WorkerTaskAttempt]:
+    """Return per-attempt history for ``worker_id``, newest first.
+
+    Indexed scan of ``task_attempts`` via ``idx_task_attempts_worker_task``;
+    each retry of the same task is its own row so the dashboard can render
+    independent state/duration per attempt rather than inheriting from the
+    parent task (which produced bogus duplicate-RUNNING rows).
+    """
     with db.read_snapshot() as q:
-        history_rows = q.raw(
-            "SELECT wth.task_id FROM worker_task_history wth "
-            "WHERE wth.worker_id = ? ORDER BY wth.assigned_at_ms DESC LIMIT ?",
-            (str(worker_id), limit),
-            decoders={"task_id": JobName.from_wire},
-        )
-        task_ids = [r.task_id for r in history_rows]
-        if not task_ids:
-            return []
-        task_wires = [tid.to_wire() for tid in task_ids]
-        placeholders = ",".join("?" for _ in task_wires)
-        tasks = TASK_DETAIL_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "
-                f"FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
-                tuple(task_wires),
-            ),
-        )
-        attempts = ATTEMPT_PROJECTION.decode(
+        rows = ATTEMPT_PROJECTION.decode(
             q.fetchall(
                 f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
-                f"WHERE ta.task_id IN ({placeholders}) "
-                "ORDER BY ta.task_id ASC, ta.attempt_id ASC",
-                tuple(task_wires),
+                "WHERE ta.worker_id = ? "
+                "ORDER BY COALESCE(ta.started_at_ms, ta.created_at_ms) DESC "
+                "LIMIT ?",
+                (str(worker_id), limit),
             ),
         )
-    task_map = {t.task_id: t for t in tasks_with_attempts(tasks, attempts)}
-    return [task for tid in task_ids if (task := task_map.get(tid)) is not None]
+    out: list[controller_pb2.Controller.WorkerTaskAttempt] = []
+    for row in rows:
+        proto_attempt = job_pb2.TaskAttempt(
+            attempt_id=row.attempt_id,
+            worker_id=str(row.worker_id) if row.worker_id else "",
+            state=row.state,
+            exit_code=row.exit_code or 0,
+            error=row.error or "",
+            is_worker_failure=attempt_is_worker_failure(row.state),
+        )
+        if row.started_at is not None:
+            proto_attempt.started_at.CopyFrom(timestamp_to_proto(row.started_at))
+        if row.finished_at is not None:
+            proto_attempt.finished_at.CopyFrom(timestamp_to_proto(row.finished_at))
+        out.append(controller_pb2.Controller.WorkerTaskAttempt(task_id=row.task_id.to_wire(), attempt=proto_attempt))
+    return out
 
 
 class AutoscalerProtocol(Protocol):
@@ -2098,28 +2104,15 @@ class ControllerServiceImpl:
             status_message=worker_status_message(worker),
         )
 
-        # Fetch worker daemon logs via LogService
-        worker_log_entries: list[iris_logging_pb2.LogEntry] = []
-        try:
-            fetch_resp = self._log_service.fetch_logs(
-                logging_pb2.FetchLogsRequest(
-                    source=worker_log_key(worker.worker_id),
-                    max_lines=200,
-                    tail=True,
-                ),
-                ctx,
-            )
-            worker_log_entries = _to_iris_log_entries(fetch_resp.entries)
-        except Exception:
-            logger.debug("Failed to fetch worker logs for %s", request.id, exc_info=True)
-
-        # Collect recent task history for this worker
-        tasks = _tasks_for_worker(self._db, worker.worker_id, limit=50)
-        recent_tasks = [task_to_proto(task) for task in tasks]
+        # Worker daemon logs are NOT inlined here — when the worker is
+        # unreachable the LogService proxy blocks for its full timeout
+        # (~10s) and stalls the worker page render. The dashboard fetches
+        # them in parallel via LogService.FetchLogs with
+        # source=/system/worker/<worker_id>.
+        recent_attempts = _attempts_for_worker(self._db, worker.worker_id, limit=50)
 
         resp = controller_pb2.Controller.GetWorkerStatusResponse(
-            worker_log_entries=worker_log_entries,
-            recent_tasks=recent_tasks,
+            recent_attempts=recent_attempts,
         )
         resp.worker.CopyFrom(worker_health)
         resource_history = detail.resource_history

@@ -1626,6 +1626,41 @@ class TaskAttemptStore:
             ),
         )
 
+    def bulk_finalize_active(
+        self,
+        cur: TransactionCursor,
+        job_ids: Sequence[JobName],
+        state: int,
+        error: str,
+        finished_at_ms: int,
+        active_states: set[int],
+    ) -> None:
+        """Mark every still-active attempt under ``job_ids`` as terminal.
+
+        Pairs with TaskStore.bulk_kill_non_terminal so cancel_job leaves no
+        orphan task_attempts rows where state stays ACTIVE long after the
+        owning task has gone terminal.
+        """
+        if not job_ids:
+            return
+        wire_ids = [jid.to_wire() for jid in job_ids]
+        job_placeholders = ",".join("?" for _ in wire_ids)
+        active_placeholders = ",".join("?" for _ in active_states)
+        cur.execute(
+            "UPDATE task_attempts SET state = ?, error = COALESCE(error, ?), "
+            "finished_at_ms = COALESCE(finished_at_ms, ?) "
+            f"WHERE task_id IN ("
+            f"  SELECT task_id FROM tasks WHERE job_id IN ({job_placeholders})"
+            f") AND state IN ({active_placeholders})",
+            (
+                state,
+                error,
+                finished_at_ms,
+                *wire_ids,
+                *active_states,
+            ),
+        )
+
 
 class WorkerStore:
     """Workers, worker_attributes, worker_task_history, worker_resource_history."""
