@@ -212,6 +212,7 @@ class _ShardedOffsets:
         self._stores = stores
         self._num_rows = sum(store.num_rows for store in stores)
         self._data_sizes = [store.data_size for store in stores]
+        self._offsets: np.ndarray | None = None
 
     def __getitem__(self, item):
         return _VirtualRead(lambda: self._read(item))
@@ -221,6 +222,11 @@ class _ShardedOffsets:
         return offsets[item]
 
     async def _full_offsets(self):
+        if self._offsets is None:
+            self._offsets = await self._compute_full_offsets()
+        return self._offsets
+
+    async def _compute_full_offsets(self):
         offset_reads = [store.offsets[0 : store.num_rows + 1].read() for store in self._stores]
         per_shard_offsets = await asyncio.gather(*offset_reads)
         adjusted_offsets = [np.asarray([self._num_rows], dtype=np.int64)]

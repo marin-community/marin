@@ -18,6 +18,7 @@ from levanter.store.cache import (
     CacheMetadata,
     SerialCacheWriter,
     _ShardedArray,
+    _ShardedOffsets,
     ShardedTreeCache,
     TreeStore,
     build_or_load_cache,
@@ -412,6 +413,44 @@ async def test_sharded_array_reads_slice_shards_concurrently():
     values = await asyncio.wait_for(sharded[2:6], timeout=1)
 
     np.testing.assert_array_equal(values, np.asarray([2, 3, 4, 5]))
+
+
+@pytest.mark.asyncio
+async def test_sharded_offsets_cache_full_offsets():
+    read_count = 0
+
+    class FakeRead:
+        def __init__(self, values: np.ndarray):
+            self._values = values
+
+        async def read(self):
+            nonlocal read_count
+            read_count += 1
+            return self._values
+
+    class FakeOffsets:
+        def __init__(self, values: np.ndarray):
+            self._values = values
+
+        def __getitem__(self, item):
+            return FakeRead(self._values[item])
+
+    class FakeStore:
+        def __init__(self, offsets: np.ndarray, data_size: int):
+            self.num_rows = len(offsets) - 1
+            self.data_size = data_size
+            self.offsets = FakeOffsets(offsets)
+
+    offsets = _ShardedOffsets(
+        [
+            FakeStore(np.asarray([2, 10, 20]), data_size=20),
+            FakeStore(np.asarray([2, 5, 15]), data_size=15),
+        ]
+    )
+
+    np.testing.assert_array_equal(await offsets[0:3], np.asarray([4, 10, 20]))
+    np.testing.assert_array_equal(await offsets[2:5], np.asarray([20, 25, 35]))
+    assert read_count == 2
 
 
 def test_sharded_tree_cache_via_load():
