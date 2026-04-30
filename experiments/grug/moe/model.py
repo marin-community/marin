@@ -72,6 +72,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    gated_norm_activation: str = "silu"  # "silu" (baseline), "relu", or "relu2"
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -181,21 +182,26 @@ class GatedNorm(eqx.Module):
 
     w_down: jax.Array
     w_up: jax.Array
+    activation: str = eqx.field(static=True, default="silu")
 
     @staticmethod
-    def init(hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "GatedNorm":
+    def init(hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray, activation: str = "silu") -> "GatedNorm":
         k_down, k_up = random.split(key)
         return GatedNorm(
             w_down=reshard(_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std), P(None, None)),
             w_up=reshard(_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std), P(None, None)),
+            activation=activation,
         )
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
-        # TODO: silu activation here isn't explored, just cargo-culted from Qwen. Likely low-hanging ablation fruit
-        # (e.g. compare no activation, relu, etc.).
-        gate_hidden = jax.nn.silu(gate_hidden)
+        if self.activation == "relu":
+            gate_hidden = jax.nn.relu(gate_hidden)
+        elif self.activation == "relu2":
+            gate_hidden = jnp.square(jax.nn.relu(gate_hidden))
+        else:
+            gate_hidden = jax.nn.silu(gate_hidden)
         gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
         return x * gate.astype(x.dtype)
 
@@ -425,10 +431,14 @@ class Block(eqx.Module):
             )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+            attn_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key, activation=cfg.gated_norm_activation
+            ),
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+            mlp_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key, activation=cfg.gated_norm_activation
+            ),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
         )
@@ -470,11 +480,15 @@ class Transformer(eqx.Module):
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
+            embed_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key, activation=cfg.gated_norm_activation
+            ),
             output_proj=output_proj,
             blocks=blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            final_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, key=final_gn_key, activation=cfg.gated_norm_activation
+            ),
             config=cfg,
         )
 
