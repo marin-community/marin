@@ -31,15 +31,10 @@ from marin.execution.executor import ExecutorStep, this_output_path
 from marin.utils import fsspec_mkdirs, fsspec_size, load_dataset_with_backoff
 from rigging.filesystem import open_url
 
-RENDERING_VERSION = "v3"
+RENDERING_VERSION = "v4"
 LONG_TAIL_PPL_EPIC_ISSUE = 5005
 RAW_CAPABILITY_ISSUE = 4963
 DEFAULT_OUTPUT_FILENAME = "data-00000-of-00001.jsonl.gz"
-
-MARIN_BOS_TOKEN = "<|begin_of_text|>"
-MARIN_START_HEADER_TOKEN = "<|start_header_id|>"
-MARIN_END_HEADER_TOKEN = "<|end_header_id|>"
-MARIN_EOT_TOKEN = "<|eot_id|>"
 
 WILDCHAT_MAX_ROWS = 8_192
 OPENHANDS_MAX_ROWS = 4_096
@@ -380,7 +375,7 @@ def _project_chat_row_to_raw_text(
         text = _project_openhands_targets(chat_row)
     else:
         messages = _require_messages(chat_row)
-        text = _render_marin_chat_messages(messages)
+        text = _render_messages(messages)
 
     if not text:
         return None
@@ -507,26 +502,6 @@ def _normalize_tool_calls(tool_calls: Any) -> Any:
             except json.JSONDecodeError:
                 normalized["function"] = {**function, "arguments": _normalize_text(arguments)}
     return normalized
-
-
-def _render_marin_chat_messages(messages: Iterable[Mapping[str, Any]]) -> str:
-    blocks = []
-    for message in messages:
-        role = _canonical_role_key(message.get("role"))
-        content = message.get("content")
-        content_text = _normalize_text(content) if isinstance(content, str) else ""
-        tool_calls = message.get("tool_calls")
-
-        if tool_calls:
-            tool_call_text = "Tool Calls:\n" + _canonical_json(tool_calls)
-            content_text = f"{content_text}\n\n{tool_call_text}".strip()
-
-        if content_text:
-            blocks.append(f"{MARIN_START_HEADER_TOKEN}{role}{MARIN_END_HEADER_TOKEN}\n{content_text}{MARIN_EOT_TOKEN}")
-
-    if not blocks:
-        return ""
-    return MARIN_BOS_TOKEN + "\n".join(blocks)
 
 
 def _project_openhands_targets(chat_row: Mapping[str, Any]) -> str:

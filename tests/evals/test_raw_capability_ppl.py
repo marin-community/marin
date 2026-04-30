@@ -9,7 +9,7 @@ from experiments.evals.raw_capability_ppl import (
 )
 
 
-def test_render_wildchat_row_writes_oai_chat_and_marin_projection():
+def test_render_wildchat_row_writes_oai_chat_and_template_neutral_projection():
     config = CapabilityEvalDatasetConfig(
         dataset_id="allenai/WildChat",
         revision="rev",
@@ -38,12 +38,10 @@ def test_render_wildchat_row_writes_oai_chat_and_marin_projection():
     assert rendered["messages"] == row["conversation"]
     assert rendered["metadata"]["language"] == "English"
     assert rendered["metadata"]["model"] == "gpt-4"
-    assert (
-        raw_text["text"] == "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n"
-        "hello<|eot_id|>\n"
-        "<|start_header_id|>assistant<|end_header_id|>\n"
-        "hi there<|eot_id|>"
-    )
+    assert raw_text["text"] == "User:\nhello\n\nAssistant:\nhi there"
+    assert "<|begin_of_text|>" not in raw_text["text"]
+    assert "<|start_header_id|>" not in raw_text["text"]
+    assert "<|eot_id|>" not in raw_text["text"]
 
 
 def test_render_openhands_row_keeps_full_oai_trace_but_scores_only_model_targets():
@@ -189,4 +187,8 @@ def test_render_global_mgsm_row_preserves_answer_prefix_in_chat_projection():
         },
         {"role": "assistant", "content": "Answer Prefix:\nAnswer\n\nAnswer:\n42"},
     ]
-    assert "Answer Prefix:\nAnswer\n\nAnswer:\n42" in raw_text["text"]
+    assert (
+        raw_text["text"] == 'User:\nInstruction:\nSolve the problem. End with "Answer:" and the final number.\n\n'
+        "Question:\nWhat is 6 * 7?\n\nAssistant:\nAnswer Prefix:\nAnswer\n\nAnswer:\n42"
+    )
+    assert "<|begin_of_text|>" not in raw_text["text"]
