@@ -72,7 +72,7 @@ def transform(input_path: str, output_path: str) -> None:
         .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="synthetic1-transform", resources=ResourceConfig(cpu=1, ram="4g"))
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)
 
 
 def download_synthetic1_step() -> StepSpec:

@@ -20,7 +20,7 @@ from iris.cluster.controller.service import (
     ControllerServiceImpl,
     _check_client_freshness,
 )
-from iris.log_server.server import LogServiceImpl
+from finelog.server import LogServiceImpl
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -1379,3 +1379,13 @@ def test_launch_job_nested_with_stale_client_date_is_exempt(service):
 
     response = service.launch_job(child_req, None)
     assert response.job_id == child_id.to_wire()
+
+
+def test_set_task_status_text_persists_via_store(service):
+    """set_task_status_text persists the supplied markdown via the store."""
+    service.launch_job(make_job_request("stats-job"), None)
+    task_id = JobName.root("test-user", "stats-job").task(0)
+    status_text = "Physical stages:\n→ 1. Map\n\nShards: 3/10 complete, 2 in-flight, 5 queued"
+    request = job_pb2.SetTaskStatusTextRequest(task_id=task_id.to_wire(), status_text_md=status_text)
+    service.set_task_status_text(request, None)
+    assert service._store.tasks.get_status_text(task_id.to_wire()) == status_text

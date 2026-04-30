@@ -10,7 +10,7 @@ different number of datasets you will need to change the number of training step
 accordingly.
 """
 
-from levanter.data.text import ChatLmDatasetFormat
+from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, ChatLmDatasetFormat
 
 from experiments.defaults import default_sft, default_tokenize
 from experiments.llama import llama_8b
@@ -94,7 +94,7 @@ mixture_sft_config = SimpleSFTConfig(
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
-    shuffle=True,
+    shuffle=DEFAULT_LM_DATA_SHUFFLE,
     missing_weights_are_validation=True,
 )
 

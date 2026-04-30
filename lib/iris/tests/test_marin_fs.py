@@ -124,7 +124,7 @@ def test_marin_temp_bucket_from_metadata():
         "rigging.filesystem.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-central2-b")
     ):
         assert marin_temp_bucket(ttl_days=30, prefix="compilation-cache") == (
-            "gs://marin-tmp-us-central2/ttl=30d/compilation-cache"
+            "gs://marin-us-central2/tmp/ttl=30d/compilation-cache"
         )
 
 
@@ -133,11 +133,44 @@ def test_marin_temp_bucket_from_env_prefix():
         patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-east1/scratch"}),
     ):
-        assert marin_temp_bucket(ttl_days=3, prefix="zephyr") == "gs://marin-tmp-us-east1/ttl=3d/zephyr"
+        assert marin_temp_bucket(ttl_days=3, prefix="zephyr") == "gs://marin-us-east1/tmp/ttl=3d/zephyr"
+
+
+def test_marin_temp_bucket_eu_west4_uses_main_bucket_alias():
+    """eu-west4 region resolves to the canonical europe-west4 marin-eu-west4 bucket."""
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-eu-west4/scratch"}),
+    ):
+        assert marin_temp_bucket(ttl_days=1, prefix="ferry") == "gs://marin-eu-west4/tmp/ttl=1d/ferry"
+
+
+def test_marin_temp_bucket_uses_source_prefix_region():
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
+    ):
+        assert marin_temp_bucket(
+            ttl_days=14,
+            prefix="checkpoints-temp/marin-us-east5/experiments/grug/run/checkpoints",
+            source_prefix="gs://marin-us-east5/experiments/grug/run",
+        ) == ("gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/run/checkpoints")
+
+
+def test_marin_temp_bucket_uses_source_prefix_region_from_local_launcher():
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {}, clear=True),
+    ):
+        assert marin_temp_bucket(
+            ttl_days=14,
+            prefix="checkpoints-temp/marin-us-east5/experiments/grug/run/checkpoints",
+            source_prefix="gs://marin-us-east5/experiments/grug/run",
+        ) == ("gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/run/checkpoints")
 
 
 def test_marin_temp_bucket_falls_back_to_marin_prefix_when_no_region():
-    # Unknown region in MARIN_PREFIX → no entry in REGION_TO_TMP_BUCKET → falls back to marin_prefix/tmp
+    # Unknown region in MARIN_PREFIX → no entry in REGION_TO_DATA_BUCKET → falls back to marin_prefix/tmp
     with (
         patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-antarctica-south1/scratch"}),
@@ -158,14 +191,48 @@ def test_marin_temp_bucket_no_prefix():
     with patch(
         "rigging.filesystem.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-east1-c")
     ):
-        assert marin_temp_bucket(ttl_days=14) == "gs://marin-tmp-us-east1/ttl=14d"
+        assert marin_temp_bucket(ttl_days=14) == "gs://marin-us-east1/tmp/ttl=14d"
 
 
 def test_marin_temp_bucket_strips_prefix_slashes():
     with patch(
         "rigging.filesystem.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-central1-a")
     ):
-        assert marin_temp_bucket(ttl_days=3, prefix="/foo/bar/") == "gs://marin-tmp-us-central1/ttl=3d/foo/bar"
+        assert marin_temp_bucket(ttl_days=3, prefix="/foo/bar/") == "gs://marin-us-central1/tmp/ttl=3d/foo/bar"
+
+
+def test_marin_temp_bucket_rounds_up_unsupported_ttl(caplog):
+    """ttl_days values between configured points round up to the next one with a warning."""
+    with (
+        patch(
+            "rigging.filesystem.urllib.request.urlopen",
+            return_value=_mock_urlopen(b"projects/12345/zones/us-east1-c"),
+        ),
+        caplog.at_level("WARNING", logger="rigging.filesystem"),
+    ):
+        # 10 → 14, 15 → 30
+        assert marin_temp_bucket(ttl_days=10, prefix="zephyr") == "gs://marin-us-east1/tmp/ttl=14d/zephyr"
+        assert marin_temp_bucket(ttl_days=15) == "gs://marin-us-east1/tmp/ttl=30d"
+    assert any("rounding up to 14" in rec.message for rec in caplog.records)
+    assert any("rounding up to 30" in rec.message for rec in caplog.records)
+
+
+def test_marin_temp_bucket_clamps_above_max_ttl(caplog):
+    """ttl_days above the configured maximum clamp to the max with a warning."""
+    with (
+        patch(
+            "rigging.filesystem.urllib.request.urlopen",
+            return_value=_mock_urlopen(b"projects/12345/zones/us-east1-c"),
+        ),
+        caplog.at_level("WARNING", logger="rigging.filesystem"),
+    ):
+        assert marin_temp_bucket(ttl_days=100) == "gs://marin-us-east1/tmp/ttl=30d"
+    assert any("clamping to 30" in rec.message for rec in caplog.records)
+
+
+def test_marin_temp_bucket_rejects_non_positive_ttl():
+    with pytest.raises(ValueError, match="must be positive"):
+        marin_temp_bucket(ttl_days=0)
 
 
 def test_check_gcs_paths_same_region_accepts_matching_region():
