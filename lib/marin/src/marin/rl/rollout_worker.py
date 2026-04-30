@@ -27,6 +27,7 @@ import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
+import wandb
 from jax.experimental import multihost_utils
 from levanter.inference.openai import InferenceServer
 from levanter.models.lm_model import LmConfig
@@ -52,8 +53,6 @@ from marin.rl.metrics import pass_at_k_estimator
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.run_state import RolloutTransferCounters
 from marin.rl.runtime import RLRuntimeHandles
-
-import wandb
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .types import (

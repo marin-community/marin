@@ -19,6 +19,7 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 import wandb
+
 from marin.profiling.schema import (
     BreakdownPart,
     CommunicationOp,

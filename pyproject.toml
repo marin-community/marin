@@ -92,6 +92,10 @@ ignore = ["F722", "B008", "UP015", "A005", "E741"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["experiments"]
+known-third-party = ["wandb"]
+
 
 [tool.mypy]
 python_version = "3.10"

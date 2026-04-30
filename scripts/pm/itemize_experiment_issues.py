@@ -17,9 +17,8 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
-from github import Github
-
 import wandb
+from github import Github
 
 
 def clean_title(title):

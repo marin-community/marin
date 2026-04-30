@@ -21,6 +21,7 @@ import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
+import wandb
 from levanter import callbacks
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook
 from levanter.checkpoint import (
@@ -38,8 +39,6 @@ from marin.rl.curriculum import CurriculumConfig
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.weight_transfer import WeightTransferConfig
-
-import wandb
 
 from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, RolloutWithCount
 from .rl_losses import RLLossModule

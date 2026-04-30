@@ -6,7 +6,6 @@ from datetime import datetime
 
 import pandas as pd
 import pytz
-
 import wandb
 
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "stanford-mercury")
