@@ -20,9 +20,9 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 from urllib.parse import urljoin
 
+from pydantic import BaseModel, ConfigDict
 import requests
 from requests.adapters import HTTPAdapter
 from rigging.filesystem import open_url
@@ -127,6 +127,20 @@ class _WarcRecord:
             if key.casefold() == folded:
                 return value
         return None
+
+
+class CommonCrawlSampleArtifact(BaseModel):
+    """Materialized output pointer for one Common Crawl WARC/WAT slice."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    output_file: str
+    metadata_file: str
+    selected_paths: tuple[str, ...]
+    bytes_written: int
+    record_count: int
+    counters: dict[str, int]
+    record_type_counts: dict[str, int]
 
 
 def _common_crawl_policy() -> IngestionPolicy:
@@ -396,7 +410,7 @@ def download_common_crawl_sample(
     output_path: str = THIS_OUTPUT_PATH,
     output_filename: str = COMMON_CRAWL_OUTPUT_FILENAME,
     http_timeout: int = COMMON_CRAWL_HTTP_TIMEOUT,
-) -> dict[str, Any]:
+) -> CommonCrawlSampleArtifact:
     """Download a tiny deterministic Common Crawl WARC/WAT sample."""
 
     source.validate()
@@ -462,15 +476,15 @@ def download_common_crawl_sample(
                                             "record_type_counts": record_types,
                                         },
                                     )
-                                    return {
-                                        "output_file": output_file,
-                                        "metadata_file": metadata_path,
-                                        "selected_paths": selected_paths,
-                                        "bytes_written": bytes_written,
-                                        "record_count": counters["records_kept"],
-                                        "counters": counters,
-                                        "record_type_counts": record_types,
-                                    }
+                                    return CommonCrawlSampleArtifact(
+                                        output_file=output_file,
+                                        metadata_file=metadata_path,
+                                        selected_paths=tuple(selected_paths),
+                                        bytes_written=bytes_written,
+                                        record_count=counters["records_kept"],
+                                        counters=dict(counters),
+                                        record_type_counts=dict(record_types),
+                                    )
 
                                 writer.write(serialized)
                                 writer.write("\n")
@@ -497,15 +511,15 @@ def download_common_crawl_sample(
             "record_type_counts": record_types,
         },
     )
-    return {
-        "output_file": output_file,
-        "metadata_file": metadata_path,
-        "selected_paths": selected_paths,
-        "bytes_written": bytes_written,
-        "record_count": counters["records_kept"],
-        "counters": counters,
-        "record_type_counts": record_types,
-    }
+    return CommonCrawlSampleArtifact(
+        output_file=output_file,
+        metadata_file=metadata_path,
+        selected_paths=tuple(selected_paths),
+        bytes_written=bytes_written,
+        record_count=counters["records_kept"],
+        counters=dict(counters),
+        record_type_counts=dict(record_types),
+    )
 
 
 def common_crawl_sample_step(

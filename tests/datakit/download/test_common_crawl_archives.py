@@ -128,7 +128,7 @@ def test_download_common_crawl_warc_streams_selected_segments_and_skips_binary(
     assert "WARC-Target-URI: https://example.com/" in records[0]["text"]
     assert "<html><body>Hello Common Crawl</body></html>" in records[0]["text"]
     assert "GET /robots.txt HTTP/1.1" in records[1]["text"]
-    assert result["selected_paths"] == [warc_paths[0], warc_paths[2]]
+    assert result.selected_paths == (warc_paths[0], warc_paths[2])
     assert metadata["materialized_output"]["record_count"] == 2
     assert metadata["materialized_output"]["metadata"]["counters"]["records_skipped_nontxt"] == 1
 
@@ -189,6 +189,6 @@ def test_download_common_crawl_wat_preserves_json_and_honors_output_cap(
     assert all(record["warc_type"] == "metadata" for record in records)
     assert '"Extracted-Text"' in records[0]["text"]
     assert '"Title":"Example"' in records[0]["text"]
-    assert result["bytes_written"] <= 1_500
+    assert result.bytes_written <= 1_500
     assert metadata["materialized_output"]["metadata"]["archive_kind"] == CommonCrawlArchiveKind.WAT.value
     assert metadata["materialized_output"]["record_count"] == len(records)
