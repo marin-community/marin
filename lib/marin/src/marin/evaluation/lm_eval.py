@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from marin.inference.served_model import RunningModel
+from marin.inference.types import RunningModel
 
 LmEvalModelArgValue = str | int | float | bool
 
@@ -44,6 +44,7 @@ def run_lm_eval(model: RunningModel, run: LmEvalRun) -> None:
     if not run.tasks:
         raise ValueError("LmEvalRun.tasks must contain at least one task.")
 
+    # lm_eval is only installed with Marin's eval extra.
     from lm_eval.evaluator import simple_evaluate
     from lm_eval.loggers import EvaluationTracker
 
