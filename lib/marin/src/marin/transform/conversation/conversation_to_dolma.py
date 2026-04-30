@@ -9,9 +9,8 @@ Transform conversation format to Dolma format.
 import dataclasses
 
 import draccus
-from zephyr import Dataset, ZephyrContext, load_jsonl
-
 from marin.execution.executor import THIS_OUTPUT_PATH
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
 
 @dataclasses.dataclass

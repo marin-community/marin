@@ -1,20 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for ``experiments.defaults.train`` and the helpers it delegates to.
-
-Coverage areas
---------------
-- ``prepare_lm_train``: output path is concrete (no OutputName placeholders),
-  checkpointer paths are baked from it, tokenizer comes from the upstream
-  tokenize step, and no Iris job is submitted.
-- ``train``: submits exactly one job via ``_submit_train_job`` with the expected
-  job name, config, resources, env_vars, and worker_fn.
-- ``_submit_train_job`` integration: exercises the fray-client path via a
-  recording stub.
-- ``materialize`` boundary: explicit ``output_path=`` kwarg resolves
-  ``OutputName`` placeholders correctly.
-"""
+"""Tests for ``experiments.defaults.train`` and ``_submit_train_job``."""
 from __future__ import annotations
 
 import os
@@ -25,6 +12,7 @@ import pytest
 from fray import client as fray_client_module
 from fray.types import ResourceConfig
 
+import levanter.main.train_lm as levanter_train_lm
 import experiments.defaults as defaults_module
 from experiments.defaults import (
     prepare_lm_train,
@@ -184,8 +172,6 @@ def test_train_calls_submit_train_job_once(tmp_path, small_train_config, fake_to
     assert "submit-once" in call["train_config"].trainer.checkpointer.base_path
     assert "OutputName" not in call["train_config"].trainer.checkpointer.base_path
     # worker_fn must be the levanter entry point
-    import levanter.main.train_lm as levanter_train_lm
-
     assert call["worker_fn"] is levanter_train_lm.main
 
 
@@ -291,11 +277,10 @@ def test_submit_train_job_extras_match_resource_class(
 
 def test_submit_train_job_worker_entrypoint_calls_materialize_then_worker_fn(monkeypatch, tmp_path, recording_client):
     """The worker's captured callable runs `materialize` followed by
-    `worker_fn(materialised_config)`, reading output_path from the config."""
+    `worker_fn(materialised_config)`. Entrypoint args are [worker_fn, train_config] (no env)."""
     received: list = []
 
     def fake_materialize(config, *, output_path=None, prefix=None):
-        # output_path kwarg is no longer passed — materialize reads config.output_path
         return ("materialized", config)
 
     def worker_fn(config):
@@ -317,6 +302,8 @@ def test_submit_train_job_worker_entrypoint_calls_materialize_then_worker_fn(mon
     request = recording_client.requests[0]
     callable_ep = request.entrypoint.callable_entrypoint
     assert callable_ep is not None
+    # Entrypoint args must be exactly [worker_fn, train_config] — no env dict.
+    assert callable_ep.args == [worker_fn, train_config]
     callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
 
     assert len(received) == 1

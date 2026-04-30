@@ -5,12 +5,12 @@
 
 from fray import ResourceConfig
 
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.datakit.download.common_corpus import (
     download_common_corpus_raw_step,
     filter_common_corpus_step,
     normalize_common_corpus_step,
 )
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 

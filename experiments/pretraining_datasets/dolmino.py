@@ -5,8 +5,8 @@
 
 import os.path
 
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.datakit.download.dolmino import DOLMINO_DATASETS, download_dolmino_step
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 

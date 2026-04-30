@@ -2,30 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tutorial: hyper-parameter sweep over a tiny model on TinyStories using TPU hardware.
+Tutorial: LR/WD hyper-parameter sweep over a tiny model on TPU using TinyStories.
 
-Plans are pre-baked at submission time; coordinators only race on ``step_lock``
-and submit child jobs — no per-target config building inside the worker.
-
-The script defines a 9-element learning-rate by weight-decay grid. Each grid
-point is fully resolved into a ``SweepTrial`` (output path baked, run id
-stamped) before any Iris job is submitted.  ``claim_and_run`` races worker
-tasks across processes / machines for unclaimed targets via the executor's
-distributed ``step_lock``.
-
-Submission model: a single ``iris job run`` invocation submits ONE Iris job
-whose ``ResourceConfig`` requests ``NUM_WORKERS`` CPU-only replicas (tasks).
-Each replica runs the same entrypoint, calls ``claim_and_run``, and loops over
-the target list — competing with its peers for the next unclaimed target via
-``step_lock``. Whichever worker wins a target calls ``_run_one`` directly,
-which submits a child Iris training job (TPU) and blocks on it; when that
-returns, the worker moves on to the next target.
-
-The number of workers is independent of the sweep size: workers run in a loop
-until the target list is exhausted. ``NUM_WORKERS = 3`` against 9 grid points
-gives roughly three trials per worker; bump it for more parallelism, lower it
-to be polite to the TPU pool. ``SWEEP_NAME`` is the stable lock-path key —
-bump it to start a fresh sweep over the same grid.
+A single Iris job submits ``NUM_WORKERS`` CPU-only coordinator replicas; each
+races on ``step_lock`` to claim grid targets and dispatch child TPU training
+jobs. ``SWEEP_NAME`` is the stable lock-path key — bump it to start a fresh
+sweep over the same grid.
 """
 import dataclasses
 import os
@@ -54,11 +36,7 @@ EVALS = CORE_TASKS
 # `iris job run` invocations converge on the same target set. Bump for a fresh sweep.
 SWEEP_NAME = "train-tiny-sweep"
 
-# Number of CPU-only sweep coordinator tasks to run in parallel. Each worker
-# loops over targets and submits a child TPU training job per claim. The grid
-# below has 9 points; 3 workers gives ~3 trials per worker. Independent of the
-# sweep size — workers exit when no unclaimed targets remain.
-NUM_WORKERS = 3
+NUM_WORKERS = 3  # CPU coordinator replicas; workers exit when all targets are claimed.
 
 small_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.

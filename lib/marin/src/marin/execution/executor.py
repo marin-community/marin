@@ -93,7 +93,6 @@ from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
-from urllib.parse import urlparse
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
@@ -109,7 +108,7 @@ from rigging.filesystem import (
 )
 from rigging.log_setup import configure_logging
 
-from marin.execution.step_spec import StepSpec
+from marin.execution.step_spec import StepSpec, _is_relative_path
 from marin.execution.step_runner import StepRunner, worker_id
 from marin.execution.remote import RemoteCallable
 from marin.execution.executor_step_status import (
@@ -541,20 +540,13 @@ def upstream_steps(obj: Any) -> list[ExecutorStep]:
 ############################################################
 
 
-def _is_relative_path(url_or_path: str) -> bool:
-    parsed_url = urlparse(url_or_path)
-    if parsed_url.scheme:
-        return False
-    return not url_or_path.startswith("/")
-
-
 def _make_prefix_absolute_path(prefix: str, override_path: str) -> str:
     if _is_relative_path(override_path):
         override_path = os.path.join(prefix, override_path)
     return override_path
 
 
-def instantiate_config(config: Any, output_path: str, output_paths: dict[ExecutorStep, str], prefix: str) -> Any:
+def instantiate_config(config: Any, output_path: str | None, output_paths: dict[ExecutorStep, str], prefix: str) -> Any:
     """
     Return a "real" config where all the special values (e.g., `InputName`,
     `OutputName`, and `VersionedValue`) have been replaced with
@@ -586,6 +578,12 @@ def instantiate_config(config: Any, output_path: str, output_paths: dict[Executo
             else:
                 return join_path(output_paths[obj.step], obj.name)
         elif isinstance(obj, OutputName):
+            if output_path is None:
+                raise ValueError(
+                    f"materialize: cannot resolve OutputName({obj.name!r}) — config has no "
+                    "output_path attribute and no explicit output_path was passed. "
+                    "Resolve OutputName placeholders in the submitter before calling materialize."
+                )
             return join_path(output_path, obj.name)
         elif isinstance(obj, VersionedValue):
             return obj.value
@@ -1926,7 +1924,7 @@ def materialize(
         output_paths = {}
 
     if output_path is None:
-        current_output_path = config.output_path  # type: ignore[attr-defined]
+        current_output_path = getattr(config, "output_path", None)
     else:
         current_output_path = output_path
 

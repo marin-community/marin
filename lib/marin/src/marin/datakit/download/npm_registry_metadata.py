@@ -31,7 +31,6 @@ from rigging.filesystem import open_url, url_to_fs
 from urllib3.util import Retry
 from zephyr.writers import atomic_rename
 
-from marin.execution.executor import ExecutorStep, THIS_OUTPUT_PATH, VersionedValue, versioned
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
@@ -43,6 +42,7 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
     write_ingestion_metadata_json,
 )
+from marin.execution.executor import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, versioned
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)

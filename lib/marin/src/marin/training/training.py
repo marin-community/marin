@@ -381,6 +381,8 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
 def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
     """Run the Levanter DPO training main function in the current process."""
+    # Run upstream ExecutorStep deps in the worker's region and substitute placeholders.
+    config = materialize(config)
     config, train_config, env = _prepare_training_run(config)
     _apply_env_to_process(env)
     importlib.import_module("levanter.main.train_dpo").main(train_config)
