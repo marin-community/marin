@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from experiments.evals.raw_capability_eval_sets import (
+from experiments.evals.raw_capability_ppl import (
     CapabilityEvalDatasetConfig,
     CapabilityEvalRenderer,
     _project_chat_row_to_raw_text,

@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Curated capability eval datasets for chat, agent traces, and reasoning QA.
-
-Each source is normalized to an OpenAI-chat JSONL artifact first. The current
-pairwise perplexity-gap runner still consumes raw text, so the same step also
-writes a derived ``raw_text`` projection using Marin's chat-token surface.
-"""
+"""Curated raw capability PPL slices for chat, agent traces, and reasoning QA."""
 
 from __future__ import annotations
 
@@ -15,13 +10,11 @@ import json
 import os
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from enum import StrEnum
 from functools import lru_cache
 from typing import Any
 
-from experiments.marin_models import MARIN_CHAT_TEMPLATE
-from levanter.data.text import ChatLmDatasetFormat, DatasetComponent, UrlDatasetSourceConfig
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
@@ -34,13 +27,14 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.evaluation.perplexity_gap import raw_text_dataset
-from marin.execution.executor import ExecutorStep, InputName, this_output_path
+from marin.execution.executor import ExecutorStep, this_output_path
 from marin.utils import fsspec_mkdirs, fsspec_size, load_dataset_with_backoff
 from rigging.filesystem import open_url
 
 RENDERING_VERSION = "v3"
 LONG_TAIL_PPL_EPIC_ISSUE = 5005
 RAW_CAPABILITY_ISSUE = 4963
+DEFAULT_OUTPUT_FILENAME = "data-00000-of-00001.jsonl.gz"
 
 MARIN_BOS_TOKEN = "<|begin_of_text|>"
 MARIN_START_HEADER_TOKEN = "<|start_header_id|>"
@@ -54,18 +48,12 @@ WILDCHAT_REVISION = "f66566ceaaeb619dd98ffb0f3bf3ce1f86775ac4"
 OPENHANDS_REVISION = "35455389ab51bf5e2306bfd436ef72d0f98bf882"
 GSM8K_REVISION = "740312add88f781978c0658806c59bc2815b9866"
 GLOBAL_MGSM_REVISION = "29087245a1a9788d4e0413f4927e994d49633bbb"
-LIMA_REVISION = "68958e98267f5fb4a52a03ebcdae4ae59213fa7c"
-LMSYS_CHAT_REVISION = "200748d9d3cddcc9d782887541057aca0b18c5da"
 
 DEFAULT_CAPABILITY_TAGS = {
     "chat/wildchat": ("chat", "dialogue", "multi_turn"),
     "agent_traces/openhands_swe_rebench": ("agent_traces", "code", "tool_use"),
     "reasoning_qa/gsm8k_main": ("reasoning_qa", "math", "english"),
     "reasoning_qa/global_mgsm_en": ("reasoning_qa", "math", "multilingual"),
-}
-OPT_IN_CAPABILITY_TAGS = {
-    "chat/lima_train": ("chat", "dialogue", "alignment"),
-    "chat/lmsys_chat_1m": ("chat", "dialogue", "multi_turn"),
 }
 
 
@@ -74,8 +62,6 @@ class CapabilityEvalRenderer(StrEnum):
     OPENHANDS = "openhands"
     GSM8K = "gsm8k"
     GLOBAL_MGSM = "global_mgsm"
-    LIMA = "lima"
-    LMSYS_CHAT = "lmsys_chat"
 
 
 @dataclass(frozen=True)
@@ -92,7 +78,7 @@ class CapabilityEvalDatasetConfig:
 
 
 def render_capability_eval_dataset(config: CapabilityEvalDatasetConfig) -> None:
-    """Render a curated structured HF dataset slice into OAI-chat and raw-text rows."""
+    """Render a curated structured HF dataset slice into raw-text rows."""
     dataset = load_dataset_with_backoff(
         path=config.dataset_id,
         name=config.dataset_name,
@@ -102,18 +88,11 @@ def render_capability_eval_dataset(config: CapabilityEvalDatasetConfig) -> None:
         context=f"{config.dataset_id}:{config.dataset_name or 'default'}:{config.split}",
     )
 
-    oai_dir = os.path.join(config.output_path, "oai")
-    raw_text_dir = os.path.join(config.output_path, "raw_text")
-    fsspec_mkdirs(oai_dir)
-    fsspec_mkdirs(raw_text_dir)
-    oai_file = os.path.join(oai_dir, "data-00000-of-00001.jsonl.gz")
-    raw_text_file = os.path.join(raw_text_dir, "data-00000-of-00001.jsonl.gz")
+    fsspec_mkdirs(config.output_path)
+    output_file = os.path.join(config.output_path, DEFAULT_OUTPUT_FILENAME)
 
     emitted = 0
-    with (
-        open_url(oai_file, "wt", compression="gzip") as oai_out,
-        open_url(raw_text_file, "wt", compression="gzip") as raw_text_out,
-    ):
+    with open_url(output_file, "wt", compression="gzip") as raw_text_out:
         for row in dataset:
             chat_row = _render_capability_chat_row(config, row)
             if chat_row is None:
@@ -123,8 +102,7 @@ def render_capability_eval_dataset(config: CapabilityEvalDatasetConfig) -> None:
             if raw_text_row is None:
                 continue
 
-            oai_out.write(json.dumps(_json_ready(chat_row), sort_keys=True) + "\n")
-            raw_text_out.write(json.dumps(_json_ready(raw_text_row), sort_keys=True) + "\n")
+            raw_text_out.write(json.dumps(raw_text_row, sort_keys=True) + "\n")
             emitted += 1
             if config.max_rows is not None and emitted >= config.max_rows:
                 break
@@ -135,88 +113,39 @@ def render_capability_eval_dataset(config: CapabilityEvalDatasetConfig) -> None:
             materialized_output=MaterializedOutputMetadata(
                 input_path=_input_path(config),
                 output_path=config.output_path,
-                output_file=raw_text_file,
+                output_file=output_file,
                 record_count=emitted,
-                bytes_written=fsspec_size(raw_text_file),
-                metadata={
-                    "oai_file": oai_file,
-                    "raw_text_file": raw_text_file,
-                    "renderer": config.renderer.value,
-                },
+                bytes_written=fsspec_size(output_file),
+                metadata={"renderer": config.renderer.value},
             ),
         )
 
 
-def capability_oai_eval_sets() -> dict[str, InputName]:
-    """Reusable OAI-chat eval artifacts for the default capability slices."""
-    return {name: step.cd("oai/data-*.jsonl.gz") for name, step in _default_capability_eval_steps().items()}
-
-
-def opt_in_capability_oai_eval_sets() -> dict[str, InputName]:
-    """Reusable OAI-chat eval artifacts for gated or otherwise non-default slices."""
-    return {name: step.cd("oai/data-*.jsonl.gz") for name, step in _opt_in_capability_eval_steps().items()}
-
-
-def capability_chat_validation_components() -> dict[str, DatasetComponent]:
-    """Levanter chat-format components for the default capability slices."""
-    return _chat_validation_components(_default_capability_eval_steps(), DEFAULT_CAPABILITY_TAGS)
-
-
-def opt_in_capability_chat_validation_components() -> dict[str, DatasetComponent]:
-    """Levanter chat-format components for gated or otherwise non-default slices."""
-    return _chat_validation_components(_opt_in_capability_eval_steps(), OPT_IN_CAPABILITY_TAGS)
-
-
 def capability_raw_validation_sets() -> dict[str, Any]:
     """Curated default raw eval slices for missing capability families."""
-    steps = _default_capability_eval_steps()
+    steps = capability_raw_steps()
     return {
         "chat/wildchat": raw_text_dataset(
-            steps["chat/wildchat"].cd("raw_text/data-*.jsonl.gz"),
+            steps["chat/wildchat"].cd("data-*.jsonl.gz"),
             tags=DEFAULT_CAPABILITY_TAGS["chat/wildchat"],
         ),
         "agent_traces/openhands_swe_rebench": raw_text_dataset(
-            steps["agent_traces/openhands_swe_rebench"].cd("raw_text/data-*.jsonl.gz"),
+            steps["agent_traces/openhands_swe_rebench"].cd("data-*.jsonl.gz"),
             tags=DEFAULT_CAPABILITY_TAGS["agent_traces/openhands_swe_rebench"],
         ),
         "reasoning_qa/gsm8k_main": raw_text_dataset(
-            steps["reasoning_qa/gsm8k_main"].cd("raw_text/data-*.jsonl.gz"),
+            steps["reasoning_qa/gsm8k_main"].cd("data-*.jsonl.gz"),
             tags=DEFAULT_CAPABILITY_TAGS["reasoning_qa/gsm8k_main"],
         ),
         "reasoning_qa/global_mgsm_en": raw_text_dataset(
-            steps["reasoning_qa/global_mgsm_en"].cd("raw_text/data-*.jsonl.gz"),
+            steps["reasoning_qa/global_mgsm_en"].cd("data-*.jsonl.gz"),
             tags=DEFAULT_CAPABILITY_TAGS["reasoning_qa/global_mgsm_en"],
         ),
     }
 
 
-def opt_in_capability_raw_validation_sets() -> dict[str, Any]:
-    """Additional raw eval slices that are gated or otherwise non-default."""
-    steps = _opt_in_capability_eval_steps()
-    return {
-        "chat/lima_train": raw_text_dataset(
-            steps["chat/lima_train"].cd("raw_text/data-*.jsonl.gz"),
-            tags=OPT_IN_CAPABILITY_TAGS["chat/lima_train"],
-        ),
-        "chat/lmsys_chat_1m": raw_text_dataset(
-            steps["chat/lmsys_chat_1m"].cd("raw_text/data-*.jsonl.gz"),
-            tags=OPT_IN_CAPABILITY_TAGS["chat/lmsys_chat_1m"],
-        ),
-    }
-
-
-def capability_source_inventory() -> tuple[IngestionSourceManifest, ...]:
-    """Return the immutable source inventory for the default capability slices."""
-    return tuple(CAPABILITY_SOURCE_MANIFESTS[name] for name in _default_capability_eval_steps())
-
-
-def opt_in_capability_source_inventory() -> tuple[IngestionSourceManifest, ...]:
-    """Return the immutable source inventory for the opt-in capability slices."""
-    return tuple(CAPABILITY_SOURCE_MANIFESTS[name] for name in _opt_in_capability_eval_steps())
-
-
 @lru_cache
-def _default_capability_eval_steps() -> dict[str, ExecutorStep]:
+def capability_raw_steps() -> dict[str, ExecutorStep]:
     return {
         "chat/wildchat": _rendered_dataset_step(
             "chat/wildchat",
@@ -257,29 +186,6 @@ def _default_capability_eval_steps() -> dict[str, ExecutorStep]:
     }
 
 
-@lru_cache
-def _opt_in_capability_eval_steps() -> dict[str, ExecutorStep]:
-    return {
-        "chat/lima_train": _rendered_dataset_step(
-            "chat/lima_train",
-            dataset_id="GAIR/lima",
-            revision=LIMA_REVISION,
-            split="train",
-            renderer=CapabilityEvalRenderer.LIMA,
-            source_manifest=CAPABILITY_SOURCE_MANIFESTS["chat/lima_train"],
-        ),
-        "chat/lmsys_chat_1m": _rendered_dataset_step(
-            "chat/lmsys_chat_1m",
-            dataset_id="lmsys/lmsys-chat-1m",
-            revision=LMSYS_CHAT_REVISION,
-            split="train",
-            renderer=CapabilityEvalRenderer.LMSYS_CHAT,
-            max_rows=WILDCHAT_MAX_ROWS,
-            source_manifest=CAPABILITY_SOURCE_MANIFESTS["chat/lmsys_chat_1m"],
-        ),
-    }
-
-
 def _eval_only_policy(provenance_notes: str) -> IngestionPolicy:
     return IngestionPolicy(
         usage_policy=UsagePolicy.EVAL_ONLY,
@@ -307,7 +213,7 @@ CAPABILITY_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
             serializer_name=CapabilityEvalRenderer.WILDCHAT.value,
             split="train",
             metadata={
-                "output_filename": "raw_text/data-00000-of-00001.jsonl.gz",
+                "output_filename": DEFAULT_OUTPUT_FILENAME,
                 "provenance_fields": ["id", "source"],
             },
         ),
@@ -330,7 +236,7 @@ CAPABILITY_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
             serializer_name=CapabilityEvalRenderer.OPENHANDS.value,
             split="train",
             metadata={
-                "output_filename": "raw_text/data-00000-of-00001.jsonl.gz",
+                "output_filename": DEFAULT_OUTPUT_FILENAME,
                 "provenance_fields": ["id", "source"],
             },
         ),
@@ -354,7 +260,7 @@ CAPABILITY_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
             split="train",
             subset="main",
             metadata={
-                "output_filename": "raw_text/data-00000-of-00001.jsonl.gz",
+                "output_filename": DEFAULT_OUTPUT_FILENAME,
                 "provenance_fields": ["id", "source"],
             },
         ),
@@ -377,7 +283,7 @@ CAPABILITY_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
             split="test",
             subset="en",
             metadata={
-                "output_filename": "raw_text/data-00000-of-00001.jsonl.gz",
+                "output_filename": DEFAULT_OUTPUT_FILENAME,
                 "provenance_fields": ["id", "source"],
             },
         ),
@@ -385,75 +291,7 @@ CAPABILITY_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
         issue_numbers=(RAW_CAPABILITY_ISSUE,),
         source_metadata={"hf_revision": GLOBAL_MGSM_REVISION},
     ),
-    "chat/lima_train": IngestionSourceManifest(
-        dataset_key="GAIR/lima",
-        slice_key="capability/chat/lima/train",
-        source_label="lima:train",
-        source_urls=("https://huggingface.co/datasets/GAIR/lima",),
-        source_license="CC BY-NC-SA or stricter upstream source license",
-        source_format="huggingface_parquet_chat_turns",
-        surface_form="curated_multi_turn_chat",
-        policy=_eval_only_policy("Pinned Hugging Face revision for held-out alignment-style chat PPL evaluation."),
-        staging=StagingMetadata(
-            transform_name="render_capability_eval_dataset",
-            serializer_name=CapabilityEvalRenderer.LIMA.value,
-            split="train",
-            metadata={
-                "output_filename": "raw_text/data-00000-of-00001.jsonl.gz",
-                "provenance_fields": ["id", "source"],
-            },
-        ),
-        epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
-        issue_numbers=(RAW_CAPABILITY_ISSUE,),
-        source_metadata={"hf_revision": LIMA_REVISION},
-    ),
-    "chat/lmsys_chat_1m": IngestionSourceManifest(
-        dataset_key="lmsys/lmsys-chat-1m",
-        slice_key="capability/chat/lmsys_chat_1m/train",
-        source_label="lmsys_chat_1m:train",
-        source_urls=("https://huggingface.co/datasets/lmsys/lmsys-chat-1m",),
-        source_license="Custom gated LMSYS-Chat-1M dataset license agreement",
-        source_format="huggingface_parquet_chat_transcripts",
-        surface_form="real_world_multi_turn_chat",
-        policy=_eval_only_policy("Pinned gated Hugging Face revision for held-out chat PPL evaluation."),
-        staging=StagingMetadata(
-            transform_name="render_capability_eval_dataset",
-            serializer_name=CapabilityEvalRenderer.LMSYS_CHAT.value,
-            split="train",
-            metadata={
-                "output_filename": "raw_text/data-00000-of-00001.jsonl.gz",
-                "provenance_fields": ["id", "source"],
-            },
-        ),
-        epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
-        issue_numbers=(RAW_CAPABILITY_ISSUE,),
-        sample_caps=SampleCapConfig(max_examples=WILDCHAT_MAX_ROWS),
-        source_metadata={"hf_revision": LMSYS_CHAT_REVISION},
-    ),
 }
-
-
-def _chat_validation_components(
-    steps: Mapping[str, ExecutorStep],
-    tags_by_name: Mapping[str, tuple[str, ...]],
-) -> dict[str, DatasetComponent]:
-    return {name: _chat_validation_component(step, tags=tags_by_name[name]) for name, step in steps.items()}
-
-
-def _chat_validation_component(step: ExecutorStep, *, tags: tuple[str, ...]) -> DatasetComponent:
-    dataset_format = ChatLmDatasetFormat(
-        messages_field="messages",
-        chat_template=MARIN_CHAT_TEMPLATE,
-        mask_user_turns=True,
-    )
-    return DatasetComponent(
-        source=UrlDatasetSourceConfig(
-            train_urls=[],
-            validation_urls=[step.cd("oai/data-*.jsonl.gz")],  # type: ignore[list-item]
-        ),
-        format=dataset_format,
-        tags=list(tags),
-    )
 
 
 def _rendered_dataset_step(
@@ -479,10 +317,10 @@ def _rendered_dataset_step(
     slug = _directory_safe_name(name)
     suffix = _config_suffix(config)
     return ExecutorStep(
-        name=f"documents/capability_eval/{name}",
+        name=f"raw/capability_ppl/{name}",
         fn=render_capability_eval_dataset,
         config=config,
-        override_output_path=f"documents/capability_eval/{slug}-{suffix}",
+        override_output_path=f"raw/capability_ppl/{slug}-{suffix}",
     )
 
 
@@ -496,27 +334,6 @@ def _render_capability_chat_row(config: CapabilityEvalDatasetConfig, row: Mappin
             record_id=_require_string(row, "conversation_id"),
             messages=row["conversation"],
             metadata_fields=("language", "model", "redacted", "timestamp", "toxic", "turn"),
-        )
-    if config.renderer == CapabilityEvalRenderer.LMSYS_CHAT:
-        return _chat_like_row(
-            row,
-            source=source_name,
-            record_id=_require_string(row, "conversation_id"),
-            messages=row["conversation"],
-            metadata_fields=("language", "model", "redacted", "timestamp", "turn"),
-        )
-    if config.renderer == CapabilityEvalRenderer.LIMA:
-        conversations = row["conversations"]
-        messages = [
-            {"role": "user" if index % 2 == 0 else "assistant", "content": utterance}
-            for index, utterance in enumerate(conversations)
-        ]
-        return _chat_like_row(
-            row,
-            source=source_name,
-            record_id=_stable_hash(*conversations),
-            messages=messages,
-            metadata_fields=("source",),
         )
     if config.renderer == CapabilityEvalRenderer.GSM8K:
         question = _require_string(row, "question")
@@ -829,18 +646,6 @@ def _normalize_json_like(value: Any) -> Any:
         except json.JSONDecodeError:
             return _normalize_text(value)
         return _normalize_json_like(parsed)
-    return value
-
-
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {key: _json_ready(val) for key, val in value.items()}
-    if isinstance(value, list):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, tuple):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, datetime | date):
-        return value.isoformat()
     return value
 
 
