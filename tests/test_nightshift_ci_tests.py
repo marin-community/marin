@@ -32,6 +32,16 @@ def test_parse_failure_line_reads_pytest_failure():
     assert nightshift_ci_tests.parse_failure_line(line) == "lib/iris/tests/test_service.py::test_retries"
 
 
+def test_parse_parametrized_test_ids_with_spaces():
+    duration_line = "12.34s call     tests/example_test.py::test_case[hello world]"
+    failure_line = "FAILED tests/example_test.py::test_case[hello world] - AssertionError: boom"
+    assert nightshift_ci_tests.parse_duration_line(duration_line) == (
+        "tests/example_test.py::test_case[hello world]",
+        12.34,
+    )
+    assert nightshift_ci_tests.parse_failure_line(failure_line) == "tests/example_test.py::test_case[hello world]"
+
+
 def test_collect_cooldowns_uses_open_issue_and_closed_cooldown():
     items = [
         {
@@ -77,10 +87,17 @@ def test_filter_recent_candidates_skips_cooldown():
     ]
 
 
-def test_canonicalize_test_name_normalizes_workspace_prefix():
+def test_canonicalize_test_name_qualifies_subproject_relative_tests():
     assert (
-        nightshift_ci_tests.canonicalize_test_name("lib/zephyr/tests/test_dataset.py::test_reduce_sum")
-        == "tests/test_dataset.py::test_reduce_sum"
+        nightshift_ci_tests.canonicalize_test_name("tests/test_dataset.py::test_reduce_sum", "Zephyr - Tests")
+        == "lib/zephyr/tests/test_dataset.py::test_reduce_sum"
+    )
+    assert (
+        nightshift_ci_tests.canonicalize_test_name(
+            "lib/zephyr/tests/test_dataset.py::test_reduce_sum",
+            "Zephyr - Tests",
+        )
+        == "lib/zephyr/tests/test_dataset.py::test_reduce_sum"
     )
 
 
@@ -128,7 +145,7 @@ def test_collect_evidence_dedupes_same_test_within_one_run():
             run={"id": 123, "html_url": "https://example.com/run/123"},
         )
 
-    record = evidence["tests/test_dataset.py::test_reduce_sum"]
+    record = evidence["lib/zephyr/tests/test_dataset.py::test_reduce_sum"]
     assert record["slow_hits"] == 1
     assert record["failure_runs"] == {123}
     assert len(record["slow_examples"]) == 1

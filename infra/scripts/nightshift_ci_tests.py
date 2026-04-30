@@ -16,8 +16,8 @@ import subprocess
 import tempfile
 from typing import Any
 from urllib import error, parse, request
-import zipfile
 import hashlib
+import zipfile
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +36,18 @@ MIN_FAILURE_RUNS = 2
 MIN_SLOW_SECONDS = 8.0
 COOLDOWN_DAYS = 30
 
-DURATION_RE = re.compile(r"(?P<seconds>\d+(?:\.\d+)?)s\s+(?:setup|call|teardown)\s+(?P<test>[^\s].+::[^\s]+)")
-FAILURE_RE = re.compile(r"(?:FAILED|ERROR)\s+(?P<test>[\w./-]+::[^\s\[]+)")
+DURATION_RE = re.compile(r"(?P<seconds>\d+(?:\.\d+)?)s\s+(?:setup|call|teardown)\s+(?P<test>\S+::.+)$")
+FAILURE_RE = re.compile(r"(?:FAILED|ERROR)\s+(?P<test>\S+::.+?)(?:\s+-\s|$)")
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 TEST_MARKER_RE = re.compile(r"<!--\s*nightshift-ci-test:\s*(?P<key>.+?)\s*-->")
 COOLDOWN_MARKER_RE = re.compile(r"<!--\s*nightshift-ci-cooldown-until:\s*(?P<date>\d{4}-\d{2}-\d{2})\s*-->")
-TEST_PATH_PREFIX_RE = re.compile(r"^(?:lib/[^/]+/)?tests/")
+WORKFLOW_TEST_PREFIXES = (
+    ("Iris -", "lib/iris/"),
+    ("Levanter -", "lib/levanter/"),
+    ("Fray -", "lib/fray/"),
+    ("Zephyr -", "lib/zephyr/"),
+    ("Haliax -", "lib/haliax/"),
+)
 
 
 class GitHubApiError(RuntimeError):
@@ -69,13 +75,18 @@ def parse_failure_line(line: str) -> str | None:
     return match.group("test")
 
 
-def canonicalize_test_name(test_name: str) -> str:
+def canonicalize_test_name(test_name: str, workflow_name: str = "") -> str:
     """Normalize test ids across workflows so dedupe and aggregation are stable."""
     test_name = test_name.strip()
     if "::" not in test_name:
         return test_name
     file_path, sep, remainder = test_name.partition("::")
-    normalized_path = TEST_PATH_PREFIX_RE.sub("tests/", file_path)
+    normalized_path = file_path
+    if file_path.startswith("tests/"):
+        for workflow_prefix, subproject_prefix in WORKFLOW_TEST_PREFIXES:
+            if workflow_name.startswith(workflow_prefix):
+                normalized_path = f"{subproject_prefix}{file_path}"
+                break
     return f"{normalized_path}{sep}{remainder}"
 
 
@@ -200,9 +211,9 @@ def download_logs(repo: str, token: str, run_id: int, destination: Path) -> Path
     return extract_dir
 
 
-def test_key(test_name: str) -> str:
+def test_key(test_name: str, workflow_name: str = "") -> str:
     """Normalize test ids used for cooldown markers and aggregation."""
-    return canonicalize_test_name(test_name)
+    return canonicalize_test_name(test_name, workflow_name)
 
 
 def test_file_key(test_name: str) -> str:
@@ -228,7 +239,7 @@ def collect_evidence(log_dir: Path, workflow_name: str, run: dict[str, Any]) -> 
             duration = parse_duration_line(raw_line)
             if duration is not None:
                 name, seconds = duration
-                key = test_key(name)
+                key = test_key(name, workflow_name)
                 slow_observation_key = f"{run_id}:{key}"
                 record = evidence.setdefault(
                     key,
@@ -261,7 +272,7 @@ def collect_evidence(log_dir: Path, workflow_name: str, run: dict[str, Any]) -> 
             failure = parse_failure_line(raw_line)
             if failure is None:
                 continue
-            key = test_key(failure)
+            key = test_key(failure, workflow_name)
             failure_observation_key = f"{run_id}:{key}"
             record = evidence.setdefault(
                 key,
