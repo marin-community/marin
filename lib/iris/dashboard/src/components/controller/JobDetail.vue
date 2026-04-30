@@ -29,6 +29,7 @@ const props = defineProps<{
 }>()
 
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'preempted', 'unschedulable'])
+const FAILED_TERMINAL_STATES = new Set(['failed', 'worker_failed', 'preempted', 'unschedulable'])
 
 // -- State --
 
@@ -1033,11 +1034,9 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               · exit {{ task.exitCode }}
             </span>
           </div>
-          <div v-if="task.error" class="mt-1 text-xs text-text-muted break-anywhere" :title="task.error">
-            {{ task.error }}
-          </div>
-          <div v-if="task.statusTextSummaryMd" class="mt-1 text-xs text-text-secondary break-anywhere">
-            <MarkdownRenderer :content="task.statusTextSummaryMd" />
+          <div class="mt-1 text-xs break-anywhere">
+            <MarkdownRenderer v-if="task.statusTextSummaryMd && !TERMINAL_STATES.has(stateToName(task.state))" :content="task.statusTextSummaryMd" class="text-text-secondary" />
+            <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
           </div>
           <div v-if="stateToName(task.state) === 'running'" class="mt-2 flex gap-1">
             <button
@@ -1077,8 +1076,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             <col class="w-[11%]" />  <!-- Started -->
             <col class="w-[7%]" />   <!-- Duration -->
             <col class="w-[4%]" />   <!-- Exit -->
-            <col class="w-[9%]" />   <!-- Error -->
-            <col class="w-[12%]" />  <!-- Status -->
+            <col class="w-[15%]" />  <!-- Status / Error -->
             <col class="w-[9%]" />   <!-- Profiling -->
           </colgroup>
           <thead>
@@ -1104,8 +1102,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                 Duration <span v-if="sortColumn === 'duration'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
               <th class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Exit</th>
-              <th class="hidden lg:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Error</th>
-              <th class="hidden xl:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Status</th>
+              <th class="hidden lg:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Status</th>
               <th class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Profiling</th>
             </tr>
           </thead>
@@ -1157,11 +1154,9 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono">
                 {{ TERMINAL_STATES.has(stateToName(task.state)) && task.exitCode !== undefined ? task.exitCode : '-' }}
               </td>
-              <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-xs text-text-muted max-w-xs truncate" :title="task.error ?? ''">
-                {{ task.error || '-' }}
-              </td>
-              <td class="hidden xl:table-cell px-2 sm:px-3 py-2 text-xs text-text-secondary max-w-xs">
-                <MarkdownRenderer v-if="task.statusTextSummaryMd" :content="task.statusTextSummaryMd" />
+              <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-xs max-w-xs">
+                <MarkdownRenderer v-if="task.statusTextSummaryMd && !TERMINAL_STATES.has(stateToName(task.state))" :content="task.statusTextSummaryMd" />
+                <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger break-anywhere" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
                 <span v-else class="text-text-muted">—</span>
               </td>
               <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px]">
