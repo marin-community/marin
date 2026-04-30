@@ -9,8 +9,8 @@ import numpy as np
 import pytest
 
 try:
-    from marin.rl.decoding import DecodingConfig
     from marin.rl import train_batch
+    from marin.rl.decoding import DecodingConfig
     from marin.rl.replay_buffer import ReplayBuffer, ReplayDataLoader
     from marin.rl.rl_losses import RLOOLoss
 except ImportError:

@@ -9,10 +9,11 @@ as well as methods for tokenization and logprob extraction from an OpenAI ChatCo
 """
 
 import asyncio
-from dataclasses import dataclass, replace
 import logging
 import threading
+from dataclasses import dataclass, replace
 from typing import Any
+
 import haliax as hax
 from jax.sharding import Mesh
 from levanter.inference.openai import InferenceServer, InferenceServerConfig

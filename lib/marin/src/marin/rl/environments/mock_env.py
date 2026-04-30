@@ -11,7 +11,6 @@ from typing import Any, ClassVar, Protocol
 import jax
 import numpy as np
 from levanter.tokenizers import MarinTokenizer
-
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup

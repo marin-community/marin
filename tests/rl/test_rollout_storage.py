@@ -9,7 +9,6 @@ import time
 import jax.numpy as jnp
 import numpy as np
 import pytest
-
 from marin.rl.decoding import DecodingConfig
 from marin.rl.rollout_storage import (
     RolloutStorageConfig,
