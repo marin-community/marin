@@ -30,6 +30,7 @@ from levanter.inference.jit_scheduler import (
 )
 from levanter.inference.page_table import PageTable
 from levanter.inference.utils import INVALID, is_valid
+from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
 from levanter.layers.sampler import Sampler
 from levanter.models.lm_model import LmHeadModel
@@ -744,6 +745,58 @@ class GenerationResult:
     total_generated: int
 
 
+FIRST_TOKEN_LOGPROB = 0.0
+
+
+@dataclass(frozen=True)
+class TokenSequenceLogprobs:
+    """Causal logprobs aligned with an input token sequence."""
+
+    token_logprobs: list[float]
+    top_token_logprobs: list[dict[int, float]]
+
+
+def score_token_sequence_logprobs(
+    model: LmHeadModel,
+    token_ids: Sequence[int],
+    top_k: int,
+) -> TokenSequenceLogprobs:
+    """Score a token sequence with a causal full forward pass."""
+    if top_k < 1:
+        raise ValueError("top_k must be at least 1")
+
+    token_id_list = [int(token_id) for token_id in token_ids]
+    if not token_id_list:
+        return TokenSequenceLogprobs(token_logprobs=[], top_token_logprobs=[])
+
+    token_logprobs = [FIRST_TOKEN_LOGPROB]
+    top_token_logprobs = [{token_id_list[0]: FIRST_TOKEN_LOGPROB}]
+    if len(token_id_list) == 1:
+        return TokenSequenceLogprobs(token_logprobs=token_logprobs, top_token_logprobs=top_token_logprobs)
+
+    Pos = hax.Axis("position", len(token_id_list))
+    input_ids = hax.named(jnp.array(token_id_list, dtype=jnp.int32), Pos)
+    pos_ids = hax.named(jnp.arange(len(token_id_list), dtype=jnp.int32), Pos)
+    logits = model(input_ids=input_ids, attn_mask=AttentionMask.causal(), pos_ids=pos_ids, key=None)
+
+    logits_array = logits.astype(jnp.float32).rearrange((Pos, model.Vocab)).array
+    next_token_logprobs = jax.nn.log_softmax(logits_array[:-1], axis=-1)
+    target_ids = jnp.array(token_id_list[1:], dtype=jnp.int32)
+    scored_logprobs = next_token_logprobs[jnp.arange(len(target_ids)), target_ids]
+    token_logprobs.extend(float(logprob) for logprob in jax.device_get(scored_logprobs))
+
+    vocab_top_k = min(top_k, next_token_logprobs.shape[-1])
+    top_values, top_indices = jax.lax.top_k(next_token_logprobs, vocab_top_k)
+    top_values = np.asarray(jax.device_get(top_values))
+    top_indices = np.asarray(jax.device_get(top_indices))
+    for values, indices in zip(top_values, top_indices, strict=True):
+        top_token_logprobs.append(
+            {int(token_id): float(logprob) for token_id, logprob in zip(indices, values, strict=True)}
+        )
+
+    return TokenSequenceLogprobs(token_logprobs=token_logprobs, top_token_logprobs=top_token_logprobs)
+
+
 class InferenceEngine:
     """Encapsulates batch inference: prefill + decode + output extraction.
 
@@ -844,6 +897,10 @@ class InferenceEngine:
         self.local_map.clear()
         self.sequences.clear()
         self.results = {}
+
+    def score_token_logprobs(self, token_ids: Sequence[int], top_k: int) -> TokenSequenceLogprobs:
+        """Score a token sequence under this engine's model."""
+        return score_token_sequence_logprobs(self.model, token_ids, top_k)
 
     def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.

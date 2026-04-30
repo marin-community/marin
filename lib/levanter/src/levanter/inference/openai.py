@@ -33,7 +33,12 @@ from openai.types.chat.chat_completion import ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
-from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
+from levanter.inference.engine import (
+    InferenceEngine,
+    InferenceEngineConfig,
+    Request,
+    TokenSequenceLogprobs,
+)
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
@@ -197,6 +202,17 @@ class InferenceContext:
                 )
                 elapsed = time.time() - start
             logger.info(f"Model reloaded in {elapsed:.2f}s")
+
+    def score_token_logprobs(self, token_ids: List[int], top_k: int) -> TokenSequenceLogprobs:
+        """Score a full token sequence under the current model."""
+        with (
+            self.model_lock,
+            hax.partitioning.set_mesh(self.config.trainer.device_mesh),
+            hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+        ):
+            if self.engine is None:
+                raise RuntimeError("Inference model is not initialized.")
+            return self.engine.score_token_logprobs(token_ids, top_k)
 
     def submit_request(
         self,
@@ -392,6 +408,55 @@ def _health_check() -> dict:
     return {"status": "healthy", "service": "levanter-inference"}
 
 
+def _decoded_token_pieces(tokenizer: MarinTokenizer, token_ids: List[int]) -> List[str]:
+    return [tokenizer.decode([token_id], skip_special_tokens=False) for token_id in token_ids]
+
+
+def _token_text_offsets(tokens: List[str]) -> List[int]:
+    offsets = []
+    offset = 0
+    for token in tokens:
+        offsets.append(offset)
+        offset += len(token)
+    return offsets
+
+
+@dataclass(frozen=True)
+class CompletionLogprobData:
+    tokens: List[str]
+    token_logprobs: List[float]
+    top_logprobs: List[dict[str, float]]
+    text_offset: List[int]
+
+
+def _completion_logprobs(
+    tokenizer: MarinTokenizer,
+    token_ids: List[int],
+    sequence_logprobs: TokenSequenceLogprobs,
+) -> CompletionLogprobData:
+    tokens = _decoded_token_pieces(tokenizer, token_ids)
+    if len(tokens) != len(sequence_logprobs.token_logprobs):
+        raise ValueError(f"Expected {len(tokens)} token logprobs, got {len(sequence_logprobs.token_logprobs)}")
+    if len(tokens) != len(sequence_logprobs.top_token_logprobs):
+        raise ValueError(
+            f"Expected {len(tokens)} top-logprob entries, got {len(sequence_logprobs.top_token_logprobs)}"
+        )
+
+    top_logprobs = [
+        {
+            tokenizer.decode([token_id], skip_special_tokens=False): logprob
+            for token_id, logprob in token_logprobs.items()
+        }
+        for token_logprobs in sequence_logprobs.top_token_logprobs
+    ]
+    return CompletionLogprobData(
+        tokens=tokens,
+        token_logprobs=sequence_logprobs.token_logprobs,
+        top_logprobs=top_logprobs,
+        text_offset=_token_text_offsets(tokens),
+    )
+
+
 async def _create_completion(ctx: InferenceContext, request: CompletionRequest) -> Completion:
     """Create a text completion using OpenAI API format."""
     try:
@@ -407,10 +472,12 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
         choices = []
         total_prompt_tokens = 0
         total_completion_tokens = 0
+        prompt_token_lists: List[List[int]] = []
 
-        for i, prompt in enumerate(prompts):
+        for prompt in prompts:
             # Tokenize prompt
             prompt_tokens = ctx.tokenizer.encode(prompt, add_special_tokens=False)
+            prompt_token_lists.append(prompt_tokens)
             total_prompt_tokens += len(prompt_tokens)
 
             # Create future for this request
@@ -433,34 +500,47 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
 
         # Format responses
         choice_idx = 0
-        for result in results:
+        for prompt, prompt_tokens, result in zip(prompts, prompt_token_lists, results, strict=True):
             for generation in result:
+                choice_text = f"{prompt}{generation.text}" if request.echo else generation.text
+
                 # Format logprobs if available
                 logprobs = None
                 if request.logprobs:
-                    # Convert logprobs to API format
-                    generated_tokens = generation.tokens
+                    if request.echo:
+                        scored_token_ids = prompt_tokens + generation.tokens
+                        sequence_logprobs = ctx.score_token_logprobs(scored_token_ids, int(request.logprobs))
+                        echo_logprobs = _completion_logprobs(ctx.tokenizer, scored_token_ids, sequence_logprobs)
+                        logprobs = Logprobs(
+                            tokens=echo_logprobs.tokens,
+                            token_logprobs=echo_logprobs.token_logprobs,
+                            text_offset=echo_logprobs.text_offset,
+                            top_logprobs=echo_logprobs.top_logprobs,
+                        )
+                    else:
+                        # Convert logprobs to API format
+                        generated_tokens = generation.tokens
 
-                    # Create token logprobs in OpenAI format
-                    tokens = []
-                    token_logprobs = []
-                    if generation.logprobs:
-                        for token_id, lp in zip(generated_tokens, generation.logprobs):
-                            # Use convert_ids_to_tokens to preserve BPE format
-                            token_str = ctx.tokenizer.convert_ids_to_tokens(token_id)
-                            tokens.append(token_str)
-                            token_logprobs.append(float(lp))
+                        # Create token logprobs in OpenAI format
+                        tokens = []
+                        token_logprobs = []
+                        if generation.logprobs:
+                            for token_id, lp in zip(generated_tokens, generation.logprobs):
+                                # Use convert_ids_to_tokens to preserve BPE format
+                                token_str = ctx.tokenizer.convert_ids_to_tokens(token_id)
+                                tokens.append(token_str)
+                                token_logprobs.append(float(lp))
 
-                    logprobs = Logprobs(
-                        tokens=tokens,
-                        token_logprobs=token_logprobs,
-                        text_offset=None,
-                        top_logprobs=None,
-                    )
+                        logprobs = Logprobs(
+                            tokens=tokens,
+                            token_logprobs=token_logprobs,
+                            text_offset=None,
+                            top_logprobs=None,
+                        )
 
                 choices.append(
                     CompletionChoice(
-                        text=generation.text,
+                        text=choice_text,
                         index=choice_idx,
                         finish_reason="stop",
                         logprobs=logprobs,
