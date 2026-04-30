@@ -72,6 +72,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    xsa_mode: str = "fixed"  # "fixed" (baseline), "sigmoid", or "tanh"
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -114,18 +115,21 @@ class CausalSelfAttention(eqx.Module):
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
+    xsa_lambda: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        xsa_lambda = reshard(jnp.zeros((n,)), P(None)) if cfg.xsa_mode != "fixed" else None
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            xsa_lambda=xsa_lambda,
             cfg=cfg,
         )
 
@@ -146,10 +150,19 @@ class CausalSelfAttention(eqx.Module):
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
-        # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
+        # zᵢ = yᵢ - scale * (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+        projection = (dot / (v_norm_sq + 1e-6)) * aligned_v
+        if self.xsa_lambda is not None:
+            # Learnable per-head scale: shape (N,) -> (1, 1, N, 1) for broadcasting
+            lam = self.xsa_lambda[None, None, :, None]
+            if self.cfg.xsa_mode == "sigmoid":
+                scale = jax.nn.sigmoid(lam)
+            else:  # tanh
+                scale = jnp.tanh(lam)
+            projection = scale * projection
+        attn_out = attn_out - projection
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
