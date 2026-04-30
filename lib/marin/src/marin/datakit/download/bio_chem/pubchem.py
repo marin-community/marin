@@ -16,7 +16,7 @@ from marin.datakit.download.bio_chem._runtime import (
     NotationSliceSpec,
     bio_chem_slice_step,
 )
-from marin.execution.executor import ExecutorStep
+from marin.execution.step_spec import StepSpec
 from marin.transform.bio_chem.splitters import SamplingCap
 
 PUBCHEM_BASE = "https://ftp.ncbi.nlm.nih.gov/pubchem/Compound"
@@ -41,5 +41,5 @@ PUBCHEM_SLICES: tuple[NotationSliceSpec, ...] = (
 )
 
 
-def pubchem_step() -> ExecutorStep:
+def pubchem_step() -> StepSpec:
     return bio_chem_slice_step(name="raw/bio_chem/pubchem", slices=PUBCHEM_SLICES)

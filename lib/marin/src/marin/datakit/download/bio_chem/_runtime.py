@@ -21,7 +21,8 @@ from typing import Any
 from rigging.filesystem import open_url
 from zephyr import Dataset, ZephyrContext
 
-from marin.execution.executor import THIS_OUTPUT_PATH, ExecutorStep, this_output_path
+from marin.execution.executor import THIS_OUTPUT_PATH
+from marin.execution.step_spec import StepSpec
 from marin.transform.bio_chem.splitters import (
     SamplingCap,
     iter_fasta_records,
@@ -104,7 +105,7 @@ class NotationSliceSpec:
 
 @dataclass
 class BioChemSliceConfig:
-    """Top-level config for one ExecutorStep — runs a list of slices in parallel."""
+    """Top-level runtime config for one materialization step."""
 
     output_path: str = THIS_OUTPUT_PATH
     slices: tuple[NotationSliceSpec, ...] = ()
@@ -184,7 +185,7 @@ def run_bio_chem_slices(cfg: BioChemSliceConfig) -> dict[str, Any]:
 
     Each slice is small enough to stream on a single worker; running them in
     a loop keeps memory and HTTP concurrency low. If you need parallelism
-    across slices, run multiple ExecutorSteps.
+    across slices, run multiple StepSpecs.
     """
     summaries: list[dict[str, Any]] = []
     for spec in cfg.slices:
@@ -197,19 +198,41 @@ def bio_chem_slice_step(
     *,
     name: str,
     slices: tuple[NotationSliceSpec, ...],
-    description: str | None = None,
-) -> ExecutorStep:
-    """Build an ExecutorStep that streams all ``slices`` into one output dir.
+) -> StepSpec:
+    """Build a StepSpec that streams all ``slices`` into one output dir.
 
     The step writes one parquet shard per slice (named ``<spec.name>-*.parquet``)
     so downstream code can glob ``<step>/<spec.name>-*.parquet`` per slice.
     """
-    return ExecutorStep(
+    return StepSpec(
         name=name,
-        description=description or f"Bio/chem notation slices: {', '.join(s.name for s in slices)}",
-        fn=run_bio_chem_slices,
-        config=BioChemSliceConfig(
-            output_path=this_output_path(),
-            slices=slices,
-        ),
+        fn=lambda output_path: run_bio_chem_slices(BioChemSliceConfig(output_path=output_path, slices=slices)),
+        hash_attrs={
+            "slice_names": [slice_spec.name for slice_spec in slices],
+            "slice_specs": [
+                {
+                    "name": slice_spec.name,
+                    "urls": list(slice_spec.urls),
+                    "fmt": slice_spec.fmt.value,
+                    "source_label": slice_spec.source_label,
+                    "compression": slice_spec.compression,
+                    "encoding": slice_spec.encoding,
+                    "sampling": {
+                        "max_records": slice_spec.sampling.max_records,
+                        "max_bytes": slice_spec.sampling.max_bytes,
+                    },
+                    "packing": (
+                        None
+                        if slice_spec.packing is None
+                        else {
+                            "target_doc_chars": slice_spec.packing.target_doc_chars,
+                            "max_records_per_doc": slice_spec.packing.max_records_per_doc,
+                            "record_separator": slice_spec.packing.record_separator,
+                        }
+                    ),
+                    "skip_header_lines": slice_spec.skip_header_lines,
+                }
+                for slice_spec in slices
+            ],
+        },
     )

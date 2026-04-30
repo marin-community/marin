@@ -31,6 +31,7 @@ from marin.datakit.download.bio_chem.refseq import refseq_viral_step
 from marin.datakit.download.bio_chem.rnacentral import rnacentral_step
 from marin.datakit.download.bio_chem.uniprot import uniprot_sprot_step
 from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 
@@ -45,7 +46,7 @@ class BioChemSlice:
     slice_name: str
     """Slice slot — matches ``NotationSliceSpec.name`` so we can find the shard files."""
 
-    step: ExecutorStep
+    step: StepSpec
     """The download step whose output dir holds the parquet shards."""
 
 
@@ -101,7 +102,7 @@ def bio_chem_tokenized(
         key = _slice_key(slice_)
         out[key] = default_tokenize(
             name=key,
-            dataset=slice_.step.cd(_slice_glob(slice_)),
+            dataset=slice_.step.as_executor_step().cd(_slice_glob(slice_)),
             tokenizer=tokenizer,
             is_validation=True,
         )
@@ -114,7 +115,9 @@ def bio_chem_raw_validation_sets(
     """Wire bio/chem slices into the perplexity-gap raw-text dataset registry."""
     from marin.evaluation.perplexity_gap import raw_text_dataset
 
-    return {_slice_key(slice_): raw_text_dataset(slice_.step.cd(_slice_glob(slice_))) for slice_ in slices}
+    return {
+        _slice_key(slice_): raw_text_dataset(slice_.step.as_executor_step().cd(_slice_glob(slice_))) for slice_ in slices
+    }
 
 
 if __name__ == "__main__":
@@ -125,5 +128,5 @@ if __name__ == "__main__":
         if id(slice_.step) in seen:
             continue
         seen.add(id(slice_.step))
-        download_steps.append(slice_.step)
+        download_steps.append(slice_.step.as_executor_step())
     executor_main(steps=download_steps)

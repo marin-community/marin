@@ -21,7 +21,7 @@ from marin.datakit.download.bio_chem._runtime import (
     NotationSliceSpec,
     bio_chem_slice_step,
 )
-from marin.execution.executor import ExecutorStep
+from marin.execution.step_spec import StepSpec
 from marin.transform.bio_chem.splitters import SamplingCap
 
 RCSB_DOWNLOAD_BASE = "https://files.rcsb.org/download"
@@ -112,5 +112,5 @@ RCSB_SLICES: tuple[NotationSliceSpec, ...] = (
 )
 
 
-def rcsb_pdb_step() -> ExecutorStep:
+def rcsb_pdb_step() -> StepSpec:
     return bio_chem_slice_step(name="raw/bio_chem/rcsb_pdb", slices=RCSB_SLICES)

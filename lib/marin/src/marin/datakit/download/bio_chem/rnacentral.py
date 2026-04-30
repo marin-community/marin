@@ -15,7 +15,7 @@ from marin.datakit.download.bio_chem._runtime import (
     NotationSliceSpec,
     bio_chem_slice_step,
 )
-from marin.execution.executor import ExecutorStep
+from marin.execution.step_spec import StepSpec
 from marin.transform.bio_chem.splitters import SamplingCap
 
 RNACENTRAL_BASE = "https://ftp.ebi.ac.uk/pub/databases/RNAcentral/current_release/sequences"
@@ -32,5 +32,5 @@ RNACENTRAL_SLICES: tuple[NotationSliceSpec, ...] = (
 )
 
 
-def rnacentral_step() -> ExecutorStep:
+def rnacentral_step() -> StepSpec:
     return bio_chem_slice_step(name="raw/bio_chem/rnacentral", slices=RNACENTRAL_SLICES)

@@ -22,7 +22,7 @@ from marin.datakit.download.bio_chem._runtime import (
     NotationSliceSpec,
     bio_chem_slice_step,
 )
-from marin.execution.executor import ExecutorStep
+from marin.execution.step_spec import StepSpec
 from marin.transform.bio_chem.splitters import SamplingCap
 
 CHEMBL_BASE = "https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/releases"
@@ -49,5 +49,5 @@ CHEMBL_SLICES: tuple[NotationSliceSpec, ...] = (
 )
 
 
-def chembl_step() -> ExecutorStep:
+def chembl_step() -> StepSpec:
     return bio_chem_slice_step(name=f"raw/bio_chem/{CHEMBL_VERSION}", slices=CHEMBL_SLICES)

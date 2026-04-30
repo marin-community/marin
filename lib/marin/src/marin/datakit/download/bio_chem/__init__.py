@@ -3,7 +3,7 @@
 
 """Streaming downloaders for biology and chemistry notation slices.
 
-Each submodule defines an ExecutorStep factory for one source family
+Each submodule defines a StepSpec factory for one source family
 (RefSeq, RNAcentral, UniProt, PubChem, RCSB PDB, ChEMBL, MoleculeNet) that
 streams from the upstream mirror, splits the stream into format-preserving
 records via :mod:`marin.transform.bio_chem`, packs short records into longer

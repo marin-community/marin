@@ -21,7 +21,7 @@ from marin.datakit.download.bio_chem._runtime import (
     NotationSliceSpec,
     bio_chem_slice_step,
 )
-from marin.execution.executor import ExecutorStep
+from marin.execution.step_spec import StepSpec
 from marin.transform.bio_chem.splitters import SamplingCap
 
 MOLECULENET_ESOL_REVISION = "8929f602b69f2a32ae07dd7a4015fa4cc64224ae"
@@ -55,5 +55,5 @@ MOLECULENET_SLICES: tuple[NotationSliceSpec, ...] = (
 )
 
 
-def moleculenet_step() -> ExecutorStep:
+def moleculenet_step() -> StepSpec:
     return bio_chem_slice_step(name="raw/bio_chem/moleculenet", slices=MOLECULENET_SLICES)
