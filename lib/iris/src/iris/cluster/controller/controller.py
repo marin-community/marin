@@ -1352,6 +1352,14 @@ class Controller:
         # timeout_keep_alive: uvicorn defaults to 5s, which races with client polling
         # intervals of the same length, causing TCP resets on idle connections. Use 120s
         # to safely cover long polling gaps during job waits.
+        # proxy_headers / forwarded_allow_ips: production traffic arrives via
+        # GCP IAP + an HTTPS load balancer. Without trusting their forwarded
+        # headers, ``scope["server"]`` is the controller's bind address, so
+        # any absolute URL built by Starlette (notably the trailing-slash
+        # redirect on routes like ``/proxy/<name>``) leaks the internal IP
+        # back to the browser as ``http://10.x.x.x:10000/...`` — unreachable
+        # outside the VPC. Trusting all upstream IPs is safe because the
+        # controller's only ingress is the LB.
         server_config = uvicorn.Config(
             self._dashboard.app,
             host=self._config.host,
@@ -1359,6 +1367,8 @@ class Controller:
             log_level="warning",
             log_config=None,
             timeout_keep_alive=120,
+            proxy_headers=True,
+            forwarded_allow_ips="*",
         )
         self._server = uvicorn.Server(server_config)
         self._threads.spawn_server(self._server, name="controller-server")
