@@ -31,6 +31,7 @@ from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
 from marin.datakit.download.nemotron_v2 import nemotron_v2_normalize_steps
 from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
+from marin.datakit.download.sec_edgar import sec_edgar_normalize_steps
 from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_normalize_steps
 from marin.datakit.download.svgfind import svgfind_creativecommons_normalize_steps
@@ -147,6 +148,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("molmo2-cap", molmo2_cap_normalize_steps, 0.36),
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
+        ("sec-edgar", sec_edgar_normalize_steps, 43.73),
         ("superior-reasoning", superior_reasoning_normalize_steps, 7.08),
         ("svg", svgfind_creativecommons_normalize_steps, 8.95),
         ("swe-rebench-openhands", swe_rebench_openhands_normalize_steps, 2.47),
