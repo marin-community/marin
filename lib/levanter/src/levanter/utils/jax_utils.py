@@ -487,6 +487,10 @@ def _psum(xs: Any) -> Any:
     return jax.tree.map(lambda x: jnp.sum(x, dtype=x.dtype, axis=0), xs)
 
 
+_BROADCAST_CALL_COUNTER = 0
+_BROADCAST_LEAF_COUNTER = 0
+
+
 def broadcast_one_to_all(in_tree: Any, is_source: bool | None = None) -> Any:
     """Broadcast data from a source host (host 0 by default) to all other hosts.
 
@@ -501,11 +505,26 @@ def broadcast_one_to_all(in_tree: Any, is_source: bool | None = None) -> Any:
       A pytree matching in_tree where the leaves now all contain the data from the
       first host.
     """
+    global _BROADCAST_CALL_COUNTER, _BROADCAST_LEAF_COUNTER
+    _BROADCAST_CALL_COUNTER += 1
+
     if jax.process_count() == 1:
         return jax.tree.map(np.asarray, in_tree)
 
     if is_source is None:
         is_source = jax.process_index() == 0
+
+    # Per-worker launch counter for issue #5319 diagnosis. Print every 200 calls
+    # so we can correlate counts across workers at the time of the eventual halt.
+    if _BROADCAST_CALL_COUNTER % 200 == 0:
+        import sys
+
+        sys.stderr.write(
+            f"[5319-counter] worker={jax.process_index()} "
+            f"broadcast_one_to_all_calls={_BROADCAST_CALL_COUNTER} "
+            f"leaves_seen={_BROADCAST_LEAF_COUNTER}\n"
+        )
+        sys.stderr.flush()
 
     devices: np.ndarray = np.array(jax.devices()).reshape(jax.process_count(), jax.local_device_count())
     global_mesh = jax.sharding.Mesh(devices, ("processes", "local_devices"))
@@ -518,6 +537,8 @@ def broadcast_one_to_all(in_tree: Any, is_source: bool | None = None) -> Any:
         # transfer only on the source caused worker 0 to accumulate +1 TPU launches
         # per call vs other workers, which eventually trips the TPU runtime's
         # `scheckne` (sequence-check-not-equal) check on multi-host pods. Issue #5319.
+        global _BROADCAST_LEAF_COUNTER
+        _BROADCAST_LEAF_COUNTER += 1
         host_inp = np.asarray(x)
         if not is_source:
             host_inp = np.zeros_like(host_inp)
