@@ -200,7 +200,53 @@ If you need to reference it, either `cat` the absolute path or copy it into your
 
 ---
 
-## 8. Provenance
+## 8. Midtraining LR + budget strategy (2026-05-01 lab discussion)
+
+This section captures the design direction for *running midtraining experiments on top of the Delphi suite* — i.e. where we go after the catalogue in §1-§7. It is the working plan, not a finished result.
+
+### 8.1 Working hypothesis
+
+**Optimal midtraining LR is fixed per mixture, not per scale or per token budget.** If true, this factors the search: fit one LR per mixture on a small Delphi scale and transfer it across the ladder.
+
+The hypothesis is fragile in two directions and we should test both:
+
+1. **LR may depend on token count.** If midtrain LR drifts with the number of midtrain tokens, fixed-LR-per-mixture will break when budgets differ. Mitigation: hold the *pretrain : midtrain proportion* constant (e.g. 2/3 pretrain : 1/3 midtrain) and scale the midtrain budget linearly with the pretrain budget — this way LR is transferred between matched regimes, not across regime boundaries.
+2. **LR may depend on model scale.** The current heuristic already scales LR across model sizes (sqrt-batch + the AdamH v6 rules in §1). Keeping the *ratio* of midtrain LR to pretrain LR fixed across scales is a strictly weaker claim than fixed-absolute-LR and is the safer fallback if (1) holds but the absolute LR still drifts.
+
+### 8.2 Methodology
+
+- **Fit regressions across (mixture × token budget × scale).** The output isn't a single optimal LR — it's a family of fits parameterized by mixture, with budget and scale as covariates. Predict not just the final loss but the *shape* of the midtrain loss curve.
+- **Validate on a held-out subset of the midtrain mixture itself.** Carve out a small validation slice from the midtraining corpus before it enters any training mix, and use its loss as the optimization target. Not Paloma c4_en, not external evals — the eval has to reflect the mixture we're tuning for. It must be cheap enough to run frequently during the small-scale sweeps. Concretely: hold out a fixed-token slice of each midtrain mixture component pre-tokenization, store it next to the checkpoints, and ensure it never appears in any training mix.
+- **Small-scale fit → large-scale extrapolation.** Run the LR / mixture sweep at the cheapest tier (1e21 — ~3.4 B params, batch 512, ~22 k steps) and use the fits to predict 1e22 and 1e23. Treat the larger tiers as confirmation runs, not search runs.
+
+### 8.3 Reframe: midtraining budget is *not* fixed across the ladder
+
+Each Delphi model has a *different pretrain token budget* (see §3 — 1e21 trains on a Chinchilla-optimal slice that is two orders of magnitude smaller than the 1e23 slice). Fixing an *absolute* midtrain token budget across scales is therefore incoherent — it would let midtrain dominate the small models while being a rounding error on the big ones.
+
+**Each scale gets its own midtrain budget, set dynamically as a fraction of its pretrain budget.** The fraction is itself a knob (the 2/3 pretrain : 1/3 midtrain split is one candidate) but it must be held *constant* across scales when extrapolating. Performance is then modelled as
+
+```
+validation_loss = f(scale, mixture, budget_fraction, budget_point_along_decay)
+```
+
+not as `f(absolute_midtrain_tokens)`. The "budget_point_along_decay" axis matters because under linear LR decay the loss curve shape — not just its endpoint — is what scales between Delphi tiers.
+
+### 8.4 Default LR schedule
+
+Stick with **linear LR decay** as the baseline schedule. It's the tried-and-true setting in the Delphi pretraining recipe and Mantis cooldown; deviating from it adds a confound we don't need until the LR-vs-mixture story is settled.
+
+### 8.5 Concrete next steps
+
+1. Pick a midtrain mixture candidate (most likely one of the Recipe A / B / C variants from `midtraining_math.md` §"Three concrete recipes").
+2. Carve out the held-out validation slice from that mixture and write its GCS path + token count into this doc.
+3. Fix the pretrain : midtrain proportion (default proposal: 2/3 : 1/3) and derive the per-scale midtrain budgets from §3.
+4. Run the LR sweep at 1e21 only, warm-starting from the 1e21 Delphi v5/v6 checkpoints (§4.1).
+5. Fit `(scale, mixture, budget_fraction, decay_point) → validation_loss` and plot predicted 1e22 / 1e23 curves with uncertainty.
+6. Spend larger compute only on confirmation runs at 1e22 and 1e23, sized to the dynamic budgets from step 3.
+
+---
+
+## 9. Provenance
 
 - W&B dump: `/tmp/delphi/delphi_runs.json` (24-record JSON with full config + summary per run; regenerate by running the "Pull all runs matching either naming prefix" script in the 2026-04-21 agent session — see entity `marin-community`, projects `marin` and `marin-analysis`, regex above).
 - GCS listing: `gcloud storage ls gs://marin-us-central2/<run-name>/checkpoints/` and `.../hf/` per run, parallelized 16-wide. Run-tree sizes were not measured (`gcloud storage du` skipped to avoid cost / latency on 25 B-param checkpoints).
@@ -210,8 +256,10 @@ If you need to reference it, either `cat` the absolute path or copy it into your
 
 ---
 
-## 9. Open questions / things this doc does *not* yet have
+## 10. Open questions / things this doc does *not* yet have
 
+- **Held-out midtrain validation slice** — §8.2 calls for a small validation subset carved out of the midtraining mixture itself, but the slice does not yet exist. Open items: which mixture components to hold out from, target token count (probably O(10–100 M) tokens per component to stay cheap), pre- vs post-tokenization split, GCS path, and a guarantee that no training mix re-includes it. Pin this down before launching any LR sweep.
+- **Per-scale midtrain budget table** — §8.3 says the budget should be a fixed fraction of each scale's pretrain budget, but the table itself (1e21 / 1e22 / 1e23 → midtrain tokens at the chosen fraction) is not yet filled in. Once the fraction is chosen, append a table here mirroring §3.
 - **Checkpoint total sizes in bytes** — skipped to keep the audit cheap. Any future agent that cares can `gcloud storage du -s gs://marin-us-central2/<run>/checkpoints/` per run.
 - **Per-checkpoint eval curves** — this doc has only the final `_step` eval metrics from W&B summary. If you need mid-training loss/bpb over time, use `wandb.Api().run(...).history()` or scan `run.scan_history(keys=[...])`.
 - **Downstream lm-eval scores** (MMLU, HellaSwag, ARC) — these were `None` in the W&B summaries at the time of capture. Some may live on separate `*-lmeval-*` runs (we saw one `8jnuv7ca` for `exp2166-scaling-ladder-nemotron-validation-optimal-1e+18-24e99e-43791_lmeval_mmlu` in the same project) — not audited here.
