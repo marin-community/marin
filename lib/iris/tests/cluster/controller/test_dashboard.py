@@ -165,7 +165,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 
 
 @pytest.fixture
-def service(state, scheduler, stats_log_client, tmp_path):
+def service(state, scheduler, tmp_path):
     controller_mock = _make_controller_mock(state, scheduler)
     log_service = LogServiceImpl()
     return ControllerServiceImpl(
@@ -174,7 +174,6 @@ def service(state, scheduler, stats_log_client, tmp_path):
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
-        stats_log_client=stats_log_client,
     )
 
 
@@ -185,7 +184,7 @@ def client(service):
 
 
 @pytest.fixture
-def service_with_autoscaler(state, scheduler, mock_autoscaler, stats_log_client, tmp_path):
+def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
     """Service with autoscaler enabled for tests."""
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
     log_service = LogServiceImpl()
@@ -195,7 +194,6 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, stats_log_client,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=log_service,
-        stats_log_client=stats_log_client,
     )
 
 
@@ -270,20 +268,6 @@ def test_list_jobs_includes_terminal_states(client, state, job_request):
     terminal_states = {"JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_KILLED", "JOB_STATE_WORKER_FAILED"}
     for j in jobs:
         assert j.get("state") in terminal_states
-
-
-def test_list_workers_returns_healthy_status(client, state):
-    """ListWorkers RPC returns workers with healthy status."""
-    register_worker(state, "healthy1", "h1:8080", make_worker_metadata())
-    register_worker(state, "healthy2", "h2:8080", make_worker_metadata())
-    register_worker(state, "unhealthy", "h3:8080", make_worker_metadata(), healthy=False)
-
-    resp = rpc_post(client, "ListWorkers")
-    workers = resp.get("workers", [])
-
-    assert len(workers) == 3
-    healthy_count = sum(1 for w in workers if w.get("healthy", False))
-    assert healthy_count == 2
 
 
 def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
@@ -1047,31 +1031,6 @@ def test_coscheduling_failure_reason_insufficient_group(client, state):
     reason = job.get("pendingReason", "")
     assert "need 4" in reason, f"Expected 'need 4' in reason, got: {reason}"
     assert "largest group has 2" in reason, f"Expected 'largest group has 2' in reason, got: {reason}"
-
-
-# =============================================================================
-# Worker Attributes Tests
-# =============================================================================
-
-
-def test_worker_attributes_in_list_workers(client, state):
-    """ListWorkers RPC surfaces the worker's metadata. The iris.worker stats
-    schema carries the well-known fields directly (tpu_name, gce_instance_name,
-    cpu_count, memory_bytes); arbitrary attributes are not part of this schema
-    bump. See ``IrisWorkerStat`` in ``iris/cluster/worker/stats.py``.
-    """
-    meta = make_worker_metadata()
-    meta.tpu_name = "v5litepod-16"
-    meta.cpu_count = 64
-    register_worker(state, "tpu-worker", "h1:8080", meta)
-
-    resp = rpc_post(client, "ListWorkers")
-    workers = resp.get("workers", [])
-    assert len(workers) == 1
-
-    metadata = workers[0].get("metadata", {})
-    assert metadata.get("tpuName") == "v5litepod-16"
-    assert int(metadata.get("cpuCount", 0)) == 64
 
 
 # =============================================================================

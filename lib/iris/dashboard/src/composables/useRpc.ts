@@ -100,6 +100,17 @@ export function useLogServiceRpc<T>(
   return useRpc<T>('finelog.logging.LogService', method, body)
 }
 
+/**
+ * RPC composable for the finelog StatsService routed via the controller's
+ * endpoint proxy at /proxy/system.log-server/finelog.stats.StatsService/<Method>.
+ */
+export function useLogServerStatsRpc<T>(
+  method: string,
+  body?: RpcBody,
+): RpcState<T> {
+  return useRpc<T>('proxy/system.log-server/finelog.stats.StatsService', method, body)
+}
+
 /** RPC composable for StatsService endpoints. */
 export function useStatsRpc<T>(
   method: string,

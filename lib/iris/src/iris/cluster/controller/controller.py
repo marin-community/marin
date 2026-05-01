@@ -1212,7 +1212,6 @@ class Controller:
             auth=config.auth,
             system_endpoints={},
             user_budget_defaults=config.user_budget_defaults,
-            stats_log_client=self._log_client,
         )
         self._dashboard = ControllerDashboard(
             self._service,

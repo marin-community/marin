@@ -177,82 +177,82 @@ const columns: Column[] = [
       >
         <template #cell-workerId="{ row }">
           <RouterLink
-            :to="`/worker/${(row as WorkerHealthStatus).workerId}`"
+            :to="`/worker/${(row as WorkerHealth).workerId}`"
             class="text-accent hover:underline font-mono"
           >
-            {{ (row as WorkerHealthStatus).workerId }}
+            {{ (row as WorkerHealth).workerId }}
           </RouterLink>
         </template>
 
         <template #cell-address="{ row }">
-          <span v-if="(row as WorkerHealthStatus).address" class="group/addr inline-flex items-center gap-1">
-            {{ (row as WorkerHealthStatus).address }}
-            <CopyButton :value="(row as WorkerHealthStatus).address!" />
+          <span v-if="(row as WorkerHealth).address" class="group/addr inline-flex items-center gap-1">
+            {{ (row as WorkerHealth).address }}
+            <CopyButton :value="(row as WorkerHealth).address!" />
           </span>
           <span v-else>-</span>
         </template>
 
         <template #cell-device="{ row }">
-          <span class="text-xs">{{ formatWorkerDevice((row as WorkerHealthStatus).metadata) }}</span>
+          <span class="text-xs">{{ formatWorkerDevice((row as WorkerHealth).metadata) }}</span>
         </template>
 
         <template #cell-zone="{ row }">
           <span class="text-xs font-mono">
-            {{ (row as WorkerHealthStatus).metadata?.attributes?.zone?.stringValue ?? '-' }}
+            {{ (row as WorkerHealth).metadata?.attributes?.['zone']?.stringValue ?? '-' }}
           </span>
         </template>
 
         <template #cell-tpuName="{ row }">
-          {{ (row as WorkerHealthStatus).metadata?.tpuName ?? '-' }}
+          {{ (row as WorkerHealth).metadata?.tpuName ?? '-' }}
         </template>
 
         <template #cell-healthy="{ row }">
           <span class="inline-flex items-center gap-1.5">
             <span
               class="w-2 h-2 rounded-full"
-              :class="(row as WorkerHealthStatus).healthy ? 'bg-status-success' : 'bg-status-danger'"
+              :class="(row as WorkerHealth).healthy ? 'bg-status-success' : 'bg-status-danger'"
             />
             <span
               class="text-xs"
-              :class="(row as WorkerHealthStatus).healthy ? 'text-status-success' : 'text-status-danger'"
+              :class="(row as WorkerHealth).healthy ? 'text-status-success' : 'text-status-danger'"
             >
-              {{ (row as WorkerHealthStatus).healthy ? 'Healthy' : 'Unhealthy' }}
+              {{ (row as WorkerHealth).healthy ? 'Healthy' : 'Unhealthy' }}
             </span>
           </span>
         </template>
 
         <template #cell-cpuCount="{ row }">
           <span class="font-mono">
-            {{ (row as WorkerHealthStatus).metadata?.cpuCount ?? '-' }}
+            {{ (row as WorkerHealth).metadata?.cpuCount ?? '-' }}
           </span>
         </template>
 
         <template #cell-memory="{ row }">
           <span class="font-mono text-xs">
-            {{ (row as WorkerHealthStatus).metadata?.memoryBytes
-              ? formatBytes(parseInt((row as WorkerHealthStatus).metadata!.memoryBytes!, 10))
+            {{ (row as WorkerHealth).metadata?.memoryBytes
+              ? formatBytes(parseInt((row as WorkerHealth).metadata!.memoryBytes!, 10))
               : '-' }}
           </span>
         </template>
 
         <template #cell-tasks="{ row }">
           <span class="font-mono">
-            {{ (row as WorkerHealthStatus).runningJobIds?.length ?? 0 }}
+            {{ (row as WorkerHealth).runningJobIds?.length ?? 0 }}
           </span>
         </template>
 
         <template #cell-lastHeartbeat="{ row }">
           <span class="text-xs font-mono">
-            {{ formatRelativeTime(timestampMs((row as WorkerHealthStatus).lastHeartbeat)) }}
+            {{ formatRelativeTime(timestampMsFromEpochMs((row as WorkerHealth).lastHeartbeat?.epochMs)) }}
           </span>
         </template>
 
         <template #cell-error="{ row }">
           <span
-            v-if="(row as WorkerHealthStatus).statusMessage"
+            v-if="(row as WorkerHealth).statusMessage"
             class="text-xs text-status-danger truncate max-w-xs inline-block"
           >
-            {{ (row as WorkerHealthStatus).statusMessage }}
+            {{ (row as WorkerHealth).statusMessage }}
           </span>
           <span v-else class="text-text-muted">-</span>
         </template>

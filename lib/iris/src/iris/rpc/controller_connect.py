@@ -43,9 +43,6 @@ class ControllerService(Protocol):
     async def register(self, request: controller__pb2.Controller.RegisterRequest, ctx: RequestContext) -> controller__pb2.Controller.RegisterResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def list_workers(self, request: controller__pb2.Controller.ListWorkersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListWorkersResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
     async def register_endpoint(self, request: controller__pb2.Controller.RegisterEndpointRequest, ctx: RequestContext) -> controller__pb2.Controller.RegisterEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -212,16 +209,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.register,
-                ),
-                "/iris.cluster.ControllerService/ListWorkers": Endpoint.unary(
-                    method=MethodInfo(
-                        name="ListWorkers",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.ListWorkersRequest,
-                        output=controller__pb2.Controller.ListWorkersResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.list_workers,
                 ),
                 "/iris.cluster.ControllerService/RegisterEndpoint": Endpoint.unary(
                     method=MethodInfo(
@@ -660,26 +647,6 @@ class ControllerServiceClient(ConnectClient):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.RegisterRequest,
                 output=controller__pb2.Controller.RegisterResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def list_workers(
-        self,
-        request: controller__pb2.Controller.ListWorkersRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.ListWorkersResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ListWorkers",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.ListWorkersRequest,
-                output=controller__pb2.Controller.ListWorkersResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -1244,8 +1211,6 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def register(self, request: controller__pb2.Controller.RegisterRequest, ctx: RequestContext) -> controller__pb2.Controller.RegisterResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def list_workers(self, request: controller__pb2.Controller.ListWorkersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListWorkersResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def register_endpoint(self, request: controller__pb2.Controller.RegisterEndpointRequest, ctx: RequestContext) -> controller__pb2.Controller.RegisterEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def unregister_endpoint(self, request: controller__pb2.Controller.UnregisterEndpointRequest, ctx: RequestContext) -> job__pb2.Empty:
@@ -1385,16 +1350,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.register,
-                ),
-                "/iris.cluster.ControllerService/ListWorkers": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="ListWorkers",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.ListWorkersRequest,
-                        output=controller__pb2.Controller.ListWorkersResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.list_workers,
                 ),
                 "/iris.cluster.ControllerService/RegisterEndpoint": EndpointSync.unary(
                     method=MethodInfo(
@@ -1833,26 +1788,6 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.RegisterRequest,
                 output=controller__pb2.Controller.RegisterResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def list_workers(
-        self,
-        request: controller__pb2.Controller.ListWorkersRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.ListWorkersResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ListWorkers",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.ListWorkersRequest,
-                output=controller__pb2.Controller.ListWorkersResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

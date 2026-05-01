@@ -19,7 +19,7 @@ from iris.cluster.worker.stats import (
     WORKER_STATS_NAMESPACE,
     IrisWorkerStat,
 )
-from iris.cluster.worker.worker import Worker, WorkerConfig, _StatsState
+from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import worker_pb2
 from rigging.timing import Duration
 
@@ -91,20 +91,18 @@ def _build_worker(tmp_path) -> Worker:
 def test_emits_stat_per_heartbeat(tmp_path):
     worker = _build_worker(tmp_path)
     fake_client = _FakeLogClient()
+    # Simulate eager registration that happens in start(): inject both
+    # log_client and stats_table directly so tests don't need a real server.
     worker._log_client = fake_client
+    worker._stats_table = fake_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
 
     try:
-        # Drive a single heartbeat; the worker should register iris.worker
-        # and append a row to the Table.
+        # Drive a single heartbeat; the worker should append a row to the Table.
         resp = worker.handle_ping(worker_pb2.Worker.PingRequest())
         assert isinstance(resp, worker_pb2.Worker.PingResponse)
     finally:
         worker.stop()
 
-    assert fake_client.register_calls, "expected get_table to be called"
-    namespace, schema = fake_client.register_calls[0]
-    assert namespace == WORKER_STATS_NAMESPACE
-    assert schema is IrisWorkerStat
     table = fake_client.tables[WORKER_STATS_NAMESPACE]
     # Exactly one row per heartbeat — no synthetic register-time row.
     assert len(table.rows) == 1
@@ -137,20 +135,23 @@ def test_ts_round_trips_through_pyarrow_at_ms_precision():
     assert round_tripped == naive_utc
 
 
-def test_register_failure_does_not_break_ping(tmp_path):
-    """A schema-register error must not propagate from ``handle_ping``."""
+def test_write_failure_does_not_break_ping(tmp_path):
+    """A transport error during stats write must not propagate from ``handle_ping``."""
     from finelog.client import StatsError
 
+    class _FailingWriteTable(_FakeTable):
+        def write(self, rows):
+            raise StatsError("transport blip")
+
     worker = _build_worker(tmp_path)
-    worker._log_client = _FakeLogClient(register_error=StatsError("boom"))
+    fake_client = _FakeLogClient()
+    worker._log_client = fake_client
+    worker._stats_table = _FailingWriteTable(WORKER_STATS_NAMESPACE)
 
     try:
-        # Ping must succeed even when the stats register raises. The next
-        # ping must also not retry register (one-shot give-up).
+        # Ping must succeed even when the stats write raises.
         worker.handle_ping(worker_pb2.Worker.PingRequest())
         worker.handle_ping(worker_pb2.Worker.PingRequest())
-        assert worker._stats_state is _StatsState.FAILED
-        assert worker._stats_table is None
     finally:
         worker.stop()
 
@@ -158,7 +159,9 @@ def test_register_failure_does_not_break_ping(tmp_path):
 def test_subsequent_heartbeats_reuse_table(tmp_path):
     worker = _build_worker(tmp_path)
     fake_client = _FakeLogClient()
+    # Simulate eager registration: get_table is called once at start().
     worker._log_client = fake_client
+    worker._stats_table = fake_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
 
     try:
         worker.handle_ping(worker_pb2.Worker.PingRequest())
@@ -167,8 +170,7 @@ def test_subsequent_heartbeats_reuse_table(tmp_path):
     finally:
         worker.stop()
 
-    # get_table is called exactly once; subsequent pings reuse the cached
-    # Table.
+    # get_table is called exactly once (at start, not per-ping).
     assert len(fake_client.register_calls) == 1
     table = fake_client.tables[WORKER_STATS_NAMESPACE]
     # One row per heartbeat. No synthetic row is emitted at register time.
@@ -177,24 +179,40 @@ def test_subsequent_heartbeats_reuse_table(tmp_path):
 
 def test_register_schema_bug_propagates(tmp_path):
     """A non-transport error (e.g. a schema-inference bug) must propagate
-    out of ``handle_ping`` rather than getting swallowed by the soft-fail
-    path. This is the contract that lets such bugs surface in CI rather
-    than silently producing an empty stats namespace in production.
+    out of ``start()`` rather than getting swallowed.
+    This is the contract that lets such bugs surface in CI rather than
+    silently producing an empty stats namespace in production.
     """
+    from unittest.mock import MagicMock, patch
 
     class _BrokenLogClient(_FakeLogClient):
         def get_table(self, namespace, schema):  # type: ignore[override]
             self.register_calls.append((namespace, schema))
             raise TypeError("schema field has unsupported type")
 
-    worker = _build_worker(tmp_path)
-    worker._log_client = _BrokenLogClient()
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        cache_dir=tmp_path / "cache",
+        worker_id="w-schema-bug",
+        controller_address="http://localhost:1",
+    )
+    runtime = MagicMock()
+    runtime.discover_containers.return_value = []
+    runtime.remove_all_iris_containers.return_value = 0
+    bundle_store = MagicMock()
+    worker = Worker(config, bundle_store=bundle_store, container_runtime=runtime)
 
-    try:
+    broken_client = _BrokenLogClient()
+    with (
+        patch("iris.cluster.worker.worker.LogClient.connect", return_value=broken_client),
+        patch.object(worker, "_cleanup_all_iris_containers"),
+        patch.object(worker, "adopt_running_containers", return_value=0),
+        patch("iris.cluster.worker.worker.uvicorn.Server"),
+        patch("iris.cluster.worker.worker.ExponentialBackoff"),
+    ):
         with pytest.raises(TypeError):
-            worker.handle_ping(worker_pb2.Worker.PingRequest())
-    finally:
-        worker.stop()
+            worker.start()
 
 
 def test_stat_dataclass_registers_with_ts_as_key():

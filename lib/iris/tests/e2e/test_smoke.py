@@ -19,6 +19,7 @@ import pytest
 from connectrpc.errors import ConnectError
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
+from iris.cli.worker_health import query_workers
 from iris.client.client import IrisClient
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
@@ -134,8 +135,7 @@ def smoke_cluster(request):
         )
         # Only wait for workers on platforms with persistent worker VMs (GCP).
         # kubernetes_provider (CoreWeave) runs tasks as ephemeral pods.
-        workers = controller_client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
-        if workers:
+        if query_workers(controller_url):
             tc.wait_for_workers(1, timeout=600)
         yield tc
         controller_client.close()
@@ -210,7 +210,7 @@ def verbose_job(smoke_cluster):
 @pytest.fixture(scope="module")
 def capabilities(smoke_cluster) -> ClusterCapabilities:
     """Discover cluster capabilities from live workers for topology-dependent tests."""
-    return discover_capabilities(smoke_cluster.controller_client)
+    return discover_capabilities(smoke_cluster.url)
 
 
 # ============================================================================
@@ -613,14 +613,10 @@ def test_region_constrained_routing(smoke_cluster, capabilities):
     task = smoke_cluster.task_status(job, task_index=0)
     assert task.worker_id
 
-    request = controller_pb2.Controller.ListWorkersRequest()
-    response = smoke_cluster.controller_client.list_workers(request)
-    worker = next(
-        (w for w in response.workers if w.worker_id == task.worker_id or w.address == task.worker_id),
-        None,
+    worker_resp = smoke_cluster.controller_client.get_worker_status(
+        controller_pb2.Controller.GetWorkerStatusRequest(id=task.worker_id)
     )
-    assert worker is not None
-    region_attr = worker.metadata.attributes.get(WellKnownAttribute.REGION)
+    region_attr = worker_resp.worker.metadata.attributes.get(WellKnownAttribute.REGION)
     if region_attr and region_attr.HasField("string_value"):
         assert region_attr.string_value == target_region, f"Expected {target_region}, got {region_attr.string_value}"
 
@@ -631,14 +627,16 @@ def test_capacity_type_propagates_to_worker_attributes(smoke_cluster):
     Catches regressions where config.capacity_type gets lost on the way to
     worker metadata (e.g. LOCAL-mode fake deriving it from the wrong source).
     """
-    request = controller_pb2.Controller.ListWorkersRequest()
-    response = smoke_cluster.controller_client.list_workers(request)
-    assert response.workers, "Expected registered workers"
+    all_workers = query_workers(smoke_cluster.url)
+    assert all_workers, "Expected registered workers"
 
-    for w in response.workers:
-        attrs = w.metadata.attributes
+    for wh in all_workers:
+        status = smoke_cluster.controller_client.get_worker_status(
+            controller_pb2.Controller.GetWorkerStatusRequest(id=wh.worker_id)
+        )
+        attrs = status.worker.metadata.attributes
         preemptible_attr = attrs.get(WellKnownAttribute.PREEMPTIBLE)
-        assert preemptible_attr is not None, f"Worker {w.worker_id} missing preemptible attribute"
+        assert preemptible_attr is not None, f"Worker {wh.worker_id} missing preemptible attribute"
 
         device_attr = attrs.get(WellKnownAttribute.DEVICE_TYPE)
         device_type = device_attr.string_value if device_attr else "cpu"
@@ -647,11 +645,11 @@ def test_capacity_type_propagates_to_worker_attributes(smoke_cluster):
         if device_type == "tpu":
             assert (
                 preemptible_attr.string_value == "true"
-            ), f"TPU worker {w.worker_id} should be preemptible=true, got {preemptible_attr.string_value}"
+            ), f"TPU worker {wh.worker_id} should be preemptible=true, got {preemptible_attr.string_value}"
         else:
             assert (
                 preemptible_attr.string_value == "false"
-            ), f"CPU worker {w.worker_id} should be preemptible=false, got {preemptible_attr.string_value}"
+            ), f"CPU worker {wh.worker_id} should be preemptible=false, got {preemptible_attr.string_value}"
 
 
 # ============================================================================
@@ -954,26 +952,26 @@ def test_static_auth_rpc_access():
     url = controller.start()
 
     try:
-        list_req = controller_pb2.Controller.ListWorkersRequest()
+        autoscaler_req = controller_pb2.Controller.GetAutoscalerStatusRequest()
 
         # Unauthenticated: should be rejected with 401
         unauth_client = ControllerServiceClientSync(address=url, timeout_ms=5000)
         with pytest.raises(ConnectError, match=r"(?i)authenticat"):
-            unauth_client.list_workers(list_req)
+            unauth_client.get_autoscaler_status(autoscaler_req)
         unauth_client.close()
 
         # Wrong token: should be rejected
         wrong_injector = AuthTokenInjector(StaticTokenProvider("wrong-token"))
         wrong_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[wrong_injector])
         with pytest.raises(ConnectError, match=r"(?i)authenticat"):
-            wrong_client.list_workers(list_req)
+            wrong_client.get_autoscaler_status(autoscaler_req)
         wrong_client.close()
 
         # Exchange static token for JWT, then use JWT
         jwt_token = _login_for_jwt(url, _AUTH_TOKEN)
         valid_injector = AuthTokenInjector(StaticTokenProvider(jwt_token))
         valid_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[valid_injector])
-        response = valid_client.list_workers(list_req)
+        response = valid_client.get_autoscaler_status(autoscaler_req)
         assert response is not None
         valid_client.close()
     finally:

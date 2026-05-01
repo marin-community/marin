@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import ClassVar
 
 from iris.rpc import job_pb2
@@ -32,10 +33,12 @@ from iris.rpc import job_pb2
 WORKER_STATS_NAMESPACE = "iris.worker"
 """Stats-service namespace for per-heartbeat worker rows."""
 
-# Worker-reported lifecycle state strings. These are *self-reported* — the
-# controller's view of healthy/unhealthy is independent.
-WORKER_STATUS_IDLE = "IDLE"
-WORKER_STATUS_RUNNING = "RUNNING"
+
+class WorkerStatus(StrEnum):
+    """Worker-reported lifecycle state. Self-reported — the controller's view is independent."""
+
+    IDLE = "IDLE"
+    RUNNING = "RUNNING"
 
 
 def _attr_string(metadata: job_pb2.WorkerMetadata, key: str) -> str:
