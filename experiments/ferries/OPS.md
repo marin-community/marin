@@ -25,7 +25,7 @@ uv run iris --cluster=marin job run --no-wait \
 - `SMOKE_RUN_ID` is required by the ferry; it namespaces outputs under
   `$MARIN_PREFIX/datakit-smoke/$SMOKE_RUN_ID/{download,normalize,dedup,consolidate,tokens}`.
 - `MARIN_PREFIX` defaults to `marin_temp_bucket(ttl_days=1)`
-  (`gs://marin-tmp-<region>/ttl=1d/...`). Override with `-e MARIN_PREFIX gs://...`
+  (`gs://marin-<region>/tmp/ttl=1d/...`). Override with `-e MARIN_PREFIX gs://...`
   for persistence or a specific bucket.
 - Use `--cluster=marin` (prod), not `--config=lib/iris/examples/marin-dev.yaml`
   — the dev config needs OS Login impersonation that dev SAs typically lack.
@@ -43,7 +43,7 @@ Terminates the entrypoint job and its Zephyr children.
 After success:
 
 ```bash
-MARIN_PREFIX=gs://marin-tmp-us-central1/ttl=1d \
+MARIN_PREFIX=gs://marin-us-central1/tmp/ttl=1d \
 SMOKE_RUN_ID=$SMOKE_RUN_ID \
   uv run python scripts/datakit/validate_ferry_outputs.py
 ```

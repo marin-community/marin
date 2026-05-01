@@ -14,8 +14,8 @@ from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.normalize import normalize_step
 from marin.datakit.download.rollout_transforms import load_parquet_batched
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "nebius/SWE-rebench-openhands-trajectories"

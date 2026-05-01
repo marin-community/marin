@@ -10,7 +10,6 @@ replaced the old _api_path_for_manifest and _api_path_for_resource functions.
 from __future__ import annotations
 
 import pytest
-
 from iris.cluster.providers.k8s.types import K8sResource
 
 

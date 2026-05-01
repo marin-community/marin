@@ -10,9 +10,9 @@ This expands the canonical bundle/model registry into:
 """
 
 from fray.types import ResourceConfig
+from marin.execution.executor import executor_main
 
 from experiments.evals.perplexity_gap_registry import build_registered_perplexity_gap_coverage_plan
-from marin.execution.executor import executor_main
 
 RESOURCE_CONFIG = ResourceConfig.with_tpu("v5p-8", regions=["us-central1"])
 PLAN = build_registered_perplexity_gap_coverage_plan(resource_config=RESOURCE_CONFIG)

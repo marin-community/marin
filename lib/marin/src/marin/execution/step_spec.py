@@ -122,7 +122,7 @@ class StepSpec:
         The exists to allow for incremental migration from ``ExecutorStep`` to ``StepSpec``:
         steps can be authored as ``StepSpec`` and used in existing pipelines without modification.
         """
-        from marin.execution.executor import ExecutorStep, VersionedValue, THIS_OUTPUT_PATH
+        from marin.execution.executor import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
 
         dep_steps = [dep.as_executor_step() for dep in self.deps]
 

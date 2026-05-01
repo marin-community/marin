@@ -22,7 +22,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
-
+from finelog.server.service import LogServiceImpl
 from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint as FrayEntrypoint
 from fray.types import GpuConfig, JobRequest, ResourceConfig
@@ -33,14 +33,12 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
-from finelog.server.service import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.service import CloudK8sService
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider, _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
+from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE, K8sTaskProvider
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, TaskAttempt
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration
 
 # ---------------------------------------------------------------------------

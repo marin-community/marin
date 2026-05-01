@@ -7,10 +7,10 @@ import threading
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from google.protobuf.message import Message
+from rigging.timing import Timer
 
 from iris.rpc.errors import connect_error_sanitized, connect_error_with_traceback
 from iris.rpc.stats import RpcStatsCollector
-from rigging.timing import Timer
 
 logger = logging.getLogger(__name__)
 

@@ -14,8 +14,8 @@ from zephyr import Dataset, ZephyrContext, counters
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.normalize import normalize_step
 from marin.datakit.download.rollout_transforms import strip_think_tags
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "Alibaba-Apsara/Superior-Reasoning-SFT-gpt-oss-120b"

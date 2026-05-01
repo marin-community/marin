@@ -16,9 +16,9 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 import numpy as np
-from rigging.filesystem import url_to_fs
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
+from rigging.filesystem import url_to_fs
 
 logger = logging.getLogger(__name__)
 

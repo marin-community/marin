@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-
+from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.auth import (
     WORKER_USER,
@@ -19,16 +19,13 @@ from iris.cluster.controller.auth import (
     create_controller_auth,
     list_api_keys,
 )
-from iris.rpc.auth import VerifiedIdentity, hash_token
-from rigging.timing import Timestamp
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
-from finelog.server import LogServiceImpl
-from iris.rpc import config_pb2
-from iris.rpc import job_pb2
-from iris.rpc.auth import _verified_identity
+from iris.rpc import config_pb2, job_pb2
+from iris.rpc.auth import VerifiedIdentity, _verified_identity, hash_token
+from rigging.timing import Timestamp
 
 
 @pytest.fixture

@@ -27,11 +27,11 @@ import uvicorn
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
-from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 

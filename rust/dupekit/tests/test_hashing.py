@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
-from dupekit import hash_blake2, hash_blake3, hash_xxh3_64, hash_xxh3_128, hash_xxh3_64_batch
+
+from dupekit import hash_blake2, hash_blake3, hash_xxh3_64, hash_xxh3_64_batch, hash_xxh3_128
 
 
 def test_blake2_compliance():
