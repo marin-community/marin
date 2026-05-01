@@ -18,11 +18,11 @@ import pytest
 import yaml
 from click.testing import CliRunner
 from iris.cli import iris
-from iris.cli.worker_health import query_workers
 from iris.client import IrisClient
 from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 
 pytestmark = pytest.mark.e2e
 
@@ -78,11 +78,13 @@ def cluster_config_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def _wait_for_workers(address: str, timeout: float = 30.0) -> None:
-    """Poll until at least one worker registers."""
+    """Poll until at least one worker registers (healthy or not)."""
+    client = ControllerServiceClientSync(address=address, timeout_ms=5000)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            if query_workers(address):
+            resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
+            if resp.workers:
                 return
         except Exception:
             pass

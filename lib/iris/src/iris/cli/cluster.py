@@ -7,7 +7,6 @@ All cluster subcommands live here: lifecycle (start/stop/restart/status),
 controller VM management, VM operations via controller RPC, and the dashboard tunnel.
 """
 
-import logging
 import signal
 import threading
 import time
@@ -25,7 +24,6 @@ from iris.cli.build import (
     get_git_sha,
 )
 from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
-from iris.cli.worker_health import query_workers
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
 from iris.cluster.controller.autoscaler.scaling_group import (
     build_worker_config_for_group,
@@ -35,8 +33,6 @@ from iris.cluster.providers.types import Labels
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
-
-logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Helpers
@@ -348,19 +344,20 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
         with bundle.controller.tunnel(address) as url:
             click.echo(f"Tunnel ready: {url}")
 
-            deadline = time.monotonic() + worker_timeout
-            healthy_count = 0
-            while time.monotonic() < deadline:
-                workers = query_workers(url)
-                healthy = [w for w in workers if w.healthy]
-                healthy_count = len(healthy)
-                if healthy_count >= min_workers:
-                    break
-                time.sleep(2)
-            else:
-                raise click.ClickException(
-                    f"Only {healthy_count} of {min_workers} workers healthy after {worker_timeout}s"
-                )
+            with rpc_client(url) as client:
+                deadline = time.monotonic() + worker_timeout
+                healthy_count = 0
+                while time.monotonic() < deadline:
+                    workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
+                    healthy = [w for w in workers if w.healthy]
+                    healthy_count = len(healthy)
+                    if healthy_count >= min_workers:
+                        break
+                    time.sleep(2)
+                else:
+                    raise click.ClickException(
+                        f"Only {healthy_count} of {min_workers} workers healthy after {worker_timeout}s"
+                    )
 
             click.echo(f"{healthy_count} workers ready, writing URL to {url_file}")
             Path(url_file).write_text(url)
@@ -610,8 +607,8 @@ def cluster_status_cmd(ctx):
     try:
         with rpc_client(controller_url) as client:
             proc = client.get_process_status(job_pb2.GetProcessStatusRequest()).process_info
+            workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
             as_status = client.get_autoscaler_status(controller_pb2.Controller.GetAutoscalerStatusRequest()).status
-        workers = query_workers(controller_url)
         healthy = sum(1 for w in workers if w.healthy)
         click.echo("Controller Status:")
         click.echo("  Running: True")
@@ -1025,30 +1022,31 @@ def worker_restart(
     """
     controller_url = require_controller_url(ctx)
 
-    all_workers = query_workers(controller_url)
-
-    if worker_id:
-        requested = set(worker_id)
-        workers = [w for w in all_workers if w.worker_id in requested]
-        missing = requested - {w.worker_id for w in workers}
-        if missing:
-            click.echo(f"Workers not found: {', '.join(sorted(missing))}", err=True)
-            raise SystemExit(1)
-    else:
-        workers = list(all_workers)
-
-    if not workers:
-        click.echo("No workers to restart")
-        return
-
-    worker_ids = [w.worker_id for w in workers]
-    total = len(worker_ids)
-    click.echo(
-        f"Restarting {total} worker(s) "
-        f"(timeout={timeout}s, observation={observation_window}s, max_batch={max_batch})"
-    )
-
     with rpc_client(controller_url) as client:
+        workers_resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
+        all_workers = workers_resp.workers
+
+        if worker_id:
+            requested = set(worker_id)
+            workers = [w for w in all_workers if w.worker_id in requested]
+            missing = requested - {w.worker_id for w in workers}
+            if missing:
+                click.echo(f"Workers not found: {', '.join(sorted(missing))}", err=True)
+                raise SystemExit(1)
+        else:
+            workers = list(all_workers)
+
+        if not workers:
+            click.echo("No workers to restart")
+            return
+
+        worker_ids = [w.worker_id for w in workers]
+        total = len(worker_ids)
+        click.echo(
+            f"Restarting {total} worker(s) "
+            f"(timeout={timeout}s, observation={observation_window}s, max_batch={max_batch})"
+        )
+
         succeeded = 0
         batch_size = 1
         offset = 0
@@ -1071,7 +1069,7 @@ def worker_restart(
 
             # Wait for all workers in the batch to become healthy
             click.echo(f"  Waiting for {len(batch)} worker(s) to become healthy...")
-            unhealthy = _wait_for_workers_healthy(controller_url, set(batch), timeout)
+            unhealthy = _wait_for_workers_healthy(client, set(batch), timeout)
             if unhealthy:
                 click.echo(
                     f"  ABORT: workers did not become healthy within {timeout}s: " f"{', '.join(sorted(unhealthy))}",
@@ -1084,7 +1082,7 @@ def worker_restart(
             time.sleep(observation_window)
 
             # Re-check health after observation window
-            failed_workers = _check_worker_health(controller_url, set(batch))
+            failed_workers = _check_worker_health(client, set(batch))
             if failed_workers:
                 click.echo(
                     f"  ABORT: workers developed failures during observation: "
@@ -1104,31 +1102,39 @@ def worker_restart(
     click.echo(f"\nDone: {succeeded}/{total} workers restarted successfully")
 
 
-def _wait_for_workers_healthy(controller_url: str, worker_ids: set[str], timeout: int) -> set[str]:
+def _wait_for_workers_healthy(client, worker_ids: set[str], timeout: int) -> set[str]:
     """Poll until all workers in the set are healthy. Returns IDs that failed to become healthy."""
     remaining = set(worker_ids)
     backoff = ExponentialBackoff(initial=5.0, maximum=5.0, jitter=0.0)
 
     def _all_healthy() -> bool:
-        for w in query_workers(controller_url):
-            if w.worker_id in remaining and w.healthy:
-                remaining.discard(w.worker_id)
+        try:
+            resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
+            for w in resp.workers:
+                if w.worker_id in remaining and w.healthy:
+                    remaining.discard(w.worker_id)
+        except Exception:
+            pass
         return len(remaining) == 0
 
     backoff.wait_until(_all_healthy, timeout=Duration.from_seconds(timeout))
     return remaining
 
 
-def _check_worker_health(controller_url: str, worker_ids: set[str]) -> list[tuple[str, str]]:
+def _check_worker_health(client, worker_ids: set[str]) -> list[tuple[str, str]]:
     """Check that all workers are still healthy. Returns list of (worker_id, problem) for failures."""
     failures: list[tuple[str, str]] = []
-    by_id = {w.worker_id: w for w in query_workers(controller_url)}
-    for wid in worker_ids:
-        w = by_id.get(wid)
-        if w is None:
-            failures.append((wid, "disappeared"))
-        elif not w.healthy:
-            failures.append((wid, w.status_message or "unhealthy"))
+    try:
+        resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
+        by_id = {w.worker_id: w for w in resp.workers}
+        for wid in worker_ids:
+            w = by_id.get(wid)
+            if w is None:
+                failures.append((wid, "disappeared"))
+            elif not w.healthy:
+                failures.append((wid, w.status_message or f"{w.consecutive_failures} consecutive failures"))
+    except Exception as e:
+        failures.append(("(rpc)", str(e)))
     return failures
 
 

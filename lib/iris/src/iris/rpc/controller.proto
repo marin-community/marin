@@ -612,6 +612,7 @@ service ControllerService {
 
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
+  rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
   // Endpoint registry (generic service discovery)
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);

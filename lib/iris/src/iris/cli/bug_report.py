@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 
-from iris.cli.worker_health import WorkerHealth, query_workers
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
@@ -66,6 +65,11 @@ class WorkerReport:
     address: str
     healthy: bool
     status_message: str
+    hostname: str
+    gpu_info: str
+    tpu_info: str
+    memory: str
+    zone: str
 
 
 @dataclass
@@ -118,7 +122,7 @@ def gather_bug_report(
     client = ControllerServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
     log_client = LogServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
     try:
-        return _gather(client, log_client, job_id, controller_url=controller_url, tail=tail)
+        return _gather(client, log_client, job_id, tail=tail)
     finally:
         log_client.close()
         client.close()
@@ -129,7 +133,6 @@ def _gather(
     log_client: LogServiceClientSync,
     job_id: JobName,
     *,
-    controller_url: str,
     tail: int,
 ) -> BugReport:
     # 1. Job status + original request
@@ -141,7 +144,8 @@ def _gather(
     tasks_resp = client.list_tasks(controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()))
     descendant_jobs = _list_descendant_jobs(client, job_id)
 
-    # 3. List workers via stats service, filter to those involved in this job
+    # 3. List workers, filter to those involved in this job
+    workers_resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
     involved_worker_ids: set[str] = set()
     for t in tasks_resp.tasks:
         if t.worker_id:
@@ -149,7 +153,6 @@ def _gather(
         for a in t.attempts:
             if a.worker_id:
                 involved_worker_ids.add(a.worker_id)
-    all_workers = query_workers(controller_url)
 
     # 4. Fetch recent logs per task
     task_logs: dict[str, list[str]] = {}
@@ -180,7 +183,7 @@ def _gather(
 
     # 7. Build worker reports
     worker_reports: dict[str, WorkerReport] = {}
-    for w in all_workers:
+    for w in workers_resp.workers:
         if w.worker_id in involved_worker_ids:
             worker_reports[w.worker_id] = _build_worker_report(w)
 
@@ -255,12 +258,32 @@ def _build_task_report(task: job_pb2.TaskStatus, logs: list[str]) -> TaskReport:
     )
 
 
-def _build_worker_report(w: WorkerHealth) -> WorkerReport:
+def _build_worker_report(
+    w: controller_pb2.Controller.WorkerHealthStatus,
+) -> WorkerReport:
+    meta = w.metadata
+    gpu_info = ""
+    if meta.gpu_count > 0:
+        gpu_info = f"{meta.gpu_count}x {meta.gpu_name}"
+        if meta.gpu_memory_mb > 0:
+            gpu_info += f" ({meta.gpu_memory_mb // 1024}GB)"
+    tpu_info = ""
+    if meta.device and meta.device.HasField("tpu"):
+        tpu_info = meta.device.tpu.variant
+    memory = ""
+    if meta.memory_bytes > 0:
+        memory = f"{meta.memory_bytes // (1024**3)} GiB"
+
     return WorkerReport(
         worker_id=w.worker_id,
         address=w.address,
         healthy=w.healthy,
         status_message=w.status_message,
+        hostname=meta.hostname,
+        gpu_info=gpu_info,
+        tpu_info=tpu_info,
+        memory=memory,
+        zone=meta.gce_zone,
     )
 
 
@@ -440,12 +463,12 @@ def format_bug_report(report: BugReport) -> str:
     # Involved Workers
     if report.workers:
         lines.append("## Involved Workers\n")
-        lines.append("| Worker | Address | Healthy | Status |")
-        lines.append("|--------|---------|---------|--------|")
+        lines.append("| Worker | Address | Healthy | Device | Memory | Zone |")
+        lines.append("|--------|---------|---------|--------|--------|------|")
         for wid, w in report.workers.items():
             healthy = "yes" if w.healthy else "no"
-            status = _escape_md(w.status_message) if w.status_message else "-"
-            lines.append(f"| {wid} | {w.address} | {healthy} | {status} |")
+            device = w.gpu_info or w.tpu_info or "cpu"
+            lines.append(f"| {wid} | {w.address} | {healthy} | {device} | {w.memory} | {w.zone} |")
         lines.append("")
 
     # Useful Commands
