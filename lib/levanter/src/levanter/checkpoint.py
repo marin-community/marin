@@ -26,6 +26,7 @@ import fsspec
 import haliax.partitioning
 import humanfriendly
 import jax
+import jax.numpy as jnp
 from draccus import field
 from fsspec import AbstractFileSystem
 from haliax.jax_utils import is_in_jit, is_jax_array_like
@@ -38,7 +39,7 @@ from levanter.tensorstore_serialization import (
     tree_serialize_leaves_tensorstore,
 )
 from levanter.utils import fsspec_utils
-from levanter.utils.jax_utils import multihost_broadcast_sync
+from levanter.utils.jax_utils import broadcast_one_to_all
 from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
@@ -526,15 +527,11 @@ class Checkpointer:
             my_should_save = True
             my_save_permanent_ckpt = False
 
-        # Use the JAX distributed KV store / barrier (host-side) to broadcast
-        # process 0's two-bool save decision. Avoids running a TPU collective per
-        # step just to share two booleans, eliminating any possibility of per-step
-        # TPU launch-sequence drift contributed by this code path. Issue #5319.
-        decision = multihost_broadcast_sync(
-            [bool(my_should_save), bool(my_save_permanent_ckpt)],
-            is_source=jax.process_index() == 0,
+        should_save, save_permanent_ckpt = broadcast_one_to_all(
+            jnp.array([my_should_save, my_save_permanent_ckpt], dtype=jnp.bool_)
         )
-        should_save, save_permanent_ckpt = bool(decision[0]), bool(decision[1])
+        # this comes out as np.bool_, so we need to convert it to a regular bool so json serialization works
+        save_permanent_ckpt = bool(save_permanent_ckpt)
 
         # log the decision
         if should_save:
