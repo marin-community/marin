@@ -18,15 +18,10 @@ from iris.cluster.runtime.profile import (
     build_pyspy_cmd,
     resolve_cpu_spec,
     resolve_memory_spec,
-    run_pyspy_dump,
 )
 from iris.rpc import job_pb2
 
-try:
-    import memray
-except ImportError:
-    memray = None
-needs_memray = pytest.mark.skipif(memray is None, reason="memray not installed")
+memray = pytest.importorskip("memray")
 
 # ---------------------------------------------------------------------------
 # resolve_cpu_spec: enum → (py_spy_format, ext) mapping and defaults
@@ -92,67 +87,6 @@ def test_build_pyspy_cmd_includes_subprocesses_flag_by_default():
     spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1")
     cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path="/tmp/out.svg")
     assert "--subprocesses" in cmd
-
-
-# ---------------------------------------------------------------------------
-# run_pyspy_dump: workaround for https://github.com/benfred/py-spy/issues/846
-# (py-spy --subprocesses exits non-zero when it walks into a non-Python child)
-# ---------------------------------------------------------------------------
-
-
-def _stub_subprocess_run(monkeypatch, *, returncode: int, stdout: str, stderr: str):
-    from subprocess import CompletedProcess
-
-    def fake_run(cmd, **kwargs):
-        return CompletedProcess(args=cmd, returncode=returncode, stdout=stdout, stderr=stderr)
-
-    monkeypatch.setattr("iris.cluster.runtime.profile.subprocess.run", fake_run)
-
-
-def test_run_pyspy_dump_returns_partial_stdout_on_non_python_child(monkeypatch):
-    _stub_subprocess_run(
-        monkeypatch,
-        returncode=1,
-        stdout="Process 1: python -u main.py\nThread 1 (idle): MainThread\n",
-        stderr="Error: Failed to find python version from target process\n",
-    )
-    out = run_pyspy_dump("1", subprocesses=True)
-    assert b"Process 1: python -u main.py" in out
-
-
-def test_run_pyspy_dump_raises_when_real_failure(monkeypatch):
-    _stub_subprocess_run(
-        monkeypatch,
-        returncode=1,
-        stdout="",
-        stderr="Error: Permission denied (ptrace)\n",
-    )
-    with pytest.raises(RuntimeError, match="Permission denied"):
-        run_pyspy_dump("1", subprocesses=True)
-
-
-def test_run_pyspy_dump_raises_when_stdout_empty_even_with_known_error(monkeypatch):
-    """If we never got the parent dump, propagate the failure — empty output is not partial success."""
-    _stub_subprocess_run(
-        monkeypatch,
-        returncode=1,
-        stdout="",
-        stderr="Error: Failed to find python version from target process\n",
-    )
-    with pytest.raises(RuntimeError):
-        run_pyspy_dump("1", subprocesses=True)
-
-
-def test_run_pyspy_dump_raises_when_subprocesses_disabled(monkeypatch):
-    """Without --subprocesses, py-spy can't have walked into a child — treat any failure as fatal."""
-    _stub_subprocess_run(
-        monkeypatch,
-        returncode=1,
-        stdout="Process 1: python -u main.py\n",
-        stderr="Error: Failed to find python version from target process\n",
-    )
-    with pytest.raises(RuntimeError):
-        run_pyspy_dump("1", subprocesses=False)
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +180,6 @@ def test_resolve_memory_spec_flamegraph_is_not_raw():
     assert spec.is_raw is False
 
 
-@needs_memray
 @pytest.mark.parametrize(
     "proto_format",
     [
@@ -265,7 +198,6 @@ def test_run_memray_profile_returns_nonempty_output(proto_format):
     assert len(result) > 0
 
 
-@needs_memray
 def test_run_memray_profile_stats_returns_valid_json():
     """Stats reporter returns parseable JSON, not a file-path string."""
     _allocate_during(1)
