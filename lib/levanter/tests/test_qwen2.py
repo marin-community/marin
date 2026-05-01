@@ -5,10 +5,13 @@ import json
 import tempfile
 
 import numpy as np
+import jax.numpy as jnp
 from jax import random
 
 import haliax as hax
 
+from levanter.inference.jit_scheduler import SequenceTable
+from levanter.inference.page_table import PageTable
 from levanter.layers.attention import AttentionMask
 from levanter.models.qwen import QwenConfig, QwenLMHeadModel
 from test_utils import skip_if_no_torch, use_test_mesh
@@ -118,3 +121,30 @@ def test_qwen_roundtrip():
         torch_out2 = torch_out2.logits[0].detach().cpu().numpy()
         assert torch_out2.shape == jax_out.shape, f"{torch_out2.shape} != {jax_out.shape}"
         np.testing.assert_allclose(torch_out2, jax_out, rtol=1e-4, atol=2e-4)
+
+
+def test_qwen_supports_paged_kv_inference_interface():
+    vocab_size = 64
+    Vocab = hax.Axis("vocab", vocab_size)
+    config = QwenConfig.from_hf_config(get_config(vocab_size))
+    key = random.PRNGKey(0)
+
+    with use_test_mesh():
+        model = QwenLMHeadModel.init(Vocab, config, key=key)
+
+        page_table = PageTable.init(8, 2, 4, 2)
+        cache = model.initial_cache(page_table.spec(), dtype=jnp.bfloat16)
+
+        sequences = SequenceTable.init(page_table.max_seqs, page_table.pages_per_seq, page_table.page_size)
+        sequences, slot_arr = sequences.reserve_slot(0)
+        slot_id = int(slot_arr)
+
+        token_ids = hax.named(jnp.array([1], dtype=jnp.int32), axis=("position",))
+        slot_ids = hax.named(jnp.array([slot_id], dtype=jnp.int32), axis=("position",))
+        pos_ids = hax.named(jnp.array([0], dtype=jnp.int32), axis=("position",))
+        sequences, _page_table, batch_info = sequences.allocate_for_seq(page_table, slot_ids, pos_ids)
+
+        logits, updated_cache = model.decode(token_ids, cache, batch_info, pos_ids)
+
+        assert logits.axes == (hax.Axis("position", 1), Vocab)
+        assert len(updated_cache) == config.num_layers
