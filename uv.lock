@@ -873,6 +873,19 @@ wheels = [
 ]
 
 [[package]]
+name = "cattrs"
+version = "26.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "attrs" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a0/ec/ba18945e7d6e55a58364d9fb2e46049c1c2998b3d805f19b703f14e81057/cattrs-26.1.0.tar.gz", hash = "sha256:fa239e0f0ec0715ba34852ce813986dfed1e12117e209b816ab87401271cdd40", size = 495672, upload-time = "2026-02-18T22:15:19.406Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/80/56/60547f7801b97c67e97491dc3d9ade9fbccbd0325058fd3dfcb2f5d98d90/cattrs-26.1.0-py3-none-any.whl", hash = "sha256:d1e0804c42639494d469d08d4f26d6b9de9b8ab26b446db7b5f8c2e97f7c3096", size = 73054, upload-time = "2026-02-18T22:15:17.958Z" },
+]
+
+[[package]]
 name = "cbor2"
 version = "5.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1187,6 +1200,22 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0a/59/ebfb8c677c75605cc27f7122c90313fd2f375ff3c8d19a1694bda74aaa63/contourpy-1.3.3-pp311-pypy311_pp73-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:70f9aad7de812d6541d29d2bbf8feb22ff7e1c299523db288004e3157ff4674e", size = 302202, upload-time = "2025-07-26T12:02:55.947Z" },
     { url = "https://files.pythonhosted.org/packages/3c/37/21972a15834d90bfbfb009b9d004779bd5a07a0ec0234e5ba8f64d5736f4/contourpy-1.3.3-pp311-pypy311_pp73-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5ed3657edf08512fc3fe81b510e35c2012fbd3081d2e26160f27ca28affec989", size = 329207, upload-time = "2025-07-26T12:02:57.468Z" },
     { url = "https://files.pythonhosted.org/packages/0c/58/bd257695f39d05594ca4ad60df5bcb7e32247f9951fd09a9b8edb82d1daa/contourpy-1.3.3-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:3d1a3799d62d45c18bafd41c5fa05120b96a28079f2393af559b843d1a966a77", size = 225315, upload-time = "2025-07-26T12:02:58.801Z" },
+]
+
+[[package]]
+name = "contree-sdk"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiofiles" },
+    { name = "cattrs" },
+    { name = "httpx" },
+    { name = "strenum" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2d/a6/1ab3554f64426d92604a5e1a7307762b33fa8723299e397886348d88549c/contree_sdk-0.3.0.tar.gz", hash = "sha256:ff7d7308e4147bf8a1c748a66d9cf962c93ca51eaedbe2cf5c70d7882b7cb260", size = 41596, upload-time = "2026-03-16T17:29:06.147Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/96/74/081873d0e36ca7e64fd603ea3d3e65afe3bec1f68cca27ca78eaf3e597b5/contree_sdk-0.3.0-py3-none-any.whl", hash = "sha256:0201990ca63e3b1b77093ec688b231b09b4e99cbd7b3bf19bd6e91ebb973d48b", size = 65147, upload-time = "2026-03-16T17:29:04.707Z" },
 ]
 
 [[package]]
@@ -5152,8 +5181,14 @@ dependencies = [
     { name = "watchdog" },
 ]
 
+[package.optional-dependencies]
+contree = [
+    { name = "contree-sdk" },
+]
+
 [package.metadata]
 requires-dist = [
+    { name = "contree-sdk", marker = "extra == 'contree'" },
     { name = "dupekit", specifier = ">=0.1.0" },
     { name = "marin", editable = "lib/marin" },
     { name = "marin-finelog", editable = "lib/finelog" },
@@ -5165,6 +5200,7 @@ requires-dist = [
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "watchdog" },
 ]
+provides-extras = ["contree"]
 
 [[package]]
 name = "marin-zephyr"

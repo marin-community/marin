@@ -23,6 +23,9 @@ dependencies = [
     "dupekit >= 0.1.0",
 ]
 
+[project.optional-dependencies]
+contree = ["contree-sdk"]
+
 [tool.uv]
 fork-strategy = "fewest"
 find-links = [
