@@ -1,0 +1,130 @@
+name: "Dupekit - Release Wheels"
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    tags:
+      - "dupekit-v*"
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write  # for creating releases
+  pull-requests: write  # for create-pull-request
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590  # v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'rust/dupekit/**'
+              - 'scripts/rust_package.py'
+              - '.github/workflows/dupekit-release-wheels.yaml'
+
+  # Linux wheels (x86_64 + aarch64) cross-compiled via zig on ubuntu.
+  # macOS wheels (x86_64 + arm64) built natively on macos-14.
+  build:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            targets: linux
+          - os: macos-14
+            targets: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Build wheels
+        run: python scripts/rust_package.py --skip-publish --targets ${{ matrix.targets }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/*
+
+  release:
+    if: needs.changes.outputs.should_run == 'true' && github.ref == 'refs/heads/main'
+    needs: [changes, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release and update pyproject
+        run: python scripts/rust_package.py --skip-build
+
+      - name: Open or update PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: auto/update-dupekit-wheels
+          TITLE: "chore: update dupekit wheels"
+          COMMIT_MESSAGE: "chore: pin dupekit wheels to ${{ github.sha }}"
+          DESIRED_LABELS: "agent-generated"
+        run: |
+          set -euo pipefail
+
+          BODY="Auto-generated: updates pyproject.toml to pin dupekit wheels from commit ${{ github.sha }}."
+          echo "$BODY" > pr_body.md
+          BODY_FILE=pr_body.md
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin "$BRANCH" --depth=1 2>/dev/null || true
+          if git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null; then
+            git checkout -B "$BRANCH" "refs/remotes/origin/$BRANCH"
+            git checkout "$GITHUB_SHA" -- .
+          else
+            git checkout -B "$BRANCH"
+          fi
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "pr_created=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "$COMMIT_MESSAGE"
+          git push --force-with-lease origin "$BRANCH"
+
+          PR_URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // ""')
+          if [[ -z "$PR_URL" ]]; then
+            gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$BODY_FILE" >/dev/null
+            PR_URL=$(gh pr view "$BRANCH" --json url --jq .url)
+          else
+            gh pr edit "$PR_URL" --title "$TITLE" --body-file "$BODY_FILE" >/dev/null
+          fi
+
+          CURRENT_LABELS=$(gh pr view "$PR_URL" --json labels --jq '[.labels[].name] | join(" ")')
+          for label in $DESIRED_LABELS; do
+            case " $CURRENT_LABELS " in *" $label "*) ;; *) gh pr edit "$PR_URL" --add-label "$label" >/dev/null ;; esac
+          done
+          for label in $CURRENT_LABELS; do
+            case " $DESIRED_LABELS " in *" $label "*) ;; *) gh pr edit "$PR_URL" --remove-label "$label" >/dev/null ;; esac
+          done
+
+          echo "pr_url=$PR_URL" >>"$GITHUB_OUTPUT"
+          echo "pr_created=true" >>"$GITHUB_OUTPUT"

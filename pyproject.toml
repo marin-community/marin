@@ -83,7 +83,10 @@ line-length = 121
 target-version = "py310"
 
 # Note :: Grow more strict over time!
+# Most of `scripts/**` is excluded until cleaned up, but `scripts/workflows/**`
+# is CI infrastructure and stays under ruff.
 extend-exclude = ["scripts/"]
+extend-include = ["scripts/workflows/**/*.py"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
@@ -119,6 +122,7 @@ project-includes = [
     "lib/iris/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
+    "scripts/workflows",
 ]
 
 # Explicitly tell Pyrefly where our editable packages live so it resolves imports
@@ -143,7 +147,22 @@ use-ignore-files = false
 # Exclude non-production code from type checking
 project-excludes = [
     "experiments/**",
-    "scripts/**",
+    "scripts/canary/**",
+    "scripts/datakit/**",
+    "scripts/debug/**",
+    "scripts/ferries/**",
+    "scripts/gcp-ssh/**",
+    "scripts/gcs-reorganization/**",
+    "scripts/gpu_eval/**",
+    "scripts/iris/**",
+    "scripts/migrations/**",
+    "scripts/ops/**",
+    "scripts/pm/**",
+    "scripts/ray/**",
+    "scripts/speedrun/**",
+    "scripts/storage/**",
+    "scripts/training/**",
+    "scripts/*.py",
     "tests/**",
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open

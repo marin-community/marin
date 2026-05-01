@@ -11,8 +11,8 @@ import { githubAuthHeaders, REPO } from "./github.js";
 
 export const FERRY_WORKFLOWS = [
   { name: "Canary ferry", file: "marin-canary-ferry.yaml" },
-  { name: "CW ferry", file: "marin-canary-ferry-cw.yaml" },
-  { name: "Datakit ferry", file: "marin-datakit-smoke.yaml" },
+  { name: "CW ferry", file: "marin-canary-ferry-coreweave.yaml" },
+  { name: "Datakit ferry", file: "marin-smoke-datakit.yaml" },
 ] as const;
 
 export type WorkflowConfig = (typeof FERRY_WORKFLOWS)[number];

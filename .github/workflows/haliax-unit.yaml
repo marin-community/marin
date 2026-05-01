@@ -1,4 +1,4 @@
-name: "Marin - Docs"
+name: "Haliax - Unit"
 
 on:
   push:
@@ -36,38 +36,30 @@ jobs:
           uv run --no-project --with click python scripts/workflows/changes.py match \
             --base "$BASE_SHA" \
             --head "$HEAD_SHA" \
-            --group relevant='docs/**,mkdocs.yml,.github/workflows/marin-docs.yaml' \
+            --group relevant='lib/haliax/**,uv.lock,.github/workflows/haliax-*.yaml' \
             --github-output
 
-  marin-docs:
+  haliax-unit:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
+
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: lib/haliax
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Install uv and Python
-        uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v5
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
         with:
-          version: "0.7.20"
           python-version: "3.11"
-          enable-cache: true
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Set up Python
-        run: uv python install
-
       - name: Install dependencies
-        run: uv sync --package marin --group dev
-
-      - name: Validate docs source links
-        run: uv run python infra/check_docs_source_links.py
-
-      - name: Build documentation
         run: |
-          uv run mkdocs build --strict
+          python -m pip install uv
+          uv sync --package marin-haliax --dev
+      - name: Test with pytest (JAX 0.9.2)
+        run: |
+          # Test with specific JAX version
+          JAX_NUM_CPU_DEVICES=8 PYTHONPATH=tests:src:. uv run --package marin-haliax --with "jax[cpu]==0.9.2" pytest -c pyproject.toml tests
