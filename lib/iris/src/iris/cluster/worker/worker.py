@@ -935,11 +935,7 @@ class Worker:
         table = self._worker_stats_table
         if table is None or self._worker_id is None:
             return
-        running = int(snapshot.running_task_count)
-        if running > 0 or self._tasks:
-            status = WorkerStatus.RUNNING
-        else:
-            status = WorkerStatus.IDLE
+        status = WorkerStatus.RUNNING if self._tasks else WorkerStatus.IDLE
         stat = build_worker_stat(
             worker_id=self._worker_id,
             ts=_now_dt(),

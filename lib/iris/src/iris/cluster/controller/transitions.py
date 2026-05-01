@@ -2172,7 +2172,7 @@ class ControllerTransitions:
             jobs_deleted += 1
             time.sleep(pause_between_s)
 
-        # 2. Workers: one at a time (CASCADE to attributes, task_history, resource_history)
+        # 2. Workers: one at a time (CASCADE to attributes, task_history)
         workers_deleted = 0
         while not _stopped():
             with self._store.read_snapshot() as snap:

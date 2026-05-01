@@ -89,6 +89,7 @@ interface QueryResponse {
 }
 
 function buildTaskStatsSql(taskId: string): string {
+  // QueryRequest has no param binding; manual DuckDB single-quote escape.
   const escaped = taskId.replace(/'/g, "''")
   return `
 SELECT ts, cpu_millicores, memory_mb

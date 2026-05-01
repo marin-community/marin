@@ -79,8 +79,7 @@ interface QueryResponse {
 }
 
 function buildStatsSql(workerId: string): string {
-  // workerId comes from the URL; quote with single quotes and escape any
-  // embedded single-quote by doubling it (DuckDB SQL string literal rules).
+  // QueryRequest has no param binding; manual DuckDB single-quote escape.
   const escaped = workerId.replace(/'/g, "''")
   return `
 SELECT ts, cpu_pct, mem_bytes, mem_total_bytes,
