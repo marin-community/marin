@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 from types import SimpleNamespace
 
 from marin.rl.rl_losses import RLOOLoss
@@ -298,8 +299,10 @@ def test_weight_transfer_hook_logs_global_and_attempt_metrics(monkeypatch):
         def serve_weights(self, weight_id: int, model: object) -> None:
             served_weights.append((weight_id, model))
 
-        def get_metrics(self) -> WeightTransferServerMetrics:
-            return WeightTransferServerMetrics(total_transfers=8, successful_transfers=8, failed_transfers=0)
+        def get_metrics(self) -> dict:
+            return dataclasses.asdict(
+                WeightTransferServerMetrics(total_transfers=8, successful_transfers=8, failed_transfers=0)
+            )
 
     class _FakeTracker:
         def log(self, metrics: dict[str, float | int], *, step: int) -> None:

@@ -9,7 +9,6 @@ rollout workers, and periodically dumps new checkpoints to disk. These
 checkpoints are read by the rollout workers to update their models.
 """
 
-import dataclasses
 import faulthandler
 import logging
 import signal
@@ -603,7 +602,7 @@ class TrainWorker:
         self.transfer_server.serve_weights(step, model_params)
         transfer_time = time.time() - transfer_start
 
-        attempt_metrics = dataclasses.asdict(self.transfer_server.get_metrics())
+        attempt_metrics = self.transfer_server.get_metrics()
         metrics = {f"weight_transfer/attempt_{k}": v for k, v in attempt_metrics.items()}
         metrics.update(
             {
