@@ -239,7 +239,12 @@ def _shard_a2a_params(
     send_sizes = row
 
     recv_sizes = shard_counts[:, shard_id]
-    output_offsets = jnp.cumsum(jnp.concatenate((jnp.array([0], dtype=recv_sizes.dtype), recv_sizes[:-1])))
+    # `ragged_all_to_all` expects sender-side output offsets: for each
+    # destination shard, where this sender's slice should land in the remote
+    # receiver buffer. JAX computes the local receive offsets by transposing
+    # these offsets with an internal all_to_all.
+    sender_output_offsets = jnp.cumsum(shard_counts, axis=0, dtype=shard_counts.dtype) - shard_counts
+    output_offsets = sender_output_offsets[shard_id]
     return input_offsets, send_sizes, output_offsets, recv_sizes
 
 
