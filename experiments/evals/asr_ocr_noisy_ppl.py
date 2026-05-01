@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
@@ -20,10 +20,10 @@ import fsspec
 from datasets import load_dataset
 from fray import ResourceConfig
 from levanter.utils import fsspec_utils
+from zephyr import Dataset, ZephyrContext
 
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
 from marin.execution.executor import this_output_path
-from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import HfDatasetSpec
 
@@ -124,49 +124,90 @@ def linearize_noisy_clean_row(
     return {NOISY_TEXT_FIELD: noisy_text, CLEAN_TEXT_FIELD: clean_text}
 
 
-def _iter_linearized_rows(slice_: NoisyTextSlice) -> Iterable[dict[str, str]]:
-    dataset = load_dataset(
-        slice_.hf_dataset.id,
-        name=slice_.hf_dataset.name,
-        split=slice_.split,
-        streaming=True,
-    )
-    for row in dataset:
-        linearized = linearize_noisy_clean_row(row, noisy_key=slice_.noisy_key, clean_key=slice_.clean_key)
-        if linearized is not None:
-            yield linearized
-
-
 def _slice_output_path(output_path: str, registry_name: str) -> str:
     return os.path.join(output_path, registry_name, DEFAULT_RAW_SHARD_NAME)
+
+
+def _slice_task(slice_: NoisyTextSlice, *, max_rows_per_slice_override: int | None) -> dict[str, object]:
+    return {
+        "registry_name": slice_.registry_name,
+        "hf_dataset_id": slice_.hf_dataset.id,
+        "hf_dataset_name": slice_.hf_dataset.name,
+        "split": slice_.split,
+        "noisy_key": slice_.noisy_key,
+        "clean_key": slice_.clean_key,
+        "row_cap": slice_.max_rows if max_rows_per_slice_override is None else max_rows_per_slice_override,
+    }
+
+
+def materialize_noisy_asr_ocr_slice(task: Mapping[str, object], *, output_path: str) -> dict[str, object]:
+    registry_name = task["registry_name"]
+    if not isinstance(registry_name, str):
+        raise ValueError("registry_name must be a string.")
+    hf_dataset_id = task["hf_dataset_id"]
+    if not isinstance(hf_dataset_id, str):
+        raise ValueError("hf_dataset_id must be a string.")
+    hf_dataset_name = task["hf_dataset_name"]
+    if hf_dataset_name is not None and not isinstance(hf_dataset_name, str):
+        raise ValueError("hf_dataset_name must be a string or None.")
+    split = task["split"]
+    if not isinstance(split, str):
+        raise ValueError("split must be a string.")
+    noisy_key = task["noisy_key"]
+    clean_key = task["clean_key"]
+    if not isinstance(noisy_key, str) or not isinstance(clean_key, str):
+        raise ValueError("noisy_key and clean_key must be strings.")
+    row_cap = task["row_cap"]
+    if not isinstance(row_cap, int):
+        raise ValueError("row_cap must be an integer.")
+    if row_cap <= 0:
+        raise ValueError(f"row cap must be positive, got {row_cap}.")
+
+    output_file = _slice_output_path(output_path, registry_name)
+    fsspec_utils.mkdirs(os.path.dirname(output_file))
+    dataset = load_dataset(
+        hf_dataset_id,
+        name=hf_dataset_name,
+        split=split,
+        streaming=True,
+    )
+
+    kept = 0
+    with fsspec.open(output_file, "wt", compression="gzip") as sink:
+        for row in dataset:
+            linearized = linearize_noisy_clean_row(row, noisy_key=noisy_key, clean_key=clean_key)
+            if linearized is None:
+                continue
+            sink.write(json.dumps(linearized, ensure_ascii=True))
+            sink.write("\n")
+            kept += 1
+            if kept >= row_cap:
+                break
+
+    return {"registry_name": registry_name, "records": kept, "output_file": output_file}
 
 
 def materialize_noisy_asr_ocr_raw(config: NoisyAsrOcrRawConfig) -> None:
     """Materialize paired noisy/clean text rows into jsonl.gz shards."""
     fsspec_utils.mkdirs(config.output_path)
-    for slice_ in config.slices:
-        output_file = _slice_output_path(config.output_path, slice_.registry_name)
-        fsspec_utils.mkdirs(os.path.dirname(output_file))
-        row_cap = slice_.max_rows if config.max_rows_per_slice_override is None else config.max_rows_per_slice_override
-        if row_cap <= 0:
-            raise ValueError(f"row cap must be positive, got {row_cap}.")
-        with fsspec.open(output_file, "wt", compression="gzip") as sink:
-            for index, record in enumerate(_iter_linearized_rows(slice_)):
-                if index >= row_cap:
-                    break
-                sink.write(json.dumps(record, ensure_ascii=True))
-                sink.write("\n")
+    tasks = [
+        _slice_task(slice_, max_rows_per_slice_override=config.max_rows_per_slice_override) for slice_ in config.slices
+    ]
+    pipeline = (
+        Dataset.from_list(tasks)
+        .map(lambda task: materialize_noisy_asr_ocr_slice(task, output_path=config.output_path))
+        .write_jsonl(f"{config.output_path}/.metrics/materialize-{{shard:05d}}.jsonl", skip_existing=True)
+    )
+    ctx = ZephyrContext(
+        name="materialize-asr-ocr-noisy",
+        resources=ResourceConfig(cpu=1, ram="32g"),
+    )
+    list(ctx.execute(pipeline))
 
-
-_MATERIALIZE_NOISY_ASR_OCR = remote(
-    materialize_noisy_asr_ocr_raw,
-    resources=ResourceConfig.with_cpu(cpu=4, ram="32g", disk="40g"),
-    pip_dependency_groups=["cpu"],
-)
 
 noisy_asr_ocr_raw = StepSpec(
     name=os.path.join("raw", "evals", ASR_OCR_NOISY_DATASET_ROOT),
-    fn=lambda output_path: _MATERIALIZE_NOISY_ASR_OCR(NoisyAsrOcrRawConfig(output_path=output_path)),
+    fn=lambda output_path: materialize_noisy_asr_ocr_raw(NoisyAsrOcrRawConfig(output_path=output_path)),
     hash_attrs={
         "dataset_root": ASR_OCR_NOISY_DATASET_ROOT,
         "slices": [

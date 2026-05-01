@@ -4,17 +4,14 @@
 import gzip
 import json
 
+from experiments.evals import asr_ocr_noisy_ppl
 from experiments.evals.asr_ocr_noisy_ppl import (
     ASR_OCR_NOISY_DATASET_ROOT,
     ASR_OCR_NOISY_SLICES,
-    NoisyAsrOcrRawConfig,
-    NoisyTextFamily,
-    NoisyTextSlice,
     linearize_noisy_clean_row,
-    materialize_noisy_asr_ocr_raw,
+    materialize_noisy_asr_ocr_slice,
     noisy_asr_ocr_raw_validation_sets,
 )
-from marin.processing.tokenize import HfDatasetSpec
 
 
 def test_linearize_noisy_clean_row_uses_first_hypothesis_and_preserves_reference():
@@ -49,9 +46,7 @@ def test_noisy_asr_ocr_raw_validation_sets_registers_clean_and_noisy_slices():
         assert datasets[clean_key].tags[-1] == "variant:clean"
 
 
-def test_materialize_noisy_asr_ocr_raw_respects_per_slice_cap(tmp_path, monkeypatch):
-    from experiments.evals import asr_ocr_noisy_ppl
-
+def test_materialize_noisy_asr_ocr_slice_respects_per_slice_cap(tmp_path, monkeypatch):
     rows = [
         {"hyps": ["NOISY ONE"], "ref": "clean one"},
         {"hyps": ["NOISY TWO"], "ref": "clean two"},
@@ -63,18 +58,18 @@ def test_materialize_noisy_asr_ocr_raw_respects_per_slice_cap(tmp_path, monkeypa
         return rows
 
     monkeypatch.setattr(asr_ocr_noisy_ppl, "load_dataset", _fake_load_dataset)
-    slice_ = NoisyTextSlice(
-        registry_name="synthetic",
-        family=NoisyTextFamily.ASR,
-        source_url="https://example.com",
-        hf_dataset=HfDatasetSpec(id="synthetic/dataset"),
-        split="test",
-        noisy_key="hyps",
-        clean_key="ref",
-        max_rows=2,
+    materialize_noisy_asr_ocr_slice(
+        {
+            "registry_name": "synthetic",
+            "hf_dataset_id": "synthetic/dataset",
+            "hf_dataset_name": None,
+            "split": "test",
+            "noisy_key": "hyps",
+            "clean_key": "ref",
+            "row_cap": 2,
+        },
+        output_path=str(tmp_path),
     )
-
-    materialize_noisy_asr_ocr_raw(NoisyAsrOcrRawConfig(output_path=str(tmp_path), slices=(slice_,)))
 
     with gzip.open(tmp_path / "synthetic" / "data-00000-of-00001.jsonl.gz", "rt") as handle:
         materialized = [json.loads(line) for line in handle]
