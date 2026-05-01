@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useLogServerStatsRpc } from '@/composables/useRpc'
+import { logServerStatsRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import type { WorkerHealth, WorkerMetadata } from '@/types/rpc'
 import { formatRelativeTime, formatBytes, formatWorkerDevice } from '@/utils/formatting'
@@ -20,6 +20,7 @@ import CopyButton from '@/components/shared/CopyButton.vue'
 // UTC by casting now() explicitly so a non-UTC server doesn't filter with
 // the wrong window.
 const LOOKBACK_MINUTES = 5
+const WORKER_NAMESPACE = 'iris.worker'
 const WORKER_STATS_SQL = `
 SELECT *
 FROM (
@@ -36,7 +37,44 @@ interface QueryResponse {
   arrowIpc?: string
 }
 
-const { data, loading, error, refresh } = useLogServerStatsRpc<QueryResponse>('Query', { sql: WORKER_STATS_SQL })
+interface NamespaceInfo {
+  namespace: string
+}
+
+interface ListNamespacesResponse {
+  namespaces?: NamespaceInfo[]
+}
+
+const data = ref<QueryResponse | null>(null)
+const loading = ref(false)
+const error = ref<string | null>(null)
+let generation = 0
+
+// Gate the SQL on ListNamespaces so a freshly-started log-server (no worker
+// has registered the namespace yet) renders the empty state instead of a
+// raw "Catalog Error: Table iris.worker does not exist" banner.
+async function refresh() {
+  const gen = ++generation
+  loading.value = true
+  error.value = null
+  try {
+    const list = await logServerStatsRpcCall<ListNamespacesResponse>('ListNamespaces', {})
+    if (gen !== generation) return
+    const registered = (list.namespaces ?? []).some((n) => n.namespace === WORKER_NAMESPACE)
+    if (!registered) {
+      data.value = { arrowIpc: undefined }
+      return
+    }
+    const resp = await logServerStatsRpcCall<QueryResponse>('Query', { sql: WORKER_STATS_SQL })
+    if (gen !== generation) return
+    data.value = resp
+  } catch (e) {
+    if (gen !== generation) return
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    if (gen === generation) loading.value = false
+  }
+}
 
 useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
 onMounted(refresh)
