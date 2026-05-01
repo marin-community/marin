@@ -15,6 +15,7 @@ dependencies = [
     "typing-extensions>=4.0",
     "click>=8.0",
     "cloudpickle>=3.0",
+    "duckdb>=1.0.0",
     "humanfriendly>=10.0",
     "msgspec>=0.18.0",
     "numpy>=2.0",

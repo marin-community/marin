@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Literal
 
+import duckdb
 import fsspec
 import msgspec
 import numpy as np
@@ -27,6 +28,24 @@ from zephyr import counters
 from zephyr.expr import Expr
 
 logger = logging.getLogger(__name__)
+
+
+# PyArrow's parquet C++ reader has a hard ~8 MiB cap on the thrift page-header
+# size (https://github.com/apache/arrow/issues/46404). Page headers carry
+# per-page column statistics; when a single value in a column exceeds that cap
+# the writer's stats overflow, and PyArrow refuses to decode with
+# `OSError: Couldn't deserialize thrift: ...`. DuckDB, arrow-rs, and arro3 read
+# the same bytes successfully because they don't cap the page-header size, so
+# we fall back to DuckDB on that specific error. The pivotal axis is value
+# size per row, not the writer or writer version. See
+# https://github.com/marin-community/marin/issues/5334. The PyArrow read-side
+# fix (https://github.com/apache/arrow/pull/47758) adds `max_page_header_size`
+# but is unmerged as of 2026-04; once it ships in a pinned PyArrow this
+# fallback can be replaced with `set_max_page_header_size`.
+_THRIFT_DESERIALIZE_MARKER = "deserialize thrift"
+
+# Bound DuckDB fallback memory: yield Arrow tables of this many rows.
+_DUCKDB_FALLBACK_BATCH_SIZE = 8192
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +109,7 @@ def iter_parquet_row_groups(
             drop_columns = extra
 
     cumulative_rows = 0
+    yielded_count = 0
 
     for i in range(pf.metadata.num_row_groups):
         rg_meta = pf.metadata.row_group(i)
@@ -108,7 +128,29 @@ def iter_parquet_row_groups(
             if rg_start >= row_end:
                 return
 
-        table = pf.read_row_group(i, columns=read_columns)
+        try:
+            table = pf.read_row_group(i, columns=read_columns)
+        except OSError as err:
+            # Fall back to DuckDB only when (a) the error is the parquet-rs
+            # page-header thrift failure, (b) we have a real path string we
+            # can hand to DuckDB, and (c) we have not yet yielded any tables
+            # — falling back mid-stream would re-yield earlier rows.
+            if _THRIFT_DESERIALIZE_MARKER not in str(err) or not isinstance(source, str) or yielded_count > 0:
+                raise
+            logger.warning(
+                "PyArrow rejected page header in %s; falling back to DuckDB. (%s)",
+                source,
+                err,
+            )
+            yield from _iter_parquet_via_duckdb(
+                source,
+                columns=read_columns,
+                row_start=row_start,
+                row_end=row_end,
+                equality_predicates=equality_predicates,
+                drop_columns=drop_columns,
+            )
+            return
 
         if has_row_range:
             assert row_start is not None and row_end is not None
@@ -125,6 +167,52 @@ def iter_parquet_row_groups(
             if drop_columns:
                 table = table.drop(drop_columns)
 
+        if len(table) > 0:
+            yielded_count += 1
+            yield table
+
+
+def _iter_parquet_via_duckdb(
+    path: str,
+    *,
+    columns: list[str] | None,
+    row_start: int | None,
+    row_end: int | None,
+    equality_predicates: dict[str, object] | None,
+    drop_columns: list[str],
+) -> Iterator[pa.Table]:
+    """Stream a parquet file through DuckDB, matching ``iter_parquet_row_groups`` semantics.
+
+    Used as a fallback when PyArrow's thrift decoder cannot read parquet-rs
+    page headers. Row range slicing happens in SQL via ``LIMIT/OFFSET`` to
+    preserve the "row positions, then filter" semantics of the PyArrow path;
+    equality predicates apply post-slice client-side.
+    """
+    fs, _ = url_to_fs(path)
+    con = duckdb.connect()
+    protocols = getattr(fs, "protocol", None)
+    if isinstance(protocols, str):
+        protocols = (protocols,)
+    if protocols and not any(p in ("file", "local") for p in protocols):
+        # DuckDB handles local paths natively; only register remote filesystems.
+        con.register_filesystem(fs)
+
+    select_clause = "*" if not columns else ", ".join(f'"{c}"' for c in columns)
+    query = f"SELECT {select_clause} FROM read_parquet(?)"
+    params: list[object] = [path]
+    if row_start is not None and row_end is not None:
+        query += " LIMIT ? OFFSET ?"
+        params += [row_end - row_start, row_start]
+
+    reader = con.execute(query, params).to_arrow_reader(_DUCKDB_FALLBACK_BATCH_SIZE)
+    for batch in reader:
+        table = pa.Table.from_batches([batch])
+        if equality_predicates:
+            for col_name, value in equality_predicates.items():
+                mask = pa.compute.equal(table.column(col_name), value)
+                table = table.filter(mask)
+            if drop_columns:
+                table = table.drop(drop_columns)
         if len(table) > 0:
             yield table
 
