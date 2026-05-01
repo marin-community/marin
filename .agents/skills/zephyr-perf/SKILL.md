@@ -1,15 +1,17 @@
 ---
 name: zephyr-perf
-description: Run an A/B perf gate on a PR that touches Zephyr internals — submit control + treatment ferries on Iris, compare metrics, post the verdict back to the PR. Use when a PR modifies `lib/zephyr/src/zephyr/**` and a reviewer (or label) asks for a perf gate.
+description: Run perf gates on a PR that touches Zephyr internals — submit a treatment ferry on Iris, compare against the latest scheduled baseline run, post the verdict back to the PR. Use when a PR modifies `lib/zephyr/src/zephyr/**` and a reviewer (or label) asks for a perf gate.
 ---
 
 # Skill: Zephyr Perf Gate
 
-A/B perf gate for Zephyr-internals PRs. The agent reads the diff, picks a
-max-gate from the assessment, submits the treatment ferry, compares against
+Perf gate for Zephyr-internals PRs. The agent reads the diff, picks a
+max-gate from the assessment, submits a treatment ferry, compares against
 the latest scheduled run, and posts a single canonical comment to the PR.
-Scheduled ferry runs (daily fineweb smoke, weekly nemotron) are the golden
-baseline — the agent does not re-run a fresh control.
+The control side of the comparison is always the latest successful
+scheduled ferry run on `main` (daily fineweb smoke, weekly nemotron
+partial-slice, weekly nemotron full-slice) — the agent never submits a
+control ferry of its own.
 
 This skill **only** triggers on changes to Zephyr internals
 (`lib/zephyr/src/zephyr/**`). Datakit / dedup / normalize / tokenize live in
@@ -141,8 +143,8 @@ still runs first when `max_gate >= 2`.
 ### 2. Locate the scheduled baselines
 
 Each gate compares its treatment run against the **latest successful
-scheduled ferry** on `main`. Scheduled ferries are the golden baseline; the
-agent does not re-run a fresh control.
+scheduled ferry** on `main`. The scheduled run is the control side of
+the comparison — the agent does not submit a separate control ferry.
 
 ```bash
 # Gate 1 baseline: latest successful daily fineweb smoke.
@@ -235,7 +237,8 @@ fi
 ### 5. Run Gate 1 (always — even when `max_gate >= 2`)
 
 Run treatment, compare against the latest scheduled fineweb smoke. The
-scheduled run **is** the control; we never re-run a fresh control.
+scheduled run **is** the control side of the comparison — the agent
+never submits a control ferry of its own.
 
 **a. Submit treatment.**
 
@@ -349,6 +352,10 @@ done
 
 ## Comment format (canonical)
 
+The `Control` column refers to the latest successful scheduled ferry on
+`main` (see "Locate the scheduled baselines" above) — the agent does not
+submit a separate control ferry.
+
 ```markdown
 <!-- zephyr-perf-gate -->
 🤖 ## Zephyr perf gate — Gate 1 (fineweb)
@@ -397,8 +404,8 @@ The comment **must** begin with `🤖` per repo convention (see
   a single failed run. If it flakes again, escalate to **debug-infra**.
 - **Scheduled baseline is missing or unparseable** (Iris log retention,
   expired status JSON, parsing error): post a comment explaining the gap and
-  ping the reviewer; do not invent numbers and do not run a fresh control
-  unless explicitly asked.
+  ping the reviewer; do not invent numbers. The agent does not submit a
+  ferry of its own to fill the gap unless the reviewer explicitly asks.
 - **Treatment OOMs at a stage the baseline didn't**: hard fail. Always
   surface the worker-pool death log with the OOM line in the comment so the
   author can act without re-pulling logs.
