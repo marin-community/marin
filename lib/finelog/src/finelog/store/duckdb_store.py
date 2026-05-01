@@ -369,6 +369,32 @@ class DuckDBLogStore:
                 existing_ns.update_schema(effective)
             return effective
 
+    def list_namespaces(self) -> list[tuple[str, Schema]]:
+        """Snapshot every registered namespace with its current schema.
+
+        Returns ``(name, schema)`` tuples in registration order. The
+        privileged ``log`` namespace is included so callers can introspect
+        it like any other surface. Snapshot is taken under the insertion
+        mutex so the result is consistent with concurrent register/drop.
+        """
+        with self._insertion_lock:
+            items = sorted(
+                self._namespaces.items(),
+                key=lambda kv: self._namespace_registered_at.get(kv[0], 0),
+            )
+            return [(name, ns.schema) for name, ns in items]
+
+    def get_table_schema(self, name: str) -> Schema:
+        """Return the registered schema for ``name``.
+
+        Raises ``NamespaceNotFoundError`` for unknown namespaces.
+        """
+        with self._insertion_lock:
+            ns = self._namespaces.get(name)
+            if ns is None:
+                raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
+            return ns.schema
+
     def write_rows(self, name: str, arrow_ipc_bytes: bytes) -> int:
         """Validate ``arrow_ipc_bytes`` and append the rows to ``name``.
 

@@ -29,6 +29,12 @@ class StatsService(Protocol):
     async def drop_table(self, request: finelog__stats__pb2.DropTableRequest, ctx: RequestContext) -> finelog__stats__pb2.DropTableResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def list_namespaces(self, request: finelog__stats__pb2.ListNamespacesRequest, ctx: RequestContext) -> finelog__stats__pb2.ListNamespacesResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def get_table_schema(self, request: finelog__stats__pb2.GetTableSchemaRequest, ctx: RequestContext) -> finelog__stats__pb2.GetTableSchemaResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class StatsServiceASGIApplication(ConnectASGIApplication[StatsService]):
     def __init__(self, service: StatsService | AsyncGenerator[StatsService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
@@ -74,6 +80,26 @@ class StatsServiceASGIApplication(ConnectASGIApplication[StatsService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.drop_table,
+                ),
+                "/finelog.stats.StatsService/ListNamespaces": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ListNamespaces",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.ListNamespacesRequest,
+                        output=finelog__stats__pb2.ListNamespacesResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.list_namespaces,
+                ),
+                "/finelog.stats.StatsService/GetTableSchema": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetTableSchema",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.GetTableSchemaRequest,
+                        output=finelog__stats__pb2.GetTableSchemaResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_table_schema,
                 ),
             },
             interceptors=interceptors,
@@ -168,6 +194,46 @@ class StatsServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def list_namespaces(
+        self,
+        request: finelog__stats__pb2.ListNamespacesRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.ListNamespacesResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListNamespaces",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.ListNamespacesRequest,
+                output=finelog__stats__pb2.ListNamespacesResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def get_table_schema(
+        self,
+        request: finelog__stats__pb2.GetTableSchemaRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.GetTableSchemaResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetTableSchema",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.GetTableSchemaRequest,
+                output=finelog__stats__pb2.GetTableSchemaResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 class StatsServiceSync(Protocol):
     def register_table(self, request: finelog__stats__pb2.RegisterTableRequest, ctx: RequestContext) -> finelog__stats__pb2.RegisterTableResponse:
@@ -177,6 +243,10 @@ class StatsServiceSync(Protocol):
     def query(self, request: finelog__stats__pb2.QueryRequest, ctx: RequestContext) -> finelog__stats__pb2.QueryResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def drop_table(self, request: finelog__stats__pb2.DropTableRequest, ctx: RequestContext) -> finelog__stats__pb2.DropTableResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def list_namespaces(self, request: finelog__stats__pb2.ListNamespacesRequest, ctx: RequestContext) -> finelog__stats__pb2.ListNamespacesResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_table_schema(self, request: finelog__stats__pb2.GetTableSchemaRequest, ctx: RequestContext) -> finelog__stats__pb2.GetTableSchemaResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -223,6 +293,26 @@ class StatsServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.drop_table,
+                ),
+                "/finelog.stats.StatsService/ListNamespaces": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ListNamespaces",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.ListNamespacesRequest,
+                        output=finelog__stats__pb2.ListNamespacesResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.list_namespaces,
+                ),
+                "/finelog.stats.StatsService/GetTableSchema": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetTableSchema",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.GetTableSchemaRequest,
+                        output=finelog__stats__pb2.GetTableSchemaResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_table_schema,
                 ),
             },
             interceptors=interceptors,
@@ -311,6 +401,46 @@ class StatsServiceClientSync(ConnectClientSync):
                 service_name="finelog.stats.StatsService",
                 input=finelog__stats__pb2.DropTableRequest,
                 output=finelog__stats__pb2.DropTableResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def list_namespaces(
+        self,
+        request: finelog__stats__pb2.ListNamespacesRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.ListNamespacesResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListNamespaces",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.ListNamespacesRequest,
+                output=finelog__stats__pb2.ListNamespacesResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_table_schema(
+        self,
+        request: finelog__stats__pb2.GetTableSchemaRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.GetTableSchemaResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetTableSchema",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.GetTableSchemaRequest,
+                output=finelog__stats__pb2.GetTableSchemaResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

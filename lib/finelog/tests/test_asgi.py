@@ -195,3 +195,59 @@ def test_drop_table_unknown_namespace_via_asgi(tmp_path: Path):
             assert resp.status_code == 404, resp.text
     finally:
         log_service.close()
+
+
+def test_list_namespaces_and_get_table_schema_via_asgi(tmp_path: Path):
+    """ListNamespaces returns every registered namespace (including the
+    privileged ``log``) with its current schema; GetTableSchema returns the
+    same schema and 404s on unknown names."""
+    log_service = LogServiceImpl(log_dir=tmp_path / "data")
+    stats_service = StatsServiceImpl(log_store=log_service.log_store)
+    app = build_log_server_asgi(log_service, stats_service=stats_service)
+
+    try:
+        with TestClient(app) as client:
+            schema_msg = stats_pb2.Schema(
+                columns=[
+                    stats_pb2.Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+                    stats_pb2.Column(name="mem_bytes", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+                    stats_pb2.Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+                ],
+            )
+            for ns in ("iris.worker", "metrics.cpu"):
+                resp = client.post(
+                    "/finelog.stats.StatsService/RegisterTable",
+                    content=stats_pb2.RegisterTableRequest(namespace=ns, schema=schema_msg).SerializeToString(),
+                    headers={"Content-Type": "application/proto"},
+                )
+                assert resp.status_code == 200, resp.text
+
+            resp = client.post(
+                "/finelog.stats.StatsService/ListNamespaces",
+                content=stats_pb2.ListNamespacesRequest().SerializeToString(),
+                headers={"Content-Type": "application/proto"},
+            )
+            assert resp.status_code == 200, resp.text
+            list_resp = stats_pb2.ListNamespacesResponse.FromString(resp.content)
+            names = [ns.namespace for ns in list_resp.namespaces]
+            assert names == ["log", "iris.worker", "metrics.cpu"]
+            iris = next(ns for ns in list_resp.namespaces if ns.namespace == "iris.worker")
+            assert [c.name for c in iris.schema.columns] == ["worker_id", "mem_bytes", "timestamp_ms"]
+
+            resp = client.post(
+                "/finelog.stats.StatsService/GetTableSchema",
+                content=stats_pb2.GetTableSchemaRequest(namespace="metrics.cpu").SerializeToString(),
+                headers={"Content-Type": "application/proto"},
+            )
+            assert resp.status_code == 200, resp.text
+            get_resp = stats_pb2.GetTableSchemaResponse.FromString(resp.content)
+            assert [c.name for c in get_resp.schema.columns] == ["worker_id", "mem_bytes", "timestamp_ms"]
+
+            resp = client.post(
+                "/finelog.stats.StatsService/GetTableSchema",
+                content=stats_pb2.GetTableSchemaRequest(namespace="nope.unknown").SerializeToString(),
+                headers={"Content-Type": "application/proto"},
+            )
+            assert resp.status_code == 404, resp.text
+    finally:
+        log_service.close()

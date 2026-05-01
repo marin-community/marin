@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x13\x66inelog_stats.proto\x12\rfinelog.stats\"g\n\x06\x43olumn\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12-\n\x04type\x18\x02 \x01(\x0e\x32\x19.finelog.stats.ColumnTypeR\x04type\x12\x1a\n\x08nullable\x18\x03 \x01(\x08R\x08nullable\"X\n\x06Schema\x12/\n\x07\x63olumns\x18\x01 \x03(\x0b\x32\x15.finelog.stats.ColumnR\x07\x63olumns\x12\x1d\n\nkey_column\x18\x02 \x01(\tR\tkeyColumn\"c\n\x14RegisterTableRequest\x12\x1c\n\tnamespace\x18\x01 \x01(\tR\tnamespace\x12-\n\x06schema\x18\x02 \x01(\x0b\x32\x15.finelog.stats.SchemaR\x06schema\"Y\n\x15RegisterTableResponse\x12@\n\x10\x65\x66\x66\x65\x63tive_schema\x18\x01 \x01(\x0b\x32\x15.finelog.stats.SchemaR\x0f\x65\x66\x66\x65\x63tiveSchema\"M\n\x10WriteRowsRequest\x12\x1c\n\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x1b\n\tarrow_ipc\x18\x02 \x01(\x0cR\x08\x61rrowIpc\"6\n\x11WriteRowsResponse\x12!\n\x0crows_written\x18\x01 \x01(\x03R\x0browsWritten\" \n\x0cQueryRequest\x12\x10\n\x03sql\x18\x01 \x01(\tR\x03sql\"I\n\rQueryResponse\x12\x1b\n\tarrow_ipc\x18\x01 \x01(\x0cR\x08\x61rrowIpc\x12\x1b\n\trow_count\x18\x02 \x01(\x03R\x08rowCount\"0\n\x10\x44ropTableRequest\x12\x1c\n\tnamespace\x18\x01 \x01(\tR\tnamespace\"\x13\n\x11\x44ropTableResponse*\xcf\x01\n\nColumnType\x12\x17\n\x13\x43OLUMN_TYPE_UNKNOWN\x10\x00\x12\x16\n\x12\x43OLUMN_TYPE_STRING\x10\x01\x12\x15\n\x11\x43OLUMN_TYPE_INT64\x10\x02\x12\x17\n\x13\x43OLUMN_TYPE_FLOAT64\x10\x03\x12\x14\n\x10\x43OLUMN_TYPE_BOOL\x10\x04\x12\x1c\n\x18\x43OLUMN_TYPE_TIMESTAMP_MS\x10\x05\x12\x15\n\x11\x43OLUMN_TYPE_BYTES\x10\x06\x12\x15\n\x11\x43OLUMN_TYPE_INT32\x10\x07\x32\xce\x02\n\x0cStatsService\x12Z\n\rRegisterTable\x12#.finelog.stats.RegisterTableRequest\x1a$.finelog.stats.RegisterTableResponse\x12N\n\tWriteRows\x12\x1f.finelog.stats.WriteRowsRequest\x1a .finelog.stats.WriteRowsResponse\x12\x42\n\x05Query\x12\x1b.finelog.stats.QueryRequest\x1a\x1c.finelog.stats.QueryResponse\x12N\n\tDropTable\x12\x1f.finelog.stats.DropTableRequest\x1a .finelog.stats.DropTableResponseB{\n\x11\x63om.finelog.statsB\x11\x46inelogStatsProtoP\x01\xa2\x02\x03\x46SX\xaa\x02\rFinelog.Stats\xca\x02\rFinelog\\Stats\xe2\x02\x19\x46inelog\\Stats\\GPBMetadata\xea\x02\x0e\x46inelog::Statsb\x08\x65\x64itionsp\xe8\x07')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x13\x66inelog_stats.proto\x12\rfinelog.stats\"g\n\x06\x43olumn\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12-\n\x04type\x18\x02 \x01(\x0e\x32\x19.finelog.stats.ColumnTypeR\x04type\x12\x1a\n\x08nullable\x18\x03 \x01(\x08R\x08nullable\"X\n\x06Schema\x12/\n\x07\x63olumns\x18\x01 \x03(\x0b\x32\x15.finelog.stats.ColumnR\x07\x63olumns\x12\x1d\n\nkey_column\x18\x02 \x01(\tR\tkeyColumn\"c\n\x14RegisterTableRequest\x12\x1c\n\tnamespace\x18\x01 \x01(\tR\tnamespace\x12-\n\x06schema\x18\x02 \x01(\x0b\x32\x15.finelog.stats.SchemaR\x06schema\"Y\n\x15RegisterTableResponse\x12@\n\x10\x65\x66\x66\x65\x63tive_schema\x18\x01 \x01(\x0b\x32\x15.finelog.stats.SchemaR\x0f\x65\x66\x66\x65\x63tiveSchema\"M\n\x10WriteRowsRequest\x12\x1c\n\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x1b\n\tarrow_ipc\x18\x02 \x01(\x0cR\x08\x61rrowIpc\"6\n\x11WriteRowsResponse\x12!\n\x0crows_written\x18\x01 \x01(\x03R\x0browsWritten\" \n\x0cQueryRequest\x12\x10\n\x03sql\x18\x01 \x01(\tR\x03sql\"I\n\rQueryResponse\x12\x1b\n\tarrow_ipc\x18\x01 \x01(\x0cR\x08\x61rrowIpc\x12\x1b\n\trow_count\x18\x02 \x01(\x03R\x08rowCount\"0\n\x10\x44ropTableRequest\x12\x1c\n\tnamespace\x18\x01 \x01(\tR\tnamespace\"\x13\n\x11\x44ropTableResponse\"\\\n\rNamespaceInfo\x12\x1c\n\tnamespace\x18\x01 \x01(\tR\tnamespace\x12-\n\x06schema\x18\x02 \x01(\x0b\x32\x15.finelog.stats.SchemaR\x06schema\"\x17\n\x15ListNamespacesRequest\"V\n\x16ListNamespacesResponse\x12<\n\nnamespaces\x18\x01 \x03(\x0b\x32\x1c.finelog.stats.NamespaceInfoR\nnamespaces\"5\n\x15GetTableSchemaRequest\x12\x1c\n\tnamespace\x18\x01 \x01(\tR\tnamespace\"G\n\x16GetTableSchemaResponse\x12-\n\x06schema\x18\x01 \x01(\x0b\x32\x15.finelog.stats.SchemaR\x06schema*\xcf\x01\n\nColumnType\x12\x17\n\x13\x43OLUMN_TYPE_UNKNOWN\x10\x00\x12\x16\n\x12\x43OLUMN_TYPE_STRING\x10\x01\x12\x15\n\x11\x43OLUMN_TYPE_INT64\x10\x02\x12\x17\n\x13\x43OLUMN_TYPE_FLOAT64\x10\x03\x12\x14\n\x10\x43OLUMN_TYPE_BOOL\x10\x04\x12\x1c\n\x18\x43OLUMN_TYPE_TIMESTAMP_MS\x10\x05\x12\x15\n\x11\x43OLUMN_TYPE_BYTES\x10\x06\x12\x15\n\x11\x43OLUMN_TYPE_INT32\x10\x07\x32\x8c\x04\n\x0cStatsService\x12Z\n\rRegisterTable\x12#.finelog.stats.RegisterTableRequest\x1a$.finelog.stats.RegisterTableResponse\x12N\n\tWriteRows\x12\x1f.finelog.stats.WriteRowsRequest\x1a .finelog.stats.WriteRowsResponse\x12\x42\n\x05Query\x12\x1b.finelog.stats.QueryRequest\x1a\x1c.finelog.stats.QueryResponse\x12N\n\tDropTable\x12\x1f.finelog.stats.DropTableRequest\x1a .finelog.stats.DropTableResponse\x12]\n\x0eListNamespaces\x12$.finelog.stats.ListNamespacesRequest\x1a%.finelog.stats.ListNamespacesResponse\x12]\n\x0eGetTableSchema\x12$.finelog.stats.GetTableSchemaRequest\x1a%.finelog.stats.GetTableSchemaResponseB{\n\x11\x63om.finelog.statsB\x11\x46inelogStatsProtoP\x01\xa2\x02\x03\x46SX\xaa\x02\rFinelog.Stats\xca\x02\rFinelog\\Stats\xe2\x02\x19\x46inelog\\Stats\\GPBMetadata\xea\x02\x0e\x46inelog::Statsb\x08\x65\x64itionsp\xe8\x07')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,8 +32,8 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'finelog_stats_pb2', _global
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\021com.finelog.statsB\021FinelogStatsProtoP\001\242\002\003FSX\252\002\rFinelog.Stats\312\002\rFinelog\\Stats\342\002\031Finelog\\Stats\\GPBMetadata\352\002\016Finelog::Stats'
-  _globals['_COLUMNTYPE']._serialized_start=741
-  _globals['_COLUMNTYPE']._serialized_end=948
+  _globals['_COLUMNTYPE']._serialized_start=1076
+  _globals['_COLUMNTYPE']._serialized_end=1283
   _globals['_COLUMN']._serialized_start=38
   _globals['_COLUMN']._serialized_end=141
   _globals['_SCHEMA']._serialized_start=143
@@ -54,6 +54,16 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_DROPTABLEREQUEST']._serialized_end=717
   _globals['_DROPTABLERESPONSE']._serialized_start=719
   _globals['_DROPTABLERESPONSE']._serialized_end=738
-  _globals['_STATSSERVICE']._serialized_start=951
-  _globals['_STATSSERVICE']._serialized_end=1285
+  _globals['_NAMESPACEINFO']._serialized_start=740
+  _globals['_NAMESPACEINFO']._serialized_end=832
+  _globals['_LISTNAMESPACESREQUEST']._serialized_start=834
+  _globals['_LISTNAMESPACESREQUEST']._serialized_end=857
+  _globals['_LISTNAMESPACESRESPONSE']._serialized_start=859
+  _globals['_LISTNAMESPACESRESPONSE']._serialized_end=945
+  _globals['_GETTABLESCHEMAREQUEST']._serialized_start=947
+  _globals['_GETTABLESCHEMAREQUEST']._serialized_end=1000
+  _globals['_GETTABLESCHEMARESPONSE']._serialized_start=1002
+  _globals['_GETTABLESCHEMARESPONSE']._serialized_end=1073
+  _globals['_STATSSERVICE']._serialized_start=1286
+  _globals['_STATSSERVICE']._serialized_end=1810
 # @@protoc_insertion_point(module_scope)

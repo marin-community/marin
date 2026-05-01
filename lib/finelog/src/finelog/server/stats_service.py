@@ -119,3 +119,25 @@ class StatsServiceImpl:
         except InvalidNamespaceError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         return stats_pb2.DropTableResponse()
+
+    def list_namespaces(
+        self,
+        request: stats_pb2.ListNamespacesRequest,
+        ctx: Any,
+    ) -> stats_pb2.ListNamespacesResponse:
+        infos = [
+            stats_pb2.NamespaceInfo(namespace=name, schema=schema_to_proto(schema))
+            for name, schema in self._log_store.list_namespaces()
+        ]
+        return stats_pb2.ListNamespacesResponse(namespaces=infos)
+
+    def get_table_schema(
+        self,
+        request: stats_pb2.GetTableSchemaRequest,
+        ctx: Any,
+    ) -> stats_pb2.GetTableSchemaResponse:
+        try:
+            schema = self._log_store.get_table_schema(request.namespace)
+        except NamespaceNotFoundError as exc:
+            raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
+        return stats_pb2.GetTableSchemaResponse(schema=schema_to_proto(schema))
