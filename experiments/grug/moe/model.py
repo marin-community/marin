@@ -496,7 +496,8 @@ class Transformer(eqx.Module):
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_window = cfg.short_sliding_window if cfg.short_sliding_window is not None else cfg.sliding_window // 2
         short_mask = AttentionMask(is_causal=True, sliding_window=short_window, segment_ids=segment_ids)
-        long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        long_window = cfg.sliding_window if cfg.sliding_window != cfg.max_seq_len else None
+        long_mask = AttentionMask(is_causal=True, sliding_window=long_window, segment_ids=segment_ids)
 
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
