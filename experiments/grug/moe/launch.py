@@ -153,16 +153,24 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
 
 
 def _stage_checkpoint_for_5319_workaround(checkpoint_base: str, output_path: str) -> str | None:
-    """Workaround for issue #5319: stage the latest checkpoint at ``checkpoint_base``
-    to a separate GCS prefix so the trainer's load_path != save_path.
+    """Workaround for issue #5319: stage the latest checkpoint to a separate
+    GCS prefix so the trainer's load_path != save_path AND save base_path is
+    empty on startup.
 
-    When load_path == save base_path, multi-host TPU runs hit a ``scheckne`` halt
-    at the first broadcast collective after resume. We don't yet understand why
-    at the OCDBT/tensorstore level, but empirically copying the latest step dir
-    to a sibling prefix and pointing the loader at that copy avoids the halt.
+    Empirically, multi-host resumes hit a ``scheckne`` halt at the first
+    broadcast collective after resume whenever the save base_path contains an
+    existing step-* dir at trainer startup. We don't yet understand the
+    OCDBT/tensorstore mechanism, but moving the latest step dir to a sibling
+    prefix (so load_path != save_path AND save base_path is empty) avoids it.
+
+    Robust to retries: this function looks for the latest step-* checkpoint in
+    BOTH ``checkpoint_base`` and the staging prefix and uses whichever has the
+    highest step. So if a prior attempt was interrupted at any point —
+    immediately after copy, after delete-original, after partial new save — the
+    next invocation picks up the latest available checkpoint and re-stages.
 
     Returns the staging prefix to pass as ``TrainerConfig.load_checkpoint_path``,
-    or None if there's no checkpoint to stage (fresh run).
+    or None if there's no checkpoint anywhere to stage (fresh run).
     """
     import json
     import logging
@@ -178,68 +186,79 @@ def _stage_checkpoint_for_5319_workaround(checkpoint_base: str, output_path: str
         return None  # local-fs case can't hit the multi-host bug
 
     fs = gcsfs.GCSFileSystem()
-    base = checkpoint_base[len("gs://") :]
 
-    # Find latest step-N subdir of checkpoint_base on worker 0.
-    # Other workers receive the staging path via multihost_broadcast_sync.
     is_source = jax.process_index() == 0
     staging_root = os.path.join(output_path, "_load_staging_5319")
-    staging_root_no_scheme = staging_root[len("gs://") :]
 
-    if is_source:
+    def _strip_scheme(path: str) -> str:
+        return path[len("gs://") :] if path.startswith("gs://") else path
+
+    base_no_scheme = _strip_scheme(checkpoint_base)
+    staging_no_scheme = _strip_scheme(staging_root)
+
+    def _find_latest(parent_no_scheme: str) -> tuple[int, str] | None:
+        """Find the highest-step step-* subdir under ``parent`` with valid metadata.
+
+        Returns (step, subdir_no_scheme) or None.
+        """
         try:
-            subdirs = fs.ls(base, detail=False)
+            subdirs = fs.ls(parent_no_scheme, detail=False)
         except FileNotFoundError:
-            subdirs = []
-
-        best_step = -1
-        best_subdir = None
+            return None
+        best: tuple[int, str] | None = None
         for subdir in subdirs:
             if "/step-" not in subdir:
                 continue
-            metadata_path = f"{subdir}/metadata.json"
             try:
-                with fs.open(metadata_path) as f:
+                with fs.open(f"{subdir}/metadata.json") as f:
                     metadata = json.load(f)
                 step = int(metadata.get("step", -1))
-                if step > best_step:
-                    best_step = step
-                    best_subdir = subdir
+                if step < 0:
+                    continue
+                if best is None or step > best[0]:
+                    best = (step, subdir)
             except Exception:
                 continue
+        return best
 
-        if best_subdir is None:
-            payload = {"staged": False}
+    if is_source:
+        base_latest = _find_latest(base_no_scheme)
+        staging_latest = _find_latest(staging_no_scheme)
+
+        if base_latest is None and staging_latest is None:
+            payload = {"staged": False}  # fresh run
         else:
-            # Clean up any prior staged copy from a previous resume so the
-            # storage cost stays bounded at one staged checkpoint.
-            try:
-                if fs.exists(staging_root_no_scheme):
-                    logger.info("issue #5319 workaround: removing stale staging at %s", staging_root)
-                    fs.rm(staging_root_no_scheme, recursive=True)
-            except Exception as exc:
-                logger.warning("issue #5319 workaround: failed to clean stale staging: %s", exc)
+            # Pick the higher-step source. Tie-break to base (newer save attempt).
+            use_base = base_latest is not None and (staging_latest is None or base_latest[0] >= staging_latest[0])
 
-            src = best_subdir  # already without gs:// prefix from fs.ls
-            dst = os.path.join(staging_root, f"step-{best_step}")[len("gs://") :]
-            logger.info("issue #5319 workaround: server-side copy %s -> gs://%s", src, dst)
-            # gcsfs.cp does server-side copies for same-bucket GCS->GCS.
-            fs.cp(src, dst, recursive=True)
-            logger.info("issue #5319 workaround: staging copy complete")
+            if use_base:
+                src_step, src_subdir = base_latest  # type: ignore[misc]
+                dst_subdir = os.path.join(staging_no_scheme, f"step-{src_step}")
+                # Always clear staging before re-copying so we don't mix step dirs.
+                try:
+                    if fs.exists(staging_no_scheme):
+                        logger.info("issue #5319 workaround: clearing staging at %s", staging_root)
+                        fs.rm(staging_no_scheme, recursive=True)
+                except Exception as exc:
+                    logger.warning("issue #5319 workaround: failed to clear staging: %s", exc)
 
-            # Critical: delete the original at checkpoint_base after copying. The
-            # bug doesn't depend just on load_path != save_path; it also fires
-            # whenever checkpoint_base (the save target) contains an existing
-            # step-* dir at trainer startup. Empirically, leaving the original
-            # in place while loading from the staging copy still trips scheckne.
-            # Path-different runs that work have an EMPTY save base_path. So the
-            # full workaround is: move (copy + delete original) into staging.
-            logger.info("issue #5319 workaround: removing original at %s to leave save base empty", src)
+                logger.info("issue #5319 workaround: server-side copy %s -> gs://%s", src_subdir, dst_subdir)
+                fs.cp(src_subdir, dst_subdir, recursive=True)
+                logger.info("issue #5319 workaround: staging copy complete")
+            else:
+                src_step, _ = staging_latest  # type: ignore[misc]
+                logger.info("issue #5319 workaround: staging already has step-%d; skipping re-copy", src_step)
+
+            # Always empty checkpoint_base before training starts so the trainer's
+            # save target is fresh. We have step-{src_step} preserved in staging
+            # at this point, so removing checkpoint_base content is safe.
             try:
-                fs.rm(src, recursive=True)
-                logger.info("issue #5319 workaround: original removed")
+                if fs.exists(base_no_scheme):
+                    logger.info("issue #5319 workaround: clearing save base at %s", checkpoint_base)
+                    fs.rm(base_no_scheme, recursive=True)
+                    logger.info("issue #5319 workaround: save base cleared")
             except Exception as exc:
-                logger.warning("issue #5319 workaround: failed to remove original (will retry on next resume): %s", exc)
+                logger.warning("issue #5319 workaround: failed to clear save base: %s", exc)
 
             payload = {"staged": True}
     else:
