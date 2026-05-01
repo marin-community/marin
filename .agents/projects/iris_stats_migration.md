@@ -235,10 +235,10 @@ Per step:
 - **Clock skew**: `ts` is the worker's wall clock. Cross-worker comparisons skew if hosts disagree. Acceptable — same risk we already accept for `last_heartbeat_ms`.
 - **No backfill**: existing `worker_resource_history` / `task_resource_history` rows are dropped, not migrated. Per AGENTS.md NO BACKWARD COMPATIBILITY. Operators who care can keep a snapshot of their pre-migration `iris.db`.
 
-### Open questions for the user
-1. Keep `WorkerResourceSnapshot` on the Ping reply once the controller stops persisting it, or drop it in a follow-up PR? (It is currently the only consumer.)
-2. Should `iris.task` include accelerator fields (`accelerator_util_pct`, `accelerator_mem_bytes`) as nullable placeholders now, or wait until the worker collector actually populates them? (Today's `task_attempt.py:511` does not have them.)
-3. Confirm modern-SQLite `ALTER TABLE … DROP COLUMN` is acceptable, or do we need the `CREATE TABLE / COPY / RENAME` recipe used by `0023_separate_profiles_db.py`?
+### Resolved (user 2026-05-01)
+1. **Drop `WorkerResourceSnapshot` from the Ping reply now** — folded into commit 3.
+2. **Include accelerator fields as nullable** in `iris.task` schema (already shown in §3.2).
+3. **`ALTER TABLE … DROP COLUMN` is acceptable** — use it directly in the migration.
 
 ### Critical files for implementation
 - `lib/iris/src/iris/cluster/worker/worker.py`

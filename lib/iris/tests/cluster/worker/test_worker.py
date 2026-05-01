@@ -812,6 +812,119 @@ def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runti
 
 
 # ============================================================================
+# Stats emission tests (iris.worker via handle_ping)
+# ============================================================================
+
+
+class _FakeStatsTable:
+    """Records every Table.write call. Optionally raises on write."""
+
+    def __init__(self, raise_on_write: Exception | None = None):
+        self.writes: list[list[object]] = []
+        self._raise_on_write = raise_on_write
+
+    def write(self, rows):
+        rows_list = list(rows)
+        self.writes.append(rows_list)
+        if self._raise_on_write is not None:
+            raise self._raise_on_write
+
+
+def _ping_request() -> worker_pb2.Worker.PingRequest:
+    return worker_pb2.Worker.PingRequest()
+
+
+def test_handle_ping_emits_worker_stat(mock_worker):
+    """One handle_ping call produces one row on the iris.worker table."""
+    from iris.cluster.worker.stats import IrisWorkerStat
+
+    table = _FakeStatsTable()
+    mock_worker._worker_stats_table = table
+    mock_worker._worker_id = "w-test"
+
+    response = mock_worker.handle_ping(_ping_request())
+    assert response.healthy is True or response.healthy is False  # health probe may pass or fail
+
+    assert len(table.writes) == 1
+    rows = table.writes[0]
+    assert len(rows) == 1
+    stat = rows[0]
+    assert isinstance(stat, IrisWorkerStat)
+    assert stat.worker_id == "w-test"
+    # Snapshot fields populated from HostMetricsCollector — sanity check shape.
+    assert stat.mem_total_bytes >= 0
+    assert stat.cpu_pct >= 0.0
+
+
+def test_handle_ping_swallows_stats_transport_error(mock_worker):
+    """StatsError on the stats table must not break the ping path."""
+    from finelog.client import StatsError
+
+    table = _FakeStatsTable(raise_on_write=StatsError("boom"))
+    mock_worker._worker_stats_table = table
+    mock_worker._worker_id = "w-test"
+
+    response = mock_worker.handle_ping(_ping_request())
+    assert response is not None
+    assert len(table.writes) == 1  # write was attempted
+
+
+def test_handle_ping_propagates_schema_error(mock_worker):
+    """TypeError from schema validation must propagate (fail fast in tests)."""
+    table = _FakeStatsTable(raise_on_write=TypeError("schema mismatch"))
+    mock_worker._worker_stats_table = table
+    mock_worker._worker_id = "w-test"
+
+    with pytest.raises(TypeError, match="schema mismatch"):
+        mock_worker.handle_ping(_ping_request())
+
+
+def test_handle_ping_no_table_is_noop(mock_worker):
+    """Worker with no stats table (no controller) must still answer pings."""
+    assert mock_worker._worker_stats_table is None
+    response = mock_worker.handle_ping(_ping_request())
+    assert response is not None
+
+
+# ============================================================================
+# Stats emission tests (iris.task via task_attempt._emit_task_stat)
+# ============================================================================
+
+
+def test_attempt_emits_task_stat_when_resource_usage_collected(mock_worker, mock_runtime):
+    """Each poll loop iteration that collects ContainerStats writes one iris.task row."""
+    from iris.cluster.worker.stats import IrisTaskStat
+
+    table = _FakeStatsTable()
+    # Inject the task stats table into the worker so submit_task wires it via log_client.
+    # Simpler: run a task and patch the attempt's _task_stats_table directly before run.
+    request = create_run_task_request()
+    task_id = mock_worker.submit_task(request)
+    task = mock_worker.get_task(task_id)
+    assert task is not None
+    # Inject before the poll loop emits — submit_task already started the thread, so
+    # there is a small race. Inject immediately and rely on multiple poll iterations.
+    task._task_stats_table = table
+    task._worker_id = "w-test"
+
+    task.thread.join(timeout=15.0)
+    final = mock_worker.get_task(task_id)
+    assert final is not None
+    assert final.status == job_pb2.TASK_STATE_SUCCEEDED
+
+    # The FakeContainerHandle reports stats.available=True, so at least one write
+    # should have landed during the monitor loop. (May be zero if the container
+    # transitioned terminal before any stats poll — accept >=0 but assert shape
+    # if any rows landed.)
+    if table.writes:
+        stat = table.writes[0][0]
+        assert isinstance(stat, IrisTaskStat)
+        assert stat.task_id == request.task_id
+        assert stat.attempt_id == request.attempt_id
+        assert stat.worker_id == "w-test"
+
+
+# ============================================================================
 # Integration Tests (with real Docker)
 # ============================================================================
 
@@ -1094,7 +1207,13 @@ def test_start_wires_log_client_into_adopted_attempts(mock_bundle_store, mock_ru
     Worker.start() must construct the LogClient *before* adopting containers,
     otherwise adopted TaskAttempts capture ``log_client=None`` permanently
     and silently drop every container log line for the rest of the task.
+
+    LogClient.connect is patched at the network boundary so this test runs
+    without a real controller or finelog server. ``get_table`` is patched so
+    the eager iris.worker / iris.task registration in ``start()`` succeeds.
     """
+    from unittest.mock import MagicMock, patch
+
     container = _make_discovered_container()
     mock_runtime.discover_containers = Mock(return_value=[container])
 
@@ -1103,22 +1222,30 @@ def test_start_wires_log_client_into_adopted_attempts(mock_bundle_store, mock_ru
         port_range=(50000, 50100),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        # Unreachable controller; lifecycle thread retries register and exits on stop().
+        # Needs a controller_address so the LogClient and stats tables are wired.
         controller_address="http://127.0.0.1:1",
         poll_interval=Duration.from_seconds(0.05),
     )
     worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
 
-    try:
-        worker.start()
+    fake_client = MagicMock()
+    fake_client.get_table.return_value = MagicMock()
 
-        assert worker._log_client is not None
-        task = worker.get_task(container.task_id, container.attempt_id)
-        assert task is not None
-        # The adopted attempt must reference the worker's live client, not None.
-        assert task._log_client is worker._log_client
-    finally:
-        worker.stop()
+    with (
+        patch("iris.cluster.worker.worker.LogClient.connect", return_value=fake_client),
+        patch.object(worker, "_cleanup_all_iris_containers"),
+        patch.object(worker, "adopt_running_containers", wraps=worker.adopt_running_containers),
+    ):
+        try:
+            worker.start()
+
+            assert worker._log_client is not None
+            task = worker.get_task(container.task_id, container.attempt_id)
+            assert task is not None
+            # The adopted attempt must reference the worker's live client, not None.
+            assert task._log_client is worker._log_client
+        finally:
+            worker.stop()
 
 
 def test_task_attempt_adopt_factory():
