@@ -316,7 +316,10 @@ class ControllerDashboard:
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         self._actor_proxy = ActorProxy(self._service._store)
-        self._endpoint_proxy = EndpointProxy(self._service._store)
+        self._endpoint_proxy = EndpointProxy(
+            self._service._store,
+            system_endpoints=self._service._system_endpoints,
+        )
 
         @requires_auth
         async def _proxy_actor_rpc(request: Request) -> Response:
@@ -355,6 +358,16 @@ class ControllerDashboard:
             routes=routes,
             lifespan=on_shutdown(self._actor_proxy.close, self._endpoint_proxy.close),
         )
+        # Starlette's default trailing-slash redirect builds an absolute
+        # Location from ``scope["server"]`` (or the request's Host header).
+        # Behind GCP IAP / a load balancer whose backend Host is the internal
+        # bind IP, that absolute URL leaks ``http://10.x.x.x:10000/...`` back
+        # to the browser — unreachable outside the VPC. Strict routing is
+        # fine here: the SPA handles its own paths client-side and the API
+        # surface is small enough that canonical URLs are easy to publish.
+        # ``redirect_slashes`` is a Router attribute, not a Starlette ctor
+        # kwarg, so we flip it after construction.
+        app.router.redirect_slashes = False
         if self._auth_verifier is not None and self._auth_provider is not None:
             app = _RouteAuthMiddleware(app, self._auth_verifier, optional=self._auth_optional)
         return app

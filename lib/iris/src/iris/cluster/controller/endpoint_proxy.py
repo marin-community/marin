@@ -17,12 +17,20 @@ upstream would be a credential leak, and dashboards that maintain their own
 cookie state would shadow the controller session — both are intentionally
 prevented here.
 
+``Location`` and ``Content-Location`` response headers are rewritten so 3xx
+redirects (and any other absolute-URL hints) keep the browser inside the
+proxy instead of escaping to the upstream's bind address. Without this,
+upstreams that emit absolute self-URLs (Starlette canonical-slash redirects,
+``/`` -> ``/login`` flows, ...) would navigate the user out of
+``iris-dev.oa.dev/proxy/<name>/`` straight to the upstream IP.
+
 Route pattern::
 
     <ANY-METHOD> /proxy/{endpoint_name:str}/{sub_path:path}
 """
 
 import logging
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from starlette.background import BackgroundTask
@@ -62,16 +70,67 @@ _HOP_BY_HOP: frozenset[str] = frozenset(
     }
 )
 
+# Response headers carrying URLs that point at the upstream. Rewritten so a
+# redirect (or content-negotiation hint) does not navigate the browser out of
+# the proxy. Other URL-bearing headers (Refresh, Link, ...) are uncommon for
+# the dashboards we proxy and are left alone for now.
+_LOCATION_HEADERS: tuple[str, ...] = ("location", "content-location")
+
 # Bound the connection pool explicitly so httpx default drift cannot silently
 # change resource usage on the controller.
 _HTTPX_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20)
+
+
+def _rewrite_location(loc: str, *, upstream_base: str, proxy_prefix: str) -> str:
+    """Rewrite a Location-style URL so it stays inside the proxy.
+
+    ``proxy_prefix`` is the request path prefix used by the dashboard,
+    e.g. ``/proxy/system.log-server`` (no trailing slash). ``upstream_base``
+    is the upstream origin the proxy forwards to, e.g.
+    ``http://10.128.0.31:10001``.
+
+    Cases:
+
+    - Absolute URL whose origin matches ``upstream_base`` -> path on the
+      dashboard origin, with ``proxy_prefix`` prepended.
+    - Protocol-relative URL (``//host/...``) on the same netloc -> same
+      treatment.
+    - Absolute path (``/foo``) -> ``proxy_prefix`` prepended.
+    - Anything else (cross-origin URL, relative path, fragment-only,
+      empty) -> passed through unchanged. Relative paths resolve against
+      the browser's current URL, which is already inside the proxy.
+
+    Upstream addresses with a non-empty path component (rare in this
+    codebase — endpoints register ``host:port`` only) are not stripped:
+    callers should register origin-only addresses.
+    """
+    if not loc:
+        return loc
+
+    parsed = urlsplit(loc)
+    base = urlsplit(upstream_base)
+
+    if parsed.netloc:
+        scheme_matches = not parsed.scheme or parsed.scheme == base.scheme
+        if scheme_matches and parsed.netloc == base.netloc:
+            new_path = f"{proxy_prefix}{parsed.path or '/'}"
+            return urlunsplit(("", "", new_path, parsed.query, parsed.fragment))
+        return loc
+
+    if parsed.path.startswith("/"):
+        new_path = f"{proxy_prefix}{parsed.path}"
+        return urlunsplit(("", "", new_path, parsed.query, parsed.fragment))
+
+    return loc
 
 
 class EndpointProxy:
     """Forwards arbitrary HTTP requests to a registered endpoint.
 
     The proxy resolves the endpoint name (with ``.`` -> ``/`` substitution)
-    against ``ControllerStore.endpoints``, then forwards request method,
+    against ``ControllerStore.endpoints`` and the service's in-memory
+    ``system_endpoints`` map (the latter is where ``/system/...`` entries
+    such as ``/system/log-server`` live), then forwards request method,
     path suffix, query string, and filtered headers to the upstream's
     ``address``. Bodies are streamed in both directions with no size cap.
     Hop-by-hop headers, ``Cookie`` / ``Set-Cookie``, and ``Authorization``
@@ -82,8 +141,20 @@ class EndpointProxy:
     safe for concurrent use across requests.
     """
 
-    def __init__(self, store: ControllerStore, *, timeout_seconds: float = PROXY_TIMEOUT_SECONDS) -> None:
+    def __init__(
+        self,
+        store: ControllerStore,
+        *,
+        system_endpoints: dict[str, str] | None = None,
+        timeout_seconds: float = PROXY_TIMEOUT_SECONDS,
+    ) -> None:
+        # System endpoints (``/system/...``) are held in an in-memory dict on
+        # ControllerServiceImpl rather than the SQLite-backed EndpointStore.
+        # The same dict object is shared by reference so updates by the
+        # controller (e.g. log-server registration during start()) are
+        # visible here without re-plumbing.
         self._store = store
+        self._system_endpoints = system_endpoints if system_endpoints is not None else {}
         self._timeout_seconds = timeout_seconds
         self._client = httpx.AsyncClient(
             timeout=timeout_seconds,
@@ -94,6 +165,19 @@ class EndpointProxy:
     async def close(self) -> None:
         """Close the underlying httpx.AsyncClient. Idempotent."""
         await self._client.aclose()
+
+    def _resolve(self, name: str) -> str | None:
+        """Resolve ``name`` to an upstream address.
+
+        Task-registered endpoints live in the SQLite-backed EndpointStore;
+        ``/system/...`` endpoints (e.g. ``/system/log-server``) live in the
+        controller service's in-memory ``system_endpoints`` map. Both are
+        consulted so the proxy mirrors what ``ListEndpoints`` exposes.
+        """
+        row = self._store.endpoints.resolve(name)
+        if row is not None:
+            return row.address
+        return self._system_endpoints.get(name)
 
     async def handle(self, request: Request) -> Response:
         """Handle one proxied request.
@@ -109,14 +193,15 @@ class EndpointProxy:
         # first (the common case for task-registered endpoints), then the bare
         # form for endpoints registered without a leading slash.
         slashed = url_name.replace(".", "/")
-        row = self._store.endpoints.resolve(f"/{slashed}") or self._store.endpoints.resolve(slashed)
-        if row is None:
+        canonical = f"/{slashed}"
+        address = self._resolve(canonical) or self._resolve(slashed)
+        if address is None:
             return JSONResponse(
                 {"error": f"No endpoint '{url_name}'"},
                 status_code=404,
             )
 
-        base = row.address if "://" in row.address else f"http://{row.address}"
+        base = address if "://" in address else f"http://{address}"
         upstream_url = f"{base}/{sub_path}"
         if request.url.query:
             upstream_url = f"{upstream_url}?{request.url.query}"
@@ -144,7 +229,16 @@ class EndpointProxy:
                 status_code=502,
             )
 
-        response_headers = {k: v for k, v in upstream_resp.headers.items() if k.lower() not in _HOP_BY_HOP}
+        proxy_prefix = f"/proxy/{url_name}"
+        response_headers: dict[str, str] = {}
+        for k, v in upstream_resp.headers.items():
+            lk = k.lower()
+            if lk in _HOP_BY_HOP:
+                continue
+            if lk in _LOCATION_HEADERS:
+                v = _rewrite_location(v, upstream_base=base, proxy_prefix=proxy_prefix)
+            response_headers[k] = v
+
         return StreamingResponse(
             upstream_resp.aiter_raw(),
             status_code=upstream_resp.status_code,

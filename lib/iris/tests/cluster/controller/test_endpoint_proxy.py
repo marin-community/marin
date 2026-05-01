@@ -20,7 +20,12 @@ from dataclasses import dataclass
 import httpx
 import pytest
 import uvicorn
-from iris.cluster.controller.endpoint_proxy import ALLOWED_METHODS, PROXY_ROUTE, EndpointProxy
+from iris.cluster.controller.endpoint_proxy import (
+    ALLOWED_METHODS,
+    PROXY_ROUTE,
+    EndpointProxy,
+    _rewrite_location,
+)
 from iris.cluster.controller.schema import EndpointRow
 from iris.cluster.dashboard_common import on_shutdown
 from iris.cluster.types import JobName
@@ -148,12 +153,43 @@ def _build_upstream_app(handle: UpstreamHandle) -> Starlette:
             headers={"set-cookie": "upstream_session=abc; Path=/"},
         )
 
+    async def redirect_absolute(request: Request) -> Response:
+        # Mirrors what Starlette / many WSGI apps emit for canonical-slash
+        # redirects: an absolute URL containing the upstream's bind host.
+        await _record(request)
+        return PlainTextResponse(
+            "",
+            status_code=302,
+            headers={"location": f"http://127.0.0.1:{handle.port}/echo?from=abs"},
+        )
+
+    async def redirect_path(request: Request) -> Response:
+        # Absolute-path redirect (no scheme/host). Common for ``/`` -> ``/login``.
+        await _record(request)
+        return PlainTextResponse(
+            "",
+            status_code=302,
+            headers={"location": "/echo?from=path"},
+        )
+
+    async def redirect_external(request: Request) -> Response:
+        # Cross-origin redirect — proxy must NOT rewrite this.
+        await _record(request)
+        return PlainTextResponse(
+            "",
+            status_code=302,
+            headers={"location": "https://other.example/landing"},
+        )
+
     routes = [
         Route("/echo", echo, methods=list(ALLOWED_METHODS)),
         Route("/500", upstream_500),
         Route("/slow", slow),
         Route("/large", large),
         Route("/cookie", cookie_setter),
+        Route("/redirect-abs", redirect_absolute),
+        Route("/redirect-path", redirect_path),
+        Route("/redirect-ext", redirect_external),
     ]
     return Starlette(routes=routes)
 
@@ -188,10 +224,16 @@ class ProxyHandle:
 
 
 def _build_proxy_app(proxy: EndpointProxy) -> Starlette:
-    return Starlette(
+    # redirect_slashes=False mirrors the controller dashboard: Starlette's
+    # default slash-redirect builds an absolute URL from the request's Host
+    # header / bind address, which leaks the internal backend IP back to the
+    # browser when the controller sits behind IAP / a load balancer.
+    app = Starlette(
         routes=[Route(PROXY_ROUTE, proxy.handle, methods=list(ALLOWED_METHODS))],
         lifespan=on_shutdown(proxy.close),
     )
+    app.router.redirect_slashes = False
+    return app
 
 
 @pytest.fixture
@@ -387,3 +429,165 @@ def test_disallowed_methods_not_listed() -> None:
     assert "CONNECT" not in ALLOWED_METHODS
     assert "TRACE" not in ALLOWED_METHODS
     assert set(ALLOWED_METHODS) == {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+
+
+# ---------------------------------------------------------------------------
+# Location-rewrite unit tests
+# ---------------------------------------------------------------------------
+
+
+_UPSTREAM_BASE = "http://10.0.0.1:8080"
+_PROXY_PREFIX = "/proxy/myep"
+
+
+@pytest.mark.parametrize(
+    "loc, expected",
+    [
+        # Absolute URL with same origin → rewritten to dashboard-relative path.
+        ("http://10.0.0.1:8080/foo", "/proxy/myep/foo"),
+        ("http://10.0.0.1:8080/foo?a=1&b=2", "/proxy/myep/foo?a=1&b=2"),
+        ("http://10.0.0.1:8080/foo#frag", "/proxy/myep/foo#frag"),
+        ("http://10.0.0.1:8080/", "/proxy/myep/"),
+        # No path on the absolute URL — treat as root.
+        ("http://10.0.0.1:8080", "/proxy/myep/"),
+        # Protocol-relative on same netloc → rewritten.
+        ("//10.0.0.1:8080/foo", "/proxy/myep/foo"),
+        # Absolute path → prepended.
+        ("/foo", "/proxy/myep/foo"),
+        ("/foo?x=1", "/proxy/myep/foo?x=1"),
+        ("/", "/proxy/myep/"),
+        # Cross-origin absolute URL → passthrough.
+        ("http://other.host/foo", "http://other.host/foo"),
+        # Different scheme on same host → passthrough (HTTPS upstream is a
+        # different origin and we should not silently downgrade).
+        ("https://10.0.0.1:8080/foo", "https://10.0.0.1:8080/foo"),
+        # Protocol-relative on a different netloc → passthrough.
+        ("//other.host/foo", "//other.host/foo"),
+        # Relative path → browser resolves against current proxy URL.
+        ("foo", "foo"),
+        ("./foo", "./foo"),
+        ("../foo", "../foo"),
+        # Fragment-only and empty → passthrough.
+        ("#anchor", "#anchor"),
+        ("", ""),
+    ],
+)
+def test_rewrite_location(loc: str, expected: str) -> None:
+    assert _rewrite_location(loc, upstream_base=_UPSTREAM_BASE, proxy_prefix=_PROXY_PREFIX) == expected
+
+
+# ---------------------------------------------------------------------------
+# Integration tests: redirects round-trip through the proxy
+# ---------------------------------------------------------------------------
+
+
+def test_absolute_redirect_rewritten_to_proxy(proxy: ProxyHandle) -> None:
+    """Upstream emits absolute self-URL Location; proxy must keep us inside."""
+    with httpx.Client() as client:
+        resp = client.get(
+            f"{proxy.base_url}/proxy/{ENDPOINT_URL_NAME}/redirect-abs",
+            follow_redirects=False,
+        )
+    assert resp.status_code == 302
+    # Browser would follow this; it must point back at the proxy, not at the
+    # upstream's bind address (which is unreachable from outside the cluster).
+    assert resp.headers["location"] == f"/proxy/{ENDPOINT_URL_NAME}/echo?from=abs"
+
+
+def test_path_redirect_rewritten_to_proxy(proxy: ProxyHandle) -> None:
+    """Upstream emits ``Location: /foo``; proxy prepends the /proxy/<name> prefix."""
+    with httpx.Client() as client:
+        resp = client.get(
+            f"{proxy.base_url}/proxy/{ENDPOINT_URL_NAME}/redirect-path",
+            follow_redirects=False,
+        )
+    assert resp.status_code == 302
+    assert resp.headers["location"] == f"/proxy/{ENDPOINT_URL_NAME}/echo?from=path"
+
+
+def test_external_redirect_passthrough(proxy: ProxyHandle) -> None:
+    """Cross-origin Location must NOT be rewritten; upstream may legitimately send users away."""
+    with httpx.Client() as client:
+        resp = client.get(
+            f"{proxy.base_url}/proxy/{ENDPOINT_URL_NAME}/redirect-ext",
+            follow_redirects=False,
+        )
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "https://other.example/landing"
+
+
+def test_system_endpoint_resolves_via_in_memory_map(threads: ThreadContainer, upstream: UpstreamHandle) -> None:
+    """``/system/...`` endpoints aren't in the SQL store; the proxy must consult
+    the service's in-memory ``system_endpoints`` dict — the same dict
+    ``ListEndpoints`` uses. This is how ``/system/log-server`` reaches finelog.
+    """
+    store = _FakeStore()  # empty: no rows for /system/log-server
+    system_endpoints = {"/system/log-server": f"127.0.0.1:{upstream.port}"}
+    ep_proxy = EndpointProxy(store, system_endpoints=system_endpoints)  # type: ignore[arg-type]
+    app = _build_proxy_app(ep_proxy)
+    port = _free_port()
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", log_config=None)
+    server = uvicorn.Server(config)
+    threads.spawn_server(server, name=f"proxy-{port}")
+    _wait_for_server(server)
+
+    with httpx.Client() as client:
+        resp = client.get(f"http://127.0.0.1:{port}/proxy/system.log-server/echo")
+    assert resp.status_code == 200
+    assert resp.json()["path"] == "/echo"
+
+
+def test_system_endpoints_dict_mutation_visible(threads: ThreadContainer, upstream: UpstreamHandle) -> None:
+    """Controller registers ``/system/log-server`` after the dashboard is built;
+    the dict is shared by reference so post-construction updates take effect.
+    """
+    store = _FakeStore()
+    system_endpoints: dict[str, str] = {}
+    ep_proxy = EndpointProxy(store, system_endpoints=system_endpoints)  # type: ignore[arg-type]
+    app = _build_proxy_app(ep_proxy)
+    port = _free_port()
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", log_config=None)
+    server = uvicorn.Server(config)
+    threads.spawn_server(server, name=f"proxy-{port}")
+    _wait_for_server(server)
+
+    with httpx.Client() as client:
+        # Before registration: 404.
+        miss = client.get(f"http://127.0.0.1:{port}/proxy/system.log-server/echo")
+        assert miss.status_code == 404
+
+        # Mutate the dict the proxy holds a reference to.
+        system_endpoints["/system/log-server"] = f"127.0.0.1:{upstream.port}"
+
+        ok = client.get(f"http://127.0.0.1:{port}/proxy/system.log-server/echo")
+    assert ok.status_code == 200
+
+
+def test_no_trailing_slash_does_not_redirect(proxy: ProxyHandle) -> None:
+    """``/proxy/<name>`` (no trailing slash) must NOT trigger Starlette's
+    slash-redirect. That redirect's Location is built from the request's
+    Host header (or scope["server"]); behind GCP IAP / a load balancer
+    that resolves to the internal bind IP, so the browser gets sent to
+    an unreachable backend address (ERR_ADDRESS_UNREACHABLE).
+    """
+    with httpx.Client() as client:
+        resp = client.get(
+            f"{proxy.base_url}/proxy/{ENDPOINT_URL_NAME}",
+            follow_redirects=False,
+        )
+    # Critical: 404, never 307. A 307 here means the dashboard is configured
+    # with redirect_slashes=True and will leak the internal IP.
+    assert resp.status_code == 404
+
+
+def test_redirect_followed_through_proxy_lands_on_upstream(proxy: ProxyHandle) -> None:
+    """End-to-end: client follows the rewritten Location and reaches the upstream's /echo."""
+    with httpx.Client(base_url=proxy.base_url) as client:
+        resp = client.get(
+            f"/proxy/{ENDPOINT_URL_NAME}/redirect-abs",
+            follow_redirects=True,
+        )
+    assert resp.status_code == 200
+    assert resp.json()["path"] == "/echo"
+    # The follow-up GET hit the upstream's /echo, not /redirect-abs again.
+    assert proxy.upstream.received_paths[-1] == "/echo?from=abs"
