@@ -404,6 +404,35 @@ The comment **must** begin with `🤖` per repo convention (see
   author can act without re-pulling logs.
 - **Agent says out of scope but the reviewer disagrees**: reviewer applies
   `zephyr-perf-gate:{1,2,3}`; the agent re-runs with the forced gate.
+- **Iris worker preemptions during the run**: spot-VM preemptions inflate
+  wall-time, retry counts, and worker-pool churn — the leg may complete but
+  the timing is infra noise, not a code regression. Signals: elevated
+  `KILLED` worker tasks in `iris rpc controller list-tasks`, frequent
+  "worker disconnected"/re-registration lines in the coord log, sudden
+  worker-count drops in the stage-progress lines. **Action**: if any stage
+  saw >5% of its workers churn during the run, mark the verdict
+  `⚠ inconclusive` (not pass/warn/fail), surface the churn count in the
+  comment, and re-submit treatment. Do not call a regression on a single
+  preempted run.
+- **Cluster scheduling delay (queue wait, not pipeline wall-time)**: the
+  job sits in `JOB_STATE_PENDING`/`JOB_STATE_BUILDING` for an unusual
+  duration before any pipeline stage starts. This is not a perf signal —
+  the gate measures stage wall-times from the coord's progress lines, not
+  end-to-end submit-to-finish. Note the queue wait in the comment if
+  notable (>30 min), but it does not affect the verdict.
+- **Cluster contention / mixed worker generations**: another large job
+  competing for europe-west4 capacity, or autoscaler bringing up workers
+  on a different machine type/zone, can shift baseline timing by 10–30%
+  even with no code change. Signals: control and treatment ran far apart
+  in time, or the scheduled-baseline run noted unusual cluster state in
+  its own logs. **Action**: if the wall-time delta is in the warn band
+  (+5–20%) and the contention signal is plausible, mark `⚠ inconclusive`
+  rather than `⚠ warn`. Hard-fail thresholds (>+20%, OOMs, failed shards)
+  still apply — those are too large to be cluster noise.
+- **TPU/CPU bad-node retries in coord**: shard retried on a different
+  worker due to hardware fault. Inflates per-stage wall-time. Same handling
+  as preemptions — count toward the churn metric and consider re-running
+  if pervasive.
 
 ## Composes with
 
@@ -411,18 +440,3 @@ The comment **must** begin with `🤖` per repo convention (see
 - `babysit-job` — for the outer Iris job lifecycle.
 - `debug-infra` — when a leg flakes and the cause is unclear.
 
-## Open questions
-
-- Calibrate the Gate 2 stride after the first scheduled run lands. Target
-  wall ~2.5h; adjust between `--stride 4` and `--stride 6` if the actual
-  run falls outside [2h, 3.5h]. Tune via the `stride` workflow_dispatch
-  input on `marin-datakit-nemotron-partial-slice-ferry`, then edit the default in
-  `submit_perf_run.py`'s Gate 2 entry to match.
-- Should Gate 2 run more than weekly (e.g., every 3 days) so the baseline
-  is fresher for mid-week PRs? Cheap enough to consider; current cadence
-  matches Gate 3 to reuse the same scheduling cadence in Iris.
-- Should the agent compute median-of-N scheduled runs instead of "latest
-  successful" to stabilize the baseline?
-- Add a high-fanout / low-RAM stress lane (10k workers, minimal RAM) to
-  surface scatter OOMs and controller back-pressure faster than Gate 2?
-  Not built yet.
