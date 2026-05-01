@@ -1,8 +1,9 @@
 name: Marin - Datakit Nemotron Partial-Slice Ferry
 
-# Gate 2 baseline for the zephyr-perf skill: nemotron-medium with --stride 5
-# (every 5th input file, ~1/5 of full medium, target ~2.5h wall time).
-# Runs weekly on Tuesday so the full nemotron ferry (Monday 01:00 UTC) has
+# Gate 2 baseline for the zephyr-perf skill: a partial slice of the
+# nemotron-medium quality slice — `datakit_nemotron_ferry --stride 5`
+# (every 5th input file, ~1/5 of the full medium slice, target ~2.5h wall).
+# Runs weekly on Tuesday so the full-slice ferry (Monday 01:00 UTC) has
 # finished before this one starts and they don't compete for cluster capacity.
 
 on:

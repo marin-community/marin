@@ -65,8 +65,8 @@ script — when in doubt, ask the reviewer.
 |---|---|---|---|---|
 | **skip** | — | — | — | All-trivial diff (e.g. comments, docstrings, type hints, renames). Reviewer must concur. |
 | **1 — fineweb smoke** | `experiments.ferries.datakit_ferry` (FineWeb-Edu sample/10BT) | daily `marin-datakit-smoke` workflow | ~30–60 min | Cheap end-to-end pass at small scale. |
-| **2 — nemotron partial-slice** | `experiments.ferries.datakit_nemotron_ferry --stride 5` (every 5th file of nemotron-medium) | weekly `marin-datakit-nemotron-partial-slice-ferry` workflow (Tuesday 01:00 UTC) | ~2–3 h | Mid-tier signal between fineweb and full medium. Surfaces scale-only effects (memory pressure, OOMs, fanout shape) without paying for an overnight run. |
-| **3 — full nemotron** | `experiments.ferries.datakit_nemotron_ferry` (full nemotron-medium, ~3.4 TiB) | weekly `marin-datakit-nemotron-ferry` workflow | overnight (≤24 h) | Reserved for diffs the reviewer wants tested at full scale. Expensive; reviewer approval (`zephyr-perf-gate:3`) required. |
+| **2 — nemotron partial-slice** | `experiments.ferries.datakit_nemotron_ferry --stride 5` (every 5th file of the medium quality slice) | weekly `marin-datakit-nemotron-partial-slice-ferry` workflow (Tuesday 01:00 UTC) | ~2–3 h | Mid-tier signal between fineweb and the full medium slice. Surfaces scale-only effects (memory pressure, OOMs, fanout shape) without paying for an overnight run. |
+| **3 — nemotron full-slice** | `experiments.ferries.datakit_nemotron_ferry` (full medium quality slice, ~3.4 TiB) | weekly `marin-datakit-nemotron-ferry` workflow (Monday 01:00 UTC) | overnight (≤24 h) | Reserved for diffs the reviewer wants tested at the largest slice we run. Expensive; reviewer approval (`zephyr-perf-gate:3`) required. Note: this is the *full medium quality slice*, not all of Nemotron-CC. |
 
 **Gate 1 is always run first**, regardless of `max_gate`. If Gate 1 passes
 and `max_gate` is `2` or `3`, escalate. If Gate 1 fails, post the verdict
@@ -164,7 +164,7 @@ BASELINE_GATE2_RUN=$(gh run list \
   --branch=main --status=success --limit=1 \
   --json databaseId,headSha,createdAt -q '.[0]')
 
-# Gate 3 baseline: latest successful weekly full-nemotron ferry.
+# Gate 3 baseline: latest successful weekly nemotron full-slice ferry.
 BASELINE_GATE3_RUN=$(gh run list \
   --repo marin-community/marin \
   --workflow=marin-datakit-nemotron-ferry.yaml \

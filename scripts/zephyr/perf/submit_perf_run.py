@@ -59,10 +59,14 @@ class GateConfig:
 
 
 # Mirrors the canonical workflow YAMLs:
-#   .github/workflows/marin-datakit-smoke.yaml          -> Gate 1
-#   .github/workflows/marin-datakit-nemotron-ferry.yaml -> Gate 3
-# Gate 2 reuses the nemotron ferry with `--stride 5` to land at ~1/5 of full
-# medium (~2-3h wall). See SKILL.md ladder for sizing rationale.
+#   .github/workflows/marin-datakit-smoke.yaml                       -> Gate 1
+#   .github/workflows/marin-datakit-nemotron-partial-slice-ferry.yaml -> Gate 2
+#   .github/workflows/marin-datakit-nemotron-ferry.yaml              -> Gate 3
+# Gate 2 reuses the nemotron ferry with `--stride 5` to land at ~1/5 of the
+# full medium quality slice (~2-3h wall). Gate 3 runs the same ferry without
+# stride for the full medium slice (~12-15h wall). Note both gates run on a
+# *quality slice* of nemotron-cc — neither covers all of nemotron. See
+# SKILL.md ladder for sizing rationale.
 GATES: dict[str, GateConfig] = {
     "1": GateConfig(
         ferry_module="experiments.ferries.datakit_ferry",
