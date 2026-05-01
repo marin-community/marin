@@ -93,7 +93,22 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
         # on worker 0 that triggers the multi-host TPU launch-id mismatch.
         # ``name`` keeps the human-readable label; ``group`` keeps cross-attempt
         # runs grouped in the wandb UI.
+        #
+        # WANDB_FORCE_ID escape hatch: when set, use that exact id and re-enable
+        # resume="allow". Used to test/verify the bug repros under a known-bad
+        # configuration (resuming a wandb run that already has accumulated
+        # history). Don't use in production resume scenarios.
         import time as _time
+
+        forced_id = os.environ.get("WANDB_FORCE_ID")
+        if forced_id:
+            return dataclasses.replace(
+                tracker,
+                name=run_id,
+                id=forced_id,
+                group=tracker.group or run_id,
+                resume="allow",
+            )
 
         attempt_suffix = os.environ.get("WANDB_ATTEMPT_ID", str(int(_time.time())))
         unique_id = f"{run_id}-{attempt_suffix}"
