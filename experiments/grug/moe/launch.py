@@ -184,6 +184,7 @@ def _stage_checkpoint_for_5319_workaround(checkpoint_base: str, output_path: str
     # Other workers receive the staging path via multihost_broadcast_sync.
     is_source = jax.process_index() == 0
     staging_root = os.path.join(output_path, "_load_staging_5319")
+    staging_root_no_scheme = staging_root[len("gs://") :]
 
     if is_source:
         try:
@@ -210,6 +211,15 @@ def _stage_checkpoint_for_5319_workaround(checkpoint_base: str, output_path: str
         if best_subdir is None:
             payload = {"staged": False}
         else:
+            # Clean up any prior staged copy from a previous resume so the
+            # storage cost stays bounded at one staged checkpoint.
+            try:
+                if fs.exists(staging_root_no_scheme):
+                    logger.info("issue #5319 workaround: removing stale staging at %s", staging_root)
+                    fs.rm(staging_root_no_scheme, recursive=True)
+            except Exception as exc:
+                logger.warning("issue #5319 workaround: failed to clean stale staging: %s", exc)
+
             src = best_subdir  # already without gs:// prefix from fs.ls
             dst = os.path.join(staging_root, f"step-{best_step}")[len("gs://") :]
             logger.info("issue #5319 workaround: server-side copy %s -> gs://%s", src, dst)
