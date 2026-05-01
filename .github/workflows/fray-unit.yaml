@@ -19,24 +19,15 @@ jobs:
       should_run: ${{ steps.filter.outputs.relevant }}
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0   # changes.py uses `git diff base...head` and needs both refs locally
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: "0.7.20"
-          enable-cache: true
-      - name: Detect changes
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590  # v3
         id: filter
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          uv run --no-project --with click python scripts/workflows/changes.py match \
-            --base "$BASE_SHA" \
-            --head "$HEAD_SHA" \
-            --group relevant='lib/fray/**,lib/iris/**,uv.lock,.github/workflows/fray-unit.yaml' \
-            --github-output
+        with:
+          filters: |
+            relevant:
+              - 'lib/fray/**'
+              - 'lib/iris/**'
+              - 'uv.lock'
+              - '.github/workflows/fray-unit.yaml'
 
   fray-unit:
     needs: changes
