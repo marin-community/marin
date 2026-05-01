@@ -40,7 +40,8 @@ DEFAULT_THRESHOLDS = {
 
 GATE_LABELS = {
     "1": "Gate 1 (fineweb)",
-    "2": "Gate 2 (full nemotron)",
+    "2": "Gate 2 (nemotron partial-slice)",
+    "3": "Gate 3 (nemotron full-slice)",
 }
 
 SENTINEL = "<!-- zephyr-perf-gate -->"

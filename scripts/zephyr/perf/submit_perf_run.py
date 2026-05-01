@@ -26,6 +26,7 @@ import dataclasses
 import datetime as _dt
 import json
 import logging
+import os
 import shlex
 import subprocess
 import sys
@@ -150,18 +151,23 @@ def submit(
         "-e",
         "WANDB_PROJECT",
         wandb_project,
-        "-e",
-        "WANDB_API_KEY",
-        "$WANDB_API_KEY",
-        "-e",
-        "HF_TOKEN",
-        "$HF_TOKEN",
-        "--",
-        "python",
-        "-m",
-        cfg.ferry_module,
-        *cfg.ferry_args,
     ]
+    # Forward secrets from the calling environment, expanded — `subprocess`
+    # does not run a shell, so the literal "$WANDB_API_KEY" string would
+    # otherwise be passed verbatim to iris CLI. Skip the flag entirely when
+    # the secret isn't set rather than overriding any inherited value with
+    # an empty string.
+    for secret_var in ("WANDB_API_KEY", "HF_TOKEN"):
+        secret_val = os.environ.get(secret_var)
+        if secret_val:
+            cmd += ["-e", secret_var, secret_val]
+        elif not dry_run:
+            logger.warning(
+                "%s not set in environment; iris job will inherit whatever the "
+                "controller has (often unset). Auth-dependent steps may fail.",
+                secret_var,
+            )
+    cmd += ["--", "python", "-m", cfg.ferry_module, *cfg.ferry_args]
 
     if dry_run:
         logger.info("dry-run cmd (cwd=%s): %s", cwd, " ".join(shlex.quote(c) for c in cmd))

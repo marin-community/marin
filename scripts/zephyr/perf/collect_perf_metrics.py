@@ -205,16 +205,21 @@ EXPECTED_STEPS = ("download", "normalize", "minhash", "fuzzy_dups", "consolidate
 
 def collect(
     *,
-    status_url: str,
+    status_url: str | None,
     job_id: str | None,
     iris_config: str,
     ferry_module: str | None,
     wandb_url: str | None,
 ) -> dict[str, Any]:
     warnings: list[str] = []
-    status_payload = _read_status(status_url)
-    if status_payload.get("status") == "unknown":
-        warnings.append(f"status file not found at {status_url}")
+    if status_url:
+        status_payload = _read_status(status_url)
+        if status_payload.get("status") == "unknown":
+            warnings.append(f"status file not found at {status_url}")
+    else:
+        # Scheduled-baseline runs don't have a long-lived status JSON (TTL=1d
+        # on FERRY_STATUS_PATH). Fall back to the iris job state in that case.
+        status_payload = {"status": None, "marin_prefix": None}
 
     summary = _job_summary(iris_config, job_id) if job_id else {}
     tasks = summary.get("tasks") or []
@@ -249,7 +254,16 @@ def collect(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--status", required=True, help="gs:// path to ferry_run_status.json")
+    parser.add_argument(
+        "--status",
+        default=None,
+        help=(
+            "gs:// path to ferry_run_status.json (written by the ferry's "
+            "`_write_status` helper). Optional — scheduled-baseline runs have "
+            "TTL=1d on this path and may not have it; in that case the "
+            "collector falls back to the iris job state."
+        ),
+    )
     parser.add_argument("--job-id", help="Iris job id of the ferry leg.")
     parser.add_argument("--iris-config", default="lib/iris/examples/marin.yaml")
     parser.add_argument("--ferry-module", help="Ferry module name (passthrough into output).")
