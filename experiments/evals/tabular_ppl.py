@@ -16,7 +16,6 @@ import posixpath
 from dataclasses import dataclass
 
 import requests
-
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,

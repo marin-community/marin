@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
