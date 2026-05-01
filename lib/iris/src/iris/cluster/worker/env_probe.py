@@ -9,7 +9,6 @@ import re
 import shutil
 import socket
 import subprocess
-import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -580,9 +579,6 @@ class HostMetricsCollector:
         self._disk_path = disk_path
         self._prev_cpu_total = 0
         self._prev_cpu_idle = 0
-        self._prev_net_recv = 0
-        self._prev_net_sent = 0
-        self._prev_net_time: float = 0.0
 
     def collect(self) -> job_pb2.WorkerResourceSnapshot:
         snapshot = job_pb2.WorkerResourceSnapshot()
@@ -641,23 +637,15 @@ class HostMetricsCollector:
             pass
 
     def _collect_network(self, snapshot: job_pb2.WorkerResourceSnapshot) -> None:
-        """Compute network bandwidth as bytes/sec delta from /proc/net/dev.
+        """Read cumulative byte counters from /proc/net/dev.
 
         Sums all non-loopback interfaces. Works inside Docker/K8s containers
         since /proc/net/dev reflects the container's network namespace.
-        The first call establishes a baseline and reports 0 B/s.
+        Consumers compute rates from successive samples.
         """
         try:
             recv, sent = _read_net_dev_bytes()
-            now = time.monotonic()
-
-            dt = now - self._prev_net_time
-            if self._prev_net_time > 0 and dt > 0:
-                snapshot.net_recv_bps = max(0, int((recv - self._prev_net_recv) / dt))
-                snapshot.net_sent_bps = max(0, int((sent - self._prev_net_sent) / dt))
-
-            self._prev_net_recv = recv
-            self._prev_net_sent = sent
-            self._prev_net_time = now
+            snapshot.net_recv_bytes = recv
+            snapshot.net_sent_bytes = sent
         except (OSError, ValueError, IndexError):
             pass

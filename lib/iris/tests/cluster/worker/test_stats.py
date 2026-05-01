@@ -31,8 +31,8 @@ def test_build_worker_stat_shape():
         disk_total_bytes=10_000_000,
         running_task_count=2,
         total_process_count=37,
-        net_recv_bps=1234,
-        net_sent_bps=5678,
+        net_recv_bytes=1234,
+        net_sent_bytes=5678,
     )
     metadata = job_pb2.WorkerMetadata(
         cpu_count=8,
@@ -67,8 +67,8 @@ def test_build_worker_stat_shape():
     assert stat.disk_total_bytes == 10_000_000
     assert stat.running_task_count == 2
     assert stat.total_process_count == 37
-    assert stat.net_recv_bps == 1234
-    assert stat.net_sent_bps == 5678
+    assert stat.net_recv_bytes == 1234
+    assert stat.net_sent_bytes == 5678
     assert stat.device_type == "tpu"
     assert stat.device_variant == "v6e-8"
     assert stat.cpu_count == 8

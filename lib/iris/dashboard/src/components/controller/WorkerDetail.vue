@@ -69,8 +69,8 @@ interface WorkerStatRow {
   mem_total_bytes?: number
   disk_used_bytes?: number
   disk_total_bytes?: number
-  net_recv_bps?: number
-  net_sent_bps?: number
+  net_recv_bytes?: number
+  net_sent_bytes?: number
   running_task_count?: number
 }
 
@@ -85,7 +85,7 @@ function buildStatsSql(workerId: string): string {
   return `
 SELECT ts, cpu_pct, mem_bytes, mem_total_bytes,
        disk_used_bytes, disk_total_bytes,
-       net_recv_bps, net_sent_bps, running_task_count
+       net_recv_bytes, net_sent_bytes, running_task_count
 FROM "iris.worker"
 WHERE worker_id = '${escaped}'
 ORDER BY ts DESC
@@ -111,8 +111,23 @@ const latestStat = computed<WorkerStatRow | null>(() => statsRows.value[0] ?? nu
 const cpuHistory = computed(() => orderedStats.value.map((s) => Number(s.cpu_pct ?? 0)))
 const memoryHistory = computed(() => orderedStats.value.map((s) => Number(s.mem_bytes ?? 0)))
 const diskHistory = computed(() => orderedStats.value.map((s) => Number(s.disk_used_bytes ?? 0)))
-const netRecvHistory = computed(() => orderedStats.value.map((s) => Number(s.net_recv_bps ?? 0)))
-const netSentHistory = computed(() => orderedStats.value.map((s) => Number(s.net_sent_bps ?? 0)))
+// Cumulative byte counters; derive per-second deltas from successive samples.
+// First sample contributes no point. Counter resets (worker restart) cap to 0.
+function ratesFrom(field: 'net_recv_bytes' | 'net_sent_bytes'): number[] {
+  const rows = orderedStats.value
+  const out: number[] = []
+  for (let i = 1; i < rows.length; i++) {
+    const cur = Number(rows[i][field] ?? 0)
+    const prev = Number(rows[i - 1][field] ?? 0)
+    const tCur = new Date(rows[i].ts ?? 0).getTime()
+    const tPrev = new Date(rows[i - 1].ts ?? 0).getTime()
+    const dt = (tCur - tPrev) / 1000
+    out.push(dt > 0 && cur >= prev ? (cur - prev) / dt : 0)
+  }
+  return out
+}
+const netRecvHistory = computed(() => ratesFrom('net_recv_bytes'))
+const netSentHistory = computed(() => ratesFrom('net_sent_bytes'))
 
 const runningTaskCount = computed(() => worker.value?.runningJobIds?.length ?? 0)
 
@@ -369,7 +384,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
               color="var(--color-status-success, #22c55e)"
             />
             <div class="text-xs font-mono text-text-muted mt-1">
-              {{ formatRate(Number(latestStat?.net_recv_bps ?? 0)) }}
+              {{ formatRate(netRecvHistory[netRecvHistory.length - 1] ?? 0) }}
             </div>
           </div>
           <div
@@ -383,7 +398,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
               color="var(--color-status-orange, #f97316)"
             />
             <div class="text-xs font-mono text-text-muted mt-1">
-              {{ formatRate(Number(latestStat?.net_sent_bps ?? 0)) }}
+              {{ formatRate(netSentHistory[netSentHistory.length - 1] ?? 0) }}
             </div>
           </div>
         </div>

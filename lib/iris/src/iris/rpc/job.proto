@@ -276,9 +276,10 @@ message WorkerResourceSnapshot {
   // Aggregate task stats
   int32 running_task_count = 7;
   int32 total_process_count = 8;
-  // Network bandwidth (bytes/sec, computed as delta between Ping snapshots)
-  int64 net_recv_bps = 9;
-  int64 net_sent_bps = 10;
+  // Cumulative network byte counters from /proc/net/dev. Consumers compute
+  // rates from successive samples (e.g. via LAG() in SQL).
+  int64 net_recv_bytes = 9;
+  int64 net_sent_bytes = 10;
 }
 
 message BuildMetrics {

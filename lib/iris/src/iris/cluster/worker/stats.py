@@ -62,8 +62,8 @@ class IrisWorkerStat:
     disk_total_bytes: int
     running_task_count: int
     total_process_count: int
-    net_recv_bps: int
-    net_sent_bps: int
+    net_recv_bytes: int
+    net_sent_bytes: int
     # static metadata (replicated each tick — keeps the table self-contained)
     device_type: str
     device_variant: str
@@ -114,8 +114,8 @@ def build_worker_stat(
         disk_total_bytes=int(snapshot.disk_total_bytes),
         running_task_count=int(snapshot.running_task_count),
         total_process_count=int(snapshot.total_process_count),
-        net_recv_bps=int(snapshot.net_recv_bps),
-        net_sent_bps=int(snapshot.net_sent_bps),
+        net_recv_bytes=int(snapshot.net_recv_bytes),
+        net_sent_bytes=int(snapshot.net_sent_bytes),
         device_type=_attr_string(metadata, "device-type"),
         device_variant=_attr_string(metadata, "device-variant"),
         cpu_count=int(metadata.cpu_count),
