@@ -5,15 +5,18 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
+from pathlib import Path
 
 from connectrpc.interceptor import Interceptor
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from finelog.rpc.finelog_stats_connect import StatsServiceWSGIApplication
@@ -21,6 +24,28 @@ from finelog.rpc.logging_connect import LogServiceWSGIApplication
 from finelog.server.interceptors import ConcurrencyLimitInterceptor
 from finelog.server.service import LogServiceImpl
 from finelog.server.stats_service import StatsServiceImpl
+
+logger = logging.getLogger(__name__)
+
+# Vue dashboard build output. Path from this file (server/asgi.py) up to
+# lib/finelog/ is four parent directories, then down into dashboard/dist.
+_VUE_DIST_DIR = Path(__file__).parent.parent.parent.parent / "dashboard" / "dist"
+_DOCKER_VUE_DIST_DIR = Path("/app/dashboard/dist")
+
+
+def _vue_dist_dir() -> Path | None:
+    for candidate in (_VUE_DIST_DIR, _DOCKER_VUE_DIST_DIR):
+        if candidate.is_dir() and (candidate / "index.html").is_file():
+            return candidate
+    return None
+
+
+_NOT_BUILT_HTML = (
+    "<!doctype html><html><body>"
+    "<h1>Dashboard not built</h1>"
+    "<p>Run <code>npm run build</code> in <code>lib/finelog/dashboard</code>.</p>"
+    "</body></html>"
+)
 
 # Cap on concurrent FetchLogs RPCs. Each read can fan out into DuckDB scans
 # across hundreds of MB of parquet; allowing unbounded parallelism evicts the
@@ -83,4 +108,29 @@ def build_log_server_asgi(
     if stats_service is not None:
         stats_wsgi_app = StatsServiceWSGIApplication(service=stats_service, interceptors=tuple(interceptors))
         routes.append(Mount(stats_wsgi_app.path, app=WSGIMiddleware(stats_wsgi_app)))
+
+    # Dashboard. dist/static/* is content-hashed (cache-friendly); dist/index.html
+    # is the SPA shell served for "/" and any unknown path so Vue Router can
+    # take over client-side. Resolved at request time so the server still boots
+    # cleanly when the dist hasn't been built yet (tests, fresh checkout).
+    dist = _vue_dist_dir()
+    if dist is not None:
+        routes.append(Mount("/static", app=StaticFiles(directory=dist / "static"), name="static"))
+        favicon = dist / "favicon.ico"
+        if favicon.is_file():
+            routes.append(Route("/favicon.ico", lambda _r: FileResponse(favicon)))
+
+        async def _spa_index(_: Request) -> Response:
+            return Response((dist / "index.html").read_bytes(), media_type="text/html")
+
+        routes.append(Route("/", _spa_index))
+        routes.append(Route("/{rest:path}", _spa_index))
+    else:
+        logger.info("Dashboard dist not found; serving placeholder at /")
+
+        async def _placeholder(_: Request) -> Response:
+            return Response(_NOT_BUILT_HTML, media_type="text/html")
+
+        routes.append(Route("/", _placeholder))
+
     return Starlette(routes=routes, middleware=[Middleware(_LegacyIrisLoggingPathMiddleware)])
