@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Opt-in raw web, markup, and image-text perplexity-gap slices for #5056."""
+"""Registry helpers for raw web, markup, and image-text PPL slices for #5056."""
 
 from __future__ import annotations
 

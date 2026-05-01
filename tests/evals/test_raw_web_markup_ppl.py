@@ -3,7 +3,7 @@
 
 import posixpath
 
-from experiments import exp5056_raw_web_markup_ppl as raw_web_markup
+from experiments.evals import raw_web_markup_ppl as raw_web_markup
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset
 
 
