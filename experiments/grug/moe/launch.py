@@ -87,7 +87,23 @@ def _resolve_run_id(default_run_id: str) -> str:
 
 def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
     if isinstance(tracker, WandbConfig):
-        return dataclasses.replace(tracker, name=run_id)
+        # Issue #5319: append a unique attempt suffix to the wandb run id and
+        # disable resume. This makes every wandb.init create a brand-new run on
+        # wandb.ai (no resume-fetch), which avoids the asymmetric host-side I/O
+        # on worker 0 that triggers the multi-host TPU launch-id mismatch.
+        # ``name`` keeps the human-readable label; ``group`` keeps cross-attempt
+        # runs grouped in the wandb UI.
+        import time as _time
+
+        attempt_suffix = os.environ.get("WANDB_ATTEMPT_ID", str(int(_time.time())))
+        unique_id = f"{run_id}-{attempt_suffix}"
+        return dataclasses.replace(
+            tracker,
+            name=run_id,
+            id=unique_id,
+            group=tracker.group or run_id,
+            resume="never",
+        )
     return tracker
 
 
