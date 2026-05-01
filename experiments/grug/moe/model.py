@@ -68,6 +68,7 @@ class GrugModelConfig:
     head_dim: int | None = None
     max_seq_len: int = 4096
     sliding_window: int = 4096
+    short_sliding_window: int | None = None  # defaults to sliding_window // 2
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
@@ -493,7 +494,8 @@ class Transformer(eqx.Module):
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
+        short_window = cfg.short_sliding_window if cfg.short_sliding_window is not None else cfg.sliding_window // 2
+        short_mask = AttentionMask(is_causal=True, sliding_window=short_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
         moe_router_stats: list[dict[str, jax.Array]] = []
