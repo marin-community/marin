@@ -79,7 +79,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
             if "token_embed" in path_lower:
-                return "adam"
+                return "adamh"
             if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
                 return "adam"
             if ".mlp.w_" in path_lower or ".shared.w_" in path_lower:

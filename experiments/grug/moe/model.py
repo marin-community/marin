@@ -574,7 +574,7 @@ class Transformer(eqx.Module):
 
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
-        long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
         pko_mode = cfg.partial_key_offset
         num_blocks = len(self.blocks)
