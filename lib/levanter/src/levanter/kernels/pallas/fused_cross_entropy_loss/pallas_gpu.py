@@ -412,8 +412,11 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_fa_style_streaming(
             if return_argmax:
                 block_best_logits = jnp.max(safe_logits, axis=-1)
                 block_best_ids = jnp.argmax(safe_logits, axis=-1).astype(jnp.int32) + jnp.int32(v_start)
+                # pyrefly: ignore[unbound-name] - best_logits set in matching `if return_argmax` init branch above
                 better = block_best_logits > best_logits
+                # pyrefly: ignore[unbound-name] - best_logits set in matching `if return_argmax` init branch above
                 best_logits = jnp.where(better, block_best_logits, best_logits)
+                # pyrefly: ignore[unbound-name] - best_ids set in matching `if return_argmax` init branch above
                 best_ids = jnp.where(better, block_best_ids, best_ids)
 
             tile_m = jnp.max(safe_logits, axis=-1)
@@ -436,6 +439,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_fa_style_streaming(
         loss = jnp.where(valid_rows, loss, 0.0)
         lse = jnp.where(valid_rows, lse, 0.0)
         if return_argmax:
+            # pyrefly: ignore[unbound-name] - best_ids set in matching `if return_argmax` init branch above
             best_ids = jnp.where(valid_rows, best_ids, jnp.int32(0))
             return loss, lse, best_ids
         return loss, lse
@@ -587,6 +591,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
     out_loss = loss_blocks.astype(out_dtype).reshape((b_pad,))
     out_lse = lse_blocks.astype(out_dtype).reshape((b_pad,))
     if return_argmax:
+        # pyrefly: ignore[unbound-name] - argmax_blocks set in matching `if return_argmax` branch above
         out_argmax = argmax_blocks.astype(jnp.int32).reshape((b_pad,))
         return out_loss[:b_dim], out_lse[:b_dim], out_argmax[:b_dim]
     return out_loss[:b_dim], out_lse[:b_dim]

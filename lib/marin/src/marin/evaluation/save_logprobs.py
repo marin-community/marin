@@ -181,7 +181,9 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
                         b_seg_ids = np.array(b_seg_ids.array)
 
                         if config.top_k is not None:
+                            # pyrefly: ignore[unbound-name] - set under matching top_k branch above
                             b_topk_ids = np.array(b_topk_ids.array)
+                            # pyrefly: ignore[unbound-name] - set under matching top_k branch above
                             b_topk_vals = np.array(b_topk_vals.array)
 
                         for i in range(len(b_tokens)):
@@ -198,7 +200,9 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
                                     "losses": b_loss[i][mask].tolist(),
                                 }
                                 if config.top_k is not None:
+                                    # pyrefly: ignore[unbound-name] - set under matching top_k branch above
                                     record["top_k_token_ids"] = b_topk_ids[i][mask].tolist()
+                                    # pyrefly: ignore[unbound-name] - set under matching top_k branch above
                                     record["top_k_logprobs"] = b_topk_vals[i][mask].tolist()
                                 f.write(json.dumps(record) + "\n")
 

@@ -343,7 +343,7 @@ def download_hf(cfg: DownloadConfig) -> None:
         try:
             relative_file_path = _relative_path_in_source(file, source_root)
             if relative_file_path.startswith(".."):
-                raise ValueError(f"Computed path escapes source root: source={hf_source_path}, file={file}")
+                raise ValueError(f"Computed path escapes source root: source={source_url}, file={file}")
             fsspec_file_path = os.path.join(output_path, relative_file_path)
             expected_size = file_sizes.get(file)
             # Fully-qualify the source URL so subprocess workers can open it via fsspec

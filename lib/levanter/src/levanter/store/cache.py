@@ -11,7 +11,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, TypeVar, Union
+from typing import Any, Dict, Generic, List, Optional, Sequence, TypeVar, Union
 
 import deepdiff
 import jax
@@ -217,7 +217,7 @@ class CacheMetadata:
         return CacheMetadata()
 
 
-class SerialCacheWriter:
+class SerialCacheWriter(Generic[T]):
     """
     Writes TreeCache-compatible caches to disk directly. Mostly for scripts and debugging.
     """

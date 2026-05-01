@@ -26,6 +26,7 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 from rigging.timing import Duration
 
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.protocols import WorkerInfraProvider
@@ -1206,7 +1207,7 @@ def create_autoscaler(
     label_prefix: str,
     base_worker_config: config_pb2.WorkerConfig | None = None,
     threads: ThreadContainer | None = None,
-    db: "ControllerDB | None" = None,  # noqa: F821, UP037 — circular import
+    db: ControllerDB | None = None,
 ):
     """Create autoscaler from WorkerInfraProvider and explicit config.
 

@@ -22,7 +22,7 @@ import os
 import socket
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import partial
@@ -121,7 +121,7 @@ def _create_binary_array(buffer_data: np.ndarray) -> pa.Array:
 
 def state_dict_to_batches(
     state_dict: dict[str, np.ndarray], shape_dict: dict[str, tuple[int, ...]], weight_id: int
-) -> dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]]:
+) -> dict[str, tuple[pa.Schema, list[pa.RecordBatch]]]:
     """Convert state_dict to Arrow RecordBatch per parameter using Haliax state_dict for efficient transfer.
 
     Large arrays are split into multiple RecordBatches if needed to avoid hitting the Arrow
@@ -264,9 +264,8 @@ class ArrowFlightCoordinator:
             param_names=param_names,
         )
         logger.info(f"Updated server: weight_id={weight_id}, params={len(param_names)}, servers={len(server_locations)}")
-        return 123
 
-    def fetch_server(self) -> ServerInfo:
+    def fetch_server(self) -> ServerInfo | None:
         return self._server_info
 
 
@@ -274,7 +273,7 @@ class MarinFlightServer(flight.FlightServerBase):
     """Arrow Flight server for serving model weights."""
 
     config: WeightTransferConfig
-    _weights_store: dict[int, dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]]]
+    _weights_store: dict[int, dict[str, tuple[pa.Schema, list[pa.RecordBatch]]]]
     _latest_weight_id: int | None
     _lock: threading.Lock
     _location: str
@@ -292,6 +291,8 @@ class MarinFlightServer(flight.FlightServerBase):
 
     def do_get(self, context, ticket):
         """Serve weight data to inference workers."""
+        # Propagate typed FlightUnavailableError without rewrapping — callers
+        # distinguish "no weights yet" (retry) from internal server errors.
         try:
             ticket_data = ticket.ticket.decode("utf-8")
 
@@ -305,12 +306,17 @@ class MarinFlightServer(flight.FlightServerBase):
             with self._lock:
                 if weight_id != self._latest_weight_id:
                     logger.debug(f"Requested weight_id {weight_id} stale, returning {self._latest_weight_id}")
+                    if self._latest_weight_id is None:
+                        raise flight.FlightUnavailableError("No weights available yet")
                     weight_id = self._latest_weight_id
 
                 (schema, batches) = self._weights_store[weight_id][param_name]
 
             return flight.RecordBatchStream(pa.RecordBatchReader.from_batches(schema, batches))
 
+        except flight.FlightUnavailableError:
+            # Typed "retry me" signal; do not rewrap as Internal.
+            raise
         except Exception as e:
             logger.error(f"Error in do_get: {e}")
             raise flight.FlightInternalError(f"Failed to get weights: {e}") from e
@@ -333,7 +339,7 @@ class MarinFlightServer(flight.FlightServerBase):
                     )
                     yield info
 
-    def store_weights(self, weight_id: int, params_dict: dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]]) -> None:
+    def store_weights(self, weight_id: int, params_dict: dict[str, tuple[pa.Schema, list[pa.RecordBatch]]]) -> None:
         with self._lock:
             # remove all other weights
             self._weights_store.clear()

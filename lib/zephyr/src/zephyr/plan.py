@@ -787,6 +787,9 @@ def run_stage(
 
         if isinstance(op, Map):
             if op.needs_shard_context:
+                # Map.fn is a compose_map pipeline that takes shard_idx/total_shards as kwargs.
+                # (The ShardInfo dataclass is only used internally by compose_map to hand off
+                # to user-provided MapShardOp.fn at the logical-op boundary — see line 237.)
                 stream = op.fn(stream, shard_idx=ctx.shard_idx, total_shards=ctx.total_shards)
             else:
                 stream = op.fn(stream)

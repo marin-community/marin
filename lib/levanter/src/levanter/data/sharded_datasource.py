@@ -529,7 +529,7 @@ class _TransformedDataset:
 
 
 class _MappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):
-    def __init__(self, source: ShardedDataSource[T_co], fn: Callable[[T_co], T]):
+    def __init__(self, source: ShardedDataSource[Any], fn: Callable[[Any], T]):
         self.source = source
         self.fn = fn
         self._transform = _MapTransform(fn)

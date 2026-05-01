@@ -462,6 +462,7 @@ def scale_by_kron(
                     q = jax.tree.map(lambda d: jnp.repeat(jnp.expand_dims(d, 0), s, axis=0), q)
                 return q
 
+            # pyrefly: ignore[unbound-name] - Qs set in matching `not return_partition_specs_only` branch above
             Qs = jax.tree.map(broadcast_qs, params, partitioned_shapes, Qs, scanned_sizes)
             if have_qs_sharding:
                 Qs = _safe_sharding_constraint(Qs, Qs_sharding)
@@ -480,6 +481,7 @@ def scale_by_kron(
             key=jax.random.PRNGKey(0),
             count=jnp.zeros([], jnp.int32),
             mu=mu,
+            # pyrefly: ignore[unbound-name] - Qs set in matching `not return_partition_specs_only` branch above (we only reach here when that was true)
             Qs_preconditioners=Qs,
             update_counter=jnp.zeros([], jnp.int32),
             balance_counter=jnp.zeros([], jnp.int32),
@@ -894,14 +896,18 @@ def scale_by_kron(
 
         # final constraint for good measure
         if have_params_sharding:
+            # pyrefly: ignore[unbound-name] - original_params_sharding_ set in matching `have_params_sharding` branch above
             precond_gs = _safe_sharding_constraint(precond_gs, original_params_sharding_)
 
         # box preconditioned grads
         if flax_partitioned:
             flat_precond_gs, _ = jax.tree.flatten(precond_gs)
+            # pyrefly: ignore[unbound-name] - boxed_updates set in matching flax_partitioned setup above
             precond_gs = [bu.replace_boxed(g) for bu, g in zip(boxed_updates, flat_precond_gs)]
+            # pyrefly: ignore[unbound-name] - grads_structure set in matching flax_partitioned setup above
             precond_gs = grads_structure.unflatten(precond_gs)
         if hax_partitioned:
+            # pyrefly: ignore[unbound-name] - updates_struct set in matching hax_partitioned setup above
             precond_gs = updates_struct.unflatten(precond_gs)
 
         # dtypes and new state

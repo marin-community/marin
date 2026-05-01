@@ -716,7 +716,7 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
     return {task.task_id: task for task in tasks_with_attempts(tasks, attempts)}
 
 
-def _building_counts(queries: ControllerDB, workers: list[WorkerRow]) -> dict[WorkerId, int]:
+def _building_counts(queries: ControllerDB, workers: list[WorkerSnapshot]) -> dict[WorkerId, int]:
     """Count tasks in BUILDING or ASSIGNED state per worker, excluding reservation-holder jobs."""
     if not workers:
         return {}
@@ -793,9 +793,9 @@ def _worker_matches_reservation_entry(
 
 
 def _inject_reservation_taints(
-    workers: list[WorkerRow],
+    workers: list[WorkerSnapshot],
     claims: dict[WorkerId, ReservationClaim],
-) -> list[WorkerRow]:
+) -> list[WorkerSnapshot]:
     """Create modified worker copies with reservation taints and prioritization.
 
     Claimed workers receive a ``reservation-job`` attribute set to the claiming
@@ -808,8 +808,8 @@ def _inject_reservation_taints(
     if not claims:
         return workers
 
-    claimed: list[WorkerRow] = []
-    unclaimed: list[WorkerRow] = []
+    claimed: list[WorkerSnapshot] = []
+    unclaimed: list[WorkerSnapshot] = []
     for worker in workers:
         claim = claims.get(worker.worker_id)
         if claim is not None:
@@ -1691,6 +1691,9 @@ class Controller:
         duration: int,
     ) -> None:
         """Capture a single task profile via RPC and store it in the DB."""
+        # Profile loop is only spawned on the non-K8s provider path (see start()).
+        assert not isinstance(self._provider, K8sTaskProvider)
+        provider = self._provider
         try:
             request = job_pb2.ProfileTaskRequest(
                 target=task_id.to_wire(),
@@ -1698,7 +1701,7 @@ class Controller:
                 profile_type=profile_type,
             )
             timeout_ms = duration * 1000 + 30000
-            resp = self._provider.profile_task(worker.address, request, timeout_ms=timeout_ms)
+            resp = provider.profile_task(worker.address, request, timeout_ms=timeout_ms)
             if resp.error:
                 logger.debug("Profile (%s) failed for %s: %s", profile_kind, task_id, resp.error)
                 return

@@ -123,8 +123,11 @@ def linear_softmax_cross_entropy_loss_streaming(
         if return_argmax:
             block_best_logits = jnp.max(logits, axis=-1)
             block_best_ids = jnp.argmax(logits, axis=-1).astype(jnp.int32) + start
+            # pyrefly: ignore[unbound-name] - best_logits unpacked in matching `if return_argmax` branch at top of body
             better = block_best_logits > best_logits
+            # pyrefly: ignore[unbound-name] - best_logits unpacked in matching `if return_argmax` branch at top of body
             best_logits = jnp.where(better, block_best_logits, best_logits)
+            # pyrefly: ignore[unbound-name] - best_ids unpacked in matching `if return_argmax` branch at top of body
             best_ids = jnp.where(better, block_best_ids, best_ids)
             return logsumexp, label_logit, best_logits, best_ids
         return logsumexp, label_logit
@@ -139,5 +142,6 @@ def linear_softmax_cross_entropy_loss_streaming(
         logsumexp, label_logit = jax.lax.fori_loop(0, num_blocks, body, (logsumexp_init, label_logit_init))
     loss = logsumexp - label_logit
     if return_argmax:
+        # pyrefly: ignore[unbound-name] - argmax set in matching `if return_argmax` branch above
         return loss, logsumexp, argmax
     return loss, logsumexp
