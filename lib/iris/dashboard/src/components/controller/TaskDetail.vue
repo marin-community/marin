@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { useControllerRpc } from '@/composables/useRpc'
+import { useControllerRpc, logServerStatsRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import type {
@@ -9,6 +9,7 @@ import type {
   GetTaskStatusResponse,
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
+import { decodeArrowIpc } from '@/utils/arrow'
 
 import { controllerRpcCall } from '@/composables/useRpc'
 import { useProfileAction } from '@/composables/useProfileAction'
@@ -71,11 +72,75 @@ const diskUsedMb = computed(() => {
   return raw ? parseFloat(raw) : 0
 })
 
+// --- Per-task resource history sourced from finelog stats (iris.task) ---
+//
+// One row per attempt-resource update emitted by the worker. Gated on
+// ListNamespaces so a freshly-started log-server renders the empty state
+// instead of a "Catalog Error" banner. Rows come back ts DESC; reverse for
+// the sparkline (oldest -> newest).
+const TASK_NAMESPACE = 'iris.task'
+
+interface TaskStatRow {
+  ts?: string
+  cpu_millicores?: number
+  memory_mb?: number
+}
+
+interface QueryResponse {
+  arrowIpc?: string
+}
+
+interface NamespaceInfo {
+  namespace: string
+}
+
+interface ListNamespacesResponse {
+  namespaces?: NamespaceInfo[]
+}
+
+const taskStatsRows = ref<TaskStatRow[]>([])
+let taskStatsGeneration = 0
+
+function buildTaskStatsSql(taskId: string): string {
+  const escaped = taskId.replace(/'/g, "''")
+  return `
+SELECT ts, cpu_millicores, memory_mb
+FROM "iris.task"
+WHERE task_id = '${escaped}'
+ORDER BY ts DESC
+LIMIT 200
+`.trim()
+}
+
+async function fetchTaskStats() {
+  const gen = ++taskStatsGeneration
+  try {
+    const list = await logServerStatsRpcCall<ListNamespacesResponse>('ListNamespaces', {})
+    if (gen !== taskStatsGeneration) return
+    const registered = (list.namespaces ?? []).some((n) => n.namespace === TASK_NAMESPACE)
+    if (!registered) {
+      taskStatsRows.value = []
+      return
+    }
+    const resp = await logServerStatsRpcCall<QueryResponse>('Query', {
+      sql: buildTaskStatsSql(props.taskId),
+    })
+    if (gen !== taskStatsGeneration) return
+    const decoded = decodeArrowIpc(resp.arrowIpc)
+    taskStatsRows.value = decoded.rows as TaskStatRow[]
+  } catch {
+    if (gen !== taskStatsGeneration) return
+    taskStatsRows.value = []
+  }
+}
+
+const orderedTaskStats = computed(() => taskStatsRows.value.slice().reverse())
+
 const cpuHistory = computed(() =>
-  (task.value?.resourceHistory ?? []).map(r => (r.cpuMillicores ?? 0) / 1000)
+  orderedTaskStats.value.map((r) => Number(r.cpu_millicores ?? 0) / 1000)
 )
 const memHistory = computed(() =>
-  (task.value?.resourceHistory ?? []).map(r => r.memoryMb ? parseFloat(r.memoryMb) : 0)
+  orderedTaskStats.value.map((r) => Number(r.memory_mb ?? 0))
 )
 
 // Use job-level resource limits for gauge totals when available.
@@ -116,15 +181,29 @@ const { active: autoRefreshActive, start: startRefresh, stop: stopRefresh } = us
   5_000,
   false,
 )
+const { start: startStatsRefresh, stop: stopStatsRefresh } = useAutoRefresh(
+  fetchTaskStats,
+  5_000,
+  false,
+)
 
 watch(isActive, (active) => {
-  if (active) startRefresh()
-  else stopRefresh()
+  if (active) {
+    startRefresh()
+    startStatsRefresh()
+  } else {
+    stopRefresh()
+    stopStatsRefresh()
+  }
 })
 
 onMounted(async () => {
   await fetchTask()
-  if (isActive.value) startRefresh()
+  fetchTaskStats()
+  if (isActive.value) {
+    startRefresh()
+    startStatsRefresh()
+  }
 })
 
 const router = useRouter()
@@ -152,9 +231,15 @@ function selectAttempt(attemptId: number) {
 // Clear stale data first so loading/error states render correctly if the fetch fails.
 watch(() => props.taskId, async () => {
   taskResponse.value = null
+  taskStatsRows.value = []
   stopRefresh()
+  stopStatsRefresh()
   await fetchTask()
-  if (isActive.value) startRefresh()
+  fetchTaskStats()
+  if (isActive.value) {
+    startRefresh()
+    startStatsRefresh()
+  }
 })
 </script>
 
