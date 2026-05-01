@@ -3,8 +3,9 @@
 
 import posixpath
 
-from experiments.evals import raw_web_markup_ppl as raw_web_markup
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset
+
+from experiments.evals import raw_web_markup_ppl as raw_web_markup
 
 
 def test_prefixed_raw_web_markup_validation_sets_prefixes_each_slice() -> None:

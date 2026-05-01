@@ -13,14 +13,13 @@ from enum import StrEnum
 from typing import Any
 
 import requests
+from marin.execution import THIS_OUTPUT_PATH
+from marin.transform.huggingface.dataset_to_eval import get_nested_item
+from marin.utils import fsspec_mkdirs
 from requests.adapters import HTTPAdapter
 from rigging.filesystem import open_url
 from urllib3.util import Retry
 from zephyr.writers import atomic_rename
-
-from marin.execution import THIS_OUTPUT_PATH
-from marin.transform.huggingface.dataset_to_eval import get_nested_item
-from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 
