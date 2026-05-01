@@ -6,6 +6,22 @@
 # The server is unauthenticated by design — restrict at the network layer
 # (k8s NetworkPolicy, GCP firewall). Do NOT expose it to the public internet.
 
+# ── Stage: dashboard ─────────────────────────────────────────────────
+# Build the Vue SPA. Output is consumed by the runtime stage at
+# /app/dashboard/dist; the finelog ASGI app serves it on the same port as
+# the RPCs (see lib/finelog/src/finelog/server/asgi.py).
+FROM node:22-slim AS dashboard
+
+WORKDIR /build/dashboard
+
+# Copy manifests first so dependency install is cached across source edits.
+COPY lib/finelog/dashboard/package.json lib/finelog/dashboard/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY lib/finelog/dashboard/ ./
+RUN npm run build
+
+
 # ── Stage: base ──────────────────────────────────────────────────────
 FROM python:3.11-slim AS base
 
@@ -58,11 +74,18 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ── Stage: runtime ───────────────────────────────────────────────────
 FROM deps AS runtime
 
+# Pre-built dashboard SPA. Served by the asgi app at "/" and "/static/*".
+COPY --from=dashboard /build/dashboard/dist ./dashboard/dist
+
 # Local segment cache. Declared as a volume so k8s/Docker mount a PV here.
-RUN mkdir -p /var/cache/finelog \
-    && groupadd --system --gid 1000 finelog \
-    && useradd --system --uid 1000 --gid finelog --home-dir /app finelog \
-    && chown -R finelog:finelog /var/cache/finelog /app
+# Only the cache dir needs to be writable by the finelog user; /app and
+# /app/.venv stay root-owned but are world-readable, so the recursive chown
+# (which walks tens of thousands of venv files and re-layers every inode)
+# is unnecessary.
+RUN groupadd --system --gid 1000 finelog \
+    && useradd --system --uid 1000 --gid finelog --home-dir /app --no-create-home finelog \
+    && mkdir -p /var/cache/finelog \
+    && chown finelog:finelog /var/cache/finelog
 
 VOLUME ["/var/cache/finelog"]
 
