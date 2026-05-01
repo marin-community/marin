@@ -390,6 +390,69 @@ class TestAutoscalerScaleDown:
         autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
         assert group.slice_count() == 0
 
+    def test_pending_demand_prevents_scaledown_of_idle_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """Idle slices are kept alive when raw pending demand exists, even if the dry-run
+        absorbed all tasks (setting current_demand=0).
+
+        Reproduces the bug where a reserved TPU slice gets terminated because:
+        1. The dry-run absorbs all pending tasks onto idle workers (demand=0)
+        2. The real scheduler hasn't assigned tasks yet (workers report run=0)
+        3. After the idle threshold, the slice is incorrectly terminated
+        """
+        ready_ts = Timestamp.from_ms(1_000)
+        discovered = [make_mock_slice_handle("slice-001", all_ready=True, created_at_ms=100000)]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(
+            scale_group_config,
+            platform,
+            idle_threshold=Duration.from_ms(1000),
+        )
+        group.reconcile()
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        slice_001 = group.get_slice("slice-001")
+        wid = slice_001.describe().workers[0].worker_id
+        idle_map = {wid: WorkerStatus(worker_id=wid, running_task_ids=frozenset())}
+
+        # Dry-run absorbed all tasks → demand_entries is empty (0 demand)
+        absorbed_demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
+        # Raw pending demand (no dry-run) shows 1 task still pending
+        raw_demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+
+        # Past idle threshold — without raw_demand, slice would be terminated
+        autoscaler.run_once(
+            absorbed_demand,
+            idle_map,
+            timestamp=Timestamp.from_ms(10_000),
+            raw_demand_entries=raw_demand,
+        )
+
+        assert group.slice_count() == 1, "Slice should be kept alive by pending_demand"
+
+    def test_scaledown_proceeds_when_pending_demand_zero(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """When both current_demand and pending_demand are 0, idle slices are scaled down."""
+        ready_ts = Timestamp.from_ms(1_000)
+        discovered = [make_mock_slice_handle("slice-001", all_ready=True, created_at_ms=100000)]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(
+            scale_group_config,
+            platform,
+            idle_threshold=Duration.from_ms(1000),
+        )
+        group.reconcile()
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        slice_001 = group.get_slice("slice-001")
+        wid = slice_001.describe().workers[0].worker_id
+        idle_map = {wid: WorkerStatus(worker_id=wid, running_task_ids=frozenset())}
+
+        no_demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
+        autoscaler.run_once(no_demand, idle_map, timestamp=Timestamp.from_ms(10_000), raw_demand_entries=no_demand)
+
+        assert group.slice_count() == 0, "Idle slice with no demand should be terminated"
+
 
 class TestAutoscalerExecution:
     """Tests for decision execution."""

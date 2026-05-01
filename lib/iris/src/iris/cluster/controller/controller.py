@@ -2519,13 +2519,20 @@ class Controller:
             return
 
         worker_status_map = self._build_worker_status_map()
+        claims = _read_reservation_claims(self._db)
+        # Compute raw demand (no dry-run absorption) BEFORE refresh so that
+        # pending_demand is set when scaledown decisions are made. This prevents
+        # terminating idle slices when the dry-run absorbs all pending tasks
+        # but the real scheduler hasn't assigned them yet.
+        raw_demand_entries = compute_demand_entries(self._db, reservation_claims=claims)
+        self._autoscaler.update_pending_demand(raw_demand_entries)
         self._autoscaler.refresh(worker_status_map)
         workers = healthy_active_workers_with_attributes(self._db)
         demand_entries = compute_demand_entries(
             self._db,
             self._scheduler,
             workers,
-            reservation_claims=_read_reservation_claims(self._db),
+            reservation_claims=claims,
         )
         self._autoscaler.update(demand_entries)
 
