@@ -450,17 +450,25 @@ class Checkpointer:
             self._async_checkpoint_remover_thread.start()
             self._checkpoint_being_removed = None
 
-        # discover latest checkpoint and see if it's temporary
+        # Discover latest checkpoint and see if it's temporary. This is gated on
+        # ``delete_old_temp_checkpoints`` because the gcsfs glob+exists probes
+        # against ``base_path`` at startup appear to trigger a multi-host TPU
+        # ``scheckne`` halt at the first broadcast on resume when ``base_path``
+        # contains a pre-existing checkpoint (issue #5319). Skipping the probe
+        # entirely when ``delete_old_temp_checkpoints=False`` lets resumes that
+        # set ``load_checkpoint_path`` explicitly avoid the trigger without
+        # needing to copy the checkpoint to a different prefix.
         self._last_temporary_checkpoint = None
-        latest_checkpoint = discover_latest_checkpoint(self.base_path)
-        if latest_checkpoint is not None and delete_old_temp_checkpoints:
-            metadata = _load_metadata(latest_checkpoint)
-            if metadata.get("is_temporary", False):
-                logger.info(
-                    f"Found prior temporary checkpoint {latest_checkpoint}. We will delete it after"
-                    " saving a new checkpoint."
-                )
-                self._last_temporary_checkpoint = latest_checkpoint
+        if delete_old_temp_checkpoints:
+            latest_checkpoint = discover_latest_checkpoint(self.base_path)
+            if latest_checkpoint is not None:
+                metadata = _load_metadata(latest_checkpoint)
+                if metadata.get("is_temporary", False):
+                    logger.info(
+                        f"Found prior temporary checkpoint {latest_checkpoint}. We will delete it after"
+                        " saving a new checkpoint."
+                    )
+                    self._last_temporary_checkpoint = latest_checkpoint
 
     def load_checkpoint(
         self,
