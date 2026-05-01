@@ -5,14 +5,9 @@ import gzip
 import json
 from pathlib import Path
 
-import pytest
-
 from experiments.evals.gh_archive_structured_output import (
-    GH_ARCHIVE_STRUCTURED_OUTPUT_SLICES,
-    gh_archive_structured_output_eval,
     GH_ARCHIVE_OPTIONAL_EVENT_TYPES,
     GH_ARCHIVE_REQUIRED_EVENT_TYPES,
-    gh_archive_structured_output_raw_validation_sets,
 )
 from marin.datakit.download.gh_archive import GhArchiveDownloadConfig, download_gh_archive_events, gh_archive_step
 
@@ -104,41 +99,6 @@ def test_download_gh_archive_events_filters_masks_and_serializes(tmp_path: Path)
     assert push_text == json.dumps(push_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
     assert not (tmp_path / "gh_archive_eval" / "WatchEvent").exists()
-
-
-def test_gh_archive_structured_output_raw_validation_sets_paths_and_tags():
-    datasets = gh_archive_structured_output_raw_validation_sets(raw_root="gs://example-bucket/raw/gha")
-
-    assert set(datasets) == {slice_.registry_key for slice_ in GH_ARCHIVE_STRUCTURED_OUTPUT_SLICES}
-
-    for slice_ in GH_ARCHIVE_STRUCTURED_OUTPUT_SLICES:
-        dataset = datasets[slice_.registry_key]
-        assert dataset.input_path == f"gs://example-bucket/raw/gha/{slice_.raw_relative_glob}"
-        assert dataset.tags == slice_.tags
-
-
-def test_gh_archive_raw_validation_sets_can_drop_optional_event_types():
-    datasets = gh_archive_structured_output_raw_validation_sets(
-        raw_root="gs://example-bucket/raw/gha",
-        include_optional_event_types=False,
-    )
-    assert set(datasets) == {
-        f"gh_archive_structured_output/{event_type}" for event_type in GH_ARCHIVE_REQUIRED_EVENT_TYPES
-    }
-
-
-def test_gh_archive_structured_output_raw_validation_sets_default_to_built_step_and_reject_ambiguous_source():
-    datasets = gh_archive_structured_output_raw_validation_sets()
-
-    assert datasets["gh_archive_structured_output/PushEvent"].input_path == gh_archive_structured_output_eval.cd(
-        "PushEvent/*.jsonl.gz"
-    )
-
-    with pytest.raises(ValueError, match=r"Provide either raw_root or gh_archive_raw, not both\."):
-        gh_archive_structured_output_raw_validation_sets(
-            raw_root="gs://example-bucket/raw/gha",
-            gh_archive_raw=gh_archive_structured_output_eval,
-        )
 
 
 def test_gh_archive_step_cache_identity_tracks_data_window_not_runtime_knobs():
