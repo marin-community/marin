@@ -31,17 +31,22 @@ def test_noisy_asr_ocr_raw_validation_sets_registers_clean_and_noisy_slices():
             return f"gs://synthetic/{path}"
 
     datasets = noisy_asr_ocr_raw_validation_sets(noisy_asr_ocr_raw=_SyntheticRawStep())
+    assert set(datasets) == {
+        f"{ASR_OCR_NOISY_DATASET_ROOT}/{slice_.registry_name}/{variant}"
+        for slice_ in ASR_OCR_NOISY_SLICES
+        for variant in ("noisy", "clean")
+    }
 
-    first_slice = ASR_OCR_NOISY_SLICES[0]
-    noisy_key = f"{ASR_OCR_NOISY_DATASET_ROOT}/{first_slice.registry_name}/noisy"
-    clean_key = f"{ASR_OCR_NOISY_DATASET_ROOT}/{first_slice.registry_name}/clean"
+    for slice_ in ASR_OCR_NOISY_SLICES:
+        noisy_key = f"{ASR_OCR_NOISY_DATASET_ROOT}/{slice_.registry_name}/noisy"
+        clean_key = f"{ASR_OCR_NOISY_DATASET_ROOT}/{slice_.registry_name}/clean"
 
-    assert datasets[noisy_key].text_key == "noisy_text"
-    assert datasets[clean_key].text_key == "clean_text"
-    assert isinstance(datasets[noisy_key].input_path, str)
-    assert f"/{first_slice.registry_name}/data-*.jsonl.gz" in datasets[noisy_key].input_path
-    assert datasets[noisy_key].tags[-1] == "variant:noisy"
-    assert datasets[clean_key].tags[-1] == "variant:clean"
+        assert datasets[noisy_key].text_key == "noisy_text"
+        assert datasets[clean_key].text_key == "clean_text"
+        assert isinstance(datasets[noisy_key].input_path, str)
+        assert f"/{slice_.registry_name}/data-*.jsonl.gz" in datasets[noisy_key].input_path
+        assert datasets[noisy_key].tags[-1] == "variant:noisy"
+        assert datasets[clean_key].tags[-1] == "variant:clean"
 
 
 def test_materialize_noisy_asr_ocr_raw_respects_per_slice_cap(tmp_path, monkeypatch):

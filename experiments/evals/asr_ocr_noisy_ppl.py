@@ -18,7 +18,7 @@ from typing import Protocol
 
 import fsspec
 from datasets import load_dataset
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from levanter.utils import fsspec_utils
 
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
