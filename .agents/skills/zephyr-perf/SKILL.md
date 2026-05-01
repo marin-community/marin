@@ -80,11 +80,6 @@ diff and judges (see *Assess the diff* below).
 Reviewer always overrides via PR labels `zephyr-perf-gate:{skip,1,2,3}`.
 The label sets `max_gate`; Gate 1 still runs first.
 
-Sizing note for Gate 2 (`--stride 5`): from one fineweb run (~46 min total)
-and a partial full-medium run (~10–14 h extrapolated), 1/5 of medium lands
-near 2.5 h. Recalibrate the stride after the first real Gate 2 run if it
-falls outside [2 h, 3.5 h].
-
 ## Workflow
 
 ### 1. Assess the diff
