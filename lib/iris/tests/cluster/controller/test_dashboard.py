@@ -270,6 +270,20 @@ def test_list_jobs_includes_terminal_states(client, state, job_request):
         assert j.get("state") in terminal_states
 
 
+def test_list_workers_returns_healthy_status(client, state):
+    """ListWorkers RPC returns workers with healthy status."""
+    register_worker(state, "healthy1", "h1:8080", make_worker_metadata())
+    register_worker(state, "healthy2", "h2:8080", make_worker_metadata())
+    register_worker(state, "unhealthy", "h3:8080", make_worker_metadata(), healthy=False)
+
+    resp = rpc_post(client, "ListWorkers")
+    workers = resp.get("workers", [])
+
+    assert len(workers) == 3
+    healthy_count = sum(1 for w in workers if w.get("healthy", False))
+    assert healthy_count == 2
+
+
 def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     """ListEndpoints returns endpoints for non-terminal jobs.
 
@@ -1031,6 +1045,27 @@ def test_coscheduling_failure_reason_insufficient_group(client, state):
     reason = job.get("pendingReason", "")
     assert "need 4" in reason, f"Expected 'need 4' in reason, got: {reason}"
     assert "largest group has 2" in reason, f"Expected 'largest group has 2' in reason, got: {reason}"
+
+
+# =============================================================================
+# Worker Attributes Tests
+# =============================================================================
+
+
+def test_worker_attributes_in_list_workers(client, state):
+    """ListWorkers RPC returns worker attributes in metadata."""
+    meta = make_worker_metadata()
+    meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(job_pb2.AttributeValue(string_value="v5litepod-16"))
+    meta.attributes[WellKnownAttribute.TPU_WORKER_ID].CopyFrom(job_pb2.AttributeValue(int_value=0))
+    register_worker(state, "tpu-worker", "h1:8080", meta)
+
+    resp = rpc_post(client, "ListWorkers")
+    workers = resp.get("workers", [])
+    assert len(workers) == 1
+
+    attrs = workers[0].get("metadata", {}).get("attributes", {})
+    assert attrs["tpu-name"]["stringValue"] == "v5litepod-16"
+    assert int(attrs["tpu-worker-id"]["intValue"]) == 0
 
 
 # =============================================================================

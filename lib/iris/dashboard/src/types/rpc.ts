@@ -226,8 +226,9 @@ export interface WorkerHealthStatus {
   statusMessage?: string
 }
 
-/** Alias used by FleetTab which reads directly from the stats service. */
-export type WorkerHealth = WorkerHealthStatus
+export interface ListWorkersResponse {
+  workers: WorkerHealthStatus[]
+}
 
 export interface WorkerResourceSnapshot {
   timestamp?: ProtoTimestamp

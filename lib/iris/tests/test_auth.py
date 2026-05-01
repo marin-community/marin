@@ -39,23 +39,23 @@ def test_static_auth_rpc_access():
     url = controller.start()
 
     try:
-        autoscaler_req = controller_pb2.Controller.GetAutoscalerStatusRequest()
+        list_req = controller_pb2.Controller.ListWorkersRequest()
 
         unauth_client = ControllerServiceClientSync(address=url, timeout_ms=5000)
         with pytest.raises(ConnectError, match=r"(?i)(authorization|authenticat)"):
-            unauth_client.get_autoscaler_status(autoscaler_req)
+            unauth_client.list_workers(list_req)
         unauth_client.close()
 
         wrong_injector = AuthTokenInjector(StaticTokenProvider("wrong-token"))
         wrong_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[wrong_injector])
         with pytest.raises(ConnectError, match=r"(?i)authenticat"):
-            wrong_client.get_autoscaler_status(autoscaler_req)
+            wrong_client.list_workers(list_req)
         wrong_client.close()
 
         jwt_token = _login_for_jwt(url, _AUTH_TOKEN)
         valid_injector = AuthTokenInjector(StaticTokenProvider(jwt_token))
         valid_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[valid_injector])
-        response = valid_client.get_autoscaler_status(autoscaler_req)
+        response = valid_client.list_workers(list_req)
         assert response is not None
         valid_client.close()
     finally:

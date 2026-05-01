@@ -728,6 +728,24 @@ def test_port_binding_failure(mock_bundle_store, tmp_path):
 # ============================================================================
 
 
+def _worker_with_mock_client(config, mock_bundle_store, mock_runtime):
+    """Build a Worker and attach a fake LogClient (normally built in start())."""
+    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+
+    class _FakeClient:
+        def write_batch(self, key, entries):
+            pass
+
+        def flush(self, timeout=None):
+            return True
+
+        def close(self):
+            pass
+
+    worker._log_client = _FakeClient()
+    return worker
+
+
 def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_store, mock_runtime, tmp_path):
     """Worker known locally (e.g. via slice_id) attaches under worker_log_key
     *before* register so pre-register failures ship remote logs."""
@@ -740,8 +758,7 @@ def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_stor
         default_task_image="mock-image",
         worker_id="w-1",
     )
-    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-    worker._log_client = Mock()
+    worker = _worker_with_mock_client(config, mock_bundle_store, mock_runtime)
 
     try:
         worker._attach_log_handler()
@@ -759,8 +776,7 @@ def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runti
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
     )
-    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-    worker._log_client = Mock()
+    worker = _worker_with_mock_client(config, mock_bundle_store, mock_runtime)
 
     worker._attach_log_handler()
     assert worker._log_handler is None
@@ -777,8 +793,7 @@ def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runti
         default_task_image="mock-image",
         worker_id="w-1",
     )
-    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-    worker._log_client = Mock()
+    worker = _worker_with_mock_client(config, mock_bundle_store, mock_runtime)
 
     try:
         worker._attach_log_handler()
@@ -1079,12 +1094,7 @@ def test_start_wires_log_client_into_adopted_attempts(mock_bundle_store, mock_ru
     Worker.start() must construct the LogClient *before* adopting containers,
     otherwise adopted TaskAttempts capture ``log_client=None`` permanently
     and silently drop every container log line for the rest of the task.
-
-    LogClient.connect is patched at the network boundary so this test runs
-    without a real controller or finelog server.
     """
-    from unittest.mock import MagicMock, patch
-
     container = _make_discovered_container()
     mock_runtime.discover_containers = Mock(return_value=[container])
 
@@ -1093,30 +1103,22 @@ def test_start_wires_log_client_into_adopted_attempts(mock_bundle_store, mock_ru
         port_range=(50000, 50100),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        # Needs a controller_address so the LogClient and stats table are wired.
+        # Unreachable controller; lifecycle thread retries register and exits on stop().
         controller_address="http://127.0.0.1:1",
         poll_interval=Duration.from_seconds(0.05),
     )
     worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
 
-    fake_client = MagicMock()
-    fake_client.get_table.return_value = MagicMock()
+    try:
+        worker.start()
 
-    with (
-        patch("iris.cluster.worker.worker.LogClient.connect", return_value=fake_client),
-        patch.object(worker, "_cleanup_all_iris_containers"),
-        patch.object(worker, "adopt_running_containers", wraps=worker.adopt_running_containers),
-    ):
-        try:
-            worker.start()
-
-            assert worker._log_client is not None
-            task = worker.get_task(container.task_id, container.attempt_id)
-            assert task is not None
-            # The adopted attempt must reference the worker's live client, not None.
-            assert task._log_client is worker._log_client
-        finally:
-            worker.stop()
+        assert worker._log_client is not None
+        task = worker.get_task(container.task_id, container.attempt_id)
+        assert task is not None
+        # The adopted attempt must reference the worker's live client, not None.
+        assert task._log_client is worker._log_client
+    finally:
+        worker.stop()
 
 
 def test_task_attempt_adopt_factory():

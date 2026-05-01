@@ -21,22 +21,6 @@ Workflow: dry-run locally (`iris cluster controller serve --dry-run`) -> capture
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
-## Finelog (log + stats service)
-
-**Layout migration on first boot**: finelog now stores log segments under
-`{data_dir}/log/` (per-namespace layout). The first boot after upgrading
-runs a synchronous migration before the server binds — multi-thousand-segment
-migrations may take minutes. Tail finelog stdout for `layout migration:` INFO
-lines; do not kill the pod during migration.
-
-### Stats service: dashboard worker pane
-
-`list_workers` reads unconditionally from the `iris.worker` finelog
-namespace. Stats are observation-only, so a transport-level outage
-soft-fails to an empty roster — the Vue dashboard renders "no workers"
-rather than crashing. If the dashboard suddenly shows zero workers, check
-controller logs for `stats pane query failed:` warnings.
-
 ## Job Management
 
 ```bash

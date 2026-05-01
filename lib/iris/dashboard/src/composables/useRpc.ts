@@ -100,33 +100,6 @@ export function useLogServiceRpc<T>(
   return useRpc<T>('finelog.logging.LogService', method, body)
 }
 
-/**
- * RPC composable for the finelog StatsService routed via the controller's
- * endpoint proxy at /proxy/system.log-server/finelog.stats.StatsService/<Method>.
- */
-export function useLogServerStatsRpc<T>(
-  method: string,
-  body?: RpcBody,
-): RpcState<T> {
-  return useRpc<T>('proxy/system.log-server/finelog.stats.StatsService', method, body)
-}
-
-/**
- * One-shot RPC call against the finelog StatsService routed via the
- * controller's endpoint proxy. Mirrors useLogServerStatsRpc for callers that
- * need imperative orchestration (e.g. list-then-query).
- */
-export async function logServerStatsRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const resp = await fetch(`/proxy/system.log-server/finelog.stats.StatsService/${method}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body ?? {}),
-  })
-  handleUnauthorized(resp)
-  if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
-  return resp.json() as Promise<T>
-}
-
 /** RPC composable for StatsService endpoints. */
 export function useStatsRpc<T>(
   method: string,

@@ -17,7 +17,6 @@ from pathlib import Path
 
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
-from iris.cli.worker_health import query_workers
 from iris.client import IrisClient
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.controller import Controller, ControllerConfig
@@ -206,10 +205,12 @@ class E2ECluster:
 
     def _wait_for_workers(self, timeout: float = 10.0) -> None:
         """Wait for all workers to register with the controller."""
-        url = f"http://127.0.0.1:{self._controller_port}"
         start = time.time()
         while time.time() - start < timeout:
-            healthy_workers = [w for w in query_workers(url) if w.healthy]
+            request = controller_pb2.Controller.ListWorkersRequest()
+            assert self._controller_client is not None
+            response = self._controller_client.list_workers(request)
+            healthy_workers = [w for w in response.workers if w.healthy]
             if len(healthy_workers) >= self._num_workers:
                 return
             time.sleep(0.1)

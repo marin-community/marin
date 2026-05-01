@@ -1034,9 +1034,11 @@ class ControllerServiceImpl:
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
-        # Short-TTL cache of the worker roster. GetAutoscalerStatus enumerates
-        # every worker; 1s is short enough that stale rows don't matter and
-        # long enough to fuse adjacent refreshes into one SELECT.
+        # Short-TTL cache of the worker roster. Dashboards call ListWorkers
+        # and GetAutoscalerStatus back-to-back; both enumerate every worker.
+        # 1s is short enough that stale rows don't matter (workers have
+        # slower health/heartbeat cadence) and long enough to fuse adjacent
+        # refreshes into one SELECT.
         self._worker_roster_cache: tuple[float, list[WorkerDetailRow]] | None = None
         self._worker_roster_cache_lock = threading.Lock()
         self._worker_roster_ttl_s = 1.0
@@ -1050,9 +1052,10 @@ class ControllerServiceImpl:
     def _worker_roster_cached(self) -> list[WorkerDetailRow]:
         """Return the worker roster, refreshed at most once per TTL window.
 
-        `GetAutoscalerStatus` enumerates every worker. The SELECT + attribute
+        `ListWorkers` and `GetAutoscalerStatus` both enumerate every worker
+        and get polled back-to-back by the dashboard. The SELECT + attribute
         fan-out is expensive (no WHERE, full scan of workers + worker_attributes)
-        so we cache to fuse adjacent refreshes into one SELECT.
+        and repeating it twice per refresh is pure duplication.
         """
         now = time.monotonic()
         with self._worker_roster_cache_lock:
@@ -1670,6 +1673,32 @@ class ControllerServiceImpl:
             worker_id=str(worker_id),
             accepted=True,
         )
+
+    def list_workers(
+        self,
+        request: controller_pb2.Controller.ListWorkersRequest,
+        ctx: Any,
+    ) -> controller_pb2.Controller.ListWorkersResponse:
+        """List all workers with their running task counts."""
+        if self._controller.has_direct_provider:
+            return controller_pb2.Controller.ListWorkersResponse()
+        workers = []
+        worker_rows = self._worker_roster_cached()
+        running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in worker_rows})
+        for worker in worker_rows:
+            workers.append(
+                controller_pb2.Controller.WorkerHealthStatus(
+                    worker_id=worker.worker_id,
+                    healthy=worker.healthy,
+                    consecutive_failures=worker.consecutive_failures,
+                    last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
+                    running_job_ids=[task_id.to_wire() for task_id in running_by_worker.get(worker.worker_id, [])],
+                    address=worker.address,
+                    metadata=_worker_metadata_to_proto(worker),
+                    status_message=worker_status_message(worker),
+                )
+            )
+        return controller_pb2.Controller.ListWorkersResponse(workers=workers)
 
     # --- Endpoint Management ---
 

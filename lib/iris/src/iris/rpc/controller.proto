@@ -252,6 +252,12 @@ message Controller {
     string status_message = 8;             // Error or status message (e.g., "Ping timeout", "Worker crashed")
   }
 
+  message ListWorkersRequest {}
+
+  message ListWorkersResponse {
+    repeated WorkerHealthStatus workers = 1;
+  }
+
   message RegisterRequest {
     string address = 1;
     iris.job.WorkerMetadata metadata = 2;
@@ -582,6 +588,7 @@ service ControllerService {
 
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
+  rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
   // Endpoint registry (generic service discovery)
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);

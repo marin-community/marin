@@ -8,12 +8,10 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
-from connectrpc.errors import ConnectError
-from finelog.client import LogClient, RemoteLogHandler, StatsError, Table
+from finelog.client import LogClient, RemoteLogHandler
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos
@@ -37,12 +35,6 @@ from iris.cluster.worker.env_probe import (
 )
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.stats import (
-    WORKER_STATS_NAMESPACE,
-    IrisWorkerStat,
-    WorkerStatus,
-    build_worker_stat,
-)
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
@@ -52,11 +44,6 @@ from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
-
-
-def _now_dt() -> datetime:
-    """Tz-naive UTC datetime for the stats namespace's TIMESTAMP_MS column."""
-    return datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
 
 
 @dataclass
@@ -213,9 +200,6 @@ class Worker:
         # post-register.
         self._log_client: LogClient | None = None
         self._log_handler: RemoteLogHandler | None = None
-        # Stats Table for the iris.worker namespace. Set in start() after
-        # LogClient is connected; None before start() (heartbeat only runs after).
-        self._stats_table: Table | None = None
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -290,12 +274,6 @@ class Worker:
                 timeout_ms=10_000,
                 interceptors=interceptors,
             )
-            # Register the iris.worker stats namespace eagerly. The resolver
-            # needs _controller_client, so this must follow its construction.
-            # A failure here propagates — schema bugs and config errors should
-            # surface at startup rather than silently producing an empty namespace.
-            assert self._log_client is not None
-            self._stats_table = self._log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
 
             # Start lifecycle thread: register + serve + reset loop
             self._threads.spawn(target=self._run_lifecycle, name="worker-lifecycle")
@@ -530,18 +508,11 @@ class Worker:
             self._log_handler.key = key
 
     def _detach_log_handler(self) -> None:
-        """Remove and close the current RemoteLogHandler and LogClient if any.
-
-        ``LogClient.close`` drains every open Table including the stats
-        Table, so stats rows queued before shutdown still ship.
-        """
+        """Remove and close the current RemoteLogHandler and LogClient if any."""
         if self._log_handler is not None:
             logging.getLogger().removeHandler(self._log_handler)
             self._log_handler.close()
             self._log_handler = None
-        # The stats Table belongs to LogClient; LogClient.close() drains it.
-        # Drop our cached reference so post-shutdown writes are no-ops.
-        self._stats_table = None
         if self._log_client is not None:
             self._log_client.close()
             self._log_client = None
@@ -915,52 +886,11 @@ class Worker:
         health = check_worker_health(disk_path=str(self._cache_dir))
         if not health.healthy:
             logger.warning("Worker health check failed: %s", health.error)
-        self._emit_worker_stat(resource_snapshot, healthy=health.healthy)
         return worker_pb2.Worker.PingResponse(
             resource_snapshot=resource_snapshot,
             healthy=health.healthy,
             health_error=health.error,
         )
-
-    def _emit_worker_stat(self, snapshot: job_pb2.WorkerResourceSnapshot, *, healthy: bool) -> None:
-        """Append one heartbeat row to the ``iris.worker`` stats namespace.
-
-        Non-blocking: ``Table.write`` queues for the bg flush thread, so the
-        ping path never waits on the stats service. Schema-register
-        failures (server unreachable, namespace conflict) are logged once
-        and the writer is dropped — the dashboard treats an empty roster
-        as "no workers" rather than blocking the rest of the page.
-
-        Schema-validation bugs (a missing/extra/typo'd field on
-        ``IrisWorkerStat``) are intentionally NOT swallowed here — they
-        propagate so the worker fails fast and the bug surfaces in tests
-        rather than silently producing an empty stats namespace.
-        """
-        if self._stats_table is None:
-            return
-        if self._worker_id is None:
-            return
-        running = int(snapshot.running_task_count) if snapshot is not None else 0
-        if running > 0 or self._tasks:
-            status = WorkerStatus.RUNNING
-        else:
-            status = WorkerStatus.IDLE
-        table = self._stats_table
-        try:
-            stat = build_worker_stat(
-                worker_id=self._worker_id,
-                ts=_now_dt(),
-                status=status,
-                address=self._resolve_address(),
-                healthy=healthy,
-                snapshot=snapshot,
-                metadata=self._worker_metadata,
-            )
-            table.write([stat])
-        except (StatsError, ConnectError, ConnectionError, OSError, TimeoutError) as exc:
-            # Transport / stats-protocol failure: log and move on. The
-            # heartbeat path must not block on the stats service.
-            logger.warning("worker stat write failed: %s: %s", type(exc).__name__, exc)
 
     def handle_start_tasks(self, request: worker_pb2.Worker.StartTasksRequest) -> worker_pb2.Worker.StartTasksResponse:
         """Start task attempts on this worker. Returns per-task ack."""
