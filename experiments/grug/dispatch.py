@@ -137,10 +137,14 @@ def _with_jax_distributed_init(fn: Callable[[ConfigT], None], config: ConfigT) -
     if xla_dump_gcs_dst:
         _start_xla_dump_uploader("/tmp/xla_dump", xla_dump_gcs_dst)
 
-    # Issue #5319 test: pre-init wandb BEFORE jax.distributed.initialize so the
-    # asymmetric resume-fetch on worker 0 finishes before TPU/JAX state exists
-    # to diverge.
-    _preinit_wandb_if_configured(config)
+    # Issue #5319 test: force wandb fully offline on ALL workers (including
+    # rank 0). Tests whether the bug fires when there is zero wandb network
+    # I/O. If it doesn't fire, any wandb-online activity on rank 0 is the
+    # trigger. If it does, wandb is not the cause. Pre-init is skipped because
+    # there's nothing to pre-initialize when offline.
+    os.environ["WANDB_MODE"] = "offline"
+    sys.stderr.write("[5319-offline-test] forcing WANDB_MODE=offline on all workers\n")
+    sys.stderr.flush()
 
     import jax
 
