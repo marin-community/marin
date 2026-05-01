@@ -452,7 +452,12 @@ def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optio
     We build a dashboard with a @requires_auth route injected and verify it
     agrees with resolve_auth for every (token, optional) combination.
     """
-    from iris.cluster.controller.dashboard import ControllerDashboard, _RouteAuthMiddleware, requires_auth
+    from iris.cluster.controller.dashboard import (
+        ControllerDashboard,
+        _RouteAuthMiddleware,
+        _SubdomainProxyMiddleware,
+        requires_auth,
+    )
     from starlette.responses import JSONResponse as _J
     from starlette.routing import Route
 
@@ -467,13 +472,13 @@ def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optio
         auth_provider="static",
         auth_optional=optional,
     )
-    # Inject a @requires_auth route. The app may be wrapped in _RouteAuthMiddleware,
-    # so reach through to the inner Starlette app to add the route.
-    inner_app = dashboard.app
-    if isinstance(inner_app, _RouteAuthMiddleware):
-        inner_app._router.routes.insert(0, Route("/test-protected", _protected))
-    else:
-        inner_app.router.routes.insert(0, Route("/test-protected", _protected))
+    # Inject a @requires_auth route. The app is wrapped in
+    # _SubdomainProxyMiddleware → _RouteAuthMiddleware → Starlette; walk down
+    # to the Starlette router so the new route participates in route matching.
+    app = dashboard.app
+    while isinstance(app, _SubdomainProxyMiddleware | _RouteAuthMiddleware):
+        app = app._app
+    app.router.routes.insert(0, Route("/test-protected", _protected))
 
     client = TestClient(dashboard.app)
     headers = {}

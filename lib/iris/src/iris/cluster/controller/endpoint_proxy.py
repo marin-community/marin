@@ -3,14 +3,20 @@
 
 """Generic HTTP reverse proxy for registered task endpoints.
 
-Two equivalent dispatch styles share one forwarding pipeline:
+Two equivalent dispatch styles share one forwarding pipeline. Both call
+:meth:`EndpointProxy.dispatch`; the caller is responsible for computing
+``encoded_name`` / ``sub_path`` / ``proxy_prefix`` from whichever source
+identifies the request:
 
 - Path-style: ``/proxy/<encoded_name>/<sub_path>`` on the controller's
-  base host. Handled by :meth:`EndpointProxy.handle`.
-- Subdomain-style: ``<encoded_name>.<base_host>/<sub_path>``. Handled by
-  :meth:`EndpointProxy.handle_subdomain`. The dashboard's
-  ``_SubdomainProxyMiddleware`` extracts ``encoded_name`` from the Host
-  header before invoking it.
+  base host. The Starlette route handler reads ``encoded_name`` /
+  ``sub_path`` from path params and passes ``proxy_prefix=/proxy/<name>``
+  so upstream-emitted absolute URLs get re-prefixed back into the proxy.
+- Subdomain-style: ``<encoded_name>.<base_host>/<sub_path>``. The
+  dashboard's ``_SubdomainProxyMiddleware`` extracts ``encoded_name``
+  from the Host header, takes ``sub_path`` from ``request.url.path``,
+  and passes ``proxy_prefix=""`` because the browser already sees the
+  upstream as the entire origin.
 
 In both cases the encoded name maps to an Iris endpoint name with ``.``
 -> ``/`` substitution (so ``user.jobX.dash`` -> ``/user/jobX/dash``). The
@@ -205,32 +211,23 @@ class EndpointProxy:
         """Close the underlying httpx.AsyncClient. Idempotent."""
         await self._client.aclose()
 
-    async def handle(self, request: Request) -> Response:
-        """Handle a path-style ``/proxy/<encoded_name>/<sub_path>`` request."""
-        encoded_name = request.path_params["endpoint_name"]
-        sub_path = request.path_params["sub_path"]
-        proxy_prefix = f"/proxy/{encoded_name}"
-        return await self._dispatch(request, encoded_name, sub_path, proxy_prefix=proxy_prefix)
-
-    async def handle_subdomain(self, request: Request, encoded_name: str) -> Response:
-        """Handle a subdomain-style ``<encoded_name>.<base_host>/<path>`` request.
-
-        ``encoded_name`` is the part of the Host header to the left of the
-        configured base host (already lowercased), e.g. ``user.jobX.dash``
-        for ``user.jobX.dash.iris-dev.oa.dev``. The full request path
-        (minus the leading ``/``) is forwarded verbatim to the upstream.
-        """
-        sub_path = request.url.path.lstrip("/")
-        return await self._dispatch(request, encoded_name, sub_path, proxy_prefix="")
-
-    async def _dispatch(
+    async def dispatch(
         self,
         request: Request,
+        *,
         encoded_name: str,
         sub_path: str,
-        *,
         proxy_prefix: str,
     ) -> Response:
+        """Forward ``request`` to ``encoded_name`` and stream the response back.
+
+        ``encoded_name`` uses ``.`` for path separators (resolved with both
+        slash-prefixed and bare forms). ``sub_path`` is the upstream path
+        with no leading slash. ``proxy_prefix`` is prepended to rewritten
+        ``Location`` / ``Content-Location`` values and forwarded as
+        ``X-Forwarded-Prefix``; pass ``""`` when the public URL already
+        roots the upstream (subdomain style).
+        """
         # Iris wire-format names start with '/'. Try the slash-prefixed form
         # first (the common case for task-registered endpoints), then the bare
         # form for endpoints registered without a leading slash.

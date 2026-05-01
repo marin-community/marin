@@ -77,6 +77,32 @@ def _extract_token_from_scope(scope: Scope) -> str | None:
     return None
 
 
+async def _enforce_http_auth(
+    scope: Scope,
+    receive: Receive,
+    send: Send,
+    verifier: TokenVerifier,
+    optional: bool,
+) -> bool:
+    """Resolve auth for an ASGI scope; on failure send a 401 and return False.
+
+    On success, sets ``scope["auth_identity"]`` if a verified identity is
+    present and returns True. Shared by ``_RouteAuthMiddleware`` (which
+    runs against route-annotated requests) and ``_SubdomainProxyMiddleware``
+    (which intercepts before any route can match).
+    """
+    token = _extract_token_from_scope(scope)
+    try:
+        identity = resolve_auth(token, verifier, optional)
+    except ValueError:
+        response = JSONResponse({"error": "authentication required"}, status_code=401)
+        await response(scope, receive, send)
+        return False
+    if identity is not None:
+        scope["auth_identity"] = identity
+    return True
+
+
 class _RouteAuthMiddleware:
     """ASGI middleware that enforces per-route auth policy annotations.
 
@@ -135,15 +161,9 @@ class _RouteAuthMiddleware:
         return "skip"
 
     async def _check_auth(self, scope: Scope, receive: Receive, send: Send) -> None:
-        token = _extract_token_from_scope(scope)
-        try:
-            identity = resolve_auth(token, self._verifier, self._optional)
-        except ValueError:
-            response = JSONResponse({"error": "authentication required"}, status_code=401)
-            return await response(scope, receive, send)
-        if identity is not None:
-            scope["auth_identity"] = identity
-        return await self._app(scope, receive, send)
+        if not await _enforce_http_auth(scope, receive, send, self._verifier, self._optional):
+            return
+        await self._app(scope, receive, send)
 
 
 _UNAUTHENTICATED_RPCS = {"Login", "GetAuthInfo"}
@@ -282,17 +302,16 @@ class _SubdomainProxyMiddleware:
             return await self._app(scope, receive, send)
 
         if self._auth_verifier is not None:
-            token = _extract_token_from_scope(scope)
-            try:
-                identity = resolve_auth(token, self._auth_verifier, self._auth_optional)
-            except ValueError:
-                response = JSONResponse({"error": "authentication required"}, status_code=401)
-                return await response(scope, receive, send)
-            if identity is not None:
-                scope["auth_identity"] = identity
+            if not await _enforce_http_auth(scope, receive, send, self._auth_verifier, self._auth_optional):
+                return
 
         request = Request(scope, receive=receive)
-        response = await self._endpoint_proxy.handle_subdomain(request, encoded_name)
+        response = await self._endpoint_proxy.dispatch(
+            request,
+            encoded_name=encoded_name,
+            sub_path=request.url.path.lstrip("/"),
+            proxy_prefix="",
+        )
         await response(scope, receive, send)
 
     @staticmethod
@@ -428,7 +447,13 @@ class ControllerDashboard:
 
         @requires_auth
         async def _proxy_endpoint(request: Request) -> Response:
-            return await self._endpoint_proxy.handle(request)
+            name = request.path_params["endpoint_name"]
+            return await self._endpoint_proxy.dispatch(
+                request,
+                encoded_name=name,
+                sub_path=request.path_params["sub_path"],
+                proxy_prefix=f"/proxy/{name}",
+            )
 
         @requires_auth
         async def _proxy_endpoint_redirect(request: Request) -> Response:

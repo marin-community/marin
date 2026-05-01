@@ -204,10 +204,19 @@ def _build_proxy_app(proxy: EndpointProxy) -> Starlette:
         query = f"?{request.url.query}" if request.url.query else ""
         return RedirectResponse(f"/proxy/{name}/{query}", status_code=307)
 
+    async def _proxy_route(request: Request) -> Response:
+        name = request.path_params["endpoint_name"]
+        return await proxy.dispatch(
+            request,
+            encoded_name=name,
+            sub_path=request.path_params["sub_path"],
+            proxy_prefix=f"/proxy/{name}",
+        )
+
     app = Starlette(
         routes=[
             Route("/proxy/{endpoint_name:str}", _redirect_to_slash, methods=list(ALLOWED_METHODS)),
-            Route(PROXY_ROUTE, proxy.handle, methods=list(ALLOWED_METHODS)),
+            Route(PROXY_ROUTE, _proxy_route, methods=list(ALLOWED_METHODS)),
         ],
         lifespan=on_shutdown(proxy.close),
     )
