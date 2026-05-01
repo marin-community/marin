@@ -56,6 +56,12 @@ class GrugMoeLaunchConfig:
     # If a preempted TPU gets rescheduled in a different region, scan all
     # regional buckets to find and resume from the latest checkpoint.
     enable_cross_region_ckpt_read: bool = False
+    # Diagnostic for issue #5319: explicitly load from a different GCS path
+    # than where the checkpointer will save to. When set, the trainer reads
+    # checkpoints from this path on resume but writes new checkpoints to
+    # ``output_path/checkpoints``. Used to test whether the bug is tied to
+    # load_path == save_path.
+    load_checkpoint_path_override: str | None = None
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -143,8 +149,13 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     checkpoint_base = os.path.join(config.output_path, "checkpoints")
 
-    # Search all regions for an existing checkpoint (handles cross-region resume).
-    load_path = _find_checkpoint_across_regions(config.output_path) if config.enable_cross_region_ckpt_read else None
+    # Diagnostic override (issue #5319) takes precedence: load from a different
+    # GCS path than where we save.
+    if config.load_checkpoint_path_override is not None:
+        load_path = config.load_checkpoint_path_override
+    else:
+        # Search all regions for an existing checkpoint (handles cross-region resume).
+        load_path = _find_checkpoint_across_regions(config.output_path) if config.enable_cross_region_ckpt_read else None
 
     trainer = TrainerConfig(
         id=config.run_id,
