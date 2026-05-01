@@ -152,19 +152,28 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
     return None
 
 
+_5319_STAGING_PREFIX = "gs://marin-us-central1/larry/5319_staging"
+
+
 def _stage_checkpoint_for_5319_workaround(checkpoint_base: str, output_path: str) -> str | None:
     """Workaround for issue #5319: stage the latest checkpoint to a separate
-    GCS prefix so the trainer's load_path != save_path AND save base_path is
-    empty on startup.
+    GCS prefix so the trainer's load_path is OUTSIDE ``output_path``.
 
     Empirically, multi-host resumes hit a ``scheckne`` halt at the first
-    broadcast collective after resume whenever the save base_path contains an
-    existing step-* dir at trainer startup. We don't yet understand the
-    OCDBT/tensorstore mechanism, but moving the latest step dir to a sibling
-    prefix (so load_path != save_path AND save base_path is empty) avoids it.
+    broadcast collective after resume whenever the load source lives anywhere
+    under the same ``output_path`` as the save target. Even with the save base
+    empty and load_path != save_path, a sibling load (e.g. load from
+    ``<output_path>/_load_staging_5319/`` and save to
+    ``<output_path>/checkpoints/``) still trips the bug. The fix is to stage
+    the loaded checkpoint to a global prefix entirely outside ``output_path``.
 
-    Robust to retries: this function looks for the latest step-* checkpoint in
-    BOTH ``checkpoint_base`` and the staging prefix and uses whichever has the
+    Suspected (not yet pinpointed) mechanism: tensorstore / OCDBT / fsspec keep
+    some state (connection pool, manifest cache, gcsfs listing cache) keyed at
+    a path prefix that includes ``output_path``. Sharing that prefix between
+    load and save corrupts the multi-host launch sequence.
+
+    Robust to retries: looks for the latest step-* checkpoint in BOTH
+    ``checkpoint_base`` and the staging prefix and uses whichever has the
     highest step. So if a prior attempt was interrupted at any point —
     immediately after copy, after delete-original, after partial new save — the
     next invocation picks up the latest available checkpoint and re-stages.
@@ -188,7 +197,10 @@ def _stage_checkpoint_for_5319_workaround(checkpoint_base: str, output_path: str
     fs = gcsfs.GCSFileSystem()
 
     is_source = jax.process_index() == 0
-    staging_root = os.path.join(output_path, "_load_staging_5319")
+    # Stage outside output_path: under a global staging prefix, namespaced by
+    # the basename of output_path so concurrent runs don't collide.
+    output_basename = os.path.basename(output_path.rstrip("/"))
+    staging_root = f"{_5319_STAGING_PREFIX}/{output_basename}"
 
     def _strip_scheme(path: str) -> str:
         return path[len("gs://") :] if path.startswith("gs://") else path
