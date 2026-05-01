@@ -213,6 +213,100 @@ class _DashboardAuthInterceptor:
             _verified_identity.reset(reset_token)
 
 
+# DNS marker label that flags a Host as a per-endpoint subdomain. A request
+# whose Host contains a ``proxy`` label routes the labels left of it to the
+# endpoint proxy: ``<encoded_name>.proxy.<base>`` -> endpoint ``<encoded_name>``
+# (with ``.`` -> ``/`` decoding, mirroring the path-style ``/proxy/<name>``
+# route). Base-domain-agnostic: works for ``iris-dev.oa.dev``,
+# ``iris.oa.dev``, or any other public host.
+PROXY_HOST_LABEL = "proxy"
+
+
+def _extract_proxy_subdomain(host: str) -> str | None:
+    """Return the encoded endpoint name from a Host header, or None.
+
+    Splits on ``.`` and looks for ``proxy`` as a label. Everything to the
+    left of that label (rejoined with ``.``) is the encoded name.
+    """
+    if not host:
+        return None
+    bare = host.split(",", 1)[0].split(":", 1)[0].strip().lower()
+    labels = bare.split(".")
+    try:
+        idx = labels.index(PROXY_HOST_LABEL)
+    except ValueError:
+        return None
+    if idx == 0:
+        return None
+    return ".".join(labels[:idx])
+
+
+class _SubdomainProxyMiddleware:
+    """Dispatch ``<encoded_name>.proxy.<base>`` requests to the endpoint proxy.
+
+    Subdomain requests don't match any Starlette route on the inner app,
+    so :class:`_RouteAuthMiddleware`'s default-allow-on-no-route would
+    leave them unauthenticated. This middleware therefore enforces auth
+    itself — running ``resolve_auth(token, verifier, optional)`` with the
+    same policy as the route-level ``@requires_auth`` annotations before
+    dispatching to the proxy.
+
+    Hosts without a ``proxy`` label pass through to the wrapped app
+    unchanged.
+
+    The encoded name (everything left of the ``proxy`` label) is decoded
+    by the proxy using the same ``.`` -> ``/`` rule as the path-style
+    route, so ``user.jobX.dash.proxy.iris-dev.oa.dev`` resolves to
+    ``/user/jobX/dash``.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        endpoint_proxy: EndpointProxy,
+        auth_verifier: TokenVerifier | None = None,
+        auth_optional: bool = False,
+    ):
+        self._app = app
+        self._endpoint_proxy = endpoint_proxy
+        self._auth_verifier = auth_verifier
+        self._auth_optional = auth_optional
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            return await self._app(scope, receive, send)
+
+        encoded_name = _extract_proxy_subdomain(self._extract_host(scope))
+        if encoded_name is None:
+            return await self._app(scope, receive, send)
+
+        if self._auth_verifier is not None:
+            token = _extract_token_from_scope(scope)
+            try:
+                identity = resolve_auth(token, self._auth_verifier, self._auth_optional)
+            except ValueError:
+                response = JSONResponse({"error": "authentication required"}, status_code=401)
+                return await response(scope, receive, send)
+            if identity is not None:
+                scope["auth_identity"] = identity
+
+        request = Request(scope, receive=receive)
+        response = await self._endpoint_proxy.handle_subdomain(request, encoded_name)
+        await response(scope, receive, send)
+
+    @staticmethod
+    def _extract_host(scope: Scope) -> str:
+        """Return the raw public-facing host header value.
+
+        Trusts ``X-Forwarded-Host`` since uvicorn is configured with
+        ``forwarded_allow_ips="*"``; the controller's only ingress is the
+        IAP proxy.
+        """
+        headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+        return headers.get("x-forwarded-host") or headers.get("host", "")
+
+
 class ControllerDashboard:
     """HTTP dashboard with Connect RPC and web UI.
 
@@ -336,6 +430,19 @@ class ControllerDashboard:
         async def _proxy_endpoint(request: Request) -> Response:
             return await self._endpoint_proxy.handle(request)
 
+        @requires_auth
+        async def _proxy_endpoint_redirect(request: Request) -> Response:
+            # ``/proxy/<name>`` (no trailing slash, no sub_path) needs a
+            # redirect to ``/proxy/<name>/`` so upstream apps resolve their
+            # relative assets correctly. We can't use Starlette's built-in
+            # redirect_slashes=True: that builds an *absolute* Location from
+            # scope["server"] / the Host header, which behind IAP is the
+            # internal bind IP. A path-only Location resolves against the
+            # browser's current origin, so no internal address leaks.
+            name = request.path_params["endpoint_name"]
+            query = f"?{request.url.query}" if request.url.query else ""
+            return RedirectResponse(f"/proxy/{name}/{query}", status_code=307)
+
         routes = [
             Route("/", self._dashboard),
             favicon_route(),
@@ -349,6 +456,11 @@ class ControllerDashboard:
             Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
             Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
+            Route(
+                "/proxy/{endpoint_name:str}",
+                _proxy_endpoint_redirect,
+                methods=list(endpoint_proxy.ALLOWED_METHODS),
+            ),
             Route(
                 endpoint_proxy.PROXY_ROUTE,
                 _proxy_endpoint,
@@ -375,9 +487,19 @@ class ControllerDashboard:
         # ``redirect_slashes`` is a Router attribute, not a Starlette ctor
         # kwarg, so we flip it after construction.
         app.router.redirect_slashes = False
+        wrapped: ASGIApp = app
         if self._auth_verifier is not None and self._auth_provider is not None:
-            app = _RouteAuthMiddleware(app, self._auth_verifier, optional=self._auth_optional)
-        return app
+            wrapped = _RouteAuthMiddleware(app, self._auth_verifier, optional=self._auth_optional)
+        # Subdomain dispatch wraps everything: subdomain requests don't match
+        # any Starlette route, so _RouteAuthMiddleware would default-allow
+        # them. This middleware enforces auth itself before forwarding.
+        wrapped = _SubdomainProxyMiddleware(
+            wrapped,
+            endpoint_proxy=self._endpoint_proxy,
+            auth_verifier=self._auth_verifier,
+            auth_optional=self._auth_optional,
+        )
+        return wrapped
 
     @public
     def _dashboard(self, request: Request) -> Response:

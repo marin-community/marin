@@ -3,12 +3,21 @@
 
 """Generic HTTP reverse proxy for registered task endpoints.
 
-External clients hit ``/proxy/<endpoint_name>/<sub_path>`` on the controller
-dashboard; the proxy resolves the endpoint name via a caller-supplied
-``resolve: (name) -> address | None`` callable (with ``.`` -> ``/``
-substitution on the URL-encoded name) and forwards method, path, query
-string, and filtered headers to the upstream's ``address``. Bodies are
-streamed in both directions with no size cap; the only backstop is
+Two equivalent dispatch styles share one forwarding pipeline:
+
+- Path-style: ``/proxy/<encoded_name>/<sub_path>`` on the controller's
+  base host. Handled by :meth:`EndpointProxy.handle`.
+- Subdomain-style: ``<encoded_name>.<base_host>/<sub_path>``. Handled by
+  :meth:`EndpointProxy.handle_subdomain`. The dashboard's
+  ``_SubdomainProxyMiddleware`` extracts ``encoded_name`` from the Host
+  header before invoking it.
+
+In both cases the encoded name maps to an Iris endpoint name with ``.``
+-> ``/`` substitution (so ``user.jobX.dash`` -> ``/user/jobX/dash``). The
+proxy resolves the name via a caller-supplied ``resolve: (name) ->
+address | None`` callable, then forwards method, path, query string, and
+filtered headers to the upstream's ``address``. Bodies are streamed in
+both directions with no size cap; the only backstop is
 :data:`PROXY_TIMEOUT_SECONDS`.
 
 Hop-by-hop headers, ``Cookie`` / ``Set-Cookie``, and ``Authorization`` are
@@ -18,16 +27,20 @@ upstream would be a credential leak, and dashboards that maintain their own
 cookie state would shadow the controller session — both are intentionally
 prevented here.
 
+``X-Forwarded-Host`` / ``X-Forwarded-Proto`` are set so upstreams that build
+self-URLs (e.g. Starlette ``url_for``, FastAPI ``request.url_for``) emit
+public-facing URLs. ``X-Forwarded-Prefix`` is set in path-style mode only,
+which Starlette/FastAPI (`root_path`), Werkzeug (`ProxyFix`), and most
+modern Python frameworks honor to mount themselves under the ``/proxy/<name>``
+prefix. Subdomain-style mode does not set ``X-Forwarded-Prefix``: the
+upstream effectively owns the whole origin.
+
 ``Location`` and ``Content-Location`` response headers are rewritten so 3xx
 redirects (and any other absolute-URL hints) keep the browser inside the
 proxy instead of escaping to the upstream's bind address. Without this,
 upstreams that emit absolute self-URLs (Starlette canonical-slash redirects,
 ``/`` -> ``/login`` flows, ...) would navigate the user out of
 ``iris-dev.oa.dev/proxy/<name>/`` straight to the upstream IP.
-
-Route pattern::
-
-    <ANY-METHOD> /proxy/{endpoint_name:str}/{sub_path:path}
 """
 
 import logging
@@ -86,6 +99,29 @@ _LOCATION_HEADERS: tuple[str, ...] = ("location", "content-location")
 # Bound the connection pool explicitly so httpx default drift cannot silently
 # change resource usage on the controller.
 _HTTPX_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20)
+
+
+def _build_forwarded_headers(request: Request, *, proxy_prefix: str) -> dict[str, str]:
+    """Compute X-Forwarded-* headers to send upstream.
+
+    Existing X-Forwarded-Host / X-Forwarded-Proto from the inbound chain
+    are preserved (so a multi-hop chain — IAP -> controller -> upstream —
+    keeps the originating values). X-Forwarded-Prefix is always set to
+    *this* hop's prefix (or omitted in subdomain mode where the upstream
+    owns the whole origin).
+
+    These headers let frameworks like Starlette/FastAPI (`root_path`),
+    Werkzeug (`ProxyFix`), and others mount themselves under the proxy
+    prefix and emit public-facing self-URLs.
+    """
+    fh: dict[str, str] = {}
+    inbound_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if inbound_host:
+        fh["x-forwarded-host"] = inbound_host
+    fh["x-forwarded-proto"] = request.headers.get("x-forwarded-proto") or request.url.scheme
+    if proxy_prefix:
+        fh["x-forwarded-prefix"] = proxy_prefix
+    return fh
 
 
 def _rewrite_location(loc: str, *, upstream_base: str, proxy_prefix: str) -> str:
@@ -170,24 +206,40 @@ class EndpointProxy:
         await self._client.aclose()
 
     async def handle(self, request: Request) -> Response:
-        """Handle one proxied request.
-
-        On success returns a :class:`StreamingResponse` whose body is the
-        upstream's body streamed chunk-by-chunk. On failure returns a
-        :class:`JSONResponse` with the error contract documented in the
-        spec. Never raises.
-        """
-        url_name = request.path_params["endpoint_name"]
+        """Handle a path-style ``/proxy/<encoded_name>/<sub_path>`` request."""
+        encoded_name = request.path_params["endpoint_name"]
         sub_path = request.path_params["sub_path"]
+        proxy_prefix = f"/proxy/{encoded_name}"
+        return await self._dispatch(request, encoded_name, sub_path, proxy_prefix=proxy_prefix)
+
+    async def handle_subdomain(self, request: Request, encoded_name: str) -> Response:
+        """Handle a subdomain-style ``<encoded_name>.<base_host>/<path>`` request.
+
+        ``encoded_name`` is the part of the Host header to the left of the
+        configured base host (already lowercased), e.g. ``user.jobX.dash``
+        for ``user.jobX.dash.iris-dev.oa.dev``. The full request path
+        (minus the leading ``/``) is forwarded verbatim to the upstream.
+        """
+        sub_path = request.url.path.lstrip("/")
+        return await self._dispatch(request, encoded_name, sub_path, proxy_prefix="")
+
+    async def _dispatch(
+        self,
+        request: Request,
+        encoded_name: str,
+        sub_path: str,
+        *,
+        proxy_prefix: str,
+    ) -> Response:
         # Iris wire-format names start with '/'. Try the slash-prefixed form
         # first (the common case for task-registered endpoints), then the bare
         # form for endpoints registered without a leading slash.
-        slashed = url_name.replace(".", "/")
+        slashed = encoded_name.replace(".", "/")
         address = self._resolve(f"/{slashed}") or self._resolve(slashed)
         if address is None:
-            logger.warning("Proxy %s %s -> no endpoint %r", request.method, request.url.path, url_name)
+            logger.warning("Proxy %s %s -> no endpoint %r", request.method, request.url.path, encoded_name)
             return JSONResponse(
-                {"error": f"No endpoint '{url_name}'"},
+                {"error": f"No endpoint '{encoded_name}'"},
                 status_code=404,
             )
 
@@ -199,6 +251,7 @@ class EndpointProxy:
         logger.info("Proxy %s %s -> %s", request.method, request.url.path, upstream_url)
 
         forward_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
+        forward_headers.update(_build_forwarded_headers(request, proxy_prefix=proxy_prefix))
 
         upstream_req = self._client.build_request(
             request.method,
@@ -209,19 +262,18 @@ class EndpointProxy:
         try:
             upstream_resp = await self._client.send(upstream_req, stream=True)
         except (httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
-            logger.warning("Proxy timeout for %s: %s", url_name, exc)
+            logger.warning("Proxy timeout for %s: %s", encoded_name, exc)
             return JSONResponse(
                 {"error": f"Upstream timeout after {self._timeout_seconds:g}s"},
                 status_code=504,
             )
         except httpx.HTTPError as exc:
-            logger.warning("Proxy upstream error for %s: %s", url_name, exc)
+            logger.warning("Proxy upstream error for %s: %s", encoded_name, exc)
             return JSONResponse(
                 {"error": f"Upstream error: {exc!r}"},
                 status_code=502,
             )
 
-        proxy_prefix = f"/proxy/{url_name}"
         response_headers: dict[str, str] = {}
         for k, v in upstream_resp.headers.items():
             lk = k.lower()
