@@ -18,7 +18,7 @@ from marin.datakit.download.gh_archive import (
     gh_archive_step,
 )
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import ExecutorStep
+from marin.execution.step_spec import StepSpec
 
 EPIC_5005 = 5005
 GH_ARCHIVE_STRUCTURED_OUTPUT_ISSUE = 5098
@@ -70,13 +70,13 @@ gh_archive_structured_output_eval = gh_archive_step(
     end_hour=GH_ARCHIVE_EVAL_END_HOUR,
     event_types=tuple(slice_.event_type for slice_ in GH_ARCHIVE_STRUCTURED_OUTPUT_SLICES),
     max_events_per_event_type=GH_ARCHIVE_EVAL_MAX_EVENTS_PER_EVENT_TYPE,
-).as_executor_step()
+)
 
 
 def gh_archive_structured_output_raw_validation_sets(
     *,
     raw_root: str | None = None,
-    gh_archive_raw: ExecutorStep | None = None,
+    gh_archive_raw: StepSpec | None = None,
     include_optional_event_types: bool = True,
 ) -> dict[str, RawTextEvaluationDataset]:
     """Materialize GH Archive structured-output slices as opt-in raw validation datasets."""
@@ -95,7 +95,7 @@ def gh_archive_structured_output_raw_validation_sets(
             source = posixpath.join(raw_root, slice_.raw_relative_glob)
         else:
             assert gh_archive_raw is not None
-            source = gh_archive_raw.cd(slice_.raw_relative_glob)
+            source = posixpath.join(gh_archive_raw.output_path, slice_.raw_relative_glob)
 
         datasets[slice_.registry_key] = raw_text_dataset(source, tags=slice_.tags)
     return datasets
