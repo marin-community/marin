@@ -1,4 +1,4 @@
-name: Marin - Datakit Nemotron Slice Ferry
+name: Marin - Datakit Nemotron Partial-Slice Ferry
 
 # Gate 2 baseline for the zephyr-perf skill: nemotron-medium with --stride 5
 # (every 5th input file, ~1/5 of full medium, target ~2.5h wall time).
@@ -20,15 +20,15 @@ permissions:
   contents: read
 
 jobs:
-  datakit-nemotron-slice-ferry:
+  datakit-nemotron-partial-slice-ferry:
     runs-on: ubuntu-latest
     timeout-minutes: 360  # 6h — slice target ~2.5h, generous headroom
     concurrency:
-      group: datakit-nemotron-slice-ferry
+      group: datakit-nemotron-partial-slice-ferry
       cancel-in-progress: true
     env:
-      SMOKE_RUN_ID: datakit-nemotron-slice-ferry-${{ github.run_id }}-${{ github.run_attempt }}
-      FERRY_STATUS_PATH: gs://marin-eu-west4/tmp/ttl=1d/ci/datakit-nemotron-slice-ferry-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
+      SMOKE_RUN_ID: datakit-nemotron-partial-slice-ferry-${{ github.run_id }}-${{ github.run_attempt }}
+      FERRY_STATUS_PATH: gs://marin-eu-west4/tmp/ttl=1d/ci/datakit-nemotron-partial-slice-ferry-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
       STRIDE: ${{ github.event.inputs.stride || '5' }}
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
@@ -73,7 +73,7 @@ jobs:
           chmod 600 ~/.ssh/google_compute_engine
           chmod 644 ~/.ssh/google_compute_engine.pub
 
-      - name: Submit datakit nemotron slice ferry
+      - name: Submit datakit nemotron partial-slice ferry
         id: submit
         shell: bash -l {0}
         run: |
@@ -95,7 +95,7 @@ jobs:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
-      - name: Wait for datakit nemotron slice ferry
+      - name: Wait for datakit nemotron partial-slice ferry
         shell: bash -l {0}
         run: |
           JOB_ID="${{ steps.submit.outputs.job_id }}"
@@ -140,14 +140,14 @@ jobs:
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. See the datakit-smoke workflow for rationale.
   notify-slack:
-    needs: datakit-nemotron-slice-ferry
-    if: always() && (needs.datakit-nemotron-slice-ferry.result == 'failure' || needs.datakit-nemotron-slice-ferry.result == 'cancelled') && github.event_name == 'schedule'
+    needs: datakit-nemotron-partial-slice-ferry
+    if: always() && (needs.datakit-nemotron-partial-slice-ferry.result == 'failure' || needs.datakit-nemotron-partial-slice-ferry.result == 'cancelled') && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - name: Notify Slack
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          TEXT: ":red_circle: *Datakit Nemotron Slice Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TEXT: ":red_circle: *Datakit Nemotron Partial-Slice Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
           PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
           curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"

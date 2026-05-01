@@ -65,7 +65,7 @@ script — when in doubt, ask the reviewer.
 |---|---|---|---|---|
 | **skip** | — | — | — | All-trivial diff (e.g. comments, docstrings, type hints, renames). Reviewer must concur. |
 | **1 — fineweb smoke** | `experiments.ferries.datakit_ferry` (FineWeb-Edu sample/10BT) | daily `marin-datakit-smoke` workflow | ~30–60 min | Cheap end-to-end pass at small scale. |
-| **2 — nemotron 1-slice** | `experiments.ferries.datakit_nemotron_ferry --stride 5` (every 5th file of nemotron-medium) | weekly `marin-datakit-nemotron-slice-ferry` workflow (Tuesday 01:00 UTC) | ~2–3 h | Mid-tier signal between fineweb and full medium. Surfaces scale-only effects (memory pressure, OOMs, fanout shape) without paying for an overnight run. |
+| **2 — nemotron partial-slice** | `experiments.ferries.datakit_nemotron_ferry --stride 5` (every 5th file of nemotron-medium) | weekly `marin-datakit-nemotron-partial-slice-ferry` workflow (Tuesday 01:00 UTC) | ~2–3 h | Mid-tier signal between fineweb and full medium. Surfaces scale-only effects (memory pressure, OOMs, fanout shape) without paying for an overnight run. |
 | **3 — full nemotron** | `experiments.ferries.datakit_nemotron_ferry` (full nemotron-medium, ~3.4 TiB) | weekly `marin-datakit-nemotron-ferry` workflow | overnight (≤24 h) | Reserved for diffs the reviewer wants tested at full scale. Expensive; reviewer approval (`zephyr-perf-gate:3`) required. |
 
 **Gate 1 is always run first**, regardless of `max_gate`. If Gate 1 passes
@@ -157,10 +157,10 @@ BASELINE_GATE1_RUN=$(gh run list \
   --branch=main --status=success --limit=1 \
   --json databaseId,headSha,createdAt -q '.[0]')
 
-# Gate 2 baseline: latest successful weekly nemotron 1-slice ferry.
+# Gate 2 baseline: latest successful weekly nemotron partial-slice ferry.
 BASELINE_GATE2_RUN=$(gh run list \
   --repo marin-community/marin \
-  --workflow=marin-datakit-nemotron-slice-ferry.yaml \
+  --workflow=marin-datakit-nemotron-partial-slice-ferry.yaml \
   --branch=main --status=success --limit=1 \
   --json databaseId,headSha,createdAt -q '.[0]')
 
@@ -421,7 +421,7 @@ The comment **must** begin with `🤖` per repo convention (see
 - Calibrate the Gate 2 stride after the first scheduled run lands. Target
   wall ~2.5h; adjust between `--stride 4` and `--stride 6` if the actual
   run falls outside [2h, 3.5h]. Tune via the `stride` workflow_dispatch
-  input on `marin-datakit-nemotron-slice-ferry`, then edit the default in
+  input on `marin-datakit-nemotron-partial-slice-ferry`, then edit the default in
   `submit_perf_run.py`'s Gate 2 entry to match.
 - Should Gate 2 run more than weekly (e.g., every 3 days) so the baseline
   is fresher for mid-week PRs? Cheap enough to consider; current cadence
