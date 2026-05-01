@@ -35,7 +35,8 @@ Here are a couple of examples:
 import argparse
 import sys
 
-from experiments.evals.evals import run_evalchemy_experiment
+from fray.cluster import ResourceConfig
+
 from experiments.evals.evalchemy_task_configs import (
     AIME24,
     AIME25,
@@ -52,7 +53,7 @@ from experiments.evals.evalchemy_task_configs import (
     OLYMPIADBENCH,
     OLYMPIADBENCH_PHYSICS,
 )
-from fray.cluster import ResourceConfig
+from experiments.evals.evals import run_evalchemy_experiment
 
 # =============================================================================
 # Model Configuration

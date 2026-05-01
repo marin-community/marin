@@ -53,7 +53,7 @@ def test_collector_records_counts_and_histogram():
 
 
 def test_collector_captures_slow_samples_and_respects_bound():
-    collector = RpcStatsCollector(slow_threshold_ms=1000, slow_samples=3, discovery_samples=0)
+    collector = RpcStatsCollector(slow_threshold_ms=1000, slow_samples_per_method=3, discovery_samples_per_method=0)
 
     for i in range(5):
         collector.record(method="ListJobs", duration_ms=2000 + i, request=_request(), ctx=_ctx())
@@ -71,7 +71,7 @@ def test_collector_captures_slow_samples_and_respects_bound():
 
 
 def test_collector_records_errors_and_fast_calls_stay_out_of_slow_ring():
-    collector = RpcStatsCollector(slow_threshold_ms=1000, discovery_samples=0)
+    collector = RpcStatsCollector(slow_threshold_ms=1000, discovery_samples_per_method=0)
 
     collector.record(method="LaunchJob", duration_ms=5, request=_request(), ctx=_ctx())
     collector.record(
@@ -96,8 +96,8 @@ def test_collector_records_errors_and_fast_calls_stay_out_of_slow_ring():
 def test_discovery_samples_throttled_per_method():
     collector = RpcStatsCollector(
         slow_threshold_ms=1000,
-        slow_samples=0,
-        discovery_samples=10,
+        slow_samples_per_method=0,
+        discovery_samples_per_method=10,
         discovery_interval=3600,
     )
 
@@ -115,8 +115,8 @@ def test_discovery_samples_throttled_per_method():
 def test_discovery_samples_capture_after_interval_elapses():
     collector = RpcStatsCollector(
         slow_threshold_ms=1000,
-        slow_samples=0,
-        discovery_samples=10,
+        slow_samples_per_method=0,
+        discovery_samples_per_method=10,
         discovery_interval=0,  # never throttle
     )
 

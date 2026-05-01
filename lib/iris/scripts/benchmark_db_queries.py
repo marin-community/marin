@@ -27,12 +27,11 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 import click
-
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     _building_counts,
@@ -53,6 +52,7 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
+    EndpointRow,
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
@@ -71,7 +71,7 @@ from iris.cluster.controller.service import (
     _worker_addresses_for_tasks,
     _worker_roster,
 )
-from iris.cluster.controller.schema import EndpointRow
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -80,8 +80,7 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
 )
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, WorkerId
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
 _results: list[tuple[str, float, float, int]] = []
@@ -252,7 +251,8 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # --- Write-path benchmarks (use a lightweight clone) ---
     write_db = clone_db(db)
-    write_txns = ControllerTransitions(write_db)
+    write_store = ControllerStore(write_db)
+    write_txns = ControllerTransitions(store=write_store)
 
     try:
         # queue_assignments: the main write-lock holder in scheduling.
@@ -542,7 +542,7 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
 
     bench("running_tasks_by_worker", lambda: running_tasks_by_worker(db, worker_ids))
 
-    transitions = ControllerTransitions(db)
+    transitions = ControllerTransitions(store=ControllerStore(db))
     bench(
         f"get_running_tasks_for_poll ({len(workers)} workers)",
         lambda: transitions.get_running_tasks_for_poll(),
@@ -594,7 +594,7 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
         )
 
     hb_db = clone_db(db)
-    hb_transitions = ControllerTransitions(hb_db)
+    hb_transitions = ControllerTransitions(store=ControllerStore(hb_db))
 
     try:
         bench(
@@ -739,14 +739,16 @@ def benchmark_endpoints(db: ControllerDB) -> None:
         contention (matches the production Register p95 of 3-4s)
     """
     # Read-path queries run against the source DB (cheap, no clone needed).
-    bench("endpoint_registry.query (all)", lambda: db.endpoints.query())
+    read_store = ControllerStore(db)
+    bench("endpoint_store.query (all)", lambda: read_store.endpoints.query())
     bench(
-        "endpoint_registry.query (prefix)",
-        lambda: db.endpoints.query(EndpointQuery(name_prefix="test")),
+        "endpoint_store.query (prefix)",
+        lambda: read_store.endpoints.query(EndpointQuery(name_prefix="test")),
     )
 
     write_db = clone_db(db)
-    write_txns = ControllerTransitions(write_db)
+    write_store = ControllerStore(write_db)
+    write_txns = ControllerTransitions(store=write_store)
 
     try:
         sample = _active_task_sample(write_db, limit=300)
@@ -762,7 +764,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
 
         def _reset_single():
             write_db.execute("DELETE FROM endpoints WHERE name LIKE '/bench/endpoint/%'")
-            write_db.endpoints._load_all()
+            write_store.endpoints._load_all()
 
         bench("add_endpoint (1 write)", _do_single, reset=_reset_single)
 
@@ -793,7 +795,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
             def _do_burst_one_txn(tasks=tasks_for_burst):
                 with write_db.transaction() as cur:
                     for t in tasks:
-                        write_db.endpoints.add(cur, _make_endpoint(t))
+                        write_store.endpoints.add(cur, _make_endpoint(t))
 
             bench(
                 f"add_endpoint burst x{burst_n} (1 txn)",
@@ -1365,7 +1367,7 @@ def benchmark_apply_contention(db: ControllerDB) -> None:
     ]
 
     write_db = clone_db(db)
-    write_txns = ControllerTransitions(write_db)
+    write_txns = ControllerTransitions(store=ControllerStore(write_db))
     try:
         for scenario in scenarios:
             _run_apply_under_contention(

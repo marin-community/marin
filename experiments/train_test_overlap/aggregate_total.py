@@ -21,9 +21,9 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-from rigging.filesystem import open_url
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import fsspec_glob
+from rigging.filesystem import open_url
 from zephyr import Dataset, ZephyrContext, load_file, load_jsonl
 
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
@@ -64,7 +64,7 @@ def _compute_dataset_sizes(dataset_steps: list[ExecutorStep]) -> dict[str, int]:
         pattern = os.path.join(path.rstrip("/"), "**", "*.jsonl*")
         pipeline = Dataset.from_files(pattern, empty_glob_ok=True).flat_map(load_file).map(lambda _: 1).reduce(sum)
         ctx = ZephyrContext(name="overlap-size")
-        results = ctx.execute(pipeline)
+        results = ctx.execute(pipeline).results
         return results[0]
 
     size_map: dict[str, int] = {}
@@ -209,7 +209,7 @@ def aggregate_single_dataset(
         Dataset.from_list(shard_paths)
         .flat_map(extract_overlap_records)
         .write_jsonl(f"{intermediate_dir}/overlap-{{shard:05d}}.jsonl.gz", skip_existing=True)
-    )
+    ).results
 
     logger.info(f"Wrote {len(intermediate_paths)} intermediate files to {intermediate_dir}")
 

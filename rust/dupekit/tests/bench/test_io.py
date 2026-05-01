@@ -6,10 +6,11 @@ Benchmarks focusing on End-to-End I/O performance:
 Disk -> Parquet Parsing -> Memory -> Rust -> Output Data.
 """
 
-import pytest
-import pyarrow.parquet as pq
 from typing import Any
+
 import dupekit
+import pyarrow.parquet as pq
+import pytest
 
 
 def test_rust_native(benchmark: Any, small_parquet_path: str) -> None:

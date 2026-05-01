@@ -16,7 +16,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from finelog.client import LogPusher
+from finelog.rpc import logging_pb2
+from finelog.types import str_to_log_level
+from rigging.log_setup import parse_log_level
+from rigging.timing import Duration, Timestamp
+
 from iris.chaos import chaos, chaos_raise
+from iris.cluster.bundle import BundleStore
+from iris.cluster.log_store_helpers import task_log_key
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
@@ -25,30 +33,24 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerRuntime,
     DiscoveredContainer,
-    RuntimeLogReader,
     MountKind,
     MountSpec,
+    RuntimeLogReader,
 )
 from iris.cluster.types import (
     JobName,
-    TaskAttempt as TaskAttemptIdentity,
     is_task_finished,
 )
-from iris.cluster.bundle import BundleStore
+from iris.cluster.types import (
+    TaskAttempt as TaskAttemptIdentity,
+)
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
-from iris.cluster.log_store._types import task_log_key
-from iris.log_server.client import LogPusher
-from iris.logging import str_to_log_level
-from rigging.log_setup import parse_log_level
-from iris.rpc import logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import worker_pb2
-from iris.rpc.job_pb2 import TaskState, WorkerMetadata
+from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import format_exception_with_traceback
+from iris.rpc.job_pb2 import TaskState, WorkerMetadata
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

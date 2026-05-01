@@ -3,14 +3,11 @@
 
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-from rigging.log_setup import configure_logging
-
+import logging
 import os
 from typing import TypeVar
 
-from fray.v2 import ResourceConfig
-from rigging.filesystem import marin_temp_bucket, region_from_metadata, check_path_in_region
-
+from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
@@ -21,8 +18,8 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
-
-import logging
+from rigging.filesystem import check_path_in_region, marin_temp_bucket, region_from_metadata
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -95,17 +92,15 @@ def fuzzy_dedup_steps() -> list[StepSpec]:
     # Normalize each quality bucket separately so we get one MinHashAttrData per
     # source dataset, and dedup them globally in a single fuzzy_dups step.
     quality_paths = {
-        "high": os.path.join(raw_data_step.output_path, "contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high"),
-        "medium-high": os.path.join(
-            raw_data_step.output_path, "contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high"
-        ),
+        "high": "contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high",
+        "medium-high": "contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high",
     }
 
     normalize_steps = {
         q: normalize_step(
             name=f"normalized_nemotron/{q}",
             download=raw_data_step,
-            input_path=path,
+            relative_input_path=path,
         )
         for q, path in quality_paths.items()
     }

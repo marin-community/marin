@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.chaos import reset_chaos
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import connect_cluster, load_config, make_local_config
@@ -36,11 +38,8 @@ from iris.cluster.types import (
     ResourceSpec,
     is_job_finished,
 )
-from iris.rpc import config_pb2, logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
 from rigging.timing import Duration
 
 from .chronos import VirtualClock

@@ -24,8 +24,7 @@ import msgspec
 import xxhash
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
-
-from zephyr.external_sort import external_sort_merge
+from rigging.log_setup import configure_logging
 
 from zephyr.dataset import (
     Dataset,
@@ -48,8 +47,8 @@ from zephyr.dataset import (
     resolve_glob,
 )
 from zephyr.expr import Expr
+from zephyr.external_sort import external_sort_merge
 from zephyr.readers import InputFileSpec
-from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -497,7 +496,10 @@ def _compute_file_pushdown(
             select_columns = list(op.columns)
             ops_to_skip.add(i)
         elif isinstance(op, FilterOp) and op.expr is None:
-            continue  # Lambda filter, can't push down
+            # Lambda filter — can't introspect what columns it reads, so any
+            # later SelectOp pushdown could KeyError the lambda by dropping
+            # columns it needs. Stop pushdown here.
+            break
         elif isinstance(op, (MapOp | FlatMapOp)):
             break  # Transform ops stop pushdown
         else:
@@ -838,7 +840,7 @@ def run_stage(
         elif isinstance(op, Reduce):
             # Build ScatterReader directly from per-mapper sidecars, then
             # merge sorted chunks and reduce per key.
-            from zephyr.execution import ScatterReader
+            from zephyr.shuffle import ScatterReader
 
             shard = ctx.shard
             if not isinstance(shard, ScatterReader):
