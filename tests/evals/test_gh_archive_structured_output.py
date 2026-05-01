@@ -5,7 +5,7 @@ import gzip
 import json
 from pathlib import Path
 
-from marin.datakit.download.gh_archive import GhArchiveDownloadConfig, download_gh_archive_events, gh_archive_step
+from marin.datakit.download.gh_archive import download_gh_archive_events, gh_archive_step
 
 from experiments.evals.gh_archive_structured_output import (
     GH_ARCHIVE_OPTIONAL_EVENT_TYPES,
@@ -48,18 +48,6 @@ def _read_jsonl_gz(path: Path) -> list[dict]:
 
 def test_download_gh_archive_events_filters_masks_and_serializes(tmp_path: Path):
     base_url = "https://example-gh-archive"
-    cfg = GhArchiveDownloadConfig(
-        output_path=str(tmp_path / "gh_archive_eval"),
-        start_date="2024-02-01",
-        end_date="2024-02-01",
-        start_hour=0,
-        end_hour=1,
-        base_url=base_url,
-        event_types=(*GH_ARCHIVE_REQUIRED_EVENT_TYPES, *GH_ARCHIVE_OPTIONAL_EVENT_TYPES),
-        max_events_per_event_type=None,
-        request_timeout=30,
-    )
-
     url_to_events = {
         f"{base_url}/2024-02-01-0.json.gz": [
             _event(event_type="PushEvent", event_id="1234567890123"),
@@ -77,7 +65,18 @@ def test_download_gh_archive_events_filters_masks_and_serializes(tmp_path: Path)
         assert timeout == 30
         return url_to_events.get(url, ())
 
-    result = download_gh_archive_events(cfg, read_hour_events=read_hour_events)
+    result = download_gh_archive_events(
+        str(tmp_path / "gh_archive_eval"),
+        start_date="2024-02-01",
+        end_date="2024-02-01",
+        start_hour=0,
+        end_hour=1,
+        base_url=base_url,
+        event_types=(*GH_ARCHIVE_REQUIRED_EVENT_TYPES, *GH_ARCHIVE_OPTIONAL_EVENT_TYPES),
+        max_events_per_event_type=None,
+        request_timeout=30,
+        read_hour_events=read_hour_events,
+    )
 
     assert result["counts"] == {
         "IssueCommentEvent": 1,

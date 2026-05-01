@@ -13,16 +13,13 @@ import posixpath
 import re
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import ExitStack
-from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-import requests
 from rigging.filesystem import open_url
 from zephyr.writers import atomic_rename
 
-from marin.execution import ExecutorStep
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_exists, fsspec_mkdirs
 
@@ -63,21 +60,6 @@ TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{24,}$")
 ISO_8601_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
 
 
-@dataclass(frozen=True)
-class GhArchiveDownloadConfig:
-    output_path: str
-    start_date: str
-    end_date: str
-    start_hour: int = 0
-    end_hour: int = 23
-    event_types: tuple[str, ...] = GH_ARCHIVE_DEFAULT_EVENT_TYPES
-    max_events_per_event_type: int | None = None
-    request_timeout: int = 120
-    base_url: str = GH_ARCHIVE_BASE_URL
-    metadata_filename: str = "metadata.json"
-    skip_existing: bool = True
-
-
 def _parse_date(value: str) -> date:
     try:
         return date.fromisoformat(value)
@@ -85,24 +67,33 @@ def _parse_date(value: str) -> date:
         raise ValueError(f"Expected date in YYYY-MM-DD format, got {value!r}") from exc
 
 
-def _validate_download_config(cfg: GhArchiveDownloadConfig) -> None:
-    start = _parse_date(cfg.start_date)
-    end = _parse_date(cfg.end_date)
+def _validate_download_request(
+    *,
+    start_date: str,
+    end_date: str,
+    start_hour: int,
+    end_hour: int,
+    event_types: Sequence[str],
+    max_events_per_event_type: int | None,
+    request_timeout: int,
+) -> None:
+    start = _parse_date(start_date)
+    end = _parse_date(end_date)
     if start > end:
-        raise ValueError(f"start_date must be <= end_date, got {cfg.start_date} > {cfg.end_date}")
-    if not 0 <= cfg.start_hour <= 23:
-        raise ValueError(f"start_hour must be in [0, 23], got {cfg.start_hour}")
-    if not 0 <= cfg.end_hour <= 23:
-        raise ValueError(f"end_hour must be in [0, 23], got {cfg.end_hour}")
-    if cfg.start_hour > cfg.end_hour:
-        raise ValueError(f"start_hour must be <= end_hour, got {cfg.start_hour} > {cfg.end_hour}")
-    if not cfg.event_types:
+        raise ValueError(f"start_date must be <= end_date, got {start_date} > {end_date}")
+    if not 0 <= start_hour <= 23:
+        raise ValueError(f"start_hour must be in [0, 23], got {start_hour}")
+    if not 0 <= end_hour <= 23:
+        raise ValueError(f"end_hour must be in [0, 23], got {end_hour}")
+    if start_hour > end_hour:
+        raise ValueError(f"start_hour must be <= end_hour, got {start_hour} > {end_hour}")
+    if not event_types:
         raise ValueError("event_types must include at least one event type")
-    if len(set(cfg.event_types)) != len(cfg.event_types):
+    if len(set(event_types)) != len(event_types):
         raise ValueError("event_types must be unique")
-    if cfg.max_events_per_event_type is not None and cfg.max_events_per_event_type <= 0:
+    if max_events_per_event_type is not None and max_events_per_event_type <= 0:
         raise ValueError("max_events_per_event_type must be positive")
-    if cfg.request_timeout <= 0:
+    if request_timeout <= 0:
         raise ValueError("request_timeout must be positive")
 
 
@@ -241,24 +232,24 @@ def normalize_gh_archive_event(
 
 def read_gh_archive_hour(url: str, timeout: int) -> Iterator[dict[str, Any]]:
     """Yield GH Archive events from one hourly ``.json.gz`` file."""
-    with requests.get(url, timeout=timeout, stream=True) as response:
-        if response.status_code == 404:
-            logger.info("GH Archive hour not found, skipping: %s", url)
-            return
-        response.raise_for_status()
-        with gzip.GzipFile(fileobj=response.raw) as gz_file:
-            with io.TextIOWrapper(gz_file, encoding="utf-8") as reader:
-                for line_number, line in enumerate(reader, start=1):
-                    text = line.strip()
-                    if not text:
-                        continue
-                    try:
-                        payload = json.loads(text)
-                    except json.JSONDecodeError as exc:
-                        raise ValueError(f"Invalid JSON in {url} line {line_number}") from exc
-                    if not isinstance(payload, dict):
-                        continue
-                    yield payload
+    try:
+        with open_url(url, "rb", timeout=timeout) as response:
+            with gzip.GzipFile(fileobj=response) as gz_file:
+                with io.TextIOWrapper(gz_file, encoding="utf-8") as reader:
+                    for line_number, line in enumerate(reader, start=1):
+                        text = line.strip()
+                        if not text:
+                            continue
+                        try:
+                            payload = json.loads(text)
+                        except json.JSONDecodeError as exc:
+                            raise ValueError(f"Invalid JSON in {url} line {line_number}") from exc
+                        if not isinstance(payload, dict):
+                            continue
+                        yield payload
+    except FileNotFoundError:
+        logger.info("GH Archive hour not found, skipping: %s", url)
+        return
 
 
 def _event_output_path(output_path: str, event_type: str) -> str:
@@ -278,19 +269,37 @@ def _write_metadata(path: str, payload: dict[str, Any]) -> None:
 
 
 def download_gh_archive_events(
-    cfg: GhArchiveDownloadConfig,
+    output_path: str,
     *,
+    start_date: str,
+    end_date: str,
+    start_hour: int = 0,
+    end_hour: int = 23,
+    event_types: Sequence[str] = GH_ARCHIVE_DEFAULT_EVENT_TYPES,
+    max_events_per_event_type: int | None = None,
+    request_timeout: int = 120,
+    base_url: str = GH_ARCHIVE_BASE_URL,
+    metadata_filename: str = "metadata.json",
+    skip_existing: bool = True,
     read_hour_events: Callable[[str, int], Iterable[dict[str, Any]]] = read_gh_archive_hour,
 ) -> dict[str, Any]:
-    _validate_download_config(cfg)
+    resolved_event_types = tuple(event_types)
+    _validate_download_request(
+        start_date=start_date,
+        end_date=end_date,
+        start_hour=start_hour,
+        end_hour=end_hour,
+        event_types=resolved_event_types,
+        max_events_per_event_type=max_events_per_event_type,
+        request_timeout=request_timeout,
+    )
 
-    event_types = tuple(cfg.event_types)
-    counts = {event_type: 0 for event_type in event_types}
-    output_files = {event_type: _event_output_path(cfg.output_path, event_type) for event_type in event_types}
-    metadata_path = posixpath.join(cfg.output_path, cfg.metadata_filename)
+    counts = {event_type: 0 for event_type in resolved_event_types}
+    output_files = {event_type: _event_output_path(output_path, event_type) for event_type in resolved_event_types}
+    metadata_path = posixpath.join(output_path, metadata_filename)
 
-    if cfg.skip_existing and all(fsspec_exists(path) for path in output_files.values()) and fsspec_exists(metadata_path):
-        logger.info("Skipping GH Archive download; output already exists at %s", cfg.output_path)
+    if skip_existing and all(fsspec_exists(path) for path in output_files.values()) and fsspec_exists(metadata_path):
+        logger.info("Skipping GH Archive download; output already exists at %s", output_path)
         with open_url(metadata_path, "r", encoding="utf-8") as handle:
             metadata = json.load(handle)
         return {
@@ -301,7 +310,7 @@ def download_gh_archive_events(
         }
 
     scanned_hour_urls: list[str] = []
-    event_type_set = set(event_types)
+    event_type_set = set(resolved_event_types)
 
     with ExitStack() as stack:
         writers: dict[str, Any] = {}
@@ -311,34 +320,34 @@ def download_gh_archive_events(
             writers[event_type] = stack.enter_context(open_url(temp_path, "wt", encoding="utf-8", compression="gzip"))
 
         for hour_url in gh_archive_hour_urls(
-            start_date=cfg.start_date,
-            end_date=cfg.end_date,
-            start_hour=cfg.start_hour,
-            end_hour=cfg.end_hour,
-            base_url=cfg.base_url,
+            start_date=start_date,
+            end_date=end_date,
+            start_hour=start_hour,
+            end_hour=end_hour,
+            base_url=base_url,
         ):
             scanned_hour_urls.append(hour_url)
-            for event in read_hour_events(hour_url, cfg.request_timeout):
+            for event in read_hour_events(hour_url, request_timeout):
                 normalized = normalize_gh_archive_event(event, event_types=event_type_set)
                 if normalized is None:
                     continue
                 event_type, row = normalized
-                if cfg.max_events_per_event_type is not None and counts[event_type] >= cfg.max_events_per_event_type:
+                if max_events_per_event_type is not None and counts[event_type] >= max_events_per_event_type:
                     continue
                 json.dump(row, writers[event_type], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
                 writers[event_type].write("\n")
                 counts[event_type] += 1
-            if _all_event_type_caps_reached(counts, cfg.max_events_per_event_type):
+            if _all_event_type_caps_reached(counts, max_events_per_event_type):
                 break
 
     metadata = {
-        "start_date": cfg.start_date,
-        "end_date": cfg.end_date,
-        "start_hour": cfg.start_hour,
-        "end_hour": cfg.end_hour,
-        "base_url": cfg.base_url,
-        "event_types": event_types,
-        "max_events_per_event_type": cfg.max_events_per_event_type,
+        "start_date": start_date,
+        "end_date": end_date,
+        "start_hour": start_hour,
+        "end_hour": end_hour,
+        "base_url": base_url,
+        "event_types": resolved_event_types,
+        "max_events_per_event_type": max_events_per_event_type,
         "counts": counts,
         "output_files": output_files,
         "hours_scanned": scanned_hour_urls,
@@ -374,7 +383,7 @@ def gh_archive_step(
     resolved_event_types = tuple(dict.fromkeys(event_types))
 
     def _run(output_path: str) -> dict[str, Any]:
-        cfg = GhArchiveDownloadConfig(
+        return download_gh_archive_events(
             output_path=output_path,
             start_date=start_date,
             end_date=end_date,
@@ -387,7 +396,6 @@ def gh_archive_step(
             metadata_filename=metadata_filename,
             skip_existing=skip_existing,
         )
-        return download_gh_archive_events(cfg)
 
     return StepSpec(
         name=name,
@@ -406,33 +414,3 @@ def gh_archive_step(
         output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
     )
-
-
-def make_gh_archive_step(
-    *,
-    name: str = "raw/gh_archive/structured_output_eval",
-    start_date: str,
-    end_date: str,
-    start_hour: int = 0,
-    end_hour: int = 23,
-    event_types: Sequence[str] = GH_ARCHIVE_DEFAULT_EVENT_TYPES,
-    max_events_per_event_type: int | None = None,
-    request_timeout: int = 120,
-    base_url: str = GH_ARCHIVE_BASE_URL,
-    metadata_filename: str = "metadata.json",
-    skip_existing: bool = True,
-) -> ExecutorStep:
-    """Create an ExecutorStep that downloads and normalizes held-out GH Archive events."""
-    return gh_archive_step(
-        name=name,
-        start_date=start_date,
-        end_date=end_date,
-        start_hour=start_hour,
-        end_hour=end_hour,
-        event_types=event_types,
-        max_events_per_event_type=max_events_per_event_type,
-        request_timeout=request_timeout,
-        base_url=base_url,
-        metadata_filename=metadata_filename,
-        skip_existing=skip_existing,
-    ).as_executor_step()
