@@ -32,12 +32,12 @@ import logging
 import posixpath
 import tarfile
 import zipfile
-import zstandard
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
 import requests
+import zstandard
 from requests.adapters import HTTPAdapter
 from rigging.filesystem import open_url
 from urllib3.util import Retry

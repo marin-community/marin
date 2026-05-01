@@ -23,7 +23,14 @@ import zipfile
 from pathlib import Path
 
 import pytest
-
+from marin.datakit.download.formal_methods_evals import (
+    JSONL_TEXT_COLUMN_CONTENT_MODE,
+    RAW_FILE_CONTENT_MODE,
+    ArchiveSourceConfig,
+    DownloadArchiveSliceConfig,
+    archive_slice_step,
+    download_archive_slice,
+)
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
@@ -33,14 +40,7 @@ from marin.datakit.ingestion_manifest import (
     StagingMetadata,
     UsagePolicy,
 )
-from marin.datakit.download.formal_methods_evals import (
-    ArchiveSourceConfig,
-    DownloadArchiveSliceConfig,
-    JSONL_TEXT_COLUMN_CONTENT_MODE,
-    RAW_FILE_CONTENT_MODE,
-    archive_slice_step,
-    download_archive_slice,
-)
+
 from experiments.evals.formal_methods_ppl import (
     FORMAL_METHODS_SOURCES,
     HARDWARE_RTL_SOURCES,
