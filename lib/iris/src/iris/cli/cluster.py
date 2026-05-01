@@ -436,11 +436,18 @@ def _require_log_server_config(ctx: click.Context) -> str:
 
 
 @log_server.command("up")
+@click.option(
+    "--build/--no-build",
+    "build",
+    default=True,
+    show_default=True,
+    help="Build and push the finelog image before provisioning. Pass --no-build to use the registry's existing :latest.",
+)
 @click.pass_context
-def log_server_up(ctx: click.Context) -> None:
+def log_server_up(ctx: click.Context, build: bool) -> None:
     """Provision/refresh the cluster's finelog deployment (idempotent)."""
     name = _require_log_server_config(ctx)
-    up_cmd.callback(name=name)
+    up_cmd.callback(name=name, build=build)
 
 
 @log_server.command("down")
@@ -453,11 +460,18 @@ def log_server_down(ctx: click.Context, yes: bool) -> None:
 
 
 @log_server.command("restart")
+@click.option(
+    "--build/--no-build",
+    "build",
+    default=True,
+    show_default=True,
+    help="Build and push the finelog image before restarting. Pass --no-build to reuse the registry's :latest.",
+)
 @click.pass_context
-def log_server_restart(ctx: click.Context) -> None:
+def log_server_restart(ctx: click.Context, build: bool) -> None:
     """Restart the cluster's finelog deployment."""
     name = _require_log_server_config(ctx)
-    restart_cmd.callback(name=name)
+    restart_cmd.callback(name=name, build=build)
 
 
 @log_server.command("status")

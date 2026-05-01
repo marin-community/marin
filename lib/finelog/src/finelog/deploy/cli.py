@@ -16,6 +16,7 @@ from __future__ import annotations
 import click
 
 from finelog.deploy import _gcp, _k8s
+from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config
 
 
@@ -66,9 +67,17 @@ def deploy() -> None:
 
 @deploy.command("up")
 @click.argument("name")
-def up_cmd(name: str) -> None:
+@click.option(
+    "--build",
+    "build",
+    is_flag=True,
+    help="Build and push the finelog image (using cfg.image as the tag) before provisioning.",
+)
+def up_cmd(name: str, build: bool) -> None:
     """Provision the finelog deployment described by `<name>` (idempotent)."""
     cfg = load_finelog_config(name)
+    if build:
+        build_finelog_image(image=cfg.image)
     _dispatch_up(cfg)
 
 
@@ -83,9 +92,17 @@ def down_cmd(name: str, yes: bool) -> None:
 
 @deploy.command("restart")
 @click.argument("name")
-def restart_cmd(name: str) -> None:
+@click.option(
+    "--build",
+    "build",
+    is_flag=True,
+    help="Build and push the finelog image (using cfg.image as the tag) before restarting.",
+)
+def restart_cmd(name: str, build: bool) -> None:
     """Restart the finelog deployment in place (refresh the container/image)."""
     cfg = load_finelog_config(name)
+    if build:
+        build_finelog_image(image=cfg.image)
     _dispatch_restart(cfg)
 
 
