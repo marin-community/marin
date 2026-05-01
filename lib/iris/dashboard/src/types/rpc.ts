@@ -95,7 +95,8 @@ export interface TaskStatus {
   canBeScheduled?: boolean
   containerId?: string
   resourceHistory?: ResourceUsage[]
-  statusTextMd?: string
+  statusTextDetailMd?: string
+  statusTextSummaryMd?: string
 }
 
 // -- Jobs --

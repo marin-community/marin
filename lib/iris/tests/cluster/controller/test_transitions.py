@@ -3256,8 +3256,8 @@ def test_prune_evicts_status_text_cache(state):
         (old_job_id.to_wire(),),
     )
 
-    state.record_task_status_text(old_tasks[0].task_id, "old status")
-    state.record_task_status_text(kept_tasks[0].task_id, "kept status")
+    state.record_task_status_text(old_tasks[0].task_id, "old detail", "old summary")
+    state.record_task_status_text(kept_tasks[0].task_id, "kept detail", "kept summary")
 
     state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
@@ -3265,8 +3265,10 @@ def test_prune_evicts_status_text_cache(state):
         profile_retention=Duration.from_seconds(86400),
     )
 
-    assert state._store.tasks.get_status_text(old_tasks[0].task_id.to_wire()) == ""
-    assert state._store.tasks.get_status_text(kept_tasks[0].task_id.to_wire()) == "kept status"
+    assert state._store.tasks.get_status_text_detail(old_tasks[0].task_id.to_wire()) == ""
+    assert state._store.tasks.get_status_text_summary(old_tasks[0].task_id.to_wire()) == ""
+    assert state._store.tasks.get_status_text_detail(kept_tasks[0].task_id.to_wire()) == "kept detail"
+    assert state._store.tasks.get_status_text_summary(kept_tasks[0].task_id.to_wire()) == "kept summary"
 
 
 def test_prune_old_inactive_workers(state):

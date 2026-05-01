@@ -793,16 +793,17 @@ class IrisClient:
         """
         return self._cluster_client.get_task_status(task_name)
 
-    def report_task_status_text(self, task_id: JobName, status_text_md: str) -> None:
-        """Push a markdown status string to the controller for UI display.
+    def report_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
+        """Push markdown status text to the controller for UI display.
 
         Called from within a running task to report progress or state.
 
         Args:
             task_id: Full task ID of the currently-running task.
-            status_text_md: Human-readable markdown status string.
+            detail_md: Full markdown for the task detail page.
+            summary_md: Short summary (up to ~3 lines) for the task list table.
         """
-        self._cluster_client.report_task_status_text(task_id, status_text_md)
+        self._cluster_client.report_task_status_text(task_id, detail_md, summary_md)
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.
