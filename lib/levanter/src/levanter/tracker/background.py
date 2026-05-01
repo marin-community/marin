@@ -112,7 +112,7 @@ class BackgroundTracker(Tracker):
                 self._dropped += 1
                 dropped = self._dropped
             if dropped <= _DROP_LOG_BURST or dropped % _DROP_LOG_PERIOD == 0:
-                logger.warning(
+                logger.error(
                     "Background tracker '%s' queue full; dropped %d update(s) so far.",
                     self.name,
                     dropped,
