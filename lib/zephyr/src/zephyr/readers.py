@@ -30,10 +30,18 @@ from zephyr.expr import Expr
 logger = logging.getLogger(__name__)
 
 
-# parquet-rs ≥ 54.x emits page-header encodings PyArrow's thrift decoder
-# rejects with `OSError: Couldn't deserialize thrift: ...`. DuckDB and
-# parquet-rs read the same bytes successfully, so we fall back to DuckDB on
-# that specific error. See https://github.com/marin-community/marin/issues/5334.
+# PyArrow's parquet C++ reader has a hard ~8 MiB cap on the thrift page-header
+# size (https://github.com/apache/arrow/issues/46404). Page headers carry
+# per-page column statistics; when a single value in a column exceeds that cap
+# the writer's stats overflow, and PyArrow refuses to decode with
+# `OSError: Couldn't deserialize thrift: ...`. DuckDB, arrow-rs, and arro3 read
+# the same bytes successfully because they don't cap the page-header size, so
+# we fall back to DuckDB on that specific error. The pivotal axis is value
+# size per row, not the writer or writer version. See
+# https://github.com/marin-community/marin/issues/5334. The PyArrow read-side
+# fix (https://github.com/apache/arrow/pull/47758) adds `max_page_header_size`
+# but is unmerged as of 2026-04; once it ships in a pinned PyArrow this
+# fallback can be replaced with `set_max_page_header_size`.
 _THRIFT_DESERIALIZE_MARKER = "deserialize thrift"
 
 # Bound DuckDB fallback memory: yield Arrow tables of this many rows.
