@@ -137,11 +137,63 @@ def _with_jax_distributed_init(fn: Callable[[ConfigT], None], config: ConfigT) -
     if xla_dump_gcs_dst:
         _start_xla_dump_uploader("/tmp/xla_dump", xla_dump_gcs_dst)
 
+    # Issue #5319 test: pre-init wandb BEFORE jax.distributed.initialize so the
+    # asymmetric resume-fetch on worker 0 finishes before TPU/JAX state exists
+    # to diverge.
+    _preinit_wandb_if_configured(config)
+
     import jax
 
     if not jax.distributed.is_initialized():
         jax.distributed.initialize()
     fn(config)
+
+
+def _preinit_wandb_if_configured(config) -> None:
+    """Run wandb.init() before jax.distributed comes up. Issue #5319 test."""
+    import os
+
+    tracker = getattr(config, "tracker", None)
+    run_id = getattr(config, "run_id", None)
+    if tracker is None or run_id is None:
+        return
+    from levanter.tracker.wandb import WandbConfig
+
+    if not isinstance(tracker, WandbConfig):
+        return
+
+    # Apply the same id mangling that _resolve_tracker does at trainer config
+    # time, so the pre-init id matches the id the trainer will look for.
+    from experiments.grug.moe.launch import _resolve_tracker
+
+    resolved = _resolve_tracker(tracker, run_id)
+    if not isinstance(resolved, WandbConfig):
+        return
+
+    rank = int(os.environ.get("JAX_PROCESS_ID", "0"))
+    mode = resolved.mode if rank == 0 else "offline"
+
+    import wandb
+
+    logger.info(
+        "issue #5319 preinit-wandb: starting wandb.init id=%s mode=%s resume=%s",
+        resolved.id,
+        mode,
+        resolved.resume,
+    )
+    wandb.init(
+        entity=resolved.entity,
+        project=resolved.project,
+        name=resolved.name,
+        tags=list(resolved.tags or []),
+        id=resolved.id,
+        group=resolved.group,
+        resume=resolved.resume,
+        mode=mode,
+        allow_val_change=True,
+    )
+    logger.info("issue #5319 preinit-wandb: wandb.init complete")
+    os.environ["LEVANTER_WANDB_PREINITIALIZED"] = "1"
 
 
 def dispatch_grug_training_run(

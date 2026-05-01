@@ -264,19 +264,31 @@ class WandbConfig(TrackerConfig):
         if "git_commit" in git_settings:
             hparams_to_save["git_commit"] = git_settings["git_commit"]
 
-        r = wandb.init(
-            entity=self.entity,
-            project=self.project,
-            name=self.name,
-            tags=self.tags,
-            id=id,
-            group=self.group,
-            resume=self.resume,
-            mode=mode,
-            config=hparams_to_save,
-            settings=git_settings,
-            allow_val_change=True,
-        )
+        # Issue #5319: if a wrapper called wandb.init() before jax.distributed
+        # came up (to avoid asymmetric resume-fetch I/O), reuse that run instead
+        # of calling wandb.init again here.
+        if os.environ.get("LEVANTER_WANDB_PREINITIALIZED") == "1" and wandb.run is not None:
+            logger.info("issue #5319: reusing pre-initialized wandb run %s", wandb.run.id)
+            r = wandb.run
+            if hparams_to_save:
+                try:
+                    r.config.update(hparams_to_save, allow_val_change=True)
+                except Exception:
+                    pass
+        else:
+            r = wandb.init(
+                entity=self.entity,
+                project=self.project,
+                name=self.name,
+                tags=self.tags,
+                id=id,
+                group=self.group,
+                resume=self.resume,
+                mode=mode,
+                config=hparams_to_save,
+                settings=git_settings,
+                allow_val_change=True,
+            )
 
         assert r is not None
 
