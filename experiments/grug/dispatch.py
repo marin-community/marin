@@ -137,14 +137,15 @@ def _with_jax_distributed_init(fn: Callable[[ConfigT], None], config: ConfigT) -
     if xla_dump_gcs_dst:
         _start_xla_dump_uploader("/tmp/xla_dump", xla_dump_gcs_dst)
 
-    # Issue #5319 test: force wandb fully offline on ALL workers (including
-    # rank 0). Tests whether the bug fires when there is zero wandb network
-    # I/O. If it doesn't fire, any wandb-online activity on rank 0 is the
-    # trigger. If it does, wandb is not the cause. Pre-init is skipped because
-    # there's nothing to pre-initialize when offline.
-    os.environ["WANDB_MODE"] = "offline"
-    sys.stderr.write("[5319-offline-test] forcing WANDB_MODE=offline on all workers\n")
-    sys.stderr.flush()
+    # Issue #5319 option 3 test: start wandb offline, switch to online on
+    # rank 0 only after the danger window passes (~60s post-init). Pre-init
+    # wandb offline so levanter's WandbTracker reuses it, then a background
+    # thread on rank 0 finishes the offline run and re-inits online with
+    # resume="must" against the contaminated wandb id. If scheckne fires at
+    # the switch, the resume-fetch danger persists across the whole run; if
+    # not, the danger window is brief and bounded to the start.
+    _preinit_wandb_offline_for_5319(config)
+    _start_wandb_online_switch_thread_for_5319(config, delay_seconds=60)
 
     import jax
 
@@ -198,6 +199,99 @@ def _preinit_wandb_if_configured(config) -> None:
     )
     logger.info("issue #5319 preinit-wandb: wandb.init complete")
     os.environ["LEVANTER_WANDB_PREINITIALIZED"] = "1"
+
+
+def _preinit_wandb_offline_for_5319(config) -> None:
+    """Issue #5319 option 3: pre-init wandb OFFLINE on all workers using the
+    raw ``config.run_id`` as the wandb id (skipping the fresh-attempt-id
+    mangling) so the later online switch can resume the contaminated wandb
+    run that previously fired the bug.
+    """
+    import os
+    import sys
+
+    tracker = getattr(config, "tracker", None)
+    run_id = getattr(config, "run_id", None)
+    if tracker is None or run_id is None:
+        return
+    from levanter.tracker.wandb import WandbConfig
+
+    if not isinstance(tracker, WandbConfig):
+        return
+
+    import wandb
+
+    sys.stderr.write(f"[5319-option3] preinit wandb OFFLINE id={run_id}\n")
+    sys.stderr.flush()
+    wandb.init(
+        entity=tracker.entity,
+        project=tracker.project,
+        name=tracker.name or run_id,
+        tags=list(tracker.tags or []),
+        id=run_id,
+        group=tracker.group or run_id,
+        resume="allow",
+        mode="offline",
+        allow_val_change=True,
+    )
+    os.environ["LEVANTER_WANDB_PREINITIALIZED"] = "1"
+
+
+def _start_wandb_online_switch_thread_for_5319(config, *, delay_seconds: int) -> None:
+    """Issue #5319 option 3: on rank 0 only, after ``delay_seconds``, finish
+    the offline wandb run and re-init online with ``resume="must"`` against
+    the contaminated wandb id. Tests whether the asymmetric resume-fetch
+    fires the multi-host TPU bug at step ~10 (later than step 0). Levanter's
+    WandbTracker keeps a stale reference to the old offline run; we accept
+    that — the diagnostic only needs to observe whether the switch fires
+    scheckne.
+    """
+    import sys
+    import threading
+    import time
+
+    tracker = getattr(config, "tracker", None)
+    run_id = getattr(config, "run_id", None)
+    if tracker is None or run_id is None:
+        return
+    from levanter.tracker.wandb import WandbConfig
+
+    if not isinstance(tracker, WandbConfig):
+        return
+
+    def _switch() -> None:
+        time.sleep(delay_seconds)
+        try:
+            import jax
+
+            if not jax.distributed.is_initialized() or jax.process_index() != 0:
+                return
+            sys.stderr.write(f"[5319-option3] switching wandb rank0 ONLINE resume=must id={run_id}\n")
+            sys.stderr.flush()
+            import wandb
+
+            if wandb.run is not None:
+                wandb.run.finish()
+            wandb.init(
+                entity=tracker.entity,
+                project=tracker.project,
+                name=tracker.name or run_id,
+                tags=list(tracker.tags or []),
+                id=run_id,
+                group=tracker.group or run_id,
+                resume="must",
+                mode="online",
+                allow_val_change=True,
+                reinit=True,
+            )
+            sys.stderr.write("[5319-option3] online resume-fetch complete\n")
+            sys.stderr.flush()
+        except Exception as exc:
+            sys.stderr.write(f"[5319-option3] switch failed: {exc}\n")
+            sys.stderr.flush()
+
+    t = threading.Thread(target=_switch, daemon=True, name="5319-online-switch")
+    t.start()
 
 
 def dispatch_grug_training_run(
