@@ -62,6 +62,12 @@ class GrugMoeLaunchConfig:
     # ``output_path/checkpoints``. Used to test whether the bug is tied to
     # load_path == save_path.
     load_checkpoint_path_override: str | None = None
+    # Diagnostic for issue #5319: when False, Checkpointer.__init__ skips the
+    # discover_latest_checkpoint -> _load_metadata -> _last_temporary_checkpoint
+    # path on startup. Used to bisect whether that path's side effects (state
+    # divergence between worker 0 and others) are the bug trigger when load
+    # path == save path.
+    delete_old_temp_checkpoints: bool = True
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -175,6 +181,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
             keep=[{"every": 10000}],
+            delete_old_temp_checkpoints=config.delete_old_temp_checkpoints,
         ),
     )
 

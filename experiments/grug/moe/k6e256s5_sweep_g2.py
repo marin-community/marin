@@ -51,6 +51,11 @@ def _make_steps() -> list[ExecutorStep]:
                     run_id=run_id,
                     resources=versioned(ResourceConfig.with_tpu("v5p-16")),
                     enable_cross_region_ckpt_read=True,
+                    # Issue #5319 bisection: skip the discover_latest_checkpoint ->
+                    # _last_temporary_checkpoint side effects in Checkpointer.__init__.
+                    # Non-versioned, so output_path hash is unchanged and we still
+                    # resume from the existing same-path step-6040.
+                    delete_old_temp_checkpoints=False,
                     steps=versioned(num_steps),
                     batch_size=versioned(batch),
                     seed=versioned(0),
