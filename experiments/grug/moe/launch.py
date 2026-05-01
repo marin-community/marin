@@ -226,6 +226,21 @@ def _stage_checkpoint_for_5319_workaround(checkpoint_base: str, output_path: str
             # gcsfs.cp does server-side copies for same-bucket GCS->GCS.
             fs.cp(src, dst, recursive=True)
             logger.info("issue #5319 workaround: staging copy complete")
+
+            # Critical: delete the original at checkpoint_base after copying. The
+            # bug doesn't depend just on load_path != save_path; it also fires
+            # whenever checkpoint_base (the save target) contains an existing
+            # step-* dir at trainer startup. Empirically, leaving the original
+            # in place while loading from the staging copy still trips scheckne.
+            # Path-different runs that work have an EMPTY save base_path. So the
+            # full workaround is: move (copy + delete original) into staging.
+            logger.info("issue #5319 workaround: removing original at %s to leave save base empty", src)
+            try:
+                fs.rm(src, recursive=True)
+                logger.info("issue #5319 workaround: original removed")
+            except Exception as exc:
+                logger.warning("issue #5319 workaround: failed to remove original (will retry on next resume): %s", exc)
+
             payload = {"staged": True}
     else:
         payload = None
