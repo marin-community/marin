@@ -19,7 +19,7 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
+from iris.rpc.proto_utils import format_resources, job_state_friendly, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -209,7 +209,7 @@ def _gather(
         started_at=_format_timestamp(job.started_at),
         finished_at=_format_timestamp(job.finished_at),
         duration=_compute_duration(job.started_at, job.finished_at),
-        resources=_format_resources(job.resources if job.HasField("resources") else None),
+        resources=format_resources(job.resources if job.HasField("resources") else None),
         task_count=task_count,
         completed_count=job.completed_count,
         failure_count=job.failure_count,
@@ -357,26 +357,6 @@ def _format_exit_code(code: int) -> str:
         sig_name = signals.get(signal_num, f"signal {signal_num}")
         return f"{code} ({sig_name})"
     return str(code)
-
-
-def _format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
-    if not resources:
-        return "-"
-    parts: list[str] = []
-    if resources.cpu_millicores:
-        parts.append(f"{resources.cpu_millicores / 1000:g} cpu")
-    if resources.memory_bytes:
-        gib = resources.memory_bytes / (1024**3)
-        parts.append(f"{gib:.0f} GiB")
-    if resources.HasField("device"):
-        device = resources.device
-        if device.HasField("tpu"):
-            parts.append(device.tpu.variant)
-        elif device.HasField("gpu"):
-            gpu = device.gpu
-            gpu_str = f"{gpu.count}x {gpu.variant}" if gpu.variant else f"{gpu.count} gpu"
-            parts.append(gpu_str)
-    return ", ".join(parts) if parts else "-"
 
 
 # ---------------------------------------------------------------------------
