@@ -5,11 +5,12 @@ import gzip
 import json
 from pathlib import Path
 
+from marin.datakit.download.gh_archive import GhArchiveDownloadConfig, download_gh_archive_events, gh_archive_step
+
 from experiments.evals.gh_archive_structured_output import (
     GH_ARCHIVE_OPTIONAL_EVENT_TYPES,
     GH_ARCHIVE_REQUIRED_EVENT_TYPES,
 )
-from marin.datakit.download.gh_archive import GhArchiveDownloadConfig, download_gh_archive_events, gh_archive_step
 
 
 def _event(
