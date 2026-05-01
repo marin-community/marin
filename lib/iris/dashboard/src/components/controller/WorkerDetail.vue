@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useControllerRpc, logServiceRpcCall, logServerStatsRpcCall } from '@/composables/useRpc'
+import { useControllerRpc, useLogServerStatsRpc, logServiceRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import type {
@@ -57,15 +57,11 @@ async function fetchWorkerLogs() {
 
 // --- Per-worker resource history sourced from finelog stats (iris.worker) ---
 //
-// The dashboard issues this query against the controller-bundled finelog
-// StatsService (proxied as system.log-server). The query is gated on
-// ListNamespaces so a freshly-started log-server (worker has not registered
-// yet) renders the empty state instead of a "Catalog Error" banner.
-//
 // Rows come back ts DESC; we reverse for the sparkline (oldest -> newest)
 // and treat the first DESC row as the latest "current resources" snapshot.
-const WORKER_NAMESPACE = 'iris.worker'
-
+// The namespace is registered eagerly by every worker at startup, so any
+// worker we can navigate to has a registered table — a missing namespace
+// here is a real bug, not a cold-start case.
 interface WorkerStatRow {
   ts?: string
   cpu_pct?: number
@@ -82,17 +78,6 @@ interface QueryResponse {
   arrowIpc?: string
 }
 
-interface NamespaceInfo {
-  namespace: string
-}
-
-interface ListNamespacesResponse {
-  namespaces?: NamespaceInfo[]
-}
-
-const statsRows = ref<WorkerStatRow[]>([])
-let statsGeneration = 0
-
 function buildStatsSql(workerId: string): string {
   // workerId comes from the URL; quote with single quotes and escape any
   // embedded single-quote by doubling it (DuckDB SQL string literal rules).
@@ -108,27 +93,16 @@ LIMIT 50
 `.trim()
 }
 
-async function fetchWorkerStats() {
-  const gen = ++statsGeneration
-  try {
-    const list = await logServerStatsRpcCall<ListNamespacesResponse>('ListNamespaces', {})
-    if (gen !== statsGeneration) return
-    const registered = (list.namespaces ?? []).some((n) => n.namespace === WORKER_NAMESPACE)
-    if (!registered) {
-      statsRows.value = []
-      return
-    }
-    const resp = await logServerStatsRpcCall<QueryResponse>('Query', {
-      sql: buildStatsSql(props.workerId),
-    })
-    if (gen !== statsGeneration) return
-    const decoded = decodeArrowIpc(resp.arrowIpc)
-    statsRows.value = decoded.rows as WorkerStatRow[]
-  } catch {
-    if (gen !== statsGeneration) return
-    statsRows.value = []
-  }
-}
+const { data: statsData, refresh: fetchWorkerStats } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({ sql: buildStatsSql(props.workerId) }),
+)
+
+const statsRows = computed<WorkerStatRow[]>(() => {
+  const ipc = statsData.value?.arrowIpc
+  if (!ipc) return []
+  return decodeArrowIpc(ipc).rows as WorkerStatRow[]
+})
 
 // Reversed copy for the sparkline: queries return ts DESC; charts want oldest -> newest.
 const orderedStats = computed(() => statsRows.value.slice().reverse())
@@ -196,7 +170,7 @@ onMounted(() => {
 watch(() => props.workerId, () => {
   data.value = null
   workerLogEntries.value = []
-  statsRows.value = []
+  statsData.value = null
   fetchWorker()
   fetchWorkerLogs()
   fetchWorkerStats()

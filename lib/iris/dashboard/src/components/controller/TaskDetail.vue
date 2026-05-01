@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { useControllerRpc, logServerStatsRpcCall } from '@/composables/useRpc'
+import { useControllerRpc, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import type {
@@ -74,12 +74,10 @@ const diskUsedMb = computed(() => {
 
 // --- Per-task resource history sourced from finelog stats (iris.task) ---
 //
-// One row per attempt-resource update emitted by the worker. Gated on
-// ListNamespaces so a freshly-started log-server renders the empty state
-// instead of a "Catalog Error" banner. Rows come back ts DESC; reverse for
+// One row per attempt-resource update emitted by the worker. The namespace
+// is registered eagerly by every worker at startup, so any task we can
+// navigate to has a registered table. Rows come back ts DESC; reverse for
 // the sparkline (oldest -> newest).
-const TASK_NAMESPACE = 'iris.task'
-
 interface TaskStatRow {
   ts?: string
   cpu_millicores?: number
@@ -89,17 +87,6 @@ interface TaskStatRow {
 interface QueryResponse {
   arrowIpc?: string
 }
-
-interface NamespaceInfo {
-  namespace: string
-}
-
-interface ListNamespacesResponse {
-  namespaces?: NamespaceInfo[]
-}
-
-const taskStatsRows = ref<TaskStatRow[]>([])
-let taskStatsGeneration = 0
 
 function buildTaskStatsSql(taskId: string): string {
   const escaped = taskId.replace(/'/g, "''")
@@ -112,27 +99,16 @@ LIMIT 200
 `.trim()
 }
 
-async function fetchTaskStats() {
-  const gen = ++taskStatsGeneration
-  try {
-    const list = await logServerStatsRpcCall<ListNamespacesResponse>('ListNamespaces', {})
-    if (gen !== taskStatsGeneration) return
-    const registered = (list.namespaces ?? []).some((n) => n.namespace === TASK_NAMESPACE)
-    if (!registered) {
-      taskStatsRows.value = []
-      return
-    }
-    const resp = await logServerStatsRpcCall<QueryResponse>('Query', {
-      sql: buildTaskStatsSql(props.taskId),
-    })
-    if (gen !== taskStatsGeneration) return
-    const decoded = decodeArrowIpc(resp.arrowIpc)
-    taskStatsRows.value = decoded.rows as TaskStatRow[]
-  } catch {
-    if (gen !== taskStatsGeneration) return
-    taskStatsRows.value = []
-  }
-}
+const { data: taskStatsData, refresh: fetchTaskStats } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({ sql: buildTaskStatsSql(props.taskId) }),
+)
+
+const taskStatsRows = computed<TaskStatRow[]>(() => {
+  const ipc = taskStatsData.value?.arrowIpc
+  if (!ipc) return []
+  return decodeArrowIpc(ipc).rows as TaskStatRow[]
+})
 
 const orderedTaskStats = computed(() => taskStatsRows.value.slice().reverse())
 
@@ -231,7 +207,7 @@ function selectAttempt(attemptId: number) {
 // Clear stale data first so loading/error states render correctly if the fetch fails.
 watch(() => props.taskId, async () => {
   taskResponse.value = null
-  taskStatsRows.value = []
+  taskStatsData.value = null
   stopRefresh()
   stopStatsRefresh()
   await fetchTask()
