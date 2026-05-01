@@ -32,7 +32,7 @@ def _default_environment_extras(resources: ResourceConfig) -> list[str]:
 
 
 def _start_xla_dump_uploader(local_dir: str, gcs_dst_template: str) -> None:
-    """Periodically rsync local XLA dumps to GCS so they survive a silent kill.
+    """Periodically copy local XLA dumps to GCS so they survive a silent kill.
 
     Diagnostic for issue #5319. Workers can SIGABRT below Python without flushing
     output, so atexit isn't reliable; a background thread uploads every 30s.
@@ -40,13 +40,13 @@ def _start_xla_dump_uploader(local_dir: str, gcs_dst_template: str) -> None:
     process index (defaults to PID before jax.distributed.initialize runs).
     """
     import os
-    import shutil
-    import subprocess
+    import sys
     import threading
     import time
 
-    if not shutil.which("gsutil"):
-        return
+    def _emit(msg: str) -> None:
+        sys.stderr.write(f"[xla-dump-uploader] {msg}\n")
+        sys.stderr.flush()
 
     def _resolve_worker_id() -> str:
         try:
@@ -58,21 +58,51 @@ def _start_xla_dump_uploader(local_dir: str, gcs_dst_template: str) -> None:
             pass
         return f"pid{os.getpid()}"
 
+    def _upload_with_gcsfs(src_dir: str, dst_url: str) -> tuple[int, int]:
+        """Upload via gcsfs. Returns (file_count, byte_count)."""
+        import gcsfs
+
+        fs = gcsfs.GCSFileSystem()
+        # Strip gs:// prefix for fs.put behavior
+        dst = dst_url.removeprefix("gs://").rstrip("/")
+        files = 0
+        total_bytes = 0
+        for root, _dirs, fnames in os.walk(src_dir):
+            for fname in fnames:
+                local = os.path.join(root, fname)
+                rel = os.path.relpath(local, src_dir)
+                remote = f"{dst}/{rel}"
+                try:
+                    fs.put(local, remote)
+                    files += 1
+                    total_bytes += os.path.getsize(local)
+                except Exception as exc:
+                    _emit(f"failed to upload {local}: {exc}")
+        return files, total_bytes
+
     def _loop() -> None:
+        _emit(f"thread started, local_dir={local_dir} gcs_dst_template={gcs_dst_template}")
+        last_count = -1
         while True:
             time.sleep(30)
             if not os.path.isdir(local_dir):
+                _emit(f"local_dir={local_dir} does not exist yet")
+                continue
+            try:
+                file_count = sum(len(fs) for _, _, fs in os.walk(local_dir))
+            except Exception:
+                file_count = -1
+            if file_count == 0:
+                _emit(f"local_dir={local_dir} is empty")
                 continue
             dst = gcs_dst_template.format(worker=_resolve_worker_id())
+            _emit(f"uploading {file_count} files from {local_dir} to {dst} (was {last_count})")
             try:
-                subprocess.run(
-                    ["gsutil", "-m", "-q", "rsync", "-r", local_dir, dst],
-                    timeout=120,
-                    check=False,
-                )
-            except Exception:
-                # Don't crash the training process on upload failure.
-                pass
+                uploaded, total_bytes = _upload_with_gcsfs(local_dir, dst)
+                _emit(f"uploaded {uploaded} files, {total_bytes} bytes to {dst}")
+                last_count = file_count
+            except Exception as exc:
+                _emit(f"upload failed: {exc}")
 
     t = threading.Thread(target=_loop, name="xla-dump-uploader", daemon=True)
     t.start()
