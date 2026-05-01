@@ -15,10 +15,12 @@ import os
 import re
 import time
 from collections.abc import Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 
 import braceexpand
 import draccus
 import fsspec
+import numpy as np
 import pyarrow.parquet as pq
 from datasets import load_dataset_builder
 from fray import ResourceConfig
@@ -30,7 +32,7 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
     preprocessor_for_format,
 )
-from levanter.store.cache import consolidate_shard_caches
+from levanter.store.cache import CacheLedger, CacheMetadata, _merge_ledgers
 from levanter.store.tree_store import TreeStore
 from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
 from rigging.filesystem import open_url, url_to_fs
@@ -48,6 +50,7 @@ MIN_GROUP_BYTES = 100_000_000  # 100 MB floor to avoid degenerate tiny shards
 # Empirical upper bound on the zephyr window size (see
 # https://github.com/marin-community/marin/issues/2829#issuecomment-3963661943).
 _MAX_WINDOW_SIZE = 64
+_LOCAL_METADATA_MAX_WORKERS = 32
 
 
 def _avg_parquet_row_group_rows(path: str) -> int | None:
@@ -69,6 +72,15 @@ def _compute_target_group_bytes(total_input_bytes: int, max_workers: int) -> int
     Applies a floor of MIN_GROUP_BYTES to avoid degenerate tiny shards.
     """
     return max(total_input_bytes // max_workers, MIN_GROUP_BYTES)
+
+
+def _local_metadata_workers(num_items: int) -> int:
+    return max(1, min(_LOCAL_METADATA_MAX_WORKERS, num_items))
+
+
+def _shard_paths_for_ledger(cache_path: str, shard_paths: Sequence[str]) -> list[str]:
+    prefix = cache_path.rstrip("/") + "/"
+    return [path.removeprefix(prefix) if path.startswith(prefix) else path for path in shard_paths]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -469,28 +481,32 @@ def tokenize(config: TokenizeConfigBase):
         shard_paths = ctx.execute(temp_shards).results
         tokenize_elapsed = time.monotonic() - tokenize_start
 
-        logger.info("Computing exemplar for cache consolidation")
-        exemplar = ctx.execute(
-            Dataset.from_list(file_groups[0][0:1])
-            .flat_map(load_file)
-            .take_per_shard(1)
-            .map_shard(lambda example, _: _tokenize_batches(config=config, batches=[example])),
-            verbose=False,
-        ).results[0]
-
-        consolidate_start = time.monotonic()
-        logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
-        ledger = consolidate_shard_caches(
-            shard_cache_paths=shard_paths,
-            output_path=prefix,
-            exemplar=exemplar,
-            copy_max_workers=config.cache_copy_max_workers,
+        # Build sharded ledger — each shard is directly readable, no consolidation needed.
+        # Loading per-shard ledgers is remote metadata I/O, so keep bounded
+        # parallelism in the local driver.
+        with ThreadPoolExecutor(max_workers=_local_metadata_workers(len(shard_paths))) as pool:
+            shard_ledgers = list(pool.map(CacheLedger.load, shard_paths))
+        ledger = _merge_ledgers(
+            prefix,
+            shard_paths,
+            shard_ledgers,
+            CacheMetadata.empty(),
+            shard_paths=_shard_paths_for_ledger(prefix, shard_paths),
         )
-        consolidate_elapsed = time.monotonic() - consolidate_start
-
         total_elements = ledger.total_num_rows
-        store = TreeStore.open(exemplar, prefix, mode="r", cache_metadata=True)
-        total_tokens = store.tree["input_ids"].data_size if "input_ids" in store.tree else 0
+
+        exemplar = {"input_ids": np.zeros(0, dtype=np.int32)}
+
+        def input_id_data_size(path: str) -> int:
+            store = TreeStore.open(exemplar, path, mode="r", cache_metadata=True)
+            if "input_ids" in store.tree:
+                return store.tree["input_ids"].data_size
+            return 0
+
+        # Sum token counts across shards. TreeStore.open and data_size are
+        # remote metadata I/O, so parallelize with the same local cap.
+        with ThreadPoolExecutor(max_workers=_local_metadata_workers(len(shard_paths))) as pool:
+            total_tokens = sum(pool.map(input_id_data_size, shard_paths))
 
         stats_path = os.path.join(prefix, ".stats.json")
         with open_url(stats_path, "w") as f:
@@ -502,7 +518,7 @@ def tokenize(config: TokenizeConfigBase):
         logger.info(
             f"{split_name} pipeline complete: {total_elements:,} docs, {total_tokens:,} tokens "
             f"in {pipeline_elapsed:.1f}s (tokenize: {tokenize_elapsed:.1f}s at {overall_tok_per_sec:,.0f} tokens/s "
-            f"{overall_doc_per_sec:,.1f} docs/s, consolidate: {consolidate_elapsed:.1f}s). "
+            f"{overall_doc_per_sec:,.1f} docs/s). "
             f"Wrote stats to {stats_path}"
         )
 

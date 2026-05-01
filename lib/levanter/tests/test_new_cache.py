@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
+import os
 import tempfile
 from typing import Any, Dict, Iterator, Sequence
 
@@ -9,8 +11,19 @@ import pytest
 from zephyr.execution import ZephyrWorkerError
 
 from levanter.data import BatchProcessor, ShardedDataSource, batched
+from levanter.data.packing import GreedyPrepackedDataset
 from levanter.data.sharded_datasource import TextUrlDataSource
-from levanter.store.cache import SerialCacheWriter, TreeStore, build_or_load_cache
+from levanter.store.cache import (
+    CacheLedger,
+    CacheMetadata,
+    SerialCacheWriter,
+    _ShardedArray,
+    _ShardedOffsets,
+    _ShardedShapes,
+    ShardedTreeCache,
+    TreeStore,
+    build_or_load_cache,
+)
 
 
 class TestProcessor(BatchProcessor[Sequence[int], dict[str, np.ndarray]]):
@@ -286,3 +299,238 @@ def test_shard_cache_fails_gracefully_with_unknown_file_type():
 
         with pytest.raises(ZephyrWorkerError):
             build_or_load_cache(tmpdir, dataset, TestProcessor())
+
+
+def test_sharded_tree_cache_reads_across_shards():
+    """Write independent shard caches, then read them via ShardedTreeCache."""
+    source = SimpleShardSource(num_shards=4, rows_per_shard=10)
+    processor = SimpleProcessor()
+    exemplar = processor.output_exemplar
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        shard_paths = []
+        all_expected = []
+
+        for shard_idx, shard_name in enumerate(source.shard_names):
+            shard_path = os.path.join(tmpdir, f"shard_{shard_idx}")
+            with SerialCacheWriter(shard_path, exemplar, shard_name=shard_name) as writer:
+                for batch in batched(source.open_shard(shard_name), 32):
+                    processed = processor(batch)
+                    writer.write_batch(processed)
+                    all_expected.extend(processed)
+            shard_paths.append(shard_path)
+
+        # Build a ledger that references the shard paths
+        shard_rows = {}
+        for path in shard_paths:
+            shard_ledger = CacheLedger.load(path)
+            shard_rows[os.path.basename(path)] = shard_ledger.total_num_rows
+
+        ledger = CacheLedger(
+            total_num_rows=sum(shard_rows.values()),
+            shard_rows=shard_rows,
+            is_finished=True,
+            finished_shards=list(shard_rows.keys()),
+            field_counts={},
+            metadata=CacheMetadata.empty(),
+            shard_paths=shard_paths,
+        )
+
+        cache = ShardedTreeCache(shard_paths, exemplar, ledger)
+
+        assert len(cache) == 40
+        assert cache.store.tree["data"].num_rows == 40
+        assert cache.store.tree["data"].data_size == 400
+        np.testing.assert_array_equal(
+            cache.store.tree["data"].offsets[0:5].read().result(),
+            np.asarray([40, 10, 20, 30, 40]),
+        )
+        np.testing.assert_array_equal(
+            cache.store.tree["data"].data[95:105].read().result(),
+            np.asarray([9, 9, 9, 9, 9, 10, 10, 10, 10, 10]),
+        )
+        packed = GreedyPrepackedDataset(
+            cache.store.tree,
+            max_length=25,
+            max_segments_per_example=3,
+            slice_strategy="raise",
+        )
+        packed_batch = packed.as_sync_dataset().get_batch([0])
+        assert packed_batch[0][0]["data"].shape == (25,)
+        np.testing.assert_array_equal(
+            packed_batch[0][0]["data"],
+            np.asarray([0] * 10 + [1] * 10 + [0] * 5),
+        )
+
+        # Sequential read
+        for i in range(40):
+            row = cache[i]
+            np.testing.assert_array_equal(row["data"], all_expected[i]["data"])
+
+        # Batch read (sync)
+        batch = cache.get_batch_sync(list(range(0, 40, 3)))
+        for idx, b in zip(range(0, 40, 3), batch):
+            np.testing.assert_array_equal(b["data"], all_expected[idx]["data"])
+
+        # Cross-shard batch (indices spanning multiple shards)
+        cross_indices = [0, 10, 20, 30, 5, 15, 25, 35]
+        batch = cache.get_batch_sync(cross_indices)
+        for idx, b in zip(cross_indices, batch):
+            np.testing.assert_array_equal(b["data"], all_expected[idx]["data"])
+
+
+@pytest.mark.asyncio
+async def test_sharded_array_reads_slice_shards_concurrently():
+    started = 0
+    both_started = asyncio.Event()
+
+    class FakeRead:
+        def __init__(self, values: np.ndarray):
+            self._values = values
+
+        async def read(self):
+            nonlocal started
+            started += 1
+            if started == 2:
+                both_started.set()
+            await both_started.wait()
+            return self._values
+
+    class FakeArray:
+        def __init__(self, values: np.ndarray):
+            self._values = values
+
+        def __getitem__(self, item):
+            return FakeRead(self._values[item])
+
+    sharded = _ShardedArray(
+        [
+            FakeArray(np.asarray([0, 1, 2, 3])),
+            FakeArray(np.asarray([4, 5, 6, 7])),
+        ],
+        [4, 4],
+    )
+
+    values = await asyncio.wait_for(sharded[2:6], timeout=1)
+
+    np.testing.assert_array_equal(values, np.asarray([2, 3, 4, 5]))
+
+
+@pytest.mark.asyncio
+async def test_sharded_shapes_reads_slice_shards_concurrently():
+    started = 0
+    both_started = asyncio.Event()
+
+    class FakeRead:
+        def __init__(self, values: np.ndarray):
+            self._values = values
+
+        async def read(self):
+            nonlocal started
+            started += 1
+            if started == 2:
+                both_started.set()
+            await both_started.wait()
+            return self._values
+
+    class FakeShapes:
+        def __init__(self, values: np.ndarray):
+            self._values = values
+
+        def __getitem__(self, item):
+            return FakeRead(self._values[item])
+
+    class FakeStore:
+        def __init__(self, shapes: np.ndarray):
+            self.num_rows = len(shapes)
+            self.shapes = FakeShapes(shapes)
+
+    sharded = _ShardedShapes(
+        [
+            FakeStore(np.asarray([[0], [1], [2], [3]])),
+            FakeStore(np.asarray([[4], [5], [6], [7]])),
+        ]
+    )
+
+    values = await asyncio.wait_for(sharded[2:6], timeout=1)
+
+    np.testing.assert_array_equal(values, np.asarray([[2], [3], [4], [5]]))
+
+
+@pytest.mark.asyncio
+async def test_sharded_offsets_cache_full_offsets():
+    read_count = 0
+
+    class FakeRead:
+        def __init__(self, values: np.ndarray):
+            self._values = values
+
+        async def read(self):
+            nonlocal read_count
+            read_count += 1
+            return self._values
+
+    class FakeOffsets:
+        def __init__(self, values: np.ndarray):
+            self._values = values
+
+        def __getitem__(self, item):
+            return FakeRead(self._values[item])
+
+    class FakeStore:
+        def __init__(self, offsets: np.ndarray, data_size: int):
+            self.num_rows = len(offsets) - 1
+            self.data_size = data_size
+            self.offsets = FakeOffsets(offsets)
+
+    offsets = _ShardedOffsets(
+        [
+            FakeStore(np.asarray([2, 10, 20]), data_size=20),
+            FakeStore(np.asarray([2, 5, 15]), data_size=15),
+        ]
+    )
+
+    np.testing.assert_array_equal(await offsets[0:3], np.asarray([4, 10, 20]))
+    np.testing.assert_array_equal(await offsets[2:5], np.asarray([20, 25, 35]))
+    assert read_count == 2
+
+
+def test_sharded_tree_cache_via_load():
+    """TreeCache.load returns ShardedTreeCache when ledger has shard_paths."""
+    source = SimpleShardSource(num_shards=3, rows_per_shard=5)
+    processor = SimpleProcessor()
+    exemplar = processor.output_exemplar
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        shard_paths = []
+        relative_shard_paths = []
+        for shard_idx, shard_name in enumerate(source.shard_names):
+            shard_path = os.path.join(tmpdir, f"shard_{shard_idx}")
+            with SerialCacheWriter(shard_path, exemplar, shard_name=shard_name) as writer:
+                for batch in batched(source.open_shard(shard_name), 32):
+                    writer.write_batch(processor(batch))
+            shard_paths.append(shard_path)
+            relative_shard_paths.append(os.path.basename(shard_path))
+
+        shard_rows = {}
+        for path in shard_paths:
+            shard_ledger = CacheLedger.load(path)
+            shard_rows[os.path.basename(path)] = shard_ledger.total_num_rows
+
+        ledger = CacheLedger(
+            total_num_rows=sum(shard_rows.values()),
+            shard_rows=shard_rows,
+            is_finished=True,
+            finished_shards=list(shard_rows.keys()),
+            field_counts={},
+            metadata=CacheMetadata.empty(),
+            shard_paths=relative_shard_paths,
+        )
+        ledger._serialize_and_commit(tmpdir)
+
+        # Load via TreeCache.load — should return ShardedTreeCache
+        from levanter.store.cache import TreeCache
+
+        loaded = TreeCache.load(tmpdir, exemplar)
+        assert isinstance(loaded, ShardedTreeCache)
+        assert len(loaded) == 15
