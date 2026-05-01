@@ -8,6 +8,14 @@ tokenize. The first step is verification-only: it confirms the ``quality=medium`
 subtree of the Nemotron-CC dump is already staged at ``NEMOTRON_RAW_PATH`` and
 refuses to initiate a Common Crawl download.
 
+Optionally, when ``--sft-general-path <gs://...>`` is given, runs a second
+pipeline (verify → normalize → minhash → fuzzy_dups → consolidate → tokenize)
+on the Nemotron-Pretraining-SFT-v1 / Nemotron-SFT-General split. The path is
+caller-supplied (no hardcoded region), verified at runtime, and never
+downloaded; the ferry fails fast if the expected parquet shards aren't there.
+The SFT-General chain runs after the medium chain so each stage's
+scheduled-baseline timing is recorded under a stable step name.
+
 Pipeline outputs land under ``$MARIN_PREFIX/datakit-nemotron-smoke/$SMOKE_RUN_ID/...``;
 ``MARIN_PREFIX`` defaults to a region-local temp bucket with 1-day TTL.
 """
@@ -76,7 +84,37 @@ def _verify_nemotron_medium_present(output_path: str) -> None:
     logger.info("Nemotron-CC medium split confirmed at %s (e.g. %s)", medium_dir, sample[0])
 
 
-def build_steps(run_id: str, *, file_stride: int = 1) -> list[StepSpec]:
+# Subdirectory under the staged Nemotron-Pretraining-SFT-v1 dump. The full
+# bucket path is caller-supplied via ``--sft-general-path`` so the ferry isn't
+# pinned to a single region.
+SFT_GENERAL_SUBDIR = "Nemotron-SFT-General"
+
+
+def _verify_sft_general_present(output_path: str) -> None:
+    """Confirm Nemotron-SFT-General is staged at ``output_path``; never downloads.
+
+    Mirrors ``_verify_nemotron_medium_present``: a cache eviction must never
+    trigger an HF download — the gate runs on already-staged data only.
+    """
+    sft_dir = f"{output_path}/{SFT_GENERAL_SUBDIR}"
+    fs, _ = url_to_fs(sft_dir)
+    if not fs.exists(sft_dir):
+        raise RuntimeError(
+            f"Nemotron-SFT-General not found at {sft_dir}. "
+            "The nemotron ferry refuses to download from HuggingFace — stage the raw dump externally first."
+        )
+    sample = fs.glob(f"{sft_dir}/**/*.parquet", maxdepth=4)
+    if not sample:
+        raise RuntimeError(f"Nemotron-SFT-General at {sft_dir} contains no .parquet files.")
+    logger.info("Nemotron-SFT-General confirmed at %s (e.g. %s)", sft_dir, sample[0])
+
+
+def build_steps(
+    run_id: str,
+    *,
+    file_stride: int = 1,
+    sft_general_path: str | None = None,
+) -> list[StepSpec]:
     base = f"datakit-nemotron-smoke/{run_id}"
 
     # Verify-only raw step. Uses an absolute override so it points at the
@@ -168,7 +206,106 @@ def build_steps(run_id: str, *, file_stride: int = 1) -> list[StepSpec]:
         override_output_path=f"{base}/tokens",
     )
 
-    return [download, normalized, minhash, deduped, consolidated, tokenized]
+    steps: list[StepSpec] = [download, normalized, minhash, deduped, consolidated, tokenized]
+
+    # Optional: parallel chain on Nemotron-SFT-General (parquet). Wired only
+    # when the caller passes ``--sft-general-path``. Step names are prefixed
+    # with ``sft-general/`` so the medium chain's existing names remain
+    # unchanged (preserves Iris cache and the metric-collector regex).
+    if sft_general_path is not None:
+        sft_download = StepSpec(
+            name="datakit-nemotron-smoke/sft-general/download",
+            fn=_verify_sft_general_present,
+            override_output_path=sft_general_path,
+        )
+
+        # SFT-General has skewed shards with row groups up to ~4.7 GB
+        # (see lib/marin/src/marin/datakit/download/nemotron_v2.py:140-143).
+        # Bump normalize workers to 64 GB RAM / 10 GB disk to match the
+        # convention used by the datakit download flow; later stages stay
+        # at the default 16 GB because the data is already smaller per-shard
+        # after normalize.
+        sft_normalized = normalize_step(
+            name="datakit-nemotron-smoke/sft-general/normalize",
+            download=sft_download,
+            text_field="text",
+            id_field="id",
+            relative_input_path=SFT_GENERAL_SUBDIR,
+            worker_resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),
+            max_workers=512,
+            override_output_path=f"{base}/sft-general/normalize",
+        )
+
+        sft_minhash = StepSpec(
+            name="datakit-nemotron-smoke/sft-general/minhash",
+            deps=[sft_normalized],
+            fn=lambda output_path: compute_minhash_attrs(
+                source=Artifact.load(sft_normalized, NormalizedData),
+                output_path=output_path,
+                worker_resources=ResourceConfig(cpu=5, ram="16g", disk="5g"),
+                max_workers=512,
+            ),
+            override_output_path=f"{base}/sft-general/minhash",
+        )
+
+        sft_deduped = StepSpec(
+            name="datakit-nemotron-smoke/sft-general/fuzzy_dups",
+            deps=[sft_minhash],
+            hash_attrs={"cc_max_iterations": 3},
+            fn=lambda output_path: compute_fuzzy_dups_attrs(
+                inputs=[Artifact.load(sft_minhash, MinHashAttrData)],
+                output_path=output_path,
+                max_parallelism=512,
+                cc_max_iterations=3,
+                worker_resources=ResourceConfig(cpu=1, ram="16g", disk="5g"),
+            ),
+            override_output_path=f"{base}/sft-general/fuzzy_dups",
+        )
+
+        sft_consolidated = StepSpec(
+            name="datakit-nemotron-smoke/sft-general/consolidate",
+            deps=[sft_normalized, sft_deduped],
+            fn=lambda output_path: consolidate(
+                input_path=Artifact.load(sft_normalized, NormalizedData).main_output_dir,
+                output_path=output_path,
+                filetype="parquet",
+                filters=[
+                    FilterConfig(
+                        type=FilterType.KEEP_DOC,
+                        attribute_path=Artifact.load(sft_deduped, FuzzyDupsAttrData)
+                        .sources[Artifact.load(sft_normalized, NormalizedData).main_output_dir]
+                        .attr_dir,
+                        name="is_cluster_canonical",
+                        attribute_filetype="parquet",
+                        keep_if_missing=True,
+                    ),
+                ],
+                worker_resources=ResourceConfig(cpu=1, ram="16g", disk="5g"),
+                max_workers=512,
+            ),
+            override_output_path=f"{base}/sft-general/consolidate",
+        )
+
+        sft_tokenized = StepSpec(
+            name="datakit-nemotron-smoke/sft-general/tokenize",
+            deps=[sft_consolidated],
+            hash_attrs={"tokenizer": "gpt2"},
+            fn=lambda output_path: tokenize(
+                TokenizeConfig(
+                    train_paths=[sft_consolidated.output_path],
+                    validation_paths=[],
+                    cache_path=output_path,
+                    tokenizer="gpt2",
+                    max_workers=512,
+                    worker_resources=ResourceConfig(ram="16g", disk="5g"),
+                )
+            ),
+            override_output_path=f"{base}/sft-general/tokens",
+        )
+
+        steps += [sft_download, sft_normalized, sft_minhash, sft_deduped, sft_consolidated, sft_tokenized]
+
+    return steps
 
 
 def _write_status(status: str, marin_prefix: str) -> None:
@@ -195,6 +332,18 @@ def main() -> None:
             "calibrated start: 5 (~1/5 of medium, ~2-3h wall)."
         ),
     )
+    parser.add_argument(
+        "--sft-general-path",
+        default=None,
+        help=(
+            "Optional gs:// path to a staged Nemotron-Pretraining-SFT-v1 dump "
+            "(must contain a `Nemotron-SFT-General/` subdirectory of .parquet "
+            "shards). When set, the ferry runs a second pipeline on this "
+            "dataset after the medium chain. The path is caller-supplied so "
+            "the ferry isn't pinned to any single region; verified at runtime "
+            "and never downloaded."
+        ),
+    )
     args = parser.parse_args()
     if args.stride < 1:
         parser.error(f"--stride must be >= 1, got {args.stride}")
@@ -211,10 +360,18 @@ def main() -> None:
     region = region_from_metadata()
     if region:
         check_path_in_region("nemotron_raw", NEMOTRON_RAW_PATH, region)
+        if args.sft_general_path:
+            check_path_in_region("nemotron_sft_general", args.sft_general_path, region)
 
     _write_status("running", marin_prefix)
     with log_time("Datakit nemotron ferry total wall time"):
-        StepRunner().run(build_steps(run_id, file_stride=args.stride))
+        StepRunner().run(
+            build_steps(
+                run_id,
+                file_stride=args.stride,
+                sft_general_path=args.sft_general_path,
+            )
+        )
     _write_status("succeeded", marin_prefix)
 
 

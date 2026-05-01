@@ -16,6 +16,11 @@ on:
         type: string
         required: false
         default: '5'
+      sft_general_path:
+        description: 'gs:// path to staged Nemotron-SFT-General (parent dir, contains Nemotron-SFT-General/). Empty = skip the SFT chain.'
+        type: string
+        required: false
+        default: 'gs://marin-eu-west4/raw/nemotron_pretraining_sft_v1-10f77e'
 
 permissions:
   contents: read
@@ -31,6 +36,7 @@ jobs:
       SMOKE_RUN_ID: datakit-nemotron-partial-slice-ferry-${{ github.run_id }}-${{ github.run_attempt }}
       FERRY_STATUS_PATH: gs://marin-eu-west4/tmp/ttl=1d/ci/datakit-nemotron-partial-slice-ferry-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
       STRIDE: ${{ github.event.inputs.stride || '5' }}
+      SFT_GENERAL_PATH: ${{ github.event.inputs.sft_general_path || 'gs://marin-eu-west4/raw/nemotron_pretraining_sft_v1-10f77e' }}
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/examples/marin.yaml
@@ -78,6 +84,13 @@ jobs:
         id: submit
         shell: bash -l {0}
         run: |
+          # SFT-General is opt-in via the workflow_dispatch input; pass the
+          # flag only when a non-empty path was supplied so the script can
+          # run medium-only by default.
+          SFT_FLAG=()
+          if [ -n "$SFT_GENERAL_PATH" ]; then
+            SFT_FLAG=(--sft-general-path "$SFT_GENERAL_PATH")
+          fi
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
             --region=europe-west4 \
@@ -89,7 +102,8 @@ jobs:
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
-            -- python -m experiments.ferries.datakit_nemotron_ferry --stride "$STRIDE")
+            -- python -m experiments.ferries.datakit_nemotron_ferry \
+                --stride "$STRIDE" "${SFT_FLAG[@]}")
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID (stride=$STRIDE)"
         env:

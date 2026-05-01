@@ -86,7 +86,18 @@ GATES: dict[str, GateConfig] = {
         cpu="1",
         extra="cpu",
         priority="production",
-        ferry_args=("--stride", "5"),
+        # Gate 2: nemotron-medium @ stride 5 (parquet-via-fsspec workload via
+        # JSONL inputs + scatter) PLUS Nemotron-SFT-General (parquet inputs;
+        # exercises the pyarrow-native read path that medium alone misses).
+        # The SFT path is region-pinned to match the GATE's --region; if you
+        # need to run from a different region, override via the
+        # --status-out / submit_perf_run plumbing.
+        ferry_args=(
+            "--stride",
+            "5",
+            "--sft-general-path",
+            "gs://marin-eu-west4/raw/nemotron_pretraining_sft_v1-10f77e",
+        ),
     ),
     "3": GateConfig(
         ferry_module="experiments.ferries.datakit_nemotron_ferry",
