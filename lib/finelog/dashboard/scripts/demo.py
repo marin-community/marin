@@ -9,8 +9,10 @@ Usage:
     uv run python lib/finelog/dashboard/scripts/demo.py [--keep]
 
 Without ``--keep`` the script tears the server down on exit. With ``--keep``
-the server is left running on port 10001 so ``npm run dev`` (in
-``lib/finelog/dashboard``) can attach to it.
+the server stays up on port 10001 so the dashboard at
+http://localhost:10001/ can be inspected in a browser. The finelog server
+serves the built dashboard from ``lib/finelog/dashboard/dist`` itself, so
+``npm run build`` must have run at least once.
 """
 
 from __future__ import annotations
@@ -187,6 +189,15 @@ def main() -> int:
     ap.add_argument("--keep", action="store_true", help="leave server running after seeding")
     args = ap.parse_args()
 
+    if args.keep:
+        dist = Path(__file__).resolve().parent.parent / "dist"
+        if not (dist / "index.html").is_file():
+            log.warning(
+                "dashboard not built (%s missing); the server will serve a placeholder. "
+                "Run `npm run build` in lib/finelog/dashboard to build the SPA.",
+                dist / "index.html",
+            )
+
     with tempfile.TemporaryDirectory(prefix="finelog-demo-") as tmpdir:
         log_dir = Path(tmpdir)
         proc = start_server(log_dir)
@@ -198,7 +209,7 @@ def main() -> int:
                 client.close()
             exercise()
             if args.keep:
-                log.info("server still running on :%d (Ctrl-C to stop)", PORT)
+                log.info("dashboard ready at http://localhost:%d/ (Ctrl-C to stop)", PORT)
                 signal.pause()
         finally:
             if proc.poll() is None:

@@ -3,10 +3,8 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "dev": "rsbuild dev",
     "build": "rsbuild build",
-    "build:check": "vue-tsc --noEmit && rsbuild build",
-    "preview": "rsbuild preview"
+    "build:check": "vue-tsc --noEmit && rsbuild build"
   },
   "dependencies": {
     "@fontsource-variable/noto-sans": "^5.2.10",
