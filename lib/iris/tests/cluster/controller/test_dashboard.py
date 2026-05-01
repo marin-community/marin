@@ -11,39 +11,38 @@ import re
 from unittest.mock import Mock
 
 import pytest
-from starlette.testclient import TestClient
-
+from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.db import (
     healthy_active_workers_with_attributes,
 )
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     EndpointRow,
 )
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
-from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import config_pb2, vm_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
+from starlette.testclient import TestClient
 
 from .conftest import (
     check_task_can_be_scheduled,
     make_test_entrypoint,
     make_worker_metadata,
-    query_tasks_with_attempts as _query_tasks_with_attempts,
     register_worker,
+)
+from .conftest import (
+    query_tasks_with_attempts as _query_tasks_with_attempts,
 )
 
 # =============================================================================
@@ -755,8 +754,11 @@ def test_worker_detail_page_escapes_id(client):
     assert "onmouseover" not in response.text or "&quot;" in response.text
 
 
-def test_get_worker_status_recent_tasks_have_timestamps(client, state, job_request):
-    """GetWorkerStatus returns recent_tasks with started_at populated from attempt timestamps."""
+def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_request):
+    """GetWorkerStatus returns one recent_attempts row per attempt with its
+    own started/finished timestamps. Regression: previously returned
+    per-task rows, dropping retry distinctions and inheriting the parent
+    task's state on every row."""
     wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
     job_id = submit_job(state, "ts-job", job_request)
     task_id = job_id.task(0)
@@ -783,11 +785,86 @@ def test_get_worker_status_recent_tasks_have_timestamps(client, state, job_reque
         )
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
-    tasks = resp.get("recentTasks", [])
-    assert len(tasks) == 1
-    assert tasks[0]["taskId"] == task_id.to_wire()
-    assert tasks[0].get("startedAt"), "started_at must be populated from attempt timestamps"
-    assert tasks[0].get("finishedAt"), "finished_at must be populated from attempt timestamps"
+    attempts = resp.get("recentAttempts", [])
+    assert len(attempts) == 1
+    assert attempts[0]["taskId"] == task_id.to_wire()
+    attempt = attempts[0].get("attempt", {})
+    assert attempt.get("attemptId") == 0
+    assert attempt.get("state") == "TASK_STATE_SUCCEEDED"
+    assert attempt.get("startedAt"), "started_at must be populated from attempt timestamps"
+    assert attempt.get("finishedAt"), "finished_at must be populated from attempt timestamps"
+
+
+def test_get_worker_status_recent_attempts_separates_retries(client, state):
+    """Two attempts of the same task on the same worker get two distinct rows
+    with per-attempt state. Regression for the dashboard rendering bug where
+    one task with multiple attempts on a worker showed up as N duplicate
+    'RUNNING' rows because the server returned per-task entries that the UI
+    rendered with the parent task's state."""
+    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
+    # Need preemption budget so the first WORKER_FAILED retries instead of
+    # killing the job; otherwise the second attempt's heartbeat is dropped.
+    request = controller_pb2.Controller.LaunchJobRequest(
+        name=JobName.root("test-user", "retry-job").to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=1,
+        max_retries_preemption=2,
+    )
+    job_id = submit_job(state, "retry-job", request)
+    task_id = job_id.task(0)
+
+    # First attempt: BUILDING -> WORKER_FAILED (retriable, retries to PENDING).
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                worker_resource_snapshot=None,
+                updates=[
+                    TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_BUILDING),
+                ],
+            ),
+        )
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                worker_resource_snapshot=None,
+                updates=[
+                    TaskUpdate(
+                        task_id=task_id,
+                        attempt_id=0,
+                        new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                        error="TPU init failure",
+                    ),
+                ],
+            ),
+        )
+    # Second attempt: re-dispatch to the same worker, RUNNING.
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                worker_resource_snapshot=None,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=1, new_state=job_pb2.TASK_STATE_RUNNING)],
+            ),
+        )
+
+    resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
+    attempts = resp.get("recentAttempts", [])
+    assert len(attempts) == 2, f"expected one row per attempt, got {len(attempts)}: {attempts}"
+    by_attempt_id = {a["attempt"]["attemptId"]: a for a in attempts}
+    assert by_attempt_id[0]["attempt"]["state"] == "TASK_STATE_WORKER_FAILED"
+    assert by_attempt_id[1]["attempt"]["state"] == "TASK_STATE_RUNNING"
+    assert all(a["taskId"] == task_id.to_wire() for a in attempts)
 
 
 def test_get_worker_status_by_worker_id(client, state):
@@ -849,7 +926,7 @@ def test_fetch_logs_for_missing_task_returns_empty_entries(client):
     """FetchLogs on LogService returns empty entries for a nonexistent task."""
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
-        "/iris.logging.LogService/FetchLogs",
+        "/finelog.logging.LogService/FetchLogs",
         json={"source": re.escape(task_id) + ":.*"},
         headers={"Content-Type": "application/json"},
     )
@@ -873,7 +950,7 @@ def test_fetch_logs_backward_compat_proxy(client):
 
 def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     """Old clients using default Connect proto encoding hit the compat endpoint."""
-    from iris.rpc import logging_pb2
+    from finelog.rpc import logging_pb2
 
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     req = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
@@ -886,6 +963,18 @@ def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     parsed = logging_pb2.FetchLogsResponse()
     parsed.ParseFromString(resp.content)
     assert list(parsed.entries) == []
+
+
+def test_fetch_logs_legacy_iris_logging_path(client):
+    """Pre-finelog-lift clients call /iris.logging.LogService/FetchLogs."""
+    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
+    resp = client.post(
+        "/iris.logging.LogService/FetchLogs",
+        json={"source": re.escape(task_id) + ":.*"},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("entries", []) == []
 
 
 # =============================================================================

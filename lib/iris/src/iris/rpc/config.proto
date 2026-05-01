@@ -197,6 +197,9 @@ message ScaleGroupResources {
 
 message WorkerSettings {
   map<string, string> attributes = 1;
+  // Overrides DefaultsConfig.worker.cache_dir for this scale group. Useful for
+  // pointing CPU workers at a real disk instead of the default /dev/shm tmpfs.
+  string cache_dir = 2;
 }
 
 // Configuration for a scale group
@@ -475,6 +478,17 @@ message UserBudgetTier {
 }
 
 // ============================================================================
+// ENDPOINT CONFIGURATION
+// ============================================================================
+
+// A scheme-tagged endpoint backing a logical service name (e.g. /system/log-server).
+// Resolution happens at controller startup via iris.cluster.endpoints.resolve_endpoint_uri.
+message EndpointSpec {
+  string uri = 1;                     // http(s)://host:port, gcp://<service>, k8s://<service>[.<ns>]
+  map<string, string> metadata = 2;   // optional resolver hints (e.g. region, project)
+}
+
+// ============================================================================
 // ROOT CLUSTER CONFIGURATION
 // ============================================================================
 
@@ -507,4 +521,14 @@ message IrisClusterConfig {
   // start. Unlisted users fall through to the default in UserBudgetDefaults
   // (set at first job submission via INSERT OR IGNORE).
   repeated UserBudgetTier user_budgets = 80;
+
+  // Cluster endpoints (logical name -> EndpointSpec). When /system/log-server
+  // is omitted, the Controller hosts a bundled in-process MemStore log server.
+  map<string, EndpointSpec> endpoints = 90;
+
+  // Name of a finelog config (looked up via the finelog config search path).
+  // When set, iris auto-derives /system/log-server from it and the iris CLI
+  // can manage the deployment via `iris cluster log-server` subcommands.
+  // Mutually exclusive with endpoints[/system/log-server].
+  string log_server_config = 20;
 }

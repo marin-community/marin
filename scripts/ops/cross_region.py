@@ -31,7 +31,6 @@ from pathlib import Path
 import click
 import duckdb
 import fsspec
-
 from iris.cluster.config import IrisConfig
 from iris.cluster.controller.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
 from rigging.filesystem import get_bucket_location, region_from_prefix
@@ -152,12 +151,6 @@ def normalize_region(region: str | None) -> str | None:
     region = region.lower()
     if region == "eu-west4":
         return "europe-west4"
-    # `marin-tmp-us-east5` is physically in us-east5; drop the tmp- prefix so
-    # same-region access to a tmp bucket doesn't show up as cross-region.
-    if region.startswith("tmp-"):
-        region = region[len("tmp-") :]
-        if region == "eu-west4":
-            return "europe-west4"
     return region
 
 

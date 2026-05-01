@@ -26,6 +26,7 @@ from iris.cluster.providers.types import (
 from iris.cluster.types import WorkerStatus
 from iris.rpc import config_pb2, vm_pb2
 from rigging.timing import Duration, Timestamp
+
 from tests.cluster.providers.conftest import (
     FakeSliceHandle,
     FakeWorkerHandle,

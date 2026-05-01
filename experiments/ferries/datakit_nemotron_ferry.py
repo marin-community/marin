@@ -16,15 +16,6 @@ import json
 import logging
 import os
 
-from rigging.filesystem import (
-    check_path_in_region,
-    marin_temp_bucket,
-    region_from_metadata,
-    url_to_fs,
-)
-from rigging.log_setup import configure_logging
-from rigging.timing import log_time
-
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import Artifact
@@ -44,6 +35,14 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     compute_minhash_attrs,
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
+from rigging.filesystem import (
+    check_path_in_region,
+    marin_temp_bucket,
+    region_from_metadata,
+    url_to_fs,
+)
+from rigging.log_setup import configure_logging
+from rigging.timing import log_time
 
 logger = logging.getLogger(__name__)
 

@@ -2,12 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for deduplicate and group_by operations."""
-import pyarrow as pa
-
 import hashlib
 
+import pyarrow as pa
 import pytest
-
 from zephyr import Dataset
 
 

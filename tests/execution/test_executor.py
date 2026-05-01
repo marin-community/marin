@@ -10,12 +10,16 @@ import time
 from dataclasses import asdict, dataclass
 from threading import Event, Thread
 
+import marin.execution.executor_step_status as executor_step_status
 import pytest
 from draccus.utils import Dataclass
 from fray.types import ResourceConfig
-import marin.execution.executor_step_status as executor_step_status
+from marin.evaluation.perplexity_gap import (
+    GapFinderModelConfig,
+    model_perplexity_scores,
+    raw_text_dataset,
+)
 from marin.execution import THIS_OUTPUT_PATH
-from marin.evaluation.perplexity_gap import GapFinderModelConfig, default_model_perplexity_gap, raw_text_dataset
 from marin.execution.executor import (
     Executor,
     ExecutorStep,
@@ -180,31 +184,26 @@ def test_step_lock_terminal_status_does_not_race_heartbeat(tmp_path, monkeypatch
     assert not StatusFile(str(tmp_path), "check").has_active_lock()
 
 
-def test_perplexity_gap_step_hash_changes_when_tokenizer_changes():
+def test_model_perplexity_score_step_hash_changes_when_tokenizer_changes():
     base_kwargs = dict(
-        name="marin-vs-qwen",
-        model_a=GapFinderModelConfig(
+        name="marin-score",
+        datasets={"eval": raw_text_dataset("gs://example-bucket/eval.jsonl")},
+        resource_config=ResourceConfig.with_tpu("v5p-8", regions=["us-central1"]),
+    )
+    step_a = model_perplexity_scores(
+        **base_kwargs,
+        model=GapFinderModelConfig(
             checkpoint_path="marin-community/marin-8b-base",
             checkpoint_is_hf=True,
             tokenizer="meta-llama/Llama-3.1-8B",
         ),
-        datasets={"eval": raw_text_dataset("gs://example-bucket/eval.jsonl")},
-        resource_config=ResourceConfig.with_tpu("v5p-8", regions=["us-central1"]),
     )
-    step_a = default_model_perplexity_gap(
+    step_b = model_perplexity_scores(
         **base_kwargs,
-        model_b=GapFinderModelConfig(
-            checkpoint_path="Qwen/Qwen3-8B-Base",
+        model=GapFinderModelConfig(
+            checkpoint_path="marin-community/marin-8b-base",
             checkpoint_is_hf=True,
-            tokenizer="Qwen/Qwen3-8B",
-        ),
-    )
-    step_b = default_model_perplexity_gap(
-        **base_kwargs,
-        model_b=GapFinderModelConfig(
-            checkpoint_path="Qwen/Qwen3-8B-Base",
-            checkpoint_is_hf=True,
-            tokenizer="meta-llama/Llama-3.1-8B",
+            tokenizer="marin-community/marin-tokenizer",
         ),
     )
 

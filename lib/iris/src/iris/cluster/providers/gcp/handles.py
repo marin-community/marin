@@ -16,8 +16,17 @@ import re
 import threading
 from dataclasses import dataclass
 
+from rigging.timing import Duration, Timestamp
+
+from iris.cluster.providers._worker_base import RemoteExecWorkerBase
 from iris.cluster.providers.gcp.service import GcpService
 from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account, ssh_key_file, uses_os_login
+from iris.cluster.providers.remote_exec import (
+    DirectSshRemoteExec,
+    GceRemoteExec,
+    GcloudRemoteExec,
+    resolve_current_os_login_user,
+)
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -27,16 +36,8 @@ from iris.cluster.providers.types import (
     WorkerStatus,
 )
 from iris.cluster.types import get_tpu_topology
-from iris.cluster.providers._worker_base import RemoteExecWorkerBase
-from iris.cluster.providers.remote_exec import (
-    DirectSshRemoteExec,
-    GceRemoteExec,
-    GcloudRemoteExec,
-    resolve_current_os_login_user,
-)
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

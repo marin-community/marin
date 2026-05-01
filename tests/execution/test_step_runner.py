@@ -9,13 +9,12 @@ from unittest.mock import patch
 
 import pytest
 from fray.types import ResourceConfig
-from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
-
 from marin.execution.artifact import Artifact, PathMetadata
-from marin.execution.executor import _dag_tpu_regions, Executor, ExecutorStep, resolve_executor_step
+from marin.execution.executor import Executor, ExecutorStep, _dag_tpu_regions, resolve_executor_step
 from marin.execution.remote import RemoteCallable, remote
-from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner
+from marin.execution.step_spec import StepSpec
+from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
 
 # ---------------------------------------------------------------------------
 # Artifact types

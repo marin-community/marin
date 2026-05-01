@@ -1,4 +1,4 @@
-# Only lib/iris/ and lib/rigging/ are needed in the build context.
+# Only lib/iris/, lib/rigging/, and lib/finelog/ are needed in the build context.
 # Exclude everything else, then selectively re-include.
 *
 
@@ -9,6 +9,10 @@
 !lib/iris/dashboard/dist/
 
 !lib/rigging/
+
+!lib/finelog/pyproject.toml
+!lib/finelog/src/
+!lib/finelog/config/
 
 # Exclude build artifacts within included paths
 **/__pycache__

@@ -14,7 +14,7 @@ from fray import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
+from marin.inference.vllm_server import VllmEnvironment, resolve_vllm_mode
 from marin.utils import remove_tpu_lockfile_on_exit
 
 
@@ -101,7 +101,7 @@ def run_one_query(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Smoke-test vLLM TPU Docker sidecar via OpenAI-compatible HTTP API.")
+    parser = argparse.ArgumentParser(description="Smoke-test a vLLM TPU server via OpenAI-compatible HTTP API.")
     parser.add_argument(
         "--model",
         required=True,
@@ -138,7 +138,10 @@ def main(argv: list[str] | None = None) -> int:
         "--mode",
         choices=["docker", "native"],
         default=None,
-        help="Override MARIN_VLLM_MODE (default: use env; docker if unset).",
+        help=(
+            "Override MARIN_VLLM_MODE (default: use env; native if unset). "
+            "Docker sidecar mode is unsupported on Iris."
+        ),
     )
     parser.add_argument(
         "--docker-image",
@@ -193,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
             print(output)
         return 0
 
-    mode_str = resolve_vllm_mode(args.mode)
+    resolve_vllm_mode(args.mode)
 
     env_vars: dict[str, str] = {}
     if args.mode is not None:
@@ -233,8 +236,8 @@ def main(argv: list[str] | None = None) -> int:
         entrypoint=Entrypoint.from_callable(_run),
         resources=resources,
         environment=create_environment(
-            extras=["eval", "tpu"],
-            pip_packages=VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else (),
+            extras=["eval", "tpu", "vllm"],
+            pip_packages=(),
             env_vars=env_vars or None,
         ),
     )

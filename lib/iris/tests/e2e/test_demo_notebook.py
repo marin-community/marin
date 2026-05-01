@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 from iris.client import IrisClient
-from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.config import IrisConfig
 from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import config_pb2
 
 pytestmark = pytest.mark.e2e
