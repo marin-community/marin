@@ -23,10 +23,10 @@ Evaluations:
 - TraitGym Mendelian v2 (255 bp) via the lm_eval harness during training.
 - LL gap = LL(functional) - LL(nonfunctional) on the v30 enhancer validation
   set, computed post-hoc from W&B as
-  ``eval/val_v30_nonfunctional/loss - eval/val_v30_functional/loss``. Note:
-  using the v30 validation set across all four arms gives v30 a
-  training-distribution match advantage on the LL gap; rely on TraitGym for
-  cross-domain confirmation (see #136 caveat).
+  ``eval/val_v30_nonfunctional/loss - eval/val_v30_functional/loss``. The val
+  set is derived from v30's filter, so v30 has a slight distribution-match
+  advantage; minor here since all four arms are projection-based enhancer
+  datasets, and TraitGym remains the cross-domain anchor.
 
 Environment variables:
     SWEEP_DATASETS   CSV of dataset names to run (default: all in
