@@ -152,6 +152,80 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
     return None
 
 
+def _stage_checkpoint_for_5319_workaround(checkpoint_base: str, output_path: str) -> str | None:
+    """Workaround for issue #5319: stage the latest checkpoint at ``checkpoint_base``
+    to a separate GCS prefix so the trainer's load_path != save_path.
+
+    When load_path == save base_path, multi-host TPU runs hit a ``scheckne`` halt
+    at the first broadcast collective after resume. We don't yet understand why
+    at the OCDBT/tensorstore level, but empirically copying the latest step dir
+    to a sibling prefix and pointing the loader at that copy avoids the halt.
+
+    Returns the staging prefix to pass as ``TrainerConfig.load_checkpoint_path``,
+    or None if there's no checkpoint to stage (fresh run).
+    """
+    import json
+    import logging
+
+    import gcsfs
+    import jax
+
+    from levanter.utils.jax_utils import multihost_broadcast_sync
+
+    logger = logging.getLogger(__name__)
+
+    if not checkpoint_base.startswith("gs://"):
+        return None  # local-fs case can't hit the multi-host bug
+
+    fs = gcsfs.GCSFileSystem()
+    base = checkpoint_base[len("gs://") :]
+
+    # Find latest step-N subdir of checkpoint_base on worker 0.
+    # Other workers receive the staging path via multihost_broadcast_sync.
+    is_source = jax.process_index() == 0
+    staging_root = os.path.join(output_path, "_load_staging_5319")
+
+    if is_source:
+        try:
+            subdirs = fs.ls(base, detail=False)
+        except FileNotFoundError:
+            subdirs = []
+
+        best_step = -1
+        best_subdir = None
+        for subdir in subdirs:
+            if "/step-" not in subdir:
+                continue
+            metadata_path = f"{subdir}/metadata.json"
+            try:
+                with fs.open(metadata_path) as f:
+                    metadata = json.load(f)
+                step = int(metadata.get("step", -1))
+                if step > best_step:
+                    best_step = step
+                    best_subdir = subdir
+            except Exception:
+                continue
+
+        if best_subdir is None:
+            payload = {"staged": False}
+        else:
+            src = best_subdir  # already without gs:// prefix from fs.ls
+            dst = os.path.join(staging_root, f"step-{best_step}")[len("gs://") :]
+            logger.info("issue #5319 workaround: server-side copy %s -> gs://%s", src, dst)
+            # gcsfs.cp does server-side copies for same-bucket GCS->GCS.
+            fs.cp(src, dst, recursive=True)
+            logger.info("issue #5319 workaround: staging copy complete")
+            payload = {"staged": True}
+    else:
+        payload = None
+
+    payload = multihost_broadcast_sync(payload, is_source=is_source)
+    if not payload.get("staged", False):
+        return None
+    return staging_root
+
+
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     checkpoint_base = os.path.join(config.output_path, "checkpoints")
 
@@ -162,6 +236,13 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     else:
         # Search all regions for an existing checkpoint (handles cross-region resume).
         load_path = _find_checkpoint_across_regions(config.output_path) if config.enable_cross_region_ckpt_read else None
+
+    # Issue #5319 workaround: if load_path is None, the trainer would default to
+    # loading from checkpoint_base. That same-path resume reliably hits a
+    # multi-host TPU `scheckne` halt at the first broadcast after resume. Stage
+    # the latest checkpoint to a sibling prefix so load_path != save_path.
+    if load_path is None:
+        load_path = _stage_checkpoint_for_5319_workaround(checkpoint_base, config.output_path)
 
     trainer = TrainerConfig(
         id=config.run_id,
