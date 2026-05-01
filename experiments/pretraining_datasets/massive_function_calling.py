@@ -8,10 +8,11 @@ adapt it to an ExecutorStep, then wire a tokenize ExecutorStep that reads its
 ``outputs/main/*.parquet`` shards through the standard Marin tokenizer.
 """
 
-from experiments.marin_models import marin_tokenizer
 from marin.datakit.download.massive import massive_normalize_steps
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
+
+from experiments.marin_models import marin_tokenizer
 
 # massive_normalize_steps returns (stage, transform, normalize); the terminal
 # normalize step is what consumers tokenize off.

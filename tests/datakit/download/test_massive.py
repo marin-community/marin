@@ -9,6 +9,7 @@ import io
 import json
 import tarfile
 
+import pyarrow.parquet as pq
 from marin.datakit.download import massive
 from marin.datakit.download.massive import (
     parse_annot_utt,
@@ -82,8 +83,6 @@ def test_transform_staged_massive_end_to_end(tmp_path):
 
     transformed = tmp_path / "transformed"
     transform_staged_massive(str(staged), str(transformed))
-
-    import pyarrow.parquet as pq
 
     docs = [r for path in transformed.rglob("*.parquet") for r in pq.read_table(path).to_pylist()]
     assert {d["id"] for d in docs} == {
