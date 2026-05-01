@@ -297,7 +297,12 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     # loading from checkpoint_base. That same-path resume reliably hits a
     # multi-host TPU `scheckne` halt at the first broadcast after resume. Stage
     # the latest checkpoint to a sibling prefix so load_path != save_path.
-    if load_path is None:
+    #
+    # DISABLED for the kill-it-dead hypothesis test: keep the original same-path
+    # resume (load_path == base_path) but rely on the post-load state reset in
+    # train.py to equalize per-worker state. Re-enable by removing the False
+    # below if the reset alone doesn't fix the halt.
+    if False and load_path is None:
         load_path = _stage_checkpoint_for_5319_workaround(checkpoint_base, config.output_path)
 
     trainer = TrainerConfig(

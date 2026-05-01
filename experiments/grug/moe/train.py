@@ -355,6 +355,63 @@ def _make_train_step(
     return train_step
 
 
+def _reset_state_after_checkpoint_load_for_5319() -> None:
+    """Issue #5319 hypothesis test: equalize per-worker host-side state after the
+    asymmetric I/O of Checkpointer init + checkpoint load.
+
+    Drops gcsfs filesystem instance caches and connection sessions on every
+    worker, forces a couple of GC passes, then issues a multi-host barrier so
+    no worker starts the next TPU op until all have finished cleanup.
+    """
+    import asyncio
+    import gc
+    import logging
+    import sys
+
+    from levanter.utils.jax_utils import multihost_broadcast_sync
+
+    log = logging.getLogger(__name__)
+
+    try:
+        import gcsfs
+
+        # gcsfs caches GCSFileSystem instances by hashed init args; each instance
+        # holds an aiohttp session + a directory cache. Drop everything.
+        cached_instances = list(getattr(gcsfs.GCSFileSystem, "_cache", {}).values())
+        for fs_inst in cached_instances:
+            try:
+                fs_inst.invalidate_cache()
+            except Exception:
+                pass
+            try:
+                # _close_session is an async method; run it in a fresh loop.
+                close_coro = getattr(fs_inst, "_close_session", None)
+                if close_coro is not None:
+                    asyncio.run(close_coro())
+            except Exception:
+                pass
+        try:
+            gcsfs.GCSFileSystem.clear_instance_cache()
+        except Exception:
+            try:
+                gcsfs.GCSFileSystem._cache.clear()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+    except Exception as exc:
+        log.warning("issue #5319 reset: gcsfs cleanup failed: %s", exc)
+
+    # Force GC twice (second pass picks up cycles created by gcsfs teardown).
+    gc.collect()
+    gc.collect()
+
+    sys.stderr.write(f"[5319-reset] worker={jax.process_index()} state reset complete\n")
+    sys.stderr.flush()
+
+    # Barrier across all workers so no one starts the next TPU op until all
+    # have finished cleanup.
+    multihost_broadcast_sync({"reset_done": True}, is_source=jax.process_index() == 0)
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
@@ -420,6 +477,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+
+        # Diagnostic for issue #5319: reset per-process state that may have
+        # diverged across workers due to asymmetric host-side I/O during
+        # Checkpointer.__init__ + checkpoint load (worker 0 starts an async
+        # deletion thread, gcsfs/tensorstore connection pools are populated,
+        # asyncio loops are spun up and torn down). The hope is that flushing
+        # gcsfs sessions/caches and forcing GC, then barrier-syncing all
+        # workers, equalizes per-worker host-side state before the first TPU
+        # collective and avoids the launch-id mismatch halt.
+        _reset_state_after_checkpoint_load_for_5319()
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
