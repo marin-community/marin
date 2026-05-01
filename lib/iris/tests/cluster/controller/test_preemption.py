@@ -1233,7 +1233,6 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
                 cur,
                 HeartbeatApplyRequest(
                     worker_id=worker_id,
-                    worker_resource_snapshot=None,
                     updates=[
                         TaskUpdate(
                             task_id=task.task_id,

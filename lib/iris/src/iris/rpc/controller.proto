@@ -391,6 +391,8 @@ message Controller {
 
     reserved 5;  // was: repeated ProcessLogRecord worker_logs
     reserved 6;  // was: repeated TaskStatus recent_tasks (replaced by recent_attempts)
+    reserved 7;  // was: WorkerResourceSnapshot current_resources (now in iris.worker stats)
+    reserved 8;  // was: repeated WorkerResourceSnapshot resource_history (now in iris.worker stats)
     reserved 9;  // was: repeated LogEntry worker_log_entries (now fetched async via FetchLogs)
 
     // Per-attempt history for this worker, newest first. Each retry of the
@@ -398,12 +400,6 @@ message Controller {
     // distinct attempts so a failed attempt doesn't render with its
     // successor's state/duration.
     repeated WorkerTaskAttempt recent_attempts = 10;
-
-    // Current host-level resource snapshot (from latest Ping)
-    iris.job.WorkerResourceSnapshot current_resources = 7;
-
-    // Recent resource history (ring buffer of Ping snapshots)
-    repeated iris.job.WorkerResourceSnapshot resource_history = 8;
   }
 
   // One attempt that ran (or is running) on a worker. Per-attempt projection

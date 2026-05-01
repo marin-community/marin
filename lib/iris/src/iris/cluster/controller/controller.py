@@ -1505,7 +1505,6 @@ class Controller:
     def _run_prune_loop(self, stop_event: threading.Event) -> None:
         """Background pruning loop: history cleanup every 60s, full data prune on the configured interval."""
         last_full_prune = 0.0
-        resource_history_limiter = RateLimiter(interval_seconds=600.0)
         wal_checkpoint_limiter = RateLimiter(interval_seconds=600.0)
         full_prune_interval = self._config.prune_interval.to_seconds()
 
@@ -1518,16 +1517,6 @@ class Controller:
                 self._store.workers.prune_task_history()
             except Exception:
                 logger.exception("Worker task history cleanup failed")
-
-            if resource_history_limiter.should_run():
-                try:
-                    self._store.workers.prune_resource_history()
-                except Exception:
-                    logger.exception("Worker resource history cleanup failed")
-                try:
-                    self._store.tasks.prune_resource_history()
-                except Exception:
-                    logger.exception("Task resource history cleanup failed")
 
             if wal_checkpoint_limiter.should_run():
                 try:
@@ -2306,7 +2295,6 @@ class Controller:
                 self._task_update_queue.put(
                     HeartbeatApplyRequest(
                         worker_id=worker_id,
-                        worker_resource_snapshot=None,
                         updates=[
                             TaskUpdate(
                                 task_id=JobName.from_wire(t.task_id),
@@ -2332,7 +2320,6 @@ class Controller:
                     self._task_update_queue.put(
                         HeartbeatApplyRequest(
                             worker_id=worker_id,
-                            worker_resource_snapshot=None,
                             updates=[
                                 TaskUpdate(
                                     task_id=JobName.from_wire(ack.task_id),
@@ -2382,9 +2369,6 @@ class Controller:
         """
         ping_interval_s = self._config.heartbeat_interval.to_seconds()
         limiter = RateLimiter(interval_seconds=ping_interval_s)
-        # Refresh resource snapshots every ~60s; other cycles just note liveness.
-        resource_update_every = max(1, round(60.0 / ping_interval_s))
-        cycle = 0
 
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
@@ -2392,19 +2376,17 @@ class Controller:
             try:
                 workers = self._get_active_worker_addresses()
                 results = self._provider.ping_workers(workers)
-                update_resources = cycle % resource_update_every == 0
-                cycle += 1
 
-                ping_snapshots: dict[WorkerId, job_pb2.WorkerResourceSnapshot | None] = {}
+                live_worker_ids: list[WorkerId] = []
                 for result in results:
                     if result.error is not None:
                         self._health.ping(result.worker_id, healthy=False)
                     else:
                         self._health.ping(result.worker_id, healthy=True)
-                        ping_snapshots[result.worker_id] = result.resource_snapshot if update_resources else None
+                        live_worker_ids.append(result.worker_id)
 
                 with self._store.transaction() as cur:
-                    self._transitions.update_worker_pings(cur, ping_snapshots)
+                    self._transitions.update_worker_pings(cur, live_worker_ids)
 
                 unhealthy = self._health.workers_over_threshold()
                 if unhealthy:
@@ -2440,7 +2422,6 @@ class Controller:
                 self._task_update_queue.put(
                     HeartbeatApplyRequest(
                         worker_id=worker_id,
-                        worker_resource_snapshot=None,
                         updates=updates,
                     )
                 )

@@ -108,6 +108,17 @@ export function useStatsRpc<T>(
   return useRpc<T>('iris.stats.StatsService', method, body)
 }
 
+/**
+ * RPC composable for the finelog StatsService routed via the controller's
+ * endpoint proxy at /proxy/system.log-server/finelog.stats.StatsService/<Method>.
+ */
+export function useLogServerStatsRpc<T>(
+  method: string,
+  body?: RpcBody,
+): RpcState<T> {
+  return useRpc<T>('proxy/system.log-server/finelog.stats.StatsService', method, body)
+}
+
 /** One-shot RPC call for LogService. */
 export async function logServiceRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
   const resp = await fetch(`/finelog.logging.LogService/${method}`, {

@@ -14,9 +14,10 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
-from finelog.client import LogClient
+from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
 from finelog.types import str_to_log_level
 from rigging.log_setup import parse_log_level
@@ -45,6 +46,7 @@ from iris.cluster.types import (
     TaskAttempt as TaskAttemptIdentity,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import job_pb2, worker_pb2
@@ -249,6 +251,13 @@ class TaskAttempt:
         self._poll_interval_seconds = poll_interval_seconds
         self._log_client = log_client
         self._log_key = task_log_key(config.task_attempt)
+        # Stats Table for the iris.task namespace. Tables are cached by the
+        # LogClient by namespace, so this fetch is cheap. Schema bugs surface
+        # here at construction (the same LogClient also registered the table
+        # eagerly in Worker.start()).
+        self._task_stats_table: Table | None = (
+            log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat) if log_client is not None else None
+        )
 
         # Task identity (from config)
         self.task_attempt: TaskAttemptIdentity = config.task_attempt
@@ -891,6 +900,9 @@ class TaskAttempt:
                 if now - last_disk_check >= _DISK_CHECK_INTERVAL_SECONDS:
                     self.disk_mb = handle.disk_usage_mb()
                     last_disk_check = now
+
+                if stats.available:
+                    self._emit_task_stat()
             except Exception:
                 logger.debug("Stats collection failed for task %s", self.task_id, exc_info=True)
 
@@ -904,6 +916,32 @@ class TaskAttempt:
         entry = logging_pb2.LogEntry(source=source, data=data, level=level)
         entry.timestamp.epoch_ms = Timestamp.now().epoch_ms()
         return entry
+
+    def _emit_task_stat(self) -> None:
+        """Append one resource-usage row to the ``iris.task`` stats namespace.
+
+        Non-blocking: queues for the LogClient bg flush. Schema-validation
+        ``TypeError`` from the row encoder deliberately propagates.
+        """
+        table = self._task_stats_table
+        if table is None or not self._worker_id:
+            return
+        usage = job_pb2.ResourceUsage(
+            memory_mb=self.current_memory_mb,
+            memory_peak_mb=self.peak_memory_mb,
+            disk_mb=self.disk_mb,
+            cpu_millicores=self.current_cpu_millicores,
+            process_count=self.process_count,
+        )
+        ts = datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
+        stat = build_task_stat(
+            task_id=self.task_id.to_wire(),
+            attempt_id=self.attempt_id,
+            worker_id=self._worker_id,
+            ts=ts,
+            usage=usage,
+        )
+        table.write([stat])
 
     def _push_logs(self, entries: list[logging_pb2.LogEntry]) -> None:
         """Push a batch of log entries to the central LogService."""

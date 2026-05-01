@@ -12,7 +12,6 @@ and ``*_for_test`` helpers are intentionally excluded — scenarios call
 those methods directly when needed.
 """
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -98,7 +97,7 @@ class RemoveWorker:
 
 @dataclass(frozen=True, slots=True)
 class UpdateWorkerPings:
-    snapshots: Mapping[WorkerId, job_pb2.WorkerResourceSnapshot | None]
+    worker_ids: list[WorkerId]
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,8 +194,8 @@ def apply_event(transitions: ControllerTransitions, event: IrisEvent) -> Any:
                 return transitions.remove_finished_job(cur, job_id)
             case RemoveWorker(worker_id):
                 return transitions.remove_worker(cur, worker_id)
-            case UpdateWorkerPings(snapshots):
-                return transitions.update_worker_pings(cur, snapshots)
+            case UpdateWorkerPings(worker_ids):
+                return transitions.update_worker_pings(cur, worker_ids)
             case DrainForDirectProvider(max_promotions):
                 return transitions.drain_for_direct_provider(cur, max_promotions)
             case ApplyDirectProviderUpdates(updates):

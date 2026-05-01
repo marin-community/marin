@@ -791,7 +791,6 @@ def test_endpoint_survives_building_state(state):
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task.task_id,
@@ -821,7 +820,6 @@ def test_endpoint_survives_building_state(state):
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task.task_id,
@@ -1491,7 +1489,6 @@ def test_stale_attempt_ignored(state):
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task.task_id,
@@ -1539,7 +1536,6 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
                 cur,
                 HeartbeatApplyRequest(
                     worker_id=worker_id,
-                    worker_resource_snapshot=None,
                     updates=[TaskUpdate(task_id=task.task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
                 ),
             )

@@ -1,17 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useControllerRpc, logServiceRpcCall } from '@/composables/useRpc'
+import { useControllerRpc, useLogServerStatsRpc, logServiceRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import type {
   GetWorkerStatusResponse,
   WorkerTaskAttempt,
-  WorkerResourceSnapshot,
   LogEntry,
   FetchLogsResponse,
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatRate, logLevelClass, formatLogTime, formatWorkerDevice } from '@/utils/formatting'
+import { decodeArrowIpc } from '@/utils/arrow'
 
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -35,8 +35,6 @@ const {
 
 const worker = computed(() => data.value?.worker)
 const vm = computed(() => data.value?.vm)
-const currentResources = computed(() => data.value?.currentResources)
-const resourceHistory = computed(() => data.value?.resourceHistory ?? [])
 const recentAttempts = computed(() => data.value?.recentAttempts ?? [])
 // Worker daemon logs are fetched independently via LogService.FetchLogs so a
 // slow/unreachable worker can't stall the worker page. Empty until the
@@ -57,46 +55,110 @@ async function fetchWorkerLogs() {
   }
 }
 
-// Sparkline data from resource history
-const cpuHistory = computed(() => resourceHistory.value.map((s) => s.hostCpuPercent ?? 0))
-const memoryHistory = computed(() =>
-  resourceHistory.value.map((s) => parseInt(s.memoryUsedBytes ?? '0', 10))
+// --- Per-worker resource history sourced from finelog stats (iris.worker) ---
+//
+// Rows come back ts DESC; we reverse for the sparkline (oldest -> newest)
+// and treat the first DESC row as the latest "current resources" snapshot.
+// The namespace is registered eagerly by every worker at startup, so any
+// worker we can navigate to has a registered table — a missing namespace
+// here is a real bug, not a cold-start case.
+interface WorkerStatRow {
+  ts?: string
+  cpu_pct?: number
+  mem_bytes?: number
+  mem_total_bytes?: number
+  disk_used_bytes?: number
+  disk_total_bytes?: number
+  net_recv_bytes?: number
+  net_sent_bytes?: number
+  running_task_count?: number
+}
+
+interface QueryResponse {
+  arrowIpc?: string
+}
+
+function buildStatsSql(workerId: string): string {
+  // QueryRequest has no param binding; manual DuckDB single-quote escape.
+  const escaped = workerId.replace(/'/g, "''")
+  return `
+SELECT ts, cpu_pct, mem_bytes, mem_total_bytes,
+       disk_used_bytes, disk_total_bytes,
+       net_recv_bytes, net_sent_bytes, running_task_count
+FROM "iris.worker"
+WHERE worker_id = '${escaped}'
+ORDER BY ts DESC
+LIMIT 50
+`.trim()
+}
+
+const { data: statsData, refresh: fetchWorkerStats } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({ sql: buildStatsSql(props.workerId) }),
 )
-const diskHistory = computed(() =>
-  resourceHistory.value.map((s) => parseInt(s.diskUsedBytes ?? '0', 10))
-)
+
+const statsRows = computed<WorkerStatRow[]>(() => {
+  const ipc = statsData.value?.arrowIpc
+  if (!ipc) return []
+  return decodeArrowIpc(ipc).rows as WorkerStatRow[]
+})
+
+// Reversed copy for the sparkline: queries return ts DESC; charts want oldest -> newest.
+const orderedStats = computed(() => statsRows.value.slice().reverse())
+const latestStat = computed<WorkerStatRow | null>(() => statsRows.value[0] ?? null)
+
+const cpuHistory = computed(() => orderedStats.value.map((s) => Number(s.cpu_pct ?? 0)))
+const memoryHistory = computed(() => orderedStats.value.map((s) => Number(s.mem_bytes ?? 0)))
+const diskHistory = computed(() => orderedStats.value.map((s) => Number(s.disk_used_bytes ?? 0)))
+// Cumulative byte counters; derive per-second deltas from successive samples.
+// First sample contributes no point. Counter resets (worker restart) cap to 0.
+function ratesFrom(field: 'net_recv_bytes' | 'net_sent_bytes'): number[] {
+  const rows = orderedStats.value
+  const out: number[] = []
+  for (let i = 1; i < rows.length; i++) {
+    const cur = Number(rows[i][field] ?? 0)
+    const prev = Number(rows[i - 1][field] ?? 0)
+    const tCur = new Date(rows[i].ts ?? 0).getTime()
+    const tPrev = new Date(rows[i - 1].ts ?? 0).getTime()
+    const dt = (tCur - tPrev) / 1000
+    out.push(dt > 0 && cur >= prev ? (cur - prev) / dt : 0)
+  }
+  return out
+}
+const netRecvHistory = computed(() => ratesFrom('net_recv_bytes'))
+const netSentHistory = computed(() => ratesFrom('net_sent_bytes'))
 
 const runningTaskCount = computed(() => worker.value?.runningJobIds?.length ?? 0)
 
 const cpuDisplay = computed(() => {
-  const cr = currentResources.value
-  if (!cr?.hostCpuPercent) return '-'
-  return `${Math.round(cr.hostCpuPercent)}%`
+  const v = latestStat.value?.cpu_pct
+  if (v === undefined || v === null) return '-'
+  return `${Math.round(Number(v))}%`
 })
 
 const memoryDisplay = computed(() => {
-  const cr = currentResources.value
-  if (!cr?.memoryUsedBytes) return '-'
-  const used = parseInt(cr.memoryUsedBytes, 10)
-  const total = parseInt(cr.memoryTotalBytes ?? '0', 10)
+  const cr = latestStat.value
+  if (!cr?.mem_bytes) return '-'
+  const used = Number(cr.mem_bytes)
+  const total = Number(cr.mem_total_bytes ?? 0)
   if (total) return `${formatBytes(used)} / ${formatBytes(total)}`
   return formatBytes(used)
 })
 
 const diskDisplay = computed(() => {
-  const cr = currentResources.value
-  if (!cr?.diskUsedBytes) return '-'
-  const used = parseInt(cr.diskUsedBytes, 10)
-  const total = parseInt(cr.diskTotalBytes ?? '0', 10)
+  const cr = latestStat.value
+  if (!cr?.disk_used_bytes) return '-'
+  const used = Number(cr.disk_used_bytes)
+  const total = Number(cr.disk_total_bytes ?? 0)
   if (total) return `${formatBytes(used)} / ${formatBytes(total)}`
   return formatBytes(used)
 })
 
 const diskFreePercent = computed(() => {
-  const cr = currentResources.value
-  if (!cr?.diskUsedBytes || !cr?.diskTotalBytes) return null
-  const used = parseInt(cr.diskUsedBytes, 10)
-  const total = parseInt(cr.diskTotalBytes, 10)
+  const cr = latestStat.value
+  if (!cr?.disk_used_bytes || !cr?.disk_total_bytes) return null
+  const used = Number(cr.disk_used_bytes)
+  const total = Number(cr.disk_total_bytes)
   if (!total) return null
   return Math.round((1 - used / total) * 100)
 })
@@ -110,9 +172,11 @@ const taskColumns: Column[] = [
 
 useAutoRefresh(fetchWorker, DEFAULT_REFRESH_MS)
 useAutoRefresh(fetchWorkerLogs, DEFAULT_REFRESH_MS)
+useAutoRefresh(fetchWorkerStats, DEFAULT_REFRESH_MS)
 onMounted(() => {
   fetchWorker()
   fetchWorkerLogs()
+  fetchWorkerStats()
 })
 
 // Re-fetch when navigating between workers (Vue Router reuses the component).
@@ -120,8 +184,10 @@ onMounted(() => {
 watch(() => props.workerId, () => {
   data.value = null
   workerLogEntries.value = []
+  statsData.value = null
   fetchWorker()
   fetchWorkerLogs()
+  fetchWorkerStats()
 })
 
 function attributeDisplay(val: { stringValue?: string; intValue?: string; floatValue?: string }): string {
@@ -277,8 +343,8 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
         </InfoCard>
       </div>
 
-      <!-- Live utilization sparklines -->
-      <div v-if="resourceHistory.length > 1" class="mb-6">
+      <!-- Live utilization sparklines (sourced from finelog iris.worker stats) -->
+      <div v-if="orderedStats.length > 1" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Live Utilization</h3>
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div class="rounded-lg border border-surface-border bg-surface p-3">
@@ -307,31 +373,31 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             </div>
           </div>
           <div
-            v-if="resourceHistory.some((s) => s.netRecvBps)"
+            v-if="netRecvHistory.some((v) => v > 0)"
             class="rounded-lg border border-surface-border bg-surface p-3"
           >
             <div class="text-xs text-text-secondary mb-2">Network Recv</div>
             <Sparkline
-              :data="resourceHistory.map((s) => parseInt(s.netRecvBps ?? '0', 10))"
+              :data="netRecvHistory"
               :height="40"
               color="var(--color-status-success, #22c55e)"
             />
             <div class="text-xs font-mono text-text-muted mt-1">
-              {{ formatRate(parseInt(currentResources?.netRecvBps ?? '0', 10)) }}
+              {{ formatRate(netRecvHistory[netRecvHistory.length - 1] ?? 0) }}
             </div>
           </div>
           <div
-            v-if="resourceHistory.some((s) => s.netSentBps)"
+            v-if="netSentHistory.some((v) => v > 0)"
             class="rounded-lg border border-surface-border bg-surface p-3"
           >
             <div class="text-xs text-text-secondary mb-2">Network Sent</div>
             <Sparkline
-              :data="resourceHistory.map((s) => parseInt(s.netSentBps ?? '0', 10))"
+              :data="netSentHistory"
               :height="40"
               color="var(--color-status-orange, #f97316)"
             />
             <div class="text-xs font-mono text-text-muted mt-1">
-              {{ formatRate(parseInt(currentResources?.netSentBps ?? '0', 10)) }}
+              {{ formatRate(netSentHistory[netSentHistory.length - 1] ?? 0) }}
             </div>
           </div>
         </div>

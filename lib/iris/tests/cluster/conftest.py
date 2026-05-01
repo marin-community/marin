@@ -365,7 +365,6 @@ class ServiceTestHarness:
                     cur,
                     HeartbeatApplyRequest(
                         worker_id=worker_id,
-                        worker_resource_snapshot=None,
                         updates=[
                             TaskUpdate(
                                 task_id=task_id,
@@ -381,7 +380,6 @@ class ServiceTestHarness:
                 cur,
                 HeartbeatApplyRequest(
                     worker_id=worker_id,
-                    worker_resource_snapshot=None,
                     updates=[
                         TaskUpdate(
                             task_id=task_id,

@@ -63,14 +63,12 @@ class Worker(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
     class PingResponse(_message.Message):
-        __slots__ = ("resource_snapshot", "healthy", "health_error")
-        RESOURCE_SNAPSHOT_FIELD_NUMBER: _ClassVar[int]
+        __slots__ = ("healthy", "health_error")
         HEALTHY_FIELD_NUMBER: _ClassVar[int]
         HEALTH_ERROR_FIELD_NUMBER: _ClassVar[int]
-        resource_snapshot: _job_pb2.WorkerResourceSnapshot
         healthy: bool
         health_error: str
-        def __init__(self, resource_snapshot: _Optional[_Union[_job_pb2.WorkerResourceSnapshot, _Mapping]] = ..., healthy: _Optional[bool] = ..., health_error: _Optional[str] = ...) -> None: ...
+        def __init__(self, healthy: _Optional[bool] = ..., health_error: _Optional[str] = ...) -> None: ...
     class StartTasksRequest(_message.Message):
         __slots__ = ("tasks",)
         TASKS_FIELD_NUMBER: _ClassVar[int]
