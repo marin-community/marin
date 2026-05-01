@@ -26,54 +26,61 @@ GATE1_CONFIGS: list[tuple[int, float]] = [
 ]
 
 
+WINDOW_SIZES: list[int] = [
+    # 512,  # already submitted
+    1024,
+]
+
+
 def _make_steps() -> list[ExecutorStep]:
     steps: list[ExecutorStep] = []
-    for dim, budget in GATE1_CONFIGS:
-        model, optimizer, batch, num_steps = build_from_heuristic(budget=budget, hidden_dim=dim)
-        model = dataclasses.replace(model, short_sliding_window=512)
-        run_id = f"short-window-512-d{dim}-{budget:.2e}"
+    for window in WINDOW_SIZES:
+        for dim, budget in GATE1_CONFIGS:
+            model, optimizer, batch, num_steps = build_from_heuristic(budget=budget, hidden_dim=dim)
+            model = dataclasses.replace(model, short_sliding_window=window)
+            run_id = f"short-window-{window}-d{dim}-{budget:.2e}"
 
-        steps.append(
-            ExecutorStep(
-                name=f"grug/{run_id}",
-                fn=run_grug_moe_trial,
-                config=GrugMoeLaunchConfig(
-                    model=versioned(model),
-                    data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-                    output_path=this_output_path(),
-                    run_id=run_id,
-                    resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-                    enable_cross_region_ckpt_read=True,
-                    steps=versioned(num_steps),
-                    batch_size=versioned(batch),
-                    seed=versioned(0),
-                    mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-                    tracker=WandbConfig(
-                        project="dial_moe",
-                        tags=["short-window", "512", f"d={dim}", f"budget={budget:.2e}"],
-                        group="short-window",
-                        name=run_id,
+            steps.append(
+                ExecutorStep(
+                    name=f"grug/{run_id}",
+                    fn=run_grug_moe_trial,
+                    config=GrugMoeLaunchConfig(
+                        model=versioned(model),
+                        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+                        output_path=this_output_path(),
+                        run_id=run_id,
+                        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+                        enable_cross_region_ckpt_read=True,
+                        steps=versioned(num_steps),
+                        batch_size=versioned(batch),
+                        seed=versioned(0),
+                        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+                        tracker=WandbConfig(
+                            project="dial_moe",
+                            tags=["short-window", str(window), f"d={dim}", f"budget={budget:.2e}"],
+                            group="short-window",
+                            name=run_id,
+                        ),
+                        optimizer=versioned(optimizer),
+                        grug_trainer=versioned(
+                            GrugTrainerConfig(
+                                z_loss_weight=1e-4,
+                                ema_beta=None,
+                                log_every=1,
+                            )
+                        ),
+                        eval=versioned(
+                            GrugEvalConfig(
+                                eval_batch_size=512,
+                                steps_per_eval=1000,
+                                max_eval_batches=8,
+                                eval_current=True,
+                                eval_ema=False,
+                            )
+                        ),
                     ),
-                    optimizer=versioned(optimizer),
-                    grug_trainer=versioned(
-                        GrugTrainerConfig(
-                            z_loss_weight=1e-4,
-                            ema_beta=None,
-                            log_every=1,
-                        )
-                    ),
-                    eval=versioned(
-                        GrugEvalConfig(
-                            eval_batch_size=512,
-                            steps_per_eval=1000,
-                            max_eval_batches=8,
-                            eval_current=True,
-                            eval_ema=False,
-                        )
-                    ),
-                ),
+                )
             )
-        )
     return steps
 
 
