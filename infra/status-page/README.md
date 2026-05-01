@@ -131,7 +131,7 @@ Ferry workflows live in `server/sources/githubActions.ts`:
 ```ts
 export const FERRY_WORKFLOWS = [
   { name: "Canary ferry", file: "marin-canary-ferry.yaml" },
-  { name: "Datakit smoke", file: "marin-datakit-smoke.yaml" },
+  { name: "Datakit smoke", file: "marin-smoke-datakit.yaml" },
 ] as const;
 ```
 

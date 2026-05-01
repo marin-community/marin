@@ -1,0 +1,395 @@
+name: "Iris - Smoke - GCP"
+
+on:
+  pull_request:
+    paths:
+      - "lib/iris/**"
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  statuses: write  # post commit status from issue_comment trigger
+
+concurrency:
+  group: iris-cloud-smoke-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  # Never kill a running cloud test — would leak GCP resources.
+  cancel-in-progress: false
+
+jobs:
+  cloud-smoke-test:
+    # Run on: PRs touching lib/iris/**, /iris-smoke comment, or manual dispatch
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '/iris-smoke') &&
+        (
+          github.event.comment.author_association == 'MEMBER' ||
+          github.event.comment.author_association == 'COLLABORATOR' ||
+          github.event.comment.author_association == 'OWNER'
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+    outputs:
+      label-prefix: ${{ steps.label.outputs.prefix }}
+    steps:
+      - name: Compute label prefix
+        id: label
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "prefix=smoke-pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "issue_comment" ]; then
+            echo "prefix=smoke-pr-${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+          else
+            # workflow_dispatch: use short SHA
+            echo "prefix=smoke-$(echo ${{ github.sha }} | head -c 8)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set commit status to pending
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
+            -f state=pending \
+            -f context="Iris Cloud Smoke Test" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
+
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          # pull_request uses default merge ref; issue_comment needs explicit PR head
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "lib/iris/pyproject.toml"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('lib/iris/pyproject.toml') }}
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: cd lib/iris && uv run playwright install --with-deps chromium
+
+      - name: Install Playwright system deps
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx --yes playwright@1.57.0 install-deps chromium
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Set up OS Login SSH key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q -C "gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          chmod 600 ~/.ssh/google_compute_engine
+          gcloud compute os-login ssh-keys add \
+            --key-file ~/.ssh/google_compute_engine.pub \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --ttl=2h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Start smoke cluster
+        env:
+          LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
+          MARIN_PREFIX: gs://marin-eu-west4
+        run: |
+          cd lib/iris && uv run --group dev iris -v \
+            --config=examples/smoke-gcp.yaml \
+            cluster start-smoke \
+            --label-prefix "$LABEL_PREFIX" \
+            --url-file /tmp/iris-controller-url \
+            --wait-for-workers 1 \
+            --worker-timeout 600 &
+          START_PID=$!
+          echo "START_PID=$START_PID" >> "$GITHUB_ENV"
+          for i in $(seq 1 900); do
+            if [ -f /tmp/iris-controller-url ]; then
+              echo "Cluster ready!"
+              echo "IRIS_CONTROLLER_URL=$(cat /tmp/iris-controller-url)" >> "$GITHUB_ENV"
+              break
+            fi
+            sleep 2
+          done
+          if [ ! -f /tmp/iris-controller-url ]; then
+            echo "Timed out waiting for cluster"
+            kill $START_PID 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Run cloud smoke tests
+        env:
+          IRIS_SCREENSHOT_DIR: ${{ github.workspace }}/iris-cloud-screenshots
+          PYTHONASYNCIODEBUG: "1"
+        run: |
+          mkdir -p ${{ github.workspace }}/iris-cloud-screenshots
+          cd lib/iris && uv run --group dev python -m pytest \
+            tests/e2e/test_smoke.py \
+            -m e2e \
+            --iris-controller-url "$IRIS_CONTROLLER_URL" \
+            -o "addopts=" \
+            --tb=short -v \
+            --timeout=1200
+
+      - name: Collect controller and worker logs
+        if: failure()
+        env:
+          LOG_DIR: ${{ github.workspace }}/iris-cloud-logs
+          LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          mkdir -p "$LOG_DIR"
+          MANAGED_LABEL="iris-${LABEL_PREFIX}-managed"
+          CONTROLLER_LABEL="iris-${LABEL_PREFIX}-controller"
+
+          # Always try to grab docker/host logs directly from every VM we
+          # spun up. This works even when the controller never became
+          # reachable (e.g. tunnel never opened, controller crashed during
+          # boot), which is exactly the case where these logs matter most.
+          gcloud compute instances list \
+            --project="$PROJECT" \
+            --filter="labels.${MANAGED_LABEL}=true OR labels.${CONTROLLER_LABEL}=true" \
+            --format="csv[no-heading](name,zone,labels.list())" 2>/dev/null \
+          | while IFS=, read -r name zone labels; do
+              [ -z "$name" ] && continue
+              role=worker
+              case "$labels" in *"$CONTROLLER_LABEL"*) role=controller ;; esac
+              echo "Fetching host logs from $role $name ($zone)"
+              out="$LOG_DIR/${role}-${name}"
+              gcloud compute ssh "$name" \
+                --project="$PROJECT" --zone="$zone" \
+                --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+                --ssh-key-file ~/.ssh/google_compute_engine \
+                --quiet \
+                --command '
+                set +e
+                echo "=== docker ps -a ==="
+                sudo docker ps -a
+                for cid in $(sudo docker ps -aq); do
+                  echo "=== docker logs $cid ==="
+                  sudo docker logs --timestamps --tail 5000 "$cid" 2>&1
+                done
+                echo "=== startup script ==="
+                sudo journalctl -u google-startup-scripts.service --no-pager 2>&1 | tail -n 2000
+                echo "=== kernel/cloud-init ==="
+                sudo journalctl -u cloud-final.service --no-pager 2>&1 | tail -n 500
+              ' > "${out}.log" 2>&1 || echo "ssh to $name failed (see ${out}.log)"
+            done
+
+          if [ -z "$IRIS_CONTROLLER_URL" ]; then
+            echo "No controller URL, skipping RPC-based log collection"
+            exit 0
+          fi
+          cd lib/iris
+
+          # Cluster status (controller process info + worker summary)
+          uv run --group dev iris \
+            --config=examples/smoke-gcp.yaml \
+            cluster status \
+            --url "$IRIS_CONTROLLER_URL" \
+            > "$LOG_DIR/cluster-status.txt" 2>&1 || true
+
+          # Fetch recent controller and worker logs via RPC
+          uv run --group dev python3 -c "
+          import json, sys
+          from iris.rpc import controller_connect
+          from iris.rpc import controller_pb2, job_pb2
+
+          url = '$IRIS_CONTROLLER_URL'
+          client = controller_connect.ControllerServiceClientSync(url)
+
+          # Controller process status with recent logs
+          proc = client.get_process_status(job_pb2.GetProcessStatusRequest())
+          with open('$LOG_DIR/controller-process.json', 'w') as f:
+              json.dump({
+                  'git_hash': proc.process_info.git_hash,
+                  'pid': proc.process_info.pid,
+                  'memory_mb': proc.process_info.memory_mb,
+                  'recent_logs': [l.message for l in proc.process_info.recent_logs],
+              }, f, indent=2)
+
+          # List workers and fetch status for each
+          workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
+          for w in workers:
+              wid = w.worker_id
+              try:
+                  status = client.get_worker_status(
+                      controller_pb2.Controller.GetWorkerStatusRequest(worker_id=wid)
+                  )
+                  with open(f'$LOG_DIR/worker-{wid}.json', 'w') as f:
+                      json.dump({
+                          'worker_id': wid,
+                          'healthy': w.healthy,
+                          'address': w.address,
+                          'recent_logs': [l.message for l in (status.process_info.recent_logs if status.HasField('process_info') else [])],
+                      }, f, indent=2)
+              except Exception as e:
+                  with open(f'$LOG_DIR/worker-{wid}.txt', 'w') as f:
+                      f.write(f'Failed to fetch status: {e}\n')
+          " 2>&1 || true
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iris-cloud-smoke-logs
+          path: iris-cloud-logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Stop tunnel
+        if: always()
+        run: |
+          kill $START_PID 2>/dev/null || true
+
+      - name: Tear down smoke cluster
+        if: always()
+        env:
+          LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
+        run: |
+          cd lib/iris && uv run --group dev iris -v \
+            --config=examples/smoke-gcp.yaml \
+            cluster stop --label "$LABEL_PREFIX" || true
+
+      - name: Remove OS Login SSH key
+        if: always()
+        run: |
+          gcloud compute os-login ssh-keys remove \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --key-file ~/.ssh/google_compute_engine.pub || true
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iris-cloud-smoke-screenshots
+          path: iris-cloud-screenshots/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # Separate job so cleanup runs even if the test job times out or is killed.
+  # Skipped when cloud-smoke-test was skipped (e.g. non-matching comment).
+  cleanup:
+    needs: cloud-smoke-test
+    if: ${{ always() && needs.cloud-smoke-test.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LABEL_PREFIX: ${{ needs.cloud-smoke-test.outputs.label-prefix }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "lib/iris/pyproject.toml"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Tear down cluster (iris stop)
+        run: |
+          cd lib/iris && uv run --group dev iris -v \
+            --config=examples/smoke-gcp.yaml \
+            cluster stop --label "$LABEL_PREFIX" || true
+
+      - name: Failsafe GCP resource cleanup
+        run: |
+          MANAGED_LABEL="iris-${LABEL_PREFIX}-managed"
+          CONTROLLER_LABEL="iris-${LABEL_PREFIX}-controller"
+          PROJECT="${{ secrets.GCP_PROJECT_ID }}"
+
+          echo "Cleaning up GCE instances with label ${MANAGED_LABEL}=true OR ${CONTROLLER_LABEL}=true..."
+          gcloud compute instances list \
+            --project="$PROJECT" \
+            --filter="labels.${MANAGED_LABEL}=true OR labels.${CONTROLLER_LABEL}=true" \
+            --format="csv[no-heading](name,zone)" 2>/dev/null \
+          | while IFS=, read -r name zone; do
+              [ -z "$name" ] && continue
+              echo "Deleting instance $name ($zone)"
+              gcloud compute instances delete "$name" \
+                --project="$PROJECT" --zone="$zone" --quiet || true
+            done
+
+          echo "Cleaning up TPU VMs with label ${MANAGED_LABEL}=true..."
+          gcloud compute tpus tpu-vm list \
+            --project="$PROJECT" --zone=- \
+            --filter="labels.${MANAGED_LABEL}=true" \
+            --uri 2>/dev/null \
+          | while read -r uri; do
+              [ -z "$uri" ] && continue
+              tpu_name=$(echo "$uri" | awk -F/ '{print $NF}')
+              tpu_zone=$(echo "$uri" | awk -F/ '{print $(NF-2)}')
+              echo "Deleting TPU $tpu_name ($tpu_zone)"
+              gcloud compute tpus tpu-vm delete "$tpu_name" \
+                --project="$PROJECT" --zone="$tpu_zone" --quiet --async || true
+            done
+
+      - name: Set commit status to result
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          if [ "${{ needs.cloud-smoke-test.result }}" = "success" ]; then
+            state=success
+          else
+            state=failure
+          fi
+          gh api repos/${{ github.repository }}/statuses/"$sha" \
+            -f state="$state" \
+            -f context="Iris Cloud Smoke Test" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

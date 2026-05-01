@@ -1,0 +1,135 @@
+name: "Marin - Canary - Datakit Nemotron"
+
+on:
+  schedule:
+    - cron: '0 1 * * 1'  # Weekly, Monday 01:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  datakit-nemotron-ferry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1440  # 24h — nemotron medium is ~3.4 TiB
+    concurrency:
+      group: datakit-nemotron-ferry
+      cancel-in-progress: true
+    env:
+      SMOKE_RUN_ID: datakit-nemotron-ferry-${{ github.run_id }}-${{ github.run_attempt }}
+      FERRY_STATUS_PATH: gs://marin-eu-west4/tmp/ttl=1d/ci/datakit-nemotron-ferry-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
+      WANDB_ENTITY: marin-community
+      WANDB_PROJECT: marin
+      IRIS_CONFIG: lib/iris/examples/marin.yaml
+      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
+          chmod 600 ~/.ssh/google_compute_engine
+          chmod 644 ~/.ssh/google_compute_engine.pub
+
+      - name: Submit datakit nemotron ferry
+        id: submit
+        shell: bash -l {0}
+        run: |
+          JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+            job run --no-wait \
+            --region=europe-west4 \
+            --memory=3G --disk=5G --cpu=1 --extra=cpu \
+            --priority production \
+            -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
+            -e FERRY_STATUS_PATH "$FERRY_STATUS_PATH" \
+            -e WANDB_ENTITY "$WANDB_ENTITY" \
+            -e WANDB_PROJECT "$WANDB_PROJECT" \
+            -e WANDB_API_KEY "$WANDB_API_KEY" \
+            -e HF_TOKEN "$HF_TOKEN" \
+            -- python -m experiments.ferries.datakit_nemotron_ferry)
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+          echo "Submitted job: $JOB_ID"
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      - name: Wait for datakit nemotron ferry
+        shell: bash -l {0}
+        run: |
+          uv run python scripts/workflows/iris_monitor.py wait \
+            --job-id "${{ steps.submit.outputs.job_id }}" \
+            --iris-config "${{ env.IRIS_CONFIG }}" \
+            --poll-interval 30 \
+            --github-output
+
+      - name: Capture failure diagnostics
+        if: failure() || cancelled()
+        continue-on-error: true
+        env:
+          JOB_ID: ${{ steps.submit.outputs.job_id }}
+          DIAG_DIR: ${{ github.workspace }}/datakit-nemotron-diagnostics
+        run: |
+          mkdir -p "$DIAG_DIR"
+          uv run python scripts/workflows/iris_monitor.py collect \
+            --job-id "$JOB_ID" \
+            --iris-config "${{ env.IRIS_CONFIG }}" \
+            --provider gcp \
+            --output-dir "$DIAG_DIR" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --controller-label iris-marin-controller \
+            --service-account "$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --ssh-key ~/.ssh/google_compute_engine
+
+      - name: Upload diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: datakit-nemotron-diagnostics
+          path: datakit-nemotron-diagnostics/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # Separate job so Slack always fires, even if the main job is force-killed
+  # after its grace window. See the datakit-smoke workflow for rationale.
+  notify-slack:
+    needs: datakit-nemotron-ferry
+    if: always() && (needs.datakit-nemotron-ferry.result == 'failure' || needs.datakit-nemotron-ferry.result == 'cancelled') && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEXT: ":red_circle: *Datakit Nemotron Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
+          curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"

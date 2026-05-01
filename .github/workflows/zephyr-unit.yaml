@@ -1,5 +1,4 @@
-name: "Marin - Docs"
-
+name: "Zephyr - Unit"
 on:
   push:
     branches:
@@ -36,38 +35,40 @@ jobs:
           uv run --no-project --with click python scripts/workflows/changes.py match \
             --base "$BASE_SHA" \
             --head "$HEAD_SHA" \
-            --group relevant='docs/**,mkdocs.yml,.github/workflows/marin-docs.yaml' \
+            --group relevant='lib/zephyr/**,lib/iris/**,lib/fray/**,uv.lock,.github/workflows/zephyr-unit.yaml' \
             --github-output
 
-  marin-docs:
+  zephyr-unit:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Install uv and Python
-        uses: astral-sh/setup-uv@v6
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
         with:
-          version: "0.7.20"
-          python-version: "3.11"
-          enable-cache: true
+          python-version: "3.12"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Set up Python
-        run: uv python install
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --package marin --group dev
-
-      - name: Validate docs source links
-        run: uv run python infra/check_docs_source_links.py
-
-      - name: Build documentation
         run: |
-          uv run mkdocs build --strict
+          python -m pip install --upgrade pip
+          uv sync --package marin-zephyr --group test --frozen
+
+      - name: Test with pytest
+        run: |
+          # important: don't cd into lib/zephyr so that ray uv integration doesn't freak out
+          uv run --package marin-zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/

@@ -3,8 +3,8 @@
 Ad-hoc run/stop/validate for `experiments/ferries/datakit_ferry.py`.
 The ferry runs download → normalize → dedup (fuzzy document) → consolidate →
 tokenize on FineWeb-Edu `sample/10BT`. Normally triggered nightly by the
-`Marin - Datakit Smoke` GitHub Actions workflow
-(`.github/workflows/marin-datakit-smoke.yaml`); the commands below are for
+`Marin - Smoke - Datakit` GitHub Actions workflow
+(`.github/workflows/marin-smoke-datakit.yaml`); the commands below are for
 manual experimentation from a dev box.
 
 ## Submit
