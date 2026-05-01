@@ -3,6 +3,7 @@
 
 # NOTE: Do not explicitly import wandb/other trackers here, as this will cause the tests to trivially pass.
 import dataclasses
+import json
 import re
 import warnings
 from typing import Tuple
@@ -101,6 +102,46 @@ def test_tracker_logging_without_global_tracker_emits_no_warning(monkeypatch):
         tracker_fns.log_configuration({"metric": 1.0})
 
     assert not caught
+
+
+def test_wandb_tracker_replicates_metadata_and_lm_eval_artifacts(tmp_path):
+    from levanter.tracker.wandb import WandbTracker
+
+    class FakeRun:
+        def __init__(self):
+            self.step = 0
+            self.project = "marin"
+            self.name = "unit/test"
+            self.tags = ["exp-tag", "run-tag"]
+            self.id = "abc123"
+            self.group = "unit-group"
+            self.url = "https://wandb.ai/example/run"
+            self.config = {"foo": "bar"}
+            self.summary = {"eval/paloma/c4_en/bpb": 1.23}
+            self.logged_artifacts = []
+
+        def log_artifact(self, artifact_path, name=None, type=None):
+            self.logged_artifacts.append((artifact_path, name, type))
+
+        def finish(self):
+            return None
+
+    run = FakeRun()
+    tracker = WandbTracker(run, replicate_path=str(tmp_path))
+
+    artifact_path = tmp_path / "lm_eval_harness_results.42.json"
+    artifact_path.write_text('{"ok": true}')
+    tracker.log_artifact(str(artifact_path), name="lm_eval_harness_results.42.json", type="lm_eval_output")
+    tracker.finish()
+
+    mirrored = tmp_path / "lm_eval_artifacts" / "lm_eval_harness_results.42.json"
+    assert mirrored.read_text() == '{"ok": true}'
+
+    metrics_path = tmp_path / "tracker_metrics.jsonl"
+    record = json.loads(metrics_path.read_text().strip())
+    assert record["wandb"]["id"] == "abc123"
+    assert record["wandb"]["name"] == "unit/test"
+    assert record["wandb"]["tags"] == ["exp-tag", "run-tag"]
 
 
 def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):

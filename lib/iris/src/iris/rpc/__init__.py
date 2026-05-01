@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Generated protobuf package for Iris RPC types."""
+
 # Import order matters for proto descriptor pool: each module must be loaded
 # after its dependencies. Chain: time → config → vm → query → job → controller/worker.
 from iris.rpc import config_pb2 as config_pb2

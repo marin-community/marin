@@ -500,8 +500,7 @@ def main(config: TrainDpoConfig):
 
         if trainer.config.checkpointer is not None:
             trainer.run_hooks(last_info, force=True)
-            checkpointer = trainer.config.checkpointer.create(trainer.run_id)
-            checkpointer.wait_until_finished()
+            trainer._checkpointer.wait_until_finished()
 
     trainer.tracker.finish()
 

@@ -46,6 +46,8 @@ class TrainLmOnPodConfig:
     """
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
+    job_name: str = "train_lm"
+    """Fray child job name used for the accelerator training task."""
     auto_build_caches: bool = False
     """Whether to allow Levanter to build dataset caches on the fly.
 
@@ -71,6 +73,8 @@ class TrainDpoOnPodConfig:
     """
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
+    job_name: str = "train_dpo"
+    """Fray child job name used for the accelerator training task."""
     auto_build_caches: bool = False
     """Whether to allow Levanter to build dataset caches on the fly.
 
@@ -111,6 +115,10 @@ def temporary_checkpoint_base_path(output_path: str) -> str:
         prefix=temp_prefix,
         source_prefix=output_path,
     )
+
+
+def _requires_eval_extra(config: TrainOnPodConfigT) -> bool:
+    return isinstance(config, TrainLmOnPodConfig) and getattr(config.train_config, "eval_harness", None) is not None
 
 
 def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
@@ -271,6 +279,8 @@ def _prepare_training_run(
         extras.append("tpu")
     elif isinstance(config.resources.device, GpuConfig):
         extras.append("gpu")
+    if _requires_eval_extra(config):
+        extras.append("eval")
 
     return config, train_config, env, extras
 
@@ -327,7 +337,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     )
 
     _submit_training_job(
-        job_name="train_lm",
+        job_name=config.job_name,
         main_fn=importlib.import_module("levanter.main.train_lm").main,
         train_config=train_config,
         resources=config.resources,
@@ -344,7 +354,7 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
     config, train_config, env, extras = _prepare_training_run(config)
 
     _submit_training_job(
-        job_name="train_dpo",
+        job_name=config.job_name,
         main_fn=importlib.import_module("levanter.main.train_dpo").main,
         train_config=train_config,
         resources=config.resources,

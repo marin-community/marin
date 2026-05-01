@@ -1,11 +1,31 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+import os
+from types import SimpleNamespace
+
+import datasets.config as datasets_config
+import huggingface_hub.constants as hub_constants
+import pytest
+import haliax as hax
+from haliax.partitioning import ResourceAxis
 from transformers import AutoTokenizer
 
 from levanter.data.packing import PromptCompletion
-from levanter.eval_harness import LmEvalHarnessConfig, TaskConfig, _iterate_tokenized_requests
-from test_utils import skip_if_module_missing
+from levanter.eval_harness import (
+    LmEvalHarnessConfig,
+    LevanterHarnessLM,
+    TaskConfig,
+    _LmEvalHarnessWorker,
+    _encode_batch_texts,
+    _enable_hf_offline_mode_for_eval_cache,
+    _enable_hf_dataset_cache_only_mode,
+    _effective_pad_token_id,
+    _iterate_tokenized_requests,
+    _make_dummy_batch,
+)
+from test_utils import skip_if_module_missing, use_test_mesh
 
 
 @skip_if_module_missing("lm_eval")
@@ -160,6 +180,106 @@ def test_iterate_tokenized_requests():
         assert len(result.ids) <= max_len
 
 
+def test_encode_batch_texts_falls_back_to_hf_call():
+    class _TokenizerWithoutEncodeBatch:
+        def __call__(self, texts, *, add_special_tokens=False, truncation=False, padding=False):
+            assert add_special_tokens is False
+            assert truncation is False
+            assert padding is False
+            return {"input_ids": [[len(text)] for text in texts]}
+
+    tokenizer = _TokenizerWithoutEncodeBatch()
+
+    assert _encode_batch_texts(tokenizer, ["ab", "hello"]) == [[2], [5]]
+
+
+def test_enable_hf_offline_mode_for_eval_cache(monkeypatch):
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
+    monkeypatch.setattr(datasets_config, "HF_HUB_OFFLINE", False)
+    monkeypatch.setattr(datasets_config, "HF_DATASETS_OFFLINE", False)
+    monkeypatch.setattr(hub_constants, "HF_HUB_OFFLINE", False)
+
+    _enable_hf_offline_mode_for_eval_cache()
+
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+    assert os.environ["HF_DATASETS_OFFLINE"] == "1"
+    assert datasets_config.HF_HUB_OFFLINE is True
+    assert datasets_config.HF_DATASETS_OFFLINE is True
+    assert hub_constants.HF_HUB_OFFLINE is True
+
+
+def test_enable_hf_dataset_cache_only_mode(monkeypatch):
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
+    monkeypatch.setattr(datasets_config, "HF_HUB_OFFLINE", True)
+    monkeypatch.setattr(datasets_config, "HF_DATASETS_OFFLINE", False)
+    monkeypatch.setattr(hub_constants, "HF_HUB_OFFLINE", True)
+
+    _enable_hf_dataset_cache_only_mode()
+
+    assert "HF_HUB_OFFLINE" not in os.environ
+    assert datasets_config.HF_HUB_OFFLINE is False
+    assert datasets_config.HF_DATASETS_OFFLINE is True
+    assert hub_constants.HF_HUB_OFFLINE is False
+
+
+def test_sync_datasets_from_gcs_enables_full_offline_mode_when_manifest_supports_it(monkeypatch):
+    import marin.evaluation.eval_dataset_cache as eval_dataset_cache
+
+    manifest = eval_dataset_cache.CacheManifest(
+        task_names=["mmlu"],
+        cached_datasets=[("cais/mmlu", None)],
+        failed_datasets=[],
+        cache_layout_version=eval_dataset_cache.HF_CACHE_LAYOUT_VERSION,
+        includes_hf_hub_cache=True,
+        includes_hf_modules_cache=True,
+    )
+
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
+    monkeypatch.setattr(datasets_config, "HF_HUB_OFFLINE", False)
+    monkeypatch.setattr(datasets_config, "HF_DATASETS_OFFLINE", False)
+    monkeypatch.setattr(hub_constants, "HF_HUB_OFFLINE", False)
+    monkeypatch.setattr(eval_dataset_cache, "load_eval_datasets_from_gcs", lambda **_: manifest)
+
+    config = LmEvalHarnessConfig(task_spec=[], eval_datasets_cache_path="gs://example/eval-cache")
+
+    assert config._sync_datasets_from_gcs() is True
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+    assert datasets_config.HF_HUB_OFFLINE is True
+    assert datasets_config.HF_DATASETS_OFFLINE is True
+    assert hub_constants.HF_HUB_OFFLINE is True
+
+
+def test_sync_datasets_from_gcs_enables_dataset_cache_only_mode_for_legacy_manifest(monkeypatch):
+    import marin.evaluation.eval_dataset_cache as eval_dataset_cache
+
+    manifest = eval_dataset_cache.CacheManifest(
+        task_names=["mmlu"],
+        cached_datasets=[("cais/mmlu", None)],
+        failed_datasets=[],
+        cache_layout_version=1,
+        includes_hf_hub_cache=False,
+        includes_hf_modules_cache=False,
+    )
+
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
+    monkeypatch.setattr(datasets_config, "HF_HUB_OFFLINE", True)
+    monkeypatch.setattr(datasets_config, "HF_DATASETS_OFFLINE", False)
+    monkeypatch.setattr(hub_constants, "HF_HUB_OFFLINE", True)
+    monkeypatch.setattr(eval_dataset_cache, "load_eval_datasets_from_gcs", lambda **_: manifest)
+
+    config = LmEvalHarnessConfig(task_spec=[], eval_datasets_cache_path="gs://example/eval-cache")
+
+    assert config._sync_datasets_from_gcs() is True
+    assert "HF_HUB_OFFLINE" not in os.environ
+    assert datasets_config.HF_HUB_OFFLINE is False
+    assert datasets_config.HF_DATASETS_OFFLINE is True
+    assert hub_constants.HF_HUB_OFFLINE is False
+
+
 @skip_if_module_missing("lm_eval")
 def test_task_config():
     task_spec = [
@@ -183,3 +303,107 @@ def test_task_config():
     q = config.to_task_dict()
 
     assert len(q) == 3
+
+
+@skip_if_module_missing("lm_eval")
+def test_get_task_and_rename_retries_with_fresh_task_dict(monkeypatch):
+    import lm_eval.tasks as tasks
+    import levanter.eval_harness as eval_harness
+
+    marker = object()
+    attempts = 0
+    original_task = {"task": "mmlu", "task_alias": "mmlu_5shot", "num_fewshot": 5}
+    config = LmEvalHarnessConfig(task_spec=[])
+
+    def fake_get_task_dict(task_name_list, manager):
+        nonlocal attempts
+        [task_config] = task_name_list
+        assert isinstance(task_config, dict)
+        attempts += 1
+        task_config.pop("task", None)
+        if attempts == 1:
+            raise RuntimeError("transient load failure")
+        return {"mmlu": marker}
+
+    monkeypatch.setattr(tasks, "get_task_dict", fake_get_task_dict)
+    monkeypatch.setattr(eval_harness.time, "sleep", lambda _: None)
+    monkeypatch.setattr(eval_harness.random, "uniform", lambda *_: 0.0)
+    monkeypatch.setattr(
+        LmEvalHarnessConfig,
+        "_rename_tasks_for_eval_harness",
+        lambda self, this_task, lm_eval_task_name, our_name: {our_name: marker},
+    )
+
+    renamed = config._get_task_and_rename(object(), "mmlu_5shot", original_task)
+
+    assert renamed == {"mmlu_5shot": marker}
+    assert attempts == 2
+    assert original_task == {"task": "mmlu", "task_alias": "mmlu_5shot", "num_fewshot": 5}
+
+
+@pytest.mark.parametrize("method_name", ["_send_payload", "_receive_payload"])
+def test_payload_broadcast_uses_worker_axis_resources(monkeypatch, method_name):
+    worker = object.__new__(_LmEvalHarnessWorker)
+    worker.axis_resources = {"batch": ResourceAxis.DATA}
+
+    EvalBatch = hax.Axis("batch", 2)
+    EvalPos = hax.Axis("pos", 8)
+
+    with use_test_mesh():
+        assert hax.partitioning.current_thread_local_mapping() is None
+        payload = _make_dummy_batch(EvalBatch, EvalPos)
+        worker._dummy_batch = payload
+
+        captured = {}
+
+        def fake_broadcast_shard(payload_arg, sharding_arg):
+            captured["payload"] = payload_arg
+            captured["sharding"] = sharding_arg
+            return payload_arg
+
+        monkeypatch.setattr("levanter.eval_harness.broadcast_shard", fake_broadcast_shard)
+
+        method = getattr(worker, method_name)
+        result = method(payload) if method_name == "_send_payload" else method()
+
+    assert result is payload
+    assert captured["payload"] is payload
+    assert captured["sharding"] is not None
+
+
+@dataclasses.dataclass(frozen=True)
+class _FrozenTokenizerForPadding:
+    eos_token_id: int = 17
+    _pad_token_id: int | None = None
+
+    @property
+    def pad_token_id(self) -> int | None:
+        return self._pad_token_id
+
+
+def test_effective_pad_token_id_falls_back_to_eos_without_mutation():
+    tokenizer = _FrozenTokenizerForPadding(eos_token_id=17, _pad_token_id=None)
+
+    assert _effective_pad_token_id(tokenizer) == 17
+    assert tokenizer.pad_token_id is None
+
+
+def test_loglikelihood_uses_effective_pad_token_without_mutating_frozen_tokenizer(monkeypatch):
+    leader = SimpleNamespace(
+        tokenizer=_FrozenTokenizerForPadding(eos_token_id=23, _pad_token_id=None),
+        EvalPos=hax.Axis("pos", 8),
+        EvalBatch=hax.Axis("batch", 1),
+        max_packed_segments=1,
+        axis_resources={},
+        sample_logging_config=SimpleNamespace(should_log=lambda: False, allow_more=lambda _count: False),
+        profiler_config=SimpleNamespace(enabled=False),
+        _generation_kwargs={},
+    )
+    harness = LevanterHarnessLM(leader)
+
+    monkeypatch.setattr("levanter.eval_harness._pack_requests", lambda *args, **kwargs: [])
+    monkeypatch.setattr("levanter.eval_harness.stack_batches", lambda *args, **kwargs: iter(()))
+    monkeypatch.setattr("levanter.eval_harness.BackgroundIterator", lambda iterable, max_capacity=0: iterable)
+
+    assert harness.loglikelihood([]) == []
+    assert harness.tokenizer.pad_token_id is None

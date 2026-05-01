@@ -1270,6 +1270,10 @@ class ControllerTransitions:
                 job_cache[job_id_wire] = decoded_job
             job = job_cache[job_id_wire]
             attempt_id = task.current_attempt_id + 1
+            if task.current_attempt_id >= 0:
+                # Clear endpoints from the previous attempt before launching
+                # a retry so new peers cannot resolve a stale coordinator.
+                self._store.endpoints.remove_by_task(cur, assignment.task_id)
             self._store.tasks.assign(
                 cur,
                 self._store.attempts,
@@ -2435,6 +2439,8 @@ class ControllerTransitions:
 
         for row in pending_rows:
             attempt_id = row.current_attempt_id + 1
+            if row.current_attempt_id >= 0:
+                self._store.endpoints.remove_by_task(cur, row.task_id)
 
             self._store.tasks.assign(
                 cur,

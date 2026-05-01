@@ -1,0 +1,21 @@
+{
+  "model_id": "identity_anchor_chinchilla_approach3",
+  "formula": "E_identity(mixture_id) + A*((N/N0)^(-alpha)-1) + B*((D/D0)^(-beta)-1); fallback identity anchor for unseen/custom mixtures",
+  "mixture_dependence": "identity lookup, no learned smooth mixture features",
+  "cross_term": "none",
+  "identity_anchor_count": 219,
+  "fallback_anchor": 0.9965332447121676,
+  "scale_coef_A_B": [
+    5.5497457952829015,
+    0.04457076232948369
+  ],
+  "alpha": 0.013188124753832879,
+  "beta": 0.5868500880543972,
+  "pair_weight": 4.0,
+  "ridge_scale": 1e-05,
+  "scale_fit_success": true,
+  "scale_fit_cost": 0.0008954595505082415,
+  "pair_count": 58,
+  "fitted_param_count_counting_exponents": 224,
+  "total_constant_count": 224
+}

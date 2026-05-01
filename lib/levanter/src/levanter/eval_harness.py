@@ -20,6 +20,7 @@ References:
 
 """
 
+import copy
 import dataclasses
 import json
 import logging
@@ -1090,6 +1091,15 @@ class LmEvalHarnessConfig:
     These can be overridden on a per-request basis by the evaluation harness.
     """
 
+    eval_datasets_cache_path: str | None = None
+    """
+    Optional GCS path to pre-cached evaluation datasets.
+
+    When set, datasets will be synced from this GCS path to the local HuggingFace
+    datasets cache before loading tasks. This avoids HuggingFace API rate limiting
+    when multiple concurrent jobs all try to download the same evaluation datasets.
+    """
+
     @property
     def max_gen_toks(self) -> int:
         """Backward compatibility property for max_gen_toks."""
@@ -1154,7 +1164,7 @@ class LmEvalHarnessConfig:
 
         task_name = task if isinstance(task, str) else task["task"]
 
-        task_dict = _call_with_retry(lambda: tasks.get_task_dict([task], manager))
+        task_dict = _call_with_retry(lambda: tasks.get_task_dict([copy.deepcopy(task)], manager))
         assert len(task_dict) == 1, f"Expected 1 task, got {len(task_dict)}"
         try:
             this_task = self._rename_tasks_for_eval_harness(task_dict, task_name, our_name)
@@ -1684,7 +1694,7 @@ def _encode_batch(tokenizer, texts: list[str]) -> list[list[int]]:
         if encoded and hasattr(encoded[0], "ids"):
             return [enc.ids for enc in encoded]
         return encoded
-    return tokenizer(texts, add_special_tokens=False)["input_ids"]
+    return tokenizer(texts, add_special_tokens=False, truncation=False, padding=False)["input_ids"]
 
 
 def _iterate_tokenized_requests(

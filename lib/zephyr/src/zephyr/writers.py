@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
+import fsspec
 import msgspec
 import pyarrow as pa
 from rigging.filesystem import open_url, url_to_fs
@@ -440,6 +441,52 @@ class ThreadedBatchWriter:
         return False
 
 
+def _get_existing_row_count(tmp_path: str, exemplar: dict[str, Any]) -> int:
+    """Read the number of rows already written in a partial .tmp cache directory.
+
+    Returns 0 if the path doesn't exist, has no data, or can't be read.
+    """
+    fs = fsspec.core.url_to_fs(tmp_path)[0]
+    if not fs.exists(tmp_path):
+        return 0
+    try:
+        from levanter.store.tree_store import TreeStore
+
+        store = TreeStore.open(exemplar, tmp_path, mode="r", cache_metadata=False)
+        return len(store)
+    except Exception:
+        logger.debug("Could not read existing rows from %s, starting fresh", tmp_path, exc_info=True)
+        return 0
+
+
+def _promote_tmp_cache(fs, tmp_path: str, output_path: str) -> None:
+    """Promote a temporary cache directory to the final output path.
+
+    If a previous output exists, move it aside first and restore it on failure.
+    """
+    backup_path = None
+    if fs.exists(output_path):
+        backup_path = f"{output_path}.bak"
+        if fs.exists(backup_path):
+            fs.rm(backup_path, recursive=True)
+        fs.mv(output_path, backup_path, recursive=True)
+
+    try:
+        fs.mv(tmp_path, output_path, recursive=True)
+    except Exception:
+        if backup_path is not None and fs.exists(backup_path):
+            try:
+                fs.mv(backup_path, output_path, recursive=True)
+            except Exception as restore_exc:
+                raise RuntimeError(
+                    f"Failed to promote {tmp_path} to {output_path} and failed to restore {backup_path}"
+                ) from restore_exc
+        raise
+    else:
+        if backup_path is not None and fs.exists(backup_path):
+            fs.rm(backup_path, recursive=True)
+
+
 def write_levanter_cache(
     records: Iterable[dict[str, Any]],
     output_path: str,
@@ -448,6 +495,9 @@ def write_levanter_cache(
     batch_size: int = _LEVANTER_BATCH_SIZE,
 ) -> dict:
     """Write tokenized records to Levanter cache format.
+
+    Uses a fixed ``.tmp`` suffix (not UUID) so that partial data from a previous
+    preempted write can be detected and resumed instead of starting over.
 
     Args:
         records: Tokenized records (iterable of dicts with array values)
@@ -462,6 +512,12 @@ def write_levanter_cache(
 
     ensure_parent_dir(output_path)
     record_iter = iter(records)
+    tmp_path = f"{output_path}.tmp"
+    fs = fsspec.core.url_to_fs(output_path)[0]
+
+    if fs.exists(output_path) and fs.exists(tmp_path):
+        logger.info("Removing stale temporary cache %s because %s already exists", tmp_path, output_path)
+        fs.rm(tmp_path, recursive=True)
 
     try:
         exemplar = next(record_iter)
@@ -471,24 +527,47 @@ def write_levanter_cache(
     count = 0
     logger.info("write_levanter_cache: starting write to %s (batch_size=%d)", output_path, batch_size)
 
-    with atomic_rename(output_path) as tmp_path:
-        with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
+    existing_rows = 0 if fs.exists(output_path) else _get_existing_row_count(tmp_path, exemplar)
 
-            def _drain_batches(batches: Iterable) -> None:
-                for batch in batches:
-                    writer.write_batch(batch)
+    if existing_rows > 0:
+        logger.info("Resuming write to %s from %d existing rows", output_path, existing_rows)
+        rows_to_skip = existing_rows - 1
+        skipped_rows = 0
+        for _record in itertools.islice(record_iter, rows_to_skip):
+            skipped_rows += 1
+            count += 1
+        if skipped_rows != rows_to_skip:
+            raise ValueError(
+                f"Temporary cache at {tmp_path} has {existing_rows} rows, but input has only {skipped_rows + 1} rows"
+            )
+        mode = "a"
+        write_exemplar = False
+    else:
+        mode = "w"
+        write_exemplar = True
 
-            with ThreadedBatchWriter(_drain_batches) as threaded:
+    with SerialCacheWriter(
+        tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata), mode=mode
+    ) as writer:
+
+        def _drain_batches(batches: Iterable) -> None:
+            for batch in batches:
+                writer.write_batch(batch)
+
+        with ThreadedBatchWriter(_drain_batches) as threaded:
+            if write_exemplar:
                 threaded.submit([exemplar])
                 count += 1
                 counters.increment("zephyr/records_out")
-                for batch in batchify(record_iter, n=batch_size):
-                    threaded.submit(batch)
-                    count += len(batch)
-                    counters.increment("zephyr/records_out", len(batch))
-                    logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
+            for batch in batchify(record_iter, n=batch_size):
+                threaded.submit(batch)
+                count += len(batch)
+                counters.increment("zephyr/records_out", len(batch))
+                logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
 
     logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
+
+    _promote_tmp_cache(fs, tmp_path, output_path)
 
     # write success sentinel
     with open_url(f"{output_path}/.success", "w") as f:

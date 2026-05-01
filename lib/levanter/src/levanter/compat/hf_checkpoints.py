@@ -14,6 +14,7 @@ import tempfile
 import time
 import urllib.parse
 import warnings
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
@@ -222,6 +223,27 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
         """The default HFCheckpointConverter to use for this config class. We recommend that you
         define this as a @cached_property on your config class."""
         pass
+
+
+def converter_from_hf_compat_config(
+    config: HFCompatConfig,
+    *,
+    tokenizer: Any | None = None,
+    reference_checkpoint: Optional[Union[RepoRef, str]] = None,
+    feature_extractor: Optional["FeatureExtractionMixin"] = None,
+    trust_remote_code: Optional[bool] = None,
+) -> "HFCheckpointConverter":
+    """Build a converter without forcing tokenizer inference from the reference checkpoint."""
+    converter_config = config
+    if tokenizer is not None and hasattr(config, "tokenizer"):
+        converter_config = dataclasses.replace(config, tokenizer=tokenizer)
+
+    converter = converter_config.hf_checkpoint_converter()
+    return converter.replaced(
+        reference_checkpoint=reference_checkpoint,
+        feature_extractor=feature_extractor,
+        trust_remote_code=trust_remote_code,
+    )
 
 
 MConfig = TypeVar("MConfig", bound=HFCompatConfig)
@@ -1280,11 +1302,34 @@ def _hf_hub_retry(fn: Callable[[], T], *, action: str, max_attempts: int = 8, ma
 
 
 def _is_retryable_hf_exception(exc: Exception) -> bool:
-    if isinstance(exc, HfHubHTTPError):
-        status_code = getattr(getattr(exc, "response", None), "status_code", None)
-        return status_code in {408, 429} or (status_code is not None and 500 <= status_code < 600)
+    for chained_exc in _exception_chain(exc):
+        if isinstance(chained_exc, HfHubHTTPError):
+            status_code = getattr(getattr(chained_exc, "response", None), "status_code", None)
+            if status_code in {408, 429} or (status_code is not None and 500 <= status_code < 600):
+                return True
 
-    return isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+        if isinstance(chained_exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+            return True
+
+        if isinstance(chained_exc, OSError) and _looks_like_wrapped_hf_rate_limit(chained_exc):
+            return True
+
+    return False
+
+
+def _exception_chain(exc: Exception) -> Iterator[BaseException]:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _looks_like_wrapped_hf_rate_limit(exc: OSError) -> bool:
+    message = str(exc)
+    lower_message = message.lower()
+    return "429" in message or "too many requests" in lower_message or "rate limit" in lower_message
 
 
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:

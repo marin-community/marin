@@ -457,6 +457,7 @@ class Checkpointer:
 
         # discover latest checkpoint and see if it's temporary
         self._last_temporary_checkpoint = None
+        self._inherited_temp_checkpoint_step = None
         # Check both base_path and temporary_base_path for prior temporary checkpoints
         search_paths = [self.base_path]
         if self.temporary_base_path is not None:
@@ -466,11 +467,14 @@ class Checkpointer:
             if latest_checkpoint is not None and delete_old_temp_checkpoints:
                 metadata = _load_metadata(latest_checkpoint)
                 if metadata.get("is_temporary", False):
+                    prior_step = metadata.get("step", 0)
                     logger.info(
-                        f"Found prior temporary checkpoint {latest_checkpoint}. We will delete it after"
-                        " saving a new checkpoint."
+                        f"Found prior temporary checkpoint {latest_checkpoint} (step {prior_step}). "
+                        "Deferring cleanup decision until the first save - will only delete if the new "
+                        "checkpoint is at an equal or higher step."
                     )
                     self._last_temporary_checkpoint = latest_checkpoint
+                    self._inherited_temp_checkpoint_step = prior_step
                     break
 
     def load_checkpoint(
@@ -568,6 +572,20 @@ class Checkpointer:
                             last_checkpoint,
                         )
                         return
+                    inherited_step = self._inherited_temp_checkpoint_step
+                    if inherited_step is not None and inherited_step > step:
+                        logger.warning(
+                            "NOT deleting prior temporary checkpoint %s (step %d) because it is ahead of "
+                            "the checkpoint we just saved (step %d). This likely means a prior child "
+                            "trained further before being preempted.",
+                            last_checkpoint,
+                            inherited_step,
+                            step,
+                        )
+                        self._inherited_temp_checkpoint_step = None
+                        return
+                    if inherited_step is not None:
+                        self._inherited_temp_checkpoint_step = None
                     # check if we still want to delete it. Sometimes we like to replace the metadata of the last
                     # checkpoint. It'd be nice if the process weren't manual, but this is a good compromise
                     try:

@@ -37,6 +37,7 @@ class LevanterLmEvalEvaluator(Evaluator):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         """
         Runs Levanter's lm-eval harness on the specified model and set of tasks.
@@ -88,6 +89,7 @@ class LevanterLmEvalEvaluator(Evaluator):
                     apply_chat_template=model.apply_chat_template,
                     confirm_run_unsafe_code=True,
                     sample_logging=eval_harness.SampleLoggingConfig(max_samples_per_benchmark=20),
+                    eval_datasets_cache_path=eval_datasets_cache_path,
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,

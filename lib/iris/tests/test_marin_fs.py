@@ -14,6 +14,7 @@ from rigging.filesystem import (
     TransferBudget,
     TransferBudgetExceeded,
     _regions_match,
+    check_path_in_region,
     check_gcs_paths_same_region,
     collect_gcs_paths,
     filesystem,
@@ -283,6 +284,20 @@ def test_check_gcs_paths_same_region_allows_unknown_region_for_local_runs():
         local_ok=True,
         region_getter=fail_region_lookup,
     )
+
+
+def test_check_path_in_region_uses_known_marin_bucket_without_gcp_credentials():
+    with patch("rigging.filesystem.get_bucket_location", side_effect=AssertionError("should not call GCP")):
+        check_path_in_region("cache_dir", "gs://marin-us-east5/tokenized/foo", "us-east5")
+        check_path_in_region("temp_dir", "gs://marin-tmp-us-east5/ttl=30d/foo", "us-east5")
+
+
+def test_check_path_in_region_rejects_known_marin_bucket_region_mismatch():
+    with (
+        patch("rigging.filesystem.get_bucket_location", side_effect=AssertionError("should not call GCP")),
+        pytest.raises(ValueError, match="cache_dir is not in the same region"),
+    ):
+        check_path_in_region("cache_dir", "gs://marin-us-central1/tokenized/foo", "us-east5")
 
 
 @dataclass

@@ -280,13 +280,16 @@ def main(config: TrainLmConfig):
             )
 
         if config.eval_harness is not None:
-            eval_harness = config.eval_harness
-            trainer.add_hook(
-                levanter.eval_harness.lm_eval_harness(
-                    eval_harness, tokenizer, EvalBatch, compute_axis_mapping, trainer.mp
-                ),
-                every=config.eval_harness_steps,
-            )
+            if os.environ.get("LEVANTER_SKIP_EVAL_HARNESS"):
+                logger.info("Skipping lm-eval harness (LEVANTER_SKIP_EVAL_HARNESS is set)")
+            else:
+                eval_harness = config.eval_harness
+                trainer.add_hook(
+                    levanter.eval_harness.lm_eval_harness(
+                        eval_harness, tokenizer, EvalBatch, compute_axis_mapping, trainer.mp
+                    ),
+                    every=config.eval_harness_steps,
+                )
 
         @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
@@ -319,6 +322,10 @@ def main(config: TrainLmConfig):
 
         ## OK, actually run training!
         trainer.train(state, train_loader)
+
+    # Ensure the last async checkpoint write is committed before the process exits.
+    if trainer.config.checkpointer is not None:
+        trainer._checkpointer.wait_until_finished()
 
     # This isn't necessary except when Levanter is run in a subprocess (as happens under Iris/Fray)
     trainer.tracker.finish()

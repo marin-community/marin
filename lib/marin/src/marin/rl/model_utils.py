@@ -21,6 +21,7 @@ from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_INDEX_NAME,
     HFCheckpointConverter,
     RepoRef,
+    converter_from_hf_compat_config,
 )
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
@@ -98,8 +99,11 @@ def load_model_from_checkpoint(
             raise ValueError("Model config lacks HF checkpoint converter for loading from HuggingFace")
 
         hf_checkpoint = RepoRef.from_string(checkpoint)
-        converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-        converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
+        converter: HFCheckpointConverter = converter_from_hf_compat_config(
+            model_config,
+            tokenizer=tokenizer,
+            reference_checkpoint=hf_checkpoint,
+        )
         with hax.partitioning.set_mesh(mesh):
             model = converter.load_pretrained(
                 model_config.model_type,

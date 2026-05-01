@@ -199,10 +199,11 @@ class GcsLease(DistributedLease):
         blob = bucket.get_blob(blob_path)
         if blob is None:
             return (0, None)
+        # The lock can be deleted between get_blob() and download_as_string()
+        # by another process releasing it. Treat this as "no lock".
         try:
             data = json.loads(blob.download_as_string())
         except NotFound:
-            # Blob was deleted between get_blob and download_as_string
             logger.debug("[%s] Lock blob %s disappeared during read (race)", self.worker_id, self.lock_path)
             return (0, None)
         return (blob.generation, Lease(**data))

@@ -51,13 +51,23 @@ def evaluate(config: EvaluationConfig) -> None:
     logger.info(f"Evaluating {model.name} with {config.evals}")
 
     start_time: float = time.time()
-    evaluator.evaluate(
-        model,
-        evals=config.evals,
-        output_path=config.evaluation_path,
-        max_eval_instances=config.max_eval_instances,
-        wandb_tags=config.wandb_tags,
-    )
+    if isinstance(evaluator, LevanterLmEvalEvaluator):
+        evaluator.evaluate(
+            model,
+            evals=config.evals,
+            output_path=config.evaluation_path,
+            max_eval_instances=config.max_eval_instances,
+            wandb_tags=config.wandb_tags,
+            eval_datasets_cache_path=config.eval_datasets_cache_path,
+        )
+    else:
+        evaluator.evaluate(
+            model,
+            evals=config.evals,
+            output_path=config.evaluation_path,
+            max_eval_instances=config.max_eval_instances,
+            wandb_tags=config.wandb_tags,
+        )
     logger.info(f"Done (total time: {time.time() - start_time} seconds)")
 
 

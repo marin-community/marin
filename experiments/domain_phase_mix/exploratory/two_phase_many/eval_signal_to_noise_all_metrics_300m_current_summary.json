@@ -1,0 +1,183 @@
+{
+  "extra_results_csv": [
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/paper_plots/img/baseline_scaling_downstream_eval_metrics_merged.csv",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/300m_gsm8k_humaneval_completion/300m_gsm8k_humaneval_eval_results.csv",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/300m_english_lite_completion/300m_english_lite_eval_results_merged.csv",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/300m_generative_smooth_proxy_completion/300m_generative_smooth_proxy_eval_results.csv",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/300m_mcq_smooth_proxy_completion/300m_mcq_smooth_proxy_eval_results.csv"
+  ],
+  "keep_drop_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/eval_signal_to_noise_all_metrics_300m_current_keep_drop.csv",
+  "n_metrics": 629,
+  "noise_rows": 10,
+  "shared_metric_count": 1073,
+  "signal_rows": 242,
+  "task_recommendation_counts": {
+    "downweight": 45,
+    "keep": 9,
+    "report_only": 30
+  },
+  "task_summary_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/eval_signal_to_noise_all_metrics_300m_current_task_summary.csv",
+  "top_metrics": [
+    {
+      "metric": "eval/uncheatable_eval/github_python/loss",
+      "noise_n": 10,
+      "primary_metric_kind": "loss",
+      "signal_n": 242,
+      "signal_to_noise": 51.34368706770525,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/uncheatable_eval/github_python/bpb",
+      "noise_n": 10,
+      "primary_metric_kind": "bpb",
+      "signal_n": 242,
+      "signal_to_noise": 51.29932191956044,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/paloma/m2d2_s2orc_unsplit/bpb",
+      "noise_n": 10,
+      "primary_metric_kind": "bpb",
+      "signal_n": 242,
+      "signal_to_noise": 37.76225344220126,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/paloma/m2d2_s2orc_unsplit/loss",
+      "noise_n": 10,
+      "primary_metric_kind": "loss",
+      "signal_n": 242,
+      "signal_to_noise": 37.62469021839024,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/uncheatable_eval/ao3_english/loss",
+      "noise_n": 10,
+      "primary_metric_kind": "loss",
+      "signal_n": 242,
+      "signal_to_noise": 35.992368173794574,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/uncheatable_eval/ao3_english/bpb",
+      "noise_n": 10,
+      "primary_metric_kind": "bpb",
+      "signal_n": 242,
+      "signal_to_noise": 35.824942597423295,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/paloma/redpajama/bpb",
+      "noise_n": 10,
+      "primary_metric_kind": "bpb",
+      "signal_n": 242,
+      "signal_to_noise": 31.584184632422783,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/paloma/redpajama/loss",
+      "noise_n": 10,
+      "primary_metric_kind": "loss",
+      "signal_n": 242,
+      "signal_to_noise": 31.41678979653032,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/uncheatable_eval/github_cpp/bpb",
+      "noise_n": 10,
+      "primary_metric_kind": "bpb",
+      "signal_n": 242,
+      "signal_to_noise": 29.08308894157404,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/uncheatable_eval/github_cpp/loss",
+      "noise_n": 10,
+      "primary_metric_kind": "loss",
+      "signal_n": 242,
+      "signal_to_noise": 29.03350286927041,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/uncheatable_eval/macro_bpb",
+      "noise_n": 10,
+      "primary_metric_kind": "bpb",
+      "signal_n": 242,
+      "signal_to_noise": 25.565211508646772,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/uncheatable_eval/bpb",
+      "noise_n": 10,
+      "primary_metric_kind": "bpb",
+      "signal_n": 242,
+      "signal_to_noise": 25.533145658883264,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/paloma/dolma_100_programing_languages/loss",
+      "noise_n": 10,
+      "primary_metric_kind": "loss",
+      "signal_n": 242,
+      "signal_to_noise": 25.20679819394737,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/uncheatable_eval/arxiv_physics/bpb",
+      "noise_n": 10,
+      "primary_metric_kind": "bpb",
+      "signal_n": 242,
+      "signal_to_noise": 25.037521881379714,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/uncheatable_eval/arxiv_physics/loss",
+      "noise_n": 10,
+      "primary_metric_kind": "loss",
+      "signal_n": 242,
+      "signal_to_noise": 25.03489481887114,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/uncheatable_eval/macro_loss",
+      "noise_n": 10,
+      "primary_metric_kind": "loss",
+      "signal_n": 242,
+      "signal_to_noise": 23.880266370675105,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/uncheatable_eval/micro_loss",
+      "noise_n": 10,
+      "primary_metric_kind": "loss",
+      "signal_n": 242,
+      "signal_to_noise": 23.84035769197911,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/paloma/dolma_100_programing_languages/bpb",
+      "noise_n": 10,
+      "primary_metric_kind": "bpb",
+      "signal_n": 242,
+      "signal_to_noise": 23.76550450745438,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/paloma/c4_en/bpb",
+      "noise_n": 10,
+      "primary_metric_kind": "bpb",
+      "signal_n": 242,
+      "signal_to_noise": 23.518913498242323,
+      "task": "eval"
+    },
+    {
+      "metric": "eval/paloma/c4_en/loss",
+      "noise_n": 10,
+      "primary_metric_kind": "loss",
+      "signal_n": 242,
+      "signal_to_noise": 23.495053997958017,
+      "task": "eval"
+    }
+  ]
+}
+

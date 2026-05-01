@@ -1,6 +1,8 @@
 # redundant, but Ray looks for this otherwise.
 .git
 
+calvin_artifacts/
+
 logs/
 
 # CPU profiles
@@ -212,6 +214,17 @@ archive/
 # wandb logs
 wandb
 
+# Offline RL generated artifacts
+experiments/domain_phase_mix/offline_rl/artifacts/
+experiments/domain_phase_mix/offline_rl/policy_bundle/
+experiments/domain_phase_mix/offline_rl/policy_payloads/
+experiments/domain_phase_mix/exploratory/starcoder_generic_selector_outputs/smoke_*/
+experiments/domain_phase_mix/exploratory/starcoder_generic_selector_outputs/*/validation_monitor_status.json
+experiments/domain_phase_mix/exploratory/starcoder_subset_selection_outputs/**/launch_command.txt
+experiments/domain_phase_mix/exploratory/starcoder_subset_selection_outputs/**/pid.txt
+
+# Generated leaderboard data
+marin/speedrun/static/data/runs.json
 # Ignore generated credentials from google-github-actions/auth
 gha-creds-*.json
 
@@ -234,6 +247,8 @@ scr/*
 .agents/tmp/
 .codex
 .entire
+experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v*/
+experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v*.zip
 
 .worktrees
 .obsidian

@@ -8,6 +8,7 @@ import typing
 import warnings
 import json
 import hashlib
+import shutil
 from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
@@ -108,6 +109,7 @@ class WandbTracker(Tracker):
             name=_truncate_wandb_artifact_name(artifact_name),
             type=type,
         )
+        self._maybe_replicate_artifact(artifact_path, name=name, type=type)
 
     def finish(self):
         logger.info("Finishing wandb run...")
@@ -130,8 +132,38 @@ class WandbTracker(Tracker):
             record = {
                 "config": _convert_value_to_loggable_rec(dict(self.run.config)),
                 "summary": _convert_value_to_loggable_rec(_summary_for_replicate(self.run)),
+                "wandb": {
+                    "id": getattr(self.run, "id", None),
+                    "name": getattr(self.run, "name", None),
+                    "project": getattr(self.run, "project", None),
+                    "group": getattr(self.run, "group", None),
+                    "tags": list(getattr(self.run, "tags", []) or []),
+                    "url": getattr(self.run, "url", None),
+                },
             }
             f.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+
+    def _maybe_replicate_artifact(self, artifact_path, *, name: Optional[str], type: Optional[str]) -> None:
+        if self._replicate_path is None:
+            return
+        if type != "lm_eval_output" and not (name and name.startswith("lm_eval_harness_results")):
+            return
+        if not isinstance(artifact_path, str) or not os.path.isfile(artifact_path):
+            return
+
+        import fsspec
+
+        source_name = os.path.basename(artifact_path)
+        dest_name = name or source_name
+        if "." not in os.path.basename(dest_name):
+            _, ext = os.path.splitext(source_name)
+            dest_name = f"{dest_name}{ext}"
+        safe_name = dest_name.replace("/", "_")
+        dest_path = f"{self._replicate_path}/lm_eval_artifacts/{safe_name}"
+        fs, _, _ = fsspec.get_fs_token_paths(dest_path)
+        fs.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        with open(artifact_path, "rb") as src, fs.open(dest_path, "wb") as dst:
+            shutil.copyfileobj(src, dst)
 
 
 def _summary_for_replicate(run: WandbRun) -> dict[str, Any]:

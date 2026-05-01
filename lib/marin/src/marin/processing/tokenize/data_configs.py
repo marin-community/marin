@@ -4,17 +4,29 @@
 import dataclasses
 import logging
 import os
+from dataclasses import dataclass
 from functools import lru_cache
 
 import numpy
-from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, BlockShuffleConfig, DatasetComponent, LmDataConfig
+from levanter.data.text import (
+    DEFAULT_LM_DATA_SHUFFLE,
+    BlockShuffleConfig,
+    DatasetComponent,
+    HierarchicalMixtureDatasetComponent,
+    LmDataConfig,
+    LmDatasetFormatBase,
+    LmDatasetSourceConfigBase,
+    TextLmDatasetFormat,
+    UrlDatasetSourceConfig,
+)
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 from marin.execution import unwrap_versioned_value
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
-from marin.processing.tokenize.tokenize import TokenizeConfig
+from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
-TokenizerStep = ExecutorStep[TokenizeConfig]
+TokenizerStep = ExecutorStep[TokenizeConfigBase]
+TokenizerConfigLike = TokenizeConfigBase | TokenizerStep
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +43,75 @@ _KNOWN_VOCAB_SIZES: dict[str, int] = {
 _EQUIVALENT_TOKENIZERS = frozenset({"meta-llama/Meta-Llama-3.1-8B", "marin-community/marin-tokenizer"})
 
 
-def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_raw_paths: bool) -> DatasetComponent:
+@dataclass(frozen=True)
+class TokenizedMixtureGroup:
+    """Logical runtime component backed by a weighted group of tokenized child caches."""
+
+    components: dict[str, TokenizerConfigLike]
+    weights: dict[str, float]
+    token_counts: dict[str, int] | None = None
+
+    @property
+    def tokenizer(self) -> str:
+        return _verify_tokenizers_same(self.components)
+
+
+@dataclass(frozen=True)
+class ExistingTokenizedCacheConfig(TokenizeConfigBase):
+    """Reference an already-finished tokenized cache without rebuilding it."""
+
+    cache_path: str
+    tokenizer: str
+    tags: list[str] = dataclasses.field(default_factory=list)
+    format: LmDatasetFormatBase = dataclasses.field(default_factory=TextLmDatasetFormat)
+
+    def as_lm_dataset_source_config(
+        self, actual_output_path: str | InputName | None, *, include_raw_paths: bool = True
+    ) -> LmDatasetSourceConfigBase:
+        return UrlDatasetSourceConfig(
+            tags=self.tags,
+            train_urls=[],
+            validation_urls=[],
+            cache_dir=actual_output_path,
+            format=self.format,
+        )
+
+
+def step_to_lm_dataset_source_config(
+    step: TokenizerConfigLike,
+    *,
+    include_raw_paths: bool,
+) -> LmDatasetSourceConfigBase:
+    """Convert a tokenized-cache step or config to a Levanter source config."""
+    if isinstance(step, TokenizeConfigBase):
+        return step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
+
+    return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
+
+
+def step_to_lm_mixture_component(
+    step: TokenizerConfigLike | TokenizedMixtureGroup,
+    include_raw_paths: bool,
+) -> DatasetComponent | HierarchicalMixtureDatasetComponent:
     """
     Converts a tokenizer step to a Levanter dataset component. This is useful for creating
     data mixture configs.
     """
+    if isinstance(step, TokenizedMixtureGroup):
+        child_components = {
+            name: step_to_lm_mixture_component(child, include_raw_paths=include_raw_paths)
+            for name, child in step.components.items()
+        }
+        if not all(isinstance(component, DatasetComponent) for component in child_components.values()):
+            raise ValueError("TokenizedMixtureGroup only supports cache-backed child components.")
 
-    if isinstance(step, TokenizeConfig):
-        source = step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
-    else:
-        source = step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
+        return HierarchicalMixtureDatasetComponent(
+            components=child_components,  # type: ignore[arg-type]
+            train_weights=step.weights,
+            token_counts=step.token_counts,
+        )
+
+    source = step_to_lm_dataset_source_config(step, include_raw_paths=include_raw_paths)
 
     return DatasetComponent(
         source=source,
@@ -97,7 +168,7 @@ def lm_data_config(
 
 
 def lm_mixture_data_config(
-    components: dict[str, TokenizerStep | TokenizeConfig],
+    components: dict[str, TokenizerConfigLike | TokenizedMixtureGroup],
     weights: dict[str, float],
     *,
     shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
@@ -192,7 +263,7 @@ def interpolate_mixture_weights(mixture_weights: list[dict[str, float]], weights
 
 
 def lm_varying_mixture_data_config(
-    components: dict[str, TokenizerStep],
+    components: dict[str, TokenizerConfigLike | TokenizedMixtureGroup],
     weights_list: list[tuple[int, dict[str, float]]],
     *,
     shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
@@ -208,10 +279,12 @@ def lm_varying_mixture_data_config(
 
     Args:
         components: dict from names of datasets to the steps that produced them.
-        weights_list: list of tuples of (start_seq_index, weights_dict)
+        weights_list: list of tuples of (start_step, weights_dict)
             weights_dict maps dataset names to their weights.
-            The weights will change at each start_seq_index. start_seq_index's must be sorted in ascending order.
-            Note that start_seq_index should be the index of the sequence (not batch) where the transition should occur.
+            The weights will change at each start_step. start_step values must be sorted in ascending order.
+            Note: start_step is a training step index (batch index), not a sequence index.
+            LMMixtureDatasetConfig.train_set() will convert step indices to sequence indices
+            using rescale_mixture_schedule_for_batch_schedule().
         shuffle: shuffling policy. Defaults to hierarchical block shuffle.
             `True` enables a full permutation shuffle; `BlockShuffleConfig` enables hierarchical block shuffling.
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
@@ -388,11 +461,17 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     return True
 
 
-def _verify_tokenizers_same(components: dict[str, TokenizerStep | TokenizeConfig]):
+def _component_tokenizer(component: TokenizerConfigLike | TokenizedMixtureGroup) -> str:
+    if isinstance(component, TokenizedMixtureGroup):
+        return component.tokenizer
+    return component.config.tokenizer if isinstance(component, ExecutorStep) else component.tokenizer
+
+
+def _verify_tokenizers_same(components: dict[str, TokenizerConfigLike | TokenizedMixtureGroup]):
     first_name, first_step = next(iter(components.items()))
-    tokenizer = first_step.config.tokenizer if isinstance(first_step, ExecutorStep) else first_step.tokenizer
+    tokenizer = _component_tokenizer(first_step)
     for name, step in components.items():
-        step_tokenizer = step.config.tokenizer if isinstance(step, ExecutorStep) else step.tokenizer
+        step_tokenizer = _component_tokenizer(step)
         if step_tokenizer != tokenizer:
             if not _are_tokenizers_equivalent(step_tokenizer, tokenizer):
                 raise ValueError(
