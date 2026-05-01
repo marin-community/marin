@@ -17,8 +17,6 @@ Lifecycle management includes:
 from __future__ import annotations
 
 import atexit
-import ctypes
-import ctypes.util
 import logging
 import os
 import select
@@ -86,22 +84,21 @@ atexit.register(_cleanup_all_runtimes)
 # =============================================================================
 
 
-def set_pdeathsig_preexec():
-    """Use prctl(PR_SET_PDEATHSIG, SIGKILL) to kill subprocess if parent dies.
-
-    This is a Linux-specific feature that ensures container processes are
-    automatically killed if the worker process dies unexpectedly. On other
-    platforms, this is a no-op.
-    """
-    if sys.platform == "linux":
-        PR_SET_PDEATHSIG = 1
-        try:
-            libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-            if libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL) != 0:
-                errno = ctypes.get_errno()
-                logger.warning(f"Failed to set parent death signal: errno {errno}")
-        except Exception as e:
-            logger.debug(f"Could not set parent death signal: {e}")
+# Inline Python launcher run in the child to set PR_SET_PDEATHSIG before
+# exec'ing the real command. We can't use ``preexec_fn`` for this: that path
+# forces CPython's _posixsubprocess to fall back to fork()+exec, which trips
+# Linux's overcommit heuristic on workers carrying large VMS (pyarrow +
+# finelog client). Without preexec_fn, CPython uses vfork()/posix_spawn,
+# which share the parent's address space and don't charge overcommit.
+#
+# PR_SET_PDEATHSIG is preserved across execve as long as the effective UID
+# doesn't change, so setting it here propagates into the user command.
+_PDEATHSIG_LAUNCHER_CODE = (
+    "import ctypes,ctypes.util,os,signal,sys;"
+    "ctypes.CDLL(ctypes.util.find_library('c'),use_errno=True)"
+    ".prctl(1,signal.SIGKILL,0,0,0);"
+    "os.execvp(sys.argv[1],sys.argv[1:])"
+)
 
 
 # =============================================================================
@@ -150,8 +147,6 @@ class ProcessContainer:
             prefix = os.pathsep.join(p for p in extra_paths if p not in existing.split(os.pathsep))
             env["PYTHONPATH"] = f"{prefix}{os.pathsep}{existing}" if existing else prefix
 
-            # Use process groups on Unix for clean termination
-            # Set PR_SET_PDEATHSIG on Linux for automatic cleanup if parent dies
             popen_kwargs: dict[str, object] = {
                 "stdout": subprocess.PIPE,
                 "stderr": subprocess.PIPE,
@@ -161,10 +156,15 @@ class ProcessContainer:
             }
 
             if sys.platform != "win32":
-                # Create new process group for clean termination
+                # New session/process group for clean termination.
                 popen_kwargs["start_new_session"] = True
-                # Set up automatic termination if parent dies (Linux only)
-                popen_kwargs["preexec_fn"] = set_pdeathsig_preexec
+
+            # On Linux, wrap the command in a tiny Python launcher that sets
+            # PR_SET_PDEATHSIG before exec'ing the user command. We avoid
+            # preexec_fn because that forces fork()+exec, which fails with
+            # ENOMEM on workers with large VMS under default overcommit.
+            if sys.platform == "linux":
+                cmd = [sys.executable, "-c", _PDEATHSIG_LAUNCHER_CODE, *cmd]
 
             self._process = subprocess.Popen(cmd, **popen_kwargs)
 
