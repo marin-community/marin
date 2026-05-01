@@ -87,8 +87,8 @@ def _triton_ragged_dot_kernel(
         plgpu.store(out_ref.at[span_m, pl.ds(0, out_ref.shape[1])], acc.astype(out_ref.dtype), mask=mask[:, None])
 
 
-def _triton_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
-    """Raw Pallas-Triton grouped matmul (forward only, not differentiable)."""
+def _triton_default_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+    """Raw Pallas-Triton grouped matmul for the default ragged-dot layout."""
     m, k = lhs.shape
     num_groups, _, n = rhs.shape
 
@@ -111,6 +111,81 @@ def _triton_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) 
         grid=(pl.cdiv(m, block_m), pl.cdiv(n, block_n), num_groups),
         compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=4),
     )(lhs, rhs, cum_rows[:-1], cum_rows[1:])
+
+
+def _triton_ragged_contracting_dim_dot_kernel(
+    a_ref,
+    b_ref,
+    lo_ref,
+    hi_ref,
+    out_ref,
+    *,
+    block_m: int,
+    block_k: int,
+):
+    """Pallas-Triton ragged dot where the ragged dimension is also contracting."""
+    lo = lo_ref[()]
+    hi = hi_ref[()]
+
+    def body(i, acc, mask_k=False):
+        start_k = lo + i * block_k
+        span_k = pl.ds(start_k, block_k)
+        mask = None
+        other = None
+        if mask_k:
+            mask = (jnp.arange(block_k) < hi - start_k)[:, None]
+            other = 0.0
+        a = plgpu.load(a_ref.at[span_k], mask=mask, other=other)
+        b = plgpu.load(b_ref.at[span_k], mask=mask, other=other)
+        dtype = jnp.result_type(a, b)
+        return acc + pl.dot(a.astype(dtype).T, b.astype(dtype))
+
+    num_k_blocks = jnp.maximum(pl.cdiv(jnp.int32(hi - lo), block_k), 1)
+    acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
+    acc = jax.lax.fori_loop(0, num_k_blocks - 1, body, acc)
+    acc = body(num_k_blocks - 1, acc, mask_k=True)
+    plgpu.store(out_ref, acc.astype(out_ref.dtype))
+
+
+def _triton_ragged_contracting_dim_pallas_call(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+) -> jax.Array:
+    """Raw Pallas-Triton grouped matmul for drhs-style ragged contraction."""
+    k, m = lhs.shape
+    _, n = rhs.shape
+
+    block_m = min(128, int(pl.next_power_of_2(m)))
+    block_n = min(128, int(pl.next_power_of_2(n)))
+    block_k = min(32, int(pl.next_power_of_2(k)))
+
+    cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
+
+    def one_group(lhs, rhs, lo, hi):
+        return pl.pallas_call(
+            lambda a, b, lo, hi, out: _triton_ragged_contracting_dim_dot_kernel(
+                a,
+                b,
+                lo,
+                hi,
+                out,
+                block_m=block_m,
+                block_k=block_k,
+            ),
+            out_shape=jax.ShapeDtypeStruct((m, n), lhs.dtype),
+            in_specs=[
+                pl.BlockSpec((k, block_m), lambda i, j: (0, i)),
+                pl.BlockSpec((k, block_n), lambda i, j: (0, j)),
+                pl.no_block_spec,
+                pl.no_block_spec,
+            ],
+            out_specs=pl.BlockSpec((block_m, block_n), lambda i, j: (i, j)),
+            grid=(pl.cdiv(m, block_m), pl.cdiv(n, block_n)),
+            compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=4),
+        )(lhs, rhs, lo, hi)
+
+    return jax.vmap(one_group, in_axes=(None, None, 0, 0))(lhs, rhs, cum_rows[:-1], cum_rows[1:])
 
 
 _DEFAULT_DIM_NUMS = jax.lax.RaggedDotDimensionNumbers(
@@ -136,13 +211,29 @@ _DRHS_DIM_NUMS = jax.lax.RaggedDotDimensionNumbers(
 )
 
 
+def _triton_pallas_call(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    ragged_dot_dimension_numbers: jax.lax.RaggedDotDimensionNumbers = _DEFAULT_DIM_NUMS,
+) -> jax.Array:
+    """Raw Pallas-Triton grouped matmul for supported ragged-dot layouts."""
+    if ragged_dot_dimension_numbers == _DEFAULT_DIM_NUMS:
+        return _triton_default_pallas_call(lhs, rhs, group_sizes)
+    if ragged_dot_dimension_numbers == _DLHS_DIM_NUMS:
+        return _triton_default_pallas_call(lhs, rhs.mT, group_sizes)
+    if ragged_dot_dimension_numbers == _DRHS_DIM_NUMS:
+        return _triton_ragged_contracting_dim_pallas_call(lhs, rhs, group_sizes)
+    raise NotImplementedError(f"Unsupported ragged dot dimension numbers for Triton: {ragged_dot_dimension_numbers}")
+
+
 @functools.partial(jax.custom_vjp, nondiff_argnums=())
 def _ragged_dot_triton_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     """Pallas-Triton grouped matmul with explicit backward pass.
 
-    Uses custom_vjp so JAX never tries to autodiff through pallas_call
-    (which lacks JVP rules in JAX 0.8.0). Both forward and backward use
-    the Triton kernel for the full 5x speedup over XLA.
+    Uses custom_vjp so JAX never tries to autodiff directly through pallas_call.
+    Direct autodiff still fails for this kernel on JAX 0.9.2, while the explicit
+    VJP can use the Triton kernels for each ragged-dot contraction layout.
     """
     if not _has_pallas_triton:
         raise NotImplementedError("Pallas Triton backend is not available")
@@ -157,25 +248,11 @@ def _ragged_dot_triton_fwd(lhs, rhs, group_sizes):
 def _ragged_dot_triton_bwd(residuals, dout):
     lhs, rhs, group_sizes = residuals
 
-    # dlhs[M,K] = ragged_dot_general(dout[M,N], rhs[G,K,N], gs)
-    # Contracts dout dim 1 (N) with rhs dim 2 (N) — different from forward's
-    # contracting dims, so we use XLA here. The Triton kernel only supports
-    # the standard (dim1, dim1) contraction.
-    dlhs = jax.lax.ragged_dot_general(
-        lhs=dout,
-        rhs=rhs,
-        group_sizes=group_sizes,
-        ragged_dot_dimension_numbers=_DLHS_DIM_NUMS,
-    )
+    # dlhs[M,K] = dout[M,N] @ rhs[G,K,N]^T
+    dlhs = _triton_pallas_call(dout, rhs, group_sizes, _DLHS_DIM_NUMS)
 
-    # drhs[G,K,N] = ragged_dot_general(lhs[M,K], dout[M,N], gs)
-    # Contracts over ragged M dimension — also non-standard for our kernel.
-    drhs = jax.lax.ragged_dot_general(
-        lhs=lhs,
-        rhs=dout,
-        group_sizes=group_sizes,
-        ragged_dot_dimension_numbers=_DRHS_DIM_NUMS,
-    )
+    # drhs[G,K,N] = lhs[M,K]^T @ dout[M,N]
+    drhs = _triton_pallas_call(lhs, dout, group_sizes, _DRHS_DIM_NUMS)
 
     return dlhs, drhs, None  # None for group_sizes (integer, no gradient)
 
