@@ -12,8 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
-from connectrpc.errors import ConnectError
-from finelog.client import LogClient, RemoteLogHandler, StatsError, Table
+from finelog.client import LogClient, RemoteLogHandler, Table
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos
@@ -930,9 +929,8 @@ class Worker:
         """Append one heartbeat row to the ``iris.worker`` stats namespace.
 
         Non-blocking: ``Table.write`` queues for the bg flush thread, so the
-        ping path never waits on the stats service. Transport / stats-protocol
-        errors are logged once and swallowed. Schema-validation ``TypeError``
-        bugs deliberately propagate so they surface in tests.
+        ping path never waits on the stats service. Schema-validation
+        ``TypeError`` bugs from the row encoder deliberately propagate.
         """
         table = self._worker_stats_table
         if table is None or self._worker_id is None:
@@ -942,18 +940,15 @@ class Worker:
             status = WorkerStatus.RUNNING
         else:
             status = WorkerStatus.IDLE
-        try:
-            stat = build_worker_stat(
-                worker_id=self._worker_id,
-                ts=_now_dt(),
-                status=status,
-                address=self._resolve_address(),
-                snapshot=snapshot,
-                metadata=self._worker_metadata,
-            )
-            table.write([stat])
-        except (StatsError, ConnectError, ConnectionError, OSError, TimeoutError) as exc:
-            logger.warning("worker stat write failed: %s: %s", type(exc).__name__, exc)
+        stat = build_worker_stat(
+            worker_id=self._worker_id,
+            ts=_now_dt(),
+            status=status,
+            address=self._resolve_address(),
+            snapshot=snapshot,
+            metadata=self._worker_metadata,
+        )
+        table.write([stat])
 
     def handle_start_tasks(self, request: worker_pb2.Worker.StartTasksRequest) -> worker_pb2.Worker.StartTasksResponse:
         """Start task attempts on this worker. Returns per-task ack."""

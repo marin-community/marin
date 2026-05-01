@@ -856,19 +856,6 @@ def test_handle_ping_emits_worker_stat(mock_worker):
     assert stat.cpu_pct >= 0.0
 
 
-def test_handle_ping_swallows_stats_transport_error(mock_worker):
-    """StatsError on the stats table must not break the ping path."""
-    from finelog.client import StatsError
-
-    table = _FakeStatsTable(raise_on_write=StatsError("boom"))
-    mock_worker._worker_stats_table = table
-    mock_worker._worker_id = "w-test"
-
-    response = mock_worker.handle_ping(_ping_request())
-    assert response is not None
-    assert len(table.writes) == 1  # write was attempted
-
-
 def test_handle_ping_propagates_schema_error(mock_worker):
     """TypeError from schema validation must propagate (fail fast in tests)."""
     table = _FakeStatsTable(raise_on_write=TypeError("schema mismatch"))

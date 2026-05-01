@@ -17,8 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from connectrpc.errors import ConnectError
-from finelog.client import LogClient, StatsError, Table
+from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
 from finelog.types import str_to_log_level
 from rigging.log_setup import parse_log_level
@@ -921,9 +920,8 @@ class TaskAttempt:
     def _emit_task_stat(self) -> None:
         """Append one resource-usage row to the ``iris.task`` stats namespace.
 
-        Non-blocking: queues for the LogClient bg flush. Transport errors are
-        logged once and swallowed; schema-validation ``TypeError`` propagates
-        so bugs surface in tests.
+        Non-blocking: queues for the LogClient bg flush. Schema-validation
+        ``TypeError`` from the row encoder deliberately propagates.
         """
         table = self._task_stats_table
         if table is None or not self._worker_id:
@@ -936,17 +934,14 @@ class TaskAttempt:
             process_count=self.process_count,
         )
         ts = datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
-        try:
-            stat = build_task_stat(
-                task_id=self.task_id.to_wire(),
-                attempt_id=self.attempt_id,
-                worker_id=self._worker_id,
-                ts=ts,
-                usage=usage,
-            )
-            table.write([stat])
-        except (StatsError, ConnectError, ConnectionError, OSError, TimeoutError) as exc:
-            logger.warning("task stat write failed: %s: %s", type(exc).__name__, exc)
+        stat = build_task_stat(
+            task_id=self.task_id.to_wire(),
+            attempt_id=self.attempt_id,
+            worker_id=self._worker_id,
+            ts=ts,
+            usage=usage,
+        )
+        table.write([stat])
 
     def _push_logs(self, entries: list[logging_pb2.LogEntry]) -> None:
         """Push a batch of log entries to the central LogService."""
