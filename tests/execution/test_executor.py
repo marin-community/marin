@@ -27,7 +27,6 @@ from marin.execution.executor import (
     _get_info_path,
     collect_dependencies_and_version,
     instantiate_config,
-    mirrored,
     output_path_of,
     this_output_path,
     versioned,
@@ -739,47 +738,54 @@ def test_parent_will_run_if_some_child_is_not_skippable():
         assert os.path.exists(os.path.join(executor.output_paths[parent], "dummy", "done.txt"))
 
 
-def test_mirrored_versioning():
-    """MirroredValue wrapping VersionedValue should version the inner value."""
+def _dummy_fn(config):
+    pass
+
+
+def test_mirrored_input_name_instantiate_config():
+    """MirroredValue wrapping InputName resolves to mirror:// path."""
 
     @dataclass(frozen=True)
     class Cfg:
-        input_path: str
+        model_path: str
         output_path: str
 
-    deps = collect_dependencies_and_version(
-        Cfg(input_path=mirrored(versioned("some/path"), budget_gb=50), output_path="out")
-    )
-    assert deps.version == {"input_path": "some/path"}
+    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
+    cfg = Cfg(model_path=step.as_mirrored_value(), output_path="out")
+    output_paths = {step: "/bucket/train/abc123"}
+    resolved = instantiate_config(cfg, output_path="/out", output_paths=output_paths, prefix="/bucket")
+    assert resolved.model_path == "mirror:///bucket/train/abc123"
 
 
-def test_mirrored_instantiate_config():
-    """MirroredValue should resolve to mirror:// path."""
+def test_mirrored_input_name_does_not_affect_version():
+    """Wrapping InputName in MirroredValue should not change the version hash."""
 
     @dataclass(frozen=True)
     class Cfg:
-        input_path: str
+        model_path: str
         output_path: str
 
-    cfg = Cfg(input_path=mirrored(versioned("documents/data"), budget_gb=10), output_path="out")
-    resolved = instantiate_config(cfg, output_path="/out", output_paths={}, prefix="/bucket")
-    assert resolved.input_path == "mirror://documents/data"
-
-
-def test_mirrored_nesting_raises():
-    with pytest.raises(ValueError, match="nest"):
-        mirrored(mirrored("x"))
-
-
-def test_mirrored_changes_version():
-    """Changing the path inside mirrored() should change the version hash."""
-    deps1 = collect_dependencies_and_version(
-        MyConfig(input_path=mirrored(versioned("data/v1")), output_path="out", n=versioned(1), m=1)
+    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
+    deps_plain = collect_dependencies_and_version(Cfg(model_path=output_path_of(step, "hf"), output_path="out"))
+    deps_mirrored = collect_dependencies_and_version(
+        Cfg(model_path=(step.as_input_name() / "hf").as_mirrored_value(budget_gb=50), output_path="out")
     )
-    deps2 = collect_dependencies_and_version(
-        MyConfig(input_path=mirrored(versioned("data/v2")), output_path="out", n=versioned(1), m=1)
-    )
-    assert deps1.version != deps2.version
+    assert deps_plain.version == deps_mirrored.version
+
+
+def test_mirrored_value_truediv_instantiate():
+    """MirroredValue with / subdirs resolves correctly via instantiate_config."""
+
+    @dataclass(frozen=True)
+    class Cfg:
+        model_path: str
+        output_path: str
+
+    step = ExecutorStep(name="train", fn=_dummy_fn, config={})
+    cfg = Cfg(model_path=step.as_mirrored_value(budget_gb=5) / "hf", output_path="out")
+    output_paths = {step: "/bucket/train/abc123"}
+    resolved = instantiate_config(cfg, output_path="/out", output_paths=output_paths, prefix="/bucket")
+    assert resolved.model_path == "mirror:///bucket/train/abc123/hf"
 
 
 def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
