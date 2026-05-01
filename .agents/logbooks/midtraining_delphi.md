@@ -7091,6 +7091,27 @@ These remain as future work items (CC-numbered references point to the corner-ca
 - **Legacy `MATH_TRAIN_STEP` single-step path** (no `MIDTRAIN_MIX_NAME` set). Still bypasses the val carve-out — `_run_pre_flight_safety_checks` warns and skips. Recommend always setting `MIDTRAIN_MIX_NAME=full_highquality_nemo_math` (or one of the replay variants) so the run goes through the safety-asserted path.
 - **`MIN_LR_RATIO = 0.0`**. Code has 0.0; the §"Fixed training knobs" plan above said 0.1 (Mantis convention). Discrepancy preserved — prior runs decayed to 0, switching now would confound interpretation. Document and keep 0.0 unless explicitly bumped.
 
+### Update: per-base permanent checkpoint cadence (every 10 % of the run)
+
+Replaced the global `STEPS_PER_EXPORT = 1000` constant with a per-base helper `_steps_per_export(num_train_steps) = max(50, num_train_steps * 0.10)`. Every base now gets ~10 evenly-spaced permanent checkpoints + a final, regardless of total length:
+
+| Base | Steps | Ckpt every | Permanent ckpts |
+|---|---:|---:|---:|
+| 1e20 | 9,413 | 941 | 10 + final |
+| 1e21-v5 | 4,411 | 441 | **10 + final** (was 4 under fixed-1000 cadence) |
+| 1e22-v5 | 7,647 | 764 | 10 + final |
+
+Motivation: under the fixed cadence, 1e21's 4,411-step run only got 4 permanent rollback points (every ~22% of training). With the per-base 10% rule, 1e21 has the same rollback granularity as 1e20. Levanter's rolling temp checkpoint (`save_interval=10min`, set in `experiments/defaults.py`) is unchanged and continues to handle preemption resume.
+
+HF export cadence is set to `None` in `SimpleTrainConfig`, which Levanter resolves to match `steps_per_export` — so HF exports also land at every ~10% of training.
+
+Storage cost (rough): ~25 GB per Levanter ckpt (1e20) / ~45 GB (1e21) / ~135 GB (1e22). Total per-run for the new sweep:
+- 1e20: 11 × 25 GB ≈ 275 GB × 6 runs = ~1.65 TB
+- 1e21: 11 × 45 GB ≈ 495 GB × 6 runs = ~2.97 TB
+- Sweep total: ~4.6 TB GCS
+
+Cleanable post-sweep once the winning checkpoints are selected.
+
 ### Update: always-on safety check (no flag)
 
 The earlier draft had a `MIDTRAIN_VERIFY_PARTITION=1` env flag gating the disjointness check. That was wrong — the check is a hard safety property; if it ever fails we want to know *before* training starts, not learn after the fact that the sweep was contaminated. Removed the flag; moved the check into the `if __name__ == "__main__":` block of `experiments/exp_delphi_math_10b_midtrain.py` so it always runs at real sweep launch but doesn't slow routine test imports / dry-runs (which don't trigger `__main__`).

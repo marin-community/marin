@@ -108,8 +108,13 @@ MIDTRAIN_TRAIN_REGION: str | None = os.environ.get("MIDTRAIN_TRAIN_REGION")
 MIDTRAIN_COORDINATOR_REGIONS: tuple[str, ...] = ("us-central1", "us-east5")
 
 STEPS_PER_EVAL: int = 200
-STEPS_PER_EXPORT: int = 1000
-STEPS_PER_HF_EXPORT: int = 1000
+# Permanent checkpoint cadence is derived per-base from num_train_steps so
+# every run gets ~10 evenly-spaced rollback points regardless of length
+# (1e20 ~9.4k steps gets ~10 ckpts; 1e21 ~4.4k steps also gets ~10). Levanter's
+# rolling temp checkpoint (save_interval=10min, set in experiments/defaults.py)
+# is independent and handles preemption resume.
+EXPORT_FRACTION_OF_RUN: float = 0.10
+MIN_STEPS_PER_EXPORT: int = 50
 
 # Heuristic-derived constants shared across the suite.
 BETA1: float = 0.9
@@ -324,6 +329,17 @@ def _num_train_steps(token_budget: int, batch_size: int, seq_len: int) -> int:
     return max(1, round(token_budget / (batch_size * seq_len)))
 
 
+def _steps_per_export(num_train_steps: int) -> int:
+    """Permanent checkpoint cadence: ``EXPORT_FRACTION_OF_RUN`` of the run.
+
+    Every base gets ~10 evenly-spaced permanent checkpoints regardless of total
+    length, so 1e21 (4,411 steps) is as resilient to mid-run failure as 1e20
+    (9,413 steps). HF exports use the same cadence (Levanter resolves
+    ``steps_per_hf_export=None`` to ``steps_per_export``).
+    """
+    return max(MIN_STEPS_PER_EXPORT, int(num_train_steps * EXPORT_FRACTION_OF_RUN))
+
+
 def _warmup_steps(batch_size: int, seq_len: int, num_train_steps: int) -> int:
     warmup_steps = max(1, round(WARMUP_TOKENS / (batch_size * seq_len)))
     return min(warmup_steps, num_train_steps - 1)
@@ -486,8 +502,9 @@ def _build_runs() -> list[ExecutorStep]:
                 # See .agents/logbooks/midtraining_delphi.md.
                 checkpoint_init_mode=CheckpointInitMode.MODEL_ONLY,
                 steps_per_eval=STEPS_PER_EVAL,
-                steps_per_export=STEPS_PER_EXPORT,
-                steps_per_hf_export=STEPS_PER_HF_EXPORT,
+                steps_per_export=_steps_per_export(num_train_steps),
+                # HF export cadence: None → matches steps_per_export.
+                steps_per_hf_export=None,
             )
 
             name = _build_run_name(base_tag, lr_factor, token_budget)
