@@ -730,3 +730,83 @@ def test_requeue_split_coscheduled_jobs_migration(tmp_path: Path) -> None:
     snap2 = list(conn.execute("SELECT task_id, state, current_worker_id FROM tasks").fetchall())
     assert snap == snap2
     conn.close()
+
+
+def test_drop_resource_history_tables_migration(tmp_path: Path) -> None:
+    """0040 drops worker_resource_history, task_resource_history, and the
+    cached snapshot_* columns on workers.
+
+    Builds a minimal v0039-shape DB (just the surfaces this migration
+    touches), populates each, runs the migration, and asserts the tables
+    and columns are gone. A second invocation must be a no-op.
+    """
+    import importlib
+
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite3"))
+    conn.executescript(
+        """
+        CREATE TABLE workers (
+            worker_id TEXT PRIMARY KEY,
+            address TEXT NOT NULL,
+            snapshot_host_cpu_percent INTEGER,
+            snapshot_memory_used_bytes INTEGER,
+            snapshot_memory_total_bytes INTEGER,
+            snapshot_disk_used_bytes INTEGER,
+            snapshot_disk_total_bytes INTEGER,
+            snapshot_running_task_count INTEGER,
+            snapshot_total_process_count INTEGER,
+            snapshot_net_recv_bps INTEGER,
+            snapshot_net_sent_bps INTEGER
+        );
+        CREATE TABLE worker_resource_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            worker_id TEXT NOT NULL,
+            snapshot_host_cpu_percent INTEGER,
+            timestamp_ms INTEGER NOT NULL
+        );
+        CREATE INDEX idx_worker_resource_history_worker
+            ON worker_resource_history(worker_id, id DESC);
+        CREATE INDEX idx_worker_resource_history_ts
+            ON worker_resource_history(worker_id, timestamp_ms DESC);
+        CREATE TABLE task_resource_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            attempt_id INTEGER NOT NULL,
+            cpu_millicores INTEGER NOT NULL DEFAULT 0,
+            timestamp_ms INTEGER NOT NULL
+        );
+        CREATE INDEX idx_task_resource_history_task_attempt
+            ON task_resource_history(task_id, attempt_id, id DESC);
+        """
+    )
+    conn.execute("INSERT INTO workers VALUES ('w1','host:1', 50, 1, 2, 3, 4, 5, 6, 7, 8)")
+    conn.execute(
+        "INSERT INTO worker_resource_history (worker_id, snapshot_host_cpu_percent, timestamp_ms) "
+        "VALUES ('w1', 42, 1000)"
+    )
+    conn.execute(
+        "INSERT INTO task_resource_history (task_id, attempt_id, cpu_millicores, timestamp_ms) "
+        "VALUES ('/u/t', 0, 100, 1000)"
+    )
+    conn.commit()
+
+    mod = importlib.import_module("iris.cluster.controller.migrations.0040_drop_resource_history_tables")
+    mod.migrate(conn)
+    conn.commit()
+
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%resource_history'"
+        ).fetchall()
+    }
+    assert tables == set(), f"resource_history tables still present: {tables}"
+
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(workers)").fetchall()}
+    assert not any(c.startswith("snapshot_") for c in cols), f"snapshot_* still on workers: {sorted(cols)}"
+
+    # Idempotent — re-running on a DB where everything is already gone
+    # must be a no-op (no exception).
+    mod.migrate(conn)
+    conn.commit()
+    conn.close()

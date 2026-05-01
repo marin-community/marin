@@ -22,9 +22,17 @@ SNAPSHOT_COLUMNS = (
 )
 
 
+def _has_table(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None
+
+
 def migrate(conn: sqlite3.Connection) -> None:
-    # Add scalar columns to both tables.
+    # Add scalar columns to both tables (when they still exist — 0040 drops
+    # both worker_resource_history and the snapshot_* columns on workers, so
+    # on a fresh DB this migration is effectively idempotent groundwork).
     for table in ("workers", "worker_resource_history"):
+        if not _has_table(conn, table):
+            continue
         for column, ddl in SNAPSHOT_COLUMNS:
             if not _has_column(conn, table, column):
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")

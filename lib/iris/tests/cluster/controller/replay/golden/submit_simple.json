@@ -67,7 +67,6 @@
   "scaling_groups": [],
   "slices": [],
   "task_attempts": [],
-  "task_resource_history": [],
   "tasks": [
     {
       "container_id": null,
@@ -103,7 +102,6 @@
     }
   ],
   "worker_attributes": [],
-  "worker_resource_history": [],
   "worker_task_history": [],
   "workers": []
 }
