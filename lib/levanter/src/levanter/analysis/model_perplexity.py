@@ -43,22 +43,44 @@ class ScoredDocument:
 class ModelLossAggregate:
     total_loss: float = 0.0
     total_bytes: int = 0
+    total_tokens: int = 0
+    elapsed_seconds: float = 0.0
     count: int = 0
 
-    def add(self, *, loss: float, num_bytes: int, count: int = 1) -> None:
+    def add(
+        self,
+        *,
+        loss: float,
+        num_bytes: int,
+        num_tokens: int = 0,
+        elapsed_seconds: float = 0.0,
+        count: int = 1,
+    ) -> None:
         self.total_loss += float(loss)
         self.total_bytes += int(num_bytes)
+        self.total_tokens += int(num_tokens)
+        self.elapsed_seconds += float(elapsed_seconds)
         self.count += int(count)
 
-    def as_dict(self, name: str) -> dict[str, Any]:
+    def as_dict(self, name: str, *, include_eval_metrics: bool = False) -> dict[str, Any]:
         bpb = None if self.total_bytes <= 0 else self.total_loss * LOG2E / self.total_bytes
-        return {
+        row = {
             "name": name,
             "documents": int(self.count),
             "bytes": int(self.total_bytes),
             "bpb": bpb,
             "bits": self.total_loss * LOG2E,
         }
+        if include_eval_metrics:
+            row["tokens"] = int(self.total_tokens)
+            row["eval_seconds"] = float(self.elapsed_seconds)
+            row["tokens_per_second"] = (
+                None if self.elapsed_seconds <= 0.0 else float(self.total_tokens) / self.elapsed_seconds
+            )
+            row["bytes_per_second"] = (
+                None if self.elapsed_seconds <= 0.0 else float(self.total_bytes) / self.elapsed_seconds
+            )
+        return row
 
 
 @dataclass
@@ -75,7 +97,14 @@ class ModelScoreReportBuilder:
             self._register_hierarchy(tag, dataset_name)
         self._register_hierarchy(dataset_name, dataset_name)
 
-    def add_document(self, *, document: RawTextDocument, per_byte_loss: np.ndarray) -> None:
+    def add_document(
+        self,
+        *,
+        document: RawTextDocument,
+        per_byte_loss: np.ndarray,
+        token_count: int = 0,
+        elapsed_seconds: float = 0.0,
+    ) -> None:
         self.register_dataset(document.dataset_name, document.tags)
 
         num_bytes = len(per_byte_loss)
@@ -83,7 +112,12 @@ class ModelScoreReportBuilder:
             return
 
         total_loss = float(per_byte_loss.sum())
-        self.dataset_stats[document.dataset_name].add(loss=total_loss, num_bytes=num_bytes)
+        self.dataset_stats[document.dataset_name].add(
+            loss=total_loss,
+            num_bytes=num_bytes,
+            num_tokens=token_count,
+            elapsed_seconds=elapsed_seconds,
+        )
 
         prefix = np.concatenate(([0.0], np.cumsum(per_byte_loss, dtype=np.float64)))
         byte_offsets = _char_to_byte_offsets(document.text)
@@ -102,7 +136,9 @@ class ModelScoreReportBuilder:
             self.bucket_stats[bucket_for_segment(segment)].add(loss=segment_loss, num_bytes=segment_bytes)
 
     def build_summary(self) -> dict[str, Any]:
-        dataset_rows = [stats.as_dict(name) for name, stats in sorted(self.dataset_stats.items())]
+        dataset_rows = [
+            stats.as_dict(name, include_eval_metrics=True) for name, stats in sorted(self.dataset_stats.items())
+        ]
 
         group_rows = []
         for group, leaves in sorted(self.group_to_leaves.items()):
@@ -113,9 +149,15 @@ class ModelScoreReportBuilder:
                 leaf_stats = self.dataset_stats.get(leaf)
                 if leaf_stats is None:
                     continue
-                aggregate.add(loss=leaf_stats.total_loss, num_bytes=leaf_stats.total_bytes, count=leaf_stats.count)
+                aggregate.add(
+                    loss=leaf_stats.total_loss,
+                    num_bytes=leaf_stats.total_bytes,
+                    num_tokens=leaf_stats.total_tokens,
+                    elapsed_seconds=leaf_stats.elapsed_seconds,
+                    count=leaf_stats.count,
+                )
             if aggregate.total_bytes > 0:
-                group_rows.append(aggregate.as_dict(group))
+                group_rows.append(aggregate.as_dict(group, include_eval_metrics=True))
 
         bucket_rows = [stats.as_dict(bucket) for bucket, stats in sorted(self.bucket_stats.items())]
 
@@ -194,12 +236,16 @@ def compare_scored_outputs(
 ) -> dict[str, Any]:
     scored_documents_a = read_scored_documents(model_a_output_path)
     scored_documents_b = read_scored_documents(model_b_output_path)
+    score_summary_a = read_model_score_summary(model_a_output_path)
+    score_summary_b = read_model_score_summary(model_b_output_path)
     summary = compare_scored_documents(
         model_a_name=model_a_name,
         model_b_name=model_b_name,
         scored_documents_a=scored_documents_a,
         scored_documents_b=scored_documents_b,
         output_path=output_path,
+        model_a_score_summary=score_summary_a,
+        model_b_score_summary=score_summary_b,
     )
     write_report_files(output_path, summary)
     return summary
@@ -212,6 +258,8 @@ def compare_scored_documents(
     scored_documents_a: Sequence[ScoredDocument],
     scored_documents_b: Sequence[ScoredDocument],
     output_path: str,
+    model_a_score_summary: dict[str, Any] | None = None,
+    model_b_score_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     docs_a_by_key = {_scored_document_key(document): document for document in scored_documents_a}
     docs_b_by_key = {_scored_document_key(document): document for document in scored_documents_b}
@@ -237,7 +285,38 @@ def compare_scored_documents(
             tokenized_a=scored_a.tokenized,
             tokenized_b=scored_b.tokenized,
         )
-    return report.build_summary()
+    summary = report.build_summary()
+    if model_a_score_summary is not None and model_b_score_summary is not None:
+        attach_model_score_metrics(
+            summary,
+            model_a_score_summary=model_a_score_summary,
+            model_b_score_summary=model_b_score_summary,
+        )
+    return summary
+
+
+def attach_model_score_metrics(
+    summary: dict[str, Any],
+    *,
+    model_a_score_summary: dict[str, Any],
+    model_b_score_summary: dict[str, Any],
+) -> dict[str, Any]:
+    for section in ("datasets", "dataset_groups"):
+        a_rows = {row["name"]: row for row in model_a_score_summary.get(section, [])}
+        b_rows = {row["name"]: row for row in model_b_score_summary.get(section, [])}
+        for row in summary.get(section, []):
+            name = row["name"]
+            _attach_prefixed_score_metrics(row, prefix="model_a", score_row=a_rows.get(name))
+            _attach_prefixed_score_metrics(row, prefix="model_b", score_row=b_rows.get(name))
+    return summary
+
+
+def _attach_prefixed_score_metrics(row: dict[str, Any], *, prefix: str, score_row: dict[str, Any] | None) -> None:
+    if score_row is None:
+        return
+
+    for metric_name in ("tokens", "eval_seconds", "tokens_per_second", "bytes_per_second"):
+        row[f"{prefix}_{metric_name}"] = score_row.get(metric_name)
 
 
 def _scored_documents_table(scored_documents: Sequence[ScoredDocument]) -> pa.Table:

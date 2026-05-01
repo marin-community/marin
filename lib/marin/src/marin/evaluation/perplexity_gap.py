@@ -289,15 +289,65 @@ def _summary_scalars(summary: dict[str, Any]) -> dict[str, float]:
         scalars[f"gap/datasets/{row['name']}/bpb_gap"] = float(row["gap_bpb"])
         scalars[f"gap/datasets/{row['name']}/model_a_bpb"] = float(row["model_a_bpb"])
         scalars[f"gap/datasets/{row['name']}/model_b_bpb"] = float(row["model_b_bpb"])
+        _add_optional_metric(scalars, f"gap/datasets/{row['name']}/model_a_tokens", row.get("model_a_tokens"))
+        _add_optional_metric(
+            scalars,
+            f"gap/datasets/{row['name']}/model_a_eval_seconds",
+            row.get("model_a_eval_seconds"),
+        )
+        _add_optional_metric(
+            scalars,
+            f"gap/datasets/{row['name']}/model_a_tokens_per_second",
+            row.get("model_a_tokens_per_second"),
+        )
+        _add_optional_metric(scalars, f"gap/datasets/{row['name']}/model_b_tokens", row.get("model_b_tokens"))
+        _add_optional_metric(
+            scalars,
+            f"gap/datasets/{row['name']}/model_b_eval_seconds",
+            row.get("model_b_eval_seconds"),
+        )
+        _add_optional_metric(
+            scalars,
+            f"gap/datasets/{row['name']}/model_b_tokens_per_second",
+            row.get("model_b_tokens_per_second"),
+        )
     for row in summary["dataset_groups"]:
         if row["gap_bpb"] is None:
             continue
         scalars[f"gap/groups/{row['name']}/bpb_gap"] = float(row["gap_bpb"])
+        _add_optional_metric(scalars, f"gap/groups/{row['name']}/model_a_tokens", row.get("model_a_tokens"))
+        _add_optional_metric(
+            scalars,
+            f"gap/groups/{row['name']}/model_a_eval_seconds",
+            row.get("model_a_eval_seconds"),
+        )
+        _add_optional_metric(
+            scalars,
+            f"gap/groups/{row['name']}/model_a_tokens_per_second",
+            row.get("model_a_tokens_per_second"),
+        )
+        _add_optional_metric(scalars, f"gap/groups/{row['name']}/model_b_tokens", row.get("model_b_tokens"))
+        _add_optional_metric(
+            scalars,
+            f"gap/groups/{row['name']}/model_b_eval_seconds",
+            row.get("model_b_eval_seconds"),
+        )
+        _add_optional_metric(
+            scalars,
+            f"gap/groups/{row['name']}/model_b_tokens_per_second",
+            row.get("model_b_tokens_per_second"),
+        )
     for row in summary["pattern_buckets"]:
         if row["gap_bpb"] is None:
             continue
         scalars[f"gap/patterns/{row['name']}/bpb_gap"] = float(row["gap_bpb"])
     return scalars
+
+
+def _add_optional_metric(scalars: dict[str, float], key: str, value: Any) -> None:
+    if value is None:
+        return
+    scalars[key] = float(value)
 
 
 def _cache_key_for_model(config: GapFinderModelConfig) -> dict[str, Any]:

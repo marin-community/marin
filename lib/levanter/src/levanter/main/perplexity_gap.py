@@ -5,6 +5,7 @@ import dataclasses
 import logging
 import os
 import tempfile
+import time
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -20,6 +21,7 @@ from haliax.partitioning import round_axis_for_partitioning
 import levanter
 import levanter.tracker
 from levanter.analysis.model_perplexity import ModelScoreReportBuilder, ScoredDocument, write_model_score_files
+from levanter.analysis.model_perplexity import attach_model_score_metrics
 from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
     RawTextDocument,
@@ -169,9 +171,25 @@ def score_main(config: ModelPerplexityConfig) -> None:
                 current_dataset = batch_dataset
                 logger.info("Starting dataset %s", current_dataset)
             texts = [doc.text for doc in docs]
+            batch_start = time.perf_counter()
             tokenized_docs, per_byte_losses = runner.score_texts(texts)
+            batch_elapsed = time.perf_counter() - batch_start
+            batch_token_counts = [max(len(tokenized.token_ids) - 1, 0) for tokenized in tokenized_docs]
+            batch_total_tokens = sum(batch_token_counts)
             for doc, tokenized, losses in zip(docs, tokenized_docs, per_byte_losses, strict=True):
-                report.add_document(document=doc, per_byte_loss=losses)
+                token_count = max(len(tokenized.token_ids) - 1, 0)
+                elapsed_share = _elapsed_share(
+                    batch_elapsed,
+                    token_count=token_count,
+                    batch_total_tokens=batch_total_tokens,
+                    batch_size=len(docs),
+                )
+                report.add_document(
+                    document=doc,
+                    per_byte_loss=losses,
+                    token_count=token_count,
+                    elapsed_seconds=elapsed_share,
+                )
                 scored_documents.append(ScoredDocument(document=doc, per_byte_loss=losses, tokenized=tokenized))
             docs_processed += len(docs)
             if docs_processed % 32 == 0:
@@ -229,6 +247,8 @@ def main(config: GapFinderConfig) -> None:
             model_b_name=runner_b.label,
             output_path=config.output_path,
         )
+        score_report_a = ModelScoreReportBuilder(model_name=runner_a.label)
+        score_report_b = ModelScoreReportBuilder(model_name=runner_b.label)
 
         docs_processed = 0
         current_dataset: str | None = None
@@ -245,8 +265,16 @@ def main(config: GapFinderConfig) -> None:
                 current_dataset = batch_dataset
                 logger.info("Starting dataset %s", current_dataset)
             texts = [doc.text for doc in docs]
+            batch_start_a = time.perf_counter()
             tokenized_a, per_byte_a = runner_a.score_texts(texts)
+            batch_elapsed_a = time.perf_counter() - batch_start_a
+            batch_start_b = time.perf_counter()
             tokenized_b, per_byte_b = runner_b.score_texts(texts)
+            batch_elapsed_b = time.perf_counter() - batch_start_b
+            batch_tokens_a = [max(len(tokenized.token_ids) - 1, 0) for tokenized in tokenized_a]
+            batch_tokens_b = [max(len(tokenized.token_ids) - 1, 0) for tokenized in tokenized_b]
+            batch_total_tokens_a = sum(batch_tokens_a)
+            batch_total_tokens_b = sum(batch_tokens_b)
             for doc, doc_a, losses_a, doc_b, losses_b in zip(
                 docs,
                 tokenized_a,
@@ -262,11 +290,41 @@ def main(config: GapFinderConfig) -> None:
                     tokenized_a=doc_a,
                     tokenized_b=doc_b,
                 )
+                token_count_a = max(len(doc_a.token_ids) - 1, 0)
+                token_count_b = max(len(doc_b.token_ids) - 1, 0)
+                score_report_a.add_document(
+                    document=doc,
+                    per_byte_loss=losses_a,
+                    token_count=token_count_a,
+                    elapsed_seconds=_elapsed_share(
+                        batch_elapsed_a,
+                        token_count=token_count_a,
+                        batch_total_tokens=batch_total_tokens_a,
+                        batch_size=len(docs),
+                    ),
+                )
+                score_report_b.add_document(
+                    document=doc,
+                    per_byte_loss=losses_b,
+                    token_count=token_count_b,
+                    elapsed_seconds=_elapsed_share(
+                        batch_elapsed_b,
+                        token_count=token_count_b,
+                        batch_total_tokens=batch_total_tokens_b,
+                        batch_size=len(docs),
+                    ),
+                )
             docs_processed += len(docs)
             if docs_processed % 32 == 0:
                 logger.info("Processed %s documents for perplexity-gap report", docs_processed)
 
-        summary = report.write()
+        summary = report.build_summary()
+        attach_model_score_metrics(
+            summary,
+            model_a_score_summary=score_report_a.build_summary(),
+            model_b_score_summary=score_report_b.build_summary(),
+        )
+        write_report_files(config.output_path, summary)
         levanter.tracker.log(_summary_scalars(summary), step=0)
         _log_report_artifact(summary)
 
@@ -360,12 +418,29 @@ def _load_model_runner(
 def _document_batches(documents: Any, *, batch_size: int) -> Any:
     batch: list[RawTextDocument] = []
     for document in documents:
+        if batch and (len(batch) == batch_size or document.dataset_name != batch[0].dataset_name):
+            yield batch
+            batch = []
         batch.append(document)
         if len(batch) == batch_size:
             yield batch
             batch = []
     if batch:
         yield batch
+
+
+def _elapsed_share(
+    total_elapsed: float,
+    *,
+    token_count: int,
+    batch_total_tokens: int,
+    batch_size: int,
+) -> float:
+    if total_elapsed <= 0.0:
+        return 0.0
+    if batch_total_tokens > 0:
+        return total_elapsed * float(token_count) / float(batch_total_tokens)
+    return total_elapsed / float(batch_size)
 
 
 def _model_label(spec: GapFinderModelConfig) -> str:
@@ -420,10 +495,54 @@ def _summary_scalars(summary: dict[str, Any]) -> dict[str, float]:
         scalars[f"gap/datasets/{row['name']}/bpb_gap"] = float(row["gap_bpb"])
         scalars[f"gap/datasets/{row['name']}/model_a_bpb"] = float(row["model_a_bpb"])
         scalars[f"gap/datasets/{row['name']}/model_b_bpb"] = float(row["model_b_bpb"])
+        _add_optional_metric(scalars, f"gap/datasets/{row['name']}/model_a_tokens", row.get("model_a_tokens"))
+        _add_optional_metric(
+            scalars,
+            f"gap/datasets/{row['name']}/model_a_eval_seconds",
+            row.get("model_a_eval_seconds"),
+        )
+        _add_optional_metric(
+            scalars,
+            f"gap/datasets/{row['name']}/model_a_tokens_per_second",
+            row.get("model_a_tokens_per_second"),
+        )
+        _add_optional_metric(scalars, f"gap/datasets/{row['name']}/model_b_tokens", row.get("model_b_tokens"))
+        _add_optional_metric(
+            scalars,
+            f"gap/datasets/{row['name']}/model_b_eval_seconds",
+            row.get("model_b_eval_seconds"),
+        )
+        _add_optional_metric(
+            scalars,
+            f"gap/datasets/{row['name']}/model_b_tokens_per_second",
+            row.get("model_b_tokens_per_second"),
+        )
     for row in summary["dataset_groups"]:
         if row["gap_bpb"] is None:
             continue
         scalars[f"gap/groups/{row['name']}/bpb_gap"] = float(row["gap_bpb"])
+        _add_optional_metric(scalars, f"gap/groups/{row['name']}/model_a_tokens", row.get("model_a_tokens"))
+        _add_optional_metric(
+            scalars,
+            f"gap/groups/{row['name']}/model_a_eval_seconds",
+            row.get("model_a_eval_seconds"),
+        )
+        _add_optional_metric(
+            scalars,
+            f"gap/groups/{row['name']}/model_a_tokens_per_second",
+            row.get("model_a_tokens_per_second"),
+        )
+        _add_optional_metric(scalars, f"gap/groups/{row['name']}/model_b_tokens", row.get("model_b_tokens"))
+        _add_optional_metric(
+            scalars,
+            f"gap/groups/{row['name']}/model_b_eval_seconds",
+            row.get("model_b_eval_seconds"),
+        )
+        _add_optional_metric(
+            scalars,
+            f"gap/groups/{row['name']}/model_b_tokens_per_second",
+            row.get("model_b_tokens_per_second"),
+        )
     for row in summary["pattern_buckets"]:
         if row["gap_bpb"] is None:
             continue
@@ -437,15 +556,27 @@ def _model_score_scalars(summary: dict[str, Any]) -> dict[str, float]:
         if row["bpb"] is None:
             continue
         scalars[f"score/datasets/{row['name']}/bpb"] = float(row["bpb"])
+        _add_optional_metric(scalars, f"score/datasets/{row['name']}/tokens", row.get("tokens"))
+        _add_optional_metric(scalars, f"score/datasets/{row['name']}/eval_seconds", row.get("eval_seconds"))
+        _add_optional_metric(scalars, f"score/datasets/{row['name']}/tokens_per_second", row.get("tokens_per_second"))
     for row in summary["dataset_groups"]:
         if row["bpb"] is None:
             continue
         scalars[f"score/groups/{row['name']}/bpb"] = float(row["bpb"])
+        _add_optional_metric(scalars, f"score/groups/{row['name']}/tokens", row.get("tokens"))
+        _add_optional_metric(scalars, f"score/groups/{row['name']}/eval_seconds", row.get("eval_seconds"))
+        _add_optional_metric(scalars, f"score/groups/{row['name']}/tokens_per_second", row.get("tokens_per_second"))
     for row in summary["pattern_buckets"]:
         if row["bpb"] is None:
             continue
         scalars[f"score/patterns/{row['name']}/bpb"] = float(row["bpb"])
     return scalars
+
+
+def _add_optional_metric(scalars: dict[str, float], key: str, value: Any) -> None:
+    if value is None:
+        return
+    scalars[key] = float(value)
 
 
 def _check_finite_losses(label: str, losses: np.ndarray) -> None:
