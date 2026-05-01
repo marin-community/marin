@@ -10,7 +10,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
@@ -49,7 +49,6 @@ from iris.cluster.controller.stores import (
     JobConfigInsertParams,
     JobInsertParams,
     JobStore,
-    ResourceUsageInsertParams,
     TaskAttemptStore,
     TaskAttemptUpdateParams,
     TaskInsertParams,
@@ -225,7 +224,6 @@ class HeartbeatApplyRequest:
     """Batch of worker heartbeat updates applied atomically."""
 
     worker_id: WorkerId
-    worker_resource_snapshot: job_pb2.WorkerResourceSnapshot | None
     updates: list[TaskUpdate]
 
 
@@ -1333,7 +1331,7 @@ class ControllerTransitions:
             return False
         self._store.workers.apply_snapshots(
             cur,
-            [(req.worker_id, req.worker_resource_snapshot)],
+            [req.worker_id],
             now_ms,
             reset_health=True,
         )
@@ -1403,20 +1401,6 @@ class ControllerTransitions:
                 )
                 continue
             worker_id = attempt.worker_id
-            if update.resource_usage is not None:
-                ru = update.resource_usage
-                self._store.tasks.insert_resource_usage(
-                    cur,
-                    ResourceUsageInsertParams(
-                        task_id=update.task_id,
-                        attempt_id=update.attempt_id,
-                        cpu_millicores=ru.cpu_millicores,
-                        memory_mb=ru.memory_mb,
-                        disk_mb=ru.disk_mb,
-                        memory_peak_mb=ru.memory_peak_mb,
-                        timestamp_ms=now_ms,
-                    ),
-                )
             terminal_ms: int | None = None
             started_ms: int | None = None
             task_state = prior_state
@@ -1626,11 +1610,7 @@ class ControllerTransitions:
         existing_workers = self._store.workers.filter_existing(cur, [req.worker_id for req in requests])
         self._store.workers.apply_snapshots(
             cur,
-            [
-                (req.worker_id, req.worker_resource_snapshot)
-                for req in requests
-                if str(req.worker_id) in existing_workers
-            ],
+            [req.worker_id for req in requests if str(req.worker_id) in existing_workers],
             now_ms,
             reset_health=True,
         )
@@ -1650,7 +1630,6 @@ class ControllerTransitions:
         task_map = self._store.tasks.bulk_get_detail(cur, all_task_ids)
 
         # ── Classify and split ────────────────────────────────────────
-        task_history_params: list[ResourceUsageInsertParams] = []
         # (request_index, transition_request) pairs so results stay aligned.
         transition_entries: list[tuple[int, HeartbeatApplyRequest]] = []
 
@@ -1670,25 +1649,8 @@ class ControllerTransitions:
 
                 if is_state_change or has_terminal_data:
                     transition_updates.append(update)
-                else:
-                    # Steady-state: check finished / stale attempt before writing.
-                    if task_row_is_finished(task):
-                        continue
-                    if update.attempt_id != task.current_attempt_id:
-                        continue
-                    if update.resource_usage is not None:
-                        u = update.resource_usage
-                        task_history_params.append(
-                            ResourceUsageInsertParams(
-                                task_id=update.task_id,
-                                attempt_id=update.attempt_id,
-                                cpu_millicores=u.cpu_millicores,
-                                memory_mb=u.memory_mb,
-                                disk_mb=u.disk_mb,
-                                memory_peak_mb=u.memory_peak_mb,
-                                timestamp_ms=now_ms,
-                            )
-                        )
+                # Steady-state resource usage no longer persisted; iris.worker /
+                # iris.task stats namespaces own per-tick measurements.
 
             if transition_updates:
                 transition_entries.append(
@@ -1696,16 +1658,12 @@ class ControllerTransitions:
                         req_idx,
                         HeartbeatApplyRequest(
                             worker_id=req.worker_id,
-                            worker_resource_snapshot=None,  # already handled above
                             updates=transition_updates,
                         ),
                     )
                 )
 
-        # ── Pass 2a: batch task resource history writes ─────────────────
-        self._store.tasks.insert_resource_usage_many(cur, task_history_params)
-
-        # ── Pass 2b: transitions via existing state machine ───────────
+        # ── Apply transitions via existing state machine ──────────────
         for req_idx, treq in transition_entries:
             results[req_idx] = self._apply_task_transitions(cur, treq, now_ms)
 
@@ -2262,23 +2220,22 @@ class ControllerTransitions:
     def update_worker_pings(
         self,
         cur: TransactionCursor,
-        snapshots: Mapping[WorkerId, job_pb2.WorkerResourceSnapshot | None],
+        worker_ids: Iterable[WorkerId],
     ) -> None:
         """Apply a batch of Ping RPC results within the caller's transaction.
 
-        For each entry, bumps last_heartbeat_ms; if the value is a snapshot,
-        also rewrites the worker's snapshot_* columns and appends a row to
-        worker_resource_history. A None value means liveness-only — the ping
-        loop emits these on cycles where it skips the resource refresh.
+        Bumps ``last_heartbeat_ms`` for each successfully-pinged worker.
+        Per-tick host utilization is no longer persisted in the controller DB —
+        workers emit it directly to the ``iris.worker`` stats namespace.
         Does not touch healthy/active/consecutive_failures — the ping loop
-        tracks failures in-memory and uses fail_workers_batch to remove
+        tracks failures in-memory and uses ``fail_workers_batch`` to remove
         workers past threshold.
         """
-        if not snapshots:
+        ids = list(worker_ids)
+        if not ids:
             return
         now_ms = Timestamp.now().epoch_ms()
-        items = list(snapshots.items())
-        self._store.workers.apply_snapshots(cur, items, now_ms, reset_health=False)
+        self._store.workers.apply_snapshots(cur, ids, now_ms, reset_health=False)
 
     def get_running_tasks_for_poll(
         self,
@@ -2541,20 +2498,6 @@ class ControllerTransitions:
                 )
                 continue
 
-            if update.resource_usage is not None:
-                ru = update.resource_usage
-                self._store.tasks.insert_resource_usage(
-                    cur,
-                    ResourceUsageInsertParams(
-                        task_id=update.task_id,
-                        attempt_id=update.attempt_id,
-                        cpu_millicores=ru.cpu_millicores,
-                        memory_mb=ru.memory_mb,
-                        disk_mb=ru.disk_mb,
-                        memory_peak_mb=ru.memory_peak_mb,
-                        timestamp_ms=now_ms,
-                    ),
-                )
             if update.container_id is not None:
                 self._store.tasks.update_container_id(cur, update.task_id, update.container_id)
 

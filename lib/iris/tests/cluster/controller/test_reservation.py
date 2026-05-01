@@ -1533,7 +1533,6 @@ def test_holder_task_removed_from_worker_when_parent_succeeds(state):
             cur,
             HeartbeatApplyRequest(
                 worker_id=wid_parent,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=parent_task.task_id,

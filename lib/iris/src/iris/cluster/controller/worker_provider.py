@@ -33,7 +33,6 @@ class PingResult:
 
     worker_id: WorkerId
     worker_address: str | None
-    resource_snapshot: job_pb2.WorkerResourceSnapshot | None = None
     healthy: bool = True
     health_error: str = ""
     error: str | None = None
@@ -161,9 +160,6 @@ class WorkerProvider:
                     return PingResult(
                         worker_id=wid,
                         worker_address=addr,
-                        resource_snapshot=(
-                            response.resource_snapshot if response.resource_snapshot.ByteSize() > 0 else None
-                        ),
                         healthy=response.healthy,
                         health_error=response.health_error,
                     )

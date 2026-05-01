@@ -907,7 +907,7 @@ class Worker:
         return snapshot
 
     def handle_ping(self, request: worker_pb2.Worker.PingRequest) -> worker_pb2.Worker.PingResponse:
-        """Liveness check. Resets heartbeat deadline, returns resource snapshot and health."""
+        """Liveness check. Resets heartbeat deadline; emits host metrics to stats."""
         if rule := chaos("worker.ping"):
             if rule.delay_seconds > 0:
                 time.sleep(rule.delay_seconds)
@@ -922,7 +922,6 @@ class Worker:
             logger.warning("Worker health check failed: %s", health.error)
         self._emit_worker_stat(resource_snapshot)
         return worker_pb2.Worker.PingResponse(
-            resource_snapshot=resource_snapshot,
             healthy=health.healthy,
             health_error=health.error,
         )

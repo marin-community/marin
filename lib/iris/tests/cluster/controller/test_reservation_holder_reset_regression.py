@@ -101,7 +101,6 @@ def test_non_holder_task_not_reset_like_reservation_holder_on_worker_failure(sta
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=parent_task.task_id,

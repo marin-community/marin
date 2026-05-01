@@ -1844,84 +1844,29 @@ class WorkerStore:
     def apply_snapshots(
         self,
         cur: TransactionCursor,
-        items: Sequence[tuple[WorkerId, job_pb2.WorkerResourceSnapshot | None]],
+        worker_ids: Sequence[WorkerId],
         now_ms: int,
         *,
         reset_health: bool,
     ) -> None:
-        """Bump ``last_heartbeat_ms`` for every worker; for entries with a
-        snapshot also rewrite ``snapshot_*`` columns and append a
-        ``worker_resource_history`` row.
+        """Bump ``last_heartbeat_ms`` for every worker.
 
-        A ``None`` snapshot is a liveness-only update: the heartbeat path emits
-        these for workers that skipped their resource refresh this cycle, and
-        the ping path emits these on cycles where it skips the resource
-        refresh.
+        Per-tick host utilization is no longer cached on the ``workers`` row or
+        appended to ``worker_resource_history`` — workers emit those samples
+        directly to the ``iris.worker`` stats namespace.
 
         ``reset_health=True`` also clears ``healthy``/``active``/
         ``consecutive_failures`` because a successful heartbeat proves
         recovery. Ping path passes ``False`` — the ping loop tracks failures
         in-memory and removes workers via ``fail_workers_batch``.
         """
-        if not items:
+        if not worker_ids:
             return
 
         health_prefix = "healthy = 1, active = 1, consecutive_failures = 0, " if reset_health else ""
-
-        liveness_only = [(now_ms, str(wid)) for wid, snap in items if snap is None]
-        if liveness_only:
-            cur.executemany(
-                f"UPDATE workers SET {health_prefix}last_heartbeat_ms = ? WHERE worker_id = ?",
-                liveness_only,
-            )
-
-        snapshot_binds = [
-            {
-                "worker_id": str(wid),
-                "now_ms": now_ms,
-                "host_cpu_percent": snap.host_cpu_percent,
-                "memory_used_bytes": snap.memory_used_bytes,
-                "memory_total_bytes": snap.memory_total_bytes,
-                "disk_used_bytes": snap.disk_used_bytes,
-                "disk_total_bytes": snap.disk_total_bytes,
-                "running_task_count": snap.running_task_count,
-                "total_process_count": snap.total_process_count,
-                "net_recv_bps": snap.net_recv_bps,
-                "net_sent_bps": snap.net_sent_bps,
-            }
-            for wid, snap in items
-            if snap is not None
-        ]
-        if not snapshot_binds:
-            return
-
         cur.executemany(
-            f"UPDATE workers SET {health_prefix}last_heartbeat_ms = :now_ms, "
-            "snapshot_host_cpu_percent = :host_cpu_percent, "
-            "snapshot_memory_used_bytes = :memory_used_bytes, "
-            "snapshot_memory_total_bytes = :memory_total_bytes, "
-            "snapshot_disk_used_bytes = :disk_used_bytes, "
-            "snapshot_disk_total_bytes = :disk_total_bytes, "
-            "snapshot_running_task_count = :running_task_count, "
-            "snapshot_total_process_count = :total_process_count, "
-            "snapshot_net_recv_bps = :net_recv_bps, "
-            "snapshot_net_sent_bps = :net_sent_bps "
-            "WHERE worker_id = :worker_id",
-            snapshot_binds,
-        )
-        cur.executemany(
-            "INSERT INTO worker_resource_history ("
-            "worker_id, snapshot_host_cpu_percent, snapshot_memory_used_bytes, "
-            "snapshot_memory_total_bytes, snapshot_disk_used_bytes, snapshot_disk_total_bytes, "
-            "snapshot_running_task_count, snapshot_total_process_count, "
-            "snapshot_net_recv_bps, snapshot_net_sent_bps, timestamp_ms"
-            ") VALUES ("
-            ":worker_id, :host_cpu_percent, :memory_used_bytes, "
-            ":memory_total_bytes, :disk_used_bytes, :disk_total_bytes, "
-            ":running_task_count, :total_process_count, "
-            ":net_recv_bps, :net_sent_bps, :now_ms"
-            ")",
-            snapshot_binds,
+            f"UPDATE workers SET {health_prefix}last_heartbeat_ms = ? WHERE worker_id = ?",
+            [(now_ms, str(wid)) for wid in worker_ids],
         )
 
     def add_committed_resources(
