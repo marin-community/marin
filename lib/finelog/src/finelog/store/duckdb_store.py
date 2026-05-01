@@ -87,6 +87,16 @@ DEFAULT_MAX_LOCAL_BYTES = 100 * 1024**3  # 100 GB
 # wedging the controller. 4GB is generous against realistic working sets
 # (5 segments x 500MB + zstd decompression scratch).
 _DEFAULT_DUCKDB_MEMORY_LIMIT = "4GB"
+_DEFAULT_DUCKDB_THREADS = "4"
+
+# Tuning for embedded use (e.g. iris controller's bundled log-server). The
+# working set is tiny — short retention, single-digit namespaces, no large
+# row groups — so a small memory ceiling and minimal thread pool keep VMS
+# down without hurting throughput. Lower numbers also matter because the
+# embedding process forks subprocesses; large parent VMS trips Linux's
+# overcommit heuristic and fails with ENOMEM at fork().
+EMBEDDED_DUCKDB_MEMORY_LIMIT = "128MB"
+EMBEDDED_DUCKDB_THREADS = "2"
 
 
 # Namespace name validation. Lowercase ASCII alphanumerics + ._-, starting
@@ -120,10 +130,15 @@ class _ConnectionPool:
     concurrent tail reads).
     """
 
-    def __init__(self, memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT):
-        self._conn = duckdb.connect(config={"memory_limit": memory_limit, "threads": "4"})
+    def __init__(
+        self,
+        memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
+        threads: str = _DEFAULT_DUCKDB_THREADS,
+    ):
+        config = {"memory_limit": memory_limit, "threads": threads}
+        self._conn = duckdb.connect(config=config)
         self._conn.execute("SET enable_object_cache=true")
-        self._compaction_conn = duckdb.connect(config={"memory_limit": memory_limit, "threads": "4"})
+        self._compaction_conn = duckdb.connect(config=config)
 
     @contextmanager
     def checkout(self, buffer_tables: list[pa.Table]) -> Iterator[tuple[duckdb.DuckDBPyConnection, list[str]]]:
@@ -223,6 +238,7 @@ class DuckDBLogStore:
         max_tmp_segments_before_compact: int = DEFAULT_MAX_TMP_SEGMENTS_BEFORE_COMPACT,
         segment_target_bytes: int = SEGMENT_TARGET_BYTES,
         duckdb_memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
+        duckdb_threads: str = _DEFAULT_DUCKDB_THREADS,
     ):
         self._data_dir: Path | None = log_dir
         if log_dir is not None:
@@ -230,7 +246,7 @@ class DuckDBLogStore:
 
         self._insertion_lock = Lock()
         self._query_visibility_lock = RWLock()
-        self._pool = _ConnectionPool(memory_limit=duckdb_memory_limit)
+        self._pool = _ConnectionPool(memory_limit=duckdb_memory_limit, threads=duckdb_threads)
         self._registry_db = RegistryDB(self._data_dir)
 
         # Global storage caps. Eviction picks the oldest sealed segment
