@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 MARIN_REQUEST_ID_HEADER = "X-Marin-Inference-Request-Id"
 JSON_CONTENT_TYPE = "application/json"
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 DEFAULT_LEASE_TIMEOUT = 30.0
 DEFAULT_REQUEST_TIMEOUT = 300.0
 DEFAULT_WORKER_LEASE_WAIT_TIMEOUT = 1.0
@@ -409,7 +411,12 @@ class _IrisInferenceProxyHandler(BaseHTTPRequestHandler):
             self._write_json(404, {"error": "not found"})
             return
 
-        request_id = self.headers.get(MARIN_REQUEST_ID_HEADER) or uuid.uuid4().hex
+        try:
+            request_id = self._request_id()
+        except ValueError as exc:
+            self._write_json(400, {"error": str(exc)})
+            return
+
         request = OpenAIHttpRequestEnvelope(
             request_id=request_id,
             endpoint=endpoint,
@@ -445,6 +452,14 @@ class _IrisInferenceProxyHandler(BaseHTTPRequestHandler):
     def _read_body(self) -> str:
         content_length = int(self.headers.get("Content-Length", "0"))
         return self.rfile.read(content_length).decode("utf-8")
+
+    def _request_id(self) -> str:
+        request_id = self.headers.get(MARIN_REQUEST_ID_HEADER)
+        if request_id is None:
+            return uuid.uuid4().hex
+        if REQUEST_ID_PATTERN.fullmatch(request_id) is None:
+            raise ValueError(f"{MARIN_REQUEST_ID_HEADER} must match {REQUEST_ID_PATTERN.pattern}.")
+        return request_id
 
     def _write_json(self, status: int, payload: dict[str, object]) -> None:
         self._write_response(

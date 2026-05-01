@@ -9,9 +9,11 @@ from pathlib import Path
 from statistics import mean
 
 import pytest
+import requests
 from fray.local_backend import LocalClient
 from marin.evaluation.lm_eval import LmEvalRun, build_lm_eval_model_args
 from marin.inference.iris_service import (
+    MARIN_REQUEST_ID_HEADER,
     BrokerRequestStatus,
     IrisInferenceBroker,
     IrisInferenceLauncher,
@@ -115,6 +117,25 @@ def test_proxy_worker_end_to_end_routes_completions_and_chat_to_engine() -> None
 
             assert len(stub.requests_for("/v1/completions")) == 1
             assert len(stub.requests_for("/v1/chat/completions")) == 1
+    finally:
+        client.shutdown(wait=True)
+
+
+def test_proxy_rejects_unsafe_request_id_header() -> None:
+    client = LocalClient()
+    try:
+        with serve_deterministic_openai_stub(model="gpt2") as stub:
+            with _launch_local_service(client, stub) as running_model:
+                response = requests.post(
+                    running_model.endpoint.url("completions"),
+                    json={"model": stub.model, "prompt": "A"},
+                    headers={MARIN_REQUEST_ID_HEADER: "unsafe/request/id"},
+                    timeout=5,
+                )
+
+            assert response.status_code == 400
+            assert MARIN_REQUEST_ID_HEADER not in response.headers
+            assert stub.requests_for("/v1/completions") == []
     finally:
         client.shutdown(wait=True)
 
