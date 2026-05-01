@@ -19,6 +19,7 @@ import click
 import humanfriendly
 import yaml
 from google.protobuf import json_format
+from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
 from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug_report
@@ -51,7 +52,6 @@ from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
 from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, job_state_friendly, priority_band_value, task_state_friendly
 from iris.time_proto import timestamp_from_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

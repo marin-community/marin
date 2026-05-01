@@ -22,7 +22,6 @@ from __future__ import annotations
 import os.path
 from dataclasses import dataclass
 
-from experiments.llama import llama3_tokenizer
 from marin.datakit.download.bio_chem.chembl import chembl_step
 from marin.datakit.download.bio_chem.moleculenet import moleculenet_step
 from marin.datakit.download.bio_chem.pubchem import pubchem_step
@@ -34,6 +33,8 @@ from marin.execution.executor import ExecutorStep, executor_main
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
+
+from experiments.llama import llama3_tokenizer
 
 
 @dataclass(frozen=True)

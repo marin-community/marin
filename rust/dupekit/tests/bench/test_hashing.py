@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any
-from collections.abc import Callable
-
-import pytest
-import pyarrow as pa
 import hashlib
+from collections.abc import Callable
+from typing import Any
+
 import dupekit
+import pyarrow as pa
+import pytest
 
 
 def _py_blake2b(text: bytes) -> bytes:

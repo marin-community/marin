@@ -44,7 +44,7 @@ jobs:
       - name: Install locally
         run: |
           python -m pip install --upgrade pip
-          pip install -e .[test] "jax[cpu]==0.4.38"
+          pip install -e .[test] "jax[cpu]==0.9.2"
 
       - name: Launch Small Fast TPU Train LM job
         run: |

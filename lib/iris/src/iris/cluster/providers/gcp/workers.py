@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
+
+from rigging.timing import Deadline, Duration, Timestamp
 
 from iris.cluster.providers.gcp.bootstrap import (
     build_worker_bootstrap_script,
@@ -24,11 +26,11 @@ from iris.cluster.providers.gcp.bootstrap import (
     zone_to_multi_region,
 )
 from iris.cluster.providers.gcp.handles import (
+    _ACTIVE_VM_SLICE_STATES,
     CloudSliceState,
     GcpSliceHandle,
     GcpStandaloneWorkerHandle,
     GcpVmSliceHandle,
-    _ACTIVE_VM_SLICE_STATES,
     _build_gce_resource_name,
 )
 from iris.cluster.providers.gcp.service import (
@@ -40,6 +42,7 @@ from iris.cluster.providers.gcp.service import (
     VmCreateRequest,
 )
 from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA, ssh_impersonate_service_account, ssh_key_file
+from iris.cluster.providers.remote_exec import GceRemoteExec
 from iris.cluster.providers.types import (
     InfraError,
     Labels,
@@ -49,9 +52,7 @@ from iris.cluster.providers.types import (
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import get_tpu_topology
 from iris.cluster.worker.env_probe import construct_worker_id
-from iris.cluster.providers.remote_exec import GceRemoteExec
 from iris.rpc import config_pb2
-from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

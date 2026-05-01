@@ -5,32 +5,30 @@
 
 from __future__ import annotations
 
-import pytest
-
-from iris.cluster.controller.transitions import ClusterCapacity, RunningTaskEntry, SchedulingEvent
 import time
 
-from iris.cluster.log_store_helpers import task_log_key
-from iris.cluster.types import TaskAttempt
-from finelog.server import LogServiceImpl
+import pytest
 from finelog.rpc import logging_pb2
+from finelog.server import LogServiceImpl
+from iris.cluster.controller.transitions import ClusterCapacity, RunningTaskEntry, SchedulingEvent
+from iris.cluster.log_store_helpers import task_log_key
 from iris.cluster.providers.k8s.tasks import (
-    K8sTaskProvider,
     _GC_MAX_AGE_SECONDS,
     _LABEL_JOB_ID,
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
     _LABEL_TASK_HASH,
-    _LogPod,
     _MANAGED_POD_LABELS,
     _POD_NOT_FOUND_GRACE_CYCLES,
     _RUNTIME_LABEL_VALUE,
+    K8sTaskProvider,
+    _LogPod,
     _pod_name,
     _sanitize_label_value,
     _task_hash,
 )
 from iris.cluster.providers.k8s.types import ExecResult, K8sResource, PodResourceUsage
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import job_pb2
 
 from .conftest import make_batch, make_run_req, populate_node, populate_pod, populate_running_pod_resource
@@ -953,7 +951,7 @@ def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
 
 
 def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -987,7 +985,7 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
 
 def test_gc_respects_interval(provider, k8s):
     """_maybe_gc_terminal_resources should only run every _GC_INTERVAL_SECONDS."""
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1071,7 +1069,7 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
     terminal (old) and attempt 1 is still Running, deleting by task_hash would
     remove the active attempt's configmap and PDB protection.
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1157,9 +1155,10 @@ def test_log_collector_set_pods_adds_and_removes(k8s, log_pusher):
 
 def test_log_collector_set_pods_preserves_cursor_state(k8s, log_pusher):
     """set_pods() preserves last_timestamp for pods that remain tracked."""
+    from datetime import datetime, timezone
+
     from iris.cluster.providers.k8s.tasks import LogCollector
     from iris.cluster.types import JobName
-    from datetime import datetime, timezone
 
     collector = LogCollector(k8s, log_pusher, concurrency=1)
     task_id = JobName.from_wire("/job/0")

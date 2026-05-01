@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import cloudpickle
-
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient as IrisClientLib

@@ -23,12 +23,11 @@ from __future__ import annotations
 import logging
 import os
 
-from rigging.filesystem import marin_prefix
-from rigging.log_setup import configure_logging
-
 from marin.execution.executor import Executor, ExecutorMainConfig, ExecutorStep, executor_main
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from rigging.filesystem import marin_prefix
+from rigging.log_setup import configure_logging
 
 from experiments.datakit_testbed.mixture import weights_from_tokenized_bucket_stats
 from experiments.datakit_testbed.sampler import build_testbed_steps

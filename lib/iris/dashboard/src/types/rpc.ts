@@ -242,13 +242,20 @@ export interface WorkerResourceSnapshot {
   netSentBps?: string
 }
 
+export interface WorkerTaskAttempt {
+  taskId: string
+  attempt?: TaskAttempt
+}
+
 export interface GetWorkerStatusResponse {
   vm?: VmInfo
   scaleGroup?: string
   worker?: WorkerHealthStatus
   bootstrapLogs?: string
-  workerLogEntries?: LogEntry[]
-  recentTasks?: TaskStatus[]
+  // workerLogEntries removed from this response to avoid blocking the worker
+  // page render on a slow LogService proxy. Fetched separately via
+  // LogService.FetchLogs(source="/system/worker/<worker_id>").
+  recentAttempts?: WorkerTaskAttempt[]
   currentResources?: WorkerResourceSnapshot
   resourceHistory?: WorkerResourceSnapshot[]
 }

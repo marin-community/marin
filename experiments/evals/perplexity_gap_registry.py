@@ -17,12 +17,6 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from fray.types import ResourceConfig
-
-from experiments.bio_chem_notation import bio_chem_raw_validation_sets
-from experiments.defaults import default_raw_validation_sets
-from experiments.evals.fineweb2_multilingual import fineweb2_multilingual_raw_validation_sets
-from experiments.evals.long_tail_ppl_runnable import runnable_long_tail_raw_validation_sets
-from experiments.marin_models import marin_tokenizer
 from marin.evaluation.perplexity_gap import (
     GapFinderModelConfig,
     RawTextEvaluationDataset,
@@ -30,6 +24,12 @@ from marin.evaluation.perplexity_gap import (
     model_perplexity_scores,
 )
 from marin.execution.executor import ExecutorStep
+
+from experiments.bio_chem_notation import bio_chem_raw_validation_sets
+from experiments.defaults import default_raw_validation_sets
+from experiments.evals.fineweb2_multilingual import fineweb2_multilingual_raw_validation_sets
+from experiments.evals.long_tail_ppl_runnable import runnable_long_tail_raw_validation_sets
+from experiments.marin_models import marin_tokenizer
 
 DEFAULT_MAX_EVAL_LENGTH = 4096
 DEFAULT_MAX_DOCS_PER_DATASET = 256

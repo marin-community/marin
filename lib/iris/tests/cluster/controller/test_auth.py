@@ -7,10 +7,8 @@ import sqlite3
 from unittest.mock import Mock
 
 import pytest
-from starlette.testclient import TestClient
-
-from iris.cluster.bundle import BundleStore
 from finelog.server import LogServiceImpl
+from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.auth import (
     JwtTokenManager,
     _get_or_create_signing_key,
@@ -27,6 +25,7 @@ from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resolve_auth
 from rigging.timing import Timestamp
+from starlette.testclient import TestClient
 
 _TEST_TOKEN = "valid-test-token"
 _TEST_USER = "test-user"
@@ -453,11 +452,9 @@ def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optio
     We build a dashboard with a @requires_auth route injected and verify it
     agrees with resolve_auth for every (token, optional) combination.
     """
-    from iris.cluster.controller.dashboard import ControllerDashboard, requires_auth
-
-    from iris.cluster.controller.dashboard import _RouteAuthMiddleware
-    from starlette.routing import Route
+    from iris.cluster.controller.dashboard import ControllerDashboard, _RouteAuthMiddleware, requires_auth
     from starlette.responses import JSONResponse as _J
+    from starlette.routing import Route
 
     @requires_auth
     def _protected(_request):

@@ -7,7 +7,6 @@ import time
 from unittest.mock import patch
 
 import pytest
-
 from rigging.distributed_lock import (
     HEARTBEAT_TIMEOUT,
     GcsLease,

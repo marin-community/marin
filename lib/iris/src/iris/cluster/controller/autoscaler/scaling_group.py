@@ -14,16 +14,15 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 
-from collections.abc import Sequence
+from rigging.timing import Deadline, Duration, Timestamp, TokenBucket
 
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
 from iris.cluster.constraints import (
-    AttributeValue,
     CONSTRAINT_REGISTRY,
+    AttributeValue,
     Constraint,
     DeviceType,
     ResourceCapacity,
@@ -33,15 +32,15 @@ from iris.cluster.constraints import (
     is_cpu_device_type_constraint,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.providers.protocols import WorkerInfraProvider
+from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
 from iris.cluster.types import (
     WorkerStatusMap,
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import config_pb2, time_pb2, vm_pb2
-from iris.rpc import job_pb2
+from iris.rpc import config_pb2, job_pb2, time_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Deadline, Duration, Timestamp, TokenBucket
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +195,8 @@ def build_worker_config_for_group(
     if group_config.HasField("worker"):
         for k, v in group_config.worker.attributes.items():
             wc.worker_attributes[k] = v
+        if group_config.worker.cache_dir:
+            wc.cache_dir = group_config.worker.cache_dir
 
     template = group_config.slice_template
     region = _region_from_template(template)

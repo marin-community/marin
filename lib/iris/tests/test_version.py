@@ -7,7 +7,6 @@ import re
 import subprocess
 
 import pytest
-
 from iris import version as iris_version
 
 

@@ -6,7 +6,6 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-
 from fray.types import JobStatus
 from marin.rl.orchestration import _HostedRuntime, _run_rl_coordinator, _train_worker_entry
 from marin.rl.rl_job import RunConfig
