@@ -41,26 +41,34 @@ See ``.agents/logbooks/midtraining_delphi.md`` for the full rationale,
 numbers, and verification plan.
 """
 
+import logging
 import os
 from dataclasses import dataclass
 
+from fray.cluster import ResourceConfig
+from haliax import Axis
 from levanter.main.train_lm import CheckpointInitMode
 from levanter.optim import AdamHConfig
+from marin.execution.executor import ExecutorStep, MirroredValue, executor_main, mirrored
+from rigging.filesystem import marin_region
 
 from experiments.defaults import default_train
+from experiments.midtrain_data_safety import assert_val_train_disjoint
 from experiments.midtraining_data_buckets import BUCKET_2
 from experiments.midtraining_mixes import (
     FULL_HIGHQUALITY_NEMO_MATH_NAME,
+    MIDTRAIN_BUDGET_FRACTION,
     PRETRAIN_33P_MATH_67P_HIGHQUALITY_NEMO_MATH_NAME,
     PRETRAIN_67P_MATH_33P_HIGHQUALITY_NEMO_MATH_NAME,
     PRETRAIN_70P_MATH_30P_HIGHQUALITY_NEMO_MATH_NAME,
+    log_partition_summary,
+    midtrain_token_budget,
     midtraining_mix_by_name,
 )
 from experiments.scaling_law_sweeps.completed_adamh import completed_adamh_heuristic
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, MirroredValue, executor_main, mirrored
-from rigging.filesystem import marin_region
+
+logger = logging.getLogger(__name__)
 
 # ----------------------------------------------------------------------------
 # Fixed knobs (all bases)
@@ -68,11 +76,18 @@ from rigging.filesystem import marin_region
 
 DEFAULT_SEQ_LEN: int = 4096
 REFERENCE_WARMUP_BATCH_SIZE: int = 512
-TOKEN_BUDGET: int = int(os.environ.get("MIDTRAIN_TOKEN_BUDGET", "10000000000"))
-TOKEN_BUDGET_LABEL: str = os.environ.get(
-    "MIDTRAIN_TOKEN_BUDGET_LABEL",
-    "10b" if TOKEN_BUDGET == 10_000_000_000 else f"{TOKEN_BUDGET / 1_000_000_000:.1f}b".replace(".", "p"),
+# Budget resolution order (per launch):
+#   1. MIDTRAIN_TOKEN_BUDGET env var → hard override applied to every base
+#      (legacy single-budget path; use only when running one base at a time).
+#   2. MIDTRAIN_BUDGET_FRACTION env var → K override applied via the
+#      midtrain_token_budget heuristic (per-base scaling).
+#   3. midtraining_mixes.MIDTRAIN_BUDGET_FRACTION → default K = 0.20 from the
+#      single-source-of-truth constant.
+_TOKEN_BUDGET_HARD_OVERRIDE: int | None = (
+    int(os.environ["MIDTRAIN_TOKEN_BUDGET"]) if os.environ.get("MIDTRAIN_TOKEN_BUDGET") else None
 )
+_BUDGET_FRACTION_OVERRIDE: float = float(os.environ.get("MIDTRAIN_BUDGET_FRACTION", MIDTRAIN_BUDGET_FRACTION))
+_TOKEN_BUDGET_LABEL_OVERRIDE: str | None = os.environ.get("MIDTRAIN_TOKEN_BUDGET_LABEL")
 # The original 1e20/1e21 sweep uses 500 warmup steps at global batch 512, or
 # about 1.05B warmup tokens. Keep that warmup-token budget stable when the
 # batch size changes for larger TPU slices.
@@ -128,6 +143,12 @@ class MidtrainingBaseConfig:
     peak_adam_lr: float
     beta2: float
     epsilon: float
+    pretrain_tokens: int
+    """Tokens the base model was pretrained on (steps * pretrain_BS * seq_len).
+
+    Drives the per-base midtrain budget via ``midtrain_token_budget``: same
+    rule (``midtrain_tokens = pretrain_tokens * K``) applied to every scale.
+    """
 
     def compute_config(self, tpu_type: str) -> V5PComputeConfig:
         for compute_config in self.v5p_compute:
@@ -173,6 +194,9 @@ BASES: dict[str, MidtrainingBaseConfig] = {
         peak_adam_lr=7.382e-5,
         beta2=0.99980,
         epsilon=4.11e-8,
+        # 47,064 pretrain steps * 128 BS * 4096 seq = 24.67 B tokens
+        # (the 3e20-isoflop d2048-L21 pretrain ran the full 47,064 steps).
+        pretrain_tokens=47_064 * 128 * 4096,
     ),
     # Canonical Delphi 1e21 v5 (~3.4 B). Seed replicates v5-seed42,
     # v5-seed62746, and v6 converge within 0.001 c4-en-loss of this run.
@@ -196,6 +220,9 @@ BASES: dict[str, MidtrainingBaseConfig] = {
         peak_adam_lr=4.314e-4,
         beta2=0.99920,
         epsilon=2.81e-8,
+        # 22,057 pretrain steps * 512 BS * 4096 seq = 46.27 B tokens
+        # (Delphi v5 pretrain plan; checkpoint at step-21979 is 78 short of plan).
+        pretrain_tokens=22_057 * 512 * 4096,
     ),
     # Canonical Delphi 1e22 v5 (~9.7 B). This base was trained at global
     # batch 1024 on v4-512 and finished at step 38206. v5p-512 ran cleanly at
@@ -219,10 +246,16 @@ BASES: dict[str, MidtrainingBaseConfig] = {
         peak_adam_lr=3.276222099351447e-4,
         beta2=0.9984011994401821,
         epsilon=3.70426657045089e-8,
+        # 38,235 pretrain steps * 1024 BS * 4096 seq = 160.37 B tokens
+        # (Delphi v5 pretrain plan; checkpoint at step-38206).
+        pretrain_tokens=38_235 * 1024 * 4096,
     ),
 }
 
-LR_FACTORS: tuple[float, ...] = (0.5, 0.67, 0.83)
+# 10B/20B prior sweeps showed monotone lr0.5 < lr0.67 < lr0.83 on eval/loss
+# for both mixes — optimum at or below 0.5. Shift the grid down to bracket
+# the new minimum. See logbook §"2026-05-01 20:30 UTC — new sweep plan".
+LR_FACTORS: tuple[float, ...] = (0.33, 0.5, 0.67)
 
 
 # ----------------------------------------------------------------------------
@@ -263,8 +296,32 @@ _MIX_OUTPUT_TAGS = {
 # ----------------------------------------------------------------------------
 
 
-def _num_train_steps(batch_size: int, seq_len: int) -> int:
-    return max(1, round(TOKEN_BUDGET / (batch_size * seq_len)))
+def _token_budget_for_base(base: MidtrainingBaseConfig) -> int:
+    """Resolve the midtrain token budget for one base.
+
+    Hard-override (``MIDTRAIN_TOKEN_BUDGET``) takes precedence and applies the
+    same absolute budget to every base. Otherwise the heuristic
+    ``midtrain_token_budget(pretrain_tokens=base.pretrain_tokens, fraction=K)``
+    derives a per-base budget so each scale gets a budget proportional to its
+    own pretrain. K defaults to ``MIDTRAIN_BUDGET_FRACTION`` and can be
+    overridden per-launch via the ``MIDTRAIN_BUDGET_FRACTION`` env var.
+    """
+    if _TOKEN_BUDGET_HARD_OVERRIDE is not None:
+        return _TOKEN_BUDGET_HARD_OVERRIDE
+    return midtrain_token_budget(pretrain_tokens=base.pretrain_tokens, fraction=_BUDGET_FRACTION_OVERRIDE)
+
+
+def _budget_label(token_budget: int) -> str:
+    """Human-readable budget label embedded in run names ("4p93b", "10b", ...)."""
+    if _TOKEN_BUDGET_LABEL_OVERRIDE is not None:
+        return _TOKEN_BUDGET_LABEL_OVERRIDE
+    if token_budget % 1_000_000_000 == 0:
+        return f"{token_budget // 1_000_000_000}b"
+    return f"{token_budget / 1_000_000_000:.2f}b".replace(".", "p")
+
+
+def _num_train_steps(token_budget: int, batch_size: int, seq_len: int) -> int:
+    return max(1, round(token_budget / (batch_size * seq_len)))
 
 
 def _warmup_steps(batch_size: int, seq_len: int, num_train_steps: int) -> int:
@@ -369,9 +426,10 @@ def _mix_output_tag(mix_name: str | None) -> str:
     return _MIX_OUTPUT_TAGS[mix_name]
 
 
-def _build_run_name(base_tag: str, lr_factor: float) -> str:
+def _build_run_name(base_tag: str, lr_factor: float, token_budget: int) -> str:
     lr_str = _lr_str(lr_factor)
-    name = f"delphi-{_base_output_tag(base_tag)}-{_mix_output_tag(_MIDTRAIN_MIX_NAME)}-{TOKEN_BUDGET_LABEL}-lr{lr_str}"
+    budget_label = _budget_label(token_budget)
+    name = f"delphi-{_base_output_tag(base_tag)}-{_mix_output_tag(_MIDTRAIN_MIX_NAME)}-{budget_label}-lr{lr_str}"
     if _RUN_NAME_SUFFIX:
         name = f"{name}-{_RUN_NAME_SUFFIX}"
     if len(name) > 64:
@@ -393,12 +451,13 @@ def _build_runs() -> list[ExecutorStep]:
             seq_len=base.seq_len,
         )
 
+        token_budget = _token_budget_for_base(base)
         for lr_factor in LR_FACTORS:
             if _SELECT_LR is not None and _lr_str(lr_factor) != _SELECT_LR:
                 continue
             compute_config = _selected_compute_config(base)
             batch_size = OVERRIDE_BATCH_SIZE or base.train_batch_size
-            num_train_steps = _num_train_steps(batch_size, base.seq_len)
+            num_train_steps = _num_train_steps(token_budget, batch_size, base.seq_len)
             warmup_steps = _warmup_steps(batch_size, base.seq_len, num_train_steps)
             decay_steps = num_train_steps - warmup_steps
             optimizer = _build_adamh(base, lr_factor, warmup_steps, decay_steps)
@@ -431,7 +490,7 @@ def _build_runs() -> list[ExecutorStep]:
                 steps_per_hf_export=STEPS_PER_HF_EXPORT,
             )
 
-            name = _build_run_name(base_tag, lr_factor)
+            name = _build_run_name(base_tag, lr_factor, token_budget)
 
             data_tags = (
                 (f"midtraining_mix={_MIDTRAIN_MIX_NAME}", "midtraining-mix")
@@ -455,7 +514,9 @@ def _build_runs() -> list[ExecutorStep]:
                         f"tpu_type={compute_config.tpu_type}",
                         f"per_device_parallelism={compute_config.per_device_parallelism}",
                         f"tensor_parallel_size={compute_config.tensor_parallel_size}",
-                        f"token_budget={TOKEN_BUDGET}",
+                        f"pretrain_tokens={base.pretrain_tokens}",
+                        f"token_budget={token_budget}",
+                        f"budget_fraction={token_budget / base.pretrain_tokens:.4f}",
                         f"num_train_steps={num_train_steps}",
                         f"peak_lr={optimizer.learning_rate:.3e}",
                         f"adam_lr={optimizer.adam_lr:.3e}",
@@ -472,10 +533,33 @@ def _build_runs() -> list[ExecutorStep]:
     return runs
 
 
+def _run_pre_flight_safety_checks() -> None:
+    """Pre-flight: log val partition + verify val/train disjointness against
+    the live cache. Always runs at sweep launch (under ``__main__``).
+
+    Reads from GCS, so don't invoke at module import time. A failure means a
+    real safety violation — do not proceed with the launch.
+    """
+    if not _MIDTRAIN_MIX_NAME:
+        # Legacy single-step path bypasses LmDataConfig (no val carve-out
+        # exists). Strongly recommend the LmDataConfig path going forward.
+        logger.warning(
+            "MIDTRAIN_MIX_NAME unset; skipping val/train disjointness check. "
+            "Recommended: set MIDTRAIN_MIX_NAME=full_highquality_nemo_math (or a "
+            "replay variant) so the run goes through the safety-asserted path."
+        )
+        return
+    cfg = midtraining_mix_by_name(_MIDTRAIN_MIX_NAME)
+    pos = Axis("position", DEFAULT_SEQ_LEN)
+    log_partition_summary(cfg, pos)
+    assert_val_train_disjoint(cfg, pos)
+
+
 runs: list[ExecutorStep] = _build_runs()
 
 
 if __name__ == "__main__":
+    _run_pre_flight_safety_checks()
     executor_main(
         steps=runs,
         description="Delphi Nemotron-CC-Math 10B midtraining: LR sweep on AdamH-trained base checkpoints.",

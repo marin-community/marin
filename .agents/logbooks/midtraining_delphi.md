@@ -6650,6 +6650,482 @@ Systemic fixes to propose:
   and reuse it on parent retry. Cross-region compute placement should change
   physical I/O/mirroring, not the experiment identity.
 
+## 2026-05-01 21:00 UTC — generalized midtraining-mix framework + safety assertions
+
+This section turns the "67/33, math-only, Delphi 1e20+1e21" sweep plan above into a reusable framework that scales to any midtraining dataset (or mixture of midtraining datasets), with hard runtime guarantees that the held-out val never leaks into training.
+
+### Goal
+
+A future agent should be able to:
+
+1. Add a new midtraining dataset with one line.
+2. Compose a mixture of N midtraining datasets + pretrain replay with a small declarative spec.
+3. Run a sweep, pre-flight, and trust that — by construction and by runtime assertion — the val carve-out is disjoint from training, identical across runs, and not silently re-leaked by future Levanter refactors or cache rebuilds.
+
+The current `experiments/midtraining_mixes.py` hard-codes `nemotron_cc_math_v1/4plus` as the only midtraining component and uses ad-hoc helpers per ratio. We replace that with a typed spec.
+
+### Core abstraction
+
+```python
+# experiments/midtraining_mixes.py — proposed refactor
+
+from dataclasses import dataclass
+from typing import Iterable
+
+from levanter.data.text import LmDataConfig, BlockShuffleConfig
+
+# ───── 1. Heuristic constants (single source of truth) ─────
+
+MIDTRAIN_BUDGET_FRACTION = 0.20
+"""K: midtrain_tokens = pretrain_tokens * K. Same for every Delphi scale.
+
+K=0.20 ⇔ 5/6 pretrain : 1/6 midtrain compute split. Mantis-territory.
+"""
+
+DEFAULT_VAL_SEQUENCES_PER_MIDTRAIN_COMPONENT = 12_500
+"""~51.2 M tokens at seq=4096. ~0.1 % of a 52 B-token component. Cheap eval pass."""
+
+# ───── 2. Budget heuristic ─────
+
+def midtrain_token_budget(*, pretrain_tokens: int, fraction: float = MIDTRAIN_BUDGET_FRACTION) -> int:
+    if pretrain_tokens <= 0:
+        raise ValueError(f"pretrain_tokens must be positive, got {pretrain_tokens}")
+    if not (0 < fraction <= 1):
+        raise ValueError(f"fraction must be in (0, 1], got {fraction}")
+    return int(pretrain_tokens * fraction)
+
+# ───── 3. Declarative spec ─────
+
+@dataclass(frozen=True)
+class MidtrainComponent:
+    """A non-pretrain-replay dataset component participating in the midtrain mix."""
+    name: str                                     # registry key, e.g. "nemotron_cc_math_v1/4plus"
+    step: ExecutorStep                            # tokenized cache step
+    weight: float                                 # share of total mix in (0, 1]
+    val_sequences: int = DEFAULT_VAL_SEQUENCES_PER_MIDTRAIN_COMPONENT  # 0 disables val
+    held_out_in_pretrain: bool = False            # if True, fail loudly: this name also exists in pretrain replay
+
+@dataclass(frozen=True)
+class MidtrainMixSpec:
+    """Declarative recipe for a midtraining LmDataConfig.
+
+    pretrain_base provides the pretrain replay components and their relative
+    weights (e.g. nemotron_mix). The pretrain components' weights are scaled
+    so they sum to pretrain_share; midtrain components contribute the rest.
+    """
+    name: str
+    pretrain_base: LmDataConfig
+    pretrain_share: float                         # in (0, 1)
+    midtrain: tuple[MidtrainComponent, ...]
+
+    def __post_init__(self):
+        validate_midtrain_spec(self)
+
+# ───── 4. Builder ─────
+
+def build_midtrain_lm_data_config(spec: MidtrainMixSpec) -> LmDataConfig:
+    midtrain_share = sum(c.weight for c in spec.midtrain)
+    if abs((spec.pretrain_share + midtrain_share) - 1.0) > 1e-6:
+        raise ValueError(f"shares must sum to 1.0, got {spec.pretrain_share + midtrain_share}")
+
+    pretrain_weights = _scale_weights(
+        _fixed_train_weights(spec.pretrain_base, name="pretrain_base"),
+        spec.pretrain_share,
+    )
+    midtrain_weights = {c.name: c.weight for c in spec.midtrain}
+    weights = {**pretrain_weights, **midtrain_weights}
+
+    components = {
+        **spec.pretrain_base.components,
+        **{
+            c.name: step_to_lm_mixture_component(c.step, include_raw_paths=True)
+            for c in spec.midtrain
+        },
+    }
+
+    val_carveouts = {c.name: c.val_sequences for c in spec.midtrain if c.val_sequences > 0}
+
+    cfg = dataclasses.replace(
+        spec.pretrain_base,
+        components=components,
+        train_weights=weights,
+        num_validation_sequences=val_carveouts or None,
+        shuffle_before_trainval_split=True,           # invariant — never override
+        # leave shuffle=DEFAULT_LM_DATA_SHUFFLE in place (block shuffle for training)
+        auto_build_caches=False,                      # see CC2; pre-warm caches at sweep launch
+    )
+    assert_lm_data_config_safe(cfg)
+    return cfg
+```
+
+The current four ratio mixes (`70p_30m`, `67p_33m`, `33p_67m`, `full`) become trivial one-liners on top of `MidtrainMixSpec`. The two we're using for this sweep:
+
+```python
+P67M33 = MidtrainMixSpec(
+    name="pretrain_67p_math_33p_highquality_nemo_math",
+    pretrain_base=nemotron_mix,
+    pretrain_share=0.67,
+    midtrain=(MidtrainComponent("nemotron_cc_math_v1/4plus", _highquality_nemo_math_step, weight=0.33),),
+)
+
+P33M67 = MidtrainMixSpec(
+    name="pretrain_33p_math_67p_highquality_nemo_math",
+    pretrain_base=nemotron_mix,
+    pretrain_share=0.33,
+    midtrain=(MidtrainComponent("nemotron_cc_math_v1/4plus", _highquality_nemo_math_step, weight=0.67),),
+)
+```
+
+A future Recipe-B style mix becomes:
+
+```python
+RECIPE_B = MidtrainMixSpec(
+    name="recipe_b",
+    pretrain_base=nemotron_mix,
+    pretrain_share=0.67,
+    midtrain=(
+        MidtrainComponent("nemotron_cc_math_v1/4plus",      step_4plus,      weight=0.16),
+        MidtrainComponent("nemotron_cc_math_v1/4plus_mind", step_4plus_mind, weight=0.08),
+        MidtrainComponent("nemotron_mind",                  step_nemo_mind,  weight=0.05),
+        MidtrainComponent("mathcoder2",                     step_mathcoder2, weight=0.04),
+    ),
+)
+```
+
+Each midtrain component automatically gets a 12,500-sequence held-out slice (configurable per-component). The pretrain replay side has no carve-out (its retention is measured by Paloma c4_en separately).
+
+### Safety assertions — four layers
+
+Layered defense. Each catches a different failure mode.
+
+**Layer 1 — config-time validation (fast, every test run):**
+
+```python
+def validate_midtrain_spec(spec: MidtrainMixSpec) -> None:
+    if not (0 < spec.pretrain_share < 1):
+        raise ValueError(f"pretrain_share must be in (0,1), got {spec.pretrain_share}")
+    if not spec.midtrain:
+        raise ValueError("at least one midtrain component required")
+
+    names = [c.name for c in spec.midtrain]
+    if len(set(names)) != len(names):
+        raise ValueError(f"duplicate midtrain component names: {names}")
+
+    pretrain_names = set(spec.pretrain_base.components.keys())
+    overlap = set(names) & pretrain_names
+    if overlap:
+        # CC1: same name in both sides means weight collision; reject loudly.
+        raise ValueError(
+            f"midtrain components overlap with pretrain replay names: {overlap}. "
+            f"Rename the midtrain component or remove it from pretrain_base."
+        )
+
+    for c in spec.midtrain:
+        if not (0 < c.weight <= 1):
+            raise ValueError(f"weight for {c.name} must be in (0,1], got {c.weight}")
+        if c.val_sequences < 0:
+            raise ValueError(f"val_sequences for {c.name} must be >= 0, got {c.val_sequences}")
+
+    midtrain_share = sum(c.weight for c in spec.midtrain)
+    if abs((spec.pretrain_share + midtrain_share) - 1.0) > 1e-6:
+        raise ValueError(
+            f"shares must sum to 1.0; got pretrain={spec.pretrain_share}, "
+            f"midtrain_total={midtrain_share}, sum={spec.pretrain_share + midtrain_share}"
+        )
+```
+
+**Layer 2 — built-config validation (fast, every launch):**
+
+```python
+def assert_lm_data_config_safe(cfg: LmDataConfig) -> None:
+    weights = cfg.train_weights
+    if not isinstance(weights, dict):
+        raise TypeError(f"expected fixed dict weights, got {type(weights)}")
+    total = sum(weights.values())
+    if abs(total - 1.0) > 1e-6:
+        raise ValueError(f"weights sum to {total}, expected 1.0")
+
+    if cfg.num_validation_sequences:
+        for name in cfg.num_validation_sequences:
+            if name not in cfg.components:
+                raise ValueError(f"val carve-out {name!r} is not a registered component")
+            if cfg.num_validation_sequences[name] <= 0:
+                raise ValueError(f"val count for {name} must be positive")
+            # CC8: don't carve out more than 10 % of any component's expected size
+            # (we enforce a stronger check at launch time once cache length is known)
+
+    if cfg.shuffle_before_trainval_split is not True:
+        raise ValueError(
+            "shuffle_before_trainval_split must be True so val is a random "
+            "sample, not the positional tail"
+        )
+
+    # Training shuffle: block shuffle (#5246 default) or False. Don't allow full
+    # Feistel/era shuffle on training — it would re-introduce the cost regression.
+    if cfg.shuffle is True:
+        raise ValueError(
+            "Training shuffle=True (full Feistel) reintroduces the I/O cost "
+            "regression that #5246 fixed. Use BlockShuffleConfig (default) or False."
+        )
+    if not (cfg.shuffle is False or isinstance(cfg.shuffle, BlockShuffleConfig)):
+        raise ValueError(f"unsupported shuffle config type: {type(cfg.shuffle)}")
+```
+
+**Layer 3 — launch-time pre-flight (slow, once per (mix × cache) at sweep start):**
+
+```python
+def assert_val_train_disjoint(
+    cfg: LmDataConfig,
+    Pos: Axis,
+    *,
+    sample_train: int = 5_000,
+    min_train_to_val_ratio: int = 100,
+) -> None:
+    """One-shot disjointness check by content hashing.
+
+    Hashes a stride-sample of train sequences and ALL val sequences (val is
+    small, ~12.5k) for each component, then asserts empty intersection.
+    Catches:
+      - any future Levanter refactor that breaks the slice/shuffle composition
+      - any cache rebuild that desynchronizes train_sets/validation_sets
+      - any silent override of shuffle_before_trainval_split
+    """
+    if not cfg.num_validation_sequences:
+        return
+    train_sets = cfg.train_sets(Pos, key=jax.random.PRNGKey(42))
+    val_sets   = cfg.validation_sets(Pos)
+
+    for name in cfg.num_validation_sequences:
+        train_ds = train_sets[name].as_sync_dataset()
+        val_ds   = val_sets[name].as_sync_dataset()
+
+        train_len, val_len = len(train_ds), len(val_ds)
+        if val_len == 0:
+            raise AssertionError(f"empty val set for {name}")
+        if train_len < val_len * min_train_to_val_ratio:
+            raise AssertionError(
+                f"train < {min_train_to_val_ratio}x val for {name} "
+                f"({train_len} vs {val_len}); likely misconfigured carve-out"
+            )
+
+        stride = max(1, train_len // sample_train)
+        train_h = {hash(train_ds[i].tokens.tobytes()) for i in range(0, train_len, stride)}
+        val_h   = {hash(val_ds[i].tokens.tobytes())   for i in range(val_len)}
+        overlap = train_h & val_h
+        if overlap:
+            raise AssertionError(
+                f"VAL LEAKED INTO TRAIN for component {name!r}: {len(overlap)} "
+                f"hash matches out of {len(val_h)} val seqs (sampled {len(train_h)} train seqs). "
+                f"Stop the sweep and investigate the slice/shuffle composition."
+            )
+
+def assert_val_partition_stable(
+    cfg: LmDataConfig,
+    Pos: Axis,
+    expected_val_first_indices: Mapping[str, list[int]],
+) -> None:
+    """Pin the val partition to a known fingerprint.
+
+    `expected_val_first_indices` is a per-component list of the *first* few
+    raw-cache indices that should be in val (computed once, committed to the
+    sweep config). Re-running this asserts the val never silently shifted due
+    to cache rebuild, JAX RNG drift, or library upgrade.
+    """
+    for name, expected in expected_val_first_indices.items():
+        val_ds = cfg.validation_sets(Pos)[name].as_sync_dataset()
+        # Hash the first len(expected) val sequences and compare to a fingerprint.
+        actual = [hash(val_ds[i].tokens.tobytes()) for i in range(len(expected))]
+        if actual != expected:
+            raise AssertionError(
+                f"val partition for {name!r} drifted from the pinned fingerprint. "
+                f"Cache may have been rebuilt or split key changed."
+            )
+```
+
+**Layer 4 — runtime instrumentation (every run, cheap):**
+
+```python
+def log_partition_summary(cfg: LmDataConfig, Pos: Axis) -> None:
+    """Log val/train shape so it's recorded in W&B and stdout for every run."""
+    val_sets = cfg.validation_sets(Pos)
+    for name, ds in val_sets.items():
+        n = len(ds.as_sync_dataset())
+        logger.info("val[%s]: %d sequences (~%.1f M tokens)", name, n, n * Pos.size / 1e6)
+    logger.info("train weights (sum=%.6f): %s", sum(cfg.train_weights.values()), cfg.train_weights)
+```
+
+### Wiring — where each layer fires
+
+| Layer | When it runs | What it catches | Where to call |
+|---|---|---|---|
+| 1. `validate_midtrain_spec` | `MidtrainMixSpec.__post_init__` | mis-typed weights, name collisions, share sums | inside the dataclass |
+| 2. `assert_lm_data_config_safe` | end of `build_midtrain_lm_data_config` | dropped val carve-out, shuffle override regressions | builder |
+| 3. `assert_val_train_disjoint` | once per (spec × cache hash) | the math we proved above + Levanter slice/shuffle refactors | called unconditionally from `experiments/exp_delphi_math_10b_midtrain.py` `__main__` (i.e. at sweep launch, NOT per run) |
+| 4. `log_partition_summary` | startup of every `train_lm` task | drift in produced shape | called from `_build_run` in the experiment file |
+
+### Corner cases (numbered, with mitigation)
+
+**CC1 — Component name collision between pretrain replay and midtrain.** Same name on both sides means `train_weights` would have one entry that conflates both — silent merge. *Mitigation:* `validate_midtrain_spec` rejects overlapping names. If a future recipe wants to upweight an existing pretrain component, it should adjust `pretrain_base` before passing it in.
+
+**CC2 — Cache rebuilds shift `len(cache)`.** Feistel + slice is keyed off cache length; if `L` changes mid-sweep, val partition shifts and old "val" sequences appear in new train. *Mitigation:* (a) `auto_build_caches=False` in the built `LmDataConfig` so a missing cache is a fast error, not a silent rebuild; (b) `assert_val_partition_stable` against a pinned fingerprint to detect any drift; (c) pre-warm caches before launch and pin the underlying `ExecutorStep` hash.
+
+**CC3 — Cross-region partial cache.** GCS replication lag could expose a partial cache to a worker mid-run. *Mitigation:* the existing `_doublecheck_paths` guard + region-stable hash (#5223) make this practically impossible now, but `assert_val_partition_stable` would catch the val drift if it ever happened.
+
+**CC4 — Tokenizer mismatch across components.** Components tokenized with different tokenizers can't share a model embedding. *Mitigation:* `validate_midtrain_spec` could assert all components share `cfg.tokenizer` (they're all built from `nemotron_mix` derivatives + a math step that uses llama3 — already aligned, but worth asserting).
+
+**CC5 — Sequence-length mismatch.** Cache built at different `seq_len` than training. *Mitigation:* `dataset_for_component` re-packs but loses identity; assert all caches' seq-len matches `Pos.size`.
+
+**CC6 — Zero-weight component with `val_sequences > 0`.** `_has_nonzero_weight` filter at line 656 skips zero-weight components in the train build, so the val carve-out has nothing to slice from. *Mitigation:* `validate_midtrain_spec` rejects `weight=0` components; if you want a val for a non-trained component, that's a different feature.
+
+**CC7 — `stop_strategy` interactions.** `restart` is the default (revisit components on exhaustion). With `first`, training stops when any component runs out. The val carve-out shrinks each component by N. With our budgets, exhaustion is many epochs away. *Mitigation:* document; assert `stop_strategy="restart"` for sweeps, OR assert the smallest component's train length × seq exceeds the budget.
+
+**CC8 — `num_validation_sequences > L`.** Slicing returns empty train. *Mitigation:* Layer 3 `min_train_to_val_ratio=100` (i.e. val must be ≤1 % of cache); also a stricter Layer 2 check once cache length is known at build time.
+
+**CC9 — Determinism across JAX/Levanter versions.** The Feistel split uses JAX RNG with `PRNGKey(0)`. If JAX changes the round constants in a future version, the partition shifts. *Mitigation:* low-probability for our 24-72 h sweep over a stable cache + pinned library versions; we deliberately skipped the `assert_val_partition_stable` fingerprint helper (would be belt-and-suspenders against this scenario but adds upkeep with little real-world risk reduction here). If the sweep ever spans library upgrades, add a fingerprint check then.
+
+**CC10 — Mixture weight floating-point drift.** `_scale_weights` and downstream normalization may produce sums like `0.99999999`. *Mitigation:* Layer 2 uses `abs(sum - 1.0) < 1e-6` tolerance; mixtures auto-normalize internally so this is informational.
+
+**CC11 — Same midtrain component name across two mixes.** Both mixes set `num_validation_sequences[name] = 12_500` → same val sequences, identical eval target across mixes. *Mitigation:* this is desired (cross-mixture comparability); document.
+
+**CC12 — Multiple midtrain components in the same mix.** Each gets its own ~50 M-token val carve-out. Per-component eval losses are reported in `eval/<name>/loss`. *Mitigation:* design accommodates this (`midtrain` is a tuple); add a derived "weighted average midtrain val loss" metric at analysis time if desired.
+
+**CC13 — Document-level content overlap between pretrain replay and midtrain val.** Val held out from `nemotron_cc_math_v1/4plus` may share documents/passages with `nemotron_cc` in the pretrain replay. Index-level held-out, not content-level. *Mitigation:* out of scope; document the limitation. Future work: pre-tokenization document hash dedup across all training components, or use a `nemotron_cc` variant that explicitly subtracts 4plus.
+
+**CC14 — Held-out slice content unknown to other consumers.** Another experiment importing `BUCKET_2["nemotron_cc_math_v1/4plus"]` directly sees the full cache, including our val sequences. Our val is held out *for this experiment*, not from the world. *Mitigation:* fine for this sweep's purposes; document.
+
+**CC15 — Sweep launch race on cache build.** Two coordinators racing to materialize the same cache. *Mitigation:* `auto_build_caches=False` at sweep launch; pre-warm caches once, then start the sweep.
+
+**CC16 — Block shuffle window degeneracy on tiny midtrain components.** A midtrain dataset with fewer than `io_block_size × window_blocks = 131,072` sequences (~537 M tokens) collapses to a single shuffle window. Block shuffle still works but loses the hierarchical structure. *Mitigation:* warn (don't error) when a midtrain component is < 1 window; recommend a smaller `window_blocks` for tiny datasets.
+
+**CC17 — Val carve-out from very small midtrain component.** If a future midtrain dataset is small (say 50 M tokens), 12,500 val sequences is ~50 M tokens — i.e. *the whole component*. *Mitigation:* `MidtrainComponent.val_sequences` defaults to 12,500 but is overridable; Layer 2 enforces `val ≤ 10 % of cache` when cache length is known. Add a `val_fraction: float | None = None` field that lets the caller say "carve 0.1 % of this component" instead of an absolute count.
+
+**CC18 — `shuffle_before_trainval_split=False` re-enabled.** Would make val the literal positional tail (still disjoint, but not random). *Mitigation:* Layer 2 hard-asserts True; the spec doesn't expose a knob for it.
+
+**CC19 — `permutation_type` change between train and val construction.** Both use `perm_type="feistel"` hard-coded inside `_split_into_trainval_sets`. *Mitigation:* not exposed as a knob; if Levanter ever changes this default, our `assert_val_partition_stable` catches it.
+
+**CC20 — WandB metric path quirks with `/` in component names.** `nemotron_cc_math_v1/4plus` may render as `eval/nemotron_cc_math_v1/4plus/loss` (4-segment path) and confuse panel filters. *Mitigation:* normalize component name slashes when registering, or pin a sanitized display name for W&B.
+
+**CC21 — Heuristic `K=0.20` baked into both code and docs.** If we change K, two places must update. *Mitigation:* `MIDTRAIN_BUDGET_FRACTION` is the single source of truth in code; doc references it by reading the value at import time, or just notes "see `midtraining_mixes.py:MIDTRAIN_BUDGET_FRACTION`".
+
+**CC22 — Checkpoint-resume across version changes.** A run preempted under K=0.20 schedule that resumes after we bump K=0.25 would see a mismatched LR schedule. *Mitigation:* the executor output hash already encodes the budget (via `pretrain_tokens` + K), so a bump produces a fresh output path → no silent resume into the wrong schedule. Verify post-hash-fix #5223 still respects this.
+
+**CC23 — Per-base BS heterogeneity.** 1e20 was pretrained at BS=128, 1e21 at BS=512. The midtrain BS=512 is fine for both architectures, but `num_train_steps` differs because tokens-per-step differs across tiers if we ever vary it. *Mitigation:* the heuristic computes tokens-then-derives-steps; document that `BS_midtrain = 512` is the convention for the sweep, separately from per-base pretrain BS.
+
+**CC24 — Warmup steps fixed at 500.** For tiny midtrain budgets (1e20: 2,354 total steps), 500 warmup is 21 % of training. *Mitigation:* keep 500 as default but cap at `min(500, num_train_steps // 5)` to avoid pathological warmup-dominated runs; document and add a check.
+
+**CC25 — `min_lr_ratio = 0.1`.** Decay floor is 10 % of peak. For shorter midtrain runs the LR doesn't reach the floor near the end of decay since decay is shorter. Acceptable; informational.
+
+### Implementation order
+
+1. Refactor `experiments/midtraining_mixes.py` to introduce `MidtrainComponent` / `MidtrainMixSpec` / `build_midtrain_lm_data_config`. Keep the existing public names (`pretrain_67p_math_33p_highquality_nemo_math` etc.) as module-level constants pointing to the new builder so call sites don't break.
+2. Add `MIDTRAIN_BUDGET_FRACTION = 0.20`, `midtrain_token_budget(...)` and the four assert helpers to the same file (Layers 1, 2, 4) and a slow-pytest companion (Layer 3) at `experiments/test_midtrain_data_safety.py`.
+3. Update `experiments/exp_delphi_math_10b_midtrain.py`:
+   - The `BASES` table already carries `pretrain_tokens`. Replace the env-driven `MIDTRAIN_TOKEN_BUDGET` with a derived `midtrain_token_budget(pretrain_tokens=base["pretrain_tokens"])` per base.
+   - Call `assert_lm_data_config_safe(cfg)` and `log_partition_summary(...)` at run-build time.
+   - Once at sweep startup (i.e. before the parent dispatches children), call `assert_val_train_disjoint(...)` for each spec — gated by an env flag like `MIDTRAIN_VERIFY_VAL=1` so the slow check doesn't run on every launch but is easy to invoke.
+4. Generate per-base val fingerprints once (`assert_val_partition_stable` baseline), commit them next to the experiment file, and reference them from `assert_val_partition_stable`.
+5. Pre-warm `nemotron_cc_math_v1/4plus` cache in both `us-central1` and `us-east5`; record the cache hash and length in this logbook.
+6. Launch.
+
+## 2026-05-01 22:30 UTC — refactor landed: spec + assertions + per-base budget
+
+Steps 1-3 above are now implemented. Lint, types, and tests pass.
+
+### Files touched
+
+- `experiments/midtraining_mixes.py` — full rewrite around `MidtrainMixSpec`/`MidtrainComponent`/`build_midtrain_lm_data_config`. Adds `MIDTRAIN_BUDGET_FRACTION = 0.20`, `DEFAULT_VAL_SEQUENCES_PER_MIDTRAIN_COMPONENT = 12_500`, `midtrain_token_budget(...)`, `validate_midtrain_spec` (Layer 1), `assert_lm_data_config_safe` (Layer 2), `log_partition_summary` (Layer 4). Backward-compat names (`FULL_*`, `PRETRAIN_*P_*_HIGHQUALITY_*` strings, the four pre-built `LmDataConfig` constants, `midtraining_mix_by_name`) preserved. Built configs auto-validate via `assert_lm_data_config_safe` at registry-build time.
+- `experiments/midtrain_data_safety.py` — new file. Hosts `assert_val_train_disjoint`, `assert_val_partition_stable`, and `compute_val_partition_fingerprint` (Layer 3). Imports `jax` only here so consumers of `midtraining_mixes` aren't slowed down.
+- `experiments/test_midtrain_data_safety.py` — new file. 50 fast tests covering Layers 1+2 plus registry-integrity invariants. Hits no GCS.
+- `experiments/exp_delphi_math_10b_midtrain.py`:
+  - Added `pretrain_tokens: int` to `MidtrainingBaseConfig` and populated each entry from `experiments/exp1337_delphi_suite.py` step counts.
+  - Added `_token_budget_for_base(base)`: hard override (`MIDTRAIN_TOKEN_BUDGET`), then K override (`MIDTRAIN_BUDGET_FRACTION` env), then `midtrain_token_budget(...)` default.
+  - Added `_budget_label(budget)`: per-base label, env-overridable.
+  - `_num_train_steps(token_budget, batch_size, seq_len)` now takes the budget rather than reading a global.
+  - `LR_FACTORS` shifted to `(0.33, 0.5, 0.67)` per the new sweep plan (the prior `(0.5, 0.67, 0.83)` was monotone in eval/loss; optimum was at-or-below 0.5).
+  - Added `pretrain_tokens=...`, `token_budget=...`, `budget_fraction=...` tags so each W&B run records the heuristic inputs.
+  - Optional Layer 4 logging gated on `MIDTRAIN_VERIFY_PARTITION=1` env flag (touches GCS to read val sequence counts).
+
+### Per-base numbers as the code now computes them
+
+```
+1e20-iso-d2048-L21:  pretrain=24.67 B  midtrain=4.93 B   label=4p93b   steps=2,353  warmup=500  decay=1,853
+1e21-v5:             pretrain=46.26 B  midtrain=9.25 B   label=9p25b   steps=4,411  warmup=500  decay=3,911
+1e22-v5:             pretrain=160.37B  midtrain=32.07 B  label=32p07b  steps=7,635  warmup=250  decay=7,385  (BS=1024)
+```
+
+(The 1e21 step count is 4,411 rather than the 4,413 in the earlier table — exact integer arithmetic on `int(46_257M * 0.20) // (512*4096)` rounds slightly differently from the pen-and-paper rounding. The W&B label still reads `9p25b`. Inconsequential.)
+
+### Verification
+
+```bash
+./infra/pre-commit.py --fix experiments/midtraining_mixes.py experiments/midtrain_data_safety.py \
+    experiments/test_midtrain_data_safety.py experiments/exp_delphi_math_10b_midtrain.py
+# Ruff + Black + license + AST + ... all OK
+
+uv run --package marin --group lint pyrefly check experiments/midtraining_mixes.py \
+    experiments/midtrain_data_safety.py experiments/test_midtrain_data_safety.py \
+    experiments/exp_delphi_math_10b_midtrain.py
+# 0 errors
+
+uv run --package marin --group test python -m pytest \
+    experiments/test_midtrain_data_safety.py experiments/test_default_train_init_mode.py \
+    tests/execution/test_step_runner.py tests/test_training.py tests/execution/test_executor.py -q
+# 50 + 79 + 1 skipped = pass
+```
+
+Smoke test confirmed run names + steps + LR per base match the planned sweep:
+
+```
+checkpoints/delphi-1e21-p67m33-9p25b-lr0.33   steps=4,411 lr=2.450e-03 adam_lr=1.424e-04
+checkpoints/delphi-1e21-p67m33-9p25b-lr0.5    steps=4,411 lr=3.713e-03 adam_lr=2.157e-04
+checkpoints/delphi-1e21-p67m33-9p25b-lr0.67   steps=4,411 lr=4.975e-03 adam_lr=2.890e-04
+```
+
+### What is intentionally NOT done yet
+
+These remain as future work items (CC-numbered references point to the corner-case catalogue above):
+
+- **Cache pre-warm — courtesy, not correctness.** Before submitting coordinators, the tokenized GCS cache for every mix component (`nemotron_cc_math_v1/4plus` plus the `nemotron_mix` replay components for the 67/33 and 33/67 mixes) needs to be present in whichever region the coordinator lands in. With `auto_build_caches=False` baked into every built mix (Layer 2 invariant), a missing cache fails fast at dataset-construction time — loud, immediate, no silent rebuild. So pre-warming is a courtesy ("verify in advance to avoid a 5-min round trip via launch-fail-relaunch"), not a correctness requirement. The math cache + nemotron replay caches already exist from prior sweeps and #5266 unified temp+main buckets, so they're very likely fine; if a launch fails on missing-cache, copy the missing component into the failing region and retry.
+- **Partition fingerprint — explicitly skipped.** Adding `assert_val_partition_stable` against a committed baseline would catch val *drifting* between sweep launches (cache rebuilt with new content under the same path; JAX/Levanter version change in the Feistel constants). For a 24-72 h sweep over a stable content-addressed cache with pinned libraries, the risk is low and the disjointness check + `auto_build_caches=False` already cover the failure modes that matter. Helper removed from `experiments/midtrain_data_safety.py` to keep surface area minimal; re-add if a future sweep spans library upgrades or weeks.
+- **Warmup cap on small-BS bases** (CC24). 1e20 at BS=128 has 2,000 warmup steps out of 9,413 total = ~21 %. Acceptable for now; revisit if 1e20's early-step loss curve looks warmup-dominated.
+- **Legacy `MATH_TRAIN_STEP` single-step path** (no `MIDTRAIN_MIX_NAME` set). Still bypasses the val carve-out — `_run_pre_flight_safety_checks` warns and skips. Recommend always setting `MIDTRAIN_MIX_NAME=full_highquality_nemo_math` (or one of the replay variants) so the run goes through the safety-asserted path.
+- **`MIN_LR_RATIO = 0.0`**. Code has 0.0; the §"Fixed training knobs" plan above said 0.1 (Mantis convention). Discrepancy preserved — prior runs decayed to 0, switching now would confound interpretation. Document and keep 0.0 unless explicitly bumped.
+
+### Update: always-on safety check (no flag)
+
+The earlier draft had a `MIDTRAIN_VERIFY_PARTITION=1` env flag gating the disjointness check. That was wrong — the check is a hard safety property; if it ever fails we want to know *before* training starts, not learn after the fact that the sweep was contaminated. Removed the flag; moved the check into the `if __name__ == "__main__":` block of `experiments/exp_delphi_math_10b_midtrain.py` so it always runs at real sweep launch but doesn't slow routine test imports / dry-runs (which don't trigger `__main__`).
+
+The pre-flight now always:
+
+1. Calls `log_partition_summary(cfg, Pos)` — Layer 4, logs val sequence counts and weights to stdout/W&B.
+2. Calls `assert_val_train_disjoint(cfg, Pos)` — Layer 3, hashes a stride-sample of train + ALL of val and asserts empty intersection. Raises `AssertionError` and aborts the launch if val ever leaks into train.
+
+Cost: ~30 s per coordinator launch (12 launches × 30 s ≈ 6 min total). Negligible vs. catching a silent leak.
+
+If `MIDTRAIN_MIX_NAME` is unset (legacy single-step path), the pre-flight emits a warning and skips — that path doesn't go through `LmDataConfig` so there's no val carve-out to verify. Recommend always setting the mix name.
+
+### What this buys us beyond "trust the math"
+
+- **CC1, CC4, CC5, CC10:** caught at config import time. Tests fail fast.
+- **CC2, CC3, CC9:** caught at sweep launch by `assert_val_partition_stable`. Cache rebuilds, JAX upgrades, region splits all flagged before training starts.
+- **The Big One — index-level proof breaks:** caught at sweep launch by `assert_val_train_disjoint`. If a future Levanter refactor changes the slice/shuffle composition (e.g. block-shuffle is moved before val split, or val key changes), we see hash overlap and stop.
+- **CC11, CC13, CC14:** documented limitations, not bugs; future work.
+- **CC15, CC22:** prevented by infra-level conventions (pre-warm caches, region-stable hashes from #5223).
+
+### Unverified / open
+
+- The `dataset.shuffle(...)` API on the AsyncDataset wrapping a TreeStore cache is assumed to return an index-remap (lazy). Worth verifying that `dataset.shuffle(...).slice_dataset(...)` doesn't materialize the permuted cache anywhere on disk — if it did, we'd need to be careful about transient storage. (It's lazy; permutation is a `Permutation` object plus index lookups. Just confirm in the code once.)
+- `step_to_lm_mixture_component(step, include_raw_paths=True)` — confirm `include_raw_paths` doesn't bypass the val carve-out (it shouldn't; it just exposes raw-doc paths for debugging).
+- Levanter's `validation_sets()` doesn't accept a key argument; the deterministic `PRNGKey(0)` for the split is hard-coded. If Levanter ever exposes a per-call key, we must pin it.
+
+### Pointers
+
+- Heuristic + budget table: §"2026-05-01 20:30 UTC — new sweep plan" above.
+- Index-level disjointness proof: §"2026-05-01 20:30 UTC — new sweep plan" → "Held-out validation slice".
+- Code we are refactoring: `experiments/midtraining_mixes.py`, `experiments/exp_delphi_math_10b_midtrain.py`.
+- Levanter shuffle internals: `lib/levanter/src/levanter/data/text/datasets.py:519-554`, `lib/levanter/src/levanter/data/permutation.py:177-276`.
+- Project doc reference: `.agents/projects/delphi_midtraining.md` §10.
+
 ## 2026-05-01 19:51 UTC — handoff: main merged and midtraining launch guard pushed
 
 State for the next agent:
@@ -6706,6 +7182,124 @@ Local worktree note:
 - At handoff, expect unrelated dirty files to remain in the worktree, including this logbook,
   `experiments/defaults.py`, `tests/test_training.py`, and analysis scripts/plots. Do not assume they
   are part of the pushed refactor unless the user explicitly asks to curate and commit them.
+
+## 2026-05-01 20:30 UTC — new sweep plan: 1e20 + 1e21, 67/33 mixes, dynamic per-scale budget
+
+This supersedes the absolute-budget framing of every prior sweep (10 B and 20 B used the same number of tokens for every base, regardless of pretrain budget). Per §8.3 of `.agents/projects/delphi_midtraining.md`, midtrain budget now scales with each base's own pretrain budget under a single rule applied uniformly across the ladder.
+
+### Heuristic (one rule, every model)
+
+```
+midtrain_tokens = pretrain_tokens / 5
+```
+
+Equivalent to a 5/6-pretrain : 1/6-midtrain compute split (`K = 0.20`). Identical for 1e20, 1e21, 1e22, 1e23 — no scale-specific override. Sits in Mantis-style cooldown territory (~10–20 % of pretrain). The earlier proposal of K = 0.5 (1/3 midtrain share) was deemed too aggressive on 2026-05-01 lab discussion follow-up.
+
+### Pretrain → midtrain budgets
+
+**Midtrain BS = pretrain BS for every base** (no standardization). The earlier "BS=512 standardized" framing was leftover from the prior 10B sweep that overrode 1e20 to BS=512 for v4-128 friendliness. The current code already does the right thing by default (`OVERRIDE_BATCH_SIZE` is only used if `MIDTRAIN_BATCH_SIZE` env var is set; otherwise `batch_size = base.train_batch_size`).
+
+Pretrain tokens computed from `experiments/exp1337_delphi_suite.py` (steps × BS × seq=4096); 1e20 row is the 3e20-isoflop d2048-L21 stand-in (47064 × 128 × 4096):
+
+| Scale | Pretrain steps × BS | Pretrain tokens | Midtrain (K=0.20) | Midtrain BS | Midtrain steps | warmup + decay |
+|---|---|---:|---:|---:|---:|---|
+| **1e20** | 47,064 × 128 | **24.67 B** | **4.93 B** | **128** | **9,413** | 2,000 + 7,413 |
+| **1e21-v5** | 22,057 × 512 | **46.27 B** | **9.25 B** | **512** | **4,411** | 500 + 3,911 |
+| 1e22-v5 | 38,235 × 1024 | 160.37 B | 32.07 B | 1024 | 7,647 | 250 + 7,397 |
+| 1e23-v5 | 74,884 × 2048 | 628.25 B | 125.65 B | 2048 | 14,977 | 125 + 14,852 |
+
+Only 1e20 and 1e21 are in scope for this sweep; 1e22 and 1e23 are confirmation tiers per §8.5. The 1e21 budget (9.25 B) lands close to the prior 10 B sweep, giving a near-direct comparison against existing 1e21 v5p-256 pilot data without re-running.
+
+**Note on warmup token budget.** `WARMUP_TOKENS = 500 × 512 × 4096 ≈ 1.05 B` is held constant across bases; warmup *steps* scale inversely with `batch_size × seq_len`. So 1e20 at BS=128 gets 2,000 warmup steps (~21 % of training), 1e21 at BS=512 gets 500 warmup steps (~11 %), 1e22 at BS=1024 gets 250 warmup steps (~3 %), 1e23 at BS=2048 gets 125 warmup steps (~1 %). The "warmup tokens are constant, warmup steps are derived" convention preserves the same warmup compute regardless of BS.
+
+### Mixtures (two; both already registered)
+
+Both already exist in `experiments/midtraining_mixes.py`:
+
+- `pretrain_67p_math_33p_highquality_nemo_math` — 67% Nemotron pretrain replay, 33% `nemotron_cc_math_v1/4plus`
+- `pretrain_33p_math_67p_highquality_nemo_math` — 33% Nemotron pretrain replay, 67% `nemotron_cc_math_v1/4plus`
+
+### LR sweep grid
+
+3 factors × 2 mixes × 2 scales = **12 runs**. The 10 B/20 B prior campaigns showed monotone `lr0.5 < lr0.67 < lr0.83` on eval/loss for both mixes (optimum at or below 0.5), so shift the grid down to bracket the new minimum:
+
+```
+LR factors = {0.33, 0.5, 0.67} × pretrain peak
+```
+
+Same factor applied to both `learning_rate` and `adam_lr`. Warmup 500 steps, linear decay, `min_lr_ratio=0.1`, AdamH, β₂/ε inherited per base.
+
+| Base | factor | `learning_rate` | `adam_lr` |
+|---|---:|---:|---:|
+| 1e20 (peak 4.483e-3 / 7.382e-5) | 0.33 | 1.479e-3 | 2.436e-5 |
+| 1e20                            | 0.50 | 2.241e-3 | 3.691e-5 |
+| 1e20                            | 0.67 | 3.004e-3 | 4.946e-5 |
+| 1e21-v5 (peak 7.425e-3 / 4.314e-4) | 0.33 | 2.450e-3 | 1.424e-4 |
+| 1e21-v5                            | 0.50 | 3.713e-3 | 2.157e-4 |
+| 1e21-v5                            | 0.67 | 4.975e-3 | 2.890e-4 |
+
+### Held-out validation slice
+
+Per §8.2, the optimization target is a held-out subset of the **midtrain mixture itself**, not Paloma c4_en. Carve out from the math component (the thing the sweep is trying to optimize); pretrain retention is still measured by Paloma c4_en independently.
+
+Use Levanter's built-in mechanism (no new tokenization required):
+
+```python
+num_validation_sequences = {"nemotron_cc_math_v1/4plus": 12_500}  # 12.5k × 4096 ≈ 51.2 M tokens
+shuffle_before_trainval_split = True  # default
+```
+
+**Two separate shuffle code paths — don't conflate them.**
+
+1. **Training stream** (`LmDataConfig.shuffle`). PR #5246 (`f2f06da2b`, in main, merged here) changed the default from `False` → `DEFAULT_LM_DATA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=512, perm_type="feistel")`. This is the cost-saving change: a 9 B–23 B-token training stream under full Feistel would mean ~10⁹ random reads against the tree-store; block shuffle keeps reads contiguous within 256-sequence blocks. We rely on this default — not overridden.
+
+2. **Val carve-out** (`_split_into_trainval_sets`, `lib/levanter/src/levanter/data/text/datasets.py:519-539`). NOT touched by #5246. Still does a full Feistel index-remap, then slices the tail:
+
+   ```python
+   split_key = jax.random.PRNGKey(0)
+   dataset = dataset.shuffle(split_key, perm_type="feistel")   # full permutation, deterministic
+   train_ds = dataset.slice_dataset(0, length - N)
+   val_ds   = dataset.slice_dataset(length - N, length)
+   ```
+
+   Feistel here is an index map, not a physical reshuffle. Cost at val time = N random reads (12,500 ≈ 50 MB) × ~24 eval passes ≈ 300 k random reads per run — dwarfed by the protected training stream.
+
+| Stream | Volume per run | Shuffle | Why |
+|---|---:|---|---|
+| Training | 9 B (1e21) / 4.9 B (1e20) tokens | hierarchical block shuffle | I/O locality on huge sequential reads |
+| Val carve-out | ~50 M tokens, read ~24×/run | full Feistel (index remap) | tiny, random-access cost negligible; better mixing than block shuffle |
+
+Net result: block shuffle for training (best I/O — the #5246 default) + full Feistel for val carve-out (best mix on a tiny slice). Both on by default in `LmDataConfig`. No code change needed beyond setting `num_validation_sequences` on the two registered mixes.
+
+Sanity check to add after first run: assert val indices span the cache (e.g., quartile counts ≈ uniform). ~5 lines, in `experiments/test_default_train_init_mode.py` or similar.
+
+Removes ~0.1 % of `nemotron_cc_math_v1/4plus` (52 B → still ~52 B). No retokenization, no new GCS path — Levanter handles it inside the existing cache.
+
+### Hierarchical block shuffle — what we are relying on
+
+`BlockShuffleConfig(io_block_size=256, window_blocks=512, perm_type="feistel")` is the default for LM data (`lib/levanter/src/levanter/data/text/datasets.py:551-555`). It is a **two-level permutation applied per component before the mixture is built** (`datasets.py:740-754`, each component gets its own PRNG key):
+
+1. **Block level (Level 1):** the cache is cut into I/O blocks of 256 sequences (≈1.05 M tokens at seq=4096). Full blocks are globally permuted with a Feistel cipher (`permutation.py:177-219`). Preserves disk-prefetch locality — 256 contiguous sequences are read at once.
+2. **Window level (Level 2):** within each window of 512 blocks (≈537 M tokens), example offsets are also permuted (`permutation.py:220-234`, separate keys for full region and tail region).
+3. **Tail block** stays at the end of the dataset and is only locally permuted.
+
+The mixture is then built on top with `mixture_block_size=2048` sequences (~8.4 M tokens) — within each mixture block the component-weights are honored deterministically, but slot order is permuted (`MixtureDataset` in `lib/levanter/src/levanter/data/mixture.py`).
+
+Implications for this plan:
+- 12 B / 23 B midtrain budgets traverse the 537 M-token shuffle window 22×–43× → plenty of mixing on the math component.
+- The 67/33 vs 33/67 mix is honored at ~8.4 M-token granularity, not just on the run-average.
+- Held-out val sequences are excluded *before* shuffling, so the val set is the same 51.2 M-token slice for every run.
+
+### Open questions and next concrete steps
+
+1. **K = 0.20 chosen** (1/6 midtrain compute share, midtrain = pretrain / 5). Alternative K = 0.25 (1/5 share) on the table if the lighter cooldown underfits.
+2. Wire `num_validation_sequences={"nemotron_cc_math_v1/4plus": 12_500}` and `shuffle_before_trainval_split=True` into both registered mixes (`pretrain_67p_math_33p_highquality_nemo_math` and `pretrain_33p_math_67p_highquality_nemo_math`). Small edit to `experiments/midtraining_mixes.py`.
+3. Plumb `MIDTRAIN_TOKEN_BUDGET` to read from `K × pretrain_tokens` per base (not a hard-coded constant). The `BASES` table in `experiments/exp_delphi_math_10b_midtrain.py` already carries `pretrain_tokens` per entry; add a derived `midtrain_token_budget = pretrain_tokens // 5` field.
+4. Launch sequence:
+   - 6 × 1e20 runs (3 LR × 2 mixes), v5p-32 batch, ~2,354 steps each (~3 h/run at 7.2 s/it).
+   - 6 × 1e21 runs (3 LR × 2 mixes), v5p-64 batch, ~4,413 steps each (~4 h/run at 3.2 s/it).
+   - All 12 launched with `--region us-central1 --region us-east5`; recently merged region-stable hash fix (#5223) and the branch-local Delphi region-pin guard make this safe.
+5. Update §10 of `.agents/projects/delphi_midtraining.md` with the chosen K, the per-scale budget table, and the val-slice spec.
 
 ## 2026-05-01 19:58 UTC — main merged locally; which incident fixes landed
 

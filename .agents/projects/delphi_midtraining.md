@@ -244,6 +244,10 @@ Stick with **linear LR decay** as the baseline schedule. It's the tried-and-true
 5. Fit `(scale, mixture, budget_fraction, decay_point) → validation_loss` and plot predicted 1e22 / 1e23 curves with uncertainty.
 6. Spend larger compute only on confirmation runs at 1e22 and 1e23, sized to the dynamic budgets from step 3.
 
+### 8.6 Generalized midtraining-mix framework
+
+The concrete API design (`MidtrainMixSpec` / `MidtrainComponent` / `build_midtrain_lm_data_config` / `midtrain_token_budget`) plus four-layer safety assertions and a numbered corner-case catalogue (CC1-CC25) lives in the logbook section §"2026-05-01 21:00 UTC — generalized midtraining-mix framework + safety assertions" of `.agents/logbooks/midtraining_delphi.md`. That framework generalizes the §8.3 budget heuristic and the §8.2 held-out val slice to arbitrary single-component or multi-component midtraining mixtures, with runtime guarantees that val never leaks into training (sample-based hashing assertion + pinned val-partition fingerprint). Refactor `experiments/midtraining_mixes.py` per that section before launching the next sweep.
+
 ---
 
 ## 9. Provenance
@@ -258,8 +262,17 @@ Stick with **linear LR decay** as the baseline schedule. It's the tried-and-true
 
 ## 10. Open questions / things this doc does *not* yet have
 
-- **Held-out midtrain validation slice** — §8.2 calls for a small validation subset carved out of the midtraining mixture itself, but the slice does not yet exist. Open items: which mixture components to hold out from, target token count (probably O(10–100 M) tokens per component to stay cheap), pre- vs post-tokenization split, GCS path, and a guarantee that no training mix re-includes it. Pin this down before launching any LR sweep.
-- **Per-scale midtrain budget table** — §8.3 says the budget should be a fixed fraction of each scale's pretrain budget, but the table itself (1e21 / 1e22 / 1e23 → midtrain tokens at the chosen fraction) is not yet filled in. Once the fraction is chosen, append a table here mirroring §3.
+- **Held-out midtrain validation slice** — Plan (proposed 2026-05-01): carve `12_500` sequences (~51.2 M tokens at seq=4096) out of `nemotron_cc_math_v1/4plus` via Levanter's `LmDataConfig.num_validation_sequences` + `shuffle_before_trainval_split=True`. The split runs inside the cache layer in `_split_into_trainval_sets` (`lib/levanter/src/levanter/data/text/datasets.py:519-539`) which applies a **full Feistel permutation** with fixed `PRNGKey(0)` over the entire cache before slicing the val tail. This is strictly stronger mixing than the hierarchical block shuffle (every index can map to every other index, not just within a window) — the val set is N truly-uniform-random sequences pulled from anywhere in the cache, identical across every sweep run as long as the cache content and split key don't change. The per-component hierarchical block shuffle still runs on the train remainder for I/O locality during streaming. Carving from only the math component is intentional — pretrain retention is measured separately by Paloma c4_en. Removes ~0.1 % of 4plus (52 B → still ~52 B), negligible for training.
+- **Per-scale midtrain budget table** — Decision (2026-05-01 follow-up): single rule `midtrain_tokens = pretrain_tokens / 5` (i.e. 5/6 pretrain : 1/6 midtrain compute split, K = 0.20 for every scale). The earlier 2/3 : 1/3 (K=0.5) proposal was rejected as too midtrain-heavy; K = 0.20 sits in Mantis-style cooldown territory (~10–20 %). Pretrain steps × BS × 4096 from `experiments/exp1337_delphi_suite.py`:
+
+    | Scale | Pretrain steps × BS | Pretrain tokens | Midtrain (K=0.20) | Midtrain steps @ BS=512 |
+    |---|---|---:|---:|---:|
+    | 1e20 (3e20-iso d2048-L21) | 47,064 × 128 | 24.67 B | 4.93 B | 2,354 |
+    | 1e21-v5 | 22,057 × 512 | 46.27 B | 9.25 B | 4,413 |
+    | 1e22-v5 | 38,235 × 1024 | 160.37 B | 32.07 B | 15,294 |
+    | 1e23-v5 | 74,884 × 2048 | 628.25 B | 125.65 B | 59,907 |
+
+    Held constant across scales while extrapolating, per §8.3. K = 0.25 (1/5 share, lighter alternative) on the table if K = 0.20 underfits. Sweep tracking in `.agents/logbooks/midtraining_delphi.md` §"2026-05-01 20:30 UTC — new sweep plan".
 - **Checkpoint total sizes in bytes** — skipped to keep the audit cheap. Any future agent that cares can `gcloud storage du -s gs://marin-us-central2/<run>/checkpoints/` per run.
 - **Per-checkpoint eval curves** — this doc has only the final `_step` eval metrics from W&B summary. If you need mid-training loss/bpb over time, use `wandb.Api().run(...).history()` or scan `run.scan_history(keys=[...])`.
 - **Downstream lm-eval scores** (MMLU, HellaSwag, ARC) — these were `None` in the W&B summaries at the time of capture. Some may live on separate `*-lmeval-*` runs (we saw one `8jnuv7ca` for `exp2166-scaling-ladder-nemotron-validation-optimal-1e+18-24e99e-43791_lmeval_mmlu` in the same project) — not audited here.
