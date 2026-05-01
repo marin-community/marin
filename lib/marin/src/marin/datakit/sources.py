@@ -27,6 +27,7 @@ from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_normalize_steps
 from marin.datakit.download.hplt import hplt_v3_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
+from marin.datakit.download.massive import massive_normalize_steps
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
 from marin.datakit.download.nemotron_v2 import nemotron_v2_normalize_steps
@@ -144,6 +145,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("gpt-oss-rollouts", gpt_oss_rollouts_normalize_steps, 3.20),
         ("hplt_v3", hplt_v3_normalize_steps, 612.7),
         ("institutional_books", institutional_books_normalize_steps, 203.63),
+        ("massive_function_calling", massive_normalize_steps, 11.39),
         ("molmo2-cap", molmo2_cap_normalize_steps, 0.36),
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
