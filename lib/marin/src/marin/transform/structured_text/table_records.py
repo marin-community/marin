@@ -3,13 +3,12 @@
 
 """Byte-preserving serializers for HuggingFace-hosted table datasets.
 
-``tabular.py`` handles raw CSV/TSV files where the ingestion contract is
-"never reparse the bytes the source wrote". HF-hosted table datasets like
-ToTTo, WikiTableQuestions, and GitTables arrive as pre-parsed Parquet with nested
-structure (lists of cells, metadata fields). For those datasets the
-byte-preservation concern collapses to one rule: **every cell value that
-was a string in the source must survive into the emitted text verbatim**.
-No ``float(cell)``, no ``" ".join(cell.split())``, no case folding.
+HF-hosted table datasets like ToTTo, WikiTableQuestions, and GitTables
+arrive as pre-parsed Parquet with nested structure (lists of cells,
+metadata fields). For those datasets the byte-preservation concern
+collapses to one rule: **every cell value that was a string in the source
+must survive into the emitted text verbatim**. No ``float(cell)``, no
+``" ".join(cell.split())``, no case folding.
 """
 
 from __future__ import annotations
@@ -36,8 +35,7 @@ from marin.utils import fsspec_mkdirs
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_BYTES_PER_SOURCE = 30 * 1024 * 1024
-"""Mirror of the per-source cap in ``tabular.py`` — kept separate so tuning
-the two is independent."""
+"""Per-source cap for structured table-record slices."""
 
 TABLE_ROW_DELIMITER = "\n"
 TABLE_CELL_DELIMITER = "\t"

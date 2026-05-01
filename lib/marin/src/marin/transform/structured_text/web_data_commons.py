@@ -36,16 +36,12 @@ from marin.datakit.ingestion_manifest import (
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from marin.transform.structured_text.tabular import (
-    DEFAULT_MAX_BYTES_PER_DOCUMENT,
-    DEFAULT_MAX_BYTES_PER_SOURCE,
-    chunk_lines_by_bytes,
-    serialize_csv_document,
-)
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MAX_BYTES_PER_SOURCE = 30 * 1024 * 1024
+DEFAULT_MAX_BYTES_PER_DOCUMENT = 32 * 1024
 DEFAULT_MAX_ZIP_BYTES = 64 * 1024 * 1024
 DEFAULT_REQUEST_TIMEOUT = 120
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
@@ -76,6 +72,47 @@ class _CsvEntry:
     table_member: str
     csv_bytes: bytes
     metadata: Mapping[str, object]
+
+
+def serialize_csv_document(header_line: str | None, body_lines: Iterator[str] | list[str]) -> str:
+    """Concatenate a header line and body lines verbatim."""
+    parts: list[str] = []
+    if header_line is not None:
+        parts.append(header_line)
+    parts.extend(body_lines)
+    return "".join(parts)
+
+
+def chunk_lines_by_bytes(
+    lines: Iterator[str] | list[str],
+    *,
+    max_bytes_per_chunk: int,
+    header_line: str | None = None,
+) -> Iterator[list[str]]:
+    """Split lines into chunks whose UTF-8 sizes stay under the target cap."""
+    if max_bytes_per_chunk <= 0:
+        raise ValueError(f"max_bytes_per_chunk must be positive, got {max_bytes_per_chunk}")
+
+    header_bytes = len(header_line.encode("utf-8")) if header_line is not None else 0
+    body_budget = max_bytes_per_chunk - header_bytes
+    if body_budget <= 0:
+        raise ValueError(
+            f"max_bytes_per_chunk={max_bytes_per_chunk} is smaller than header size {header_bytes}; "
+            "increase the cap or disable header preservation."
+        )
+
+    current: list[str] = []
+    current_bytes = 0
+    for line in lines:
+        line_bytes = len(line.encode("utf-8"))
+        if current and current_bytes + line_bytes > body_budget:
+            yield current
+            current = []
+            current_bytes = 0
+        current.append(line)
+        current_bytes += line_bytes
+    if current:
+        yield current
 
 
 def _append_limited(buffer: io.BytesIO, chunk: bytes, *, max_zip_bytes: int, source: str) -> None:
