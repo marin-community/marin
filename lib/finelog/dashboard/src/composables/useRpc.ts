@@ -27,7 +27,7 @@ function useRpc<T>(service: string, method: string, body?: RpcBody): RpcState<T>
     error.value = null
     try {
       const resolvedBody = typeof body === 'function' ? body() : (body ?? {})
-      const resp = await fetch(`/${service}/${method}`, {
+      const resp = await fetch(`${service}/${method}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(resolvedBody),
@@ -60,7 +60,7 @@ export function useStatsRpc<T>(method: string, body?: RpcBody): RpcState<T> {
 }
 
 export async function statsRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const resp = await fetch(`/finelog.stats.StatsService/${method}`, {
+  const resp = await fetch(`finelog.stats.StatsService/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
@@ -73,7 +73,7 @@ export async function statsRpcCall<T>(method: string, body?: Record<string, unkn
 }
 
 export async function logRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const resp = await fetch(`/finelog.logging.LogService/${method}`, {
+  const resp = await fetch(`finelog.logging.LogService/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),

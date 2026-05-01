@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pyarrow as pa
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
-from finelog.server.asgi import build_log_server_asgi
+from finelog.server.asgi import _index_html_with_base, build_log_server_asgi
 from finelog.server.service import LogServiceImpl
 from finelog.server.stats_service import StatsServiceImpl
 from starlette.testclient import TestClient
@@ -178,6 +178,23 @@ def test_drop_table_log_namespace_rejected_via_asgi(tmp_path: Path):
             assert resp.status_code == 400, resp.text
     finally:
         log_service.close()
+
+
+def test_index_html_base_href_rewrite():
+    raw = b'<html><head><base href="/" /></head></html>'
+    # No prefix -> untouched.
+    assert _index_html_with_base(raw, "") == raw
+    assert _index_html_with_base(raw, "/") == raw
+    # Prefix gets normalized to leading + trailing slash.
+    assert _index_html_with_base(raw, "/proxy/log-server") == (
+        b'<html><head><base href="/proxy/log-server/" /></head></html>'
+    )
+    assert _index_html_with_base(raw, "proxy/log-server/") == (
+        b'<html><head><base href="/proxy/log-server/" /></head></html>'
+    )
+    # Replacement only happens once even if the placeholder appears twice.
+    raw_dup = b'<base href="/" /><base href="/" />'
+    assert _index_html_with_base(raw_dup, "/p") == b'<base href="/p/" /><base href="/" />'
 
 
 def test_drop_table_unknown_namespace_via_asgi(tmp_path: Path):

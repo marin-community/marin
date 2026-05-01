@@ -47,6 +47,25 @@ _NOT_BUILT_HTML = (
     "</body></html>"
 )
 
+# The dashboard template ships with `<base href="/">` so URLs resolve against
+# the origin root by default. When fronted by a reverse proxy at a sub-path
+# (e.g. https://foo.bar/proxy/log-server/), the proxy sets X-Forwarded-Prefix
+# and we rewrite the base href so fetch()/vue-router/asset URLs all resolve
+# under that prefix instead.
+_BASE_HREF_PLACEHOLDER = b'<base href="/"'
+
+
+def _index_html_with_base(raw: bytes, prefix: str) -> bytes:
+    if not prefix or prefix == "/":
+        return raw
+    if not prefix.startswith("/"):
+        prefix = "/" + prefix
+    if not prefix.endswith("/"):
+        prefix = prefix + "/"
+    replacement = f'<base href="{prefix}"'.encode()
+    return raw.replace(_BASE_HREF_PLACEHOLDER, replacement, 1)
+
+
 # Cap on concurrent FetchLogs RPCs. Each read can fan out into DuckDB scans
 # across hundreds of MB of parquet; allowing unbounded parallelism evicts the
 # page cache and wedges the process. Tune alongside the working-set caps in
@@ -120,8 +139,10 @@ def build_log_server_asgi(
         if favicon.is_file():
             routes.append(Route("/favicon.ico", lambda _r: FileResponse(favicon)))
 
-        async def _spa_index(_: Request) -> Response:
-            return Response((dist / "index.html").read_bytes(), media_type="text/html")
+        async def _spa_index(request: Request) -> Response:
+            prefix = request.headers.get("x-forwarded-prefix", "")
+            html = _index_html_with_base((dist / "index.html").read_bytes(), prefix)
+            return Response(html, media_type="text/html")
 
         routes.append(Route("/", _spa_index))
         routes.append(Route("/{rest:path}", _spa_index))

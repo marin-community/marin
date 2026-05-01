@@ -10,7 +10,10 @@ export default defineConfig({
   },
   output: {
     distPath: { root: 'dist' },
-    assetPrefix: '/',
+    // 'auto' makes chunk URLs resolve against the script tag's origin, so the
+    // bundle works under either / or a reverse-proxy prefix like
+    // /proxy/log-server/. The base is set via <base href> at serve time.
+    assetPrefix: 'auto',
   },
   html: {
     template: './src/template.html',

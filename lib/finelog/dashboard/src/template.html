@@ -3,6 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- href is rewritten at serve time from X-Forwarded-Prefix; fetch() and
+         vue-router both resolve relative URLs against this. -->
+    <base href="/" />
     <title><%= title %></title>
     <script>
       try {
