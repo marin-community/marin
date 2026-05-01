@@ -496,7 +496,10 @@ def _compute_file_pushdown(
             select_columns = list(op.columns)
             ops_to_skip.add(i)
         elif isinstance(op, FilterOp) and op.expr is None:
-            continue  # Lambda filter, can't push down
+            # Lambda filter — can't introspect what columns it reads, so any
+            # later SelectOp pushdown could KeyError the lambda by dropping
+            # columns it needs. Stop pushdown here.
+            break
         elif isinstance(op, (MapOp | FlatMapOp)):
             break  # Transform ops stop pushdown
         else:

@@ -123,3 +123,28 @@ def test_stage_name_truncation():
     name = stage.stage_name(max_length=20)
     assert len(name) <= 20
     assert name.endswith("...")
+
+
+def test_lambda_filter_blocks_select_pushdown(tmp_path):
+    """A lambda filter prevents SelectOp pushdown — otherwise the projection
+    would drop columns the lambda reads, KeyError-ing the user code."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from zephyr.execution import ZephyrContext
+    from zephyr.expr import col
+
+    path = str(tmp_path / "data.parquet")
+    pq.write_table(
+        pa.Table.from_pylist([{"a": 1, "b": 10, "c": 100}, {"a": 2, "b": 20, "c": 200}]),
+        path,
+    )
+
+    # Lambda reads column "c" but later select("a", "b") would drop it.
+    ds = Dataset.from_files(path).load_parquet().filter(lambda r: r["c"] > 150).select("a", "b")
+    results = ZephyrContext(name="test").execute(ds).results
+    assert results == [{"a": 2, "b": 20}]
+
+    # Sanity: an Expr filter (introspectable) does still allow select pushdown
+    # because referenced columns are added back at read time.
+    ds_expr = Dataset.from_files(path).load_parquet().filter(col("c") > 150).select("a", "b")
+    assert ZephyrContext(name="test").execute(ds_expr).results == [{"a": 2, "b": 20}]
