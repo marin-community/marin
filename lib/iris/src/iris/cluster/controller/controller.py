@@ -22,7 +22,7 @@ from finelog.client.proxy import LogServiceProxy
 from finelog.server import LogServiceImpl
 from finelog.server.asgi import build_log_server_asgi
 from finelog.server.stats_service import StatsServiceImpl
-from finelog.store.duckdb_store import DuckDBLogStore
+from finelog.store.duckdb_store import EMBEDDED_DUCKDB_MEMORY_LIMIT, EMBEDDED_DUCKDB_THREADS, DuckDBLogStore
 from rigging.log_setup import slow_log
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp, TokenBucket
 
@@ -1292,7 +1292,11 @@ class Controller:
         log_server_port = find_free_port()
         log_store_dir = self._config.local_state_dir / "embedded_log_store"
         log_store_dir.mkdir(parents=True, exist_ok=True)
-        log_store = DuckDBLogStore(log_dir=log_store_dir)
+        log_store = DuckDBLogStore(
+            log_dir=log_store_dir,
+            duckdb_memory_limit=EMBEDDED_DUCKDB_MEMORY_LIMIT,
+            duckdb_threads=EMBEDDED_DUCKDB_THREADS,
+        )
         self._log_service = LogServiceImpl(log_store=log_store)
         stats_service = StatsServiceImpl(log_store=log_store)
 
