@@ -185,6 +185,7 @@ class EndpointProxy:
         slashed = url_name.replace(".", "/")
         address = self._resolve(f"/{slashed}") or self._resolve(slashed)
         if address is None:
+            logger.warning("Proxy %s %s -> no endpoint %r", request.method, request.url.path, url_name)
             return JSONResponse(
                 {"error": f"No endpoint '{url_name}'"},
                 status_code=404,
@@ -194,6 +195,8 @@ class EndpointProxy:
         upstream_url = f"{base}/{sub_path}"
         if request.url.query:
             upstream_url = f"{upstream_url}?{request.url.query}"
+
+        logger.info("Proxy %s %s -> %s", request.method, request.url.path, upstream_url)
 
         forward_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
 
