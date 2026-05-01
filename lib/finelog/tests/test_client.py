@@ -502,8 +502,9 @@ def test_table_overflow_drops_oldest(tracked_clients, caplog):
             # Overflow trim runs in the calling thread; assert immediately.
             assert any("buffer overflow" in r.message for r in caplog.records)
             # Only the four most-recent rows survive; older ones were dropped.
+            # Payloads are now pre-built RecordBatches; extract via column().
             with table._cond:
-                surviving_ids = [item.payload.worker_id for item in table._queue]
+                surviving_ids = [item.payload.column("worker_id")[0].as_py() for item in table._queue]
             assert surviving_ids == ["w-16", "w-17", "w-18", "w-19"]
         finally:
             client_logger.removeHandler(caplog.handler)
@@ -622,10 +623,12 @@ def test_table_close_drains_queue_when_thread_starts_late(monkeypatch):
 
     monkeypatch.setattr(log_client_mod.threading, "Thread", DeferredThread)
 
+    # Use a custom row_encoder so write() doesn't fall into the log-tuple path.
     table = log_client_mod.Table(
         namespace="iris.worker",
         schema=Schema(columns=()),
         flusher=lambda _namespace, rows: sent.append(list(rows)),
+        row_encoder=lambda row: (row, 1),
     )
     table.write([{"worker_id": "w-1"}, {"worker_id": "w-2"}])
     table.close()

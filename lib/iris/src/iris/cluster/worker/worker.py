@@ -9,7 +9,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import StrEnum
 from pathlib import Path
 
 import uvicorn
@@ -40,9 +39,8 @@ from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.stats import (
     WORKER_STATS_NAMESPACE,
-    WORKER_STATUS_IDLE,
-    WORKER_STATUS_RUNNING,
     IrisWorkerStat,
+    WorkerStatus,
     build_worker_stat,
 )
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
@@ -54,14 +52,6 @@ from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
-
-
-class _StatsState(StrEnum):
-    """Lifecycle of the worker's iris.worker stats Table registration."""
-
-    UNINITIALIZED = "uninitialized"
-    READY = "ready"
-    FAILED = "failed"
 
 
 def _now_dt() -> datetime:
@@ -223,13 +213,9 @@ class Worker:
         # post-register.
         self._log_client: LogClient | None = None
         self._log_handler: RemoteLogHandler | None = None
-        # Stats Table for the iris.worker namespace. Created lazily on the
-        # first successful register; if registration ever fails (server
-        # unreachable, version skew) we log the failure once and leave the
-        # field None so subsequent heartbeats silently no-op. The dashboard
-        # pane treats an empty roster as "no workers" rather than blocking.
+        # Stats Table for the iris.worker namespace. Set in start() after
+        # LogClient is connected; None before start() (heartbeat only runs after).
         self._stats_table: Table | None = None
-        self._stats_state: _StatsState = _StatsState.UNINITIALIZED
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -304,6 +290,12 @@ class Worker:
                 timeout_ms=10_000,
                 interceptors=interceptors,
             )
+            # Register the iris.worker stats namespace eagerly. The resolver
+            # needs _controller_client, so this must follow its construction.
+            # A failure here propagates — schema bugs and config errors should
+            # surface at startup rather than silently producing an empty namespace.
+            assert self._log_client is not None
+            self._stats_table = self._log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
 
             # Start lifecycle thread: register + serve + reset loop
             self._threads.spawn(target=self._run_lifecycle, name="worker-lifecycle")
@@ -548,9 +540,8 @@ class Worker:
             self._log_handler.close()
             self._log_handler = None
         # The stats Table belongs to LogClient; LogClient.close() drains it.
-        # Drop our cached reference so a subsequent register starts fresh.
+        # Drop our cached reference so post-shutdown writes are no-ops.
         self._stats_table = None
-        self._stats_state = _StatsState.UNINITIALIZED
         if self._log_client is not None:
             self._log_client.close()
             self._log_client = None
@@ -945,16 +936,16 @@ class Worker:
         propagate so the worker fails fast and the bug surfaces in tests
         rather than silently producing an empty stats namespace.
         """
-        table = self._get_or_register_stats_table()
-        if table is None:
+        if self._stats_table is None:
             return
         if self._worker_id is None:
             return
         running = int(snapshot.running_task_count) if snapshot is not None else 0
         if running > 0 or self._tasks:
-            status = WORKER_STATUS_RUNNING
+            status = WorkerStatus.RUNNING
         else:
-            status = WORKER_STATUS_IDLE
+            status = WorkerStatus.IDLE
+        table = self._stats_table
         try:
             stat = build_worker_stat(
                 worker_id=self._worker_id,
@@ -970,38 +961,6 @@ class Worker:
             # Transport / stats-protocol failure: log and move on. The
             # heartbeat path must not block on the stats service.
             logger.warning("worker stat write failed: %s: %s", type(exc).__name__, exc)
-
-    def _get_or_register_stats_table(self) -> Table | None:
-        """Lazily register the iris.worker namespace and cache the Table.
-
-        Returns ``None`` if registration has previously failed for this
-        worker process (we do not retry register-time failures within one
-        process — a misconfigured schema or unavailable stats endpoint is
-        a startup-time problem).
-        """
-        if self._stats_state is _StatsState.READY:
-            return self._stats_table
-        if self._stats_state is _StatsState.FAILED:
-            return None
-        if self._log_client is None:
-            return None
-        try:
-            self._stats_table = self._log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
-        except (StatsError, ConnectError, ConnectionError, OSError, TimeoutError) as exc:
-            # Transport / stats-protocol failure: one-shot give up. Schema
-            # bugs (TypeError, KeyError out of schema_from_dataclass) are
-            # intentionally NOT caught — the worker should crash visibly so
-            # the bug surfaces in tests / startup logs rather than the
-            # dashboard silently rendering empty.
-            logger.warning(
-                "worker stats namespace register failed (giving up): %s: %s",
-                type(exc).__name__,
-                exc,
-            )
-            self._stats_state = _StatsState.FAILED
-            return None
-        self._stats_state = _StatsState.READY
-        return self._stats_table
 
     def handle_start_tasks(self, request: worker_pb2.Worker.StartTasksRequest) -> worker_pb2.Worker.StartTasksResponse:
         """Start task attempts on this worker. Returns per-task ack."""

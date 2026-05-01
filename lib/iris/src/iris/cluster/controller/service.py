@@ -17,13 +17,12 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from typing import Any, Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
-from finelog.client import LogClient, StatsError
 from finelog.client.proxy import LogServiceProxy
 from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
@@ -104,7 +103,6 @@ from iris.cluster.types import (
     get_tpu_count,
     is_job_finished,
 )
-from iris.cluster.worker.stats import WORKER_STATS_NAMESPACE, IrisWorkerStat
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc import logging_pb2 as iris_logging_pb2
 from iris.rpc.auth import (
@@ -119,103 +117,6 @@ from iris.rpc.proto_utils import job_state_friendly, priority_band_name, task_st
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
-
-
-# How far back the latest-row-per-worker query looks. Workers heartbeat at
-# ~5s; 5 minutes gives plenty of room for one missed heartbeat without
-# losing the worker from the pane, while still bounding the SQL.
-_STATS_PANE_LOOKBACK_MINUTES = 5
-
-
-# Latest-row-per-worker query. We use ``QUALIFY ROW_NUMBER()`` rather than a
-# self-join because DuckDB's window functions evaluate before the QUALIFY
-# clause and the planner pushes the WHERE filter past the partition. The
-# lookback window is plugged in at format-time; the rest is constant SQL.
-#
-# DuckDB's ``now()`` returns a TIMESTAMPTZ; the stored ``ts`` column is
-# tz-naive TIMESTAMP populated from a UTC-normalized datetime (see
-# ``Worker._now_dt`` and design.md "Datetime precision"). Comparing the two
-# directly silently uses the session timezone, which causes a non-UTC
-# controller to filter with the wrong window. Pin the comparison to UTC by
-# casting ``now()`` explicitly.
-_LATEST_WORKER_ROW_SQL = """
-SELECT *
-FROM (
-    SELECT *,
-           ROW_NUMBER() OVER (PARTITION BY worker_id ORDER BY ts DESC) AS _rn
-    FROM "iris.worker"
-    WHERE ts > (now() AT TIME ZONE 'UTC')::TIMESTAMP - INTERVAL '{minutes} minutes'
-) ranked
-WHERE _rn = 1
-ORDER BY worker_id
-""".strip()
-
-
-def _stats_status_message(*, healthy: bool, ts: Any) -> str:
-    """Empty when healthy; otherwise the unhealthy banner shown in the dashboard."""
-    if healthy:
-        return ""
-    age_ms = _to_timestamp(ts).age_ms()
-    return f"Unhealthy (last seen {age_ms // 1000}s ago)"
-
-
-def _stats_table_to_list_response(
-    table,
-) -> "controller_pb2.Controller.ListWorkersResponse":
-    """Map the latest-row-per-worker pa.Table to ListWorkersResponse."""
-    workers: list[controller_pb2.Controller.WorkerHealthStatus] = []
-    rows = table.to_pylist()
-    for row in rows:
-        ts = row.get("ts")
-        ts_proto = timestamp_to_proto(_to_timestamp(ts)) if ts is not None else None
-        metadata = job_pb2.WorkerMetadata(
-            cpu_count=int(row.get("cpu_count") or 0),
-            memory_bytes=int(row.get("memory_bytes") or 0),
-            tpu_name=row.get("tpu_name") or "",
-            gce_instance_name=row.get("gce_instance_name") or "",
-            gce_zone=row.get("zone") or "",
-        )
-        device_type = row.get("device_type") or ""
-        device_variant = row.get("device_variant") or ""
-        if device_type:
-            metadata.attributes["device-type"].string_value = device_type
-        if device_variant:
-            metadata.attributes["device-variant"].string_value = device_variant
-        zone = row.get("zone") or ""
-        if zone:
-            metadata.attributes["zone"].string_value = zone
-        running_count = int(row.get("running_task_count") or 0)
-        # Placeholder list — the Vue cell renders the length, not the values.
-        # When we have per-task identity in the stats namespace this becomes
-        # the real list; until then we preserve the count.
-        running_job_ids = [""] * running_count
-        healthy = bool(row.get("healthy"))
-        ws = controller_pb2.Controller.WorkerHealthStatus(
-            worker_id=row.get("worker_id") or "",
-            healthy=healthy,
-            consecutive_failures=0,  # Not carried in the stats namespace.
-            running_job_ids=running_job_ids,
-            address=row.get("address") or "",
-            metadata=metadata,
-            status_message=_stats_status_message(healthy=healthy, ts=ts),
-        )
-        if ts_proto is not None:
-            ws.last_heartbeat.CopyFrom(ts_proto)
-        workers.append(ws)
-    return controller_pb2.Controller.ListWorkersResponse(workers=workers)
-
-
-def _to_timestamp(value: Any) -> Timestamp:
-    """Coerce a query-result timestamp (tz-naive UTC datetime, or epoch ms) to Timestamp."""
-    if value is None:
-        return Timestamp.from_ms(0)
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return Timestamp.from_ms(int(value.timestamp() * 1000))
-    if isinstance(value, (int, float)):
-        return Timestamp.from_ms(int(value))
-    return Timestamp.from_ms(0)
 
 
 def _to_iris_log_entries(entries) -> list[iris_logging_pb2.LogEntry]:
@@ -1122,7 +1023,6 @@ class ControllerServiceImpl:
         auth: ControllerAuth | None = None,
         system_endpoints: dict[str, str] | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
-        stats_log_client: LogClient | None = None,
     ):
         self._transitions = transitions
         self._store = store
@@ -1134,15 +1034,9 @@ class ControllerServiceImpl:
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
-        self._stats_log_client = stats_log_client
-        # Cached stats Table; lazily resolved on the first list_workers call
-        # so a misbehaving stats service can't break controller startup.
-        self._stats_worker_table = None
-        # Short-TTL cache of the worker roster. Dashboards call ListWorkers
-        # and GetAutoscalerStatus back-to-back; both enumerate every worker.
-        # 1s is short enough that stale rows don't matter (workers have
-        # slower health/heartbeat cadence) and long enough to fuse adjacent
-        # refreshes into one SELECT.
+        # Short-TTL cache of the worker roster. GetAutoscalerStatus enumerates
+        # every worker; 1s is short enough that stale rows don't matter and
+        # long enough to fuse adjacent refreshes into one SELECT.
         self._worker_roster_cache: tuple[float, list[WorkerDetailRow]] | None = None
         self._worker_roster_cache_lock = threading.Lock()
         self._worker_roster_ttl_s = 1.0
@@ -1156,10 +1050,9 @@ class ControllerServiceImpl:
     def _worker_roster_cached(self) -> list[WorkerDetailRow]:
         """Return the worker roster, refreshed at most once per TTL window.
 
-        `ListWorkers` and `GetAutoscalerStatus` both enumerate every worker
-        and get polled back-to-back by the dashboard. The SELECT + attribute
+        `GetAutoscalerStatus` enumerates every worker. The SELECT + attribute
         fan-out is expensive (no WHERE, full scan of workers + worker_attributes)
-        and repeating it twice per refresh is pure duplication.
+        so we cache to fuse adjacent refreshes into one SELECT.
         """
         now = time.monotonic()
         with self._worker_roster_cache_lock:
@@ -1777,65 +1670,6 @@ class ControllerServiceImpl:
             worker_id=str(worker_id),
             accepted=True,
         )
-
-    def list_workers(
-        self,
-        request: controller_pb2.Controller.ListWorkersRequest,
-        ctx: Any,
-    ) -> controller_pb2.Controller.ListWorkersResponse:
-        """List all workers with their running task counts.
-
-        The worker pane reads unconditionally from the ``iris.worker`` stats
-        namespace. Stats are observation-only; on transport / stats-protocol
-        failure the response is an empty roster so the Vue layer renders a
-        soft failure (see design.md "Availability") rather than crashing.
-        """
-        if self._controller.has_direct_provider:
-            return controller_pb2.Controller.ListWorkersResponse()
-
-        response = self._list_workers()
-        if response is None:
-            return controller_pb2.Controller.ListWorkersResponse()
-        return response
-
-    def _list_workers(self) -> controller_pb2.Controller.ListWorkersResponse | None:
-        """Build the worker list from the stats service, soft-failing to None.
-
-        Returns ``None`` if the stats client is missing, the namespace can't
-        be registered, or the SQL query raises a transport-level error.
-        Schema-mapping bugs (KeyError / TypeError / AttributeError out of
-        ``_stats_table_to_list_response``) are deliberately not caught — they
-        must surface so operators can see and fix them.
-        """
-        if self._stats_log_client is None:
-            return None
-        try:
-            table = self._get_stats_worker_table()
-            if table is None:
-                return None
-            result = table.query(_LATEST_WORKER_ROW_SQL.format(minutes=_STATS_PANE_LOOKBACK_MINUTES))
-        except (StatsError, ConnectError, ConnectionError, OSError, TimeoutError) as exc:
-            logger.warning("stats pane query failed: %s: %s", type(exc).__name__, exc)
-            return None
-        return _stats_table_to_list_response(result)
-
-    def _get_stats_worker_table(self):
-        """Lazily register and cache the iris.worker stats Table."""
-        if self._stats_worker_table is not None:
-            return self._stats_worker_table
-        if self._stats_log_client is None:
-            return None
-        try:
-            self._stats_worker_table = self._stats_log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
-        except (StatsError, ConnectError, ConnectionError, OSError, TimeoutError) as exc:
-            logger.warning(
-                "stats pane: register %s failed: %s: %s",
-                WORKER_STATS_NAMESPACE,
-                type(exc).__name__,
-                exc,
-            )
-            return None
-        return self._stats_worker_table
 
     # --- Endpoint Management ---
 

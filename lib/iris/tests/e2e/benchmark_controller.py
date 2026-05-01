@@ -40,6 +40,7 @@ import click
 import httpx
 import humanfriendly
 import psutil
+from iris.cli.worker_health import query_workers
 from iris.client.client import IrisClient, Job, ResourceSpec
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.types import Entrypoint, EnvironmentSpec, get_tpu_topology, tpu_device
@@ -201,13 +202,11 @@ def _submit_job_mix(client: IrisClient, num_jobs: int, workspace: Path) -> tuple
     return schedulable_jobs, unschedulable_jobs
 
 
-def _wait_for_workers(controller_client: ControllerServiceClientSync, min_workers: int, timeout: float = 120.0) -> None:
+def _wait_for_workers(controller_url: str, min_workers: int, timeout: float = 120.0) -> None:
     """Wait for workers to register with the controller."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        request = controller_pb2.Controller.ListWorkersRequest()
-        response = controller_client.list_workers(request)
-        healthy = [w for w in response.workers if w.healthy]
+        healthy = [w for w in query_workers(controller_url) if w.healthy]
         if len(healthy) >= min_workers:
             logger.info(f"Cluster ready: {len(healthy)} healthy workers registered")
             return
@@ -287,7 +286,7 @@ def run_benchmark(num_jobs: int, num_slices: int) -> BenchmarkMetrics:
         try:
             # Wait for workers
             print(f"Waiting for {num_slices} workers to register...")
-            _wait_for_workers(controller_client, num_slices, timeout=120.0)
+            _wait_for_workers(url, num_slices, timeout=120.0)
 
             # Get controller process for memory tracking
             controller_proc = psutil.Process(os.getpid())
@@ -422,7 +421,7 @@ def run_single_worker_benchmark(num_jobs: int) -> BenchmarkMetrics:
 
         try:
             print("Waiting for worker to register...")
-            _wait_for_workers(controller_client, 1, timeout=60.0)
+            _wait_for_workers(url, 1, timeout=60.0)
 
             controller_proc = psutil.Process(os.getpid())
             mem_before = controller_proc.memory_info().rss
@@ -654,7 +653,7 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
 
         try:
             print("Waiting for worker...")
-            _wait_for_workers(controller_client, 1, timeout=60.0)
+            _wait_for_workers(url, 1, timeout=60.0)
 
             # Submit jobs with many replicas to create many tasks.
             print(f"Submitting {num_jobs} jobs with {tasks_per_job} replicas each...")
@@ -741,13 +740,6 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             _time_rpc(
                 f"ListTasks (all, {total_tasks} tasks)",
                 lambda: controller_client.list_tasks(controller_pb2.Controller.ListTasksRequest()),
-                iters,
-            )
-
-            # ListWorkers
-            _time_rpc(
-                "ListWorkers",
-                lambda: controller_client.list_workers(controller_pb2.Controller.ListWorkersRequest()),
                 iters,
             )
 

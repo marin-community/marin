@@ -27,6 +27,7 @@ import pytest
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.chaos import reset_chaos
+from iris.cli.worker_health import query_workers
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, WellKnownAttribute
@@ -251,9 +252,7 @@ class IrisTestCluster:
         """Wait until at least min_workers healthy workers are registered."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            request = controller_pb2.Controller.ListWorkersRequest()
-            response = self.controller_client.list_workers(request)
-            healthy = [w for w in response.workers if w.healthy]
+            healthy = [w for w in query_workers(self.url) if w.healthy]
             if len(healthy) >= min_workers:
                 return
             time.sleep(0.5)
@@ -289,27 +288,32 @@ class ClusterCapabilities:
         return "tpu" in self.device_types
 
 
-def discover_capabilities(controller_client: ControllerServiceClientSync) -> ClusterCapabilities:
+def discover_capabilities(controller_url: str) -> ClusterCapabilities:
     """Probe the live worker fleet to determine cluster capabilities."""
-    request = controller_pb2.Controller.ListWorkersRequest()
-    response = controller_client.list_workers(request)
-    healthy = [w for w in response.workers if w.healthy]
+    healthy = [w for w in query_workers(controller_url) if w.healthy]
 
     regions: set[str] = set()
     device_types: set[str] = set()
     tpu_names: set[str] = set()
 
     for w in healthy:
-        attrs = w.metadata.attributes
-        region_attr = attrs.get(WellKnownAttribute.REGION)
-        if region_attr and region_attr.HasField("string_value"):
-            regions.add(region_attr.string_value)
-        device_attr = attrs.get(WellKnownAttribute.DEVICE_TYPE)
-        if device_attr and device_attr.HasField("string_value"):
-            device_types.add(device_attr.string_value)
-        tpu_attr = attrs.get(WellKnownAttribute.TPU_NAME)
-        if tpu_attr and tpu_attr.HasField("string_value"):
-            tpu_names.add(tpu_attr.string_value)
+        resp = controller_pb2.Controller.GetWorkerStatusRequest(id=w.worker_id)
+        try:
+            controller_client = ControllerServiceClientSync(address=controller_url, timeout_ms=10000)
+            status = controller_client.get_worker_status(resp)
+            controller_client.close()
+            attrs = status.worker.metadata.attributes
+            region_attr = attrs.get(WellKnownAttribute.REGION)
+            if region_attr and region_attr.HasField("string_value"):
+                regions.add(region_attr.string_value)
+            device_attr = attrs.get(WellKnownAttribute.DEVICE_TYPE)
+            if device_attr and device_attr.HasField("string_value"):
+                device_types.add(device_attr.string_value)
+            tpu_attr = attrs.get(WellKnownAttribute.TPU_NAME)
+            if tpu_attr and tpu_attr.HasField("string_value"):
+                tpu_names.add(tpu_attr.string_value)
+        except Exception:
+            logger.warning("Failed to get worker status for %s", w.worker_id, exc_info=True)
 
     return ClusterCapabilities(
         regions=tuple(sorted(regions)),

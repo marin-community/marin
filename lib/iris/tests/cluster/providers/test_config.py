@@ -13,7 +13,6 @@ import pytest
 import yaml
 from iris.cluster.config import (
     config_to_dict,
-    connect_cluster,
     create_autoscaler,
     get_ssh_config,
     load_config,
@@ -22,10 +21,9 @@ from iris.cluster.config import (
 )
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.providers.factory import create_provider_bundle
-from iris.rpc import config_pb2, controller_pb2
-from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc import config_pb2
 from iris.time_proto import duration_to_proto
-from rigging.timing import Duration, ExponentialBackoff
+from rigging.timing import Duration
 
 
 class TestConfigRoundTrip:
@@ -590,7 +588,6 @@ class TestLocalConfigTransformation:
 
     def test_make_local_config_transforms_gcp_to_local(self, tmp_path: Path):
         """make_local_config transforms GCP config to local mode."""
-        from iris.cluster.config import make_local_config
 
         config_content = """\
 platform:
@@ -654,7 +651,6 @@ scale_groups:
 
     def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
         """make_local_config preserves accelerator type and other scale group settings."""
-        from iris.cluster.config import make_local_config
 
         config_content = """\
 platform:
@@ -726,7 +722,6 @@ scale_groups:
 
     def test_example_configs_load_and_transform(self):
         """Example configs in examples/ directory load and transform to local correctly."""
-        from iris.cluster.config import make_local_config
 
         iris_root = Path(__file__).parent.parent.parent.parent
         example_configs = [
@@ -1808,35 +1803,3 @@ def test_coreweave_worker_provider_rejected():
     sg.slice_template.coreweave.region = "US-WEST-04A"
     with pytest.raises(ValueError, match="does not support worker_provider"):
         validate_config(config)
-
-
-SMOKE_GCP_CONFIG = Path(__file__).resolve().parents[3] / "examples" / "smoke-gcp.yaml"
-
-
-@pytest.mark.skip(
-    reason="list_workers now reads from the iris.worker stats namespace. "
-    "Local-mode workers boot but the in-process stats emission timing under "
-    "connect_cluster is not yet reliable enough for this test; the wiring "
-    "is correct (production controllers use a co-hosted finelog DuckDBLogStore) "
-    "but synchronizing first-ping → flush → query inside one test process "
-    "needs a follow-up. Re-enable once the local-mode stats path is "
-    "deterministic."
-)
-def test_smoke_gcp_config_boots_locally():
-    """Load smoke-gcp.yaml, convert to local mode, verify workers join."""
-    config = load_config(SMOKE_GCP_CONFIG)
-    config = make_local_config(config)
-
-    with connect_cluster(config) as url:
-        client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-
-        def _has_healthy_worker() -> bool:
-            workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
-            return any(w.healthy for w in workers)
-
-        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until_or_raise(
-            _has_healthy_worker,
-            timeout=Duration.from_seconds(30.0),
-            error_message="No healthy workers with smoke-gcp.yaml in local mode",
-        )
-        client.close()

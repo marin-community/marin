@@ -1064,34 +1064,6 @@ def test_worker_addresses_for_tasks(state, service):
 # =============================================================================
 
 
-def test_list_workers_returns_all(service, state):
-    """Verify list_workers returns all registered workers."""
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
-    db = state._db
-    db.ensure_user("system:worker", Timestamp.now(), role="worker")
-    token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
-    try:
-        for i in range(3):
-            request = controller_pb2.Controller.RegisterRequest(
-                address=f"host{i}:8080",
-                metadata=make_worker_metadata(),
-                worker_id=f"worker-{i}",
-            )
-            service.register(request, None)
-    finally:
-        _verified_identity.reset(token)
-
-    request = controller_pb2.Controller.ListWorkersRequest()
-    response = service.list_workers(request, None)
-
-    assert len(response.workers) == 3
-
-    # All workers should be healthy after registration
-    for w in response.workers:
-        assert w.healthy is True
-
-
 # =============================================================================
 # Constraint Injection Tests
 # =============================================================================

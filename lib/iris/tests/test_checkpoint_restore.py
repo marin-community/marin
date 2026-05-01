@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import pytest
+from iris.cli.worker_health import query_workers
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.providers.local.cluster import LocalCluster
@@ -32,8 +33,7 @@ class _IrisTestHelper:
     def wait_for_workers(self, count: int, timeout: float = 30):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            resp = self.controller_client.list_workers(controller_pb2.Controller.ListWorkersRequest())
-            healthy = [w for w in resp.workers if w.healthy]
+            healthy = [w for w in query_workers(self.url) if w.healthy]
             if len(healthy) >= count:
                 return
             time.sleep(0.5)

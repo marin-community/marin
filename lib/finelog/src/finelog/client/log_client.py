@@ -119,8 +119,7 @@ DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
 _BACKOFF_INITIAL = 0.5
 _BACKOFF_MAX = 30.0
 
-# Floor on per-row byte cost. Strings vary; we use a conservative estimate
-# so the byte cap is not bypassed by tiny entries.
+# Floor on per-row byte cost applied to log entries only.
 _EST_BYTES_PER_LOG_ENTRY = 256
 
 # Throttle overflow warnings.
@@ -243,25 +242,23 @@ class Table:
         namespace: str,
         schema: Schema,
         flusher: Callable[[str, list[Any]], None],
-        client_class: type | None = None,
         querier: Callable[[str], pa.Table] | None = None,
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
         batch_rows: int = DEFAULT_BATCH_ROWS,
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
         max_buffer_rows: int = DEFAULT_BATCH_ROWS,
         thread_name: str | None = None,
-        size_estimator: Callable[[Any], int] | None = None,
+        row_encoder: Callable[[Any], tuple[Any, int]] | None = None,
     ) -> None:
         self._namespace = namespace
         self._schema = schema
         self._flusher = flusher
-        self._client_class = client_class  # dataclass class for stats Tables (None for log)
         self._querier = querier
         self._flush_interval = flush_interval
         self._batch_rows = batch_rows
         self._max_buffer_bytes = max_buffer_bytes
         self._max_buffer_rows = max_buffer_rows
-        self._size_estimator = size_estimator or _default_size_estimator
+        self._row_encoder = row_encoder
 
         self._cond = threading.Condition()
         self._queue: deque[_PendingItem] = deque()
@@ -304,9 +301,16 @@ class Table:
             if self._closing or self._closed:
                 raise RuntimeError(f"Table({self._namespace}) is closed")
             for row in rows_list:
-                size = self._size_estimator(row)
+                if self._row_encoder is not None:
+                    payload, size = self._row_encoder(row)
+                else:
+                    # Log path: payload is (key, [LogEntry, ...]); size is the
+                    # sum of the raw entry bytes plus a fixed header per entry.
+                    payload = row
+                    _key, entries = row
+                    size = sum(_EST_BYTES_PER_LOG_ENTRY + len(e.data) for e in entries)
                 self._pushed_seq += 1
-                self._queue.append(_PendingItem(self._pushed_seq, row, size))
+                self._queue.append(_PendingItem(self._pushed_seq, payload, size))
                 self._queue_bytes += size
             self._trim_oldest_locked()
             if len(self._queue) >= self._batch_rows or self._queue_bytes >= self._max_buffer_bytes:
@@ -478,13 +482,6 @@ class Table:
         return items[-1].seq, []
 
 
-def _default_size_estimator(payload: Any) -> int:
-    """Cheap byte-cost estimate. Used for byte-cap accounting only."""
-    if isinstance(payload, logging_pb2.LogEntry):
-        return _EST_BYTES_PER_LOG_ENTRY + len(payload.data)
-    return _EST_BYTES_PER_LOG_ENTRY
-
-
 # ---------------------------------------------------------------------------
 # LogClient — top-level client.
 # ---------------------------------------------------------------------------
@@ -622,10 +619,8 @@ class LogClient:
             raise InvalidNamespaceError("use write_batch/query for the privileged 'log' namespace")
         if isinstance(schema, Schema):
             requested = schema
-            client_class = None
         elif isinstance(schema, type):
             requested = schema_from_dataclass(schema)
-            client_class = schema
         else:
             raise SchemaValidationError(f"schema must be a Schema or a dataclass class, got {type(schema).__name__}")
 
@@ -644,17 +639,13 @@ class LogClient:
         except ConnectError as exc:
             raise _translate_connect_error(exc) from exc
         effective = schema_from_proto(response.effective_schema)
-        # Cache the requested dataclass class on the Table so write() can
-        # accept either dataclass instances or dicts and convert to Arrow
-        # using the *effective* (possibly evolved) schema.
         arrow_schema = schema_to_arrow(effective)
         table = Table(
             namespace=namespace,
             schema=effective,
-            flusher=lambda ns, rows: self._stats_flush(ns, rows, arrow_schema, effective),
-            client_class=client_class,
+            flusher=lambda ns, rows: self._stats_flush(ns, rows),
             querier=self._stats_query,
-            size_estimator=_stats_size_estimator,
+            row_encoder=_make_stats_row_encoder(arrow_schema, effective),
         )
         with self._lock:
             if self._closed:
@@ -705,7 +696,6 @@ class LogClient:
                 namespace=LOG_NAMESPACE,
                 schema=Schema(columns=()),  # log table schema is server-managed
                 flusher=self._log_flush,
-                size_estimator=_log_size_estimator,
                 thread_name="finelog-log-client",
             )
             self._tables[LOG_NAMESPACE] = tbl
@@ -808,14 +798,13 @@ class LogClient:
 
     # --- stats namespace flusher ---
 
-    def _stats_flush(
-        self,
-        namespace: str,
-        rows: list[Any],
-        arrow_schema: pa.Schema,
-        schema: Schema,
-    ) -> None:
-        batch_bytes = _rows_to_arrow_ipc(rows, arrow_schema, schema)
+    def _stats_flush(self, namespace: str, batches: list[Any]) -> None:
+        """Flush pre-built Arrow RecordBatches to the stats service."""
+        combined = pa.concat_batches(batches)
+        sink = io.BytesIO()
+        with paipc.new_stream(sink, combined.schema) as writer:
+            writer.write_batch(combined)
+        batch_bytes = sink.getvalue()
         client = self._get_stats_client()
         try:
             client.write_rows(stats_pb2.WriteRowsRequest(namespace=namespace, arrow_ipc=batch_bytes))
@@ -828,76 +817,52 @@ class LogClient:
             raise
 
 
-def _stats_size_estimator(_row: Any) -> int:
-    """Rough cost estimate per stats row.
-
-    Stats rows tend to be small (worker_id + a handful of numeric fields);
-    the byte cap exists to bound the column-encoded RecordBatch, so we
-    over-estimate slightly to keep the buffer headroom honest.
-    """
-    return 256
-
-
-def _log_size_estimator(payload: Any) -> int:
-    """Cost estimate for a (key, entries) pair queued in the log Table."""
-    if isinstance(payload, tuple) and len(payload) == 2:
-        _key, entries = payload
-        if isinstance(entries, list):
-            return sum(_EST_BYTES_PER_LOG_ENTRY + len(e.data) for e in entries)
-    return _EST_BYTES_PER_LOG_ENTRY
-
-
 # ---------------------------------------------------------------------------
 # Row → Arrow conversion for stats Tables.
 # ---------------------------------------------------------------------------
 
 
-def _rows_to_arrow_ipc(rows: list[Any], arrow_schema: pa.Schema, schema: Schema) -> bytes:
-    """Convert ``rows`` (dataclass instances or attribute-bearing objects) to Arrow IPC bytes.
+def _row_to_record_batch(row: Any, arrow_schema: pa.Schema, schema: Schema) -> pa.RecordBatch:
+    """Convert a single dataclass (or attribute-bearing) row to a 1-row RecordBatch.
 
-    Uses the registered/effective schema's column order. Missing nullable
-    columns are filled with NULL; missing non-nullable columns raise
-    :class:`SchemaValidationError`. ``datetime`` values are normalized to
-    millisecond precision; other types are passed through pyarrow which
-    raises if the conversion fails.
+    Missing nullable columns are filled with NULL; missing non-nullable columns
+    raise :class:`SchemaValidationError`. ``datetime`` values are accepted
+    directly by pyarrow for timestamp(ms) columns.
     """
-    if not rows:
-        raise ValueError("_rows_to_arrow_ipc requires at least one row")
-
     columns: list[pa.Array] = []
     for col, field in zip(schema.columns, arrow_schema, strict=True):
-        values: list[Any] = []
-        for row in rows:
-            value = _extract_row_value(row, col.name)
-            if value is _MISSING:
-                if not col.nullable:
-                    raise SchemaValidationError(f"row missing required (non-nullable) column {col.name!r}")
-                values.append(None)
-                continue
-            if value is None:
-                if not col.nullable:
-                    raise SchemaValidationError(f"row has None for non-nullable column {col.name!r}")
-                values.append(None)
-                continue
-            if col.type is ColumnType.TIMESTAMP_MS and isinstance(value, datetime):
-                # pyarrow accepts datetime directly for timestamp("ms"); the
-                # microsecond truncation is documented behavior.
-                values.append(value)
-            else:
-                values.append(value)
+        value = _extract_row_value(row, col.name)
+        if value is _MISSING:
+            if not col.nullable:
+                raise SchemaValidationError(f"row missing required (non-nullable) column {col.name!r}")
+            raw: list[Any] = [None]
+        elif value is None:
+            if not col.nullable:
+                raise SchemaValidationError(f"row has None for non-nullable column {col.name!r}")
+            raw = [None]
+        else:
+            raw = [value]
         try:
-            arr = pa.array(values, type=field.type, from_pandas=False)
+            arr = pa.array(raw, type=field.type, from_pandas=False)
         except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError, ValueError) as exc:
-            raise SchemaValidationError(
-                f"column {col.name!r}: failed to encode rows as {col.type.value}: {exc}"
-            ) from exc
+            raise SchemaValidationError(f"column {col.name!r}: failed to encode row as {col.type.value}: {exc}") from exc
         columns.append(arr)
+    return pa.RecordBatch.from_arrays(columns, schema=arrow_schema)
 
-    batch = pa.RecordBatch.from_arrays(columns, schema=arrow_schema)
-    sink = io.BytesIO()
-    with paipc.new_stream(sink, arrow_schema) as writer:
-        writer.write_batch(batch)
-    return sink.getvalue()
+
+def _make_stats_row_encoder(arrow_schema: pa.Schema, schema: Schema) -> Callable[[Any], tuple[pa.RecordBatch, int]]:
+    """Return a ``row_encoder`` for stats tables.
+
+    The encoder converts each dataclass row to a 1-row RecordBatch and
+    returns ``(batch, batch.nbytes)`` so the byte cap tracks the actual
+    Arrow wire representation.
+    """
+
+    def encode(row: Any) -> tuple[pa.RecordBatch, int]:
+        batch = _row_to_record_batch(row, arrow_schema, schema)
+        return batch, batch.nbytes
+
+    return encode
 
 
 _MISSING = object()

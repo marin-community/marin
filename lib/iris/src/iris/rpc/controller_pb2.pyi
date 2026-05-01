@@ -243,14 +243,6 @@ class Controller(_message.Message):
         metadata: _job_pb2.WorkerMetadata
         status_message: str
         def __init__(self, worker_id: _Optional[str] = ..., healthy: _Optional[bool] = ..., consecutive_failures: _Optional[int] = ..., last_heartbeat: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., running_job_ids: _Optional[_Iterable[str]] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[_job_pb2.WorkerMetadata, _Mapping]] = ..., status_message: _Optional[str] = ...) -> None: ...
-    class ListWorkersRequest(_message.Message):
-        __slots__ = ()
-        def __init__(self) -> None: ...
-    class ListWorkersResponse(_message.Message):
-        __slots__ = ("workers",)
-        WORKERS_FIELD_NUMBER: _ClassVar[int]
-        workers: _containers.RepeatedCompositeFieldContainer[Controller.WorkerHealthStatus]
-        def __init__(self, workers: _Optional[_Iterable[_Union[Controller.WorkerHealthStatus, _Mapping]]] = ...) -> None: ...
     class RegisterRequest(_message.Message):
         __slots__ = ("address", "metadata", "worker_id", "slice_id", "scale_group")
         ADDRESS_FIELD_NUMBER: _ClassVar[int]
