@@ -95,3 +95,33 @@ class DropTableRequest(_message.Message):
 class DropTableResponse(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
+
+class NamespaceInfo(_message.Message):
+    __slots__ = ("namespace", "schema")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    namespace: str
+    schema: Schema
+    def __init__(self, namespace: _Optional[str] = ..., schema: _Optional[_Union[Schema, _Mapping]] = ...) -> None: ...
+
+class ListNamespacesRequest(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class ListNamespacesResponse(_message.Message):
+    __slots__ = ("namespaces",)
+    NAMESPACES_FIELD_NUMBER: _ClassVar[int]
+    namespaces: _containers.RepeatedCompositeFieldContainer[NamespaceInfo]
+    def __init__(self, namespaces: _Optional[_Iterable[_Union[NamespaceInfo, _Mapping]]] = ...) -> None: ...
+
+class GetTableSchemaRequest(_message.Message):
+    __slots__ = ("namespace",)
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    namespace: str
+    def __init__(self, namespace: _Optional[str] = ...) -> None: ...
+
+class GetTableSchemaResponse(_message.Message):
+    __slots__ = ("schema",)
+    SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    schema: Schema
+    def __init__(self, schema: _Optional[_Union[Schema, _Mapping]] = ...) -> None: ...

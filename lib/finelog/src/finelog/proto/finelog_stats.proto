@@ -104,9 +104,33 @@ message DropTableResponse {
   // place; callers who want it deleted must clean the bucket themselves.
 }
 
+// Metadata for one registered namespace. Names are returned in registration
+// order. The privileged "log" namespace is included so dashboards can see
+// every queryable surface.
+message NamespaceInfo {
+  string namespace = 1;
+  Schema schema = 2;
+}
+
+message ListNamespacesRequest {}
+
+message ListNamespacesResponse {
+  repeated NamespaceInfo namespaces = 1;
+}
+
+message GetTableSchemaRequest {
+  string namespace = 1;
+}
+
+message GetTableSchemaResponse {
+  Schema schema = 1;
+}
+
 service StatsService {
   rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
   rpc WriteRows(WriteRowsRequest) returns (WriteRowsResponse);
   rpc Query(QueryRequest) returns (QueryResponse);
   rpc DropTable(DropTableRequest) returns (DropTableResponse);
+  rpc ListNamespaces(ListNamespacesRequest) returns (ListNamespacesResponse);
+  rpc GetTableSchema(GetTableSchemaRequest) returns (GetTableSchemaResponse);
 }
