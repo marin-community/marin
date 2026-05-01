@@ -76,15 +76,15 @@ def _triton_ragged_dot_kernel(
         def body(i, acc):
             start_k = i * block_k
             span_k = pl.ds(start_k, block_k)
-            a = pl.load(a_ref, (span_m, span_k))
-            b = pl.load(b_ref, (span_k, pl.ds(0, b_ref.shape[1])))
+            a = plgpu.load(a_ref.at[span_m, span_k])
+            b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])])
             dtype = jnp.result_type(a, b)
             return acc + pl.dot(a.astype(dtype), b.astype(dtype))
 
         num_k_blocks = pl.cdiv(k, block_k)
         acc = jax.lax.fori_loop(0, num_k_blocks, body, acc)
         mask = (start_m + jnp.arange(block_m)) < hi
-        pl.store(out_ref, (span_m, pl.ds(0, out_ref.shape[1])), acc.astype(out_ref.dtype), mask=mask[:, None])
+        plgpu.store(out_ref.at[span_m, pl.ds(0, out_ref.shape[1])], acc.astype(out_ref.dtype), mask=mask[:, None])
 
 
 def _triton_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
