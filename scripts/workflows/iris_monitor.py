@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Iris job monitoring CLI: status, wait, and failure-diagnostics collection."""
+"""Iris job monitoring CLI: status, wait, failure-diagnostics, and CoreWeave port-forward."""
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -17,13 +18,21 @@ import click
 
 _REPO_ROOT = Path(__file__).parents[2]
 
-# SSH command run on each controller VM. Fetches docker state and full iris-controller logs.
-_CONTROLLER_SSH_COMMAND = """\
+# SSH command run on every Iris-managed VM. Dumps every container's logs (not
+# just iris-controller) plus the GCE startup-script and cloud-init journals,
+# so we capture worker-side failures and "controller never booted" cases.
+_HOST_SSH_COMMAND = """\
 set +e
 echo '=== docker ps -a ==='
 sudo docker ps -a
-echo '=== docker logs iris-controller (last 5000 lines) ==='
-sudo docker logs --timestamps --tail 5000 iris-controller 2>&1
+for cid in $(sudo docker ps -aq); do
+  echo "=== docker logs $cid ==="
+  sudo docker logs --timestamps --tail 5000 "$cid" 2>&1
+done
+echo '=== startup script journal ==='
+sudo journalctl -u google-startup-scripts.service --no-pager 2>&1 | tail -n 2000
+echo '=== cloud-final journal ==='
+sudo journalctl -u cloud-final.service --no-pager 2>&1 | tail -n 500
 """
 
 
@@ -113,7 +122,17 @@ def wait_for_job(
         time.sleep(poll_interval)
 
 
-def _list_controller_instances(project: str, controller_label: str) -> list[tuple[str, str]]:
+def _list_managed_instances(
+    project: str,
+    controller_label: str,
+    managed_label: str | None,
+) -> list[tuple[str, str, str]]:
+    """Return (name, zone, role) for every controller and managed worker VM."""
+    if managed_label:
+        filter_ = f"labels.{managed_label}=true OR labels.{controller_label}=true"
+    else:
+        filter_ = f"labels.{controller_label}=true"
+
     result = _run(
         [
             "gcloud",
@@ -121,21 +140,25 @@ def _list_controller_instances(project: str, controller_label: str) -> list[tupl
             "instances",
             "list",
             f"--project={project}",
-            f"--filter=labels.{controller_label}=true",
-            "--format=csv[no-heading](name,zone)",
+            f"--filter={filter_}",
+            "--format=csv[no-heading](name,zone,labels.list())",
         ]
     )
     if result.returncode != 0:
         return []
-    instances = []
+    out: list[tuple[str, str, str]] = []
     for line in result.stdout.strip().splitlines():
-        parts = [p.strip() for p in line.split(",", 1)]
-        if len(parts) == 2 and parts[0]:
-            instances.append((parts[0], parts[1]))
-    return instances
+        parts = [p.strip() for p in line.split(",", 2)]
+        if len(parts) < 2 or not parts[0]:
+            continue
+        name, zone = parts[0], parts[1]
+        labels = parts[2] if len(parts) == 3 else ""
+        role = "controller" if controller_label in labels else "worker"
+        out.append((name, zone, role))
+    return out
 
 
-def _fetch_controller_log(
+def _fetch_host_log(
     name: str,
     zone: str,
     project: str,
@@ -152,7 +175,7 @@ def _fetch_controller_log(
         f"--project={project}",
         f"--zone={zone}",
         "--quiet",
-        f"--command={_CONTROLLER_SSH_COMMAND}",
+        f"--command={_HOST_SSH_COMMAND}",
     ]
     if service_account:
         cmd.append(f"--impersonate-service-account={service_account}")
@@ -169,20 +192,24 @@ def _collect_gcp(
     output_dir: Path,
     project: str,
     controller_label: str,
+    managed_label: str | None,
     *,
     service_account: str | None,
     ssh_key: Path | None,
 ) -> tuple[list[str], list[str]]:
-    """Return (files_written, errors). Each controller log is also a required artifact."""
-    instances = _list_controller_instances(project, controller_label)
+    """Return (files_written, errors). Each controller log is a required artifact."""
+    instances = _list_managed_instances(project, controller_label, managed_label)
     if not instances:
-        return [], [f"gcloud found no instances with label {controller_label}=true in project {project}"]
+        labels = f"{controller_label}=true"
+        if managed_label:
+            labels = f"{managed_label}=true OR {controller_label}=true"
+        return [], [f"gcloud found no instances with label {labels} in project {project}"]
 
     written: list[str] = []
     errors: list[str] = []
-    for name, zone in instances:
-        filename = f"controller-{name}.log"
-        error = _fetch_controller_log(
+    for name, zone, role in instances:
+        filename = f"{role}-{name}.log"
+        error = _fetch_host_log(
             name, zone, project, output_dir / filename, service_account=service_account, ssh_key=ssh_key
         )
         if error:
@@ -192,22 +219,162 @@ def _collect_gcp(
     return written, errors
 
 
-def _collect_coreweave(output_dir: Path, job_id: str, namespace: str, kubeconfig: Path | None) -> tuple[bool, list[str]]:
-    """Return (wrote_pods_json, errors). Kubernetes label values cap at 63 chars and disallow underscores."""
-    label = job_id.lstrip("/").replace("_", "-")[:63]
+def _kubectl(kubeconfig: Path | None) -> list[str]:
     cmd = ["kubectl"]
     if kubeconfig:
         cmd += [f"--kubeconfig={kubeconfig}"]
-    cmd += ["-n", namespace, "get", "pods", f"-l=iris.job_id={label}", "-o", "json"]
+    return cmd
 
+
+def _kubectl_dump(
+    cmd: list[str],
+    output_path: Path,
+    description: str,
+) -> str | None:
+    """Run kubectl, write combined stdout+stderr to output_path, return error string or None."""
     result = _run(cmd)
-    pods_path = output_dir / "kubernetes-pods.json"
+    output_path.write_text(result.stdout or result.stderr or "")
     if result.returncode != 0:
-        # Write whatever we got so the artifact upload has something.
-        pods_path.write_text(result.stdout or result.stderr or "")
-        return False, [f"kubectl get pods failed (exit {result.returncode}): {result.stderr.strip()}"]
-    pods_path.write_text(result.stdout)
-    return True, []
+        return f"{description} failed (exit {result.returncode}): {result.stderr.strip()}"
+    return None
+
+
+def _collect_coreweave(
+    output_dir: Path,
+    job_id: str,
+    namespace: str,
+    kubeconfig: Path | None,
+    *,
+    managed_label: str | None,
+    include_cluster_context: bool,
+    iris_cmd: list[str],
+) -> tuple[list[str], list[str]]:
+    """Collect controller pod logs, worker pod logs, and (optionally) cluster-wide context.
+
+    Returns (files_written, errors). `kubernetes-pods.json` is required.
+    """
+    written: list[str] = []
+    errors: list[str] = []
+    kctl = _kubectl(kubeconfig)
+
+    # Required: pod listing for the job. Kubernetes label values cap at 63 chars
+    # and disallow underscores.
+    label = job_id.lstrip("/").replace("_", "-")[:63]
+    pods_path = output_dir / "kubernetes-pods.json"
+    err = _kubectl_dump(
+        [*kctl, "-n", namespace, "get", "pods", f"-l=iris.job_id={label}", "-o", "json"],
+        pods_path,
+        "kubectl get pods (job)",
+    )
+    if err:
+        errors.append(err)
+    else:
+        written.append("kubernetes-pods.json")
+
+    # Controller pod logs / describe (current + previous container).
+    for fname, args, desc in [
+        (
+            "controller.log",
+            ["-n", namespace, "logs", "-l", "app=iris-controller", "--tail=-1", "--all-containers"],
+            "kubectl logs controller",
+        ),
+        (
+            "controller-previous.log",
+            ["-n", namespace, "logs", "-l", "app=iris-controller", "--tail=-1", "--all-containers", "--previous"],
+            "kubectl logs controller --previous",
+        ),
+        (
+            "controller-describe.txt",
+            ["-n", namespace, "describe", "pod", "-l", "app=iris-controller"],
+            "kubectl describe controller",
+        ),
+    ]:
+        err = _kubectl_dump([*kctl, *args], output_dir / fname, desc)
+        if err is None:
+            written.append(fname)
+        # Failures here are best-effort; we always at least attempted to write the file.
+
+    # Per-managed-pod logs and describes. Without a managed label we can't
+    # enumerate workers cheaply; skip silently in that case.
+    if managed_label:
+        list_result = _run([*kctl, "-n", namespace, "get", "pods", "-l", f"{managed_label}=true", "-o", "name"])
+        if list_result.returncode == 0:
+            for line in list_result.stdout.strip().splitlines():
+                if not line:
+                    continue
+                safe = line.replace("/", "-")
+                _kubectl_dump(
+                    [*kctl, "-n", namespace, "logs", line, "--tail=-1", "--all-containers"],
+                    output_dir / f"{safe}.log",
+                    f"kubectl logs {line}",
+                )
+                _kubectl_dump(
+                    [*kctl, "-n", namespace, "describe", line],
+                    output_dir / f"{safe}-describe.txt",
+                    f"kubectl describe {line}",
+                )
+                written.append(f"{safe}.log")
+                written.append(f"{safe}-describe.txt")
+        else:
+            errors.append(f"kubectl get pods -l {managed_label}=true failed: {list_result.stderr.strip()}")
+
+    # Recent events scoped to namespace.
+    err = _kubectl_dump(
+        [*kctl, "-n", namespace, "get", "events", "--sort-by=.lastTimestamp"],
+        output_dir / "events.txt",
+        "kubectl get events",
+    )
+    if err is None:
+        written.append("events.txt")
+
+    if include_cluster_context:
+        for fname, args, desc in [
+            (
+                "nodepools.txt",
+                ["get", "nodepools.compute.coreweave.com", "-A", "-o", "wide"],
+                "kubectl get nodepools",
+            ),
+            (
+                "nodepools.yaml",
+                ["get", "nodepools.compute.coreweave.com", "-A", "-o", "yaml"],
+                "kubectl get nodepools -o yaml",
+            ),
+            ("nodes.txt", ["get", "nodes", "-o", "wide"], "kubectl get nodes"),
+        ]:
+            err = _kubectl_dump([*kctl, *args], output_dir / fname, desc)
+            if err is None:
+                written.append(fname)
+
+        for fname, rpc in [
+            ("autoscaler-status.txt", "get-autoscaler-status"),
+            ("scheduler-state.txt", "get-scheduler-state"),
+        ]:
+            result = _run([*iris_cmd, "rpc", "controller", rpc])
+            (output_dir / fname).write_text(result.stdout + result.stderr)
+            if result.returncode == 0:
+                written.append(fname)
+            else:
+                errors.append(f"iris rpc controller {rpc} failed (exit {result.returncode})")
+
+    return written, errors
+
+
+# Required artifacts per provider — used by summary.json's missing_required_files
+# field so the workflow run can tell at a glance whether collection succeeded.
+_REQUIRED_GCP = ("controller-*.log",)  # at least one match
+_REQUIRED_COREWEAVE = ("kubernetes-pods.json",)
+
+
+def _missing_required(provider: str, files: list[str]) -> list[str]:
+    if provider == "gcp":
+        # At least one SSH-fetched controller log must be present.
+        # `controller-process.log` (iris RPC dump) does not satisfy this — it
+        # comes from RPC, not from a host SSH, and is present even when every
+        # GCE VM was unreachable, which is exactly the case we want to flag.
+        if any(f.startswith("controller-") and f.endswith(".log") and f != "controller-process.log" for f in files):
+            return []
+        return ["controller-*.log"]
+    return [f for f in _REQUIRED_COREWEAVE if f not in files]
 
 
 def collect_diagnostics(
@@ -219,10 +386,12 @@ def collect_diagnostics(
     controller_url: str | None,
     project: str | None,
     controller_label: str | None,
+    managed_label: str | None,
     service_account: str | None,
     ssh_key: Path | None,
     namespace: str | None,
     kubeconfig: Path | None,
+    include_cluster_context: bool,
     repo_root: Path,
 ) -> Path:
     """Collect Iris controller, job tree, and provider-specific diagnostics into output_dir."""
@@ -248,36 +417,152 @@ def collect_diagnostics(
         if not project or not controller_label:
             raise click.UsageError("GCP diagnostics require --project and --controller-label")
         gcp_files, gcp_errors = _collect_gcp(
-            output_dir, project, controller_label, service_account=service_account, ssh_key=ssh_key
+            output_dir,
+            project,
+            controller_label,
+            managed_label,
+            service_account=service_account,
+            ssh_key=ssh_key,
         )
         files.extend(gcp_files)
         errors.extend(gcp_errors)
-        if not gcp_files:
-            _write_summary(output_dir, job_id, provider, files, errors)
-            raise RuntimeError(f"No GCP controller logs could be collected. Errors: {'; '.join(errors)}")
     else:
         if not namespace:
             raise click.UsageError("CoreWeave diagnostics require --namespace")
-        wrote, cw_errors = _collect_coreweave(output_dir, job_id, namespace, kubeconfig)
-        if wrote:
-            files.append("kubernetes-pods.json")
+        cw_files, cw_errors = _collect_coreweave(
+            output_dir,
+            job_id,
+            namespace,
+            kubeconfig,
+            managed_label=managed_label,
+            include_cluster_context=include_cluster_context,
+            iris_cmd=iris_cmd,
+        )
+        files.extend(cw_files)
         errors.extend(cw_errors)
-        if not wrote:
-            _write_summary(output_dir, job_id, provider, files, errors)
-            raise RuntimeError(f"CoreWeave kubernetes-pods.json could not be collected. Errors: {'; '.join(errors)}")
 
-    _write_summary(output_dir, job_id, provider, files, errors)
+    missing_required = _missing_required(provider, files)
+    _write_summary(output_dir, job_id, provider, files, missing_required, errors)
+    if missing_required:
+        raise RuntimeError(
+            f"Required {provider} diagnostics missing: {missing_required}. Errors: {'; '.join(errors) or '(none)'}"
+        )
     return output_dir
 
 
-def _write_summary(output_dir: Path, job_id: str, provider: str, files: list[str], errors: list[str]) -> None:
-    summary = {"job_id": job_id, "provider": provider, "files": files, "errors": errors}
+def _write_summary(
+    output_dir: Path,
+    job_id: str,
+    provider: str,
+    files: list[str],
+    missing_required: list[str],
+    errors: list[str],
+) -> None:
+    summary = {
+        "job_id": job_id,
+        "provider": provider,
+        "files": files,
+        "required_files": list(_REQUIRED_GCP if provider == "gcp" else _REQUIRED_COREWEAVE),
+        "missing_required_files": missing_required,
+        "errors": errors,
+    }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+
+
+def _free_local_port() -> int:
+    with socket.socket() as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def _start_port_forward(
+    namespace: str,
+    service: str,
+    local_port: int,
+    target_port: int,
+    kubeconfig: Path | None,
+) -> subprocess.Popen:
+    cmd = [
+        *_kubectl(kubeconfig),
+        "-n",
+        namespace,
+        "port-forward",
+        f"svc/{service}",
+        f"{local_port}:{target_port}",
+    ]
+    # start_new_session detaches from the parent so the forwarder survives this
+    # python process exiting; the workflow step records PF_PID and kills it later.
+    return subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def port_forward_until_healthy(
+    namespace: str,
+    service: str,
+    *,
+    target_port: int,
+    timeout: float,
+    poll_interval: float,
+    kubeconfig: Path | None,
+    rollout_deployment: str | None,
+    rollout_timeout: float,
+    health_path: str,
+) -> tuple[int, int]:
+    """Wait for the controller deployment to roll out, then port-forward and probe /health.
+
+    Returns (local_port, pf_pid). Raises TimeoutError if the controller never becomes healthy.
+    """
+    import urllib.error
+    import urllib.request
+
+    kctl = _kubectl(kubeconfig)
+    if rollout_deployment:
+        rollout = _run(
+            [
+                *kctl,
+                "-n",
+                namespace,
+                "rollout",
+                "status",
+                f"deployment/{rollout_deployment}",
+                f"--timeout={int(rollout_timeout)}s",
+            ]
+        )
+        if rollout.returncode != 0:
+            raise RuntimeError(
+                f"deployment/{rollout_deployment} rollout failed: {(rollout.stderr or rollout.stdout).strip()}"
+            )
+
+    local_port = _free_local_port()
+    proc = _start_port_forward(namespace, service, local_port, target_port, kubeconfig)
+    health_url = f"http://localhost:{local_port}{health_path}"
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        # Restart the forwarder if it died (konnectivity flakes after rollout).
+        if proc.poll() is not None:
+            proc = _start_port_forward(namespace, service, local_port, target_port, kubeconfig)
+            time.sleep(poll_interval)
+            continue
+        try:
+            with urllib.request.urlopen(health_url, timeout=poll_interval) as resp:
+                if 200 <= resp.status < 300:
+                    return local_port, proc.pid
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+            pass
+        time.sleep(poll_interval)
+
+    proc.terminate()
+    raise TimeoutError(f"controller {health_url} never became healthy within {timeout}s")
 
 
 @click.group()
 def cli() -> None:
-    """Iris job monitor: status, wait, and collect commands."""
+    """Iris job monitor: status, wait, collect, and port-forward."""
 
 
 @cli.command()
@@ -357,6 +642,14 @@ def wait(
 )
 @click.option("--project", default=None, help="GCP project ID (GCP only).")
 @click.option("--controller-label", default=None, help="GCE instance label key identifying controller VMs (GCP only).")
+@click.option(
+    "--managed-label",
+    default=None,
+    help=(
+        "Label key identifying every managed VM/pod (controllers + workers). When set, GCP diagnostics also "
+        "SSH worker VMs and CoreWeave diagnostics also dump per-pod logs."
+    ),
+)
 @click.option("--service-account", default=None, help="Service account to impersonate for gcloud SSH (GCP only).")
 @click.option(
     "--ssh-key", default=None, type=click.Path(path_type=Path), help="Path to SSH key file for gcloud SSH (GCP only)."
@@ -364,6 +657,12 @@ def wait(
 @click.option("--namespace", default=None, help="Kubernetes namespace (CoreWeave only).")
 @click.option(
     "--kubeconfig", default=None, type=click.Path(path_type=Path), help="Path to kubeconfig file (CoreWeave only)."
+)
+@click.option(
+    "--include-cluster-context",
+    is_flag=True,
+    default=False,
+    help="CoreWeave: also dump nodepools, nodes, autoscaler-status, and scheduler-state.",
 )
 def collect(
     job_id: str,
@@ -373,10 +672,12 @@ def collect(
     output_dir: Path,
     project: str | None,
     controller_label: str | None,
+    managed_label: str | None,
     service_account: str | None,
     ssh_key: Path | None,
     namespace: str | None,
     kubeconfig: Path | None,
+    include_cluster_context: bool,
 ) -> None:
     """Collect failure diagnostics for an Iris job into an output directory."""
     click.echo(f"Collecting diagnostics for job {job_id!r} into {output_dir} ...", err=True)
@@ -388,13 +689,83 @@ def collect(
         controller_url=controller_url,
         project=project,
         controller_label=controller_label,
+        managed_label=managed_label,
         service_account=service_account,
         ssh_key=ssh_key,
         namespace=namespace,
         kubeconfig=kubeconfig,
+        include_cluster_context=include_cluster_context,
         repo_root=_REPO_ROOT,
     )
     click.echo(f"Diagnostics written to {out}", err=True)
+
+
+@cli.command(name="port-forward")
+@click.option("--namespace", required=True, help="Kubernetes namespace.")
+@click.option("--service", required=True, help="Service name to port-forward (without svc/ prefix).")
+@click.option("--target-port", default=10000, show_default=True, type=int, help="Service port to forward to.")
+@click.option("--kubeconfig", default=None, type=click.Path(path_type=Path), help="Path to kubeconfig file.")
+@click.option(
+    "--rollout-deployment",
+    default="iris-controller",
+    show_default=True,
+    help="Deployment to wait for before port-forwarding. Pass empty string to skip.",
+)
+@click.option(
+    "--rollout-timeout", default=120.0, show_default=True, type=float, help="Seconds to wait for rollout to settle."
+)
+@click.option(
+    "--timeout", default=300.0, show_default=True, type=float, help="Seconds to wait for /health to return 2xx."
+)
+@click.option("--poll-interval", default=5.0, show_default=True, type=float, help="Seconds between probes.")
+@click.option(
+    "--health-path",
+    default="/health",
+    show_default=True,
+    help="HTTP path to probe for readiness on the forwarded service.",
+)
+@click.option(
+    "--url-var",
+    default="IRIS_CONTROLLER_URL",
+    show_default=True,
+    help="$GITHUB_ENV variable name to write the controller URL under.",
+)
+def port_forward(
+    namespace: str,
+    service: str,
+    target_port: int,
+    kubeconfig: Path | None,
+    rollout_deployment: str,
+    rollout_timeout: float,
+    timeout: float,
+    poll_interval: float,
+    health_path: str,
+    url_var: str,
+) -> None:
+    """Port-forward to an Iris controller service and wait for it to be healthy.
+
+    Spawns a detached `kubectl port-forward` and writes IRIS_CONTROLLER_URL,
+    LOCAL_PORT, and PF_PID to $GITHUB_ENV. The forwarder survives this process
+    exiting so subsequent workflow steps can reach the controller.
+    """
+    click.echo(f"Port-forwarding to {service} in {namespace} ...", err=True)
+    local_port, pf_pid = port_forward_until_healthy(
+        namespace,
+        service,
+        target_port=target_port,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        kubeconfig=kubeconfig,
+        rollout_deployment=rollout_deployment or None,
+        rollout_timeout=rollout_timeout,
+        health_path=health_path,
+    )
+    url = f"http://localhost:{local_port}"
+    click.echo(f"Controller healthy on {url} (pid={pf_pid})", err=True)
+
+    if path := os.environ.get("GITHUB_ENV"):
+        with open(path, "a") as fh:
+            fh.write(f"{url_var}={url}\nLOCAL_PORT={local_port}\nPF_PID={pf_pid}\n")
 
 
 if __name__ == "__main__":

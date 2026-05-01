@@ -102,35 +102,10 @@ jobs:
 
       - name: Port-forward to iris-ci controller
         run: |
-          export KUBECONFIG=~/.kube/coreweave-iris
-          kubectl rollout status deployment/iris-controller -n "$IRIS_NAMESPACE" --timeout=120s
-          kubectl wait pod -n "$IRIS_NAMESPACE" -l app=iris-controller \
-            --for=condition=Ready --timeout=60s
-
-          LOCAL_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()")
-          kubectl port-forward -n "$IRIS_NAMESPACE" svc/iris-ci-controller-svc "${LOCAL_PORT}:10000" &
-          PF_PID=$!
-          echo "PF_PID=$PF_PID" >> "$GITHUB_ENV"
-          echo "LOCAL_PORT=$LOCAL_PORT" >> "$GITHUB_ENV"
-          echo "IRIS_CONTROLLER_URL=http://localhost:${LOCAL_PORT}" >> "$GITHUB_ENV"
-
-          # Konnectivity can take ~20s to become usable after controller restart.
-          for i in $(seq 1 60); do
-            if ! kill -0 "$PF_PID" 2>/dev/null; then
-              kubectl port-forward -n "$IRIS_NAMESPACE" svc/iris-ci-controller-svc "${LOCAL_PORT}:10000" &
-              PF_PID=$!
-              echo "PF_PID=$PF_PID" >> "$GITHUB_ENV"
-              sleep 2
-              continue
-            fi
-            if curl -sf "http://localhost:${LOCAL_PORT}/health" > /dev/null 2>&1; then
-              echo "Controller healthy on localhost:${LOCAL_PORT}"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Controller did not become healthy within timeout"
-          exit 1
+          uv run python scripts/workflows/iris_monitor.py port-forward \
+            --namespace "$IRIS_NAMESPACE" \
+            --service iris-ci-controller-svc \
+            --kubeconfig "$HOME/.kube/coreweave-iris"
 
       - name: Submit canary ferry
         id: submit
@@ -203,38 +178,15 @@ jobs:
           DIAG_DIR: /tmp/canary-diag
         run: |
           mkdir -p "$DIAG_DIR"
-
           uv run python scripts/workflows/iris_monitor.py collect \
             --job-id "$JOB_ID" \
             --controller-url "$IRIS_CONTROLLER_URL" \
             --provider coreweave \
             --output-dir "$DIAG_DIR" \
             --namespace "$IRIS_NAMESPACE" \
-            --kubeconfig "$HOME/.kube/coreweave-iris"
-
-          # Additional cluster-wide diagnostics not covered by iris_monitor.py collect.
-          # $HOME, not ~: tilde inside a double-quoted string is NOT expanded
-          # by bash. Passing "~/.kube/..." to kubectl makes it stat a literal
-          # "~" path and emit 'no such file or directory'.
-          KCI="kubectl --kubeconfig $HOME/.kube/coreweave-iris"
-
-          echo "=== NodePools (cluster-wide) ==="
-          # Canary hangs are often account-wide GPU capacity contention; dump
-          # every nodepool, not just this namespace's.
-          $KCI get nodepools.compute.coreweave.com -A -o wide \
-            | tee "$DIAG_DIR/nodepools.txt" || true
-          $KCI get nodepools.compute.coreweave.com -A -o yaml \
-            > "$DIAG_DIR/nodepools.yaml" || true
-          echo "=== Nodes ==="
-          $KCI get nodes -o wide | tee "$DIAG_DIR/nodes.txt" || true
-          echo "=== Iris autoscaler / scheduler state ==="
-          .venv/bin/iris --controller-url="$IRIS_CONTROLLER_URL" \
-            rpc controller get-autoscaler-status \
-            > "$DIAG_DIR/autoscaler-status.txt" 2>&1 || true
-          .venv/bin/iris --controller-url="$IRIS_CONTROLLER_URL" \
-            rpc controller get-scheduler-state \
-            > "$DIAG_DIR/scheduler-state.txt" 2>&1 || true
-          cat "$DIAG_DIR/autoscaler-status.txt" || true
+            --managed-label "$IRIS_MANAGED_LABEL" \
+            --kubeconfig "$HOME/.kube/coreweave-iris" \
+            --include-cluster-context
 
       - name: Upload diagnostics bundle
         if: failure() || cancelled()
@@ -248,26 +200,20 @@ jobs:
       - name: Claude triage
         id: claude_triage
         if: (failure() || cancelled()) && github.event_name == 'schedule'
-        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
-        timeout-minutes: 30
+        uses: ./.github/actions/claude-triage
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
-          prompt: |
-            Read .agents/skills/canary-triage/SKILL.md and follow it.
-          claude_args: |
-            --model opus
-            --max-turns 500
-            --allowedTools "Bash(kubectl:*),Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(ls:*),Bash(wc:*),Bash(find:*),Bash(awk:*),Bash(sed:*),Bash(date:*),Bash(echo:*),Bash(tr:*),Bash(sort:*),Bash(uniq:*),Bash(curl:*),Write,Read,Edit"
-        env:
-          CANARY_LANE: gpu
-          CANARY_JOB_ID: ${{ steps.submit.outputs.job_id }}
-          CANARY_RUN_ID: ${{ env.RUN_ID }}
-          IRIS_CONFIG: ${{ env.IRIS_CONFIG }}
-          IRIS_NAMESPACE: ${{ env.IRIS_NAMESPACE }}
-          WANDB_ENTITY: ${{ env.WANDB_ENTITY }}
-          WANDB_PROJECT: ${{ env.WANDB_PROJECT }}
-          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          lane: gpu
+          job-id: ${{ steps.submit.outputs.job_id }}
+          run-id: ${{ env.RUN_ID }}
+          iris-config: ${{ env.IRIS_CONFIG }}
+          iris-namespace: ${{ env.IRIS_NAMESPACE }}
+          wandb-entity: ${{ env.WANDB_ENTITY }}
+          wandb-project: ${{ env.WANDB_PROJECT }}
+          wandb-api-key: ${{ secrets.WANDB_API_KEY }}
+          gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # CoreWeave lane needs kubectl plus filesystem tools the GCP lane skips.
+          allowed-tools: 'Bash(kubectl:*),Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(ls:*),Bash(wc:*),Bash(find:*),Bash(awk:*),Bash(sed:*),Bash(date:*),Bash(echo:*),Bash(tr:*),Bash(sort:*),Bash(uniq:*),Bash(curl:*),Write,Read,Edit'
 
       # claude-code-action writes the full agent trace (prompt, tool calls,
       # tool results, final message) to this path. Uploading it is the only
@@ -311,21 +257,10 @@ jobs:
     if: always() && (needs.canary-ferry-cw.result == 'failure' || needs.canary-ferry-cw.result == 'cancelled') && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - name: Download Slack message
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: slack-message
-
+      - name: Checkout code
+        uses: actions/checkout@v5
       - name: Notify Slack
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          FALLBACK_TEXT: ":red_circle: *GPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        run: |
-          if [ -f slack_message.md ]; then
-            TEXT=$(cat slack_message.md)
-          else
-            TEXT="$FALLBACK_TEXT"
-          fi
-          PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
-          curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"
+        uses: ./.github/actions/notify-slack
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: ":red_circle: *GPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

@@ -126,10 +126,11 @@ jobs:
     if: always() && (needs.datakit-nemotron-ferry.result == 'failure' || needs.datakit-nemotron-ferry.result == 'cancelled') && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
       - name: Notify Slack
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          TEXT: ":red_circle: *Datakit Nemotron Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        run: |
-          PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
-          curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"
+        uses: ./.github/actions/notify-slack
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: ":red_circle: *Datakit Nemotron Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          message-artifact: ''
