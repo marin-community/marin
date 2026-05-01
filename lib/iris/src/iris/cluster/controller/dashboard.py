@@ -39,7 +39,9 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from iris.cluster.controller import endpoint_proxy
 from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
+from iris.cluster.controller.endpoint_proxy import EndpointProxy
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import (
     _AUTH_POLICY_ATTR,
@@ -314,10 +316,15 @@ class ControllerDashboard:
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         self._actor_proxy = ActorProxy(self._service._store)
+        self._endpoint_proxy = EndpointProxy(self._service._store)
 
         @requires_auth
         async def _proxy_actor_rpc(request: Request) -> Response:
             return await self._actor_proxy.handle(request)
+
+        @requires_auth
+        async def _proxy_endpoint(request: Request) -> Response:
+            return await self._endpoint_proxy.handle(request)
 
         routes = [
             Route("/", self._dashboard),
@@ -332,6 +339,11 @@ class ControllerDashboard:
             Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
             Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
+            Route(
+                endpoint_proxy.PROXY_ROUTE,
+                _proxy_endpoint,
+                methods=list(endpoint_proxy.ALLOWED_METHODS),
+            ),
             Mount(log_wsgi_app.path, app=log_app),
             Mount(_LEGACY_LOG_SERVICE_PATH, app=log_app),
             Mount(rpc_wsgi_app.path, app=rpc_app),
@@ -341,7 +353,7 @@ class ControllerDashboard:
 
         app: Starlette | _RouteAuthMiddleware = Starlette(
             routes=routes,
-            lifespan=on_shutdown(self._actor_proxy.close),
+            lifespan=on_shutdown(self._actor_proxy.close, self._endpoint_proxy.close),
         )
         if self._auth_verifier is not None and self._auth_provider is not None:
             app = _RouteAuthMiddleware(app, self._auth_verifier, optional=self._auth_optional)
