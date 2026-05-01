@@ -17,10 +17,10 @@ import jax
 from jax.sharding import Mesh
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import (
-    HFCheckpointConverter,
     PYTORCH_WEIGHTS_INDEX_NAME,
-    RepoRef,
     SAFE_TENSORS_INDEX_NAME,
+    HFCheckpointConverter,
+    RepoRef,
     converter_from_hf_compat_config,
 )
 from levanter.models.lm_model import LmConfig, LmHeadModel

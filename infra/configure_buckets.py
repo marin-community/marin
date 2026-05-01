@@ -27,7 +27,6 @@ import sys
 import tempfile
 
 import click
-
 from rigging.filesystem import ALLOWED_TTL_DAYS, REGION_TO_DATA_BUCKET, TEMP_PATH_PREFIX
 
 logger = logging.getLogger(__name__)

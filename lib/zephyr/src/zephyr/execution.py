@@ -19,29 +19,28 @@ import logging
 import os
 import pickle
 import sys
-from datetime import datetime, timezone
 import threading
 import time
 import traceback
 import uuid
 from collections import Counter, defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 import cloudpickle
-from rigging.filesystem import open_url, url_to_fs
 from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from fray.client import JobHandle
 from fray.types import Entrypoint, JobRequest
-from rigging.filesystem import marin_temp_bucket
-from rigging.timing import ExponentialBackoff, log_time
-
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from rigging.filesystem import marin_temp_bucket, open_url, url_to_fs
+from rigging.timing import ExponentialBackoff, log_time
+
 from zephyr.dataset import Dataset
 from zephyr.plan import (
     Join,
@@ -55,7 +54,7 @@ from zephyr.plan import (
     compute_plan,
 )
 from zephyr.shuffle import ListShard, MemChunk, _write_scatter
-from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
+from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir, unique_temp_path
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +108,6 @@ class PickleDiskChunk:
         the same shard.  The resulting path is used directly for reads —
         no rename step is required.
         """
-        from zephyr.writers import unique_temp_path
-
         ensure_parent_dir(path)
         data = list(data)
         count = len(data)
@@ -194,14 +191,13 @@ def _write_pickle_chunks(
 
     Returns a ListShard containing PickleDiskChunk references.
     """
-    chunk_size = INTERMEDIATE_CHUNK_SIZE
     chunks: list[Iterable] = []
     batch: list = []
     pidx = 0
 
     for item in items:
         batch.append(item)
-        if chunk_size > 0 and len(batch) >= chunk_size:
+        if len(batch) >= INTERMEDIATE_CHUNK_SIZE:
             chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
             chunks.append(chunk_ref)
             pidx += 1

@@ -11,11 +11,11 @@ controller itself.
 
 import click
 import humanfriendly
+from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
 
 from iris.cli.main import require_controller_url, rpc_client
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
-from finelog.rpc import logging_pb2
-from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.rpc import job_pb2
 
 _CONTROLLER_LOG_TARGET = "/system/controller"

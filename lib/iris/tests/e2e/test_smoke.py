@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 from connectrpc.errors import ConnectError
+from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.client import IrisClient
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
@@ -26,12 +28,8 @@ from iris.cluster.types import (
     ResourceSpec,
     gpu_device,
 )
-from finelog.rpc import logging_pb2
-from iris.rpc import config_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from finelog.rpc.logging_connect import LogServiceClientSync
 from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import (
@@ -39,8 +37,8 @@ from .conftest import (
     MARIN_ROOT,
     ClusterCapabilities,
     IrisTestCluster,
-    _NoOpPage,
     _add_coscheduling_group,
+    _NoOpPage,
     assert_visible,
     dashboard_goto,
     discover_capabilities,

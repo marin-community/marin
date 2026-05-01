@@ -8,7 +8,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from rigging.filesystem import (
     MARIN_CROSS_REGION_OVERRIDE_ENV,
     CrossRegionGuardedFS,

@@ -12,14 +12,14 @@ import subprocess
 from dataclasses import dataclass, field
 
 from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
+
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
-from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from finelog.rpc.logging_connect import LogServiceClientSync
+from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)

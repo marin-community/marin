@@ -9,8 +9,8 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
-from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.dashboard_common import favicon_route, html_shell, static_files_mount
+from iris.cluster.worker.service import WorkerServiceImpl
 from iris.rpc.worker_connect import WorkerServiceWSGIApplication
 
 

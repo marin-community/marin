@@ -7,10 +7,9 @@ import io
 import json
 from pathlib import Path
 
+import marin.datakit.download.game_music_evals as game_music_evals
 import pytest
 import zstandard
-
-import marin.datakit.download.game_music_evals as game_music_evals
 from marin.datakit.download.game_music_evals import (
     HfJsonTextStagingConfig,
     LichessPgnStagingConfig,

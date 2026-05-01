@@ -1,12 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import jax
 import jax.numpy as jnp
 import pytest
-
-from types import SimpleNamespace
-
 from marin.rl.rl_losses import compute_logprobs, importance_sampling_ratio
 
 

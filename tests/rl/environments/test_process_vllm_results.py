@@ -4,14 +4,13 @@
 """Tests for vLLM result processing functions."""
 
 import pytest
-from openai.types.chat import ChatCompletion, ChatCompletionMessage
-from openai.types.chat.chat_completion import Choice, ChoiceLogprobs, ChatCompletionTokenLogprob
-from openai.types.completion_usage import CompletionUsage
-
 from marin.rl.environments.process_vllm_results import (
-    parse_chat_completion_tokens_from_bytes,
     parse_chat_completion_logprobs,
+    parse_chat_completion_tokens_from_bytes,
 )
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
+from openai.types.completion_usage import CompletionUsage
 
 
 @pytest.fixture

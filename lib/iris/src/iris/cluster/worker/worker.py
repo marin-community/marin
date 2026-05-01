@@ -11,14 +11,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import uvicorn
+from finelog.client import LogPusher, RemoteLogHandler
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos
+from iris.cluster.bundle import BundleStore
 from iris.cluster.log_store_helpers import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
-from finelog.client import LogPusher, RemoteLogHandler
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
-from iris.cluster.types import JobName, TaskAttempt as TaskAttemptId
-from iris.cluster.bundle import BundleStore
+from iris.cluster.types import JobName
+from iris.cluster.types import TaskAttempt as TaskAttemptId
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
@@ -36,14 +38,10 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import config_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
-from iris.rpc import worker_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 

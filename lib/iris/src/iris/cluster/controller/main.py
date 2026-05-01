@@ -17,16 +17,15 @@ import signal
 import threading
 from pathlib import Path
 
-
 import click
 from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.endpoints import resolve_endpoint_uri
 from iris.rpc import config_pb2
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -333,8 +332,9 @@ def serve(
     state_dir: Path | None,
 ):
     """Start the Iris controller service."""
-    from iris.cluster.config import load_config
     from rigging.log_setup import configure_logging
+
+    from iris.cluster.config import load_config
 
     configure_logging(level=getattr(logging, log_level))
 

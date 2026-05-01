@@ -15,6 +15,8 @@ from pathlib import Path
 import click
 from connectrpc.errors import ConnectError
 from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_cmd
+from rigging.config_discovery import list_cluster_configs
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.cli.build import (
     build_image,
@@ -28,14 +30,9 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     prepare_slice_config,
 )
 from iris.cluster.providers.types import Labels
-from iris.rpc import config_pb2
-from iris.rpc import vm_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
-from rigging.config_discovery import list_cluster_configs
-from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 # =============================================================================
 # Helpers

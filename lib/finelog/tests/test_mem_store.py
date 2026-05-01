@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import pytest
-
 from finelog.rpc import logging_pb2
 from finelog.store.mem_store import MemStore
 

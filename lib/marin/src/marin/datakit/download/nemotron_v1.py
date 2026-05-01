@@ -10,15 +10,16 @@ from collections.abc import Iterator
 
 import requests
 import zstandard
-from rigging.filesystem import open_url
-from marin.datakit.normalize import normalize_step
-from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_exists
 from fray.cluster import ResourceConfig
 from requests.adapters import HTTPAdapter
+from rigging.filesystem import open_url
 from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
+
+from marin.datakit.normalize import normalize_step
+from marin.execution.step_spec import StepSpec
+from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 

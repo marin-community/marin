@@ -102,21 +102,24 @@ from fray.client import current_client, set_current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import TpuConfig
 from iris.cluster.constraints import WellKnownAttribute
-from rigging.filesystem import collect_gcs_paths
-from rigging.filesystem import get_bucket_location, open_url
-from rigging.filesystem import marin_prefix
-from rigging.filesystem import region_from_prefix
-from rigging.filesystem import split_gcs_path
+from rigging.filesystem import (
+    collect_gcs_paths,
+    get_bucket_location,
+    marin_prefix,
+    open_url,
+    region_from_prefix,
+    split_gcs_path,
+)
+from rigging.log_setup import configure_logging
 
-from marin.execution.step_spec import StepSpec
-from marin.execution.step_runner import StepRunner, worker_id
-from marin.execution.remote import RemoteCallable
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
 )
+from marin.execution.remote import RemoteCallable
+from marin.execution.step_runner import StepRunner, worker_id
+from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
-from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

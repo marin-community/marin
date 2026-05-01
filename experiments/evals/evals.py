@@ -13,7 +13,6 @@ from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
-from marin.execution.remote import remote
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
@@ -23,6 +22,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from marin.execution.remote import remote
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
 from experiments.evals.evalchemy_results_compiler import compile_evalchemy_results_fn

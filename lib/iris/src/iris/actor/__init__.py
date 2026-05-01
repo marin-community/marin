@@ -14,8 +14,8 @@ from iris.actor.resolver import (
     FixedResolver,
     ProxyResolver,
     ResolvedEndpoint,
-    ResolveResult,
     Resolver,
+    ResolveResult,
 )
 from iris.actor.server import ActorId, ActorServer
 

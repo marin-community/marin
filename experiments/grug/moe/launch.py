@@ -30,7 +30,7 @@ from experiments.defaults import default_validation_sets
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
-from experiments.pretraining_datasets import nemotron_mix_block_shuffle
+from experiments.pretraining_datasets import nemotron_mix
 
 
 @dataclass(frozen=True)
@@ -57,8 +57,8 @@ class GrugMoeLaunchConfig:
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
-    nemotron_mix_block_shuffle,
-    default_validation_sets(tokenizer=nemotron_mix_block_shuffle.tokenizer),
+    nemotron_mix,
+    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
 )
 
 
