@@ -219,6 +219,9 @@ class IrisInferenceBroker:
                 if response is not None:
                     return response
 
+                if self._stopped:
+                    return None
+
                 if request_id not in self._entries:
                     return None
 
@@ -418,6 +421,9 @@ class _IrisInferenceProxyHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._write_json(409, {"error": str(exc), "request_id": request_id})
             return
+        except RuntimeError as exc:
+            self._write_json(503, {"error": str(exc), "request_id": request_id})
+            return
 
         future = self._proxy_server.broker.wait.submit(request_id, self._proxy_server.request_timeout)
         try:
@@ -543,37 +549,41 @@ class _IrisInferenceServiceContext(AbstractContextManager[RunningModel]):
         self._proxy_context: AbstractContextManager[RunningIrisInferenceProxy] | None = None
 
     def __enter__(self) -> RunningModel:
-        service_name = self._config.service_name or f"iris-inference-{uuid.uuid4().hex[:8]}"
-        self._broker = self._client.create_actor(
-            IrisInferenceBroker,
-            self._config.lease_timeout,
-            name=f"{service_name}-broker",
-            resources=self._config.broker_resources,
-        )
-        self._worker_group = self._client.create_actor_group(
-            IrisInferenceWorker,
-            self._broker,
-            self._config.engine_base_url,
-            name=f"{service_name}-workers",
-            count=self._config.worker_count,
-            resources=self._config.worker_resources,
-            request_timeout=self._config.request_timeout,
-            lease_wait_timeout=self._config.worker_lease_wait_timeout,
-        )
-        workers = self._worker_group.wait_ready(timeout=self._config.worker_ready_timeout)
-        self._worker_futures = [worker.run.submit(max_requests=None) for worker in workers]
+        try:
+            service_name = self._config.service_name or f"iris-inference-{uuid.uuid4().hex[:8]}"
+            self._broker = self._client.create_actor(
+                IrisInferenceBroker,
+                self._config.lease_timeout,
+                name=f"{service_name}-broker",
+                resources=self._config.broker_resources,
+            )
+            self._worker_group = self._client.create_actor_group(
+                IrisInferenceWorker,
+                self._broker,
+                self._config.engine_base_url,
+                name=f"{service_name}-workers",
+                count=self._config.worker_count,
+                resources=self._config.worker_resources,
+                request_timeout=self._config.request_timeout,
+                lease_wait_timeout=self._config.worker_lease_wait_timeout,
+            )
+            workers = self._worker_group.wait_ready(timeout=self._config.worker_ready_timeout)
+            self._worker_futures = [worker.run.submit(max_requests=None) for worker in workers]
 
-        self._proxy_context = serve_iris_inference_proxy(
-            self._broker,
-            host=self._config.proxy_host,
-            port=self._config.proxy_port,
-            request_timeout=self._config.request_timeout,
-        )
-        proxy = self._proxy_context.__enter__()
-        return RunningModel(
-            endpoint=OpenAIEndpoint(base_url=proxy.base_url, model=self._deployment.model_name),
-            tokenizer=self._deployment.tokenizer,
-        )
+            self._proxy_context = serve_iris_inference_proxy(
+                self._broker,
+                host=self._config.proxy_host,
+                port=self._config.proxy_port,
+                request_timeout=self._config.request_timeout,
+            )
+            proxy = self._proxy_context.__enter__()
+            return RunningModel(
+                endpoint=OpenAIEndpoint(base_url=proxy.base_url, model=self._deployment.model_name),
+                tokenizer=self._deployment.tokenizer,
+            )
+        except BaseException as exc:
+            self.__exit__(type(exc), exc, exc.__traceback__)
+            raise
 
     def __exit__(
         self,
@@ -581,19 +591,23 @@ class _IrisInferenceServiceContext(AbstractContextManager[RunningModel]):
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> bool | None:
-        if self._proxy_context is not None:
-            self._proxy_context.__exit__(exc_type, exc_value, traceback)
-            self._proxy_context = None
+        try:
+            if self._proxy_context is not None:
+                self._proxy_context.__exit__(exc_type, exc_value, traceback)
+                self._proxy_context = None
 
-        if self._broker is not None:
-            self._broker.stop.remote().result(timeout=DEFAULT_CLEANUP_TIMEOUT)
+            if self._broker is not None:
+                self._broker.stop.remote().result(timeout=DEFAULT_CLEANUP_TIMEOUT)
 
-        for future in self._worker_futures:
-            future.result(timeout=DEFAULT_CLEANUP_TIMEOUT)
-        self._worker_futures = []
+            for future in self._worker_futures:
+                future.result(timeout=DEFAULT_CLEANUP_TIMEOUT)
+        finally:
+            self._worker_futures = []
 
-        if self._worker_group is not None:
-            self._worker_group.shutdown()
-            self._worker_group = None
+            if self._worker_group is not None:
+                self._worker_group.shutdown()
+                self._worker_group = None
+
+            self._broker = None
 
         return None
