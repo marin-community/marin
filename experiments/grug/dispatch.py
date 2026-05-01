@@ -31,6 +31,53 @@ def _default_environment_extras(resources: ResourceConfig) -> list[str]:
     return []
 
 
+def _start_xla_dump_uploader(local_dir: str, gcs_dst_template: str) -> None:
+    """Periodically rsync local XLA dumps to GCS so they survive a silent kill.
+
+    Diagnostic for issue #5319. Workers can SIGABRT below Python without flushing
+    output, so atexit isn't reliable; a background thread uploads every 30s.
+    `gcs_dst_template` may contain `{worker}` which is replaced with the JAX
+    process index (defaults to PID before jax.distributed.initialize runs).
+    """
+    import os
+    import shutil
+    import subprocess
+    import threading
+    import time
+
+    if not shutil.which("gsutil"):
+        return
+
+    def _resolve_worker_id() -> str:
+        try:
+            import jax
+
+            if jax.distributed.is_initialized():
+                return f"worker{jax.process_index()}"
+        except Exception:
+            pass
+        return f"pid{os.getpid()}"
+
+    def _loop() -> None:
+        while True:
+            time.sleep(30)
+            if not os.path.isdir(local_dir):
+                continue
+            dst = gcs_dst_template.format(worker=_resolve_worker_id())
+            try:
+                subprocess.run(
+                    ["gsutil", "-m", "-q", "rsync", "-r", local_dir, dst],
+                    timeout=120,
+                    check=False,
+                )
+            except Exception:
+                # Don't crash the training process on upload failure.
+                pass
+
+    t = threading.Thread(target=_loop, name="xla-dump-uploader", daemon=True)
+    t.start()
+
+
 def _with_jax_distributed_init(fn: Callable[[ConfigT], None], config: ConfigT) -> None:
     """Wrapper that initializes JAX distributed before running the entrypoint.
 
@@ -40,10 +87,12 @@ def _with_jax_distributed_init(fn: Callable[[ConfigT], None], config: ConfigT) -
 
     Also enables faulthandler so SIGABRT/SIGSEGV from libtpu (which can hard-abort
     the process when the TPU runtime detects launch-group/scheckne mismatches)
-    print a Python traceback to stderr instead of dying silently. Diagnostic for
-    issue #5319.
+    print a Python traceback to stderr instead of dying silently, and starts a
+    periodic XLA-dump uploader if XLA_DUMP_GCS_DST is set. Diagnostic for issue
+    #5319.
     """
     import faulthandler
+    import os
     import signal
     import sys
 
@@ -53,6 +102,10 @@ def _with_jax_distributed_init(fn: Callable[[ConfigT], None], config: ConfigT) -
             faulthandler.register(sig, file=sys.stderr, all_threads=True, chain=True)
         except Exception:
             pass
+
+    xla_dump_gcs_dst = os.environ.get("XLA_DUMP_GCS_DST")
+    if xla_dump_gcs_dst:
+        _start_xla_dump_uploader("/tmp/xla_dump", xla_dump_gcs_dst)
 
     import jax
 
