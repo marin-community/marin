@@ -179,6 +179,7 @@ def build_hf_export_step(
     model_config: LlamaConfig,
     checkpoint_step: int,
     name_prefix: str,
+    checkpoint_path_override: str | None = None,
 ) -> ExecutorStep:
     """Build a CPU-only HF export step for a distance-masked training run.
 
@@ -187,6 +188,12 @@ def build_hf_export_step(
     is used only to label the output directory (``hf/step-{checkpoint_step}``)
     so multiple checkpoints from the same run can coexist.
 
+    By default, ``checkpoint_path`` is wired up via ``output_path_of(train_step,
+    "checkpoints")`` so the export step depends on ``train_step`` and waits for
+    it to reach ``SUCCEEDED`` before running. Set ``checkpoint_path_override``
+    to a literal gs:// path to bypass that dependency — useful when you want to
+    snapshot a checkpoint while training is still in progress.
+
     Args:
         train_step: The training ExecutorStep to export from.
         model_config: The same ``LlamaConfig`` used to train ``train_step``.
@@ -194,14 +201,24 @@ def build_hf_export_step(
             export if you want to label a different checkpoint.
         name_prefix: Used in the export step's name and tags, e.g.
             ``"protein-contacts-30m-distance-masked"``.
+        checkpoint_path_override: When set, use this literal gs:// path instead
+            of the dependency-creating ``output_path_of(train_step, ...)``. The
+            export step then has no marin-executor dependency on ``train_step``
+            and will run immediately, regardless of ``train_step``'s status.
     """
     trainer = train_step.config.train_config.trainer
     if not isinstance(trainer, TrainerConfig):
         raise TypeError(f"Expected TrainerConfig on train_step, got {type(trainer)!r}")
 
+    checkpoint_path: str | object
+    if checkpoint_path_override is not None:
+        checkpoint_path = checkpoint_path_override
+    else:
+        checkpoint_path = output_path_of(train_step, "checkpoints")
+
     return convert_checkpoint_to_hf_step(
         name=f"hf/{name_prefix}-step-{checkpoint_step}",
-        checkpoint_path=output_path_of(train_step, "checkpoints"),
+        checkpoint_path=checkpoint_path,  # pyrefly: ignore
         trainer=deepcopy(trainer),
         model=model_config,
         tokenizer=PROTEIN_TOKENIZER,

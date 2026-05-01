@@ -59,10 +59,36 @@ PROMPT_CONTACT_COUNTS = (0, 1, 2, 3, 4, 5)
 
 @dataclass(frozen=True)
 class EvalRunEntry:
-    """One protein-docs training run + its HF checkpoint."""
+    """One protein-docs training run + a checkpoint to evaluate.
+
+    The checkpoint can be either an HF dir (existing post-export workflow) or
+    a Levanter checkpoint dir (the eval container converts it to HF in-place
+    on CPU before vLLM loads). Set exactly one of ``hf_checkpoint_path`` or
+    (``levanter_checkpoint_path`` + ``levanter_model_spec``).
+    """
 
     model_label: str
-    hf_checkpoint_path: str
+    hf_checkpoint_path: str | None = None
+    levanter_checkpoint_path: str | None = None
+    # Importable ``module.attribute`` for an LmConfig — required when using
+    # the Levanter path since Levanter checkpoints don't carry an architecture
+    # spec. Example: "experiments.protein.train_protein_30m_distance_masked.protein_llama_30m".
+    levanter_model_spec: str | None = None
+
+    def __post_init__(self):
+        has_hf = self.hf_checkpoint_path is not None
+        has_levanter = self.levanter_checkpoint_path is not None
+        if has_hf == has_levanter:
+            raise ValueError(
+                "EvalRunEntry must specify exactly one of hf_checkpoint_path or " "levanter_checkpoint_path."
+            )
+        if has_levanter and self.levanter_model_spec is None:
+            raise ValueError("levanter_checkpoint_path requires levanter_model_spec.")
+
+    @property
+    def model_path(self) -> str:
+        """The path passed to ``--model``."""
+        return self.hf_checkpoint_path or self.levanter_checkpoint_path  # pyrefly: ignore
 
 
 @dataclass(frozen=True)
@@ -91,21 +117,46 @@ class EvalVariant:
 #
 # The existing 1B run's HF checkpoint already exists at the path below; the
 # rest are placeholders to be filled in once exports finish.
+# Snapshot timestamp: 2026-05-01 13:30 UTC. Each ``model_label`` includes the
+# rough training step where the HF export was taken, so multiple snapshots per
+# size can coexist as we re-export at later checkpoints.
 EVAL_RUNS: list[EvalRunEntry] = [
     EvalRunEntry(
-        model_label="1b_continue_train",
+        model_label="1b-step-31337",
         hf_checkpoint_path=(
             "gs://marin-us-east5/checkpoints/protein-contacts-1b-3.5e-4-distance-masked-7d355e/hf/step-31337"
         ),
     ),
-    # TODO: fill in once exports run. Path layout for fresh runs is
-    # ``gs://marin-us-east5/hf/protein-contacts-<size>-distance-masked-step-<N>-<hash>``.
-    # EvalRunEntry(model_label="30m", hf_checkpoint_path="gs://..."),
-    # EvalRunEntry(model_label="100m", hf_checkpoint_path="gs://..."),
-    # EvalRunEntry(model_label="400m", hf_checkpoint_path="gs://..."),
-    # EvalRunEntry(model_label="420m_deep", hf_checkpoint_path="gs://..."),
-    # EvalRunEntry(model_label="1_5b", hf_checkpoint_path="gs://..."),
-    # EvalRunEntry(model_label="3b", hf_checkpoint_path="gs://..."),
+    EvalRunEntry(
+        # Already exported successfully on 2026-05-01 at the older 153e41 hash
+        # (before the checkpoint_path_override change). Reusing it directly.
+        model_label="30m-step-50000",
+        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-30m-distance-masked-step-50000-153e41",
+    ),
+    EvalRunEntry(
+        model_label="100m-step-20000",
+        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-100m-distance-masked-step-20000-b5539f",
+    ),
+    EvalRunEntry(
+        model_label="400m-step-7000",
+        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-400m-distance-masked-step-7000-91fa33",
+    ),
+    EvalRunEntry(
+        model_label="420m_deep-step-5000",
+        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-420m-deep-distance-masked-step-5000-81fbbb",
+    ),
+    EvalRunEntry(
+        model_label="1_5b-step-2500",
+        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-1_5b-distance-masked-step-2500-91d41a",
+    ),
+    EvalRunEntry(
+        model_label="3b-step-1000",
+        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-3b-distance-masked-step-1000-bd8398",
+    ),
+    EvalRunEntry(
+        model_label="1b_unmasked-step-3500",
+        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-1b-3.5e-4-unmasked-step-3500-d6a8ed",
+    ),
 ]
 
 EVAL_TARGETS: list[EvalTarget] = [
@@ -146,7 +197,7 @@ def build_iris_command(run: EvalRunEntry, target: EvalTarget, variant: EvalVaria
         "-m",
         "experiments.protein.eval_protein_distogram",
         "--model",
-        run.hf_checkpoint_path,
+        run.model_path,
         "--pdb-id",
         target.pdb_id,
         "--prompt-contact-counts",
@@ -154,6 +205,8 @@ def build_iris_command(run: EvalRunEntry, target: EvalTarget, variant: EvalVaria
         "--output-dir",
         output_dir,
     ]
+    if run.levanter_model_spec is not None:
+        inner.extend(["--levanter-model-spec", run.levanter_model_spec])
     if target.chain_id is not None:
         inner.extend(["--chain-id", target.chain_id])
     if variant.redesigns_source is not None:

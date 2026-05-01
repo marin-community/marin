@@ -435,12 +435,137 @@ def summarize(probs: np.ndarray, gt: np.ndarray) -> dict:
     }
 
 
-# ---- Model staging (same as eval_protein_contacts.py) ----
+# ---- Model staging ----
 
 
-def stage_model_locally(model_path: str) -> str:
+def _looks_like_levanter_checkpoint(model_path: str) -> bool:
+    """Detect a Levanter checkpoint dir.
+
+    Levanter dirs contain a ``metadata.json`` (and ``state/``) at the
+    checkpoint root, or live as ``step-N`` subdirs of a parent ``checkpoints/``
+    dir. HF dirs always have ``config.json`` at the top level.
+
+    Returns True only when the path doesn't look HF-shaped.
+    """
+    fs, root = url_to_fs(model_path.rstrip("/"))
+    if not fs.exists(root):
+        return False
+    if fs.exists(f"{root}/config.json"):
+        return False
+    if fs.exists(f"{root}/metadata.json"):
+        return True
+    # Parent of step-N subdirs (`checkpoints/`-style) — `discover_latest` will
+    # pick whichever is loadable.
+    try:
+        children = fs.ls(root, detail=False)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    for child in children:
+        name = child.rstrip("/").rsplit("/", 1)[-1]
+        if name.startswith("step-") and fs.exists(f"{child}/metadata.json"):
+            return True
+    return False
+
+
+def _resolve_levanter_model_spec(spec: str):
+    """Import ``module.path.attribute`` and return the attribute (an LmConfig)."""
+    import importlib
+
+    if "." not in spec:
+        raise ValueError(f"--levanter-model-spec must be 'module.attribute'; got {spec!r}")
+    mod_name, attr_name = spec.rsplit(".", 1)
+    return getattr(importlib.import_module(mod_name), attr_name)
+
+
+def stage_levanter_checkpoint_locally(
+    model_path: str,
+    *,
+    levanter_model_spec: str,
+    tokenizer: str,
+) -> str:
+    """Convert a Levanter checkpoint to a local HF dir for vLLM.
+
+    Uses ``discover_latest_checkpoint`` to resolve a ``checkpoints/`` parent
+    dir to the most recent loadable ``step-N``. Conversion runs on CPU to
+    avoid contending with the TPU that vLLM is about to claim.
+
+    Result is cached under
+    ``/tmp/marin-protein-eval-levanter/<sha-of-model_path>/`` so re-running
+    the eval skips the conversion.
+    """
+    from levanter.checkpoint import discover_latest_checkpoint
+    from levanter.main.export_lm_to_hf import ConvertLmConfig
+    from levanter.main.export_lm_to_hf import main as export_lm_to_hf_main
+    from levanter.trainer import TrainerConfig
+
+    cache_key = hashlib.sha256(model_path.encode("utf-8")).hexdigest()[:16]
+    local_dir = os.path.join(tempfile.gettempdir(), "marin-protein-eval-levanter", cache_key)
+    if os.path.exists(os.path.join(local_dir, "config.json")):
+        logger.info("Reusing cached Levanter→HF conversion at %s", local_dir)
+        return local_dir
+    os.makedirs(local_dir, exist_ok=True)
+
+    discovered = discover_latest_checkpoint(model_path)
+    if discovered is None:
+        raise FileNotFoundError(f"No Levanter checkpoint found under {model_path!r}")
+    if discovered != model_path:
+        logger.info("discover_latest_checkpoint resolved %s → %s", model_path, discovered)
+
+    model_config = _resolve_levanter_model_spec(levanter_model_spec)
+
+    logger.info("Converting Levanter checkpoint %s → local HF at %s (CPU)", discovered, local_dir)
+    t0 = time.time()
+    export_lm_to_hf_main(
+        ConvertLmConfig(
+            trainer=TrainerConfig(),
+            checkpoint_path=discovered,
+            output_dir=local_dir,
+            model=model_config,
+            tokenizer=tokenizer,
+            save_tokenizer=True,
+            use_cpu=True,
+        )
+    )
+    logger.info("Levanter→HF conversion took %.1fs", time.time() - t0)
+
+    if not os.path.exists(os.path.join(local_dir, "config.json")):
+        raise RuntimeError(f"Conversion produced no config.json at {local_dir}")
+    return local_dir
+
+
+def stage_model_locally(
+    model_path: str,
+    *,
+    levanter_model_spec: str | None = None,
+    tokenizer: str | None = None,
+) -> str:
+    """Make ``model_path`` available locally as an HF checkpoint dir.
+
+    * Local paths: returned unchanged.
+    * gs://... HF dirs: mirrored to ``/tmp/marin-protein-eval-model/<sha>/``.
+    * gs://... Levanter checkpoint dirs: converted in-place via
+      ``levanter.main.export_lm_to_hf`` to ``/tmp/marin-protein-eval-levanter/<sha>/``.
+
+    Auto-detect picks the right path based on the directory contents. Pass
+    ``levanter_model_spec`` (an importable ``module.attribute`` for an
+    ``LmConfig``) when forcing the Levanter path or when auto-detect picks
+    Levanter — the conversion needs the model's architecture spec since
+    Levanter checkpoints don't carry one. ``tokenizer`` defaults to the
+    model spec's HF tokenizer; pass explicitly to override.
+    """
     if not model_path.startswith(("gs://", "s3://")):
         return model_path
+
+    if _looks_like_levanter_checkpoint(model_path):
+        if levanter_model_spec is None:
+            raise ValueError(f"{model_path} looks like a Levanter checkpoint but --levanter-model-spec was not set.")
+        if tokenizer is None:
+            raise ValueError("Levanter checkpoint requires an explicit --tokenizer.")
+        return stage_levanter_checkpoint_locally(
+            model_path,
+            levanter_model_spec=levanter_model_spec,
+            tokenizer=tokenizer,
+        )
 
     fs, remote_root = url_to_fs(model_path.rstrip("/"))
     cache_key = hashlib.sha256(model_path.encode("utf-8")).hexdigest()[:16]
@@ -548,6 +673,22 @@ def main(argv: list[str] | None = None) -> int:
         "--sequence-override-method", default=None, help="method field to match (e.g. 'soluble' or 'mpnn')."
     )
     parser.add_argument("--sequence-override-idx", type=int, default=None, help="redesign_idx to match.")
+    parser.add_argument(
+        "--levanter-model-spec",
+        default=None,
+        help=(
+            "Importable ``module.attribute`` for an LmConfig (e.g. "
+            "``experiments.protein.train_protein_30m_distance_masked.protein_llama_30m``). "
+            "Required when --model points at a Levanter checkpoint dir; the "
+            "conversion needs the architecture spec since Levanter checkpoints "
+            "don't carry one. Ignored when --model is an HF dir."
+        ),
+    )
+    parser.add_argument(
+        "--levanter-tokenizer",
+        default="timodonnell/protein-docs-tokenizer",
+        help="HF tokenizer id used during Levanter→HF conversion.",
+    )
     args = parser.parse_args(argv)
 
     override_fields = (
@@ -630,7 +771,11 @@ def main(argv: list[str] | None = None) -> int:
     # --- 2. Stage model + load vLLM once ---
     from vllm import LLM
 
-    local_model_path = stage_model_locally(args.model)
+    local_model_path = stage_model_locally(
+        args.model,
+        levanter_model_spec=args.levanter_model_spec,
+        tokenizer=args.levanter_tokenizer,
+    )
     logger.info("Loading model %s via vLLM", args.model)
     llm = LLM(
         model=local_model_path,

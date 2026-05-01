@@ -24,12 +24,14 @@ from experiments.protein.train_protein_30m_distance_masked import (
 from marin.execution.executor import executor_main
 
 CHECKPOINT_STEP = 50000
+CHECKPOINT_PATH = "gs://marin-us-east5/checkpoints/protein-contacts-30m-distance-masked-a7457a/checkpoints"
 
 hf_export = build_hf_export_step(
     train_step=protein_model_30m_distance_masked,
     model_config=protein_llama_30m,
     checkpoint_step=CHECKPOINT_STEP,
     name_prefix="protein-contacts-30m-distance-masked",
+    checkpoint_path_override=CHECKPOINT_PATH,
 )
 
 

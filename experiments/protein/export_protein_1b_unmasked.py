@@ -23,13 +23,15 @@ from experiments.protein.train_protein_1b_unmasked import (
 )
 from marin.execution.executor import executor_main
 
-CHECKPOINT_STEP = 50000
+CHECKPOINT_STEP = 3500
+CHECKPOINT_PATH = "gs://marin-us-east5/checkpoints/protein-contacts-1b-3.5e-4-unmasked-8efbcb/checkpoints"
 
 hf_export = build_hf_export_step(
     train_step=protein_model_1b_unmasked,
     model_config=protein_llama_1b,
     checkpoint_step=CHECKPOINT_STEP,
     name_prefix="protein-contacts-1b-3.5e-4-unmasked",
+    checkpoint_path_override=CHECKPOINT_PATH,
 )
 
 
