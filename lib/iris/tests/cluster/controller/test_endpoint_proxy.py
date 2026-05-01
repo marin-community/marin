@@ -26,55 +26,17 @@ from iris.cluster.controller.endpoint_proxy import (
     EndpointProxy,
     _rewrite_location,
 )
-from iris.cluster.controller.schema import EndpointRow
 from iris.cluster.dashboard_common import on_shutdown
-from iris.cluster.types import JobName
 from iris.managed_thread import ThreadContainer
-from rigging.timing import Duration, ExponentialBackoff, Timestamp
+from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-# Endpoint name registered in the fake store; reachable at /proxy/user.jobX.dash/...
+# Endpoint name registered with the proxy resolver; reachable at /proxy/user.jobX.dash/...
 ENDPOINT_NAME = "/user/jobX/dash"
 ENDPOINT_URL_NAME = "user.jobX.dash"
-
-
-class _FakeEndpointStore:
-    """In-memory stand-in for ``EndpointStore`` that exposes ``resolve``.
-
-    Only the methods used by ``EndpointProxy`` are implemented. This mirrors
-    the ``StandaloneActorProxy`` pattern in ``test_actor_proxy.py``: keep
-    the proxy under test real, swap out the persistent store.
-    """
-
-    def __init__(self) -> None:
-        self._rows: dict[str, EndpointRow] = {}
-
-    def register(self, name: str, address: str) -> None:
-        self._rows[name] = EndpointRow(
-            endpoint_id=f"e-{len(self._rows)}",
-            name=name,
-            address=address,
-            task_id=JobName.from_wire("/user/jobX/dash"),
-            metadata={},
-            registered_at=Timestamp.now(),
-        )
-
-    def resolve(self, name: str) -> EndpointRow | None:
-        return self._rows.get(name)
-
-
-class _FakeStore:
-    """Duck-typed stand-in for ``ControllerStore`` used by the proxy.
-
-    ``EndpointProxy`` only touches ``store.endpoints.resolve``; we ignore the
-    declared ``ControllerStore`` type at the construction sites.
-    """
-
-    def __init__(self) -> None:
-        self.endpoints = _FakeEndpointStore()
 
 
 @dataclass
@@ -220,7 +182,10 @@ def upstream(threads: ThreadContainer) -> UpstreamHandle:
 class ProxyHandle:
     base_url: str
     upstream: UpstreamHandle
-    store: _FakeStore
+    # Mutable name->address mapping that backs the proxy's resolver. Tests can
+    # add or remove entries at runtime to exercise the post-construction
+    # registration path used by the controller's system endpoints.
+    endpoints: dict[str, str]
 
 
 def _build_proxy_app(proxy: EndpointProxy) -> Starlette:
@@ -236,18 +201,35 @@ def _build_proxy_app(proxy: EndpointProxy) -> Starlette:
     return app
 
 
-@pytest.fixture
-def proxy(upstream: UpstreamHandle, threads: ThreadContainer) -> ProxyHandle:
-    store = _FakeStore()
-    store.endpoints.register(ENDPOINT_NAME, f"127.0.0.1:{upstream.port}")
-    ep_proxy = EndpointProxy(store)  # type: ignore[arg-type]
+def _start_proxy(
+    threads: ThreadContainer,
+    *,
+    endpoints: dict[str, str] | None = None,
+    timeout_seconds: float = 30.0,
+) -> tuple[str, dict[str, str], EndpointProxy]:
+    """Spin up an EndpointProxy + its hosting Starlette server.
+
+    Returns ``(base_url, endpoints, proxy)``. ``endpoints`` is the mutable
+    dict the proxy resolves against — callers can register or remove names
+    at runtime. The proxy uses ``endpoints.get`` directly as its resolver,
+    keeping the test wiring identical to production: a single ``name ->
+    address`` callable, no fakes for the persistent stores.
+    """
+    endpoints = endpoints if endpoints is not None else {}
+    ep_proxy = EndpointProxy(endpoints.get, timeout_seconds=timeout_seconds)
     app = _build_proxy_app(ep_proxy)
     port = _free_port()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", log_config=None)
     server = uvicorn.Server(config)
     threads.spawn_server(server, name=f"proxy-{port}")
     _wait_for_server(server)
-    return ProxyHandle(base_url=f"http://127.0.0.1:{port}", upstream=upstream, store=store)
+    return f"http://127.0.0.1:{port}", endpoints, ep_proxy
+
+
+@pytest.fixture
+def proxy(upstream: UpstreamHandle, threads: ThreadContainer) -> ProxyHandle:
+    base_url, endpoints, _ = _start_proxy(threads, endpoints={ENDPOINT_NAME: f"127.0.0.1:{upstream.port}"})
+    return ProxyHandle(base_url=base_url, upstream=upstream, endpoints=endpoints)
 
 
 # ---------------------------------------------------------------------------
@@ -325,21 +307,13 @@ def test_upstream_5xx_passes_through(proxy: ProxyHandle) -> None:
 
 
 def test_upstream_connection_refused_returns_502(threads: ThreadContainer) -> None:
-    store = _FakeStore()
     # Bind a port and immediately release it; the address is dead by the time
     # the proxy connects.
     dead_port = _free_port()
-    store.endpoints.register(ENDPOINT_NAME, f"127.0.0.1:{dead_port}")
-    ep_proxy = EndpointProxy(store)  # type: ignore[arg-type]
-    app = _build_proxy_app(ep_proxy)
-    port = _free_port()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", log_config=None)
-    server = uvicorn.Server(config)
-    threads.spawn_server(server, name=f"proxy-{port}")
-    _wait_for_server(server)
+    base_url, _, _ = _start_proxy(threads, endpoints={ENDPOINT_NAME: f"127.0.0.1:{dead_port}"})
 
     with httpx.Client() as client:
-        resp = client.get(f"http://127.0.0.1:{port}/proxy/{ENDPOINT_URL_NAME}/anything")
+        resp = client.get(f"{base_url}/proxy/{ENDPOINT_URL_NAME}/anything")
     assert resp.status_code == 502
     assert "Upstream error" in resp.json()["error"]
 
@@ -347,18 +321,14 @@ def test_upstream_connection_refused_returns_502(threads: ThreadContainer) -> No
 def test_upstream_timeout_returns_504(threads: ThreadContainer, upstream: UpstreamHandle) -> None:
     # Use a short proxy timeout so the test runs quickly. The /slow upstream
     # sleeps far longer than the proxy timeout, guaranteeing a ReadTimeout.
-    store = _FakeStore()
-    store.endpoints.register(ENDPOINT_NAME, f"127.0.0.1:{upstream.port}")
-    ep_proxy = EndpointProxy(store, timeout_seconds=0.5)  # type: ignore[arg-type]
-    app = _build_proxy_app(ep_proxy)
-    port = _free_port()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", log_config=None)
-    server = uvicorn.Server(config)
-    threads.spawn_server(server, name=f"proxy-{port}")
-    _wait_for_server(server)
+    base_url, _, _ = _start_proxy(
+        threads,
+        endpoints={ENDPOINT_NAME: f"127.0.0.1:{upstream.port}"},
+        timeout_seconds=0.5,
+    )
 
     with httpx.Client(timeout=10.0) as client:
-        resp = client.get(f"http://127.0.0.1:{port}/proxy/{ENDPOINT_URL_NAME}/slow")
+        resp = client.get(f"{base_url}/proxy/{ENDPOINT_URL_NAME}/slow")
     assert resp.status_code == 504
     assert "timeout" in resp.json()["error"].lower()
 
@@ -390,26 +360,23 @@ def test_authorization_stripped(proxy: ProxyHandle) -> None:
 
 def test_dot_to_slash_transform(threads: ThreadContainer, upstream: UpstreamHandle) -> None:
     """``.`` in the URL maps to ``/`` at lookup; literal-``.`` names are unreachable."""
-    store = _FakeStore()
-    store.endpoints.register("/user/jobX/dash", f"127.0.0.1:{upstream.port}")
     # A name with a literal '.' would only be reachable via /proxy/literal.dot/...,
     # but that URL transforms to 'literal/dot' on lookup and won't match.
-    store.endpoints.register("literal.dot", f"127.0.0.1:{upstream.port}")
-    ep_proxy = EndpointProxy(store)  # type: ignore[arg-type]
-    app = _build_proxy_app(ep_proxy)
-    port = _free_port()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", log_config=None)
-    server = uvicorn.Server(config)
-    threads.spawn_server(server, name=f"proxy-{port}")
-    _wait_for_server(server)
+    base_url, _, _ = _start_proxy(
+        threads,
+        endpoints={
+            "/user/jobX/dash": f"127.0.0.1:{upstream.port}",
+            "literal.dot": f"127.0.0.1:{upstream.port}",
+        },
+    )
 
     with httpx.Client() as client:
         # Slash-substituted name reaches the upstream.
-        ok = client.get(f"http://127.0.0.1:{port}/proxy/user.jobX.dash/echo")
+        ok = client.get(f"{base_url}/proxy/user.jobX.dash/echo")
         assert ok.status_code == 200
 
         # Literal-dot name is unreachable: 'literal.dot' -> 'literal/dot' on lookup.
-        miss = client.get(f"http://127.0.0.1:{port}/proxy/literal.dot/echo")
+        miss = client.get(f"{base_url}/proxy/literal.dot/echo")
         assert miss.status_code == 404
 
 
@@ -516,50 +483,22 @@ def test_external_redirect_passthrough(proxy: ProxyHandle) -> None:
     assert resp.headers["location"] == "https://other.example/landing"
 
 
-def test_system_endpoint_resolves_via_in_memory_map(threads: ThreadContainer, upstream: UpstreamHandle) -> None:
-    """``/system/...`` endpoints aren't in the SQL store; the proxy must consult
-    the service's in-memory ``system_endpoints`` dict — the same dict
-    ``ListEndpoints`` uses. This is how ``/system/log-server`` reaches finelog.
+def test_post_construction_registration_visible(threads: ThreadContainer, upstream: UpstreamHandle) -> None:
+    """The resolver is a callable closed over a mutable map — registrations
+    after the proxy is built must take effect on the next request. This is
+    how the controller's ``/system/log-server`` registration during start()
+    becomes visible to a dashboard already constructed in ``__init__``.
     """
-    store = _FakeStore()  # empty: no rows for /system/log-server
-    system_endpoints = {"/system/log-server": f"127.0.0.1:{upstream.port}"}
-    ep_proxy = EndpointProxy(store, system_endpoints=system_endpoints)  # type: ignore[arg-type]
-    app = _build_proxy_app(ep_proxy)
-    port = _free_port()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", log_config=None)
-    server = uvicorn.Server(config)
-    threads.spawn_server(server, name=f"proxy-{port}")
-    _wait_for_server(server)
+    base_url, endpoints, _ = _start_proxy(threads, endpoints={})
 
     with httpx.Client() as client:
-        resp = client.get(f"http://127.0.0.1:{port}/proxy/system.log-server/echo")
-    assert resp.status_code == 200
-    assert resp.json()["path"] == "/echo"
-
-
-def test_system_endpoints_dict_mutation_visible(threads: ThreadContainer, upstream: UpstreamHandle) -> None:
-    """Controller registers ``/system/log-server`` after the dashboard is built;
-    the dict is shared by reference so post-construction updates take effect.
-    """
-    store = _FakeStore()
-    system_endpoints: dict[str, str] = {}
-    ep_proxy = EndpointProxy(store, system_endpoints=system_endpoints)  # type: ignore[arg-type]
-    app = _build_proxy_app(ep_proxy)
-    port = _free_port()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", log_config=None)
-    server = uvicorn.Server(config)
-    threads.spawn_server(server, name=f"proxy-{port}")
-    _wait_for_server(server)
-
-    with httpx.Client() as client:
-        # Before registration: 404.
-        miss = client.get(f"http://127.0.0.1:{port}/proxy/system.log-server/echo")
+        miss = client.get(f"{base_url}/proxy/{ENDPOINT_URL_NAME}/echo")
         assert miss.status_code == 404
 
-        # Mutate the dict the proxy holds a reference to.
-        system_endpoints["/system/log-server"] = f"127.0.0.1:{upstream.port}"
+        # Mutate the dict the resolver closes over.
+        endpoints[ENDPOINT_NAME] = f"127.0.0.1:{upstream.port}"
 
-        ok = client.get(f"http://127.0.0.1:{port}/proxy/system.log-server/echo")
+        ok = client.get(f"{base_url}/proxy/{ENDPOINT_URL_NAME}/echo")
     assert ok.status_code == 200
 
 

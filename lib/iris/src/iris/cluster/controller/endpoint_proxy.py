@@ -4,11 +4,12 @@
 """Generic HTTP reverse proxy for registered task endpoints.
 
 External clients hit ``/proxy/<endpoint_name>/<sub_path>`` on the controller
-dashboard; the proxy resolves the endpoint via :class:`EndpointStore` (with
-``.`` -> ``/`` substitution on the URL-encoded name) and forwards method,
-path, query string, and filtered headers to the upstream's ``address``.
-Bodies are streamed in both directions with no size cap; the only backstop
-is :data:`PROXY_TIMEOUT_SECONDS`.
+dashboard; the proxy resolves the endpoint name via a caller-supplied
+``resolve: (name) -> address | None`` callable (with ``.`` -> ``/``
+substitution on the URL-encoded name) and forwards method, path, query
+string, and filtered headers to the upstream's ``address``. Bodies are
+streamed in both directions with no size cap; the only backstop is
+:data:`PROXY_TIMEOUT_SECONDS`.
 
 Hop-by-hop headers, ``Cookie`` / ``Set-Cookie``, and ``Authorization`` are
 stripped (in both directions for cookies; client -> upstream for
@@ -30,6 +31,7 @@ Route pattern::
 """
 
 import logging
+from collections.abc import Callable
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -37,9 +39,14 @@ from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from iris.cluster.controller.stores import ControllerStore
-
 logger = logging.getLogger(__name__)
+
+# Resolves an endpoint wire name (e.g. ``/system/log-server``) to an
+# upstream address (``host:port`` or ``http(s)://host:port``), or None if
+# unknown. Decoupled from the storage layer so the proxy doesn't need to
+# know whether the address came from the SQL endpoint store, the
+# controller's in-memory ``system_endpoints`` map, or anywhere else.
+EndpointResolver = Callable[[str], str | None]
 
 PROXY_ROUTE = "/proxy/{endpoint_name:str}/{sub_path:path}"
 PROXY_TIMEOUT_SECONDS: float = 30.0
@@ -128,13 +135,16 @@ class EndpointProxy:
     """Forwards arbitrary HTTP requests to a registered endpoint.
 
     The proxy resolves the endpoint name (with ``.`` -> ``/`` substitution)
-    against ``ControllerStore.endpoints`` and the service's in-memory
-    ``system_endpoints`` map (the latter is where ``/system/...`` entries
-    such as ``/system/log-server`` live), then forwards request method,
-    path suffix, query string, and filtered headers to the upstream's
-    ``address``. Bodies are streamed in both directions with no size cap.
-    Hop-by-hop headers, ``Cookie`` / ``Set-Cookie``, and ``Authorization``
-    are stripped (see :data:`_HOP_BY_HOP`).
+    via the caller-supplied ``resolve`` callable, then forwards request
+    method, path suffix, query string, and filtered headers to the
+    upstream's ``address``. Bodies are streamed in both directions with no
+    size cap. Hop-by-hop headers, ``Cookie`` / ``Set-Cookie``, and
+    ``Authorization`` are stripped (see :data:`_HOP_BY_HOP`).
+
+    The dashboard wires ``resolve`` to consult both the SQL endpoint store
+    (task-registered endpoints) and the controller service's in-memory
+    ``system_endpoints`` map (``/system/...`` entries such as
+    ``/system/log-server``), mirroring ``ListEndpoints``.
 
     Lifecycle: construct once on dashboard startup; await :meth:`close` on
     shutdown to drain the underlying httpx connection pool. The proxy is
@@ -143,18 +153,11 @@ class EndpointProxy:
 
     def __init__(
         self,
-        store: ControllerStore,
+        resolve: EndpointResolver,
         *,
-        system_endpoints: dict[str, str] | None = None,
         timeout_seconds: float = PROXY_TIMEOUT_SECONDS,
     ) -> None:
-        # System endpoints (``/system/...``) are held in an in-memory dict on
-        # ControllerServiceImpl rather than the SQLite-backed EndpointStore.
-        # The same dict object is shared by reference so updates by the
-        # controller (e.g. log-server registration during start()) are
-        # visible here without re-plumbing.
-        self._store = store
-        self._system_endpoints = system_endpoints if system_endpoints is not None else {}
+        self._resolve = resolve
         self._timeout_seconds = timeout_seconds
         self._client = httpx.AsyncClient(
             timeout=timeout_seconds,
@@ -165,19 +168,6 @@ class EndpointProxy:
     async def close(self) -> None:
         """Close the underlying httpx.AsyncClient. Idempotent."""
         await self._client.aclose()
-
-    def _resolve(self, name: str) -> str | None:
-        """Resolve ``name`` to an upstream address.
-
-        Task-registered endpoints live in the SQLite-backed EndpointStore;
-        ``/system/...`` endpoints (e.g. ``/system/log-server``) live in the
-        controller service's in-memory ``system_endpoints`` map. Both are
-        consulted so the proxy mirrors what ``ListEndpoints`` exposes.
-        """
-        row = self._store.endpoints.resolve(name)
-        if row is not None:
-            return row.address
-        return self._system_endpoints.get(name)
 
     async def handle(self, request: Request) -> Response:
         """Handle one proxied request.
@@ -193,8 +183,7 @@ class EndpointProxy:
         # first (the common case for task-registered endpoints), then the bare
         # form for endpoints registered without a leading slash.
         slashed = url_name.replace(".", "/")
-        canonical = f"/{slashed}"
-        address = self._resolve(canonical) or self._resolve(slashed)
+        address = self._resolve(f"/{slashed}") or self._resolve(slashed)
         if address is None:
             return JSONResponse(
                 {"error": f"No endpoint '{url_name}'"},

@@ -316,10 +316,17 @@ class ControllerDashboard:
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         self._actor_proxy = ActorProxy(self._service._store)
-        self._endpoint_proxy = EndpointProxy(
-            self._service._store,
-            system_endpoints=self._service._system_endpoints,
-        )
+
+        def _resolve_endpoint(name: str) -> str | None:
+            # Task-registered endpoints live in the SQL store; system endpoints
+            # (``/system/...``) live in an in-memory dict on the service.
+            # Same fallback order as ListEndpoints' system-endpoint branch.
+            row = self._service._store.endpoints.resolve(name)
+            if row is not None:
+                return row.address
+            return self._service._system_endpoints.get(name)
+
+        self._endpoint_proxy = EndpointProxy(_resolve_endpoint)
 
         @requires_auth
         async def _proxy_actor_rpc(request: Request) -> Response:
