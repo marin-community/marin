@@ -16,6 +16,7 @@ edition = "2023";
 
 package iris.config;
 
+import "job.proto";
 import "time.proto";
 
 // Enable explicit presence tracking for all fields to support HasField on scalars
@@ -108,6 +109,12 @@ message GcpSliceConfig {
   string machine_type = 7;      // Required for mode=GCP_SLICE_MODE_VM
   reserved 8;  // was: boot_disk_size_gb (moved to SliceConfig.disk_size_gb)
   string service_account = 9;
+  // Default: true. Set false to provision the slice without external IPs (e.g.
+  // in projects subject to the constraints/compute.vmExternalIpAccess org
+  // policy). Currently honored only for TPU-mode slices. The caller is
+  // responsible for in-VPC connectivity to the controller — Iris does not
+  // manage controller-side SSH or RPC routing.
+  bool enable_external_ip = 10;
 }
 
 message CoreweaveSliceConfig {
@@ -190,6 +197,9 @@ message ScaleGroupResources {
 
 message WorkerSettings {
   map<string, string> attributes = 1;
+  // Overrides DefaultsConfig.worker.cache_dir for this scale group. Useful for
+  // pointing CPU workers at a real disk instead of the default /dev/shm tmpfs.
+  string cache_dir = 2;
 }
 
 // Configuration for a scale group
@@ -362,7 +372,8 @@ message CoreweaveControllerConfig {
 message ControllerVmConfig {
   string image = 10;            // Controller docker image (shared by all controller types)
   iris.time.Duration worker_timeout = 12;  // Default: 60s
-  int32 heartbeat_failure_threshold = 13;  // Consecutive heartbeat failures before marking worker dead (default: 10)
+  reserved 13;                  // removed: heartbeat_failure_threshold (now hardcoded via PING_FAILURE_THRESHOLD)
+  reserved 14;                  // removed: use_split_heartbeat (legacy monolithic heartbeat path deleted)
   oneof controller {
     GcpControllerConfig gcp = 1;
     ManualControllerConfig manual = 2;
@@ -445,6 +456,39 @@ message KubernetesProviderConfig {
 }
 
 // ============================================================================
+// USER BUDGETS
+// ============================================================================
+
+// Pre-seeds a row in the user_budgets table for each listed user at controller
+// startup. This is the source of truth for tier membership — the controller
+// upserts these into the DB on every start, so a DB wipe or a listed user
+// who hasn't yet submitted a job still lands on the intended budget + max
+// band. Tiers are applied in order; later tiers override earlier tiers for
+// the same user_id.
+message UserBudgetTier {
+  // Users assigned this tier. A user_id must match the authenticated identity
+  // the submitter presents (see AuthConfig); a mismatch silently drops the
+  // user to the INSERT OR IGNORE default row created at first job submission.
+  repeated string user_ids = 1;
+  // Max resource-value spend before tasks are downgraded to BATCH. 0 = unlimited.
+  int64 budget_limit = 2;
+  // Highest priority band this user is allowed to submit to. Submissions above
+  // this band are rejected with PERMISSION_DENIED.
+  iris.job.PriorityBand max_band = 3;
+}
+
+// ============================================================================
+// ENDPOINT CONFIGURATION
+// ============================================================================
+
+// A scheme-tagged endpoint backing a logical service name (e.g. /system/log-server).
+// Resolution happens at controller startup via iris.cluster.endpoints.resolve_endpoint_uri.
+message EndpointSpec {
+  string uri = 1;                     // http(s)://host:port, gcp://<service>, k8s://<service>[.<ns>]
+  map<string, string> metadata = 2;   // optional resolver hints (e.g. region, project)
+}
+
+// ============================================================================
 // ROOT CLUSTER CONFIGURATION
 // ============================================================================
 
@@ -472,4 +516,19 @@ message IrisClusterConfig {
     KubernetesProviderConfig kubernetes_provider = 70;
     WorkerProviderConfig worker_provider = 71;
   }
+
+  // Per-user budget/max-band policy reconciled into the DB at every controller
+  // start. Unlisted users fall through to the default in UserBudgetDefaults
+  // (set at first job submission via INSERT OR IGNORE).
+  repeated UserBudgetTier user_budgets = 80;
+
+  // Cluster endpoints (logical name -> EndpointSpec). When /system/log-server
+  // is omitted, the Controller hosts a bundled in-process MemStore log server.
+  map<string, EndpointSpec> endpoints = 90;
+
+  // Name of a finelog config (looked up via the finelog config search path).
+  // When set, iris auto-derives /system/log-server from it and the iris CLI
+  // can manage the deployment via `iris cluster log-server` subcommands.
+  // Mutually exclusive with endpoints[/system/log-server].
+  string log_server_config = 20;
 }

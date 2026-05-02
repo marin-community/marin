@@ -17,10 +17,9 @@ import traceback
 
 import fsspec
 import pandas as pd
+from marin.evaluation.evaluation_config import WANDB_PROJECT
 from rigging.filesystem import filesystem as marin_filesystem
 from rigging.filesystem import open_url
-
-from marin.evaluation.evaluation_config import WANDB_PROJECT
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +108,11 @@ def _load_results_from_input_paths(
                     expected = str(example.get("answer", example.get("expected_answer", ""))).strip()
                     model_answers = example.get("model_answers", [])
                     model_answer = str(model_answers[0]).strip() if model_answers else ""
+                    # TODO: This string match only works for evals with simple answers
+                    # (integers, letters) like AIME, AMC, GPQA, HLE. It produces wrong
+                    # results for benchmarks with complex answers needing math symbol
+                    # comparison (HMMT), numerical tolerance (OlympiadBench_Physics),
+                    # or execution-based grading (LiveCodeBench, JEEBench).
                     correct = 1 if (model_answer == expected and expected) else 0
 
                     record = {
@@ -279,6 +283,21 @@ def compile_evalchemy_results_fn(config: dict) -> None:
         df.to_csv(f, index=False)
 
     logger.info(f"Compiled results saved to: {results_file}")
+
+    # Validate that all expected seeds are present before averaging.
+    # This prevents stale compiles where the compile step runs before all
+    # seed tasks have finished writing results.
+    if seeds_config:
+        actual_seeds = sorted(df["seed"].dropna().unique().tolist())
+        expected_seeds = sorted(seeds_config)
+        if actual_seeds != expected_seeds:
+            missing = set(expected_seeds) - set(actual_seeds)
+            raise ValueError(
+                f"Compile found seeds {actual_seeds} but expected {expected_seeds}. "
+                f"Missing seeds: {missing}. "
+                f"This likely means some seed tasks haven't finished yet."
+            )
+        logger.info(f"All {len(expected_seeds)} expected seeds present: {actual_seeds}")
 
     # Compute averaged results across seeds
     averaged = _compute_averaged_results(df)

@@ -14,6 +14,11 @@ import dataclasses
 import math
 import re
 
+from fray.cluster import ResourceConfig
+from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, ChatLmDatasetFormat
+from marin.execution.executor import ExecutorStep, executor_main
+from marin.processing.tokenize import lm_mixture_data_config
+
 from experiments.defaults import default_sft, default_tokenize
 from experiments.evals.evals import default_sft_eval
 from experiments.llama import llama_8b
@@ -25,10 +30,6 @@ from experiments.posttrain.instruction_datasets import (
     get_instruction_dataset,
 )
 from experiments.simple_sft_config import SimpleSFTConfig
-from fray.cluster import ResourceConfig
-from levanter.data.text import ChatLmDatasetFormat
-from marin.execution.executor import ExecutorStep, executor_main
-from marin.processing.tokenize import lm_mixture_data_config
 
 SLUGIFY_PATTERN = re.compile(r"[^a-z0-9]+")
 
@@ -140,7 +141,7 @@ mixture_sft_config = SimpleSFTConfig(
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
-    shuffle=True,
+    shuffle=DEFAULT_LM_DATA_SHUFFLE,
     missing_weights_are_validation=True,
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
 )

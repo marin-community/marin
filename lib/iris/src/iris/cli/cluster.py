@@ -14,6 +14,9 @@ from pathlib import Path
 
 import click
 from connectrpc.errors import ConnectError
+from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_cmd
+from rigging.config_discovery import list_cluster_configs
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.cli.build import (
     build_image,
@@ -22,13 +25,14 @@ from iris.cli.build import (
 )
 from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
-from iris.rpc import vm_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.cluster.controller.autoscaler.scaling_group import (
+    build_worker_config_for_group,
+    prepare_slice_config,
+)
+from iris.cluster.providers.types import Labels
+from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
-from rigging.config_discovery import list_cluster_configs
-from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 # =============================================================================
 # Helpers
@@ -407,6 +411,177 @@ def cluster_restart(ctx):
     ctx.invoke(cluster_stop)
     click.echo("")
     ctx.invoke(cluster_start)
+
+
+# =============================================================================
+# Log server (finelog) shim
+# =============================================================================
+
+
+@cluster.group("log-server")
+def log_server() -> None:
+    """Manage the log server referenced by this cluster's log_server_config."""
+
+
+def _require_log_server_config(ctx: click.Context) -> str:
+    cfg = ctx.obj.get("config")
+    if cfg is None:
+        raise click.ClickException("--config is required for cluster log-server commands")
+    if not cfg.log_server_config:
+        raise click.ClickException(
+            "cluster does not declare log_server_config; "
+            "set it or manage the log server via `finelog deploy` directly"
+        )
+    return cfg.log_server_config
+
+
+@log_server.command("up")
+@click.pass_context
+def log_server_up(ctx: click.Context) -> None:
+    """Provision/refresh the cluster's finelog deployment (idempotent)."""
+    name = _require_log_server_config(ctx)
+    up_cmd.callback(name=name)
+
+
+@log_server.command("down")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation; for k8s also deletes the PVC.")
+@click.pass_context
+def log_server_down(ctx: click.Context, yes: bool) -> None:
+    """Tear down the cluster's finelog deployment."""
+    name = _require_log_server_config(ctx)
+    down_cmd.callback(name=name, yes=yes)
+
+
+@log_server.command("restart")
+@click.pass_context
+def log_server_restart(ctx: click.Context) -> None:
+    """Restart the cluster's finelog deployment."""
+    name = _require_log_server_config(ctx)
+    restart_cmd.callback(name=name)
+
+
+@log_server.command("status")
+@click.pass_context
+def log_server_status(ctx: click.Context) -> None:
+    """Show the cluster's finelog deployment status."""
+    name = _require_log_server_config(ctx)
+    status_cmd.callback(name=name)
+
+
+@log_server.command("logs")
+@click.option("--tail", type=int, default=200, show_default=True)
+@click.option("-f", "--follow", is_flag=True, help="Stream logs")
+@click.pass_context
+def log_server_logs(ctx: click.Context, tail: int, follow: bool) -> None:
+    """Tail the cluster's finelog deployment logs."""
+    name = _require_log_server_config(ctx)
+    logs_cmd.callback(name=name, tail=tail, follow=follow)
+
+
+@cluster.command("create-slice")
+@click.option("--scale-group", "scale_group_name", required=True, help="Scale group whose template to use")
+@click.pass_context
+def cluster_create_slice(ctx, scale_group_name: str):
+    """Create an operator-managed slice bound to the running controller.
+
+    Allocates a slice using the named scale group's template, tags it with
+    ``iris-{prefix}-manual=true``, and bootstraps workers so they connect to
+    the controller. The autoscaler ignores manual slices: they don't count
+    toward demand, won't be scaled down on idle, and survive
+    ``iris cluster stop``. Remove with ``iris cluster delete-slice``.
+    """
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required for cluster create-slice")
+    if config.controller.WhichOneof("controller") == "local":
+        raise click.ClickException("create-slice is not supported for local clusters")
+
+    sg_config = config.scale_groups.get(scale_group_name)
+    if sg_config is None:
+        available = ", ".join(sorted(config.scale_groups.keys())) or "(none)"
+        raise click.ClickException(f"Unknown scale group '{scale_group_name}'. Available: {available}")
+
+    # Verify the controller is reachable before creating the slice. The
+    # returned URL may be a tunnel endpoint that's only reachable from the CLI
+    # host; workers need the cluster-internal address instead, resolved below.
+    require_controller_url(ctx)
+    iris_config = IrisConfig(config)
+    bundle = ctx.obj.get("provider_bundle") or iris_config.provider_bundle()
+
+    # Resolve the address workers will connect to. Prefer an explicit value in
+    # defaults.worker.controller_address, then discover it via the provider
+    # (e.g., GCE label lookup). Never pass the CLI-local tunnel URL here.
+    worker_controller_address = iris_config.controller_address()
+    if not worker_controller_address:
+        worker_controller_address = bundle.controller.discover_controller(config.controller)
+
+    label_prefix = config.platform.label_prefix or "iris"
+    labels = Labels(label_prefix)
+
+    slice_config = prepare_slice_config(sg_config.slice_template, sg_config, label_prefix)
+    slice_config.labels[labels.iris_manual] = "true"
+
+    base_worker_config = config_pb2.WorkerConfig()
+    base_worker_config.CopyFrom(config.defaults.worker)
+    if not base_worker_config.controller_address:
+        base_worker_config.controller_address = worker_controller_address
+    base_worker_config.platform.CopyFrom(config.platform)
+    if config.storage.remote_state_dir:
+        base_worker_config.storage_prefix = config.storage.remote_state_dir
+
+    worker_config = build_worker_config_for_group(base_worker_config, sg_config)
+
+    click.echo(f"Creating manual slice from scale group '{scale_group_name}'...")
+    try:
+        handle = bundle.workers.create_slice(slice_config, worker_config=worker_config)
+    except Exception as e:
+        click.echo(f"Failed to create slice: {e}", err=True)
+        raise SystemExit(1) from e
+
+    click.echo(f"Created manual slice: {handle.slice_id}")
+    click.echo(f"  Scale group: {handle.scale_group or scale_group_name}")
+    click.echo(f"  Zone:        {handle.zone}")
+    click.echo("Workers will register with the controller as they bootstrap.")
+    click.echo(f"Terminate with: iris cluster delete-slice {handle.slice_id}")
+
+
+@cluster.command("delete-slice")
+@click.argument("slice_id")
+@click.pass_context
+def cluster_delete_slice(ctx, slice_id: str):
+    """Terminate an operator-managed slice created via ``create-slice``.
+
+    Only slices tagged ``iris-{prefix}-manual=true`` are eligible —
+    autoscaler-managed slices must go through the autoscaler.
+    """
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required for cluster delete-slice")
+    if config.controller.WhichOneof("controller") == "local":
+        raise click.ClickException("delete-slice is not supported for local clusters")
+
+    iris_config = IrisConfig(config)
+    bundle = ctx.obj.get("provider_bundle") or iris_config.provider_bundle()
+
+    label_prefix = config.platform.label_prefix or "iris"
+    labels = Labels(label_prefix)
+
+    manual_slices = bundle.workers.list_slices(zones=[], labels={labels.iris_manual: "true"})
+    match = next((s for s in manual_slices if s.slice_id == slice_id), None)
+    if match is None:
+        raise click.ClickException(
+            f"No manual slice found with id '{slice_id}'. "
+            "List manual slices with the controller dashboard or "
+            "`iris cluster status` to find the correct id."
+        )
+
+    click.echo(f"Terminating manual slice {slice_id}...")
+    try:
+        match.terminate()
+    except Exception as e:
+        click.echo(f"Failed to terminate slice: {e}", err=True)
+        raise SystemExit(1) from e
+    click.echo("Terminated.")
 
 
 @cluster.command("status")

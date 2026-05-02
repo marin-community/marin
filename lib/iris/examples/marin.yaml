@@ -1,6 +1,8 @@
 # Iris production configuration for Marin cluster
 # Usage: uv run iris --cluster=marin cluster start
 
+log_server_config: marin
+
 platform:
   label_prefix: marin
   gcp:
@@ -32,7 +34,7 @@ controller:
     service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     zone: us-central1-a
     machine_type: e2-highmem-4
-    boot_disk_size_gb: 100
+    boot_disk_size_gb: 500
     port: 10000
 
 # ---------------------------------------------------------------------------
@@ -105,7 +107,7 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5
     sizes:
-      8:    { max_slices: 2048 }
+      8:    { buffer_slices: 2, max_slices: 2048 }
       16:   { max_slices: 1024 }
       32:   { max_slices: 512 }
       64:   { max_slices: 256 }
@@ -148,14 +150,14 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: tpu-ubuntu2204-base
     sizes:
-      32:   { buffer_slices: 0, max_slices: 4 }
-      64:   { buffer_slices: 0, max_slices: 4 }
-      128:  { buffer_slices: 0, max_slices: 4 }
-      256:  { buffer_slices: 0, max_slices: 4 }
-      512:  { buffer_slices: 0, max_slices: 4 }
-      1024: { buffer_slices: 0, max_slices: 4 }
-      2048: { buffer_slices: 1, max_slices: 4 }
-      4096: { buffer_slices: 0, max_slices: 4 }
+      32:   { buffer_slices: 0, max_slices: 1 }
+      64:   { buffer_slices: 0, max_slices: 1 }
+      128:  { buffer_slices: 0, max_slices: 1 }
+      256:  { buffer_slices: 0, max_slices: 1 }
+      512:  { buffer_slices: 0, max_slices: 1 }
+      1024: { buffer_slices: 0, max_slices: 1 }
+      2048: { buffer_slices: 1, max_slices: 1 }
+      4096: { buffer_slices: 0, max_slices: 1 }
 
 # ---------------------------------------------------------------------------
 # Non-TPU scale groups (not part of tpu_pools)
@@ -170,8 +172,52 @@ scale_groups:
     resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
     buffer_slices: 0
     max_slices: 6
+    # Override the default /dev/shm tmpfs so disk health and metrics reflect the
+    # 100 GB boot disk. n2-highmem-2 only has 16 GiB RAM, so a tmpfs cache_dir
+    # would expose ~7.8 GiB to workers and clip image pulls / workdirs.
+    worker:
+      cache_dir: /var/lib/iris-cache
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         mode: GCP_SLICE_MODE_VM
         machine_type: n2-highmem-2
+
+# ---------------------------------------------------------------------------
+# User budget tiers
+#
+# This section is the source of truth for per-user budgets. It is reconciled
+# into user_budgets on every controller start (migration 0037 truncates the
+# table first so the config fully owns row contents).
+#
+# Unlisted submitters have no row and fall through to UserBudgetDefaults at
+# read time — a small INTERACTIVE budget that silently degrades to BATCH once
+# exceeded. See docs/priority-bands.md → "Max-band caps and unlisted users"
+# for the recovery path on PERMISSION_DENIED.
+# ---------------------------------------------------------------------------
+user_budgets:
+  # Admins: standard budget, may submit PRIORITY_BAND_PRODUCTION for work that
+  # must not be downgraded. INTERACTIVE work still counts against the budget.
+  - user_ids: [runner, power, dlwh, rav, romain, held, larry]
+    budget_limit: 75000
+    max_band: PRIORITY_BAND_PRODUCTION
+  # Researchers: standard budget, capped at PRIORITY_BAND_INTERACTIVE.
+  - user_ids:
+      - ruili
+      - quevedo
+      - pc0618
+      - konwoo
+      - ahmedah
+      - ahmed
+      - rohith
+      - tim
+      - eczech
+      - tonyhlee
+      - kevin
+      - calvinxu
+      - moojink
+      - michaelryan
+      - kaiyue
+      - ryan
+    budget_limit: 75000
+    max_band: PRIORITY_BAND_INTERACTIVE

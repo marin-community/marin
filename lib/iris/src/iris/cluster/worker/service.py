@@ -4,22 +4,18 @@
 """WorkerService RPC implementation using Connect RPC."""
 
 import logging
-import time
 from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
+from rigging.timing import Timer
 
-from iris.chaos import chaos
 from iris.cluster.process_status import get_process_status as _get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.worker.worker_types import TaskInfo
-from iris.rpc import job_pb2
-from iris.rpc import worker_pb2
+from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import rpc_error_handler
-from rigging.log_setup import slow_log
-from rigging.timing import Timer
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +30,12 @@ class TaskProvider(Protocol):
     def get_task(self, task_id: str, attempt_id: int = -1) -> TaskInfo | None: ...
     def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
-    def handle_heartbeat(self, request: job_pb2.HeartbeatRequest) -> job_pb2.HeartbeatResponse: ...
+    def handle_ping(self, request: worker_pb2.Worker.PingRequest) -> worker_pb2.Worker.PingResponse: ...
+    def handle_start_tasks(
+        self, request: worker_pb2.Worker.StartTasksRequest
+    ) -> worker_pb2.Worker.StartTasksResponse: ...
+    def handle_stop_tasks(self, request: worker_pb2.Worker.StopTasksRequest) -> worker_pb2.Worker.StopTasksResponse: ...
+    def handle_poll_tasks(self, request: worker_pb2.Worker.PollTasksRequest) -> worker_pb2.Worker.PollTasksResponse: ...
     def profile_task(
         self, task_id: str, duration_seconds: int, profile_type: job_pb2.ProfileType, attempt_id: int | None = None
     ) -> bytes: ...
@@ -92,36 +93,6 @@ class WorkerServiceImpl:
         response.uptime.milliseconds = self._timer.elapsed_ms()
         return response
 
-    def heartbeat(
-        self,
-        request: job_pb2.HeartbeatRequest,
-        _ctx: RequestContext,
-    ) -> job_pb2.HeartbeatResponse:
-        """Handle controller-initiated heartbeat.
-
-        Processes tasks_to_run and tasks_to_kill, then returns current state.
-        """
-        with rpc_error_handler("heartbeat"), slow_log(logger, "heartbeat rpc", threshold_ms=1000):
-            # Chaos injection for testing heartbeat failures and delays
-            if rule := chaos("worker.heartbeat"):
-                if rule.delay_seconds > 0:
-                    time.sleep(rule.delay_seconds)
-                if rule.error:
-                    raise rule.error
-                # If no error specified, raise generic RuntimeError
-                if not rule.delay_seconds:
-                    raise RuntimeError("chaos: worker.heartbeat")
-
-            logger.debug(
-                "heartbeat rpc received n_run=%d n_kill=%d n_expected=%d req_bytes=%d",
-                len(request.tasks_to_run),
-                len(request.tasks_to_kill),
-                len(request.expected_tasks),
-                request.ByteSize(),
-            )
-            # Delegate to worker for reconciliation
-            return self._provider.handle_heartbeat(request)
-
     def get_process_status(
         self,
         request: job_pb2.GetProcessStatusRequest,
@@ -176,3 +147,25 @@ class WorkerServiceImpl:
                 raise ConnectError(Code.INVALID_ARGUMENT, "command is required")
             timeout_seconds = request.timeout_seconds if request.timeout_seconds != 0 else 60
             return self._provider.exec_in_container(request.task_id, list(request.command), timeout_seconds)
+
+    def ping(self, request: worker_pb2.Worker.PingRequest, _ctx: RequestContext) -> worker_pb2.Worker.PingResponse:
+        with rpc_error_handler("ping"):
+            return self._provider.handle_ping(request)
+
+    def start_tasks(
+        self, request: worker_pb2.Worker.StartTasksRequest, _ctx: RequestContext
+    ) -> worker_pb2.Worker.StartTasksResponse:
+        with rpc_error_handler("start_tasks"):
+            return self._provider.handle_start_tasks(request)
+
+    def stop_tasks(
+        self, request: worker_pb2.Worker.StopTasksRequest, _ctx: RequestContext
+    ) -> worker_pb2.Worker.StopTasksResponse:
+        with rpc_error_handler("stop_tasks"):
+            return self._provider.handle_stop_tasks(request)
+
+    def poll_tasks(
+        self, request: worker_pb2.Worker.PollTasksRequest, _ctx: RequestContext
+    ) -> worker_pb2.Worker.PollTasksResponse:
+        with rpc_error_handler("poll_tasks"):
+            return self._provider.handle_poll_tasks(request)

@@ -7,12 +7,10 @@ import hashlib
 import socket
 import time
 import zipfile
-from typing import ClassVar
 from unittest.mock import Mock
 
 import pytest
 from connectrpc.request import RequestContext
-
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
     ContainerErrorKind,
@@ -23,20 +21,21 @@ from iris.cluster.runtime.types import (
     ExecutionStage,
 )
 from iris.cluster.types import Entrypoint, JobName
-from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
+from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import job_pb2
-from rigging.timing import Duration
 from iris.cluster.worker.worker_types import LogLine
+from iris.rpc import job_pb2, worker_pb2
+from iris.test_util import wait_for_condition
+from rigging.timing import Duration
+
 from tests.cluster.worker.conftest import (
     FakeContainerHandle,
     FakeLogReader,
     create_mock_container_handle,
     create_run_task_request,
 )
-from iris.test_util import wait_for_condition
 
 pytestmark = pytest.mark.timeout(10)
 
@@ -425,46 +424,36 @@ def test_duplicate_attempt_rejected(mock_worker, mock_runtime):
     task.thread.join(timeout=15.0)
 
 
-def test_heartbeat_kill_blocks_until_stopped(mock_worker, mock_runtime):
-    """Heartbeat blocks on tasks_to_kill so the old task releases resources before returning."""
+def test_stop_tasks_initiates_async_kill(mock_worker, mock_runtime):
+    """StopTasks signals the task to stop and returns without waiting for the kill to complete."""
     mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
 
     def slow_stop(force=False):
-        time.sleep(0.3)
+        time.sleep(0.5)
 
     mock_handle.stop_hook = slow_stop
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    task_id_wire = JobName.root("test-user", "hb-kill-task").task(0).to_wire()
+    task_id_wire = JobName.root("test-user", "stop-task").task(0).to_wire()
     request = create_run_task_request(task_id=task_id_wire)
     mock_worker.submit_task(request)
 
-    # Wait for task to reach RUNNING
     task = mock_worker.get_task(task_id_wire)
     wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
 
-    # Build a heartbeat that requests this task be killed.
-    # Include the task in expected_tasks so the reconciliation path doesn't
-    # also try to kill it -- we only want to exercise the tasks_to_kill path.
-    heartbeat_req = job_pb2.HeartbeatRequest(
-        tasks_to_kill=[task_id_wire],
-        expected_tasks=[
-            job_pb2.WorkerTaskStatus(task_id=task_id_wire, attempt_id=0),
-        ],
-    )
+    mock_worker.handle_stop_tasks(worker_pb2.Worker.StopTasksRequest(task_ids=[task_id_wire]))
 
-    response = mock_worker.handle_heartbeat(heartbeat_req)
-
+    # should_stop is set synchronously before StopTasks returns.
     assert task.should_stop is True
-    # The task is KILLED by the time handle_heartbeat returns — kill is blocking
+    # The container stop runs in a daemon thread, so the task hasn't been reaped yet.
+    assert task.status != job_pb2.TASK_STATE_KILLED
+
+    task.thread.join(timeout=15.0)
     assert task.status == job_pb2.TASK_STATE_KILLED
 
-    # The response should still include the task's current state
-    assert len(response.tasks) >= 1
 
-
-def test_heartbeat_reconciliation_kill_is_non_blocking(mock_worker, mock_runtime):
-    """Tasks not in expected_tasks are killed asynchronously during heartbeat reconciliation."""
+def test_poll_tasks_reconciliation_kill_is_non_blocking(mock_worker, mock_runtime):
+    """Tasks not in expected_tasks are killed asynchronously during PollTasks reconciliation."""
     mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
 
     def slow_stop(force=False):
@@ -480,19 +469,91 @@ def test_heartbeat_reconciliation_kill_is_non_blocking(mock_worker, mock_runtime
     task = mock_worker.get_task(task_id_wire)
     wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
 
-    # Send heartbeat with empty expected_tasks -- the worker should kill
-    # the running task because it's no longer expected
-    heartbeat_req = job_pb2.HeartbeatRequest(expected_tasks=[])
+    # Clear recent-submissions tracking to simulate the task having been
+    # around long enough for the grace window to have elapsed; this test
+    # exercises reconciliation-driven kill, not grace-window protection.
+    mock_worker._recent_submissions.clear()
 
-    mock_worker.handle_heartbeat(heartbeat_req)
+    mock_worker.handle_poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=[]))
 
-    # should_stop is set synchronously by the heartbeat before the async stop() runs
+    # should_stop is set synchronously by PollTasks before the async stop() runs
     assert task.should_stop is True
-    # The task is not yet KILLED because slow_stop is async — confirms kill is non-blocking
+    # The task is not yet KILLED because slow_stop runs in a daemon thread — confirms kill is non-blocking
     assert task.status != job_pb2.TASK_STATE_KILLED
 
     task.thread.join(timeout=15.0)
     assert task.status == job_pb2.TASK_STATE_KILLED
+
+
+def test_poll_tasks_grace_window_protects_freshly_submitted_task(mock_worker, mock_runtime):
+    """PollTasks must not kill a task submitted moments before the controller polls.
+
+    Reproduces the StartTasks → PollTasks race from iris #5041: the controller
+    dispatches a task via StartTasks but polls before its own expected_tasks view
+    includes the new task. Without the grace window, the worker would read the
+    task as "unexpected" and kill it, cascading the whole pool to KILLED.
+    """
+    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
+    mock_runtime.create_container = Mock(return_value=mock_handle)
+
+    task_id_wire = JobName.root("test-user", "poll-race").task(0).to_wire()
+    request = create_run_task_request(task_id=task_id_wire)
+    mock_worker.submit_task(request)
+
+    task = mock_worker.get_task(task_id_wire)
+    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
+
+    # Controller polls with the just-submitted task missing from expected_tasks
+    # (race: controller hasn't reconciled its own StartTasks response yet).
+    mock_worker.handle_poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=[]))
+
+    # The task must not have been marked for kill.
+    assert task.should_stop is False
+    assert task.status == job_pb2.TASK_STATE_RUNNING
+
+    # Clean up.
+    mock_worker.kill_task(task_id_wire)
+    task.thread.join(timeout=15.0)
+
+
+def test_poll_tasks_kills_task_outside_grace_window(mock_worker, mock_runtime):
+    """Once the grace window has elapsed, reconciliation resumes killing unexpected tasks."""
+    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
+    mock_runtime.create_container = Mock(return_value=mock_handle)
+
+    task_id_wire = JobName.root("test-user", "poll-post-grace").task(0).to_wire()
+    request = create_run_task_request(task_id=task_id_wire)
+    mock_worker.submit_task(request)
+
+    task = mock_worker.get_task(task_id_wire)
+    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
+
+    # Simulate grace window elapsing by clearing recent-submissions tracking.
+    mock_worker._recent_submissions.clear()
+
+    mock_worker.handle_poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=[]))
+
+    assert task.should_stop is True
+    task.thread.join(timeout=15.0)
+    assert task.status == job_pb2.TASK_STATE_KILLED
+
+
+def test_recent_submissions_prune_removes_stale_entries(mock_worker):
+    """Stale recent-submission entries are pruned to keep the dict bounded."""
+    key_fresh = ("task-fresh", 0)
+    key_stale = ("task-stale", 0)
+    grace = mock_worker._RECENT_SUBMISSION_GRACE_SECONDS
+    now = time.monotonic()
+    # now - (grace + 1): clearly older than the window -> should be pruned
+    mock_worker._recent_submissions[key_stale] = now - (grace + 1)
+    mock_worker._recent_submissions[key_fresh] = now
+
+    with mock_worker._lock:
+        recent = mock_worker._prune_and_get_recent_submission_keys()
+
+    assert key_fresh in recent
+    assert key_stale not in recent
+    assert key_stale not in mock_worker._recent_submissions
 
 
 def test_kill_nonexistent_task(mock_worker):
@@ -667,55 +728,28 @@ def test_port_binding_failure(mock_bundle_store, tmp_path):
 # ============================================================================
 
 
-def _log_server_endpoints(address: str):
-    from iris.rpc import controller_pb2
+def _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime):
+    """Build a Worker and attach a fake LogPusher (normally built in start())."""
+    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
 
-    return controller_pb2.Controller.ListEndpointsResponse(
-        endpoints=[
-            controller_pb2.Controller.Endpoint(
-                endpoint_id="/system/log-server",
-                name="/system/log-server",
-                address=address,
-            )
-        ]
-    )
+    class _FakePusher:
+        def push(self, key, entries):
+            pass
 
+        def flush(self, timeout=None):
+            return True
 
-class _RecordingPusher:
-    """Records server_url so tests can observe LogPusher re-creation."""
+        def close(self):
+            pass
 
-    instances: ClassVar[list["_RecordingPusher"]] = []
-
-    def __init__(self, server_url, **_kwargs):
-        self.server_url = server_url
-        _RecordingPusher.instances.append(self)
-
-    def push(self, key, entries):
-        pass
-
-    def flush(self):
-        pass
-
-    def close(self):
-        pass
+    worker._log_pusher = _FakePusher()
+    return worker
 
 
-@pytest.fixture
-def recording_log_pusher(monkeypatch):
-    """Swap iris.log_server.client.LogPusher for a recorder that tracks constructions."""
-    from iris.cluster.worker import worker as worker_module
-
-    _RecordingPusher.instances = []
-    monkeypatch.setattr(worker_module, "LogPusher", _RecordingPusher)
-    yield _RecordingPusher
-
-
-def test_attach_log_handler_uses_worker_log_key_before_register(
-    mock_bundle_store, mock_runtime, tmp_path, recording_log_pusher
-):
+def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_store, mock_runtime, tmp_path):
     """Worker known locally (e.g. via slice_id) attaches under worker_log_key
     *before* register so pre-register failures ship remote logs."""
-    from iris.cluster.log_store import worker_log_key
+    from iris.cluster.log_store_helpers import worker_log_key
 
     config = WorkerConfig(
         port=0,
@@ -724,8 +758,7 @@ def test_attach_log_handler_uses_worker_log_key_before_register(
         default_task_image="mock-image",
         worker_id="w-1",
     )
-    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-    worker._controller_client = Mock(list_endpoints=Mock(return_value=_log_server_endpoints("http://log:9000")))
+    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
 
     try:
         worker._attach_log_handler()
@@ -735,27 +768,24 @@ def test_attach_log_handler_uses_worker_log_key_before_register(
         worker._detach_log_handler()
 
 
-def test_attach_log_handler_tolerates_resolve_failure(mock_bundle_store, mock_runtime, tmp_path, recording_log_pusher):
-    """A ListEndpoints RPC failure must not crash the lifecycle thread."""
+def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runtime, tmp_path):
+    """Before the worker_id is known, attach is a no-op."""
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        worker_id="w-1",
     )
-    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-    worker._controller_client = Mock(list_endpoints=Mock(side_effect=ConnectionError("controller down")))
+    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
 
     worker._attach_log_handler()
     assert worker._log_handler is None
-    assert worker._log_pusher is None
-    assert recording_log_pusher.instances == []
 
 
-def test_attach_log_handler_rebuilds_pusher_on_reattach(mock_bundle_store, mock_runtime, tmp_path, recording_log_pusher):
-    """Repeated attach must tear down the old LogPusher so log-server failover
-    is picked up — protects against the regression Codex flagged."""
+def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runtime, tmp_path):
+    """Re-attach under a new worker_id renames the handler's key in place."""
+    from iris.cluster.log_store_helpers import worker_log_key
+
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
@@ -763,18 +793,20 @@ def test_attach_log_handler_rebuilds_pusher_on_reattach(mock_bundle_store, mock_
         default_task_image="mock-image",
         worker_id="w-1",
     )
-    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-    addrs = iter(["http://log-a:9000", "http://log-b:9000"])
-    worker._controller_client = Mock(list_endpoints=Mock(side_effect=lambda _req: _log_server_endpoints(next(addrs))))
+    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
 
     try:
         worker._attach_log_handler()
+        first_handler = worker._log_handler
+        assert first_handler is not None
+
         worker._attach_log_handler()
-        assert [p.server_url for p in recording_log_pusher.instances] == [
-            "http://log-a:9000",
-            "http://log-b:9000",
-        ]
-        assert worker._log_pusher is recording_log_pusher.instances[-1]
+        assert worker._log_handler is first_handler
+
+        worker._worker_id = "w-2"
+        worker._attach_log_handler()
+        assert worker._log_handler is first_handler
+        assert first_handler.key == worker_log_key("w-2")
     finally:
         worker._detach_log_handler()
 
@@ -992,13 +1024,13 @@ def test_adopt_accepts_matching_worker_id(mock_worker, mock_runtime):
     assert adopted == 1
 
 
-def test_heartbeat_after_adoption_reports_running(mock_worker, mock_runtime):
-    """After adoption, heartbeat reconciliation should report the task as RUNNING."""
+def test_poll_tasks_after_adoption_reports_running(mock_worker, mock_runtime):
+    """After adoption, PollTasks reconciliation should report the task as RUNNING."""
     container = _make_discovered_container()
     mock_runtime.discover_containers = Mock(return_value=[container])
     mock_worker.adopt_running_containers()
 
-    heartbeat_req = job_pb2.HeartbeatRequest(
+    poll_req = worker_pb2.Worker.PollTasksRequest(
         expected_tasks=[
             job_pb2.WorkerTaskStatus(
                 task_id=container.task_id,
@@ -1006,7 +1038,7 @@ def test_heartbeat_after_adoption_reports_running(mock_worker, mock_runtime):
             )
         ],
     )
-    response = mock_worker.handle_heartbeat(heartbeat_req)
+    response = mock_worker.handle_poll_tasks(poll_req)
 
     assert len(response.tasks) == 1
     task_status = response.tasks[0]
@@ -1014,11 +1046,11 @@ def test_heartbeat_after_adoption_reports_running(mock_worker, mock_runtime):
     assert task_status.state == job_pb2.TASK_STATE_RUNNING
 
 
-def test_heartbeat_without_adoption_reports_worker_failed(mock_worker, mock_runtime):
+def test_poll_tasks_without_adoption_reports_worker_failed(mock_worker, mock_runtime):
     """Without adoption, expected tasks should report WORKER_FAILED."""
     mock_runtime.discover_containers = Mock(return_value=[])
 
-    heartbeat_req = job_pb2.HeartbeatRequest(
+    poll_req = worker_pb2.Worker.PollTasksRequest(
         expected_tasks=[
             job_pb2.WorkerTaskStatus(
                 task_id=JobName.root("test-user", "test-job").task(0).to_wire(),
@@ -1026,7 +1058,7 @@ def test_heartbeat_without_adoption_reports_worker_failed(mock_worker, mock_runt
             )
         ],
     )
-    response = mock_worker.handle_heartbeat(heartbeat_req)
+    response = mock_worker.handle_poll_tasks(poll_req)
 
     assert len(response.tasks) == 1
     assert response.tasks[0].state == job_pb2.TASK_STATE_WORKER_FAILED
@@ -1054,6 +1086,39 @@ def test_stop_preserve_containers_does_not_kill_tasks(mock_worker, mock_runtime)
     mock_worker.stop(preserve_containers=True)
     # The task should still be in RUNNING state (not KILLED)
     assert task.status == job_pb2.TASK_STATE_RUNNING
+
+
+def test_start_wires_log_pusher_into_adopted_attempts(mock_bundle_store, mock_runtime, tmp_path):
+    """Regression for #5261.
+
+    Worker.start() must construct the LogPusher *before* adopting containers,
+    otherwise adopted TaskAttempts capture ``log_pusher=None`` permanently
+    and silently drop every container log line for the rest of the task.
+    """
+    container = _make_discovered_container()
+    mock_runtime.discover_containers = Mock(return_value=[container])
+
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+        # Unreachable controller; lifecycle thread retries register and exits on stop().
+        controller_address="http://127.0.0.1:1",
+        poll_interval=Duration.from_seconds(0.05),
+    )
+    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+
+    try:
+        worker.start()
+
+        assert worker._log_pusher is not None
+        task = worker.get_task(container.task_id, container.attempt_id)
+        assert task is not None
+        # The adopted attempt must reference the worker's live pusher, not None.
+        assert task._log_pusher is worker._log_pusher
+    finally:
+        worker.stop()
 
 
 def test_task_attempt_adopt_factory():

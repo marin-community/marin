@@ -58,7 +58,7 @@ Marin leverages the `fsspec` library, allowing you to use various storage backen
 
 ## Important Considerations for Distributed Environments
 
-When running Marin in a distributed setup (e.g., across multiple nodes or with Ray), it is **critical** that the specified prefix path (whether via `MARIN_PREFIX` or `--prefix`):
+When running Marin in a distributed setup (e.g., across multiple nodes via Iris), it is **critical** that the specified prefix path (whether via `MARIN_PREFIX` or `--prefix`):
 
 *   **Is accessible by all worker nodes:** Each machine involved in the experiment must have the necessary permissions and network access to read from and write to this location.
 *   **Points to the same shared storage location for all workers:** Using a local path like `/tmp/marin_output` on each machine will result in data being scattered and inaccessible, not a unified output. You must use a shared filesystem (like NFS) or a cloud storage solution (S3, GCS) for distributed runs.

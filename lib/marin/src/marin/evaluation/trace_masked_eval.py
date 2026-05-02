@@ -15,17 +15,16 @@ from typing import Any, Literal, TypeVar
 
 import equinox as eqx
 import fsspec
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import jmp
+import levanter
 import numpy as np
-from tqdm_loggable.auto import tqdm
-
-import haliax as hax
+from fray import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
-
-import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data.sharded_datasource import ShardedDataSource
@@ -44,9 +43,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
-
-from fray.v2 import current_client
-from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
+from tqdm_loggable.auto import tqdm
 
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name

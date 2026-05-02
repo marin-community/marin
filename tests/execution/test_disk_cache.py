@@ -6,11 +6,9 @@ import os
 from pathlib import Path
 
 import cloudpickle
-
 from marin.execution.artifact import Artifact
 from marin.execution.disk_cache import disk_cache
-from marin.execution.executor_step_status import distributed_lock
-from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile
+from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile, distributed_lock
 from marin.execution.step_spec import StepSpec
 
 

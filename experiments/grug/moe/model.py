@@ -3,13 +3,11 @@
 
 """MoE grug variant model.
 
-Architecture: QB-routed MoE with GatedNorm, XSA, sigmoid combine weights,
-and 2 dense initial layers. No load-balancing loss; router z-loss only.
-See https://grugbrain.dev — no config flags, just the code that runs.
+Architecture: QB-routed MoE with GatedNorm, XSA, sigmoid combine weights.
+No load-balancing loss; router z-loss only. All layers are MoE (no dense layers).
 """
 
 import dataclasses
-
 from dataclasses import dataclass
 
 import equinox as eqx
@@ -27,17 +25,15 @@ try:
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
-
 from levanter.grug.attention import AttentionMask, RotaryConfig, align_kv_heads, apply_rotary_embedding, attention
-from levanter.grug.grug_moe import MoeActivation, moe_mlp
+from levanter.grug.grug_moe import MoeActivation, MoeImplementation, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
 from levanter.tracker.histogram import Histogram
 from levanter.utils.activation import ActivationFunctionEnum
 
-_DEFAULT_EP_CAPACITY_FACTOR = 1.25
+_DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
-_NUM_DENSE_LAYERS = 2
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -54,15 +50,14 @@ def _batch_spec() -> P:
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
 
-    Architecture choices (GatedNorm, XSA, QB routing, dense initial layers)
-    are hardcoded. Only shape/size knobs live here.
+    Architecture choices (GatedNorm, XSA, QB routing) are hardcoded.
+    Only shape/size knobs live here. All layers are MoE.
     """
 
     vocab_size: int
     hidden_dim: int = 2048
     intermediate_dim: int = 5632
     shared_expert_intermediate_dim: int = 5632
-    dense_intermediate_dim: int = 6144
     num_experts: int = 8
     num_experts_per_token: int = 2
     num_layers: int = 24
@@ -74,8 +69,8 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
-    bias_update_rate: float = 0.01
     router_z_loss_coef: float = 0.001
+    moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -148,6 +143,7 @@ class CausalSelfAttention(eqx.Module):
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
+        aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
@@ -400,6 +396,7 @@ class MoEMLP(eqx.Module):
             self.w_gate_up,
             self.w_down,
             activation=ActivationFunctionEnum.silu,
+            implementation=self.cfg.moe_implementation,
             mesh=get_abstract_mesh(),
             capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
         )
@@ -415,33 +412,25 @@ class Block(eqx.Module):
     attn: CausalSelfAttention
     rms_mlp: RMSNorm
     mlp_gated_norm: GatedNorm
-    mlp: MoEMLP | None
+    mlp: MoEMLP
     shared: DenseMLP | None
-    dense_mlp: DenseMLP | None
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, dense_only: bool = False) -> "Block":
-        attn_key, mlp_key, shared_key, dense_key, gn_attn_key, gn_mlp_key = random.split(key, 6)
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
+        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         shared = None
-        moe = None
-        dense_mlp = None
-        if dense_only:
-            dense_mlp = DenseMLP.init(cfg.hidden_dim, cfg.dense_intermediate_dim, cfg.initializer_std, key=dense_key)
-        else:
-            moe = MoEMLP.init(cfg, key=mlp_key)
-            if cfg.shared_expert_intermediate_dim > 0:
-                shared = DenseMLP.init(
-                    cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
-                )
+        if cfg.shared_expert_intermediate_dim > 0:
+            shared = DenseMLP.init(
+                cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
+            )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
-            mlp=moe,
+            mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
-            dense_mlp=dense_mlp,
         )
 
     @named_call
@@ -453,14 +442,9 @@ class Block(eqx.Module):
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        if self.dense_mlp is not None:
-            mlp_out = self.dense_mlp(mlp_in, activation=ActivationFunctionEnum.silu)
-            router_stats = {}
-        else:
-            assert self.mlp is not None
-            mlp_out, router_stats = self.mlp(mlp_in)
-            if self.shared is not None:
-                mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+        mlp_out, router_stats = self.mlp(mlp_in)
+        if self.shared is not None:
+            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
         return x, router_stats
 
@@ -482,9 +466,7 @@ class Transformer(eqx.Module):
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
-        blocks = tuple(
-            Block.init(cfg, key=block_keys[i], dense_only=(i < _NUM_DENSE_LAYERS)) for i in range(cfg.num_layers)
-        )
+        blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -518,8 +500,7 @@ class Transformer(eqx.Module):
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
             hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
-            if router_stats:
-                moe_router_stats.append(router_stats)
+            moe_router_stats.append(router_stats)
 
         router_metrics = {
             "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),

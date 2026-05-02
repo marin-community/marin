@@ -34,32 +34,18 @@ def eval_loss_loop(
 ) -> tuple[float, dict[str, float]]:
 
     total_loss = 0.0
-    total_load_time = 0.0
-    total_loss_time = 0.0
-    accumulated_metrics = {}
+    accumulated_metrics: dict = {}
     n = 0
 
-    if name is not None:
-        desc = f"eval {name}"
-    else:
-        desc = "eval"
+    desc = f"eval {name}" if name is not None else "eval"
 
     _tqdm_logging_one_time_setup()
     pbar = tqdm(dataset, desc=desc, position=1, leave=False, total=max_batches)
 
-    iter_ = iter(pbar)
-    while True:
-        time_in = time.time()
-        batch = next(iter_, None)
-        if batch is None:
-            break
-        load_time = time.time() - time_in
-        total_load_time += load_time
-
+    for batch in pbar:
         # loss_fn returns (loss, wrapped_metrics) where wrapped_metrics is Dict[str, Metric]
         loss, wrapped_metrics = loss_fn(model, batch)
 
-        # Use fold() to accumulate Metric objects
         for key, metric in wrapped_metrics.items():
             if key not in accumulated_metrics:
                 accumulated_metrics[key] = metric
@@ -68,8 +54,6 @@ def eval_loss_loop(
 
         total_loss += loss.item()
         n += 1
-        loss_time = time.time() - time_in - load_time
-        total_loss_time += loss_time
 
         pbar.set_postfix(loss=total_loss / n)
 
@@ -79,7 +63,6 @@ def eval_loss_loop(
     if n > 0:
         total_loss /= n
 
-    # Unwrap metrics before returning
     plain_metrics = unwrap_metrics(accumulated_metrics)
     return total_loss, plain_metrics
 
@@ -185,6 +168,13 @@ def profile_ctx(
             txt_summary_path = os.path.join(path, f"{host_profile_basename}.txt")
         except Exception as e:  # pragma: no cover - optional/diagnostic path
             logger.warning(f"Failed to start cProfile host profiler: {e}")
+
+    def _try_log_host_artifact(artifact_path: str, description: str) -> None:
+        try:
+            levanter.tracker.current_tracker().log_artifact(artifact_path, type="host_profile")
+        except Exception:
+            logger.warning(f"Failed to log host profile {description}", exc_info=True)
+
     try:
         yield
     finally:
@@ -203,7 +193,7 @@ def profile_ctx(
                         s.stream = f  # type: ignore
                         s.print_stats(host_profile_topn)
             except Exception:  # pragma: no cover - optional/diagnostic path
-                logger.warn("Failed to log host profile stats", exc_info=True)
+                logger.warning("Failed to log host profile stats", exc_info=True)
 
         # Start periodic flushing before stop_trace since it may block when perfetto is enabled
         if create_perfetto_link and jax.process_index() == 0:
@@ -222,17 +212,10 @@ def profile_ctx(
             event.set()
 
         levanter.tracker.current_tracker().log_artifact(path, type="jax_profile")
-        # Log host stats if available
         if stats_path is not None and os.path.exists(stats_path):
-            try:
-                levanter.tracker.current_tracker().log_artifact(stats_path, type="host_profile")
-            except Exception:
-                logger.warn("Failed to log host profile stats", exc_info=True)
+            _try_log_host_artifact(stats_path, "stats")
         if txt_summary_path is not None and os.path.exists(txt_summary_path):
-            try:
-                levanter.tracker.current_tracker().log_artifact(txt_summary_path, type="host_profile")
-            except Exception:
-                logger.warn("Failed to log host profile summary", exc_info=True)
+            _try_log_host_artifact(txt_summary_path, "summary")
         barrier_sync()
 
 

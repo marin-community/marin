@@ -15,14 +15,15 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
-from rigging.filesystem import open_url
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
-from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_mkdirs
 from requests.adapters import HTTPAdapter
+from rigging.filesystem import open_url
 from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
+
+from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
+from marin.execution.step_spec import StepSpec
+from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 

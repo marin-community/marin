@@ -3,13 +3,15 @@
 
 """Normalize raw downloaded data into the datakit standard Parquet format.
 
-Reads raw files (JSONL, Parquet, etc.) from an input directory, transforms each
-record into the standard schema (``id``, ``text``, plus all original columns),
-deduplicates by content, sorts by ``id`` within each partition, and writes
-Parquet output with ``part-{shard}-of-{total}`` naming.
+Reads raw files (JSONL, Parquet, etc.) discovered recursively under a single
+input directory, transforms each record into the standard schema (``id``,
+``text``, plus all original columns), deduplicates by content, sorts by ``id``
+within each partition, and writes Parquet output with
+``part-{shard}-of-{total}`` naming.
 
-Directory structure from the download is preserved: each subdirectory gets its
-own set of partitions sized by ``target_partition_bytes``.
+All discovered files are merged into a single output: main records land in
+``<output_path>/outputs/main/`` and (when dedup is enabled) duplicates land in
+``<output_path>/outputs/dups/``. Input directory structure is not preserved.
 """
 
 from __future__ import annotations
@@ -17,19 +19,20 @@ from __future__ import annotations
 import logging
 import os
 import re
-from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 import dupekit
+from fray import ResourceConfig
+from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
-from zephyr import counters
-from marin.execution.step_spec import StepSpec
-from fray.v2 import ResourceConfig
-from zephyr import Dataset, ZephyrContext
+from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
+from zephyr.writers import ThreadedBatchWriter
+
+from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
@@ -56,32 +59,23 @@ class DedupMode(StrEnum):
     EXACT = "exact"
 
 
-@dataclass
-class NormalizeSubdirResult:
-    """Per-subdirectory outcome of :func:`normalize_to_parquet`.
-
-    Attributes:
-        subdir: Relative subdirectory under the input root (``""`` for root).
-        output_files: Absolute paths of the Parquet partitions written.
-        counters: Aggregated zephyr counters from the subdirectory's pipeline
-            run (builtin ``zephyr/records_in``/``records_out`` plus any user
-            counters).
-    """
-
-    subdir: str
-    output_files: list[str]
-    counters: dict[str, int]
-
-
-@dataclass
-class NormalizeResult:
-    """Full outcome of :func:`normalize_to_parquet`, one entry per subdir.
+class NormalizedData(BaseModel):
+    """Outcome of :func:`normalize_to_parquet`: a single normalized dataset.
 
     Persisted as the step's ``.artifact`` so counters and output paths are
-    available to downstream consumers without re-running the pipeline.
+    available to downstream consumers without re-running the pipeline. Load
+    via ``Artifact.load(step, NormalizedData)``.
+
+    Attributes:
+        main_output_dir: Directory containing the main output Parquet files.
+        dup_output_dir: Directory containing the duplicate side output Parquet files.
+        counters: Aggregated zephyr counters.
     """
 
-    subdirs: list[NormalizeSubdirResult] = field(default_factory=list)
+    version: str = "v1"
+    main_output_dir: str
+    dup_output_dir: str
+    counters: dict[str, int]
 
 
 def generate_id(text: str) -> str:
@@ -137,15 +131,14 @@ def _make_normalize_fn(
     return normalize_record
 
 
-def _discover_file_groups(
+def _discover_files(
     input_path: str,
     file_extensions: tuple[str, ...] | None = None,
-) -> dict[str, list[str]]:
-    """Walk *input_path* and group data files by their subdirectory.
+) -> list[str]:
+    """Walk *input_path* recursively and return a sorted flat list of data files.
 
-    Returns a mapping from relative subdirectory (``""`` for root) to a sorted
-    list of file paths.  Only files with matching extensions are included;
-    dotfiles and ``.metrics`` directories are skipped.
+    Only files with matching extensions are included; dotfiles and hidden
+    directories are skipped.
 
     Args:
         input_path: Root directory to walk.
@@ -160,30 +153,21 @@ def _discover_file_groups(
     def _full_path(p: str) -> str:
         return f"{protocol}://{p}" if protocol else p
 
-    groups: dict[str, list[str]] = {}
-
+    discovered: list[str] = []
     for root, _dirs, files in fs.walk(resolved):
-        # Skip hidden / metrics directories
         rel_root = os.path.relpath(root, resolved)
-        if rel_root == ".":
-            rel_root = ""
-        parts = rel_root.split(os.sep)
-        if any(p.startswith(".") for p in parts if p):
+        parts = [] if rel_root == "." else rel_root.split(os.sep)
+        if any(p.startswith(".") for p in parts):
             continue
-
-        for fname in sorted(files):
+        for fname in files:
             if fname.startswith("."):
                 continue
             if not fname.endswith(extensions):
                 continue
-            full = _full_path(os.path.join(root, fname))
-            groups.setdefault(rel_root, []).append(full)
+            discovered.append(_full_path(os.path.join(root, fname)))
 
-    # Sort files within each group for determinism
-    for file_list in groups.values():
-        file_list.sort()
-
-    return groups
+    discovered.sort()
+    return discovered
 
 
 def _compute_total_bytes(file_paths: list[str]) -> int:
@@ -216,6 +200,67 @@ def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[
     return compact
 
 
+@dataclass
+class MainOutput:
+    """Wraps a unique record destined for the main output shard."""
+
+    data: dict[str, Any]
+
+
+@dataclass
+class ExactDupSideOutput:
+    """Wraps a duplicate record destined for the side (dups) output shard."""
+
+    data: dict[str, Any]
+
+
+def _make_split_writer(
+    output_dir: str,
+) -> Callable[[Iterator[MainOutput | ExactDupSideOutput], ShardInfo], Iterator[dict[str, dict[str, Any]]]]:
+    """Return a ``map_shard`` function that fans records out to main and dup Parquet files.
+
+    Each shard writes two files concurrently via ``ThreadedBatchWriter`` so the
+    producer isn't blocked on I/O. Yields a single manifest per shard containing
+    the ``write_parquet_file`` result (``{"path", "count"}``) for each branch.
+    """
+
+    # TODO (rav): consider whether we want to generalize this in the future.
+
+    def split_writer(
+        records: Iterator[MainOutput | ExactDupSideOutput],
+        shard: ShardInfo,
+    ) -> Iterator[dict[str, dict[str, Any]]]:
+        # NOTE: we could add support for split_existing - but we intentionally don't
+        main_path = f"{output_dir}/outputs/main/part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet"
+        dup_path = f"{output_dir}/outputs/dups/part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet"
+
+        # Results are populated by each writer thread. Safe to read only after
+        # the ThreadedBatchWriter context exits (which joins the thread).
+        results: dict[str, dict[str, Any]] = {}
+
+        def write_to(path: str, key: str) -> Callable[[Iterable[dict[str, Any]]], None]:
+            def _fn(items: Iterable[dict[str, Any]]) -> None:
+                results[key] = write_parquet_file(items, output_path=path)
+
+            return _fn
+
+        with (
+            ThreadedBatchWriter(write_to(main_path, "main")) as main_writer,
+            ThreadedBatchWriter(write_to(dup_path, "dup")) as dup_writer,
+        ):
+            for item in records:
+                if isinstance(item, MainOutput):
+                    counters.increment("normalize/unique_records_out")
+                    main_writer.submit(item.data)
+                else:
+                    counters.increment("normalize/duplicate_records_out")
+                    dup_writer.submit(item.data)
+
+        yield results
+
+    return split_writer
+
+
 def _build_pipeline(
     files: list[str],
     output_dir: str,
@@ -225,21 +270,23 @@ def _build_pipeline(
     dedup_mode: DedupMode,
     max_whitespace_run_chars: int,
 ) -> Dataset:
-    """Build a single Zephyr pipeline for one subdirectory."""
+    """Build the Zephyr pipeline that normalizes *files* into *output_dir*."""
     normalize_record = _make_normalize_fn(text_field, id_field)
 
-    def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
         """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
         prev_id: str | None = None
         for record in items:
             rid = record["id"]
             if rid != prev_id:
                 prev_id = rid
-                yield record
+                yield MainOutput(data=record)
+            else:
+                yield ExactDupSideOutput(data=record)
 
-    def passthrough(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    def passthrough(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput]:
         """Yield items unchanged; used when dedup is disabled."""
-        yield from items
+        yield from (MainOutput(data=item) for item in items)
 
     def has_text(record: dict[str, Any]) -> bool:
         text = record.get(text_field)
@@ -262,10 +309,7 @@ def _build_pipeline(
             sort_by=lambda r: r["id"],
             num_output_shards=num_shards,
         )
-        .write_parquet(
-            f"{output_dir}/part-{{shard:05d}}-of-{{total:05d}}.parquet",
-            skip_existing=True,
-        )
+        .map_shard(_make_split_writer(output_dir))
     )
 
 
@@ -278,26 +322,29 @@ def normalize_to_parquet(
     target_partition_bytes: int = 256 * 1024 * 1024,
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
-) -> NormalizeResult:
+) -> NormalizedData:
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
-    Discovers all data files under *input_path*, groups them by subdirectory,
-    and launches one Zephyr pipeline per subdirectory concurrently.  Each
-    pipeline normalizes records (``id``, ``text``, preserves all other columns),
-    optionally deduplicates by content per *dedup_mode*, sorts by ``id``, and
-    writes Parquet partitions sized by *target_partition_bytes*.
+    Discovers all data files recursively under *input_path*, merges them into a
+    single Zephyr pipeline that normalizes records (``id``, ``text``, preserves
+    all other columns), optionally deduplicates by content per *dedup_mode*,
+    sorts by ``id``, and writes Parquet partitions sized by
+    *target_partition_bytes*. Input directory structure is not preserved.
 
     Args:
         input_path: Root directory containing raw downloaded data.
-        output_path: Root directory for normalized Parquet output.
+        output_path: Directory for normalized Parquet output. Main records are
+            written to ``<output_path>/outputs/main/`` and (when dedup is
+            enabled) duplicates to ``<output_path>/outputs/dups/``.
         text_field: Name of the field containing primary text content.
         id_field: Name of the field containing the source ID (renamed to
             ``source_id``).  If the field is absent from a record, it is
             silently skipped.
         target_partition_bytes: Target size in bytes per output partition.
-            Used to compute the number of output shards per subdirectory.
+            Used to compute the number of output shards.
         max_whitespace_run_chars: Compact any consecutive whitespace run
             longer than this many characters down to this length.
             Pathologically long whitespace runs (e.g. multi-MB runs from
@@ -308,6 +355,8 @@ def normalize_to_parquet(
             Defaults to 2 CPU / 16GB RAM / 10GB disk, sized for
             ``target_partition_bytes`` of 256MB.  Scale up when increasing
             partition size.
+        max_workers: Maximum number of Zephyr workers for the pipeline.
+            Defaults to Zephyr's own default (128 for distributed backends).
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
@@ -317,65 +366,45 @@ def normalize_to_parquet(
             all input records.
 
     Returns:
-        A :class:`NormalizeResult` describing the output files and zephyr
-        counters for each subdirectory that was processed.
+        A :class:`NormalizedData` describing the output directories and
+        aggregated zephyr counters.
     """
     resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="10g")
 
-    file_groups = _discover_file_groups(input_path, file_extensions=file_extensions)
-    if not file_groups:
+    files = _discover_files(input_path, file_extensions=file_extensions)
+    if not files:
         raise FileNotFoundError(f"No data files found under {input_path}")
 
-    logger.info("Discovered %d subdirectories under %s", len(file_groups), input_path)
+    total_bytes = _compute_total_bytes(files)
+    num_shards = max(1, total_bytes // target_partition_bytes)
 
-    def _run_subdir(subdir: str, files: list[str]) -> NormalizeSubdirResult:
-        total_bytes = _compute_total_bytes(files)
-        num_shards = max(1, total_bytes // target_partition_bytes)
-        output_dir = os.path.join(output_path, subdir) if subdir else output_path
+    logger.info(
+        "Normalizing %s → %s: %d files, %d bytes, %d shards",
+        input_path,
+        output_path,
+        len(files),
+        total_bytes,
+        num_shards,
+    )
 
-        logger.info(
-            "Normalizing %s → %s: %d files, %d bytes, %d shards",
-            os.path.join(input_path, subdir) if subdir else input_path,
-            output_dir,
-            len(files),
-            total_bytes,
-            num_shards,
-        )
+    pipeline = _build_pipeline(
+        files,
+        output_path,
+        num_shards,
+        text_field,
+        id_field,
+        dedup_mode,
+        max_whitespace_run_chars,
+    )
+    ctx_kwargs: dict = {"name": "normalize", "resources": resources}
+    if max_workers is not None:
+        ctx_kwargs["max_workers"] = max_workers
+    ctx = ZephyrContext(**ctx_kwargs)
+    outcome = ctx.execute(pipeline)
+    counters_dict = dict(outcome.counters)
 
-        pipeline = _build_pipeline(
-            files,
-            output_dir,
-            num_shards,
-            text_field,
-            id_field,
-            dedup_mode,
-            max_whitespace_run_chars,
-        )
-        ctx = ZephyrContext(
-            name=f"normalize-{subdir.replace('/', '-') if subdir else 'all'}",
-            resources=resources,
-        )
-        outcome = ctx.execute(pipeline)
-        return NormalizeSubdirResult(
-            subdir=subdir,
-            output_files=list(outcome.results),
-            counters=dict(outcome.counters),
-        )
-
-    # Launch all subdirectory pipelines concurrently
-    subdir_results: list[NormalizeSubdirResult] = []
-    with ThreadPoolExecutor(max_workers=len(file_groups)) as pool:
-        futures = {pool.submit(_run_subdir, subdir, files): subdir for subdir, files in file_groups.items()}
-        for future in as_completed(futures):
-            subdir = futures[future]
-            subdir_results.append(future.result())  # Propagate exceptions
-            logger.info("Completed normalization for %s", os.path.join(output_path, subdir) if subdir else output_path)
-
-    # Sort for deterministic output so re-runs produce stable .artifact contents
-    subdir_results.sort(key=lambda r: r.subdir)
-
-    total_in = sum(r.counters.get("zephyr/records_in", 0) for r in subdir_results)
-    total_filtered = sum(r.counters.get("normalize/empty_text_filtered", 0) for r in subdir_results)
+    total_in = counters_dict.get("zephyr/records_in", 0)
+    total_filtered = counters_dict.get("normalize/empty_text_filtered", 0)
     if total_in > 0 and total_filtered == total_in:
         raise ValueError(
             f"All {total_in} records were filtered out due to missing/empty text. "
@@ -383,7 +412,11 @@ def normalize_to_parquet(
             f"current column: {text_field!r}"
         )
 
-    return NormalizeResult(subdirs=subdir_results)
+    return NormalizedData(
+        main_output_dir=os.path.join(output_path, "outputs/main"),
+        dup_output_dir=os.path.join(output_path, "outputs/dups"),
+        counters=counters_dict,
+    )
 
 
 def normalize_step(
@@ -395,8 +428,9 @@ def normalize_step(
     target_partition_bytes: int = 256 * 1024 * 1024,
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
     override_output_path: str | None = None,
-    input_path: str | None = None,
+    relative_input_path: str | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
 ) -> StepSpec:
@@ -410,8 +444,10 @@ def normalize_step(
         target_partition_bytes: Target size per output partition.
         worker_resources: Per-worker resource request for the Zephyr pipeline.
             See :func:`normalize_to_parquet` for the default.
+        max_workers: Maximum number of Zephyr workers. Defaults to Zephyr's
+            own default (128 for distributed backends).
         override_output_path: Override the computed output path.
-        input_path: Override the input path. Defaults to ``download.output_path``.
+        relative_input_path: Override the input path relative to the download output.
             Useful when normalizing a subdirectory of the download output.
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
@@ -419,7 +455,14 @@ def normalize_step(
         dedup_mode: How to deduplicate records within each output shard.
             Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
     """
-    resolved_input = input_path or download.output_path
+    if relative_input_path:
+        # ``os.path.join`` collapses redundant separators when ``download.output_path``
+        # ends with ``/`` (e.g. ``override_output_path="gs://.../nemotro-cc-eeb783/"``);
+        # naive f-string concatenation would yield ``gs://.../nemotro-cc-eeb783//<rel>``,
+        # which ``_discover_files`` then fails to resolve on GCS.
+        resolved_input = os.path.join(download.output_path, relative_input_path)
+    else:
+        resolved_input = download.output_path
 
     return StepSpec(
         name=name,
@@ -431,6 +474,7 @@ def normalize_step(
             target_partition_bytes=target_partition_bytes,
             max_whitespace_run_chars=max_whitespace_run_chars,
             worker_resources=worker_resources,
+            max_workers=max_workers,
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
         ),
@@ -440,7 +484,7 @@ def normalize_step(
             "id_field": id_field,
             "target_partition_bytes": target_partition_bytes,
             "max_whitespace_run_chars": max_whitespace_run_chars,
-            "input_path": resolved_input,
+            "relative_input_path": relative_input_path,
             "file_extensions": file_extensions,
             "dedup_mode": dedup_mode,
         },

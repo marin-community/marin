@@ -100,8 +100,6 @@ At the time of writing, `KEY_GENERATION_TASKS` includes:
 - `mmlu` 5-shot
 - `truthfulqa_mc2`
 
-There is no longer an in-repo `evaluate_alpaca_eval` helper, so Alpaca-specific guidance has been removed from this tutorial.
-
 ## 3. Build a Custom Eval Step
 
 Use the lower-level helpers when you want a custom task list or evaluator:
@@ -190,26 +188,3 @@ For deeper dives, see:
 - `docs/explanations/evaluation.md`
 - `experiments/evals/task_configs.py`
 - `experiments/evals/evals.py`
-
-## Raw Perplexity Gap Datasets
-
-The raw perplexity-gap workflow uses `default_raw_validation_sets()` from `experiments/defaults.py`. That bundle now includes:
-
-- Paloma
-- Uncheatable Eval
-- Curated capability-family slices for:
-  - `chat/wildchat`
-  - `agent_traces/openhands_swe_rebench`
-  - `reasoning_icl/gsm8k_main`
-  - `reasoning_icl/global_mgsm_en`
-
-These capability datasets are first normalized into reusable OpenAI-chat JSONL artifacts under each step's `oai/` output. Consumers that want Levanter chat tokenization can use `capability_chat_validation_components()`, which wraps those rows in `ChatLmDatasetFormat` with `MARIN_CHAT_TEMPLATE`. The raw gap finder still consumes plain `text`, so the same step also writes a derived `raw_text/` projection using Marin's chat-token surface. OpenHands traces keep the full system/user/tool conversation in the OAI artifact, while the raw-text projection scores only assistant-generated trace targets and final patches.
-
-The curated default uses modest, reproducible slices for the larger structured corpora rather than mirroring whole Hugging Face datasets into GCS. That keeps cost and executor output size bounded while still giving useful coverage for base-model PPL comparisons.
-
-If you want the gated chat sources as well, use `extended_raw_validation_sets()` instead of `default_raw_validation_sets()`. That currently adds:
-
-- `chat/lima_train`
-- `chat/lmsys_chat_1m`
-
-Those opt-in datasets stay out of the default bundle because access and licensing are more restrictive.

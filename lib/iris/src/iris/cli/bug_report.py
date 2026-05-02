@@ -11,15 +11,15 @@ import logging
 import subprocess
 from dataclasses import dataclass, field
 
-from iris.cluster.log_store import build_log_source
+from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
+
+from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.types import JobName
-from iris.rpc import logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
-from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
+from iris.rpc.proto_utils import format_resources, job_state_friendly, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -209,7 +209,7 @@ def _gather(
         started_at=_format_timestamp(job.started_at),
         finished_at=_format_timestamp(job.finished_at),
         duration=_compute_duration(job.started_at, job.finished_at),
-        resources=_format_resources(job.resources if job.HasField("resources") else None),
+        resources=format_resources(job.resources if job.HasField("resources") else None),
         task_count=task_count,
         completed_count=job.completed_count,
         failure_count=job.failure_count,
@@ -295,19 +295,19 @@ def _list_descendant_jobs(
         return []
 
     try:
-        log_resp = client.get_task_logs(
-            controller_pb2.Controller.GetTaskLogsRequest(
-                id=job_id.to_wire(),
-                include_children=True,
-                max_total_lines=1,
-                tail=True,
+        list_resp = client.list_jobs(
+            controller_pb2.Controller.ListJobsRequest(
+                query=controller_pb2.Controller.JobQuery(
+                    parent_job_id=job_id.to_wire(),
+                    scope=controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN,
+                )
             )
         )
     except Exception:
         logger.warning("Failed to fetch descendant job statuses for %s", job_id, exc_info=True)
         return []
 
-    return [_build_descendant_job_report(job) for job in log_resp.child_job_statuses]
+    return [_build_descendant_job_report(job) for job in list_resp.jobs]
 
 
 def _build_descendant_job_report(job: job_pb2.JobStatus) -> DescendantJobReport:
@@ -357,26 +357,6 @@ def _format_exit_code(code: int) -> str:
         sig_name = signals.get(signal_num, f"signal {signal_num}")
         return f"{code} ({sig_name})"
     return str(code)
-
-
-def _format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
-    if not resources:
-        return "-"
-    parts: list[str] = []
-    if resources.cpu_millicores:
-        parts.append(f"{resources.cpu_millicores / 1000:g} cpu")
-    if resources.memory_bytes:
-        gib = resources.memory_bytes / (1024**3)
-        parts.append(f"{gib:.0f} GiB")
-    if resources.HasField("device"):
-        device = resources.device
-        if device.HasField("tpu"):
-            parts.append(device.tpu.variant)
-        elif device.HasField("gpu"):
-            gpu = device.gpu
-            gpu_str = f"{gpu.count}x {gpu.variant}" if gpu.variant else f"{gpu.count} gpu"
-            parts.append(gpu_str)
-    return ", ".join(parts) if parts else "-"
 
 
 # ---------------------------------------------------------------------------

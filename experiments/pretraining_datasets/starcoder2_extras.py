@@ -3,9 +3,7 @@
 
 """StarCoder2 data extras: download and tokenize ir_cpp, ir_python, ir_rust, ir_low_resource, documentation."""
 
-from experiments.defaults import default_tokenize
-from experiments.marin_models import marin_tokenizer
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from marin.datakit.download.starcoder2_extras import (
     SUBSETS,
@@ -14,6 +12,9 @@ from marin.datakit.download.starcoder2_extras import (
 from marin.datakit.normalize import normalize_step
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import TokenizerStep
+
+from experiments.defaults import default_tokenize
+from experiments.marin_models import marin_tokenizer
 
 
 def tokenize_starcoder2_extras(*, tokenizer: str = marin_tokenizer) -> list[TokenizerStep]:
@@ -33,7 +34,8 @@ def tokenize_starcoder2_extras(*, tokenizer: str = marin_tokenizer) -> list[Toke
         steps.append(
             default_tokenize(
                 name=f"starcoder2_extras/{subset}",
-                dataset=normalized.as_executor_step(),
+                # Normalize splits main/dup outputs; only tokenize the main branch.
+                dataset=normalized.as_executor_step() / "outputs/main/*.parquet",
                 tokenizer=tokenizer,
                 format=TextLmDatasetFormat(text_key="text"),
                 levanter_batch_size=128,

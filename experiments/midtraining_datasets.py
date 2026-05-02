@@ -1,9 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from experiments.common_pile.tokenize_common_pile import stackv2_edu_filtered
-from experiments.defaults import default_download, default_tokenize
-from experiments.llama import llama3_tokenizer
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution import versioned
 from marin.execution.executor import ExecutorStep, this_output_path
@@ -13,6 +10,10 @@ from marin.transform.common_pile.filter_by_extension import (
     filter_dataset_by_metadata_extension,
 )
 from marin.transform.medical.lavita_to_dolma import LavitaToDolmaConfig, convert_lavita_split_to_dolma
+
+from experiments.common_pile.tokenize_common_pile import stackv2_edu_filtered
+from experiments.defaults import default_download, default_tokenize
+from experiments.llama import llama3_tokenizer
 
 finemath_commit_hash = "8f233cf"
 finemath = ExecutorStep(

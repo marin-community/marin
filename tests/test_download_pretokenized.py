@@ -10,14 +10,13 @@ import requests  # For requests.exceptions.RequestException
 from huggingface_hub.utils import HfHubHTTPError
 from levanter.store import TreeCache
 from levanter.tokenizers import load_tokenizer
-
 from marin.processing.tokenize.download_pretokenized import (
     PretokenizedCacheDownloadConfig,
     _actually_download_pretokenized_cache,
 )
 
 HF_REPO_ID = "marin-community/fineweb-edu-pretokenized-10K"
-TOKENIZER_NAME = "stanford-crfm/marin-tokenizer"
+TOKENIZER_NAME = "marin-community/marin-tokenizer"
 
 
 def test_download_and_load_cache():

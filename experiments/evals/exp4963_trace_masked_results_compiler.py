@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import fsspec
-
 from marin.execution.executor import ExecutorStep, OutputName
 from rigging.filesystem import open_url
 

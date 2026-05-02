@@ -5,6 +5,16 @@
 
 from typing import Literal
 
+from fray.cluster import ResourceConfig
+from levanter.data.text import HfDatasetSourceConfig, TraceChatEvaluationFormat
+from marin.evaluation.trace_masked_eval import (
+    TraceMaskedEvalDatasetConfig,
+    TraceRowAdapterConfig,
+    default_trace_masked_eval,
+)
+from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, output_path_of
+from marin.rl.placement import marin_prefix_for_region, singleton_region_list
+
 from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
 from experiments.chat_templates.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
 from experiments.chat_templates.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
@@ -19,7 +29,8 @@ from experiments.llama import (
     llama_3_1_8b_tokenizer,
 )
 from experiments.marin_models import MARIN_CHAT_TEMPLATE, marin_tokenizer
-from experiments.models import ModelConfig, download_model_step, llama_3_1_8b as llama_3_1_8b_hf
+from experiments.models import ModelConfig, download_model_step
+from experiments.models import llama_3_1_8b as llama_3_1_8b_hf
 from experiments.models import llama_3_1_8b_instruct as llama_3_1_8b_instruct_hf
 from experiments.models import marin_8b_base as marin_8b_base_hf
 from experiments.models import qwen2_5_7b as qwen2_5_7b_hf_raw
@@ -34,15 +45,6 @@ from experiments.qwen3 import (
     qwen3_8b,
     qwen3_8b_tokenizer,
 )
-from fray.cluster import ResourceConfig
-from levanter.data.text import HfDatasetSourceConfig, TraceChatEvaluationFormat
-from marin.evaluation.trace_masked_eval import (
-    TraceMaskedEvalDatasetConfig,
-    TraceRowAdapterConfig,
-    default_trace_masked_eval,
-)
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, output_path_of
-from marin.rl.placement import marin_prefix_for_region, singleton_region_list
 
 REGION = "us-central1"
 MAX_EXAMPLES_PER_DATASET = 128

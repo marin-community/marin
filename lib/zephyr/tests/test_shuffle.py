@@ -10,7 +10,8 @@ without spinning up a full coordinator.
 from zephyr.plan import deterministic_hash
 from zephyr.shuffle import (
     ScatterFileIterator,
-    ScatterShard,
+    ScatterReader,
+    ScatterWriter,
     _write_chunk_frame,
     _write_scatter,
 )
@@ -51,7 +52,7 @@ def test_scatter_roundtrip(tmp_path):
 
     recovered = []
     for shard_idx in range(num_shards):
-        shard = ScatterShard.from_sidecars(scatter_paths, shard_idx)
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
         recovered.extend(list(shard))
 
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
@@ -64,7 +65,7 @@ def test_scatter_each_shard_gets_correct_items(tmp_path):
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=num_shards)
 
     for shard_idx in range(num_shards):
-        shard = ScatterShard.from_sidecars(scatter_paths, shard_idx)
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
         recovered = sorted(list(shard), key=lambda x: x["v"])
         expected = sorted([x for x in items if _target(x["k"], num_shards) == shard_idx], key=lambda x: x["v"])
         assert recovered == expected, f"shard {shard_idx} mismatch"
@@ -76,7 +77,7 @@ def test_scatter_roundtrip_sorted_chunks(tmp_path):
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=2)
 
     for shard_idx in range(2):
-        shard = ScatterShard.from_sidecars(scatter_paths, shard_idx)
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
         for chunk_iter in shard.get_iterators():
             chunk = list(chunk_iter)
             keys = [_key(x) for x in chunk]
@@ -96,13 +97,13 @@ def test_max_chunk_rows_per_shard(tmp_path):
 
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=num_shards)
 
-    shard0 = ScatterShard.from_sidecars(scatter_paths, 0)
-    shard1 = ScatterShard.from_sidecars(scatter_paths, 1)
+    big_shard = ScatterReader.from_sidecars(scatter_paths, _target(3, num_shards))
+    small_shard = ScatterReader.from_sidecars(scatter_paths, _target(0, num_shards))
 
-    assert shard0.max_chunk_rows == 500
-    assert shard1.max_chunk_rows == 2, (
-        f"shard1 max_chunk_rows={shard1.max_chunk_rows}, expected 2; "
-        "contamination from shard0's large chunk would show 500"
+    assert big_shard.max_chunk_rows == 500
+    assert small_shard.max_chunk_rows == 2, (
+        f"small_shard max_chunk_rows={small_shard.max_chunk_rows}, expected 2; "
+        "contamination from the large chunk would show 500"
     )
 
 
@@ -112,7 +113,7 @@ def test_max_chunk_rows_per_shard(tmp_path):
 
 
 def test_needs_external_sort_triggers():
-    shard = ScatterShard(
+    shard = ScatterReader(
         iterators=[ScatterFileIterator(path="gs://fake/path.shuffle", chunks=tuple((i, 1) for i in range(1000)))],
         max_chunk_rows=1000,
         avg_item_bytes=1000.0,
@@ -124,12 +125,12 @@ def test_needs_external_sort_triggers():
 def test_needs_external_sort_below_threshold(tmp_path):
     items = [{"k": 0, "v": i} for i in range(5)]
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=1)
-    shard = ScatterShard.from_sidecars(scatter_paths, 0)
+    shard = ScatterReader.from_sidecars(scatter_paths, 0)
     assert not shard.needs_external_sort(memory_limit=32 * 1024**3)
 
 
 def test_needs_external_sort_empty_shard():
-    shard = ScatterShard(iterators=[], max_chunk_rows=100_000, avg_item_bytes=200.0)
+    shard = ScatterReader(iterators=[], max_chunk_rows=100_000, avg_item_bytes=200.0)
     assert not shard.needs_external_sort(memory_limit=32 * 1024**3)
 
 
@@ -141,7 +142,7 @@ def test_needs_external_sort_empty_shard():
 def test_avg_item_bytes_written(tmp_path):
     items = [{"k": 0, "v": i} for i in range(20)]
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=1)
-    shard = ScatterShard.from_sidecars(scatter_paths, 0)
+    shard = ScatterReader.from_sidecars(scatter_paths, 0)
     assert shard.avg_item_bytes > 0
 
 
@@ -162,13 +163,130 @@ def test_scatter_handles_arbitrary_python_objects(tmp_path):
 
     recovered = []
     for shard_idx in range(2):
-        shard = ScatterShard.from_sidecars(scatter_paths, shard_idx)
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
         recovered.extend(list(shard))
 
     def _ord(x):
         return (x["k"], repr(x["v"]))
 
     assert sorted(recovered, key=_ord) == sorted(items, key=_ord)
+
+
+# ---------------------------------------------------------------------------
+# Byte-budget flushing
+# ---------------------------------------------------------------------------
+
+
+def test_scatter_byte_budget_flushes_mid_write(tmp_path):
+    """A tiny byte budget forces flushes during write, not only at close."""
+    num_shards = 2
+    items = [{"k": i % num_shards, "v": i} for i in range(200)]
+    data_path = str(tmp_path / "shard-0000.shuffle")
+
+    # Budget of 1 byte forces a flush on every write after the first.
+    writer = ScatterWriter(
+        data_path=data_path,
+        key_fn=_key,
+        num_output_shards=num_shards,
+        buffer_limit_bytes=1,
+    )
+    for item in items:
+        writer.write(item)
+    writer.close()
+
+    # Multiple chunks must have been written (not just the close-time flush).
+    scatter_paths = [data_path]
+    total_chunks = sum(ScatterReader.from_sidecars(scatter_paths, s).total_chunks for s in range(num_shards))
+    assert total_chunks > 2, f"expected >2 chunks with 1-byte budget, got {total_chunks}"
+
+
+def test_scatter_estimate_tracks_skewed_items(tmp_path):
+    """Write-time EMA sampling catches large late items and triggers mid-write flushes."""
+    num_shards = 1
+    data_path = str(tmp_path / "shard-0000.shuffle")
+
+    # Start with tiny items, then switch to large items. With a frozen estimate
+    # the budget check would never fire for the large items. With EMA updates it
+    # should: _item_bytes_estimate rises and eventually exceeds budget / rows.
+    small_items = [{"k": 0, "v": "x"} for _ in range(50)]
+    large_items = [{"k": 0, "v": "y" * 50_000} for _ in range(10)]
+
+    # Budget large enough that small items alone never flush, but one large
+    # item should push the estimate over threshold quickly.
+    budget = 10_000  # 10 KB — well under 10 * 50 KB large items
+    writer = ScatterWriter(
+        data_path=data_path,
+        key_fn=_key,
+        num_output_shards=num_shards,
+        buffer_limit_bytes=budget,
+    )
+    for item in small_items + large_items:
+        writer.write(item)
+    writer.close()
+
+    # All items must survive the skewed flush pattern.
+    scatter_paths = [data_path]
+    recovered = list(ScatterReader.from_sidecars(scatter_paths, 0))
+    all_items = small_items + large_items
+    assert sorted(recovered, key=lambda x: x["v"]) == sorted(all_items, key=lambda x: x["v"])
+
+    # The estimate must have been updated: mid-write flushes should have fired
+    # for the large items (not just at close).
+    assert writer._mid_write_flushes > 0, "expected mid-write flushes for large items"
+
+
+def test_scatter_estimate_adapts_to_gradual_drift(tmp_path):
+    """Write-time EMA bounds peak buffered rows even when item sizes grow gradually."""
+    num_shards = 1
+    data_path = str(tmp_path / "shard-0000.shuffle")
+
+    # Items grow linearly from ~100 B to ~100 KB across 200 records.
+    # If all 200 were buffered at once the real RSS would be ~10 MB.
+    n_items = 200
+    items = [{"k": 0, "v": "x" * (100 + i * 500)} for i in range(n_items)]
+
+    # 500 KB budget. With a frozen first-item estimate (~110 B) the budget check
+    # would read 200 * 110 = 22 KB < 500 KB and never flush mid-write, letting
+    # all items accumulate. With EMA adaptation the estimate tracks the growing
+    # sizes and flushes before peak RSS reaches the budget.
+    budget = 500_000
+    writer = ScatterWriter(
+        data_path=data_path,
+        key_fn=_key,
+        num_output_shards=num_shards,
+        buffer_limit_bytes=budget,
+    )
+    for item in items:
+        writer.write(item)
+    writer.close()
+
+    scatter_paths = [data_path]
+    recovered = list(ScatterReader.from_sidecars(scatter_paths, 0))
+    assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
+
+    assert writer._mid_write_flushes > 0, "expected mid-write flushes as item sizes grew"
+    assert writer._peak_buffer_rows < n_items, (
+        f"peak_buffer_rows={writer._peak_buffer_rows} should be < {n_items}; "
+        "a frozen estimate lets all items accumulate before close()"
+    )
+
+
+def test_scatter_byte_budget_preserves_all_items(tmp_path):
+    """Items are not lost or duplicated when byte-budget flushes fire mid-write."""
+    num_shards = 3
+    items = [{"k": i % num_shards, "v": i} for i in range(300)]
+    scatter_paths = _build_shard(
+        tmp_path,
+        items,
+        num_output_shards=num_shards,
+    )
+
+    recovered = []
+    for shard_idx in range(num_shards):
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
+        recovered.extend(list(shard))
+
+    assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
 
 # ---------------------------------------------------------------------------

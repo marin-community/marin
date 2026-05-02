@@ -19,7 +19,7 @@ jobs:
     outputs:
       should_run: ${{ steps.filter.outputs.relevant }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -40,16 +40,16 @@ jobs:
         working-directory: lib/haliax
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
       - name: Set up Python 3.11
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Install dependencies
         run: |
           python -m pip install uv
           uv sync --package marin-haliax --dev
-      - name: Test with pytest (JAX 0.8.0)
+      - name: Test with pytest (JAX 0.9.2)
         run: |
           # Test with specific JAX version
-          JAX_NUM_CPU_DEVICES=8 PYTHONPATH=tests:src:. uv run --package marin-haliax --with "jax[cpu]==0.8.0" pytest -c pyproject.toml tests
+          JAX_NUM_CPU_DEVICES=8 PYTHONPATH=tests:src:. uv run --package marin-haliax --with "jax[cpu]==0.9.2" pytest -c pyproject.toml tests

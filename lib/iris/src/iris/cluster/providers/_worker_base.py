@@ -18,13 +18,14 @@ import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from rigging.timing import Duration
+
 from iris.cluster.providers.remote_exec import (
     RemoteExec,
     run_streaming_with_retry,
     wait_for_connection,
 )
 from iris.cluster.providers.types import CommandResult
-from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
 

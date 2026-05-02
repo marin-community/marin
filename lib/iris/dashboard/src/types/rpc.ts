@@ -95,6 +95,8 @@ export interface TaskStatus {
   canBeScheduled?: boolean
   containerId?: string
   resourceHistory?: ResourceUsage[]
+  statusTextDetailMd?: string
+  statusTextSummaryMd?: string
 }
 
 // -- Jobs --
@@ -241,13 +243,20 @@ export interface WorkerResourceSnapshot {
   netSentBps?: string
 }
 
+export interface WorkerTaskAttempt {
+  taskId: string
+  attempt?: TaskAttempt
+}
+
 export interface GetWorkerStatusResponse {
   vm?: VmInfo
   scaleGroup?: string
   worker?: WorkerHealthStatus
   bootstrapLogs?: string
-  workerLogEntries?: LogEntry[]
-  recentTasks?: TaskStatus[]
+  // workerLogEntries removed from this response to avoid blocking the worker
+  // page render on a slow LogService proxy. Fetched separately via
+  // LogService.FetchLogs(source="/system/worker/<worker_id>").
+  recentAttempts?: WorkerTaskAttempt[]
   currentResources?: WorkerResourceSnapshot
   resourceHistory?: WorkerResourceSnapshot[]
 }
@@ -458,19 +467,6 @@ export interface GetProcessStatusResponse {
   logEntries?: LogEntry[]
 }
 
-// -- Transactions --
-
-export interface TransactionAction {
-  timestamp?: ProtoTimestamp
-  action?: string
-  entityId?: string
-  details?: string
-}
-
-export interface GetTransactionsResponse {
-  actions: TransactionAction[]
-}
-
 // -- Task State Counts (used in job summaries and user summaries) --
 
 /** Mapping from lowercase state name to count, e.g. { running: 2, pending: 5 } */
@@ -546,4 +542,39 @@ export interface GetSchedulerStateResponse {
   runningTasks: SchedulerRunningTask[]
   totalPending: number
   totalRunning: number
+}
+
+// -- RPC Statistics (iris.stats.StatsService) --
+
+export interface RpcMethodStats {
+  method: string
+  count?: string
+  errorCount?: string
+  totalDurationMs?: number
+  maxDurationMs?: number
+  p50Ms?: number
+  p95Ms?: number
+  p99Ms?: number
+  bucketUpperBoundsMs?: string[]
+  bucketCounts?: string[]
+  lastCall?: ProtoTimestamp
+}
+
+export interface RpcCallSample {
+  method: string
+  timestamp?: ProtoTimestamp
+  durationMs?: number
+  peer?: string
+  userAgent?: string
+  caller?: string
+  errorCode?: string
+  errorMessage?: string
+  requestPreview?: string
+}
+
+export interface GetRpcStatsResponse {
+  methods?: RpcMethodStats[]
+  slowSamples?: RpcCallSample[]
+  discoverySamples?: RpcCallSample[]
+  collectorStartedAt?: ProtoTimestamp
 }

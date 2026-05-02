@@ -4,24 +4,20 @@
 import json
 
 from fray.cluster import ResourceConfig
-from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
-from experiments.marin_models import MARIN_CHAT_TEMPLATE
 from levanter.data.sharded_datasource import ShardedDataSource
-from levanter.data.text import TraceChatEvaluationFormat
-from levanter.data.text import HfDatasetSourceConfig
-from levanter.data.text import UrlDatasetSourceConfig
+from levanter.data.text import HfDatasetSourceConfig, TraceChatEvaluationFormat, UrlDatasetSourceConfig
 from levanter.models.llama import LlamaConfig
+from levanter.tokenizers import load_tokenizer
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.tracker.wandb import WandbConfig
-from levanter.tokenizers import load_tokenizer
 from marin.evaluation import trace_masked_eval as trace_masked_eval_module
 from marin.evaluation.trace_masked_eval import (
     DEFAULT_TRACE_MASKED_EVAL_WANDB_PROJECT,
     FirstRowsShardedDataSource,
     TraceMaskedEvalConfig,
-    TraceRowAdapterConfig,
     TraceMaskedEvalDatasetConfig,
     TraceMaskedEvalOnPodConfig,
+    TraceRowAdapterConfig,
     _binary_auroc,
     _completed_dataset_metrics,
     _contrastive_outcome_summary,
@@ -34,6 +30,9 @@ from marin.evaluation.trace_masked_eval import (
     _write_results,
     default_trace_masked_eval,
 )
+
+from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
+from experiments.marin_models import MARIN_CHAT_TEMPLATE
 
 
 class FailingAfterLimitSource(ShardedDataSource[int]):

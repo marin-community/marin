@@ -16,17 +16,16 @@ import threading
 import time
 
 import pytest
-
 from iris.cluster.providers.k8s.controller import (
-    K8sControllerProvider,
     _CONTROLLER_CPU_REQUEST,
     _CONTROLLER_MEMORY_REQUEST,
+    K8sControllerProvider,
 )
 from iris.cluster.providers.k8s.fake import InMemoryK8sService
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.types import (
-    Labels,
     InfraError,
+    Labels,
 )
 from iris.rpc import config_pb2
 

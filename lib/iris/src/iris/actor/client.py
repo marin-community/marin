@@ -28,12 +28,12 @@ from typing import Any
 import cloudpickle
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from rigging.timing import ExponentialBackoff
 
 from iris.actor.resolver import Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
 from iris.rpc.errors import call_with_retry
-from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 

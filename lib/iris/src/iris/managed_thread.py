@@ -110,7 +110,14 @@ class ManagedThread:
                 raise
             finally:
                 if watcher:
-                    watcher.join(timeout=1.0)
+                    # Wake the watcher regardless of how the target exited so
+                    # on_stop runs on the natural-completion path too. Otherwise
+                    # cleanup (e.g. docker kill+rm for task containers) is
+                    # silently skipped whenever the target returns without an
+                    # explicit stop() — leaving wedged containers that keep
+                    # holding TPU vfio/iommu groups and break subsequent tasks.
+                    self._stop_event.set()
+                    watcher.join(timeout=5.0)
                     if watcher.is_alive():
                         logger.warning("on_stop callback for %s did not complete", name)
 

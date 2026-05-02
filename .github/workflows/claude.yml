@@ -44,12 +44,12 @@ jobs:
       actions: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -92,12 +92,12 @@ jobs:
       actions: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -114,6 +114,22 @@ jobs:
           prompt: |
             Read AGENTS.md, .agents/skills/fix-issue/SKILL.md, and .agents/skills/pull-request/SKILL.md.
             Then analyze issue #${{ github.event.issue.number }}.
+
+            ## Actionability check (do this first)
+
+            Before doing anything else, read the issue and decide whether it is
+            actionable. An actionable issue states what is broken or what
+            needs to be done in concrete terms, names the affected area
+            (file, module, command, or feature), and (for bugs) gives enough
+            detail to reproduce or to locate the problem in code. For task
+            requests, there must be a clear definition of done.
+
+            If the issue is too vague, missing reproduction steps, or has no
+            clear acceptance criteria, do NOT open a PR. Post a
+            comment listing exactly what additional information you need
+            (concrete reproduction steps, error messages, expected vs actual
+            behavior, file/module pointers, or a definition of done) and
+            stop. Do not guess at intent.
 
             ## Comment management (critical)
 
@@ -174,13 +190,13 @@ jobs:
       actions: read
     steps:
       - name: Checkout PR branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 

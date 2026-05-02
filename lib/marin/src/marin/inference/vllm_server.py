@@ -26,7 +26,10 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 logger = logging.getLogger(__name__)
 DEFAULT_VLLM_TPU_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
 DEFAULT_VLLM_GPU_DOCKER_IMAGE: str = "nvcr.io/nvidia/vllm:25.12.post1-py3"
-VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu",)
+VLLM_DOCKER_SIDECAR_UNSUPPORTED_MESSAGE = (
+    "Docker sidecar vLLM mode is not supported for Iris jobs because Iris workers do not mount "
+    "/var/run/docker.sock; use native vLLM by leaving MARIN_VLLM_MODE unset or setting it to 'native'."
+)
 
 _SENSITIVE_ENV_KEYS = frozenset(
     {
@@ -236,10 +239,17 @@ class NativeVllmServerBackend(VllmServerBackend):
 
 
 def resolve_vllm_mode(mode: Literal["native", "docker"] | None) -> Literal["native", "docker"]:
-    mode_str = (mode if mode is not None else os.environ.get("MARIN_VLLM_MODE", "docker")).lower()
-    if mode_str not in ("native", "docker"):
-        raise ValueError(f"Unknown MARIN_VLLM_MODE={mode_str!r}; expected 'native' or 'docker'.")
-    return mode_str  # type: ignore[return-value]
+    # Native is the only supported Iris vLLM mode. The old Docker sidecar path
+    # requires docker-alongside-docker, and Iris workers do not mount
+    # /var/run/docker.sock. See GitHub issue #4750.
+    mode_str = (mode if mode is not None else os.environ.get("MARIN_VLLM_MODE", "native")).lower()
+    if mode_str == "native":
+        return mode_str
+    if mode_str == "docker":
+        raise ValueError(VLLM_DOCKER_SIDECAR_UNSUPPORTED_MESSAGE)
+    raise ValueError(
+        f"Unknown MARIN_VLLM_MODE={mode_str!r}; expected 'native'. Docker sidecar mode is unsupported on Iris."
+    )
 
 
 def _resolve_vllm_backend(
@@ -287,6 +297,9 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     gpu_memory_utilization = engine_kwargs.get("gpu_memory_utilization")
     if gpu_memory_utilization is not None:
         args.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
+    max_num_batched_tokens = engine_kwargs.get("max_num_batched_tokens")
+    if max_num_batched_tokens is not None:
+        args.extend(["--max-num-batched-tokens", str(max_num_batched_tokens)])
     return args
 
 
@@ -473,6 +486,13 @@ def _detect_tpu_environment() -> bool:
 
     # GKE TPU device plugin exposes /dev/accel* device nodes.
     if glob.glob("/dev/accel*"):
+        return True
+
+    # v5+/v6e TPUs expose devices under /dev/vfio/ (VFIO passthrough); the
+    # /dev/vfio/vfio control node exists even without TPUs, so skip it.
+    # See lib/iris/src/iris/cluster/runtime/docker.py:_discover_tpu_device_mappings
+    # for the authoritative v4-vs-v5+ device-node split.
+    if any(os.path.basename(p) != "vfio" for p in glob.glob("/dev/vfio/*")):
         return True
 
     # Heuristic fallbacks for TPU pods / libtpu environments.

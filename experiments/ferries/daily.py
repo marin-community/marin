@@ -11,7 +11,8 @@ Expected workflow:
 2. If no obvious change emerges from recent commits/ferries, use judgment to pick a low-risk tweak
    (for example data-mix or hyperparameter) that could improve loss at the same FLOPs budget.
 3. Get human approval.
-4. Push the launch commit, then launch with `ray_run.py` and monitor to completion.
+4. Push the launch commit, then launch per the `ferries` skill
+   (`uv run iris --cluster=marin job run ...`) and monitor to completion.
 """
 
 import datetime as dt

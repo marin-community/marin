@@ -5,7 +5,6 @@
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-
 from iris.rpc.errors import (
     call_with_retry,
     connect_error_sanitized,
@@ -102,6 +101,21 @@ def test_call_with_retry_retries_on_deadline_exceeded() -> None:
         call_count += 1
         if call_count <= 2:
             raise ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out")
+        return "success"
+
+    result = call_with_retry("test_op", retry_then_succeed, backoff=ExponentialBackoff(initial=0.001, maximum=0.001))
+    assert result == "success"
+    assert call_count == 3
+
+
+def test_call_with_retry_retries_on_resource_exhausted() -> None:
+    call_count = 0
+
+    def retry_then_succeed():
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            raise ConnectError(Code.RESOURCE_EXHAUSTED, "shed by concurrency limiter")
         return "success"
 
     result = call_with_retry("test_op", retry_then_succeed, backoff=ExponentialBackoff(initial=0.001, maximum=0.001))

@@ -1,46 +1,42 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""WorkerProvider: TaskProvider backed by worker daemons via heartbeat RPC."""
+"""WorkerProvider: TaskProvider backed by worker daemons via Connect RPC."""
 
 import asyncio
 import logging
 import threading
 from dataclasses import dataclass
-from time import monotonic
 from typing import Protocol
+
+from rigging.timing import Duration
 
 from iris.chaos import chaos
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.controller.transitions import (
-    DispatchBatch,
-    HeartbeatApplyRequest,
+    RunningTaskEntry,
     TaskUpdate,
+    task_updates_from_proto,
 )
-from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
-from iris.rpc import worker_pb2
+from iris.cluster.types import WorkerId
+from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.worker_connect import WorkerServiceClient
-from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(10.0)
-_SLOW_HEARTBEAT_RPC_LOG_THRESHOLD_MS = 5_000
 
 
-def _heartbeat_rpc_context(
-    batch: DispatchBatch,
-    *,
-    elapsed_ms: int,
-    timeout_ms: int | None,
-) -> str:
-    timeout_fragment = f" timeout_ms={timeout_ms}" if timeout_ms is not None else ""
-    return (
-        f"worker={batch.worker_id} address={batch.worker_address or '<missing>'}"
-        f" elapsed_ms={elapsed_ms}{timeout_fragment}"
-        f" expected={len(batch.running_tasks)} run={len(batch.tasks_to_run)} kill={len(batch.tasks_to_kill)}"
-    )
+@dataclass(frozen=True)
+class PingResult:
+    """Result of a Ping RPC to a single worker."""
+
+    worker_id: WorkerId
+    worker_address: str | None
+    resource_snapshot: job_pb2.WorkerResourceSnapshot | None = None
+    healthy: bool = True
+    health_error: str = ""
+    error: str | None = None
 
 
 class WorkerStubFactory(Protocol):
@@ -84,123 +80,18 @@ class RpcWorkerStubFactory:
             self._stubs.clear()
 
 
-def _apply_request_from_response(
-    worker_id: WorkerId,
-    response: job_pb2.HeartbeatResponse,
-) -> HeartbeatApplyRequest:
-    """Convert a HeartbeatResponse proto to a HeartbeatApplyRequest."""
-    updates: list[TaskUpdate] = []
-    for entry in response.tasks:
-        if entry.state in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING):
-            continue
-        updates.append(
-            TaskUpdate(
-                task_id=JobName.from_wire(entry.task_id),
-                attempt_id=entry.attempt_id,
-                new_state=entry.state,
-                error=entry.error or None,
-                exit_code=entry.exit_code if entry.HasField("exit_code") else None,
-                resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
-                container_id=entry.container_id or None,
-            )
-        )
-    return HeartbeatApplyRequest(
-        worker_id=worker_id,
-        worker_resource_snapshot=(response.resource_snapshot if response.resource_snapshot.ByteSize() > 0 else None),
-        updates=updates,
-    )
-
-
 @dataclass
 class WorkerProvider:
-    """TaskProvider backed by worker daemons via async heartbeat RPC.
+    """TaskProvider backed by worker daemons via async Connect RPCs.
 
-    Per round, `sync()` spins up an asyncio event loop via `asyncio.run`
-    and dispatches per-worker heartbeat RPCs concurrently via
-    `asyncio.gather`, capped at `parallelism` in-flight requests by a
-    local semaphore. Cached stubs in the factory keep their pyqwest
-    connection pools across rounds independently of the Python loop.
+    Each public method spins up an asyncio event loop and dispatches the
+    relevant RPC to each worker concurrently via `asyncio.gather`, capped at
+    `parallelism` in-flight requests by a local semaphore. Cached stubs in
+    the factory keep their pyqwest connection pools across rounds.
     """
 
     stub_factory: WorkerStubFactory
     parallelism: int = 128
-
-    def sync(
-        self,
-        batches: list[DispatchBatch],
-    ) -> list[tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]]:
-        if not batches:
-            return []
-        return asyncio.run(self._sync_all(batches))
-
-    async def _sync_all(
-        self,
-        batches: list[DispatchBatch],
-    ) -> list[tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]]:
-        sem = asyncio.Semaphore(self.parallelism)
-        return await asyncio.gather(*(self._heartbeat_one_safe(sem, b) for b in batches))
-
-    async def _heartbeat_one_safe(
-        self,
-        sem: asyncio.Semaphore,
-        batch: DispatchBatch,
-    ) -> tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]:
-        async with sem:
-            try:
-                apply_req = await self._heartbeat_one(batch)
-                return (batch, apply_req, None)
-            except Exception as e:
-                return (batch, None, str(e))
-
-    async def _heartbeat_one(self, batch: DispatchBatch) -> HeartbeatApplyRequest:
-        """Send heartbeat RPC to one worker and return the apply request."""
-        started = monotonic()
-        timeout_ms = getattr(self.stub_factory, "timeout_ms", None)
-
-        if rule := chaos("controller.heartbeat"):
-            await asyncio.sleep(rule.delay_seconds)
-            raise ProviderError("chaos: heartbeat unavailable")
-
-        if not batch.worker_address:
-            raise ProviderError(f"Worker {batch.worker_id} has no address for heartbeat")
-
-        stub = self.stub_factory.get_stub(batch.worker_address)
-
-        expected_tasks = []
-        for entry in batch.running_tasks:
-            if rule := chaos("controller.heartbeat.iteration"):
-                await asyncio.sleep(rule.delay_seconds)
-            expected_tasks.append(
-                job_pb2.WorkerTaskStatus(
-                    task_id=entry.task_id.to_wire(),
-                    attempt_id=entry.attempt_id,
-                )
-            )
-        request = job_pb2.HeartbeatRequest(
-            tasks_to_run=batch.tasks_to_run,
-            tasks_to_kill=batch.tasks_to_kill,
-            expected_tasks=expected_tasks,
-        )
-        try:
-            response = await stub.heartbeat(request)
-
-            if not response.worker_healthy:
-                health_error = response.health_error or "worker reported unhealthy"
-                raise ProviderError(f"worker {batch.worker_id} reported unhealthy: {health_error}")
-
-            elapsed_ms = int((monotonic() - started) * 1000)
-            if elapsed_ms >= _SLOW_HEARTBEAT_RPC_LOG_THRESHOLD_MS:
-                logger.warning(
-                    "Slow heartbeat RPC succeeded: %s",
-                    _heartbeat_rpc_context(batch, elapsed_ms=elapsed_ms, timeout_ms=timeout_ms),
-                )
-            return _apply_request_from_response(batch.worker_id, response)
-        except Exception as e:
-            elapsed_ms = int((monotonic() - started) * 1000)
-            context = _heartbeat_rpc_context(batch, elapsed_ms=elapsed_ms, timeout_ms=timeout_ms)
-            if isinstance(e, ProviderError):
-                raise ProviderError(f"{e}; {context}") from e
-            raise ProviderError(f"heartbeat RPC failed: {context}; error={e}") from e
 
     def get_process_status(
         self,
@@ -245,6 +136,140 @@ class WorkerProvider:
         else:
             rpc_timeout_ms = (timeout_seconds + 5) * 1000
         return asyncio.run(stub.exec_in_container(request, timeout_ms=rpc_timeout_ms))
+
+    def ping_workers(self, workers: list[tuple[WorkerId, str | None]]) -> list[PingResult]:
+        """Send Ping RPCs to all workers concurrently. Returns per-worker results."""
+        if not workers:
+            return []
+
+        async def _one(sem: asyncio.Semaphore, wid: WorkerId, addr: str | None) -> PingResult:
+            async with sem:
+                if not addr:
+                    return PingResult(worker_id=wid, worker_address=addr, error=f"Worker {wid} has no address")
+                try:
+                    if rule := chaos("controller.ping"):
+                        await asyncio.sleep(rule.delay_seconds)
+                        raise ProviderError("chaos: controller.ping")
+                    stub = self.stub_factory.get_stub(addr)
+                    response = await stub.ping(worker_pb2.Worker.PingRequest())
+                    if not response.healthy:
+                        return PingResult(
+                            worker_id=wid,
+                            worker_address=addr,
+                            error=f"worker {wid} reported unhealthy: {response.health_error}",
+                        )
+                    return PingResult(
+                        worker_id=wid,
+                        worker_address=addr,
+                        resource_snapshot=(
+                            response.resource_snapshot if response.resource_snapshot.ByteSize() > 0 else None
+                        ),
+                        healthy=response.healthy,
+                        health_error=response.health_error,
+                    )
+                except Exception as e:
+                    return PingResult(worker_id=wid, worker_address=addr, error=str(e))
+
+        async def _run() -> list[PingResult]:
+            sem = asyncio.Semaphore(self.parallelism)
+            return await asyncio.gather(*(_one(sem, wid, addr) for wid, addr in workers))
+
+        return asyncio.run(_run())
+
+    def start_tasks(
+        self,
+        jobs: list[tuple[WorkerId, str, list[job_pb2.RunTaskRequest]]],
+    ) -> list[tuple[WorkerId, worker_pb2.Worker.StartTasksResponse | None, str | None]]:
+        """Send StartTasks RPCs to many workers concurrently."""
+        if not jobs:
+            return []
+
+        async def _one(
+            sem: asyncio.Semaphore, wid: WorkerId, addr: str, tasks: list[job_pb2.RunTaskRequest]
+        ) -> tuple[WorkerId, worker_pb2.Worker.StartTasksResponse | None, str | None]:
+            async with sem:
+                try:
+                    if rule := chaos("controller.start_tasks"):
+                        await asyncio.sleep(rule.delay_seconds)
+                        raise ProviderError("chaos: controller.start_tasks")
+                    stub = self.stub_factory.get_stub(addr)
+                    response = await stub.start_tasks(worker_pb2.Worker.StartTasksRequest(tasks=tasks))
+                    return (wid, response, None)
+                except Exception as e:
+                    return (wid, None, str(e))
+
+        async def _run() -> list[tuple[WorkerId, worker_pb2.Worker.StartTasksResponse | None, str | None]]:
+            sem = asyncio.Semaphore(self.parallelism)
+            return await asyncio.gather(*(_one(sem, wid, addr, tasks) for wid, addr, tasks in jobs))
+
+        return asyncio.run(_run())
+
+    def stop_tasks(
+        self,
+        jobs: list[tuple[WorkerId, str, list[str]]],
+    ) -> list[tuple[WorkerId, str | None]]:
+        """Send StopTasks RPCs to many workers concurrently."""
+        if not jobs:
+            return []
+
+        async def _one(sem: asyncio.Semaphore, wid: WorkerId, addr: str, ids: list[str]) -> tuple[WorkerId, str | None]:
+            async with sem:
+                try:
+                    if rule := chaos("controller.stop_tasks"):
+                        await asyncio.sleep(rule.delay_seconds)
+                        raise ProviderError("chaos: controller.stop_tasks")
+                    stub = self.stub_factory.get_stub(addr)
+                    await stub.stop_tasks(worker_pb2.Worker.StopTasksRequest(task_ids=ids))
+                    return (wid, None)
+                except Exception as e:
+                    return (wid, str(e))
+
+        async def _run() -> list[tuple[WorkerId, str | None]]:
+            sem = asyncio.Semaphore(self.parallelism)
+            return await asyncio.gather(*(_one(sem, wid, addr, ids) for wid, addr, ids in jobs))
+
+        return asyncio.run(_run())
+
+    def poll_workers(
+        self,
+        running: dict[WorkerId, list[RunningTaskEntry]],
+        worker_addresses: dict[WorkerId, str],
+    ) -> list[tuple[WorkerId, list[TaskUpdate] | None, str | None]]:
+        """Poll all workers for task state via PollTasks RPC concurrently.
+
+        Returns a list of (worker_id, updates_or_none, error_or_none).
+        """
+        if not running:
+            return []
+
+        async def _one(
+            sem: asyncio.Semaphore, wid: WorkerId, entries: list[RunningTaskEntry], addr: str | None
+        ) -> tuple[WorkerId, list[TaskUpdate] | None, str | None]:
+            async with sem:
+                if not addr:
+                    return (wid, None, f"Worker {wid} has no address")
+                try:
+                    if rule := chaos("controller.poll_tasks"):
+                        await asyncio.sleep(rule.delay_seconds)
+                        raise ProviderError("chaos: controller.poll_tasks")
+                    expected = []
+                    for entry in entries:
+                        if iter_rule := chaos("controller.poll_iteration"):
+                            await asyncio.sleep(iter_rule.delay_seconds)
+                        expected.append(
+                            job_pb2.WorkerTaskStatus(task_id=entry.task_id.to_wire(), attempt_id=entry.attempt_id)
+                        )
+                    stub = self.stub_factory.get_stub(addr)
+                    response = await stub.poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=expected))
+                    return (wid, task_updates_from_proto(response.tasks), None)
+                except Exception as e:
+                    return (wid, None, str(e))
+
+        async def _run() -> list[tuple[WorkerId, list[TaskUpdate] | None, str | None]]:
+            sem = asyncio.Semaphore(self.parallelism)
+            return await asyncio.gather(*(_one(sem, wid, running[wid], worker_addresses.get(wid)) for wid in running))
+
+        return asyncio.run(_run())
 
     def close(self) -> None:
         self.stub_factory.close()

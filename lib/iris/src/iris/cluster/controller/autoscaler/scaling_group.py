@@ -14,16 +14,15 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 
-from collections.abc import Sequence
+from rigging.timing import Deadline, Duration, Timestamp, TokenBucket
 
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
 from iris.cluster.constraints import (
-    AttributeValue,
     CONSTRAINT_REGISTRY,
+    AttributeValue,
     Constraint,
     DeviceType,
     ResourceCapacity,
@@ -33,15 +32,15 @@ from iris.cluster.constraints import (
     is_cpu_device_type_constraint,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.providers.protocols import WorkerInfraProvider
+from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
 from iris.cluster.types import (
     WorkerStatusMap,
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import config_pb2, time_pb2, vm_pb2
-from iris.rpc import job_pb2
+from iris.rpc import config_pb2, job_pb2, time_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Deadline, Duration, Timestamp, TokenBucket
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +149,68 @@ def prepare_slice_config(
         config.num_vms = parent_config.num_vms
 
     return config
+
+
+def _region_from_template(template: config_pb2.SliceConfig) -> str | None:
+    """Region derived from a scale group's slice template."""
+    if template.HasField("gcp") and template.gcp.zone:
+        return template.gcp.zone.rsplit("-", 1)[0]
+    if template.HasField("coreweave") and template.coreweave.region:
+        return template.coreweave.region
+    return None
+
+
+def _zone_from_template(template: config_pb2.SliceConfig) -> str | None:
+    """Zone derived from a scale group's slice template."""
+    if template.HasField("gcp") and template.gcp.zone:
+        return template.gcp.zone
+    if template.HasField("coreweave") and template.coreweave.region:
+        return template.coreweave.region
+    return None
+
+
+def build_worker_config_for_group(
+    base_worker_config: config_pb2.WorkerConfig | None,
+    group_config: config_pb2.ScaleGroupConfig,
+) -> config_pb2.WorkerConfig | None:
+    """Merge base worker config with per-scale-group overrides.
+
+    Returns None when base_worker_config is None (test/local mode).
+    """
+    if not base_worker_config:
+        return None
+
+    wc = config_pb2.WorkerConfig()
+    wc.CopyFrom(base_worker_config)
+
+    resources = group_config.resources if group_config.HasField("resources") else None
+    if resources is not None:
+        wc.accelerator_type = resources.device_type
+        if resources.device_variant:
+            wc.accelerator_variant = resources.device_variant
+        if resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and resources.device_count > 0:
+            wc.gpu_count = resources.device_count
+        wc.capacity_type = resources.capacity_type
+
+    if group_config.HasField("worker"):
+        for k, v in group_config.worker.attributes.items():
+            wc.worker_attributes[k] = v
+        if group_config.worker.cache_dir:
+            wc.cache_dir = group_config.worker.cache_dir
+
+    template = group_config.slice_template
+    region = _region_from_template(template)
+    if region and not wc.worker_attributes.get(WellKnownAttribute.REGION):
+        wc.worker_attributes[WellKnownAttribute.REGION] = region
+
+    zone = _zone_from_template(template)
+    if zone and not wc.worker_attributes.get(WellKnownAttribute.ZONE):
+        wc.worker_attributes[WellKnownAttribute.ZONE] = zone
+
+    if group_config.name:
+        wc.worker_attributes["scale-group"] = group_config.name
+
+    return wc
 
 
 def _zones_from_config(config: config_pb2.ScaleGroupConfig) -> list[str]:
@@ -500,12 +561,16 @@ class ScalingGroup:
 
         Used in tests to populate a scaling group with pre-injected slices.
         Production restore uses prepare_for_restore() + restore_scaling_group().
+        Skips operator-created manual slices (iris_manual=true), which the
+        autoscaler must not track or scale down.
         """
         zones = _zones_from_config(self._config)
         labels = {self._labels.iris_scale_group: self._config.name}
         slice_handles = self._platform.list_slices(zones, labels)
         with self._slices_lock:
             for handle in slice_handles:
+                if handle.labels.get(self._labels.iris_manual) == "true":
+                    continue
                 state = SliceState(handle=handle)
                 self._slices[handle.slice_id] = state
                 self._db_upsert_slice(handle.slice_id, state)

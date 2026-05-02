@@ -28,21 +28,21 @@ from levanter.main import train_lm
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-
-from experiments.defaults import default_validation_sets
-from experiments.isoflop_sweep import (
-    IsoFlopAnalysisConfig,
-    MARIN_SCALING_SUITES,
-    nemotron_mix,
-    run_isoflop_analysis_step,
-)
-from experiments.scaling_law_sweeps.c_adamc import c_adamc_heuristic
-from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.scaling_laws import ScalingFit, predict_optimal_config
-from marin.scaling_laws.tpu_utils import pick_v5p_type, HBM_PER_CHIP_GIB
+from marin.scaling_laws.tpu_utils import V5P_SPEC, pick_v5p_type
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+
+from experiments.defaults import default_validation_sets
+from experiments.isoflop_sweep import (
+    MARIN_SCALING_SUITES,
+    IsoFlopAnalysisConfig,
+    nemotron_mix,
+    run_isoflop_analysis_step,
+)
+from experiments.llama import llama3_tokenizer
+from experiments.scaling_law_sweeps.c_adamc import c_adamc_heuristic
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -118,7 +118,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
     # Compute TPU type and gradient accumulation settings
     max_cores = int(MAX_TPU_TYPE.split("-")[1])
     num_chips = max_cores // 2
-    max_memory = num_chips * HBM_PER_CHIP_GIB * 1024**3
+    max_memory = num_chips * V5P_SPEC.hbm_per_chip_gib * 1024**3
 
     per_device_parallelism: int | None = None
     if estimated_memory <= max_memory:

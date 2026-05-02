@@ -17,6 +17,7 @@ from draccus import field
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 
 from levanter.tracker import Tracker
+from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
 from levanter.tracker.histogram import Histogram
 from levanter.tracker.tracker import TrackerConfig
@@ -237,7 +238,20 @@ class WandbConfig(TrackerConfig):
     replicate_path: Optional[str] = None
     """If set, write config and summary to this path (local or GCS) on finish()."""
 
-    def init(self, run_id: Optional[str]) -> WandbTracker:
+    background: bool = True
+    """If True (default), forward all log calls through a background thread that catches
+    exceptions from W&B. This keeps long-running training jobs alive when W&B is
+    unreachable, runs out of storage quota, or returns transient errors. Set to False
+    only if you need synchronous, fail-fast behavior (e.g. from tests)."""
+
+    background_max_queue_size: int = 10000
+    """Max number of pending tracker calls. If exceeded, additional calls are dropped
+    with a rate-limited warning rather than blocking the trainer."""
+
+    background_finish_timeout: float = 120.0
+    """Maximum seconds to wait for the background thread to drain on finish()."""
+
+    def init(self, run_id: Optional[str]) -> Tracker:
         import wandb
 
         if run_id is not None and self.id is not None and run_id != self.id:
@@ -317,7 +331,12 @@ class WandbConfig(TrackerConfig):
         wandb.summary["num_hosts"] = jax.process_count()  # type: ignore
         wandb.summary["backend"] = jax.default_backend()  # type: ignore
 
-        return WandbTracker(r, replicate_path=self.replicate_path)
+        return maybe_wrap_background(
+            WandbTracker(r, replicate_path=self.replicate_path),
+            enabled=self.background,
+            max_queue_size=self.background_max_queue_size,
+            finish_timeout=self.background_finish_timeout,
+        )
 
     def _git_settings(self):
         other_settings = dict()

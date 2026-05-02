@@ -13,18 +13,26 @@ Usage:
     uv run python lib/iris/scripts/benchmark_log_store.py --jobs 50 --tasks 50 --lines 500
     uv run python lib/iris/scripts/benchmark_log_store.py --only ingest
     uv run python lib/iris/scripts/benchmark_log_store.py --only query
+
+Corpus mode runs read-only queries against a pre-populated log directory
+(e.g. downloaded from GCS), sampling real keys from the parquet files:
+
+    uv run python lib/iris/scripts/benchmark_log_store.py \\
+        --corpus-dir /tmp/cross-region/logs --segment-caps 50,200,1000
 """
 
+import random
 import time
+from collections import deque
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import click
-
-from iris.cluster.log_store import task_log_key
-from iris.cluster.log_store.duckdb_store import DuckDBLogStore as LogStore
+import duckdb
+from finelog.rpc import logging_pb2
+from finelog.store.duckdb_store import DuckDBLogStore as LogStore
+from iris.cluster.log_store_helpers import task_log_key
 from iris.cluster.types import JobName, TaskAttempt
-from iris.rpc import logging_pb2
 
 
 def _make_entries(count: int, prefix: str, start_ms: int = 0) -> list[logging_pb2.LogEntry]:
@@ -271,6 +279,170 @@ def benchmark_queries(
     return results
 
 
+def sample_corpus_keys(log_dir: Path, n_exact: int = 5) -> tuple[list[str], list[str]]:
+    """Pick real exact keys and prefix families from an existing log_dir.
+
+    Samples from the 5 newest parquets to reflect what the log server
+    typically serves (recent tasks, current jobs).
+    """
+    files = sorted(log_dir.glob("logs_*.parquet"))
+    if not files:
+        raise click.ClickException(f"no logs_*.parquet files in {log_dir}")
+    probe = [str(p) for p in files[-5:]]
+    con = duckdb.connect()
+    try:
+        rows = con.execute(
+            f"SELECT key, COUNT(*) c FROM read_parquet({probe!r}) GROUP BY key ORDER BY c DESC LIMIT {n_exact * 4}"
+        ).fetchall()
+        keys = [r[0] for r in rows]
+        rng = random.Random(0)
+        rng.shuffle(keys)
+        exact = keys[:n_exact]
+        prefixes = sorted({k.rsplit("/", 1)[0] + "/" for k in exact})
+    finally:
+        con.close()
+    return exact, prefixes
+
+
+def benchmark_corpus(
+    store: LogStore, exact_keys: list[str], prefixes: list[str], iterations: int
+) -> list[tuple[str, float, float]]:
+    """Run the read-only query workload against pre-populated segments."""
+    results: list[tuple[str, float, float]] = []
+
+    for i, key in enumerate(exact_keys):
+        p50, p95 = bench(
+            f"get_logs(exact #{i}, limit=100)", lambda k=key: store.get_logs(k, max_lines=100), iterations=iterations
+        )
+        results.append((f"get_logs(exact #{i}, limit=100)", p50, p95))
+        print_result(f"get_logs(exact #{i}, limit=100)", p50, p95)
+
+        p50, p95 = bench(
+            f"get_logs(exact #{i}, tail, limit=100)",
+            lambda k=key: store.get_logs(k, max_lines=100, tail=True),
+            iterations=iterations,
+        )
+        results.append((f"get_logs(exact #{i}, tail, limit=100)", p50, p95))
+        print_result(f"get_logs(exact #{i}, tail, limit=100)", p50, p95)
+
+        p50, p95 = bench(
+            f"get_logs(exact #{i}, substring='error')",
+            lambda k=key: store.get_logs(k, substring_filter="error", max_lines=100),
+            iterations=iterations,
+        )
+        results.append((f"get_logs(exact #{i}, substring='error')", p50, p95))
+        print_result(f"get_logs(exact #{i}, substring='error')", p50, p95)
+
+        p50, p95 = bench(
+            f"has_logs(exact #{i})",
+            lambda k=key: store.has_logs(k),
+            iterations=iterations,
+        )
+        results.append((f"has_logs(exact #{i})", p50, p95))
+        print_result(f"has_logs(exact #{i})", p50, p95)
+
+    missing_key = "/no-such-user/no-such-job-xxxxxxxx/0:0"
+    p50, p95 = bench(
+        "get_logs(missing key, limit=100)", lambda: store.get_logs(missing_key, max_lines=100), iterations=iterations
+    )
+    results.append(("get_logs(missing key, limit=100)", p50, p95))
+    print_result("get_logs(missing key, limit=100)", p50, p95)
+
+    p50, p95 = bench("has_logs(missing key)", lambda: store.has_logs(missing_key), iterations=iterations)
+    results.append(("has_logs(missing key)", p50, p95))
+    print_result("has_logs(missing key)", p50, p95)
+
+    for i, prefix in enumerate(prefixes[:3]):
+        pattern = prefix + ".*"
+        p50, p95 = bench(
+            f"get_logs(regex(prefix #{i}), tail, limit=100)",
+            lambda p=pattern: store.get_logs(p, max_lines=100, tail=True),
+            iterations=iterations,
+        )
+        results.append((f"get_logs(regex(prefix #{i}), tail, limit=100)", p50, p95))
+        print_result(f"get_logs(regex(prefix #{i}), tail, limit=100)", p50, p95)
+
+    return results
+
+
+def run_corpus_mode(corpus_dir: Path, caps: list[int], iterations: int) -> None:
+    """Open the existing log_dir at each cap value, run the read workload."""
+    if not corpus_dir.exists():
+        raise click.ClickException(f"corpus dir does not exist: {corpus_dir}")
+    all_files = sorted(corpus_dir.glob("logs_*.parquet")) + sorted(corpus_dir.glob("tmp_*.parquet"))
+    total_bytes = sum(f.stat().st_size for f in all_files)
+    print(f"Corpus: {corpus_dir}")
+    print(f"  {len(all_files)} parquet files, {total_bytes / 1024 / 1024 / 1024:.1f} GB on disk")
+
+    print("  Sampling real keys...")
+    t0 = time.perf_counter()
+    exact, prefixes = sample_corpus_keys(corpus_dir, n_exact=3)
+    print(f"  Sampled in {time.perf_counter() - t0:.2f}s")
+    print("  Exact keys:")
+    for k in exact:
+        print(f"    {k}")
+    print("  Prefixes:")
+    for p in prefixes[:3]:
+        print(f"    {p}.*")
+
+    summary: list[tuple[int, list[tuple[str, float, float]], float]] = []
+    for cap in caps:
+        print(f"\n[cap={cap}]")
+        print(f"  Opening store with max_local_segments={cap}, max_local_bytes=100GB...")
+        init_start = time.perf_counter()
+        store = LogStore(
+            log_dir=corpus_dir,
+            max_local_segments=cap,
+            max_local_bytes=100 * 1024**3,
+        )
+        init_elapsed = time.perf_counter() - init_start
+
+        # Simulate post-GC state: _gc_local_segments only fires after flushes,
+        # which a read-only corpus never triggers. Trim the in-memory deque to
+        # the newest `cap` files by min_seq to reflect what the store would
+        # actually retain at steady state under this cap.
+        segs = sorted(store._local_segments, key=lambda s: s.min_seq)  # type: ignore[attr-defined]
+        if len(segs) > cap:
+            segs = segs[-cap:]
+        store._local_segments = deque(segs)  # type: ignore[attr-defined]
+
+        n_segments = len(store._local_segments)  # type: ignore[attr-defined]
+        seg_bytes = sum(s.size_bytes for s in store._local_segments)  # type: ignore[attr-defined]
+        seg_gb = seg_bytes / 1024 / 1024 / 1024
+        print(f"  Init: {init_elapsed * 1000:.0f}ms ({n_segments} segments, {seg_gb:.1f} GB retained)")
+
+        try:
+            print("  Warmup...")
+            for k in exact:
+                store.get_logs(k, max_lines=100)
+            print("  Benchmarking queries...")
+            results = benchmark_corpus(store, exact, prefixes, iterations)
+            summary.append((cap, results, init_elapsed * 1000))
+        finally:
+            store.close()
+
+    print("\n" + "=" * 110)
+    print(f"  Corpus benchmark summary ({corpus_dir})")
+    print("=" * 110)
+    caps_hdr = "  ".join(f"cap={c:<5d}" for c in caps)
+    print(f"  {'Query':52s}  {caps_hdr}  (p50 / p95 ms)")
+    print("-" * 110)
+    per_cap = {cap: {name: (p50, p95) for name, p50, p95 in res} for cap, res, _ in summary}
+    query_order = [name for name, _, _ in summary[0][1]]
+    for name in query_order:
+        parts = []
+        for cap in caps:
+            p50, p95 = per_cap[cap].get(name, (float("nan"), float("nan")))
+            parts.append(f"{p50:5.1f}/{p95:<5.1f}")
+        print(f"  {name:52s}  " + "  ".join(f"{p:<11s}" for p in parts))
+    print("-" * 110)
+    init_parts = []
+    for _, _, init_ms in summary:
+        init_parts.append(f"{init_ms:5.0f}      ")
+    print(f"  {'[init time ms]':52s}  " + "  ".join(f"{p:<11s}" for p in init_parts))
+    print("=" * 110)
+
+
 def print_summary(results: list[tuple[str, float, float]]) -> None:
     print("\n" + "=" * 85)
     print(f"  {'Query':55s}  {'p50':>10s}  {'p95':>10s}")
@@ -289,6 +461,17 @@ def print_summary(results: list[tuple[str, float, float]]) -> None:
 @click.option(
     "--log-dir", type=click.Path(path_type=Path), default=None, help="Persist logs to this dir (default: tmpdir)"
 )
+@click.option(
+    "--corpus-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Read-only: benchmark queries against an existing log dir (skips ingest)",
+)
+@click.option(
+    "--segment-caps",
+    default="50,1000",
+    help="Comma-separated max_local_segments values to compare in corpus mode",
+)
 def main(
     jobs: int,
     tasks: int,
@@ -296,8 +479,15 @@ def main(
     iterations: int,
     only_group: str | None,
     log_dir: Path | None,
+    corpus_dir: Path | None,
+    segment_caps: str,
 ) -> None:
     """Benchmark LogStore write and query performance."""
+    if corpus_dir is not None:
+        caps = [int(x) for x in segment_caps.split(",") if x.strip()]
+        run_corpus_mode(corpus_dir, caps, iterations)
+        return
+
     total = jobs * tasks * lines
     print(f"LogStore benchmark: {jobs} jobs x {tasks} tasks x {lines} lines = {total:,} entries")
     print(f"  query_iterations={iterations}")
@@ -314,7 +504,7 @@ def main(
             print("\n[ingest]")
             ingest(store, jobs, tasks, lines)
 
-            parquet_files = list(log_dir.glob("logs_*_*.parquet"))
+            parquet_files = list(log_dir.glob("tmp_*.parquet")) + list(log_dir.glob("logs_*.parquet"))
             total_size = sum(f.stat().st_size for f in parquet_files)
             print(f"  {len(parquet_files)} Parquet segments, {total_size / 1024 / 1024:.1f} MB on disk")
 

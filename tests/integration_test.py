@@ -25,12 +25,13 @@ from pathlib import Path
 
 import fsspec
 from fray import ResourceConfig, set_current_client
-from fray.v2.iris_backend import FrayIrisClient
-from fray.v2.types import Entrypoint, JobRequest, create_environment
-from rigging.log_setup import configure_logging
+from fray.iris_backend import FrayIrisClient
+from fray.types import Entrypoint, JobRequest, create_environment
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
+from marin.datakit.normalize import NormalizedData, normalize_step
+from marin.execution.artifact import Artifact
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -45,6 +46,7 @@ from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from marin.schemas.web.convert import ResiliparseConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
+from rigging.log_setup import configure_logging
 
 configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -71,28 +73,22 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             )
         ),
     )
-    transform_lq_data_spec = StepSpec(
-        name=os.path.join(prefix, "lq-transformed"),
-        hash_attrs={"extract_method": "resiliparse"},
-        fn=lambda output_path: html_to_md(
-            SimpleHtmlToMdConfig(
-                input_path=os.path.join(synth_data, "neg"),
-                output_path=output_path,
-                extract_method="resiliparse",
-                config=ResiliparseConfig(),
-            )
-        ),
-    )
     transform_hq_data_step = transform_hq_data_spec.as_executor_step()
-    transform_lq_data_step = transform_lq_data_spec.as_executor_step()
+
+    normalize_hq_spec = normalize_step(
+        name=os.path.join(prefix, "hq-normalized"),
+        download=transform_hq_data_spec,
+        file_extensions=(".jsonl.gz",),
+    )
+    normalize_hq_step = normalize_hq_spec.as_executor_step()
 
     # Dedup (exact only — fuzzy dedup has 4 iterative rounds of pod scheduling on K8s)
     dedup_exact_paragraph_spec = StepSpec(
         name=os.path.join(prefix, "dedup_exact_paragraph"),
         hash_attrs={"mode": "exact_paragraph"},
-        deps=[transform_hq_data_spec],
+        deps=[normalize_hq_spec],
         fn=lambda output_path: dedup_exact_paragraph(
-            input_paths=transform_hq_data_spec.output_path,
+            input_paths=[Artifact.load(normalize_hq_spec, NormalizedData).main_output_dir],
             output_path=output_path,
             max_parallelism=4,
             worker_resources=ResourceConfig(cpu=1, ram="1g"),
@@ -103,10 +99,12 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # Consolidate
     consolidate_spec = StepSpec(
         name=os.path.join(prefix, "cleaned"),
-        deps=[transform_hq_data_spec, dedup_exact_paragraph_spec],
+        deps=[normalize_hq_spec, dedup_exact_paragraph_spec],
         fn=lambda output_path: consolidate(
-            input_path=transform_hq_data_spec.output_path,
+            input_path=Artifact.load(normalize_hq_spec, NormalizedData).main_output_dir,
             output_path=output_path,
+            # Normalize emits parquet; override the jsonl.gz default.
+            filetype="parquet",
             filters=[
                 FilterConfig(
                     type=FilterType.REMOVE_SPANS,
@@ -146,7 +144,10 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             },
             train_config=TrainLmConfig(
                 data=lm_data_config(tokenize_step),
-                hf_save_steps=1,
+                # hf_save_steps=2 (not 1): at num_train_steps=2, final info.step=1 doesn't match
+                # every=2, so Trainer.train's end-of-train run_hooks(force=True) flushes the HF
+                # save exactly once. hf_save_steps=1 would double-fire on info.step=1.
+                hf_save_steps=2,
                 model=Gpt2Config(
                     num_layers=2,
                     num_heads=2,
@@ -162,7 +163,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     return [
         transform_hq_data_step,
-        transform_lq_data_step,
+        normalize_hq_step,
         dedup_exact_paragraph_step,
         consolidate_step,
         tokenize_step,
@@ -218,6 +219,11 @@ def _run_executor(prefix: str, synth_data: str) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Run full marin pipeline on Iris")
     parser.add_argument("--controller-url", required=True)
+    parser.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="Leave the run's output directory in place when the test exits (default: remove it).",
+    )
     args = parser.parse_args()
 
     s3_base = os.environ.get("MARIN_CI_S3_PREFIX")
@@ -283,7 +289,10 @@ def main():
         logger.exception("Pipeline failed")
         sys.exit(1)
     finally:
-        cleanup()
+        if args.no_cleanup:
+            logger.info("Skipping cleanup; output directory preserved at: %s", prefix)
+        else:
+            cleanup()
 
 
 if __name__ == "__main__":

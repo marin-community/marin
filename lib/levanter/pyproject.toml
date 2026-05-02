@@ -36,7 +36,7 @@ classifiers = [
 dependencies = [
     "marin-haliax",
     "equinox>=0.11.7,!=0.12.0",
-    "jax>=0.8.0",
+    "jax>=0.9.2",
     "marin-fray",
     "marin-rigging",
     "marin-zephyr",
@@ -45,32 +45,32 @@ dependencies = [
     "tokenizers>=0.15.2",
     "kitoken>=0.10.2",
     "transformers>=4.57.1,<5.0",
-    "optax>=0.1.9",
-    "wandb>=0.17.8",
+    "chex>=0.1.86",
+    "optax>=0.1.9,<0.2.7",
+    "wandb>0.24.0",
     "draccus>=0.11.5",
     "pyarrow>=11.0.0",
     "zstandard>=0.18.0",
     "datasets>=3.1.0,<5.0",
-    "gcsfs>=2024.2,<2026",
+    "gcsfs>=2024.2,<2027",
     "braceexpand>=0.1.7",
     "chex>=0.1.86",
     "jmp>=0.0.3",
-    "fsspec[http]>=2024.2,<2026",
-    "tensorstore>=0.1.73",
+    "fsspec[http]>=2024.2,<2027",
+    "tensorstore>=0.1.73,<0.1.82",
     "pytimeparse>=1.1.8",
     "humanfriendly==10.0",
     "safetensors[numpy]>=0.4.2,<0.7.0",
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
-    "ray[default]==2.53.0",
     "pydantic<3",
     "filelock~=3.13",
     "async-lru~=2.0",
     "tqdm-loggable>=0.2",
-    "deepdiff",
+    "deepdiff>=8.6.2",
     "lenses",
     "jinja2",  # needed for apply_chat_template
-    "protobuf>=6,<7",  # ensure TB/XProf compatibility; avoid 7+ due to ray
+    "protobuf>=6",
     "immutabledict",
 ]
 
@@ -79,8 +79,8 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 "Bug Tracker" = "https://github.com/stanford-crfm/levanter/issues"
 
 [project.optional-dependencies]
-gpu = ["jax[cuda12]>=0.8.0"]
-tpu = ["jax[tpu]>=0.8.0"]
+gpu = ["jax[cuda12]>=0.9.2"]
+tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.38"]
 torch_test = [
   "torch>=2.7.0",
   "peft>=0.12.0",
@@ -124,6 +124,7 @@ test = [
   "pytest-asyncio",
   "soundfile",
   "librosa>=0.11.0",
+  "torchcodec>=0.10,<0.11",
   "tensorboardX>=2.6",
   "chex>=0.1.86",
   "httpx>=0.28.1",
@@ -203,7 +204,6 @@ filterwarnings = [
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "entry: marks tests as entry point tests (deselect with '-m \"not entry\"')",
-    "ray: marks tests that require Ray (deselect with '-m \"not ray\"')",
     "torch: mark tests that use Torch (deselect with '-m \"not torch\"')",
     "tpu: mark tests that require TPU (deselect with '-m \"not tpu\"')",
 ]

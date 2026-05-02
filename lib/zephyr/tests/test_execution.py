@@ -6,15 +6,34 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import threading
 import time
 import uuid
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
+from fray.local_backend import LocalClient
+from zephyr import counters
 from zephyr.dataset import Dataset
-from zephyr.execution import CounterSnapshot, ZephyrContext, zephyr_worker_ctx
+from zephyr.execution import (
+    MAX_SHARD_FAILURES,
+    MAX_SHARD_INFRA_FAILURES,
+    CounterSnapshot,
+    ListShard,
+    PickleDiskChunk,
+    ShardTask,
+    TaskResult,
+    WorkerState,
+    ZephyrContext,
+    ZephyrCoordinator,
+    ZephyrWorkerError,
+    zephyr_worker_ctx,
+)
+from zephyr.plan import compute_plan
 
 
 def test_simple_map(zephyr_ctx):
@@ -31,21 +50,18 @@ def test_filter(zephyr_ctx):
     assert sorted(results) == [4, 5]
 
 
-def test_subprocess_propagates_user_counters(zephyr_ctx):
-    """User counters incremented inside the shard subprocess flow back to the coordinator.
+def test_propagates_user_counters(zephyr_ctx):
+    """User counters incremented inside a shard flow back to the coordinator.
 
-    Each task runs in a fresh Python subprocess, so ``counters.increment`` writes
-    into a ``_SubprocessWorkerContext`` that lives only in the child. This test
-    verifies the result file ships those increments back to the parent worker,
-    which then forwards them to the coordinator via ``report_result``. Without
-    that round-trip, the coordinator's ``get_counters`` would silently report 0.
+    Each task runs in the worker's own process; ``counters.increment`` writes
+    into the per-task ``_InProcessWorkerContext``. This test verifies the
+    worker forwards the final counter dict to the coordinator via
+    ``report_result``, otherwise the coordinator's ``get_counters`` would
+    silently report 0.
 
     Uses a direct logging handler attachment (rather than ``caplog``) so the
     test works whether or not pytest's logging plugin is enabled.
     """
-    import logging
-
-    from zephyr import counters
 
     def increment_per_item(x: int) -> int:
         counters.increment("docs", 1)
@@ -81,23 +97,18 @@ def test_subprocess_propagates_user_counters(zephyr_ctx):
     assert "'doubled_sum': 30" in last, f"expected 'doubled_sum': 30 in {last!r}"
 
 
-def test_subprocess_exception_includes_subprocess_traceback(zephyr_ctx):
-    """Exceptions raised inside the shard subprocess surface with the original frame info.
+def test_exception_preserves_user_frame(zephyr_ctx):
+    """Exceptions raised inside a shard surface with the original frame info.
 
-    Cloudpickling an exception drops ``__traceback__`` so a naive re-raise in
-    the parent shows only the parent's stack at the re-raise site, not where
-    the exception actually happened in the user lambda. The subprocess
-    attaches the formatted traceback as a ``__notes__`` entry, which Python
-    prints inline when the exception finally propagates. Verify both the
-    original exception type AND a snippet from the user-code frame survive
-    the round-trip.
+    The worker's ``report_error`` ships a formatted traceback string up to
+    the coordinator, which wraps it in ``ZephyrWorkerError``. Verify either
+    the user function name or the exception text survives that round-trip
+    so failures are debuggable.
     """
-    from zephyr.execution import ZephyrWorkerError
 
     def buggy_index_lookup(x: int) -> int:
-        # Force a non-trivial subprocess-side exception with a recognizable
-        # source line. The parent should surface the function name and the
-        # offending statement, not just the bare `IndexError`.
+        # Recognizable user-frame source line. The parent should surface the
+        # function name and the offending statement, not just bare ``IndexError``.
         empty: tuple = ()
         return empty[x]
 
@@ -106,11 +117,7 @@ def test_subprocess_exception_includes_subprocess_traceback(zephyr_ctx):
     with pytest.raises(ZephyrWorkerError) as exc_info:
         zephyr_ctx.execute(ds)
 
-    rendered = str(exc_info.value) + "".join(getattr(exc_info.value, "__notes__", []))
-    # The wrapping ZephyrWorkerError should chain through the parent's
-    # report_error path. Either the chained cause or the notes payload
-    # must contain the user-frame breadcrumb.
-    chained = rendered
+    chained = str(exc_info.value) + "".join(getattr(exc_info.value, "__notes__", []))
     cur: BaseException | None = exc_info.value
     while cur is not None:
         chained += str(cur) + "".join(getattr(cur, "__notes__", []))
@@ -118,7 +125,7 @@ def test_subprocess_exception_includes_subprocess_traceback(zephyr_ctx):
 
     assert (
         "buggy_index_lookup" in chained or "tuple index out of range" in chained
-    ), f"subprocess traceback was not preserved through report_error; got: {chained!r}"
+    ), f"user-frame traceback was not preserved through report_error; got: {chained!r}"
 
 
 def test_shared_data(integration_client, tmp_path):
@@ -219,8 +226,6 @@ def test_chunk_cleanup(local_client, tmp_path):
     assert sorted(results) == [2, 4, 6]
 
     # Verify chunks directory is cleaned up
-    import os
-
     if os.path.exists(chunk_prefix):
         # Should be empty or not exist
         files = list(Path(chunk_prefix).rglob("*"))
@@ -234,10 +239,6 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     Also verifies that re-registering a worker that had an in-flight task
     requeues that task so it is not silently lost.
     """
-    from unittest.mock import MagicMock
-
-    from zephyr.execution import ListShard, ShardTask, ZephyrCoordinator
-
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
 
@@ -248,7 +249,7 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
         operations=[],
         stage_name="test",
     )
-    coord.start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
 
     # Register 3 workers
     for i in range(3):
@@ -299,11 +300,56 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     assert len(coord._task_queue) == 1  # task was requeued
 
 
+def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_path, caplog):
+    """Map-only stages don't populate item/byte counters, so the coordinator's
+    status log should drop the ``items=... bytes_processed=...`` segment rather
+    than print misleading zeros. Once either counter is recorded, the segment
+    reappears."""
+    from zephyr.execution import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="map_only",
+    )
+    coord._start_stage("map_only", 0, [task])
+
+    # No counters recorded → throughput segment is suppressed.
+    with caplog.at_level(logging.INFO, logger="zephyr.execution"):
+        caplog.clear()
+        coord._log_status()
+    msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]
+    assert msgs, "expected a status line"
+    assert all("items=" not in m and "bytes_processed=" not in m for m in msgs), msgs
+
+    # Once a counter snapshot exists, the throughput segment reappears.
+    coord._worker_counters["worker-A"] = CounterSnapshot(
+        counters={ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name="map_only"): 7}, generation=1
+    )
+    with caplog.at_level(logging.INFO, logger="zephyr.execution"):
+        caplog.clear()
+        coord._log_status()
+    msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]
+    assert msgs and "items=7" in msgs[-1] and "bytes_processed=0.0MiB" in msgs[-1], msgs
+
+    # Same when only the byte counter is present.
+    coord._worker_counters["worker-A"] = CounterSnapshot(
+        counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name="map_only"): 1024}, generation=2
+    )
+    with caplog.at_level(logging.INFO, logger="zephyr.execution"):
+        caplog.clear()
+        coord._log_status()
+    msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]
+    assert msgs and "items=0" in msgs[-1] and "bytes_processed=" in msgs[-1], msgs
+
+
 def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
     """When a task is requeued after heartbeat timeout, the original worker's
     stale result (from a previous attempt) is rejected by the coordinator."""
-    from zephyr.execution import ListShard, ShardTask, TaskResult, ZephyrCoordinator
-
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
 
@@ -314,7 +360,7 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
         operations=[],
         stage_name="test",
     )
-    coord.start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
 
     # Worker A pulls task (attempt 0)
     pulled = coord.pull_task("worker-A")
@@ -348,8 +394,6 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
 
 def test_disk_chunk_write_uses_unique_paths(tmp_path):
     """Each PickleDiskChunk.write() writes to a unique location, avoiding collisions."""
-    from zephyr.execution import PickleDiskChunk
-
     base_path = str(tmp_path / "chunk.pkl")
     refs = [PickleDiskChunk.write(base_path, [i]) for i in range(3)]
 
@@ -370,8 +414,6 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
 
     Stale chunk files are left for context-dir cleanup (no per-chunk deletion).
     """
-    from zephyr.execution import ListShard, PickleDiskChunk, ShardTask, TaskResult, ZephyrCoordinator
-
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
 
@@ -382,7 +424,7 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
         operations=[],
         stage_name="test",
     )
-    coord.start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
 
     # Worker A pulls task (attempt 0)
     pulled_a = coord.pull_task("worker-A")
@@ -433,8 +475,6 @@ def test_shard_streaming_low_memory(tmp_path):
 
     Verifies get_iterators yields data lazily and flat iteration works.
     """
-    from zephyr.execution import ListShard, PickleDiskChunk
-
     # Write 3 refs to disk (directly readable, no finalize needed)
     refs = []
     for i in range(3):
@@ -459,16 +499,6 @@ def test_shard_streaming_low_memory(tmp_path):
 
 def test_report_error_requeues_until_max_shard_failures(actor_context, tmp_path):
     """report_error re-queues a task until MAX_SHARD_FAILURES, then aborts."""
-    from unittest.mock import MagicMock
-
-    from zephyr.execution import (
-        MAX_SHARD_FAILURES,
-        ListShard,
-        ShardTask,
-        WorkerState,
-        ZephyrCoordinator,
-    )
-
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
 
@@ -479,7 +509,7 @@ def test_report_error_requeues_until_max_shard_failures(actor_context, tmp_path)
         operations=[],
         stage_name="test",
     )
-    coord.start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
     coord.register_worker("worker-0", MagicMock())
 
     # Each failure should re-queue until the limit
@@ -500,18 +530,8 @@ def test_report_error_requeues_until_max_shard_failures(actor_context, tmp_path)
     assert "final-error" in coord._fatal_error
 
 
-def test_heartbeat_death_aborts_at_max_shard_failures(actor_context, tmp_path):
-    """When a shard's worker keeps dying (heartbeat timeout), abort after
-    MAX_SHARD_FAILURES re-queues instead of retrying forever."""
-    from unittest.mock import MagicMock
-
-    from zephyr.execution import (
-        MAX_SHARD_FAILURES,
-        ListShard,
-        ShardTask,
-        ZephyrCoordinator,
-    )
-
+def test_heartbeat_timeouts_do_not_count_toward_shard_failures(actor_context, tmp_path):
+    """Heartbeat-timeout requeues (preemption) must not consume MAX_SHARD_FAILURES."""
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
 
@@ -522,15 +542,124 @@ def test_heartbeat_death_aborts_at_max_shard_failures(actor_context, tmp_path):
         operations=[],
         stage_name="test",
     )
-    coord.start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
     coord.register_worker("worker-0", MagicMock())
 
-    for _i in range(MAX_SHARD_FAILURES):
+    # Far more heartbeat timeouts than MAX_SHARD_FAILURES — must not abort.
+    for _ in range(MAX_SHARD_FAILURES * 5):
         pulled = coord.pull_task("worker-0")
         assert pulled is not None and pulled != "SHUTDOWN"
-        # Simulate worker death via heartbeat timeout
         coord._last_seen["worker-0"] = 0.0
         coord.check_heartbeats(timeout=0.0)
+        assert coord._fatal_error is None
+
+    # Task-error budget is untouched; a successful completion closes the shard.
+    assert coord._task_error_attempts[0] == 0
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    _task, attempt, _config = pulled
+    coord.report_result("worker-0", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
+    assert coord._completed_shards == 1
+    assert coord._fatal_error is None
+
+
+def test_repeated_infra_failures_on_same_shard_eventually_abort(actor_context, tmp_path):
+    """A shard that consistently crashes its worker must eventually abort the pipeline.
+
+    With in-process shard execution, a native SIGSEGV / OOM in shard code
+    takes down the whole worker actor. The coordinator sees that as an
+    INFRA failure (heartbeat timeout / re-registration). If the same shard
+    causes this repeatedly, it's deterministic — keep retrying forever and
+    the pipeline never converges. ``MAX_SHARD_INFRA_FAILURES`` bounds it.
+    """
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord._start_stage("test", 0, [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    # One short of the cap: still re-queues, no abort yet.
+    for _ in range(MAX_SHARD_INFRA_FAILURES - 1):
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        coord._last_seen["worker-0"] = 0.0
+        coord.check_heartbeats(timeout=0.0)
+        assert coord._fatal_error is None
+
+    # The next failure crosses the cap and aborts.
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    coord._last_seen["worker-0"] = 0.0
+    coord.check_heartbeats(timeout=0.0)
+
+    assert coord._fatal_error is not None
+    assert "Shard 0" in coord._fatal_error
+    assert "crashed its worker" in coord._fatal_error
+
+
+def test_worker_reregistration_does_not_count_toward_shard_failures(actor_context, tmp_path):
+    """Preemption-driven worker re-registration requeues without burning MAX_SHARD_FAILURES."""
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord._start_stage("test", 0, [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    for _ in range(MAX_SHARD_FAILURES * 5):
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        # Simulate preemption + Iris reconstruction: worker re-registers while
+        # a task is still recorded as in-flight on the old handle.
+        coord.register_worker("worker-0", MagicMock())
+        assert "worker-0" not in coord._in_flight
+        assert coord._fatal_error is None
+
+    assert coord._task_error_attempts[0] == 0
+
+
+def test_report_error_still_aborts_at_max_shard_failures_after_preemptions(actor_context, tmp_path):
+    """Task errors still abort at MAX_SHARD_FAILURES even after many survived preemptions."""
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord._start_stage("test", 0, [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    # Several preemption cycles first — these must not count.
+    for _ in range(5):
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        coord._last_seen["worker-0"] = 0.0
+        coord.check_heartbeats(timeout=0.0)
+
+    assert coord._fatal_error is None
+
+    # Now MAX_SHARD_FAILURES explicit task errors should abort.
+    for i in range(MAX_SHARD_FAILURES):
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        coord.report_error("worker-0", 0, f"boom-{i}")
 
     assert coord._fatal_error is not None
     assert "Shard 0" in coord._fatal_error
@@ -539,10 +668,6 @@ def test_heartbeat_death_aborts_at_max_shard_failures(actor_context, tmp_path):
 def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
     """When all registered workers become dead/failed, _wait_for_stage raises
     after the no_workers_timeout instead of waiting forever."""
-    from unittest.mock import MagicMock
-
-    from zephyr.execution import ListShard, ShardTask, WorkerState, ZephyrCoordinator, ZephyrWorkerError
-
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
     coord._no_workers_timeout = 0.5  # short timeout for test
@@ -554,7 +679,7 @@ def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
         operations=[],
         stage_name="test",
     )
-    coord.start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
 
     # Register 2 workers
     coord.register_worker("worker-0", MagicMock())
@@ -576,12 +701,6 @@ def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
 def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
     """When a worker recovers (re-registers) after all workers died,
     the dead timer resets and execution can continue."""
-    import threading
-
-    from unittest.mock import MagicMock
-
-    from zephyr.execution import ListShard, ShardTask, TaskResult, WorkerState, ZephyrCoordinator
-
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
     coord._no_workers_timeout = 2.0
@@ -593,7 +712,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
         operations=[],
         stage_name="test",
     )
-    coord.start_stage("test", [task])
+    coord._start_stage("test", 0, [task])
 
     # Register and kill a worker
     coord.register_worker("worker-0", MagicMock())
@@ -651,8 +770,6 @@ def test_fresh_actors_per_execute(integration_client, tmp_path):
 
 def test_fatal_errors_fail_fast(local_client, tmp_path):
     """Application errors (e.g. ValueError) cause immediate failure, no retries."""
-    from zephyr.execution import ZephyrWorkerError
-
     chunk_prefix = str(tmp_path / "chunks")
 
     def exploding_map(x):
@@ -739,8 +856,6 @@ def test_pipeline_id_increments(local_client, tmp_path):
 
 def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp_path):
     """When the last stage's tasks are all in-flight or done, pull_task returns SHUTDOWN."""
-    from zephyr.execution import ListShard, ShardTask, TaskResult, ZephyrCoordinator
-
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
 
@@ -753,7 +868,7 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     )
 
     # Non-last stage: empty queue returns None
-    coord.start_stage("stage-0", [task], is_last_stage=False)
+    coord._start_stage("stage-0", 0, [task], is_last_stage=False)
     pulled = coord.pull_task("worker-A")
     assert pulled is not None and pulled != "SHUTDOWN"
     _task, attempt, _config = pulled
@@ -771,7 +886,7 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
         operations=[],
         stage_name="test-last",
     )
-    coord.start_stage("stage-1", [task2], is_last_stage=True)
+    coord._start_stage("stage-1", 1, [task2], is_last_stage=True)
     pulled = coord.pull_task("worker-A")
     assert pulled is not None and pulled != "SHUTDOWN"
     _task, attempt, _config = pulled
@@ -786,7 +901,7 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
         ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test-last2")
         for i in range(2)
     ]
-    coord.start_stage("stage-2", tasks_2, is_last_stage=True)
+    coord._start_stage("stage-2", 2, tasks_2, is_last_stage=True)
     coord.pull_task("worker-A")  # task 0 in-flight
     # Queue has one task left; worker-B takes it
     coord.pull_task("worker-B")  # task 1 in-flight
@@ -797,10 +912,6 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
 
 def test_last_stage_deadlock_detected_when_worker_job_dies(actor_context, tmp_path):
     """Coordinator aborts if the worker job dies while last-stage work is outstanding."""
-    from unittest.mock import MagicMock
-
-    from zephyr.execution import ListShard, ShardTask, TaskResult, ZephyrCoordinator
-
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
 
@@ -808,7 +919,7 @@ def test_last_stage_deadlock_detected_when_worker_job_dies(actor_context, tmp_pa
         ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
         for i in range(2)
     ]
-    coord.start_stage("last-stage", tasks, is_last_stage=True)
+    coord._start_stage("last-stage", 0, tasks, is_last_stage=True)
 
     # Set up a mock worker group so _check_worker_group can query it.
     mock_group = MagicMock()
@@ -848,8 +959,6 @@ def test_last_stage_deadlock_detected_when_worker_job_dies(actor_context, tmp_pa
 
 def test_coordinator_loop_crash_aborts_pipeline(actor_context, tmp_path):
     """Coordinator loop crash sets _fatal_error instead of dying silently. #3996."""
-    from zephyr.execution import ZephyrCoordinator
-
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
 
@@ -873,11 +982,6 @@ def test_coordinator_loop_crash_aborts_pipeline(actor_context, tmp_path):
 
 def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
     """Calling run_pipeline while another is already running raises RuntimeError."""
-    from unittest.mock import MagicMock
-
-    from zephyr.execution import ZephyrCoordinator
-    from zephyr.plan import compute_plan
-
     coord = ZephyrCoordinator()
     coord.initialize(str(tmp_path / "chunks"), MagicMock())
 
@@ -947,8 +1051,6 @@ def test_execute_retries_on_coordinator_death(tmp_path):
     Patches client.submit so the first coordinator job submission raises,
     then the retry submits a real job that succeeds.
     """
-    from fray.v2.local_backend import LocalClient
-
     client = LocalClient()
     chunk_prefix = str(tmp_path / "chunks")
 
@@ -990,8 +1092,6 @@ def test_execute_retries_on_coordinator_death(tmp_path):
 
 def test_execute_does_not_retry_worker_errors(local_client, tmp_path):
     """ZephyrWorkerError (application errors) are never retried."""
-    from zephyr.execution import ZephyrWorkerError
-
     chunk_prefix = str(tmp_path / "chunks")
 
     def exploding_map(x):
@@ -1014,6 +1114,69 @@ def test_execute_does_not_retry_worker_errors(local_client, tmp_path):
 
     # Should fail fast — no retries for application errors
     assert elapsed < 15.0, f"Took {elapsed:.1f}s, expected fast failure (no retries)"
+
+
+def test_stage_index_correct_with_join(local_client, tmp_path):
+    """_current_stage_index is set correctly for main and join-right stages.
+
+    The right-side sub-plan must carry the parent's stage_idx so the arrow
+    indicator in _report_task_stats stays on the parent stage while the
+    right side executes. If _compute_join_aux passes a different index,
+    the highlighted stage would be wrong.
+    """
+    # (stage_name, current_stage_index) recorded at each _start_stage call.
+    stage_calls: list[tuple[str, int]] = []
+    original_start_stage = ZephyrCoordinator._start_stage
+
+    def recording_start_stage(self, stage_name, current_stage_index, tasks, is_last_stage=False):
+        original_start_stage(self, stage_name, current_stage_index, tasks, is_last_stage=is_last_stage)
+        stage_calls.append((stage_name, self._current_stage_index))
+
+    ctx = ZephyrContext(
+        client=local_client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"test-join-index-{uuid.uuid4().hex[:8]}",
+    )
+
+    # The right side needs a worker stage so _compute_join_aux calls _start_stage.
+    left = Dataset.from_list([{"id": 1}, {"id": 2}])
+    right = Dataset.from_list([{"id": 1}, {"id": 2}]).map(lambda x: x)
+    joined = left.sorted_merge_join(
+        right,
+        left_key=lambda x: x["id"],
+        right_key=lambda x: x["id"],
+        combiner=lambda l, r: {**l, **r},
+    )
+
+    ZephyrCoordinator._start_stage = recording_start_stage
+    try:
+        ctx.execute(joined)
+    finally:
+        ZephyrCoordinator._start_stage = original_start_stage
+        ctx.shutdown()
+
+    main_calls = [(n, i) for n, i in stage_calls if not n.startswith("join-right")]
+    join_right_calls = [(n, i) for n, i in stage_calls if n.startswith("join-right")]
+
+    assert join_right_calls, f"Expected join-right stages; got: {stage_calls}"
+    assert main_calls, f"Expected main stages; got: {stage_calls}"
+
+    # Each join-right stage must carry the same current_stage_index as the
+    # main stage that follows it (the parent stage).
+    for right_name, right_idx in join_right_calls:
+        # The parent stage_idx is encoded in the join-right label: join-right-{parent}-...
+        parent_idx = int(right_name.split("-")[2])
+        assert right_idx == parent_idx, f"{right_name!r} has current_stage_index={right_idx}, expected {parent_idx}"
+
+    # The main stage immediately following the join-right stages must have its
+    # own stage_idx, not the join-right stages' index.
+    for main_name, main_idx in main_calls:
+        # Verify each main stage's recorded index matches what run_pipeline passed.
+        # stage_label format: "stage{stage_idx}-{stage_name}"
+        expected_idx = int(main_name.split("-")[0].replace("stage", ""))
+        assert main_idx == expected_idx, f"{main_name!r} has current_stage_index={main_idx}, expected {expected_idx}"
 
 
 # --- Integration tests (all backends) ---

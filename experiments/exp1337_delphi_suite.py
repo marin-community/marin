@@ -31,21 +31,20 @@ from levanter.main import train_lm
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.processing.tokenize import step_to_lm_mixture_component
+from marin.scaling_laws import ScalingFit, predict_optimal_config
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 from experiments.defaults import default_validation_sets
 from experiments.isoflop_sweep import (
-    IsoFlopAnalysisConfig,
     MARIN_SCALING_SUITES,
+    IsoFlopAnalysisConfig,
     nemotron_mix,
     run_isoflop_analysis_step,
 )
 from experiments.llama import llama3_tokenizer
 from experiments.scaling_law_sweeps.completed_adamh import completed_adamh_heuristic
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.processing.tokenize import step_to_lm_mixture_component
-from marin.scaling_laws import ScalingFit, predict_optimal_config
-
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -75,6 +74,7 @@ class OptimalTrainingConfig:
     label: str
     output_path: str
     tokenized: LMMixtureDatasetConfig
+    seed: int = 0
     validation_configs: dict[str, DatasetComponent] | None = None
 
 
@@ -163,6 +163,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
                     f"FLOPs={config.target_budget:.1e}",
                     f"label={config.label}",
                     f"N={params:.1e}",
+                    f"seed={config.seed}",
                 ],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -181,6 +182,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                 },
             ),
+            seed=config.seed,
             allow_nondivisible_batch_size=True,
         ),
         train_seq_len=SEQ_LEN,
@@ -215,23 +217,33 @@ validation_configs = {
 }
 
 # --- Step 2: Optimal Training Runs ---
+# Seeds per budget: 1e21 and 1e22 get 3 seeds (0, 42, 62746); 1e23 gets seed 0 only
+SEEDS_PER_BUDGET: dict[float, list[int]] = {
+    1e21: [0, 42, 62746],
+    1e22: [0, 42, 62746],
+    1e23: [0],
+}
+
 optimal_runs: list[ExecutorStep] = []
 for budget, (tpu_type, batch_size) in TARGET_BUDGETS.items():
-    step = ExecutorStep(
-        name=f"{EXPERIMENT_NAME}-optimal-{budget:.0e}-v5",
-        fn=run_optimal_training,
-        config=OptimalTrainingConfig(
-            analysis_output_path=analysis_step.as_input_name(),
-            target_budget=budget,
-            tpu_type=tpu_type,
-            batch_size=batch_size,
-            label=LABEL,
-            output_path=this_output_path(),
-            tokenized=nemotron_mix,
-            validation_configs=validation_configs,
-        ),
-    )
-    optimal_runs.append(step)
+    for seed in SEEDS_PER_BUDGET[budget]:
+        suffix = f"-seed{seed}" if seed != 0 else ""
+        step = ExecutorStep(
+            name=f"{EXPERIMENT_NAME}-optimal-{budget:.0e}-v5{suffix}",
+            fn=run_optimal_training,
+            config=OptimalTrainingConfig(
+                analysis_output_path=analysis_step.as_input_name(),
+                target_budget=budget,
+                tpu_type=tpu_type,
+                batch_size=batch_size,
+                label=LABEL,
+                output_path=this_output_path(),
+                tokenized=nemotron_mix,
+                seed=seed,
+                validation_configs=validation_configs,
+            ),
+        )
+        optimal_runs.append(step)
 
 all_steps = [analysis_step, *optimal_runs]
 

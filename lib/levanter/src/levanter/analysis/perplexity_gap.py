@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import heapq
-import html
 import itertools
 import json
 import os
@@ -65,12 +64,49 @@ class TokenizedChunk:
 
 
 @dataclass(frozen=True)
+class _TokenBoundarySpans:
+    byte_starts: tuple[int, ...]
+    byte_ends: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class LiteralExample:
     abs_delta_bits: float
     dataset_name: str
     doc_preview: str
+    segment_text: str
+    segment_byte_start: int
+    segment_byte_end: int
+    model_a_token_spans: _TokenBoundarySpans
+    model_b_token_spans: _TokenBoundarySpans
+
+
+@dataclass(frozen=True)
+class _TokenBoundaryIndex:
+    byte_starts: np.ndarray
+    byte_ends: np.ndarray
+
+
+@dataclass(frozen=True)
+class _RenderedLiteralExample:
+    dataset_name: str
+    doc_preview: str
     model_a_token_boundaries: str
     model_b_token_boundaries: str
+
+
+@dataclass(frozen=True)
+class WorstSegment:
+    delta_bits: float
+    char_start: int
+    char_end: int
+    bytes: int
+    bucket: str
+    text: str
+
+    @property
+    def gap_bpb(self) -> float:
+        return self.delta_bits / self.bytes
 
 
 @dataclass
@@ -151,17 +187,8 @@ class GapReportBuilder:
 
         delta_bits = (loss_a - loss_b) * LOG2E
         gap_bpb = delta_bits / num_bytes if num_bytes > 0 else 0.0
-        doc_record = {
-            "dataset": document.dataset_name,
-            "shard": document.shard_name,
-            "row_index": int(document.row_index),
-            "bytes": int(num_bytes),
-            "gap_bpb": gap_bpb,
-            "delta_bits": delta_bits,
-            "preview": preview_text(document.text),
-        }
-        _push_top_positive(self._top_docs_positive, delta_bits, doc_record, self.top_k_docs, self._heap_counter)
-        _push_top_negative(self._top_docs_negative, delta_bits, doc_record, self.top_k_docs, self._heap_counter)
+        model_a_bpb = loss_a * LOG2E / num_bytes if num_bytes > 0 else None
+        model_b_bpb = loss_b * LOG2E / num_bytes if num_bytes > 0 else None
 
         if num_bytes <= 0:
             return
@@ -169,6 +196,10 @@ class GapReportBuilder:
         prefix_a = np.concatenate(([0.0], np.cumsum(per_byte_loss_a, dtype=np.float64)))
         prefix_b = np.concatenate(([0.0], np.cumsum(per_byte_loss_b, dtype=np.float64)))
         byte_offsets = char_to_byte_offsets(document.text)
+        worst_positive_segment: WorstSegment | None = None
+        worst_negative_segment: WorstSegment | None = None
+        token_boundary_index_a = _token_boundary_index(tokenized_a) if tokenized_a is not None else None
+        token_boundary_index_b = _token_boundary_index(tokenized_b) if tokenized_b is not None else None
 
         for match in _SEGMENT_RE.finditer(document.text):
             segment = match.group(0)
@@ -186,6 +217,22 @@ class GapReportBuilder:
             segment_delta_bits = (segment_loss_a - segment_loss_b) * LOG2E
             bucket = bucket_for_segment(segment)
             visible = render_visible(segment)
+            segment_summary = WorstSegment(
+                delta_bits=segment_delta_bits,
+                char_start=match.start(),
+                char_end=match.end(),
+                bytes=segment_bytes,
+                bucket=bucket,
+                text=visible,
+            )
+            if segment_delta_bits > 0.0 and (
+                worst_positive_segment is None or segment_delta_bits > worst_positive_segment.delta_bits
+            ):
+                worst_positive_segment = segment_summary
+            if segment_delta_bits < 0.0 and (
+                worst_negative_segment is None or segment_delta_bits < worst_negative_segment.delta_bits
+            ):
+                worst_negative_segment = segment_summary
 
             self.bucket_stats[bucket].add(loss_a=segment_loss_a, loss_b=segment_loss_b, num_bytes=segment_bytes)
             if segment_bytes <= 32:
@@ -195,16 +242,18 @@ class GapReportBuilder:
                     loss_b=segment_loss_b,
                     num_bytes=segment_bytes,
                 )
-                if tokenized_a is not None and tokenized_b is not None:
+                if token_boundary_index_a is not None and token_boundary_index_b is not None:
                     self._maybe_record_literal_example(
                         literal_key=literal_key,
                         document=document,
                         segment_text=segment,
                         segment_byte_start=byte_start,
                         segment_byte_end=byte_end,
+                        segment_char_start=match.start(),
+                        segment_char_end=match.end(),
                         segment_delta_bits=segment_delta_bits,
-                        tokenized_a=tokenized_a,
-                        tokenized_b=tokenized_b,
+                        token_boundary_index_a=token_boundary_index_a,
+                        token_boundary_index_b=token_boundary_index_b,
                     )
 
             if segment_delta_bits == 0.0:
@@ -217,7 +266,7 @@ class GapReportBuilder:
                 "delta_bits": segment_delta_bits,
                 "gap_bpb": segment_delta_bits / segment_bytes,
                 "text": visible,
-                "doc_preview": preview_text(document.text),
+                "doc_preview": preview_text_window(document.text, match.start(), match.end()),
             }
             _push_top_positive(
                 self._top_segments_positive,
@@ -233,6 +282,33 @@ class GapReportBuilder:
                 self.top_k_segments,
                 self._heap_counter,
             )
+
+        preview_span = None
+        if delta_bits > 0.0:
+            preview_span = worst_positive_segment
+        elif delta_bits < 0.0:
+            preview_span = worst_negative_segment
+        preview = (
+            preview_text_window(document.text, preview_span.char_start, preview_span.char_end)
+            if preview_span is not None
+            else preview_text(document.text)
+        )
+        doc_record = {
+            "dataset": document.dataset_name,
+            "shard": document.shard_name,
+            "row_index": int(document.row_index),
+            "bytes": int(num_bytes),
+            "model_a_bpb": model_a_bpb,
+            "model_b_bpb": model_b_bpb,
+            "gap_bpb": gap_bpb,
+            "delta_bits": delta_bits,
+            "worst_bucket": preview_span.bucket if preview_span is not None else None,
+            "worst_text": preview_span.text if preview_span is not None else None,
+            "worst_gap_bpb": preview_span.gap_bpb if preview_span is not None else None,
+            "preview": preview,
+        }
+        _push_top_positive(self._top_docs_positive, delta_bits, doc_record, self.top_k_docs, self._heap_counter)
+        _push_top_negative(self._top_docs_negative, delta_bits, doc_record, self.top_k_docs, self._heap_counter)
 
     def build_summary(self) -> dict[str, Any]:
         dataset_rows = [stats.as_dict(name) for name, stats in sorted(self.dataset_stats.items())]
@@ -309,30 +385,35 @@ class GapReportBuilder:
         segment_text: str,
         segment_byte_start: int,
         segment_byte_end: int,
+        segment_char_start: int,
+        segment_char_end: int,
         segment_delta_bits: float,
-        tokenized_a: TokenizedDocument,
-        tokenized_b: TokenizedDocument,
+        token_boundary_index_a: _TokenBoundaryIndex,
+        token_boundary_index_b: _TokenBoundaryIndex,
     ) -> None:
-        candidate = LiteralExample(
-            abs_delta_bits=abs(segment_delta_bits),
+        abs_delta_bits = abs(segment_delta_bits)
+        current = self.literal_examples.get(literal_key)
+        if current is not None and abs_delta_bits <= current.abs_delta_bits:
+            return
+
+        self.literal_examples[literal_key] = LiteralExample(
+            abs_delta_bits=abs_delta_bits,
             dataset_name=document.dataset_name,
-            doc_preview=preview_text(document.text),
-            model_a_token_boundaries=render_token_boundaries(
-                segment_text=segment_text,
+            doc_preview=preview_text_window(document.text, segment_char_start, segment_char_end),
+            segment_text=segment_text,
+            segment_byte_start=segment_byte_start,
+            segment_byte_end=segment_byte_end,
+            model_a_token_spans=_overlapping_token_spans(
+                token_boundary_index_a,
                 segment_byte_start=segment_byte_start,
                 segment_byte_end=segment_byte_end,
-                tokenized=tokenized_a,
             ),
-            model_b_token_boundaries=render_token_boundaries(
-                segment_text=segment_text,
+            model_b_token_spans=_overlapping_token_spans(
+                token_boundary_index_b,
                 segment_byte_start=segment_byte_start,
                 segment_byte_end=segment_byte_end,
-                tokenized=tokenized_b,
             ),
         )
-        current = self.literal_examples.get(literal_key)
-        if current is None or candidate.abs_delta_bits > current.abs_delta_bits:
-            self.literal_examples[literal_key] = candidate
 
 
 def iter_raw_text_documents(
@@ -350,7 +431,7 @@ def iter_raw_text_documents(
                 "Gap finding currently supports TextLmDatasetFormat only."
             )
 
-        source = component.source.get_shard_source("validation")
+        source = component.source.get_shard_source(component.split)
         if source is None:
             continue
 
@@ -463,19 +544,30 @@ def tokenize_text_with_byte_spans(tokenizer: MarinTokenizer, hf_tokenizer: Any, 
     )
 
 
-def chunk_tokenized_document(document: TokenizedDocument, max_eval_length: int) -> list[TokenizedChunk]:
+def chunk_tokenized_document(
+    document: TokenizedDocument,
+    max_eval_length: int,
+    *,
+    doc_index: int = -1,
+) -> list[TokenizedChunk]:
+    if max_eval_length <= 1:
+        raise ValueError(f"max_eval_length must be greater than 1, got {max_eval_length}.")
+
     chunks: list[TokenizedChunk] = []
     total_tokens = len(document.token_ids)
-    for start in range(0, total_tokens, max_eval_length):
+    stride = max_eval_length - 1
+    for start in range(0, total_tokens, stride):
         end = min(start + max_eval_length, total_tokens)
         chunks.append(
             TokenizedChunk(
-                doc_index=-1,
+                doc_index=doc_index,
                 token_ids=document.token_ids[start:end],
                 byte_starts=document.byte_starts[start:end],
                 byte_ends=document.byte_ends[start:end],
             )
         )
+        if end == total_tokens:
+            break
     return chunks
 
 
@@ -508,6 +600,10 @@ def batch_chunks(
 ) -> Iterator[list[TokenizedChunk]]:
     current: list[TokenizedChunk] = []
     for chunk in chunks:
+        if len(chunk.token_ids) > max_eval_length:
+            raise ValueError(
+                f"Tokenized chunk length {len(chunk.token_ids)} exceeds max_eval_length {max_eval_length}."
+            )
         current.append(chunk)
         if len(current) == batch_size:
             yield current
@@ -528,6 +624,25 @@ def preview_text(text: str, limit: int = 120) -> str:
     if len(preview) > limit:
         preview = preview[: limit - 1] + "\u2026"
     return preview
+
+
+def preview_text_window(text: str, start: int, end: int, limit: int = 120) -> str:
+    if limit <= 2:
+        raise ValueError(f"limit must be greater than 2, got {limit}.")
+    if len(text) <= limit:
+        return visible_text(text)
+
+    start = min(max(start, 0), len(text))
+    end = min(max(end, start), len(text))
+    center = (start + end) // 2
+    content_limit = limit - 2
+    window_start = max(0, center - content_limit // 2)
+    window_end = min(len(text), window_start + content_limit)
+    window_start = max(0, window_end - content_limit)
+
+    prefix = "\u2026" if window_start > 0 else ""
+    suffix = "\u2026" if window_end < len(text) else ""
+    return prefix + visible_text(text[window_start:window_end]) + suffix
 
 
 def visible_text(text: str) -> str:
@@ -568,6 +683,68 @@ def render_token_boundaries(
     return "|" + "|".join(pieces) + "|"
 
 
+def _token_boundary_index(tokenized: TokenizedDocument) -> _TokenBoundaryIndex:
+    valid = (tokenized.byte_starts >= 0) & (tokenized.byte_ends > tokenized.byte_starts)
+    return _TokenBoundaryIndex(
+        byte_starts=tokenized.byte_starts[valid].astype(np.int64, copy=False),
+        byte_ends=tokenized.byte_ends[valid].astype(np.int64, copy=False),
+    )
+
+
+def _overlapping_token_spans(
+    token_boundary_index: _TokenBoundaryIndex,
+    *,
+    segment_byte_start: int,
+    segment_byte_end: int,
+) -> _TokenBoundarySpans:
+    first_index = int(np.searchsorted(token_boundary_index.byte_ends, segment_byte_start, side="right"))
+    byte_starts: list[int] = []
+    byte_ends: list[int] = []
+    for token_start, token_end in zip(
+        token_boundary_index.byte_starts[first_index:],
+        token_boundary_index.byte_ends[first_index:],
+        strict=True,
+    ):
+        if token_start >= segment_byte_end:
+            break
+        if token_end <= segment_byte_start:
+            continue
+        byte_starts.append(int(token_start))
+        byte_ends.append(int(token_end))
+
+    return _TokenBoundarySpans(byte_starts=tuple(byte_starts), byte_ends=tuple(byte_ends))
+
+
+def _tokenized_document_from_boundary_spans(token_spans: _TokenBoundarySpans) -> TokenizedDocument:
+    byte_starts = np.asarray(token_spans.byte_starts, dtype=np.int32)
+    byte_ends = np.asarray(token_spans.byte_ends, dtype=np.int32)
+    return TokenizedDocument(
+        token_ids=np.zeros(len(byte_starts), dtype=np.int32),
+        byte_starts=byte_starts,
+        byte_ends=byte_ends,
+        num_bytes=0,
+    )
+
+
+def _render_literal_example(example: LiteralExample) -> _RenderedLiteralExample:
+    return _RenderedLiteralExample(
+        dataset_name=example.dataset_name,
+        doc_preview=example.doc_preview,
+        model_a_token_boundaries=render_token_boundaries(
+            segment_text=example.segment_text,
+            segment_byte_start=example.segment_byte_start,
+            segment_byte_end=example.segment_byte_end,
+            tokenized=_tokenized_document_from_boundary_spans(example.model_a_token_spans),
+        ),
+        model_b_token_boundaries=render_token_boundaries(
+            segment_text=example.segment_text,
+            segment_byte_start=example.segment_byte_start,
+            segment_byte_end=example.segment_byte_end,
+            tokenized=_tokenized_document_from_boundary_spans(example.model_b_token_spans),
+        ),
+    )
+
+
 def bucket_for_segment(segment: str) -> str:
     if segment.isspace():
         if "\t" in segment or "\r" in segment:
@@ -589,33 +766,34 @@ def bucket_for_segment(segment: str) -> str:
     return "text/punctuation"
 
 
-def render_report_html(summary: dict[str, Any]) -> str:
+def render_report_markdown(summary: dict[str, Any]) -> str:
     def section(title: str, rows: Sequence[dict[str, Any]], note: str | None = None) -> str:
         if not rows:
-            return f"<h2>{html.escape(title)}</h2><p>No rows.</p>"
+            return f"## {title}\n\nNo rows.\n"
 
         headers = list(rows[0].keys())
-        table = "<table><thead><tr>" + "".join(f"<th>{html.escape(h)}</th>" for h in headers) + "</tr></thead><tbody>"
+        table = [
+            "| " + " | ".join(_escape_markdown_table_cell(h) for h in headers) + " |",
+            "| " + " | ".join("---" for _ in headers) + " |",
+        ]
         for row in rows:
-            table += "<tr>" + "".join(f"<td>{html.escape(_format_cell(row[h]))}</td>" for h in headers) + "</tr>"
-        table += "</tbody></table>"
-        note_html = f"<p>{html.escape(note)}</p>" if note is not None else ""
-        return f"<h2>{html.escape(title)}</h2>{note_html}{table}"
+            table.append("| " + " | ".join(_format_markdown_cell(row[h]) for h in headers) + " |")
+
+        parts = [f"## {title}"]
+        if note is not None:
+            parts.extend(["", note])
+        parts.extend(["", *table, ""])
+        return "\n".join(parts)
 
     literal_note = (
         "Representative token boundaries come from the highest-gap occurrence for each literal. "
-        "An ellipsis means the token continues outside the literal boundary in that example."
+        "`|` marks token boundaries for each model; an ellipsis means the token continues outside "
+        "the literal boundary in that example."
     )
     parts = [
-        "<html><head><meta charset='utf-8'><style>"
-        "body{font-family:sans-serif;max-width:1200px;margin:24px auto;padding:0 16px;}"
-        "table{border-collapse:collapse;width:100%;margin:12px 0 28px 0;font-size:14px;}"
-        "th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;vertical-align:top;}"
-        "th{background:#f5f5f5;}"
-        "code{font-family:monospace;}"
-        "</style></head><body>",
-        f"<h1>Perplexity Gap Report</h1><p><strong>Model A:</strong> {html.escape(summary['model_a'])}<br>"
-        f"<strong>Model B:</strong> {html.escape(summary['model_b'])}</p>",
+        "# Perplexity Gap Report\n",
+        f"**Model A:** {_escape_markdown_text(str(summary['model_a']))}\n",
+        f"**Model B:** {_escape_markdown_text(str(summary['model_b']))}\n",
         section("Datasets", summary["datasets"]),
         section("Dataset Groups", summary["dataset_groups"]),
         section("Pattern Buckets", summary["pattern_buckets"]),
@@ -625,24 +803,38 @@ def render_report_html(summary: dict[str, Any]) -> str:
         section("Top Segments: Model B Worse", summary["top_segments"]["model_b_worse"]),
         section("Top Literals: Model A Worse", summary["top_literals"]["model_a_worse"], note=literal_note),
         section("Top Literals: Model B Worse", summary["top_literals"]["model_b_worse"], note=literal_note),
-        "</body></html>",
     ]
-    return "".join(parts)
+    return "\n".join(parts)
 
 
-def write_report_files(output_path: str, summary: dict[str, Any]) -> tuple[str, str]:
+def write_report_files(output_path: str, summary: dict[str, Any]) -> tuple[str, str, str]:
     summary_path = os.path.join(output_path, "summary.json")
-    html_path = os.path.join(output_path, "report.html")
+    report_path = os.path.join(output_path, "report.md")
+    worst_documents_path = os.path.join(output_path, "worst_documents.jsonl")
     fs, _, _ = fsspec.get_fs_token_paths(summary_path)
     fs.makedirs(output_path, exist_ok=True)
 
     with open_url(summary_path, "w") as f:
         json.dump(summary, f, indent=2, sort_keys=True)
 
-    with open_url(html_path, "w") as f:
-        f.write(render_report_html(summary))
+    with open_url(report_path, "w") as f:
+        f.write(render_report_markdown(summary))
 
-    return summary_path, html_path
+    with open_url(worst_documents_path, "w") as f:
+        for row in worst_document_rows(summary):
+            f.write(json.dumps(row, sort_keys=True))
+            f.write("\n")
+
+    return summary_path, report_path, worst_documents_path
+
+
+def worst_document_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for direction in ("model_a_worse", "model_b_worse"):
+        documents = summary["top_documents"][direction]
+        for rank, row in enumerate(documents, start=1):
+            rows.append({"direction": direction, "rank": rank, **row})
+    return rows
 
 
 def _format_cell(value: Any) -> str:
@@ -651,6 +843,18 @@ def _format_cell(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.6f}"
     return str(value)
+
+
+def _format_markdown_cell(value: Any) -> str:
+    return _escape_markdown_table_cell(_format_cell(value))
+
+
+def _escape_markdown_table_cell(value: str) -> str:
+    return _escape_markdown_text(value).replace("\r", " ").replace("\n", "<br>")
+
+
+def _escape_markdown_text(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("|", "\\|")
 
 
 def _push_top_positive(
@@ -696,17 +900,13 @@ def _top_literal_rows(
     direction: str,
     limit: int,
 ) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for (bucket, literal), stats in literal_stats.items():
-        example = literal_examples.get((bucket, literal))
+    rows: list[tuple[tuple[str, str], dict[str, Any]]] = []
+    for literal_key, stats in literal_stats.items():
+        bucket, literal = literal_key
         stats_row = stats.as_dict(literal)
         row = {
             "name": stats_row["name"],
             "bucket": bucket,
-            "example_dataset": example.dataset_name if example is not None else None,
-            "example_doc_preview": example.doc_preview if example is not None else None,
-            "model_a_token_boundaries": example.model_a_token_boundaries if example is not None else None,
-            "model_b_token_boundaries": example.model_b_token_boundaries if example is not None else None,
             "documents": stats_row["documents"],
             "bytes": stats_row["bytes"],
             "model_a_bpb": stats_row["model_a_bpb"],
@@ -714,13 +914,27 @@ def _top_literal_rows(
             "gap_bpb": stats_row["gap_bpb"],
             "delta_bits": stats_row["delta_bits"],
         }
-        rows.append(row)
+        rows.append((literal_key, row))
 
     if direction == "positive":
-        rows = [row for row in rows if row["delta_bits"] > 0]
-        rows.sort(key=lambda row: row["delta_bits"], reverse=True)
+        rows = [(literal_key, row) for literal_key, row in rows if row["delta_bits"] > 0]
+        rows.sort(key=lambda item: item[1]["delta_bits"], reverse=True)
     else:
-        rows = [row for row in rows if row["delta_bits"] < 0]
-        rows.sort(key=lambda row: row["delta_bits"])
+        rows = [(literal_key, row) for literal_key, row in rows if row["delta_bits"] < 0]
+        rows.sort(key=lambda item: item[1]["delta_bits"])
 
-    return rows[:limit]
+    selected_rows: list[dict[str, Any]] = []
+    for literal_key, row in rows[:limit]:
+        example = literal_examples.get(literal_key)
+        rendered_example = _render_literal_example(example) if example is not None else None
+        row["example_dataset"] = rendered_example.dataset_name if rendered_example is not None else None
+        row["example_doc_preview"] = rendered_example.doc_preview if rendered_example is not None else None
+        row["model_a_token_boundaries"] = (
+            rendered_example.model_a_token_boundaries if rendered_example is not None else None
+        )
+        row["model_b_token_boundaries"] = (
+            rendered_example.model_b_token_boundaries if rendered_example is not None else None
+        )
+        selected_rows.append(row)
+
+    return selected_rows
