@@ -1,0 +1,488 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Byte-preserving serializers for HuggingFace-hosted table datasets.
+
+HF-hosted table datasets like ToTTo, WikiTableQuestions, and GitTables
+arrive as pre-parsed Parquet with nested structure (lists of cells,
+metadata fields). For those datasets the byte-preservation concern
+collapses to one rule: **every cell value that was a string in the source
+must survive into the emitted text verbatim**. No ``float(cell)``, no
+``" ".join(cell.split())``, no case folding.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import posixpath
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import Any
+
+from marin.datakit.ingestion_manifest import (
+    IngestionSourceManifest,
+    MaterializedOutputMetadata,
+    write_ingestion_metadata_json,
+)
+from marin.utils import fsspec_mkdirs
+from rigging.filesystem import open_url, url_to_fs
+from zephyr.writers import atomic_rename
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_MAX_BYTES_PER_SOURCE = 30 * 1024 * 1024
+"""Per-source cap for structured table-record slices."""
+
+TABLE_ROW_DELIMITER = "\n"
+TABLE_CELL_DELIMITER = "\t"
+"""Tab-separated rows, newline-separated rows. TSV is the serialization
+format with the least whitespace-munging behavior in tokenizers and is
+the standard choice across the structured-eval literature."""
+
+GITTABLES_TARGET_BENCHMARK_DATASET = "target-benchmark/gittables-corpus"
+GITTABLES_IID_HOLDOUT_NUM_BUCKETS = 1000
+GITTABLES_IID_HOLDOUT_SELECTED_BUCKET = 0
+GITTABLES_IID_HOLDOUT_SALT = "marin:gittables:zenodo_iid_holdout:v1"
+
+
+@dataclass(frozen=True)
+class TableRecordStagingConfig:
+    """Configuration for staging HF table-record datasets into JSONL.
+
+    Attributes:
+        input_path: fsspec URL pointing at HF-exported parquet files.
+            The loader globs split parquet shards and passes them through
+            ``datasets.load_dataset("parquet", data_files=...)``.
+        output_path: fsspec URL for the staged JSONL directory.
+        source_label: Identifier written into each record's ``source`` field.
+        serializer_name: Which serializer to invoke. Must match a key in
+            :data:`SERIALIZERS`.
+        split: Which HF split to stage.
+        subset: Optional HF config/subset name.
+        max_bytes_per_source: Stop once this many bytes of text have been
+            staged. Enforces the 20-40 MB/source budget.
+        output_filename: Name of the single JSONL output file.
+        extra_metadata: Extra key/values baked into every record's
+            ``provenance`` field.
+        source_manifest: Optional typed source manifest used for writing
+            ``metadata.json`` alongside the staged JSONL.
+        content_fingerprint: Optional explicit hash copied from the source
+            manifest into the step config so text-projection changes
+            participate in executor hashing.
+    """
+
+    input_path: str
+    output_path: str
+    source_label: str
+    serializer_name: str
+    split: str = "validation"
+    subset: str | None = None
+    max_bytes_per_source: int = DEFAULT_MAX_BYTES_PER_SOURCE
+    output_filename: str = "staged.jsonl.gz"
+    extra_metadata: dict[str, str] = field(default_factory=dict)
+    source_manifest: IngestionSourceManifest | None = None
+    content_fingerprint: str = ""
+
+
+def _format_cell(cell_value: Any) -> str:
+    """Format a single cell value for serialization.
+
+    Preserves strings verbatim. For non-string scalars we use ``str(...)``,
+    which for Python ``int``/``float`` produces the usual textual form. If
+    an upstream dataset pre-formatted numerics as strings (the common
+    case for table datasets sourced from HTML), we keep those strings
+    byte-identical.
+    """
+    if cell_value is None:
+        return ""
+    if isinstance(cell_value, str):
+        return cell_value
+    return str(cell_value)
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _hash_bucket(key: str, num_buckets: int) -> int:
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return int(digest[:16], 16) % num_buckets
+
+
+def _serialize_row_values(row: Any) -> str:
+    row_values = row.values() if isinstance(row, dict) else row
+    return TABLE_CELL_DELIMITER.join(_format_cell(cell) for cell in row_values)
+
+
+def _serialize_table_rows(table_rows: Any) -> str:
+    return TABLE_ROW_DELIMITER.join(_serialize_row_values(row) for row in table_rows)
+
+
+def serialize_totto_example(example: dict[str, Any]) -> str:
+    """Serialize a ToTTo example into a single-string PPL document.
+
+    ToTTo records look like::
+
+        {
+          "table_page_title": str,
+          "table_section_title": str,
+          "table": [[{"value": str, "is_header": bool, ...}, ...], ...],
+          "highlighted_cells": [[row_idx, col_idx], ...],
+          "sentence_annotations": {"final_sentence": [str, ...], ...},
+          ...
+        }
+
+    The emitted document preserves the table's row/column structure in
+    TSV form (so tokenizers see natural delimiters), followed by a blank
+    line and the target sentence. Both the table cells and the sentence
+    are byte-preserved.
+
+    The ``final_sentence`` field is usually a list (one per annotator);
+    we take the first non-empty string. This is the form that
+    perplexity-gap experiments over ToTTo need.
+    """
+    page_title = _format_cell(example.get("table_page_title", ""))
+    section_title = _format_cell(example.get("table_section_title", ""))
+
+    rows = example.get("table", [])
+    serialized_rows: list[str] = []
+    for row in rows:
+        cells = [_format_cell(cell.get("value", "")) if isinstance(cell, dict) else _format_cell(cell) for cell in row]
+        serialized_rows.append(TABLE_CELL_DELIMITER.join(cells))
+    table_block = TABLE_ROW_DELIMITER.join(serialized_rows)
+
+    target = ""
+    sentence_annotations = example.get("sentence_annotations") or {}
+    if isinstance(sentence_annotations, dict):
+        candidates = sentence_annotations.get("final_sentence") or []
+        if isinstance(candidates, str):
+            target = candidates
+        elif isinstance(candidates, list):
+            target = next((s for s in candidates if isinstance(s, str) and s.strip()), "")
+
+    parts: list[str] = []
+    if page_title:
+        parts.append(f"title: {page_title}")
+    if section_title:
+        parts.append(f"section: {section_title}")
+    if table_block:
+        parts.append(table_block)
+    if target:
+        parts.append(target)
+
+    return "\n\n".join(parts)
+
+
+def serialize_wikitablequestions_example(example: dict[str, Any]) -> str:
+    """Serialize a WikiTableQuestions example into a PPL document.
+
+    Records look like::
+
+        {
+          "question": str,
+          "answers": [str, ...],
+          "table": {"header": [str, ...], "rows": [[str, ...], ...]}
+        }
+
+    The emitted document is TSV table followed by ``Q: ...`` and
+    ``A: ...`` lines. We concatenate all answers with a comma so the
+    context/target boundary lands at a stable delimiter. All numeric
+    cells come from the source as strings and are preserved byte-identically.
+    """
+    table = example.get("table") or {}
+    header = [_format_cell(cell) for cell in table.get("header", [])]
+    rows = [[_format_cell(cell) for cell in row] for row in table.get("rows", [])]
+
+    serialized_rows: list[str] = []
+    if header:
+        serialized_rows.append(TABLE_CELL_DELIMITER.join(header))
+    for row in rows:
+        serialized_rows.append(TABLE_CELL_DELIMITER.join(row))
+    table_block = TABLE_ROW_DELIMITER.join(serialized_rows)
+
+    question = _format_cell(example.get("question", ""))
+    answers = example.get("answers") or []
+    if isinstance(answers, str):
+        answer_text = answers
+    else:
+        answer_text = ", ".join(_format_cell(a) for a in answers)
+
+    parts: list[str] = []
+    if table_block:
+        parts.append(table_block)
+    if question:
+        parts.append(f"Q: {question}")
+    if answer_text:
+        parts.append(f"A: {answer_text}")
+
+    return "\n\n".join(parts)
+
+
+def serialize_gittables_example(example: dict[str, Any]) -> str:
+    """Serialize a GitTables example into a PPL document.
+
+    The public Hugging Face mirror exposes each record as a relational table
+    plus lightweight provenance. We keep the table cells verbatim in TSV form
+    and prepend a small metadata header with the original CSV URL, license, and
+    shape so the resulting text retains the path/URL/schema surfaces that make
+    GitTables interesting for gap analysis.
+    """
+
+    metadata_lines: list[str] = []
+    database_id = _format_cell(example.get("database_id", ""))
+    table_id = _format_cell(example.get("table_id", ""))
+    if database_id:
+        metadata_lines.append(f"database_id: {database_id}")
+    if table_id:
+        metadata_lines.append(f"table_id: {table_id}")
+
+    context = example.get("context") or {}
+    if isinstance(context, dict):
+        csv_url = _format_cell(context.get("csv_url", ""))
+        license_value = _format_cell(context.get("license", ""))
+        number_rows = _format_cell(context.get("number_rows", ""))
+        number_columns = _format_cell(context.get("number_columns", ""))
+        if csv_url:
+            metadata_lines.append(f"csv_url: {csv_url}")
+        if license_value:
+            metadata_lines.append(f"license: {license_value}")
+        if number_rows:
+            metadata_lines.append(f"rows: {number_rows}")
+        if number_columns:
+            metadata_lines.append(f"columns: {number_columns}")
+
+    table_block = _serialize_table_rows(example.get("table") or [])
+
+    parts: list[str] = []
+    if metadata_lines:
+        parts.append("\n".join(metadata_lines))
+    if table_block:
+        parts.append(table_block)
+
+    return "\n\n".join(parts)
+
+
+def gittables_decontamination_metadata(
+    example: dict[str, Any],
+    serialized_text: str,
+    *,
+    target_benchmark_holdout: bool,
+) -> dict[str, Any]:
+    """Return GitTables identity hashes and deterministic validation buckets.
+
+    ``target-benchmark/gittables-corpus`` is a GitTables-derived benchmark
+    subset, but its upstream sampling recipe is not documented enough to treat
+    it as an official split. These hashes let a future Zenodo GitTables training
+    materializer remove exact TARGET overlaps by serialized table content. The
+    IID bucket gives us an additional deterministic held-out slice from the
+    full Zenodo corpus without needing a side manifest.
+    """
+
+    context = example.get("context") or {}
+    context_table_id = ""
+    if isinstance(context, dict):
+        context_table_id = _format_cell(context.get("table_id", ""))
+
+    database_id = _format_cell(example.get("database_id", ""))
+    table_id = _format_cell(example.get("table_id", ""))
+    table_body = _serialize_table_rows(example.get("table") or [])
+    table_body_sha256 = _sha256_text(table_body)
+    identity_payload = json.dumps(
+        {
+            "context_table_id": context_table_id,
+            "database_id": database_id,
+            "table_id": table_id,
+            "table_body_sha256": table_body_sha256,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    iid_bucket = _hash_bucket(f"{GITTABLES_IID_HOLDOUT_SALT}:{table_body_sha256}", GITTABLES_IID_HOLDOUT_NUM_BUCKETS)
+
+    holdout_roles: list[str] = []
+    if target_benchmark_holdout:
+        holdout_roles.append("target_benchmark_validation")
+    if iid_bucket == GITTABLES_IID_HOLDOUT_SELECTED_BUCKET:
+        holdout_roles.append("zenodo_iid_validation")
+
+    return {
+        "context_table_id": context_table_id,
+        "database_id": database_id,
+        "table_id": table_id,
+        "identity_sha256": _sha256_text(identity_payload),
+        "serialized_text_sha256": _sha256_text(serialized_text),
+        "table_body_sha256": table_body_sha256,
+        "holdout_roles": holdout_roles,
+        "iid_holdout_bucket": iid_bucket,
+        "iid_holdout_num_buckets": GITTABLES_IID_HOLDOUT_NUM_BUCKETS,
+        "iid_holdout_selected_bucket": GITTABLES_IID_HOLDOUT_SELECTED_BUCKET,
+        "iid_holdout_salt": GITTABLES_IID_HOLDOUT_SALT,
+    }
+
+
+SERIALIZERS: dict[str, Any] = {
+    "gittables": serialize_gittables_example,
+    "totto": serialize_totto_example,
+    "wikitablequestions": serialize_wikitablequestions_example,
+}
+"""Registry mapping serializer name -> callable. Lets the staging step stay
+data-agnostic."""
+
+
+def _fsspec_url(fs: Any, path: str) -> str:
+    protocol = fs.protocol
+    if isinstance(protocol, (list, tuple)):
+        protocol = protocol[0]
+    if protocol in (None, "file"):
+        return path
+    if path.startswith(f"{protocol}://"):
+        return path
+    return f"{protocol}://{path}"
+
+
+def _parquet_file_matches_split(path: str, split: str) -> bool:
+    filename = os.path.basename(path)
+    if not filename.endswith(".parquet"):
+        return False
+    return filename == f"{split}.parquet" or filename.startswith(f"{split}-")
+
+
+def _find_split_parquet_files(input_path: str, split: str, subset: str | None) -> list[str]:
+    """Find downloaded HF parquet files for ``split`` under an fsspec path."""
+    fs, root = url_to_fs(input_path)
+    roots: list[str] = []
+    if subset and subset != "default":
+        subset_root = posixpath.join(root, subset)
+        if fs.exists(subset_root):
+            roots.append(subset_root)
+    roots.append(root)
+
+    matches: list[str] = []
+    for candidate_root in roots:
+        if fs.isfile(candidate_root):
+            candidates = [candidate_root]
+            selected = [path for path in candidates if path.endswith(".parquet")]
+        else:
+            candidates = list(fs.find(candidate_root, withdirs=False))
+            selected = [path for path in candidates if _parquet_file_matches_split(path, split)]
+        matches.extend(selected)
+
+    if not matches:
+        raise FileNotFoundError(f"No parquet files found for split {split!r} under {input_path}")
+
+    return [_fsspec_url(fs, path) for path in sorted(set(matches))]
+
+
+def _load_hf_iterable(input_path: str, split: str, subset: str | None) -> Iterable[dict[str, Any]]:
+    """Iterate over examples in downloaded HF parquet shards at ``input_path``.
+
+    Imported lazily so the import graph doesn't require ``datasets`` at
+    module load time (e.g. when only the pure serializer functions are
+    used in tests).
+    """
+    from datasets import load_dataset  # local import to keep module importable without `datasets`
+
+    data_files = _find_split_parquet_files(input_path, split, subset)
+    dataset = load_dataset("parquet", data_files={split: data_files}, split=split, streaming=True)
+    return dataset
+
+
+def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | str]:
+    """Run the configured serializer over an HF table dataset and write JSONL.
+
+    Iterates in dataset order (deterministic) and stops once the kept text
+    exceeds :attr:`TableRecordStagingConfig.max_bytes_per_source`.
+
+    Returns a dict with ``record_count``, ``bytes_written``, and
+    ``output_file`` for logging and downstream provenance.
+    """
+    if cfg.serializer_name not in SERIALIZERS:
+        raise ValueError(f"Unknown serializer {cfg.serializer_name!r}; known: {sorted(SERIALIZERS)}")
+    serializer = SERIALIZERS[cfg.serializer_name]
+    if cfg.source_manifest is not None and cfg.content_fingerprint:
+        expected = cfg.source_manifest.fingerprint()
+        if cfg.content_fingerprint != expected:
+            raise ValueError(
+                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
+            )
+
+    fsspec_mkdirs(cfg.output_path, exist_ok=True)
+    out_file = posixpath.join(cfg.output_path, cfg.output_filename)
+    compression = "gzip" if out_file.endswith(".gz") else None
+
+    total_text_bytes = 0
+    record_count = 0
+    target_benchmark_gittables = (
+        cfg.serializer_name == "gittables"
+        and cfg.source_manifest is not None
+        and cfg.source_manifest.dataset_key == GITTABLES_TARGET_BENCHMARK_DATASET
+    )
+
+    with atomic_rename(out_file) as temp_path:
+        with open_url(temp_path, "wt", encoding="utf-8", compression=compression) as outfile:
+            for index, example in enumerate(_load_hf_iterable(cfg.input_path, cfg.split, cfg.subset)):
+                text = serializer(example)
+                if not text.strip():
+                    continue
+                text_bytes = len(text.encode("utf-8"))
+                if total_text_bytes + text_bytes > cfg.max_bytes_per_source and record_count > 0:
+                    logger.info(
+                        "Reached per-source cap after %d records (%d bytes); stopping.",
+                        record_count,
+                        total_text_bytes,
+                    )
+                    break
+
+                provenance: dict[str, Any] = {
+                    "dataset": cfg.input_path,
+                    "split": cfg.split,
+                    "subset": cfg.subset,
+                    "serializer": cfg.serializer_name,
+                    "index": index,
+                    **cfg.extra_metadata,
+                }
+                if cfg.serializer_name == "gittables":
+                    provenance["gittables_decontam"] = gittables_decontamination_metadata(
+                        example,
+                        text,
+                        target_benchmark_holdout=target_benchmark_gittables,
+                    )
+
+                record = {
+                    "id": f"{cfg.source_label}:{cfg.split}:{index:08d}",
+                    "text": text,
+                    "source": cfg.source_label,
+                    "provenance": provenance,
+                }
+                json.dump(record, outfile, ensure_ascii=False)
+                outfile.write("\n")
+                total_text_bytes += text_bytes
+                record_count += 1
+
+    logger.info(
+        "Staged %d records (%d bytes of text) to %s",
+        record_count,
+        total_text_bytes,
+        out_file,
+    )
+    result: dict[str, int | str] = {
+        "record_count": record_count,
+        "bytes_written": total_text_bytes,
+        "output_file": out_file,
+    }
+    if cfg.source_manifest is not None:
+        result["metadata_file"] = write_ingestion_metadata_json(
+            manifest=cfg.source_manifest,
+            materialized_output=MaterializedOutputMetadata(
+                input_path=cfg.input_path,
+                output_path=cfg.output_path,
+                output_file=out_file,
+                record_count=record_count,
+                bytes_written=total_text_bytes,
+            ),
+        )
+    return result
