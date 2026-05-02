@@ -35,7 +35,11 @@ from levanter.tokenizers import load_tokenizer
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 from marin.rl.curriculum import Curriculum
-from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
+from marin.rl.environments.inference_ctx import (
+    VLLMEngineConfig,
+    VLLMFallbackSamplingConfig,
+    vLLMInferenceContextConfig,
+)
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig
@@ -49,12 +53,6 @@ from marin.rl.weight_transfer.base import WeightTransferMode
 from optax import softmax_cross_entropy_with_integer_labels
 
 logger = logging.getLogger(__name__)
-
-try:
-    from vllm import SamplingParams
-except ImportError:
-    logger.warning("vLLM is not installed, so we will not be able to use vLLM inference context.")
-    SamplingParams = None
 
 
 def create_test_runtime(curriculum_config, weight_transfer_config: WeightTransferConfig) -> RLRuntimeHandles:
@@ -258,16 +256,13 @@ def create_qwen_tokenizer():
 
 def create_vllm_inference_config():
     return vLLMInferenceContextConfig(
-        model_name="Qwen/Qwen3-0.6B",
-        max_model_len=1024,
-        tensor_parallel_size=1,
-        gpu_memory_utilization=0.90,
-        sampling_params=SamplingParams(
-            temperature=1.0,
-            n=4,
-            max_tokens=16,
-            logprobs=1,
-            stop=None,
+        engine=VLLMEngineConfig(
+            model_name="Qwen/Qwen3-0.6B",
+            max_model_len=1024,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.90,
+        ),
+        fallback_sampling=VLLMFallbackSamplingConfig(
             # Workaround for vllm-project/tpu-inference#1386: default top_k forces greedy sampling
             top_k=4096,
         ),
@@ -277,6 +272,7 @@ def create_vllm_inference_config():
 def create_test_curriculum_config(actor_name: str = "test_curriculum"):
     """Create a minimal CurriculumConfig for testing."""
     from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
+    from marin.rl.decoding import DecodingConfig
     from marin.rl.environments import EnvConfig
 
     return CurriculumConfig(
@@ -288,7 +284,9 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum"):
                     env_args={"task_type": "cats", "seed": 42},
                 ),
                 sampling_params=SamplingParams(
-                    temperature=1.0, n_prompts=4, n_generations_per_prompt=4, max_output_tokens=32
+                    n_prompts=4,
+                    n_generations_per_prompt=4,
+                    train_decoding=DecodingConfig(temperature=1.0, max_output_tokens=32),
                 ),
             )
         },

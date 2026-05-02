@@ -10,6 +10,7 @@ from typing import Any
 
 import jax
 import numpy as np
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.tinker_environments.math_env import (
     MathEnv as TinkerMathEnvBase,
@@ -128,12 +129,9 @@ class MathEnv(MarinEnv):
         inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
-        temperature: float,
+        decoding: DecodingConfig,
         prng_key,
         mode: str = "train",
-        max_tokens: int | None = None,
-        top_k: int | None = None,
-        stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample prompts, evaluate responses, and create rollouts."""
@@ -160,11 +158,8 @@ class MathEnv(MarinEnv):
         ]
         completions = inference_ctx.batch_completions(
             prompts=prompts,
-            temperature=temperature,
             n=n_generations,
-            max_tokens=max_tokens,
-            top_k=top_k,
-            stop=stop,
+            decoding=decoding,
             system_prompt=None,  # No system prompt - use few-shot examples instead
         )
 
@@ -194,8 +189,7 @@ class MathEnv(MarinEnv):
                     env_example_id=example.example_id,
                     reward=reward,
                     correctness_reward=correct_score,
-                    temperature=temperature,
-                    top_k=top_k,
+                    decoding=decoding,
                     system_prompt=system_prompt,
                 )
 

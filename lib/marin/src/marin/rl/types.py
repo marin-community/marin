@@ -18,6 +18,7 @@ import haliax.haxtyping as ht
 import jax
 import numpy as np
 from haliax import NamedArray
+from marin.rl.decoding import RolloutDecodingTrace
 
 
 @dataclass
@@ -27,8 +28,7 @@ class RolloutStats:
     episode_reward: float
     env_example_id: str
     lesson_id: str
-    temperature: float
-    top_k: int | None
+    decoding: RolloutDecodingTrace
 
 
 @dataclass(frozen=True)
@@ -69,11 +69,8 @@ class Rollout(eqx.Module):
     episode_reward: float
     """The overall reward for the episode."""
 
-    temperature: float
-    """The temperature used to sample the response."""
-
-    top_k: int | None
-    """The top_k used to sample the response."""
+    decoding: RolloutDecodingTrace
+    """The decoding configuration used to sample the response."""
 
     is_truncated: bool
     """True if the rollout was truncated due to length. False otherwise."""
