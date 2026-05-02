@@ -1,14 +1,9 @@
-name: Marin - Canary Ferry
+name: "Marin - Smoke - Datakit"
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # Daily at 6 AM UTC
+    - cron: '30 6 * * *'  # Daily at 06:30 UTC, offset from canary
   workflow_dispatch:
-    inputs:
-      target_tokens:
-        description: 'Override training token budget'
-        type: number
-        required: false
 
 permissions:
   contents: read
@@ -16,20 +11,15 @@ permissions:
   id-token: write  # claude-code-action OIDC
 
 jobs:
-  canary-ferry:
+  datakit-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 120
     concurrency:
-      group: canary-ferry
+      group: datakit-smoke
       cancel-in-progress: true
     env:
-      RUN_ID: canary-tpu-${{ github.run_id }}-${{ github.run_attempt }}
-      CANARY_ACCELERATOR: tpu
-      CANARY_BATCH_SIZE: "512"
-      CANARY_TARGET_TOKENS: "1000000000"
-      CANARY_MIN_STEPS: "400"
-      CANARY_MAX_LOSS: "8.0"
-      CANARY_MAX_WALL_CLOCK: "7200"
+      SMOKE_RUN_ID: datakit-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      FERRY_STATUS_PATH: gs://marin-us-central1/tmp/ttl=1d/ci/datakit-smoke-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/examples/marin.yaml
@@ -73,7 +63,7 @@ jobs:
           chmod 600 ~/.ssh/google_compute_engine
           chmod 644 ~/.ssh/google_compute_engine.pub
 
-      - name: Submit canary ferry
+      - name: Submit datakit smoke ferry
         id: submit
         shell: bash -l {0}
         run: |
@@ -81,66 +71,55 @@ jobs:
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             --priority production \
-            --reserve v5p-8 \
-            -e RUN_ID "$RUN_ID" \
-            -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
-            -e CANARY_BATCH_SIZE "$CANARY_BATCH_SIZE" \
-            -e CANARY_TARGET_TOKENS "$CANARY_TARGET_TOKENS" \
+            -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
+            -e FERRY_STATUS_PATH "$FERRY_STATUS_PATH" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
-            -- python -m experiments.ferries.canary_ferry)
+            -- python -m experiments.ferries.datakit_ferry)
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          CANARY_TARGET_TOKENS: ${{ inputs.target_tokens || env.CANARY_TARGET_TOKENS }}
 
-      - name: Wait for canary ferry
+      - name: Wait for datakit smoke ferry
         shell: bash -l {0}
         run: |
           uv run python scripts/workflows/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
-            --timeout 14100 \
+            --timeout 7100 \
             --github-output
 
-      - name: Validate canary metrics
-        continue-on-error: ${{ inputs.target_tokens != '' }}
-        shell: bash -l {0}
-        # MARIN_PREFIX is required so mirror:// knows which gs://marin-* bucket
-        # counts as "local" — without it the runner falls back to /tmp/marin,
-        # _mirror_remote_prefixes() returns [] (to avoid anonymous-caller 401s
-        # from gcsfs off-GCP), and the read raises FileNotFoundError. The
-        # google-github-actions/auth step above provides the credentials
-        # gcsfs needs to actually scan the remote buckets. Canary lands on v5p
-        # in us-central1 or us-east5; picking us-central1 keeps the hit rate
-        # high and lets mirror:// resolve either region.
-        env:
-          MARIN_PREFIX: gs://marin-us-central1
-        run: .venv/bin/python scripts/canary/validate_canary_metrics.py
-
-      - name: Summarize TPU canary profile
-        continue-on-error: true
+      - name: Read ferry status
+        id: ferry_status
         shell: bash -l {0}
         run: |
-          .venv/bin/python -m marin.profiling.cli summarize \
-            --run-target "$RUN_ID" \
-            --entity "$WANDB_ENTITY" \
-            --project "$WANDB_PROJECT"
+          PREFIX=$(.venv/bin/python -c "
+          import json
+          from rigging.filesystem import url_to_fs
+          fs, _ = url_to_fs('$FERRY_STATUS_PATH')
+          with fs.open('$FERRY_STATUS_PATH') as f:
+              print(json.load(f)['marin_prefix'])
+          ")
+          echo "marin_prefix=$PREFIX" >> "$GITHUB_OUTPUT"
+          echo "Ferry output prefix: $PREFIX"
+
+      - name: Validate datakit smoke outputs
+        shell: bash -l {0}
         env:
-          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          MARIN_PREFIX: ${{ steps.ferry_status.outputs.marin_prefix }}
+        run: .venv/bin/python scripts/datakit/validate_ferry_outputs.py
 
       - name: Capture failure diagnostics
         if: failure() || cancelled()
         continue-on-error: true
-        shell: bash -l {0}
         env:
           JOB_ID: ${{ steps.submit.outputs.job_id }}
-          DIAG_DIR: ${{ github.workspace }}/canary-diagnostics
+          DIAG_DIR: ${{ github.workspace }}/datakit-smoke-diagnostics
         run: |
           mkdir -p "$DIAG_DIR"
           uv run python scripts/workflows/iris_monitor.py collect \
@@ -157,20 +136,21 @@ jobs:
         if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
-          name: canary-diagnostics
-          path: canary-diagnostics/
+          name: datakit-smoke-diagnostics
+          path: datakit-smoke-diagnostics/
           retention-days: 14
           if-no-files-found: ignore
 
+      # The canary-triage skill handles both lanes; CANARY_LANE selects datakit-smoke vs tpu.
       - name: Claude triage
         id: claude_triage
         if: (failure() || cancelled()) && github.event_name == 'schedule'
         uses: ./.github/actions/claude-triage
         with:
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
-          lane: tpu
+          lane: datakit-smoke
           job-id: ${{ steps.submit.outputs.job_id }}
-          run-id: ${{ env.RUN_ID }}
+          run-id: ${{ env.SMOKE_RUN_ID }}
           iris-config: ${{ env.IRIS_CONFIG }}
           wandb-entity: ${{ env.WANDB_ENTITY }}
           wandb-project: ${{ env.WANDB_PROJECT }}
@@ -191,12 +171,52 @@ jobs:
           retention-days: 1
           if-no-files-found: ignore
 
+  # Parallel lane: verify every DatakitSource.staged_path resolves to a
+  # non-empty prefix under gs://marin-us-central1. Cheap (metadata only) and
+  # independent of the ferry, so runs alongside datakit-smoke.
+  datakit-sources-staged:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: datakit-sources-staged
+      cancel-in-progress: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Verify datakit source staging paths
+        shell: bash -l {0}
+        run: .venv/bin/python scripts/datakit/validate_source_staging.py
+
   # Separate job so Slack always fires, even if the main job is force-killed
-  # after its grace window. `needs.canary-ferry.result` reflects the main job
-  # outcome; failure()/cancelled() context functions only see this job's steps.
+  # after its grace window. `needs.*.result` reflects the upstream job
+  # outcomes; failure()/cancelled() context functions only see this job's
+  # steps.
   notify-slack:
-    needs: canary-ferry
-    if: always() && (needs.canary-ferry.result == 'failure' || needs.canary-ferry.result == 'cancelled') && github.event_name == 'schedule'
+    needs: [datakit-smoke, datakit-sources-staged]
+    if: |
+      always() && github.event_name == 'schedule' && (
+        needs.datakit-smoke.result == 'failure' || needs.datakit-smoke.result == 'cancelled'
+        || needs.datakit-sources-staged.result == 'failure' || needs.datakit-sources-staged.result == 'cancelled'
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -205,4 +225,4 @@ jobs:
         uses: ./.github/actions/notify-slack
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          fallback-text: ":red_circle: *TPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fallback-text: ":red_circle: *Datakit Smoke failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

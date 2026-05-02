@@ -1,0 +1,201 @@
+name: "Iris - Smoke - CoreWeave"
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - "lib/iris/**"
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: read   # needed for issue_comment to access PR metadata
+  statuses: write       # post commit status from issue_comment trigger
+
+# Shared concurrency group with marin-canary-ferry-coreweave.yaml — both rebuild/roll
+# the shared iris-ci controller and submit against the shared H100 in
+# US-WEST-04A. Only one run cluster-wide at a time. cancel-in-progress=false
+# so a mid-flight canary is not killed by a PR firing.
+concurrency:
+  group: iris-coreweave-ci-shared
+  cancel-in-progress: false
+
+jobs:
+  cw-ci-test:
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '/iris-ci-cw') &&
+        (
+          github.event.comment.author_association == 'MEMBER' ||
+          github.event.comment.author_association == 'COLLABORATOR' ||
+          github.event.comment.author_association == 'OWNER'
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      IRIS_NAMESPACE: iris-ci
+      # Must match Labels(label_prefix).iris_managed from the cluster config
+      IRIS_MANAGED_LABEL: iris-iris-ci-managed
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+
+      - name: Set commit status to pending
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          gh api repos/${{ github.repository }}/statuses/"$sha" \
+            -f state=pending \
+            -f context="Iris CoreWeave CI" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "lib/iris/pyproject.toml"
+
+      - name: Write kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.CW_KUBECONFIG }}" > ~/.kube/coreweave-iris
+          chmod 600 ~/.kube/coreweave-iris
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Delete stale worker pods so the autoscaler recreates them with fresh images.
+      # Nodepools (and their underlying nodes) survive — this is the "warm start".
+      - name: Reset worker pods
+        run: |
+          export KUBECONFIG=~/.kube/coreweave-iris
+          kubectl delete pods -n "$IRIS_NAMESPACE" -l "$IRIS_MANAGED_LABEL=true" --grace-period=0 --ignore-not-found || true
+
+      # Rebuild images and (re)start the controller. `cluster start` is fully
+      # idempotent on K8s: it applies namespace/RBAC/ConfigMap/Deployment/Service
+      # and triggers a rollout restart, so both cold starts and warm restarts
+      # work without needing to tunnel to an existing controller first.
+      - name: Start controller
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          cd lib/iris && uv run --group dev iris -v \
+            --config=examples/coreweave-ci.yaml \
+            cluster start --fresh
+
+      - name: Port-forward to iris-ci controller
+        run: |
+          uv run python scripts/workflows/iris_monitor.py port-forward \
+            --namespace "$IRIS_NAMESPACE" \
+            --service iris-ci-controller-svc \
+            --kubeconfig "$HOME/.kube/coreweave-iris"
+
+      - name: Run integration tests
+        env:
+          WANDB_MODE: disabled
+          WANDB_API_KEY: ""
+          JAX_TRACEBACK_FILTERING: off
+          # When set, the marin-on-iris test uploads fixtures and writes
+          # intermediate data to S3 (R2) so remote Zephyr pods can access them.
+          MARIN_CI_S3_PREFIX: s3://marin-na/temp/ci
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+          FSSPEC_S3: '{"endpoint_url": "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"}'
+        run: |
+          export KUBECONFIG=~/.kube/coreweave-iris
+          uv run pytest tests/integration/iris/ \
+            --controller-url "$IRIS_CONTROLLER_URL" \
+            -v --tb=short --timeout=600 \
+            -o "addopts=" \
+            -x
+
+      - name: Run full integration pipeline
+        env:
+          WANDB_MODE: disabled
+          WANDB_API_KEY: ""
+          JAX_TRACEBACK_FILTERING: off
+          MARIN_CI_S3_PREFIX: s3://marin-na/temp/ci
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+          FSSPEC_S3: '{"endpoint_url": "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"}'
+        run: |
+          timeout 1800 uv run pytest tests/test_integration_test.py \
+            -m integration -o "addopts=" --timeout=900 -v -s
+
+      - name: Stop port-forward
+        if: always()
+        run: |
+          [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true
+          pkill -f "kubectl port-forward.*$IRIS_NAMESPACE" 2>/dev/null || true
+
+      - name: Capture failure diagnostics
+        if: failure()
+        continue-on-error: true
+        env:
+          LOG_DIR: ${{ github.workspace }}/iris-cw-logs
+        run: |
+          # iris_monitor.py collect handles controller logs (current+previous),
+          # describe, per-managed-pod logs/describes, and events. The job_id
+          # filter on `kubectl get pods -l iris.job_id=...` will not match here
+          # (no submitted job), so kubernetes-pods.json may be empty — that's
+          # tolerated below via continue-on-error.
+          uv run python scripts/workflows/iris_monitor.py collect \
+            --job-id "ci-smoke" \
+            --iris-config lib/iris/examples/coreweave-ci.yaml \
+            --provider coreweave \
+            --output-dir "$LOG_DIR" \
+            --namespace "$IRIS_NAMESPACE" \
+            --managed-label "$IRIS_MANAGED_LABEL" \
+            --kubeconfig "$HOME/.kube/coreweave-iris"
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iris-cw-ci-logs
+          path: iris-cw-logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Set commit status to result
+        if: always() && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          if [ "${{ job.status }}" = "success" ]; then
+            state=success
+          else
+            state=failure
+          fi
+          gh api repos/${{ github.repository }}/statuses/"$sha" \
+            -f state="$state" \
+            -f context="Iris CoreWeave CI" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

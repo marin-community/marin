@@ -1,5 +1,4 @@
-name: "Marin - Docs"
-
+name: "Fray - Unit"
 on:
   push:
     branches:
@@ -25,39 +24,31 @@ jobs:
         with:
           filters: |
             relevant:
-              - 'docs/**'
-              - 'mkdocs.yml'
-              - '.github/workflows/marin-docs.yaml'
+              - 'lib/fray/**'
+              - 'lib/iris/**'
+              - 'uv.lock'
+              - '.github/workflows/fray-unit.yaml'
 
-  marin-docs:
+  fray-unit:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Install uv and Python
-        uses: astral-sh/setup-uv@v6
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
         with:
-          version: "0.7.20"
-          python-version: "3.11"
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
           enable-cache: true
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Set up Python
-        run: uv python install
-
-      - name: Install dependencies
-        run: uv sync --package marin --group dev
-
-      - name: Validate docs source links
-        run: uv run python infra/check_docs_source_links.py
-
-      - name: Build documentation
+      - name: Test fray
         run: |
-          uv run mkdocs build --strict
+          cd lib/fray && uv run --group=fray-test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/
+

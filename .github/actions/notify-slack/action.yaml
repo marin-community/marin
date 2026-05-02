@@ -1,0 +1,43 @@
+name: Notify Slack
+description: Post a message to a Slack webhook, falling back to a fixed text when no message artifact is available.
+
+inputs:
+  webhook-url:
+    description: Slack incoming webhook URL.
+    required: true
+  fallback-text:
+    description: Text to post when the message artifact is not present.
+    required: true
+  message-artifact:
+    description: Name of an artifact containing slack_message.md. When present and non-empty, its contents replace fallback-text.
+    required: false
+    default: slack-message
+  message-file:
+    description: Path within the message artifact to read. Workflows that already have slack_message.md on disk can leave this default.
+    required: false
+    default: slack_message.md
+
+runs:
+  using: composite
+  steps:
+    - name: Download Slack message
+      if: inputs.message-artifact != ''
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        name: ${{ inputs.message-artifact }}
+
+    - name: Post to Slack
+      shell: bash
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.webhook-url }}
+        FALLBACK_TEXT: ${{ inputs.fallback-text }}
+        MESSAGE_FILE: ${{ inputs.message-file }}
+      run: |
+        if [ -n "$MESSAGE_FILE" ] && [ -s "$MESSAGE_FILE" ]; then
+          TEXT=$(cat "$MESSAGE_FILE")
+        else
+          TEXT="$FALLBACK_TEXT"
+        fi
+        PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
+        curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"
