@@ -146,15 +146,31 @@ You can use the following tools in your python code like regular functions:
 {% endif %}
 <|eot_id|>
 {% elif has_tool_calls -%}
-    {%- if message.tool_calls|length != 1 -%}
-      {{- raise_exception("This template expects exactly one tool call per assistant turn.") -}}
-    {%- endif -%}
-    {%- set tool_call = message.tool_calls[0].function -%}
 <|start_header_id|>assistant<|end_header_id|>
 {% generation %}
+{%- set assistant_content = message.get('content') -%}
+{%- if assistant_content is string and assistant_content | trim -%}
+{{ assistant_content | trim }}
+{{ "\n" }}
+{%- endif -%}
+{%- for raw_tool_call in message.tool_calls -%}
+    {%- if raw_tool_call.function is defined and raw_tool_call.function is not none -%}
+        {%- set tool_call = raw_tool_call.function -%}
+    {%- else -%}
+        {%- set tool_call = raw_tool_call -%}
+    {%- endif -%}
 {{- '{\"name\": \"' + tool_call.name + '\", \"arguments\": ' -}}
+{%- if tool_call.arguments is string -%}
+{{- tool_call.arguments -}}
+{%- else -%}
 {{- tool_call.arguments | tojson -}}
-{{- \"}\" -}}<|eot_id|>
+{%- endif -%}
+{{- \"}\" -}}
+{%- if not loop.last -%}
+{{ "\n" }}
+{%- endif -%}
+{%- endfor -%}
+<|eot_id|>
 {% endgeneration %}
   {%- endif -%}
 {%- endfor -%}

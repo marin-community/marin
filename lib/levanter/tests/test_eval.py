@@ -9,12 +9,21 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
 from levanter.data.dataset import ListAsyncDataset
-from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
-from levanter.eval import EvalResult, LossFnOutput, TaggedEvaluator, cb_tagged_evaluate
+from levanter.data.text.examples import GrugLmExample, TraceLmExample, named_lm_example_from_grug
+from levanter.eval import (
+    EvalResult,
+    LossFnOutput,
+    MaskedEvaluator,
+    MaskedEvalResult,
+    TaggedEvaluator,
+    cb_tagged_evaluate,
+    construct_masked_log_dict,
+)
 from levanter.models.lm_model import LmExample
 from levanter.tracker import current_tracker
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -169,6 +178,107 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
 
     assert np.isfinite(result.micro_avg_loss)
     assert "grug" in result.tag_micro_losses
+
+
+def test_masked_evaluator_aggregates_token_masks():
+    seq_len = 4
+    EvalBatch = Axis("batch", len(jax.devices()))
+
+    examples = []
+    for _ in range(EvalBatch.size):
+        tokens = jnp.arange(seq_len, dtype=jnp.int32)
+        loss_masks = jnp.array(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 1.0, 0.0],
+            ],
+            dtype=jnp.float32,
+        )
+        examples.append(TraceLmExample(tokens=tokens, loss_masks=loss_masks))
+
+    dataset = ListAsyncDataset(examples)
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+
+        def loss_fn(_model, batch: TraceLmExample):
+            per_pos_loss = jnp.broadcast_to(
+                jnp.arange(1, seq_len + 1, dtype=jnp.float32),
+                batch.tokens.shape,
+            )
+            token_ids = jnp.roll(batch.tokens, -1, axis=-1)
+            return per_pos_loss, batch.loss_masks, token_ids
+
+        evaluator = MaskedEvaluator(
+            EvalBatch=EvalBatch,
+            dataset=dataset,
+            target_names=["first", "middle"],
+            loss_fn=loss_fn,
+            tokenizer=None,
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(jnp.zeros((), dtype=jnp.float32))
+
+    assert result.mask_losses["first"] == pytest.approx(1.0)
+    assert result.mask_losses["middle"] == pytest.approx(2.5)
+    assert result.mask_token_counts["first"] == pytest.approx(float(EvalBatch.size))
+    assert result.mask_token_counts["middle"] == pytest.approx(float(EvalBatch.size * 2))
+
+
+def test_masked_log_dict_omits_loss_and_bpb_for_empty_masks():
+    result = MaskedEvalResult(
+        mask_losses={"present": 1.5, "empty": 0.0},
+        mask_token_counts={"present": 2.0, "empty": 0.0},
+        total_eval_loading_time=0.25,
+        mask_bpb={"present": 0.5, "empty": 0.0},
+    )
+
+    log_dict = construct_masked_log_dict(result, total_time=1.0, prefix="eval")
+
+    assert log_dict["eval/present/tokens"] == 2.0
+    assert log_dict["eval/present/loss"] == 1.5
+    assert log_dict["eval/present/bpb"] == 0.5
+    assert log_dict["eval/empty/tokens"] == 0.0
+    assert "eval/empty/loss" not in log_dict
+    assert "eval/empty/bpb" not in log_dict
+
+
+def test_trace_masked_evaluator_resizes_pos_to_batch_length():
+    cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
+    Vocab = Axis("vocab", 32)
+    model = ToyLmHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(0))
+
+    seq_len = 4
+    EvalBatch = Axis("batch", len(jax.devices()))
+    examples = []
+    for _ in range(EvalBatch.size):
+        tokens = jnp.arange(seq_len, dtype=jnp.int32)
+        loss_masks = jnp.array(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 1.0, 0.0],
+            ],
+            dtype=jnp.float32,
+        )
+        examples.append(TraceLmExample(tokens=tokens, loss_masks=loss_masks))
+
+    dataset = ListAsyncDataset(examples)
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = MaskedEvaluator.for_trace_lm(
+            EvalBatch=EvalBatch,
+            dataset=dataset,
+            target_names=["first", "middle"],
+            tokenizer=None,
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(model)
+
+    assert np.isfinite(result.mask_losses["first"])
+    assert np.isfinite(result.mask_losses["middle"])
+    assert result.mask_token_counts["first"] == pytest.approx(float(EvalBatch.size))
+    assert result.mask_token_counts["middle"] == pytest.approx(float(EvalBatch.size * 2))
 
 
 def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):

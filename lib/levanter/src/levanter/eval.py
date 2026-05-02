@@ -26,7 +26,12 @@ from haliax.partitioning import ResourceMapping
 import levanter.tracker
 from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset, DataLoader
-from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
+from levanter.data.text.examples import (
+    GrugLmExample,
+    TraceLmExample,
+    named_lm_example_from_grug,
+    named_lm_example_from_trace,
+)
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.hf_utils import byte_length_of_token
@@ -44,6 +49,7 @@ M = TypeVar("M")
 Ex = TypeVar("Ex")
 LmEvalExample = LmExample | GrugLmExample
 LossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
+MaskedLossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
 TagArray = Int[Array, "tag"]
 BatchedTagArray = Int[Array, "... tag"]
 
@@ -59,6 +65,16 @@ class EvalResult:
     macro_bpb: Optional[float] = None
     tag_macro_bpb: Optional[dict[str, float]] = None
     tag_micro_bpb: Optional[dict[str, float]] = None
+
+
+@dataclasses.dataclass
+class MaskedEvalResult:
+    """Evaluation result for token-level named masks."""
+
+    mask_losses: dict[str, float]
+    mask_token_counts: dict[str, float]
+    total_eval_loading_time: float
+    mask_bpb: Optional[dict[str, float]] = None
 
 
 class DomainTaggedDataset(AsyncDataset[tuple[T, TagArray]]):
@@ -194,6 +210,29 @@ def _default_lm_eval_loss_fn(
     per_pos_weight = named_batch.loss_weight.array
     per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
     return per_pos_loss, per_pos_weight, per_pos_token_id
+
+
+def _default_trace_masked_lm_eval_loss_fn(
+    model: LmHeadModel,
+    batch: TraceLmExample,
+    *,
+    EvalBatch: hax.Axis,
+    Target: hax.Axis,
+    mp: jmp.Policy | None,
+) -> MaskedLossFnOutput:
+    model = inference_mode(model, True)
+    if batch.tokens.ndim == 1:
+        Pos = model.Pos.resize(batch.tokens.shape[0])
+    elif batch.tokens.ndim == 2:
+        Pos = model.Pos.resize(batch.tokens.shape[1])
+    else:
+        raise ValueError(f"TraceLmExample tokens must be rank-1 or rank-2, got rank={batch.tokens.ndim}")
+    named_batch, loss_masks = named_lm_example_from_trace(batch, Pos, Target, batch_axis=EvalBatch)
+    if mp is not None:
+        model = mp.cast_to_compute(model)
+    per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+    per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
+    return per_pos_loss, loss_masks.array, per_pos_token_id
 
 
 def cb_tagged_lm_evaluate(
@@ -384,6 +423,17 @@ def construct_log_dict(evaluator, eval_result, total_time, prefix):
     return log_dict
 
 
+def _calculate_bytes_per_token_type(tokenizer: Optional[MarinTokenizer]) -> Optional[Int[Array, "vocab"]]:
+    if tokenizer is None:
+        return None
+
+    vocab_size = len(tokenizer.get_vocab())
+    bytes = np.ndarray((vocab_size,), dtype=np.int32)
+    for i in range(vocab_size):
+        bytes[i] = byte_length_of_token(tokenizer, i)
+    return jnp.array(bytes)
+
+
 class TaggedEvaluator(Generic[Ex, M]):
     loss_fn: Callable[[M, Ex], LossFnOutput]
 
@@ -417,7 +467,7 @@ class TaggedEvaluator(Generic[Ex, M]):
             if batch_axis_resource is not None and axis_resource_is_explicit(device_mesh, batch_axis_resource):
                 self.per_pos_out_sharding = NamedSharding(device_mesh, P(batch_axis_resource, None))
 
-        self.bytes_per_token = self._calculate_bytes_per_token_type(tokenizer)
+        self.bytes_per_token = _calculate_bytes_per_token_type(tokenizer)
         self.hierarchy = self._construct_tag_hierarchy()
         self.accum_for_batch = self._make_accum_for_batch()
 
@@ -547,18 +597,177 @@ class TaggedEvaluator(Generic[Ex, M]):
                 hierarchy[parent].append(index)
         return hierarchy
 
-    def _calculate_bytes_per_token_type(self, tokenizer: MarinTokenizer) -> Optional[Int[Array, "vocab"]]:
-        if tokenizer is None:
-            return None
+
+class MaskedEvaluator(Generic[Ex, M]):
+    """Evaluator that aggregates loss over token-level named masks in one forward pass.
+
+    The loss callback must return:
+    - per-position losses with shape `[batch, position]`
+    - per-mask weights with shape `[batch, mask, position]`
+    - next-token ids with shape `[batch, position]`
+    """
+
+    loss_fn: Callable[[M, Ex], MaskedLossFnOutput]
+
+    def __init__(
+        self,
+        EvalBatch: hax.Axis | int,
+        dataset: AsyncDataset[Ex],
+        target_names: Sequence[str],
+        loss_fn: Callable[[M, Ex], MaskedLossFnOutput],
+        tokenizer: Optional[MarinTokenizer] = None,
+        device_mesh=None,
+        axis_mapping=None,
+    ):
+        if isinstance(EvalBatch, int):
+            EvalBatch = hax.Axis("batch", EvalBatch)
+        if not target_names:
+            raise ValueError("MaskedEvaluator requires at least one target name")
+        self.loss_fn = loss_fn
+        self.target_names = tuple(target_names)
+        self.Target = hax.Axis("trace_target", len(self.target_names))
+        self.dataset = dataset
+        self.loader = DataLoader(
+            self.dataset.as_async_dataset(),
+            EvalBatch,
+            max_buffered_batches=100,
+            mesh=device_mesh,
+            axis_resources=axis_mapping,
+        )
+        self.device_mesh = device_mesh
+        self.tokenizer = tokenizer
+        self.axis_mapping = axis_mapping
+        self.per_pos_out_sharding = None
+        if device_mesh is not None and axis_mapping is not None:
+            batch_axis_resource = axis_mapping.get(EvalBatch.name, axis_mapping.get("batch"))
+            if batch_axis_resource is not None and axis_resource_is_explicit(device_mesh, batch_axis_resource):
+                self.per_pos_out_sharding = NamedSharding(device_mesh, P(batch_axis_resource, None))
+
+        self.bytes_per_token = _calculate_bytes_per_token_type(tokenizer)
+        self.accum_for_batch = self._make_accum_for_batch()
+
+    @classmethod
+    def for_trace_lm(
+        cls,
+        EvalBatch: hax.Axis | int,
+        dataset: AsyncDataset[TraceLmExample],
+        target_names: Sequence[str],
+        tokenizer: Optional[MarinTokenizer] = None,
+        device_mesh=None,
+        axis_mapping=None,
+        mp: jmp.Policy = None,
+    ) -> "MaskedEvaluator[TraceLmExample, LmHeadModel]":
+        if isinstance(EvalBatch, int):
+            eval_batch_axis = hax.Axis("batch", EvalBatch)
         else:
-            # calculate the number of bytes in each token
-            vocab_size = len(tokenizer.get_vocab())
-            bytes = np.ndarray((vocab_size,), dtype=np.int32)
+            eval_batch_axis = EvalBatch
+        target_axis = hax.Axis("trace_target", len(target_names))
 
-            for i in range(vocab_size):
-                bytes[i] = byte_length_of_token(tokenizer, i)
+        def loss_fn(model: LmHeadModel, batch: TraceLmExample) -> MaskedLossFnOutput:
+            return _default_trace_masked_lm_eval_loss_fn(
+                model, batch, EvalBatch=eval_batch_axis, Target=target_axis, mp=mp
+            )
 
-            return jnp.array(bytes)
+        return cls(
+            EvalBatch=eval_batch_axis,
+            dataset=dataset,
+            target_names=target_names,
+            loss_fn=loss_fn,
+            tokenizer=tokenizer,
+            device_mesh=device_mesh,
+            axis_mapping=axis_mapping,
+        )
+
+    def _make_accum_for_batch(self) -> Callable[[M, "_MaskedEvalRunningMeans", Ex], "_MaskedEvalRunningMeans"]:
+        bytes_per_token = self.bytes_per_token
+        log2e = jnp.log2(jnp.e)
+        per_target_out_sharding = None if self.device_mesh is None else NamedSharding(self.device_mesh, P(None))
+        per_pos_out_sharding = self.per_pos_out_sharding
+
+        @hax.named_jit(axis_resources=self.axis_mapping)
+        def accum_for_batch(model: M, state: "_MaskedEvalRunningMeans", batch: Ex):
+            losses, weights, token_ids = self.loss_fn(model, batch)
+            if losses.ndim != 2 or weights.ndim != 3 or token_ids.ndim != 2:
+                raise ValueError(
+                    f"Expected masked eval tensors with ranks losses=2, weights=3, token_ids=2; got "
+                    f"losses={losses.ndim}, weights={weights.ndim}, token_ids={token_ids.ndim}"
+                )
+
+            weighted_loss = losses[:, None, :] * weights
+            this_loss_per_target = jnp.sum(weighted_loss, axis=(0, 2))
+            this_weights_per_target = jnp.sum(weights, axis=(0, 2))
+            if per_target_out_sharding is not None:
+                this_loss_per_target = jax.lax.with_sharding_constraint(this_loss_per_target, per_target_out_sharding)
+                this_weights_per_target = jax.lax.with_sharding_constraint(
+                    this_weights_per_target, per_target_out_sharding
+                )
+            safe_mean = jnp.where(this_weights_per_target > 0, this_loss_per_target / this_weights_per_target, 0.0)
+            mean_per_target = state.loss_per_target.add(safe_mean, this_weights_per_target)
+            state = dataclasses.replace(state, loss_per_target=mean_per_target)
+
+            if bytes_per_token is not None:
+                bytes_per_pos = bytes_per_token.at[token_ids].get(out_sharding=per_pos_out_sharding)
+                bytes_per_target = jnp.einsum(
+                    "bt,bkt->k", bytes_per_pos, weights, out_sharding=per_target_out_sharding
+                )
+                bpb_per_target = this_loss_per_target / jnp.maximum(bytes_per_target, 1.0) * log2e
+                bpb_mean = state.bpb_per_target.add(bpb_per_target, this_weights_per_target)
+                state = dataclasses.replace(state, bpb_per_target=bpb_mean)
+
+            return state
+
+        return accum_for_batch
+
+    def evaluate(self, model: M) -> MaskedEvalResult:
+        mean_losses_per_target = jnp.zeros((len(self.target_names),), dtype=jnp.float32)
+        state = _MaskedEvalRunningMeans.zeros_like(mean_losses_per_target)
+        state = hax.shard(state)
+
+        iterator = LoadingTimeTrackerIterator(self.loader)
+        for batch in tqdm(iterator, "masked_eval", total=len(self.loader)):
+            state = self.accum_for_batch(model, state, batch)
+
+        mean_loss_cpu = np.array(state.loss_per_target.mean)
+        token_count_cpu = np.array(state.loss_per_target.total)
+
+        losses = {name: float(mean_loss_cpu[index]) for index, name in enumerate(self.target_names)}
+        counts = {name: float(token_count_cpu[index]) for index, name in enumerate(self.target_names)}
+
+        if self.bytes_per_token is not None:
+            mean_bpb_cpu = np.array(state.bpb_per_target.mean)
+            bpb = {name: float(mean_bpb_cpu[index]) for index, name in enumerate(self.target_names)}
+        else:
+            bpb = None
+
+        return MaskedEvalResult(
+            mask_losses=losses,
+            mask_token_counts=counts,
+            total_eval_loading_time=iterator.total_time,
+            mask_bpb=bpb,
+        )
+
+
+def eval_masked_model(evaluator: MaskedEvaluator[Ex, M], model: M, prefix: str = "masked_eval") -> dict[str, float]:
+    with levanter.tracker.capture_time() as time_fn:
+        result = evaluator.evaluate(model)
+    return construct_masked_log_dict(result, time_fn(), prefix=prefix)
+
+
+def construct_masked_log_dict(eval_result: MaskedEvalResult, total_time: float, prefix: str) -> dict[str, float]:
+    log_dict: dict[str, float] = {
+        _join_prefix(prefix, "loading_time"): eval_result.total_eval_loading_time,
+        _join_prefix(prefix, "total_time"): total_time,
+    }
+    for name, loss in eval_result.mask_losses.items():
+        tokens = eval_result.mask_token_counts[name]
+        log_dict[_join_prefix(prefix, name) + "/tokens"] = tokens
+        if tokens > 0:
+            log_dict[_join_prefix(prefix, name) + "/loss"] = loss
+    if eval_result.mask_bpb is not None:
+        for name, bpb in eval_result.mask_bpb.items():
+            if eval_result.mask_token_counts[name] > 0:
+                log_dict[_join_prefix(prefix, name) + "/bpb"] = bpb
+    return log_dict
 
 
 class _EvalRunningMeans(eqx.Module):
@@ -572,3 +781,13 @@ class _EvalRunningMeans(eqx.Module):
         z = RunningMean.zeros_like(total)
         per_tag = RunningMean.zeros_like(per_tag)
         return _EvalRunningMeans(z, per_tag, z, per_tag)
+
+
+class _MaskedEvalRunningMeans(eqx.Module):
+    loss_per_target: RunningMean
+    bpb_per_target: RunningMean
+
+    @staticmethod
+    def zeros_like(per_target: Float[Array, "target"]) -> "_MaskedEvalRunningMeans":
+        per_target = RunningMean.zeros_like(per_target)
+        return _MaskedEvalRunningMeans(per_target, per_target)
