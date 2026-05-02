@@ -10,13 +10,24 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
 import click
 
+# Cross-module imports from iris: the script lives downstream of iris and must
+# stay in lockstep with how the controller labels managed pods (otherwise our
+# kubectl selectors silently miss everything) and what set of states iris
+# considers terminal (otherwise `wait` falls through to a ValueError on real
+# terminal states like JOB_STATE_KILLED). Importing rather than mirroring
+# means future iris changes propagate automatically.
+from iris.cluster.providers.k8s.tasks import _sanitize_label_value
+from iris.cluster.types import is_job_finished
+from iris.rpc import job_pb2
+
 _REPO_ROOT = Path(__file__).parents[2]
+
+JOB_STATE_SUCCEEDED = job_pb2.JobState.Name(job_pb2.JOB_STATE_SUCCEEDED)
 
 # SSH command run on every Iris-managed VM. Dumps every container's logs (not
 # just iris-controller) plus the GCE startup-script and cloud-init journals,
@@ -36,22 +47,10 @@ sudo journalctl -u cloud-final.service --no-pager 2>&1 | tail -n 500
 """
 
 
-class IrisJobState(StrEnum):
-    PENDING = "JOB_STATE_PENDING"
-    BUILDING = "JOB_STATE_BUILDING"
-    RUNNING = "JOB_STATE_RUNNING"
-    SUCCEEDED = "JOB_STATE_SUCCEEDED"
-    FAILED = "JOB_STATE_FAILED"
-    CANCELLED = "JOB_STATE_CANCELLED"
-
-
-_ACTIVE = {IrisJobState.PENDING, IrisJobState.BUILDING, IrisJobState.RUNNING}
-
-
 @dataclass(frozen=True)
 class IrisJobStatus:
     job_id: str
-    state: IrisJobState
+    state: str  # iris proto state name, e.g. "JOB_STATE_RUNNING"
     error: str | None
 
 
@@ -97,7 +96,7 @@ def job_status(
 
     for row in json.loads(result.stdout):
         if row.get("job_id") == job_id:
-            return IrisJobStatus(job_id=job_id, state=IrisJobState(row["state"]), error=row.get("error") or None)
+            return IrisJobStatus(job_id=job_id, state=row["state"], error=row.get("error") or None)
 
     raise LookupError(f"Job not found in iris job list output: {job_id!r}")
 
@@ -115,7 +114,7 @@ def wait_for_job(
     start = time.monotonic()
     while True:
         status = job_status(job_id, iris_config=iris_config, repo_root=repo_root, controller_url=controller_url)
-        if status.state not in _ACTIVE:
+        if is_job_finished(job_pb2.JobState.Value(status.state)):
             return status
         if timeout is not None and (time.monotonic() - start) >= timeout:
             raise TimeoutError(f"Timed out waiting for job {job_id!r} after {timeout}s")
@@ -257,9 +256,10 @@ def _collect_coreweave(
     errors: list[str] = []
     kctl = _kubectl(kubeconfig)
 
-    # Required: pod listing for the job. Kubernetes label values cap at 63 chars
-    # and disallow underscores.
-    label = job_id.lstrip("/").replace("_", "-")[:63]
+    # Required: pod listing for the job. Must use the same sanitization the
+    # iris controller uses when writing iris.job_id labels (interior '/' →
+    # '.'), or the selector matches nothing.
+    label = _sanitize_label_value(job_id.lstrip("/"))[:63]
     pods_path = output_dir / "kubernetes-pods.json"
     err = _kubectl_dump(
         [*kctl, "-n", namespace, "get", "pods", f"-l=iris.job_id={label}", "-o", "json"],
@@ -614,14 +614,14 @@ def wait(
     )
 
     if github_output and (path := os.environ.get("GITHUB_OUTPUT")):
-        succeeded = "true" if s.state == IrisJobState.SUCCEEDED else "false"
+        succeeded = "true" if s.state == JOB_STATE_SUCCEEDED else "false"
         with open(path, "a") as fh:
             fh.write(f"job_id={s.job_id}\nstate={s.state}\nsucceeded={succeeded}\n")
 
     click.echo(f"Job {job_id!r} finished with state: {s.state}", err=True)
     if s.error:
         click.echo(f"Error: {s.error}", err=True)
-    if s.state != IrisJobState.SUCCEEDED:
+    if s.state != JOB_STATE_SUCCEEDED:
         sys.exit(1)
 
 
