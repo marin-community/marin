@@ -46,6 +46,16 @@ class Controller(_message.Message):
     JOB_QUERY_SCOPE_ALL: Controller.JobQueryScope
     JOB_QUERY_SCOPE_ROOTS: Controller.JobQueryScope
     JOB_QUERY_SCOPE_CHILDREN: Controller.JobQueryScope
+    class WorkerSortField(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        WORKER_SORT_FIELD_UNSPECIFIED: _ClassVar[Controller.WorkerSortField]
+        WORKER_SORT_FIELD_WORKER_ID: _ClassVar[Controller.WorkerSortField]
+        WORKER_SORT_FIELD_LAST_HEARTBEAT: _ClassVar[Controller.WorkerSortField]
+        WORKER_SORT_FIELD_DEVICE_TYPE: _ClassVar[Controller.WorkerSortField]
+    WORKER_SORT_FIELD_UNSPECIFIED: Controller.WorkerSortField
+    WORKER_SORT_FIELD_WORKER_ID: Controller.WorkerSortField
+    WORKER_SORT_FIELD_LAST_HEARTBEAT: Controller.WorkerSortField
+    WORKER_SORT_FIELD_DEVICE_TYPE: Controller.WorkerSortField
     class LaunchJobRequest(_message.Message):
         __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_id", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout", "fail_if_exists", "reservation", "preemption_policy", "existing_job_policy", "priority_band", "task_image", "submit_argv", "client_revision_date")
         NAME_FIELD_NUMBER: _ClassVar[int]
@@ -243,14 +253,35 @@ class Controller(_message.Message):
         metadata: _job_pb2.WorkerMetadata
         status_message: str
         def __init__(self, worker_id: _Optional[str] = ..., healthy: _Optional[bool] = ..., consecutive_failures: _Optional[int] = ..., last_heartbeat: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., running_job_ids: _Optional[_Iterable[str]] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[_job_pb2.WorkerMetadata, _Mapping]] = ..., status_message: _Optional[str] = ...) -> None: ...
+    class WorkerQuery(_message.Message):
+        __slots__ = ("prefix", "type", "sort_field", "sort_direction", "offset", "limit")
+        PREFIX_FIELD_NUMBER: _ClassVar[int]
+        TYPE_FIELD_NUMBER: _ClassVar[int]
+        SORT_FIELD_FIELD_NUMBER: _ClassVar[int]
+        SORT_DIRECTION_FIELD_NUMBER: _ClassVar[int]
+        OFFSET_FIELD_NUMBER: _ClassVar[int]
+        LIMIT_FIELD_NUMBER: _ClassVar[int]
+        prefix: str
+        type: str
+        sort_field: Controller.WorkerSortField
+        sort_direction: Controller.SortDirection
+        offset: int
+        limit: int
+        def __init__(self, prefix: _Optional[str] = ..., type: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.WorkerSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ...) -> None: ...
     class ListWorkersRequest(_message.Message):
-        __slots__ = ()
-        def __init__(self) -> None: ...
+        __slots__ = ("query",)
+        QUERY_FIELD_NUMBER: _ClassVar[int]
+        query: Controller.WorkerQuery
+        def __init__(self, query: _Optional[_Union[Controller.WorkerQuery, _Mapping]] = ...) -> None: ...
     class ListWorkersResponse(_message.Message):
-        __slots__ = ("workers",)
+        __slots__ = ("workers", "total_count", "has_more")
         WORKERS_FIELD_NUMBER: _ClassVar[int]
+        TOTAL_COUNT_FIELD_NUMBER: _ClassVar[int]
+        HAS_MORE_FIELD_NUMBER: _ClassVar[int]
         workers: _containers.RepeatedCompositeFieldContainer[Controller.WorkerHealthStatus]
-        def __init__(self, workers: _Optional[_Iterable[_Union[Controller.WorkerHealthStatus, _Mapping]]] = ...) -> None: ...
+        total_count: int
+        has_more: bool
+        def __init__(self, workers: _Optional[_Iterable[_Union[Controller.WorkerHealthStatus, _Mapping]]] = ..., total_count: _Optional[int] = ..., has_more: _Optional[bool] = ...) -> None: ...
     class RegisterRequest(_message.Message):
         __slots__ = ("address", "metadata", "worker_id", "slice_id", "scale_group")
         ADDRESS_FIELD_NUMBER: _ClassVar[int]

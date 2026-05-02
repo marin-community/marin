@@ -252,10 +252,36 @@ message Controller {
     string status_message = 8;             // Error or status message (e.g., "Ping timeout", "Worker crashed")
   }
 
-  message ListWorkersRequest {}
+  // Sort fields for worker listing
+  enum WorkerSortField {
+    WORKER_SORT_FIELD_UNSPECIFIED = 0;
+    WORKER_SORT_FIELD_WORKER_ID = 1;
+    WORKER_SORT_FIELD_LAST_HEARTBEAT = 2;
+    WORKER_SORT_FIELD_DEVICE_TYPE = 3;
+  }
+
+  message WorkerQuery {
+    // Case-insensitive substring match against worker_id (and address as
+    // fallback so address:port searches also work in the dashboard).
+    string prefix = 1;
+    // Exact match against device_type ("cpu", "gpu", "tpu"). Empty = any.
+    string type = 2;
+    WorkerSortField sort_field = 3;
+    SortDirection sort_direction = 4;
+    int32 offset = 5;
+    // Max workers to return. 0 means unbounded (preserves CLI behavior);
+    // dashboard callers should always set an explicit page size.
+    int32 limit = 6;
+  }
+
+  message ListWorkersRequest {
+    WorkerQuery query = 1;
+  }
 
   message ListWorkersResponse {
     repeated WorkerHealthStatus workers = 1;
+    int32 total_count = 2;  // Total workers matching the query before paging.
+    bool has_more = 3;      // More workers available after this page.
   }
 
   message RegisterRequest {
