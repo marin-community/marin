@@ -13,7 +13,6 @@ from marin.evaluation.trace_masked_eval import (
     default_trace_masked_eval,
 )
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, output_path_of
-from marin.rl.placement import marin_prefix_for_region, singleton_region_list
 
 from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
 from experiments.chat_templates.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
@@ -46,7 +45,7 @@ from experiments.qwen3 import (
     qwen3_8b_tokenizer,
 )
 
-REGION = "us-central1"
+TRACE_EVAL_TPU_TYPE = "v5p-8"
 MAX_EXAMPLES_PER_DATASET = 128
 MAX_EVAL_LENGTH = 8192
 MAX_OUTCOME_TRACE_MESSAGES = 64
@@ -55,7 +54,7 @@ MAX_OUTCOME_MESSAGE_CHARS = 4096
 OUTCOME_PREFIX_FRACTIONS = (0.25, 0.5, 0.75, 1.0)
 PATCH_ABLATION_PREFIX_FRACTIONS = (0.0, 0.5)
 WANDB_GROUP = "exp4963-trace-masked-head-to-head"
-RUN_SUFFIX = "trace-masked-prefix-patch-ablation-128ex-us-central1"
+RUN_SUFFIX = "trace-masked-prefix-patch-ablation-128ex"
 
 LOCAL_LOSS_TAGS = ("assistant", "assistant_text", "tool_call", "tool", "observation", "final_assistant")
 OUTCOME_LOSS_TAGS = ("patch",)
@@ -252,8 +251,7 @@ def trace_eval_step(
         tokenizer=tokenizer,
         datasets=trace_datasets(chat_template),
         resource_config=ResourceConfig.with_tpu(
-            "v5p-8",
-            regions=singleton_region_list(REGION),
+            TRACE_EVAL_TPU_TYPE,
             ram="256g",
             disk="100g",
         ),
@@ -371,7 +369,7 @@ compiled_results = compile_trace_masked_results(
 
 if __name__ == "__main__":
     executor_main(
-        ExecutorMainConfig(prefix=marin_prefix_for_region(REGION)),
+        ExecutorMainConfig(),
         steps=[
             qwen2_5_7b_hf,
             qwen2_5_7b_instruct_hf,
