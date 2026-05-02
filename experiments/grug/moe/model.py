@@ -71,7 +71,7 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
-    use_learnable_qk_gain: bool = False  # per-head learnable scale replacing qk_mult
+    qk_gain_mode: str = "fixed"  # "fixed" (baseline), "per_head", or "per_layer"
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -123,8 +123,10 @@ class CausalSelfAttention(eqx.Module):
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
         qk_gain = None
-        if cfg.use_learnable_qk_gain:
+        if cfg.qk_gain_mode == "per_head":
             qk_gain = reshard(jnp.full((n,), cfg.qk_mult), P(None))
+        elif cfg.qk_gain_mode == "per_layer":
+            qk_gain = jnp.array(cfg.qk_mult)
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
@@ -148,7 +150,10 @@ class CausalSelfAttention(eqx.Module):
         k = rms_norm(k)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         if self.qk_gain is not None:
-            q = q * self.qk_gain[None, None, :, None]
+            if self.qk_gain.ndim == 0:
+                q = q * self.qk_gain
+            else:
+                q = q * self.qk_gain[None, None, :, None]
         else:
             q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)

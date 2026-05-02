@@ -30,8 +30,8 @@ def _make_steps() -> list[ExecutorStep]:
     steps: list[ExecutorStep] = []
     for dim, budget in GATE1_CONFIGS:
         model, optimizer, batch, num_steps = build_from_heuristic(budget=budget, hidden_dim=dim)
-        model = dataclasses.replace(model, use_learnable_qk_gain=True)
-        run_id = f"qk-gain-d{dim}-{budget:.2e}"
+        model = dataclasses.replace(model, qk_gain_mode="per_layer")
+        run_id = f"qk-gain-per-layer-d{dim}-{budget:.2e}"
 
         steps.append(
             ExecutorStep(
@@ -50,7 +50,7 @@ def _make_steps() -> list[ExecutorStep]:
                     mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
                     tracker=WandbConfig(
                         project="dial_moe",
-                        tags=["qk-gain", f"d={dim}", f"budget={budget:.2e}"],
+                        tags=["qk-gain", "per-layer", f"d={dim}", f"budget={budget:.2e}"],
                         group="qk-gain",
                         name=run_id,
                     ),
