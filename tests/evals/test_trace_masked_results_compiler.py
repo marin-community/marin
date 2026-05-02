@@ -5,8 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-
-from experiments.evals.exp4963_trace_masked_results_compiler import compile_trace_masked_results_fn
+from marin.evaluation.trace_masked_results import compile_trace_masked_results_fn
 
 
 def _write_results(

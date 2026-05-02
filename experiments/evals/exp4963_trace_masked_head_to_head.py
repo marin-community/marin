@@ -12,15 +12,15 @@ from marin.evaluation.trace_masked_eval import (
     TraceRowAdapterConfig,
     default_trace_masked_eval,
 )
+from marin.evaluation.trace_masked_results import (
+    TraceMaskedResultInput,
+    compile_trace_masked_results,
+)
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, output_path_of
 
 from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
 from experiments.chat_templates.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
 from experiments.chat_templates.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
-from experiments.evals.exp4963_trace_masked_results_compiler import (
-    TraceMaskedResultInput,
-    compile_trace_masked_results,
-)
 from experiments.llama import (
     llama_3_1_8b,
     llama_3_1_8b_instruct,
