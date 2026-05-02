@@ -71,6 +71,7 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
+    use_learnable_qk_gain: bool = False  # per-head learnable scale replacing qk_mult
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -114,18 +115,23 @@ class CausalSelfAttention(eqx.Module):
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
+    qk_gain: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        qk_gain = None
+        if cfg.use_learnable_qk_gain:
+            qk_gain = reshard(jnp.full((n,), cfg.qk_mult), P(None))
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            qk_gain=qk_gain,
             cfg=cfg,
         )
 
@@ -141,7 +147,10 @@ class CausalSelfAttention(eqx.Module):
         q = rms_norm(q)
         k = rms_norm(k)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
-        q = q * self.cfg.qk_mult
+        if self.qk_gain is not None:
+            q = q * self.qk_gain[None, None, :, None]
+        else:
+            q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
