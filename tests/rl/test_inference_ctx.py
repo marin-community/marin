@@ -3,6 +3,7 @@
 
 """Tests for InferenceContext utilities and chat template handling."""
 
+import asyncio
 import sys
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
@@ -20,9 +21,12 @@ from marin.rl.environments.inference_ctx import (
     vLLMInferenceContextConfig,
 )
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
+from marin.rl.environments.inference_ctx.openai_compat import OpenAICompatClient
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
-from openai.types.chat import ChatCompletionMessage
+from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
+from openai.types.completion_usage import CompletionUsage
 from transformers import AutoTokenizer
 
 _LLAMA3_MODEL_ID = "NousResearch/Meta-Llama-3-8B-Instruct"
@@ -104,6 +108,24 @@ def create_choice_with_logprobs(tokenizer, response_text: str, logprobs_values: 
     )
 
 
+def create_chat_completion(response_text: str) -> ChatCompletion:
+    return ChatCompletion(
+        id="chatcmpl-test",
+        choices=[
+            Choice(
+                finish_reason="stop",
+                index=0,
+                message=ChatCompletionMessage(role="assistant", content=response_text),
+                logprobs=ChoiceLogprobs(content=[]),
+            )
+        ],
+        created=1234567890,
+        model="test-model",
+        object="chat.completion",
+        usage=CompletionUsage(completion_tokens=1, prompt_tokens=1, total_tokens=2),
+    )
+
+
 def test_apply_chat_template(llama3_tokenizer):
     messages = [
         ChatMessage(role="system", content="You are a helpful assistant."),
@@ -145,6 +167,20 @@ def test_tokenize_prompt_adds_special_tokens(inference_ctx, llama3_tokenizer):
     assert prompt in decoded
 
 
+def test_tokenize_prompt_supports_message_lists(inference_ctx, llama3_tokenizer):
+    messages = [
+        {"role": "system", "content": "You are careful."},
+        {"role": "user", "content": "What is 2+2?"},
+    ]
+
+    tokens = inference_ctx.tokenize_prompt(messages)
+    decoded = llama3_tokenizer.decode(tokens)
+
+    assert "You are careful." in decoded
+    assert "What is 2+2?" in decoded
+    assert "<|start_header_id|>assistant<|end_header_id|>" in decoded
+
+
 def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
     """Test fallback when tokenizer has no chat template."""
     ctx = LevanterInferenceContext(
@@ -165,6 +201,29 @@ def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
     decoded = gpt2_tokenizer.decode(tokens)
     assert "user:" in decoded
     assert prompt in decoded
+
+
+def test_tokenize_prompt_fallback_message_list_no_template(gpt2_tokenizer):
+    ctx = LevanterInferenceContext(
+        LevanterInferenceContextConfig(
+            inference_server_config=None,
+            tokenizer=gpt2_tokenizer,
+            stop_tokens=None,
+            max_tokens=100,
+            mesh=None,
+            axis_mapping={},
+        )
+    )
+
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Test prompt"},
+    ]
+    tokens = ctx.tokenize_prompt(messages)
+
+    decoded = gpt2_tokenizer.decode(tokens)
+    assert "system: You are helpful." in decoded
+    assert "user: Test prompt" in decoded
 
 
 def test_response_tokens_from_choice(inference_ctx, llama3_tokenizer):
@@ -245,6 +304,7 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     # Verify token rewards
     assert len(rollout.token_rewards) == len(expected_response_tokens)
     np.testing.assert_array_equal(rollout.token_rewards, np.full(len(expected_response_tokens), reward))
+    np.testing.assert_array_equal(rollout.response_loss_mask, np.ones(len(expected_response_tokens), dtype=np.float32))
 
 
 def test_vllm_inference_context_uses_canonical_model_name(monkeypatch):
@@ -377,6 +437,136 @@ def test_vllm_async_engine_receives_engine_seed(monkeypatch):
     vLLMInferenceContext._get_llm_engine(config)
 
     assert calls["seed"] == 1234
+
+
+def test_levanter_openai_client_stays_native(inference_ctx, dummy_server):
+    inference_ctx._inference_server = dummy_server
+
+    client = inference_ctx.openai_client()
+
+    assert isinstance(client, AsyncOpenAI)
+    assert str(client.base_url).endswith("/v1/")
+
+
+def test_vllm_openai_client_delegates_to_batch_completions(monkeypatch):
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: object()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: SimpleNamespace(get_vocab=lambda: {}),
+    )
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_renderer",
+        staticmethod(lambda model_name, _tokenizer: model_name),
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="test-model",
+            canonical_model_name="meta-llama/Llama-3.1-8B-Instruct",
+            max_model_len=1024,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(temperature=0.2, top_k=13),
+        )
+    )
+
+    completion = create_chat_completion("hello")
+    completion.choices[0].prompt_token_ids = [11, 12, 13]
+    completion.choices[0].response_token_ids = [21, 22]
+    captured = {}
+
+    def _fake_batch_completions(*, prompts, temperature, n, max_tokens, top_k, stop, system_prompt):
+        captured.update(
+            prompts=prompts,
+            temperature=temperature,
+            n=n,
+            max_tokens=max_tokens,
+            top_k=top_k,
+            stop=stop,
+            system_prompt=system_prompt,
+        )
+        return [completion]
+
+    monkeypatch.setattr(ctx, "batch_completions", _fake_batch_completions)
+
+    client = ctx.openai_client()
+    result = asyncio.run(
+        client.chat.completions.create(
+            model="marin-model",
+            messages=[
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "Solve 2+2"},
+            ],
+            temperature=0.7,
+            n=2,
+            max_completion_tokens=32,
+            stop=["<stop>"],
+            extra_body={"top_k": 17, "return_tokens_as_token_ids": True},
+            logprobs=True,
+            top_logprobs=1,
+        )
+    )
+
+    assert isinstance(client, OpenAICompatClient)
+    assert result is completion
+    assert captured == {
+        "prompts": [[{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Solve 2+2"}]],
+        "temperature": 0.7,
+        "n": 2,
+        "max_tokens": 32,
+        "top_k": 17,
+        "stop": ["<stop>"],
+        "system_prompt": None,
+    }
+    assert result.choices[0].prompt_token_ids == [11, 12, 13]
+    assert result.choices[0].response_token_ids == [21, 22]
+
+
+def test_vllm_openai_client_rejects_unsupported_kwargs():
+    class _DummyCtx:
+        def batch_completions(self, **_kwargs):
+            raise AssertionError("batch_completions should not be called for unsupported kwargs")
+
+    client = OpenAICompatClient(_DummyCtx())
+
+    with pytest.raises(NotImplementedError, match="Tool-enabled verifier environments"):
+        asyncio.run(
+            client.chat.completions.create(
+                model="marin-model",
+                messages=[{"role": "user", "content": "hello"}],
+                tools=[{"type": "function"}],
+            )
+        )
+
+    with pytest.raises(NotImplementedError, match="Unsupported OpenAI compatibility extra_body keys"):
+        asyncio.run(
+            client.chat.completions.create(
+                model="marin-model",
+                messages=[{"role": "user", "content": "hello"}],
+                extra_body={"min_p": 0.1},
+            )
+        )
+
+    with pytest.raises(NotImplementedError, match="Unsupported OpenAI compatibility kwargs"):
+        asyncio.run(
+            client.chat.completions.create(
+                model="marin-model",
+                messages=[{"role": "user", "content": "hello"}],
+                response_format={"type": "json_object"},
+            )
+        )
+
+
+def test_vllm_openai_client_completion_endpoint_is_not_supported():
+    client = OpenAICompatClient(SimpleNamespace())
+
+    with pytest.raises(NotImplementedError, match="Completion-format requests are not supported"):
+        asyncio.run(client.completions.create(model="marin-model", prompt="hello"))
 
 
 def test_worker_extension_uses_public_sync_weights():

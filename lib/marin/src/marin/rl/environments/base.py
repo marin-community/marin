@@ -19,6 +19,10 @@ class MarinEnv(ABC):
     Subclasses must implement sample() method.
     """
 
+    def prepare(self) -> None:
+        """Perform one-time worker-local setup before sampling."""
+        return None
+
     @abstractmethod
     def sample(
         self,

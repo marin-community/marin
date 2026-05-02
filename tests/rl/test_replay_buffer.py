@@ -71,6 +71,7 @@ def create_test_batch(
             prompt_tokens=prompt_tokens,
             response_tokens=response_tokens,
             response_logprobs=response_logprobs,
+            response_loss_mask=np.ones(response_len, dtype=np.float32),
             token_rewards=token_rewards,
             episode_reward=episode_reward,
             temperature=1.0,

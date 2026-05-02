@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .async_vllm import AsyncvLLMInferenceContext
-from .base import BaseInferenceContext
+from .base import BaseInferenceContext, PromptLike
 from .levanter import LevanterInferenceContext, LevanterInferenceContextConfig
 from .vllm import (
     MODEL_MAPPINGS,
@@ -19,6 +19,7 @@ __all__ = [
     "BaseInferenceContext",
     "LevanterInferenceContext",
     "LevanterInferenceContextConfig",
+    "PromptLike",
     "VLLMSamplingConfig",
     "vLLMInferenceContext",
     "vLLMInferenceContextConfig",

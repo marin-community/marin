@@ -119,6 +119,7 @@ def create_test_inference_context():
             env_example_id,
             reward,
             temperature,
+            top_k=None,
             system_prompt=None,
             correctness_reward=None,
         ):
@@ -126,6 +127,7 @@ def create_test_inference_context():
             response_tokens = self.get_choice_tokens(choice)
             response_logprobs = self.get_choice_logprobs(choice)
             token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
+            response_loss_mask = jnp.ones(len(response_tokens), dtype=jnp.float32)
 
             return Rollout(
                 env_name=env_name,
@@ -133,9 +135,11 @@ def create_test_inference_context():
                 prompt_tokens=jnp.array(prompt_tokens, dtype=jnp.int32),
                 response_tokens=jnp.array(response_tokens, dtype=jnp.int32),
                 response_logprobs=jnp.array(response_logprobs, dtype=jnp.float32),
+                response_loss_mask=response_loss_mask,
                 token_rewards=token_rewards,
                 episode_reward=float(reward),
                 temperature=temperature,
+                top_k=top_k,
                 is_truncated=False,
                 correctness_reward=correctness_reward,
             )

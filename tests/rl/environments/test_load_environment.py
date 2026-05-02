@@ -3,6 +3,9 @@
 
 """Tests for environment loading from EnvConfig."""
 
+import sys
+from types import ModuleType
+
 from marin.rl.environments import EnvConfig, load_environment_from_spec
 from marin.rl.environments.math_env import MathEnv
 from marin.rl.environments.mock_env import MockEnv
@@ -36,3 +39,28 @@ def test_load_math_environment():
     assert isinstance(env, MathEnv)
     assert len(env.train_examples) > 0
     assert len(env.eval_examples) > 0
+
+
+def test_load_environment_from_spec_does_not_call_prepare():
+    module_name = "test_prepare_env_module"
+    test_module = ModuleType(module_name)
+
+    class PreparingEnv:
+        prepare_calls = 0
+
+        def __init__(self):
+            pass
+
+        def prepare(self):
+            type(self).prepare_calls += 1
+
+    test_module.PreparingEnv = PreparingEnv
+    sys.modules[module_name] = test_module
+
+    try:
+        env = load_environment_from_spec(EnvConfig(env_class=f"{module_name}.PreparingEnv", env_args={}))
+    finally:
+        sys.modules.pop(module_name, None)
+
+    assert isinstance(env, PreparingEnv)
+    assert PreparingEnv.prepare_calls == 0
