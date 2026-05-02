@@ -240,6 +240,7 @@ class _FakeCompletionContext:
         prompt_tokens: list[int],
         max_tokens: int,
         temperature: float,
+        top_p: float | None,
         stop_tokens: list[int] | None,
         seed: int | None,
         future,
