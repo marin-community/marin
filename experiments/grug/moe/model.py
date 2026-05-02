@@ -72,6 +72,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     qk_gain_mode: str = "fixed"  # "fixed" (baseline), "per_head", or "per_layer"
+    qk_norm_mode: str = "per_head"  # "per_head" (baseline) or "full"
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -143,11 +144,15 @@ class CausalSelfAttention(eqx.Module):
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
+        q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
+        k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
-        q = rms_norm(q)
-        k = rms_norm(k)
+        if self.cfg.qk_norm_mode == "full":
+            q = rearrange(rms_norm(q_flat), "... (n d) -> ... n d", d=head_dim)
+            k = rearrange(rms_norm(k_flat), "... (m d) -> ... m d", d=head_dim)
+        else:
+            q = rms_norm(rearrange(q_flat, "... (n d) -> ... n d", d=head_dim))
+            k = rms_norm(rearrange(k_flat, "... (m d) -> ... m d", d=head_dim))
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         if self.qk_gain is not None:
             if self.qk_gain.ndim == 0:
