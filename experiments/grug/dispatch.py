@@ -201,22 +201,39 @@ def _preinit_wandb_if_configured(config) -> None:
     os.environ["LEVANTER_WANDB_PREINITIALIZED"] = "1"
 
 
+def _resolve_tracker_for_5319(config):
+    """Navigate the GrugRunConfig nesting to find the wandb tracker + run id.
+
+    Returns (tracker, run_id) or (None, None) if either is missing.
+    """
+    grug_trainer = getattr(config, "trainer", None)
+    if grug_trainer is None:
+        return None, None
+    trainer = getattr(grug_trainer, "trainer", None)
+    if trainer is None:
+        return None, None
+    return getattr(trainer, "tracker", None), getattr(trainer, "id", None)
+
+
 def _preinit_wandb_offline_for_5319(config) -> None:
     """Issue #5319 option 3: pre-init wandb OFFLINE on all workers using the
-    raw ``config.run_id`` as the wandb id (skipping the fresh-attempt-id
-    mangling) so the later online switch can resume the contaminated wandb
-    run that previously fired the bug.
+    raw run id as the wandb id (skipping the fresh-attempt-id mangling) so
+    the later online switch can resume the contaminated wandb run that
+    previously fired the bug.
     """
     import os
     import sys
 
-    tracker = getattr(config, "tracker", None)
-    run_id = getattr(config, "run_id", None)
+    tracker, run_id = _resolve_tracker_for_5319(config)
     if tracker is None or run_id is None:
+        sys.stderr.write("[5319-option3] preinit skipped: no tracker/run_id on config\n")
+        sys.stderr.flush()
         return
     from levanter.tracker.wandb import WandbConfig
 
     if not isinstance(tracker, WandbConfig):
+        sys.stderr.write(f"[5319-option3] preinit skipped: tracker type {type(tracker).__name__}\n")
+        sys.stderr.flush()
         return
 
     import wandb
@@ -250,13 +267,16 @@ def _start_wandb_online_switch_thread_for_5319(config, *, delay_seconds: int) ->
     import threading
     import time
 
-    tracker = getattr(config, "tracker", None)
-    run_id = getattr(config, "run_id", None)
+    tracker, run_id = _resolve_tracker_for_5319(config)
     if tracker is None or run_id is None:
+        sys.stderr.write("[5319-option3] switch thread skipped: no tracker/run_id on config\n")
+        sys.stderr.flush()
         return
     from levanter.tracker.wandb import WandbConfig
 
     if not isinstance(tracker, WandbConfig):
+        sys.stderr.write(f"[5319-option3] switch thread skipped: tracker type {type(tracker).__name__}\n")
+        sys.stderr.flush()
         return
 
     def _switch() -> None:
