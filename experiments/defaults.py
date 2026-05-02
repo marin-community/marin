@@ -380,6 +380,7 @@ def default_train(
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
         wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
         wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
+        wandb_project: Optional W&B project. If unset, defaults to $WANDB_PROJECT, then "marin".
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -389,6 +390,8 @@ def default_train(
 
     if wandb_group is None:
         wandb_group = os.environ.get("WANDB_GROUP")
+    if wandb_project is None:
+        wandb_project = os.environ.get("WANDB_PROJECT", "marin")
 
     name = _truncate_wandb_name(name)
 

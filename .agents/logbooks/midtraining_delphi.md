@@ -1,10 +1,48 @@
 # Delphi × Nemotron-CC-Math 10 B midtraining — logbook
 
-## README / IMPORTANT — current handoff state as of 2026-05-01
+## README / IMPORTANT — current handoff state as of 2026-05-02 06:07 UTC
 
 This logbook now tracks both the midtraining experiments and the cross-region
 resume incident that happened while running them. Read this section before
 launching, relaunching, or "recovering" any Delphi midtraining job.
+
+### Current live monitor handoff
+
+Active jobs are split across two Iris users:
+
+- `/ahmedah`: active `1e20` sweep jobs.
+- `/ahmed`: active `1e21` and `1e22` sweep jobs.
+
+Current sweep state:
+
+- `1e20`: six intended sweep points are represented. Four `train_lm` children
+  are running, two `train_lm` children are pending v5p-32 capacity. See the
+  dated 2026-05-02 06:07 UTC handoff section for exact job ids.
+- `1e21`: six v5p-64 BATCH points were launched in `us-east5`. Four parent
+  coordinators are running and have pending v5p-64 `train_lm` children; two
+  parent coordinators are still pending CPU coordinator capacity.
+- `1e22`: six v5p-256 BATCH points were launched in `us-east5`. All six parent
+  coordinators are still pending CPU coordinator capacity; no v5p-256 child has
+  materialized yet.
+
+MirrorFS issue to remember:
+
+- The earlier `1e21-v5` v5p-256 pilot failed during checkpoint initialization
+  because Levanter's `mirror://` TensorStore staging path made every rank stage
+  the base checkpoint. One rank hit `TransferBudgetExceeded`; others hit mirror
+  lock handoff failures and then JAX coordination cascaded.
+- This branch has a local quick patch that propagates `MARIN_MIRROR_BUDGET_GB`
+  into nested train jobs and retries MirrorFS lock handoff for 120s. Tests passed,
+  but the deeper all-rank staging design problem is still tracked in
+  https://github.com/marin-community/marin/issues/5374.
+- For the `1e22` launch, the base checkpoint was copied from
+  `gs://marin-us-central1/.../step-38206` to
+  `gs://marin-us-east5/.../step-38206` before submission to avoid forcing
+  v5p-256 ranks to stage it cross-region.
+- If a launch fails around checkpoint init, do not blindly relaunch. Check the
+  exact output path, whether a permanent/temp checkpoint exists, and grep logs
+  for `TransferBudgetExceeded`, `Could not acquire mirror lock`,
+  `_stage_mirror_to_local`, `Using output path`, and `Using run ID`.
 
 ### Hard resume rule
 
@@ -7577,3 +7615,404 @@ Conclusion:
   into main.
 - There is still no full automatic region migration/resume system. For old failed
   runs, still force the exact old output path and verify resume logs.
+
+## 2026-05-02 04:49 UTC — launched first 1e21-v5 current-mix point on `/ahmed`
+
+User asked to launch the first current 1e21 config with `v5p-256`,
+interactive priority, and the local Iris account `/ahmed`.
+
+Interpretation of "first config": `1e21-v5 × p67m33 × lr0.33`
+(`MIDTRAIN_MIX_NAME=67p_33m_highquality_nemo_math`).
+
+Sanity check before submission:
+
+```bash
+MIDTRAIN_SELECT_BASE=1e21-v5
+MIDTRAIN_SELECT_LR=0.33
+MIDTRAIN_MIX_NAME=67p_33m_highquality_nemo_math
+MIDTRAIN_TPU_TYPE=v5p-256
+```
+
+Generated exactly one step:
+
+- Step: `checkpoints/delphi-1e21-p67m33-9p25b-lr0.33`
+- Child TPU resource: `v5p-256` (`replicas=32`)
+- Train steps: `4,411`
+- Batch: `512`
+- Peak LR / Adam LR: `2.45025e-3` / `1.42362e-4`
+- W&B project: `delphi-midtraining`
+
+First submission:
+
+```bash
+uv run iris --cluster=marin job run \
+  --user ahmed \
+  --priority interactive \
+  --cpu 1 --memory 3GB --disk 5GB --extra marin:tpu \
+  --region us-central1 --region us-east5 \
+  --job-name delphi-1e21-p67m33-lr0p33-int256-20260502-044350 \
+  --no-wait \
+  -e MIDTRAIN_SELECT_BASE 1e21-v5 \
+  -e MIDTRAIN_SELECT_LR 0.33 \
+  -e MIDTRAIN_MIX_NAME 67p_33m_highquality_nemo_math \
+  -e MIDTRAIN_TPU_TYPE v5p-256 \
+  -- python experiments/exp_delphi_math_10b_midtrain.py
+```
+
+Failed before launching children: coordinator build ran out of disk extracting
+`torch==2.10.0+cpu` into `/uv/cache` (`No space left on device`). This was a
+coordinator build failure only; no `train_lm` child was created.
+
+Relaunch:
+
+```bash
+uv run iris --cluster=marin job run \
+  --user ahmed \
+  --priority interactive \
+  --cpu 1 --memory 3GB --disk 20GB --enable-extra-resources --extra marin:tpu \
+  --region us-central1 --region us-east5 \
+  --job-name delphi-1e21-p67m33-lr0p33-int256-20260502-044538 \
+  --no-wait \
+  -e MIDTRAIN_SELECT_BASE 1e21-v5 \
+  -e MIDTRAIN_SELECT_LR 0.33 \
+  -e MIDTRAIN_MIX_NAME 67p_33m_highquality_nemo_math \
+  -e MIDTRAIN_TPU_TYPE v5p-256 \
+  -- python experiments/exp_delphi_math_10b_midtrain.py
+```
+
+Current status at launch handoff:
+
+- Parent: `/ahmed/delphi-1e21-p67m33-lr0p33-int256-20260502-044538` running.
+- Child: `/ahmed/delphi-1e21-p67m33-lr0p33-int256-20260502-044538/train_lm`
+  submitted, `32/32` tasks pending for v5p-256 capacity.
+- All child tasks have `priority_band=2` (`INTERACTIVE`).
+- `/ahmed` budget spend was still `8 / 75,000` immediately after child submission
+  because pending tasks do not count toward spend until assigned/building/running.
+- Training output path/run id selected by the east5 coordinator:
+  `gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.33-ab4e64`
+  / `delphi-1e21-p67m33-9p25b-lr0.33-ab4e64`.
+- Pre-flight cache disjointness check skipped due unresolved `VersionedValue`
+  wrappers, same known issue as the 1e20 launches. Layers 1+2 validated at import;
+  math disjointness property is still by Feistel split.
+- Cache/dependency steps skipped as already succeeded; no rebuild observed.
+
+Caveat: once the v5p-256 child actually gets assigned/running, this single job's
+resource spend will exceed `/ahmed`'s 75k interactive budget. That means the
+task can become BATCH-effective after assignment even though it was submitted as
+INTERACTIVE and is INTERACTIVE while pending.
+
+## 2026-05-02 05:38 UTC — patched MirrorFS checkpoint staging failure and relaunched v5p-256 pilot
+
+The `20260502-044538` v5p-256 child failed before training while initializing
+from the `1e21-v5` checkpoint:
+
+- Parent: `/ahmed/delphi-1e21-p67m33-lr0p33-int256-20260502-044538`
+- Child: `/ahmed/delphi-1e21-p67m33-lr0p33-int256-20260502-044538/train_lm`
+- Child landed in `us-east5` and discovered the base checkpoint at
+  `mirror://adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-21979`.
+- Levanter's TensorStore workaround eagerly staged the whole `mirror://`
+  checkpoint tree into `gs://marin-us-east5/...` on all 32 ranks.
+- First real failure was a `TransferBudgetExceeded` on task 24:
+  the nested `train_lm` job used the default 10GB mirror budget even though the
+  experiment configured `mirrored(..., budget_gb=50)`.
+- Other ranks also hit `Could not acquire mirror lock ... after waiting` because
+  the MirrorFS lock handoff path gave up after one failed reacquire.
+
+Applied two local fixes:
+
+1. `lib/marin/src/marin/execution/executor.py`
+   - Propagate the resolved `MirroredValue` budget into dataclass configs with
+     an `env_vars` field as `MARIN_MIRROR_BUDGET_GB`.
+   - This is necessary because `run_levanter_train_lm` submits a nested Fray/Iris
+     child; the executor process's `mirror_budget(...)` context does not cross
+     that process boundary.
+2. `lib/rigging/src/rigging/filesystem.py`
+   - Replace the one-shot MirrorFS lock handoff check with a 120s retry loop.
+   - This avoids spurious failure when another waiter wins the lock after the
+     first holder releases it.
+
+Regression tests added and passed:
+
+```bash
+uv run pytest tests/execution/test_executor.py -x --timeout=120
+# 22 passed, 1 skipped
+
+uv run pytest lib/rigging/tests/test_mirror_fs.py -x --timeout=120
+# 21 passed
+```
+
+Opened tracking issue for the deeper design problem:
+`https://github.com/marin-community/marin/issues/5374`
+(`[levanter] Avoid all-rank mirror checkpoint staging`). The quick patch does
+not eliminate eager all-rank staging; it only fixes the immediate budget
+propagation and lock handoff bugs.
+
+Relaunched the same single pilot from the patched worktree:
+
+```bash
+uv run iris --cluster=marin job run \
+  --user ahmed \
+  --priority interactive \
+  --cpu 1 --memory 3GB --disk 20GB --enable-extra-resources --extra marin:tpu \
+  --region us-central1 --region us-east5 \
+  --job-name delphi-1e21-p67m33-lr0p33-int256-20260502-053250 \
+  --no-wait \
+  -e MIDTRAIN_SELECT_BASE 1e21-v5 \
+  -e MIDTRAIN_SELECT_LR 0.33 \
+  -e MIDTRAIN_MIX_NAME 67p_33m_highquality_nemo_math \
+  -e MIDTRAIN_TPU_TYPE v5p-256 \
+  -- python experiments/exp_delphi_math_10b_midtrain.py
+```
+
+Current handoff status:
+
+- Parent: `/ahmed/delphi-1e21-p67m33-lr0p33-int256-20260502-053250` running.
+- Parent landed in `us-east5` and chose output/run id:
+  `gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.33-ab4e64`
+  / `delphi-1e21-p67m33-9p25b-lr0.33-ab4e64`.
+- Child: `/ahmed/delphi-1e21-p67m33-lr0p33-int256-20260502-053250/train_lm`
+  submitted, `32/32` tasks pending.
+- Pending reason: waiting for workers in scale group
+  `tpu_v5p-preemptible_256-us-east5-a` to become ready.
+- Verified via `job_config.environment_json` that the child request includes
+  `MARIN_MIRROR_BUDGET_GB=50`.
+- Superseded by the 2026-05-02 05:55 UTC decision below: the v5p-256 pilot was
+  stopped while still pending, then relaunched as the full v5p-64 batch sweep
+  with the same output path forced for `p67m33/lr0.33`.
+
+## 2026-05-02 05:55 UTC — stopped v5p-256 pilot and launched full 1e21 v5p-64 batch sweep
+
+User asked to move the 1e21 sweep to v5p-64 and batch priority while preserving
+the already-started `p67m33/lr0.33` run namespace.
+
+Pre-launch checks:
+
+- Existing run namespace:
+  `gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.33-ab4e64`
+  / `delphi-1e21-p67m33-9p25b-lr0.33-ab4e64`.
+- No Levanter permanent checkpoint existed under
+  `.../checkpoints/delphi-1e21-p67m33-9p25b-lr0.33-ab4e64/`.
+- No temp checkpoint existed under
+  `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/delphi-1e21-p67m33-9p25b-lr0.33-ab4e64/`.
+- Therefore the relaunch preserves the output path/W&B run id, but resumes from
+  the base `1e21-v5` initialization rather than a midtraining step checkpoint.
+
+Stopped the pending v5p-256 recovery job so it would release the executor lock:
+
+```bash
+uv run iris --cluster=marin job stop /ahmed/delphi-1e21-p67m33-lr0p33-int256-20260502-053250
+```
+
+Submitted six v5p-64 BATCH coordinators in `us-east5`:
+
+- `/ahmed/delphi-1e21-p67m33-lr0p33-batch64-20260502-055342`
+  - `MIDTRAIN_OUTPUT_PATH_OVERRIDE=gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.33-ab4e64`
+- `/ahmed/delphi-1e21-p67m33-lr0p5-batch64-20260502-055342`
+- `/ahmed/delphi-1e21-p67m33-lr0p67-batch64-20260502-055342`
+- `/ahmed/delphi-1e21-p33m67-lr0p33-batch64-20260502-055342`
+- `/ahmed/delphi-1e21-p33m67-lr0p5-batch64-20260502-055342`
+- `/ahmed/delphi-1e21-p33m67-lr0p67-batch64-20260502-055342`
+
+Common launch shape:
+
+```bash
+uv run iris --cluster=marin job run \
+  --user ahmed \
+  --priority batch \
+  --cpu 1 --memory 4GB --disk 50GB \
+  --enable-extra-resources --extra marin:tpu \
+  --region us-east5 \
+  --job-name <job-name> \
+  --no-wait \
+  -e MIDTRAIN_SELECT_BASE 1e21-v5 \
+  -e MIDTRAIN_SELECT_LR <0.33|0.5|0.67> \
+  -e MIDTRAIN_MIX_NAME <67p_33m_highquality_nemo_math|33p_67m_highquality_nemo_math> \
+  -e MIDTRAIN_TPU_TYPE v5p-64 \
+  -e MIDTRAIN_TRAIN_REGION us-east5 \
+  [ -e MIDTRAIN_OUTPUT_PATH_OVERRIDE gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.33-ab4e64 ] \
+  -- python experiments/exp_delphi_math_10b_midtrain.py
+```
+
+Initial verification:
+
+- `p67m33/lr0.33` logs show:
+  - `Using output path: gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.33-ab4e64`
+  - `Using run ID: delphi-1e21-p67m33-9p25b-lr0.33-ab4e64`
+  - `device=TpuConfig(variant='v5p-64', kind='tpu', topology=None)`
+- `p67m33/lr0.5` logs show new namespace
+  `gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.5-114e49`
+  and v5p-64 device config.
+- At the first status check, the two earliest coordinators were RUNNING with
+  `train_lm` children PENDING for v5p-64 capacity; the remaining coordinators
+  were pending for us-east5 CPU workers to become ready.
+
+## 2026-05-02 06:02 UTC — copied 1e22 base checkpoint to east5 and launched v5p-256 sweep
+
+User asked to launch the full `1e22-v5` sweep on v5p-256 in `us-east5-a`, and
+explicitly approved copying model weights to east5 if needed. The checkpoint was
+present only in the central bucket:
+
+- Source:
+  `gs://marin-us-central1/adamh-scaling-ladder-nemotron-optimal-1e+22-v5-025b0e/checkpoints/step-38206`
+- Destination:
+  `gs://marin-us-east5/adamh-scaling-ladder-nemotron-optimal-1e+22-v5-025b0e/checkpoints/step-38206`
+
+Copied with direct `gcloud storage cp -r` (not Storage Transfer Service):
+
+```bash
+gcloud storage cp -r \
+  gs://marin-us-central1/adamh-scaling-ladder-nemotron-optimal-1e+22-v5-025b0e/checkpoints/step-38206 \
+  gs://marin-us-east5/adamh-scaling-ladder-nemotron-optimal-1e+22-v5-025b0e/checkpoints/
+```
+
+Post-copy verification:
+
+```text
+1821588428   gs://marin-us-central1/.../checkpoints/step-38206
+1821588428   gs://marin-us-east5/.../checkpoints/step-38206
+```
+
+Submitted six v5p-256 BATCH coordinators pinned to `us-east5`:
+
+- `/ahmed/delphi-1e22-p67m33-lr0p33-batch256-20260502-060043`
+- `/ahmed/delphi-1e22-p67m33-lr0p5-batch256-20260502-060043`
+- `/ahmed/delphi-1e22-p67m33-lr0p67-batch256-20260502-060043`
+- `/ahmed/delphi-1e22-p33m67-lr0p33-batch256-20260502-060043`
+- `/ahmed/delphi-1e22-p33m67-lr0p5-batch256-20260502-060043`
+- `/ahmed/delphi-1e22-p33m67-lr0p67-batch256-20260502-060043`
+
+Common launch shape:
+
+```bash
+uv run iris --cluster=marin job run \
+  --user ahmed \
+  --priority batch \
+  --cpu 1 --memory 4GB --disk 50GB \
+  --enable-extra-resources --extra marin:tpu \
+  --region us-east5 \
+  --job-name <job-name> \
+  --no-wait \
+  -e MIDTRAIN_SELECT_BASE 1e22-v5 \
+  -e MIDTRAIN_SELECT_LR <0.33|0.5|0.67> \
+  -e MIDTRAIN_MIX_NAME <67p_33m_highquality_nemo_math|33p_67m_highquality_nemo_math> \
+  -e MIDTRAIN_TPU_TYPE v5p-256 \
+  -e MIDTRAIN_TRAIN_REGION us-east5 \
+  -- python experiments/exp_delphi_math_10b_midtrain.py
+```
+
+Initial status immediately after submission: all six parent coordinators were
+`JOB_STATE_PENDING`, waiting for east5 CPU coordinator workers. The latest
+pending reason was `no_capacity: cpu_vm_e2_highmem_2_ondemand-us-east5-a=at_max_slices,
+cpu_vm_e2_highmem_2_ondemand-us-east5-b=backoff`. No child `train_lm` jobs had
+materialized yet at the first check, so v5p-256 TPU capacity had not yet been
+requested by the children.
+
+## 2026-05-02 06:07 UTC — consolidated live sweep handoff for next monitor
+
+Source of truth for this snapshot:
+
+```bash
+uv run iris --cluster=marin job list --json --prefix /ahmedah/delphi-1e20
+uv run iris --cluster=marin job list --json --prefix /ahmed/delphi-1e21
+uv run iris --cluster=marin job list --json --prefix /ahmed/delphi-1e22
+```
+
+State names below are Iris job states. `train_lm` task counts are from
+`task_state_counts`; parent rows are the CPU coordinator jobs.
+
+### 1e20 sweep (`/ahmedah`)
+
+The active 1e20 sweep has six intended points. Four are actively training and
+two are queued for v5p-32 TPU capacity.
+
+| Point | Parent job | Parent state | `train_lm` state | Notes |
+|---|---|---:|---:|---|
+| `p67m33/lr0.5` | `/ahmedah/delphi-1e20-p67m33-lr0p5-int64-20260502-014459` | RUNNING | RUNNING, 8 ranks | v5p-64 survivor. Parent has 0 failures, 0 preemptions; child has 0 failures, 7 preemptions. |
+| `p67m33/lr0.33` | `/ahmedah/delphi-1e20-p67m33-lr0p33-int32-20260502-025832` | RUNNING | RUNNING, 4 ranks | v5p-32. Parent has 0 failures, 1 preemption. |
+| `p67m33/lr0.67` | `/ahmedah/delphi-1e20-p67m33-lr0p67-int32-20260502-025832` | RUNNING | RUNNING, 4 ranks | v5p-32. Parent has 0 failures, 1 preemption. |
+| `p33m67/lr0.33` | `/ahmedah/delphi-1e20-p33m67-lr0p33-int32-20260502-025832` | RUNNING | RUNNING, 4 ranks | v5p-32. Parent has 0 failures, 0 preemptions. |
+| `p33m67/lr0.5` | `/ahmedah/delphi-1e20-p33m67-lr0p5-int32-20260502-025832` | RUNNING | PENDING, 4 ranks | Waiting for v5p-32 capacity. Parent has 0 failures, 1 preemption. |
+| `p33m67/lr0.67` | `/ahmedah/delphi-1e20-p33m67-lr0p67-int32-20260502-025832` | RUNNING | PENDING, 4 ranks | Waiting for v5p-32 capacity. Parent has 0 failures, 1 preemption. |
+
+The two pending v5p-32 children currently report:
+`Coscheduling: need 4 workers ... Insufficient TPUs (need 4, available 0)` and
+`tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity`.
+
+Older `20260502-014459` v5p-64 siblings other than `p67m33/lr0.5` failed with
+`RuntimeError: 1 step(s) failed`; those are superseded by the v5p-32 relaunches
+above and should not be recovered blindly.
+
+### 1e21 sweep (`/ahmed`)
+
+The current 1e21 sweep is the v5p-64 BATCH relaunch in `us-east5`. All six points
+have been submitted. Four coordinators are running and have `train_lm` children
+waiting for v5p-64 capacity; two coordinators are still waiting for CPU
+coordinator capacity.
+
+| Point | Parent job | Parent state | `train_lm` state | Notes |
+|---|---|---:|---:|---|
+| `p67m33/lr0.33` | `/ahmed/delphi-1e21-p67m33-lr0p33-batch64-20260502-055342` | RUNNING | PENDING, 8 ranks | Relaunch preserves old namespace with `MIDTRAIN_OUTPUT_PATH_OVERRIDE=gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.33-ab4e64`. |
+| `p67m33/lr0.5` | `/ahmed/delphi-1e21-p67m33-lr0p5-batch64-20260502-055342` | RUNNING | PENDING, 8 ranks | New namespace verified in logs: `gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.5-114e49`. |
+| `p67m33/lr0.67` | `/ahmed/delphi-1e21-p67m33-lr0p67-batch64-20260502-055342` | RUNNING | PENDING, 8 ranks | Waiting for v5p-64 capacity. |
+| `p33m67/lr0.33` | `/ahmed/delphi-1e21-p33m67-lr0p33-batch64-20260502-055342` | RUNNING | PENDING, 8 ranks | Waiting for v5p-64 capacity. |
+| `p33m67/lr0.5` | `/ahmed/delphi-1e21-p33m67-lr0p5-batch64-20260502-055342` | PENDING | Not created yet | Waiting for east5 CPU coordinator capacity. |
+| `p33m67/lr0.67` | `/ahmed/delphi-1e21-p33m67-lr0p67-batch64-20260502-055342` | PENDING | Not created yet | Waiting for east5 CPU coordinator capacity. |
+
+The v5p-64 pending children currently report:
+`Coscheduling: need 8 workers ... Insufficient TPUs (need 4, available 0)` and
+`tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity`.
+
+The two CPU-pending coordinators report:
+`no_capacity: cpu_vm_e2_highmem_2_ondemand-us-east5-a=at_max_slices,
+cpu_vm_e2_highmem_2_ondemand-us-east5-b=backoff`.
+
+### 1e22 sweep (`/ahmed`)
+
+The 1e22 sweep has six v5p-256 BATCH parent coordinators submitted in `us-east5`.
+All six are still CPU-pending and no `train_lm` child has materialized yet, so
+these jobs are not yet holding/requesting v5p-256 TPU slices.
+
+| Point | Parent job | Parent state | `train_lm` state |
+|---|---|---:|---:|
+| `p67m33/lr0.33` | `/ahmed/delphi-1e22-p67m33-lr0p33-batch256-20260502-060043` | PENDING | Not created yet |
+| `p67m33/lr0.5` | `/ahmed/delphi-1e22-p67m33-lr0p5-batch256-20260502-060043` | PENDING | Not created yet |
+| `p67m33/lr0.67` | `/ahmed/delphi-1e22-p67m33-lr0p67-batch256-20260502-060043` | PENDING | Not created yet |
+| `p33m67/lr0.33` | `/ahmed/delphi-1e22-p33m67-lr0p33-batch256-20260502-060043` | PENDING | Not created yet |
+| `p33m67/lr0.5` | `/ahmed/delphi-1e22-p33m67-lr0p5-batch256-20260502-060043` | PENDING | Not created yet |
+| `p33m67/lr0.67` | `/ahmed/delphi-1e22-p33m67-lr0p67-batch256-20260502-060043` | PENDING | Not created yet |
+
+All six currently report the same CPU coordinator capacity issue:
+`no_capacity: cpu_vm_e2_highmem_2_ondemand-us-east5-a=at_max_slices,
+cpu_vm_e2_highmem_2_ondemand-us-east5-b=backoff`.
+
+The 1e22 base checkpoint was copied before launch:
+
+- Source:
+  `gs://marin-us-central1/adamh-scaling-ladder-nemotron-optimal-1e+22-v5-025b0e/checkpoints/step-38206`
+- Destination:
+  `gs://marin-us-east5/adamh-scaling-ladder-nemotron-optimal-1e+22-v5-025b0e/checkpoints/step-38206`
+- Verified byte totals matched: `1821588428` bytes on both source and dest.
+
+### MirrorFS issue for the next agent
+
+Do not treat the MirrorFS checkpoint problem as fully solved by the quick patch.
+The local branch patch only raises the transfer budget inherited by nested
+`train_lm` jobs and makes MirrorFS lock handoff wait up to 120s. It reduces the
+immediate failure mode but does not change the fact that Levanter checkpoint
+loading can still make many TPU ranks try to stage a mirrored checkpoint.
+
+The earlier `1e21-v5` v5p-256 pilot failed during checkpoint initialization:
+
+- one rank hit `TransferBudgetExceeded` while staging from `mirror://`;
+- peers hit mirror lock handoff failures such as `Could not acquire mirror lock`;
+- JAX coordination then cascaded into a parent-level `RuntimeError: 1 step(s) failed`.
+
+Track the deeper fix in GitHub issue:
+https://github.com/marin-community/marin/issues/5374
+
+For any failed/restarted midtraining job, follow the hard resume rule at the top
+of this file. In particular, grep startup logs for `Using output path` and
+`Using run ID`, then verify `Resuming training from step ...` before considering
+the job recovered. For MirrorFS-specific failures, also grep for
+`TransferBudgetExceeded`, `Could not acquire mirror lock`, and
+`_stage_mirror_to_local`.

@@ -887,17 +887,13 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
 
         lock = create_lock(self._lock_path_for(path), self._worker_id)
 
-        if not lock.try_acquire():
-            for _ in range(60):
-                time.sleep(2)
-                if self._fs_exists(local_url):
-                    return
-                if not lock.has_active_holder():
-                    break
+        deadline = time.monotonic() + 120
+        while not lock.try_acquire():
             if self._fs_exists(local_url):
                 return
-            if not lock.try_acquire():
+            if time.monotonic() >= deadline:
                 raise RuntimeError(f"Could not acquire mirror lock for {path} after waiting")
+            time.sleep(2)
 
         try:
             if self._fs_exists(local_url):

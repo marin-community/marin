@@ -67,6 +67,33 @@ def test_read_copies_from_remote(mirror_fs, mirror_env):
         assert f.read() == b"remote-data"
 
 
+def test_copy_waits_when_lock_race_is_lost(monkeypatch, mirror_fs, mirror_env):
+    """A waiter that loses a lock handoff race should keep waiting."""
+
+    class RacingLock:
+        def __init__(self):
+            self.attempts = 0
+
+        def try_acquire(self):
+            self.attempts += 1
+            return self.attempts == 3
+
+        def has_active_holder(self):
+            return False
+
+        def release(self):
+            pass
+
+    lock = RacingLock()
+    monkeypatch.setattr("rigging.filesystem.create_lock", lambda _path, _worker_id: lock)
+    monkeypatch.setattr("rigging.filesystem.time.sleep", lambda _seconds: None)
+
+    _write_file(mirror_env["remote1"], "models/ckpt.bin", b"remote-data")
+
+    assert mirror_fs.cat_file("models/ckpt.bin") == b"remote-data"
+    assert lock.attempts == 3
+
+
 def test_file_not_found_raises(mirror_fs):
     with pytest.raises(FileNotFoundError, match="not found in any marin bucket"):
         mirror_fs.cat_file("nonexistent/file.bin")
