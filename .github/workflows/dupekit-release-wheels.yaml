@@ -74,6 +74,26 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # Branch setup must happen BEFORE rust_package.py so the wheel-pin
+      # modifications land on the PR branch's tree, not get clobbered by a
+      # later checkout. Resetting to $GITHUB_SHA gives rust_package a clean
+      # baseline to write on top of, regardless of what the existing PR
+      # branch contained.
+      - name: Set up release branch
+        env:
+          BRANCH: auto/update-dupekit-wheels
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$BRANCH" --depth=1 2>/dev/null || true
+          if git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null; then
+            git checkout -B "$BRANCH" "refs/remotes/origin/$BRANCH"
+            git checkout "$GITHUB_SHA" -- .
+          else
+            git checkout -B "$BRANCH"
+          fi
+
       - name: Publish release and update pyproject
         run: python scripts/rust_package.py --skip-build
 
@@ -90,17 +110,6 @@ jobs:
           BODY="Auto-generated: updates pyproject.toml to pin dupekit wheels from commit ${{ github.sha }}."
           echo "$BODY" > pr_body.md
           BODY_FILE=pr_body.md
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git fetch origin "$BRANCH" --depth=1 2>/dev/null || true
-          if git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null; then
-            git checkout -B "$BRANCH" "refs/remotes/origin/$BRANCH"
-            git checkout "$GITHUB_SHA" -- .
-          else
-            git checkout -B "$BRANCH"
-          fi
 
           git add -A
           if git diff --cached --quiet; then
