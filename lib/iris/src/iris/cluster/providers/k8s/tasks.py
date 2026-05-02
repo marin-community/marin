@@ -23,22 +23,27 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
-from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
 from finelog.rpc import logging_pb2
 from finelog.types import LogPusherProtocol, str_to_log_level
+from rigging.log_setup import parse_log_level
+from rigging.timing import Timestamp
+
+from iris.cluster.controller.transitions import (
+    ClusterCapacity,
+    DirectProviderBatch,
+    DirectProviderSyncResult,
+    RunningTaskEntry,
+    SchedulingEvent,
+    TaskUpdate,
+)
 from iris.cluster.log_store_helpers import task_log_key
 from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
 from iris.cluster.types import JobName, TaskAttempt, get_gpu_count
-from rigging.log_setup import parse_log_level
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
-from iris.rpc import worker_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 

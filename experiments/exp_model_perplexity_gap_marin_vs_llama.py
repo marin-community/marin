@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from fray.types import ResourceConfig
-
-from experiments.defaults import default_raw_validation_sets
 from marin.evaluation.perplexity_gap import (
     GapFinderModelConfig,
     model_perplexity_gap_from_scores,
     model_perplexity_scores,
 )
 from marin.execution.executor import executor_main
+
+from experiments.defaults import default_raw_validation_sets
 
 RESOURCE_CONFIG = ResourceConfig.with_tpu(
     "v5p-8",

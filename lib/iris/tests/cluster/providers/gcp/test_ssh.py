@@ -10,7 +10,6 @@ import threading
 from unittest.mock import patch
 
 import pytest
-
 from iris.cluster.providers.gcp.ssh import OsLoginKeyProvisioner, ssh_key_file, uses_os_login
 from iris.rpc import config_pb2
 

@@ -6,12 +6,12 @@
 from datetime import datetime, timezone
 from typing import Protocol
 
-from pydantic import BaseModel
-
 from finelog.rpc import logging_pb2
+from pydantic import BaseModel
+from rigging.timing import Timestamp
+
 from iris.rpc import job_pb2
 from iris.rpc.job_pb2 import TaskState
-from rigging.timing import Timestamp
 
 
 class LogLine(BaseModel):

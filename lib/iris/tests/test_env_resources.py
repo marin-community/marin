@@ -7,7 +7,6 @@ import os
 
 import pytest
 from google.protobuf import json_format
-
 from iris.env_resources import TaskResources, _read_iris_resource_proto, _read_proc_meminfo_total
 from iris.rpc import job_pb2
 

@@ -31,7 +31,7 @@ maintaining such forks.
 | Package | Repository | How Marin depends on it |
 |---------|-----------|------------------------|
 | Harbor  | [`marin-community/harbor`](https://github.com/marin-community/harbor) | Git dependency pinned to a commit rev in the root `pyproject.toml` |
-| vllm-tpu | [`marin-community/vllm-tpu`](https://github.com/marin-community/vllm-tpu) | PyPI version pin (`vllm-tpu==0.13.2.post6`) in `lib/marin/pyproject.toml` |
+| vllm-tpu | [`marin-community/vllm-tpu`](https://github.com/marin-community/vllm-tpu) | PyPI version pin (`vllm-tpu==0.18.0`) in `lib/marin/pyproject.toml` |
 
 ## When to Fork
 

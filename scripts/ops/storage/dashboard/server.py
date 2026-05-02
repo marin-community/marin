@@ -33,9 +33,6 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from starlette.responses import FileResponse, JSONResponse
-
-
 from scripts.storage.constants import (
     GCS_DISCOUNT,
     continent_for_region,
@@ -51,6 +48,7 @@ from scripts.storage.db import (
     flush_protect_rules,
     init_db,
 )
+from starlette.responses import FileResponse, JSONResponse
 
 log = logging.getLogger(__name__)
 

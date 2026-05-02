@@ -11,16 +11,16 @@ from enum import StrEnum
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import load_tokenizer
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
+from marin.rl.environments.inference_ctx.render import Llama3Renderer, Message, Qwen3Renderer, Renderer
+from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
-from openai.types.completion_usage import CompletionUsage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext
-from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
-from marin.rl.environments.inference_ctx.render import Llama3Renderer, Qwen3Renderer, Renderer, Message
-from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
-from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
+from openai.types.completion_usage import CompletionUsage
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,8 @@ class vLLMInferenceContextConfig:
     tensor_parallel_size: int
     gpu_memory_utilization: float
     sampling_params: VLLMSamplingConfig
+    seed: int = 0
+    """Engine-level vLLM seed. TPU vLLM does not support per-request sampling seeds."""
     canonical_model_name: str | None = None
     mode: InferenceMode = InferenceMode.SYNC
     load_format: str = "auto"
@@ -184,15 +186,18 @@ class vLLMInferenceContext(BaseInferenceContext):
         else:
             raise ValueError(f"Invalid inference mode: {inference_config.mode}")
 
-        return llm_engine_cls(
-            model=inference_config.model_name,
-            max_model_len=inference_config.max_model_len,
-            tensor_parallel_size=inference_config.tensor_parallel_size,
-            gpu_memory_utilization=inference_config.gpu_memory_utilization,
-            load_format=inference_config.load_format,
-            enforce_eager=inference_config.enforce_eager,
-            kv_cache_metrics=inference_config.kv_cache_metrics,
-        )
+        engine_kwargs = {
+            "model": inference_config.model_name,
+            "max_model_len": inference_config.max_model_len,
+            "tensor_parallel_size": inference_config.tensor_parallel_size,
+            "gpu_memory_utilization": inference_config.gpu_memory_utilization,
+            "load_format": inference_config.load_format,
+            "enforce_eager": inference_config.enforce_eager,
+            "kv_cache_metrics": inference_config.kv_cache_metrics,
+            "seed": inference_config.seed,
+        }
+
+        return llm_engine_cls(**engine_kwargs)
 
     def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize the prompt with the choice's prompt token IDs.

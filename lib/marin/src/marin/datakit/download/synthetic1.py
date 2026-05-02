@@ -13,8 +13,8 @@ from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.normalize import normalize_step
 from marin.datakit.download.rollout_transforms import strip_think_tags
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "PrimeIntellect/SYNTHETIC-1"

@@ -6,10 +6,11 @@ Benchmarks focusing purely on Memory -> Rust FFI overhead.
 Benchmarks include the cost of converting Arrow data to target format (Dicts, Structs) if applicable.
 """
 
-import pytest
-import pyarrow as pa
 from typing import Any
+
 import dupekit
+import pyarrow as pa
+import pytest
 
 
 @pytest.mark.parametrize(

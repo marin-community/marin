@@ -17,10 +17,11 @@ Usage: python gh_issues_from_markdown.py <markdown_file>
 
 """
 
+import json
 import os
 from datetime import datetime
+
 import requests
-import json
 
 # Configuration
 GITHUB_REPO = "stanford-crfm/marin"
