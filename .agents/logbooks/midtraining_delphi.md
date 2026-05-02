@@ -7246,6 +7246,90 @@ If `MIDTRAIN_MIX_NAME` is unset (legacy single-step path), the pre-flight emits 
 - Levanter shuffle internals: `lib/levanter/src/levanter/data/text/datasets.py:519-554`, `lib/levanter/src/levanter/data/permutation.py:177-276`.
 - Project doc reference: `.agents/projects/delphi_midtraining.md` §10.
 
+## 2026-05-02 04:00 UTC — sweep launch chaos, JAX-coordinator cascade, lessons learned
+
+Long live-debugging session. Captured here so the next agent inherits the empirical findings without re-discovering them at 4 AM.
+
+### Sweep timeline (all on 1e20-iso-d2048-L21, BS=128, K=0.20 → 4.93 B tokens / 9,413 steps, mostly us-east5-a)
+
+| Sweep ID | TPU | Priority | Outcome |
+|---|---|---|---|
+| `20260501-234550` | v5p-32 | batch | All 12 failed with `TypeError: object of type 'VersionedValue' has no len()` in pre-flight `validation_sets()` call. |
+| `20260501-235233` | v5p-32 | batch | Pre-flight switched to math-only mix; same TypeError (math step also has versioned-wrapped paths). |
+| `20260501-235704` | v5p-32 | batch | Pre-flight wrapped in `try/except TypeError` — works. Tokenize rebuilt (`4plus-2c5519`, ~13 min normalize + ~22 min tokenize). 2 of 12 train_lm running before user killed all 12 to switch to interactive. |
+| `20260502-010854` | v5p-32 | **interactive** | 6 × 1e20 only. 2 train_lm reached step ~390 then user killed to switch to v5p-64. |
+| `20260502-012515` | v5p-64 | batch | 6 × 1e20. User killed before any reached training (mistakenly submitted as batch when intent was interactive). |
+| `20260502-014459` | v5p-64 | interactive | 6 × 1e20. **5 of 6 cascade-killed** by stale-port-8476 JAX coordinator collision (`INVALID_ARGUMENT: Unexpected task registered with task_name=/job:/replica:0/task:0`). One survivor: `p67m33-lr0p5-int64-20260502-014459`. |
+| `20260502-020127` | v5p-64 | interactive | 4 relaunches of dead 014459 jobs. **All 4 failed again**, same JAX coordinator pattern + one SIGSEGV. (First attempt had a copy-paste mix-mapping bug — `p33m67` short was paired with `67p_33m_*` long; killed and resubmitted with correct mapping. The corrected resubmits also failed.) |
+| `20260502-025832` | v5p-32 | interactive | 5 missing combos (everything except `p67m33-lr0p5` which the v5p-64 survivor covers). 3 train_lm running on v5p-32 within ~50 min, 2 still pending coscheduling. v5p-32's smaller blast radius (4 hosts vs 8) avoided cascade kills. |
+
+### Empirical findings about the cluster (verified live)
+
+**1. `compute_effective_band` is dynamic and recomputed every scheduling tick.**
+- For both pending and running tasks. So spend > 75 k on tick T → all of user's INTERACTIVE work is BATCH-effective on tick T+1, until spend drops back below.
+- PRODUCTION never demotes (`budget.py:121-122`). PRODUCTION is admin-tier-only (`runner, power, dlwh, rav, romain, held, larry`).
+- I was earlier wrong that `ahmedah` was already "over quota" with 12 PENDING jobs — `ACTIVE_TASK_STATES = {ASSIGNED, BUILDING, RUNNING}` (`db.py:144`); PENDING does NOT count. Spend was 34,400 / 75,000 = 45.9 % under at that snapshot.
+
+**2. BATCH band literally never preempts anything.** `controller.py:655-657`:
+```python
+for candidate in unscheduled_tasks:
+    # Batch never preempts
+    if candidate.band >= job_pb2.PRIORITY_BAND_BATCH:
+        continue
+```
+- Within BATCH, "fairness" is round-robin scheduling order on new slots via `interleave_by_user` (`budget.py:129-160`) — under-spend users get first pick when a worker boots or task finishes. Existing batch tasks are never *evicted* in favor of new ones from a lower-spend user.
+- Practical implication: if the cluster is at full BATCH-band capacity (which it routinely is when researchers go over quota), submitting at BATCH means waiting for autoscaler to bring up new workers. No preemption shortcut.
+- To preempt over-quota users' BATCH-effective work: submit at INTERACTIVE while you are under quota. INTERACTIVE > BATCH preemption rule (`controller.py:535`). Once *your* spend crosses 75 k, your INTERACTIVE work auto-demotes to BATCH-effective and loses preemption power.
+
+**3. JAX coordinator stale-port-8476 cascade.**
+- Symptom: one of N coscheduled hosts dies at startup with `F: Terminating process because the JAX distributed service detected fatal errors. INVALID_ARGUMENT: Unexpected task registered with task_name=/job:/replica:0/task:0`. The other N-1 cascade-killed via Marin's "1 step(s) failed" gate.
+- Cause: when a previous coscheduled job (especially one that was killed mid-run) leaves the JAX distributed coordinator process bound to port 8476 on a worker, then iris recycles that worker for a new task, the new task tries to register a task ID that's already known to the leftover coordinator → fatal.
+- Cluster gets into a "bad pool" state where multiple recycled workers carry stale state. Repeated relaunches keep hitting them.
+- Smaller coscheduling group helps: v5p-32 (4 hosts) sometimes survives where v5p-64 (8 hosts) doesn't, just because fewer hosts means lower probability of hitting at least one bad worker.
+- No clean upstream fix yet. Workarounds: keep retrying; switch to v5p-32; wait for autoscaler to drain bad workers.
+
+**4. Cache hash drift from PR #5223 forces one-time tokenize rebuild.**
+- The `tokenized/nemotron_cc_math_v1/4plus` step is non-leaf, so its hash recomputed when #5223 (region-stable hashes) merged. Pre-#5223 caches at hashes `4plus-{212a2d, da9608, 0bd79d}` are orphaned. New cache at `4plus-2c5519`.
+- `auto_build_caches=False` on `LmDataConfig` does NOT prevent the Marin executor from rebuilding upstream `normalize → tokenize` ExecutorSteps (those are separate steps in the dep graph; `auto_build_caches` only governs Levanter's own cache layer). So missing cache becomes a long zephyr rebuild rather than a fast error. Pre-warm caches manually before launching if you care about start time.
+- After the one-time rebuild, future sweeps with the same code reuse `4plus-2c5519` (verified — 0252-onwards sweeps skip tokenize). DON'T merge another upstream commit that touches StepSpec hashing during a sweep, or you re-incur the rebuild.
+
+### `wandb_project` hard-coding fix (commit `6d6384bd2`)
+
+Was: `experiments/defaults.py:427` had `tracker=WandbConfig(project="marin", ...)` hard-coded since `b804686ae3` (2025-04-03, "wip", David Hall). The `default_train_dpo` sibling already supported `wandb_project` via its config dataclass; `default_train` just hadn't been extended. The `WANDB_PROJECT` env var alone never worked because Levanter's `wandb.init(project=self.project, ...)` passes the explicit string from `WandbConfig`.
+
+Fixed by:
+- Adding `wandb_project: str | None = None` kwarg to `default_train`
+- `tracker=WandbConfig(project=wandb_project or "marin", ...)`
+- `experiments/exp_delphi_math_10b_midtrain.py` passes `wandb_project="delphi-midtraining"` per call.
+
+Net effect: every Delphi midtraining run from this branch now lands at `https://wandb.ai/marin-community/delphi-midtraining`. Verified via the wandb dashboard showing 32+ runs in that project including all sweep cycles documented above.
+
+### Wandb run-id "fragmentation" — what to expect with multiple kill/relaunch cycles
+
+Levanter's `WandbConfig(resume="allow")` is the default. When two runs share the same display name within the same wandb project, wandb merges them into a single run id and continues the metric stream. Concretely:
+
+- Sweep 235704 created `delphi-1e20-p67m33-4p94b-lr0.5-9e1229`. Killed at step ~390.
+- Sweep 014459 (post-fix, but on v5p-64 which has different `train_cfg.resources` → different TrainLmConfig hash → conceptually different executor output path) — **but the wandb display name** is computed differently (it pulls from the experiment-side `name` truncated, plus a suffix Marin appends from the executor output basename). When that display name happened to match `delphi-1e20-p67m33-4p94b-lr0.5-9e1229`, wandb's resume="allow" picked up the existing run id and continued the metric stream.
+- Result: one wandb run shows step 0-390 from the killed v5p-32 attempt + step 391-5300+ from the live v5p-64 survivor, all under the same run id. **Looks continuous in the chart even though the underlying training was interrupted and restarted on different hardware.**
+- The other LR factors (`lr0.33-590ea1`, `lr0.67-64a9c5`) don't have a long-running survivor doing the same name-resume trick, so they appear truncated at ~400 steps.
+
+This is mostly fine — the visualization continues to show the trajectory — but if you want clean per-sweep wandb runs, you'd need to either set unique `WandbConfig.name` per sweep launch (e.g. include the sweep timestamp) or `resume="never"`.
+
+### Snapshot at session-end
+
+- **1 v5p-64 train_lm running**: `p67m33-lr0p5-int64-20260502-014459`, ~step 5,300/9,413 (~56 %), 1.2 s/iter, ETA ~05:30 UTC. Survivor of the cascade.
+- **3 v5p-32 train_lm running** from sweep `025832`: `p67m33-lr0p33`, `p67m33-lr0p67`, plus one of the p33m67 (autoscaler still ramping)
+- **2 v5p-32 train_lm pending** coscheduling: 2 of the p33m67 mix
+- **All currently in `marin-community/delphi-midtraining`** wandb project (post-fix).
+
+### Lessons baked in
+
+1. **Always submit at BATCH for unattended sweeps over many jobs.** INTERACTIVE only buys priority while user is under 75 k spend; once over (which any 6+ job 1e20/1e21 sweep guarantees), it's BATCH-effective anyway. Submit BATCH from the start to avoid surprises.
+2. **v5p-32 > v5p-64 for sweep robustness** — the cascade-kill blast radius scales with coscheduling group size. If JAX coordinator port-8476 issues are happening (post a worker pool getting churned by killed jobs), prefer smaller TPU shapes for the next sweep launch.
+3. **Don't kill+relaunch a sweep within 30 min on the same worker pool.** The recycled workers carry stale JAX state. Either wait for autoscaler to fully reap them, or accept high failure rate on the immediate retry.
+4. **Pre-warm caches before launching.** `auto_build_caches=False` is half-protection only; the Marin executor's normalize/tokenize steps will rebuild silently. `gcloud storage ls gs://marin-us-east5/tokenized/nemotron_cc_math_v1/4plus-<expected-hash>` before launch saves a 35-min build delay.
+5. **`wandb_project="..."` kwarg now works on `default_train`** — use it for any new midtraining experiments to avoid landing in the generic `marin` project.
+
 ## 2026-05-01 19:51 UTC — handoff: main merged and midtraining launch guard pushed
 
 State for the next agent:
