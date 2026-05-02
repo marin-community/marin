@@ -45,6 +45,9 @@ jobs:
       CANARY_TARGET_TOKENS: "6553600"
       CANARY_MIN_STEPS: "40"
       CANARY_MAX_LOSS: "8.0"
+      # The profiler pushed the post-NCCL CW canary into GPU BFC OOM. Keep this
+      # health canary unprofiled; set true for an explicit profiling run.
+      CANARY_PROFILER_ENABLED: "false"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/examples/coreweave-ci.yaml
@@ -144,6 +147,7 @@ jobs:
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
             -e CANARY_BATCH_SIZE "$CANARY_BATCH_SIZE" \
             -e CANARY_TARGET_TOKENS "$CANARY_TARGET_TOKENS" \
+            -e CANARY_PROFILER_ENABLED "$CANARY_PROFILER_ENABLED" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
@@ -204,6 +208,7 @@ jobs:
           AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
       - name: Summarize GPU canary profile
+        if: env.CANARY_PROFILER_ENABLED == 'true'
         continue-on-error: true
         shell: bash -l {0}
         run: |
