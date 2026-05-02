@@ -141,3 +141,45 @@ def test_materialize_hf_raw_text_reads_dataset_viewer_rows(tmp_path: Path) -> No
     assert metadata[0]["license"] == "apache-2.0"
     assert metadata[0]["sampling_plan"] == "First 2 non-empty rendered rows from TextOCR."
     assert result["metadata"] == str(tmp_path / "metadata.json")
+
+
+def test_materialize_hf_raw_text_skip_existing_preserves_record_count(tmp_path: Path, write_jsonl_gz) -> None:
+    output_file = tmp_path / "textocr" / "ocr_strings.jsonl.gz"
+    write_jsonl_gz(
+        output_file,
+        [
+            {"id": "textocr_ocr_strings:0", "text": "Alpha", "source": "test/textocr", "metadata": {"row_idx": 0}},
+            {"id": "textocr_ocr_strings:1", "text": "Beta", "source": "test/textocr", "metadata": {"row_idx": 1}},
+        ],
+    )
+    cfg = HfRawTextMaterializationConfig(
+        output_path=str(tmp_path),
+        datasets_server_url="http://127.0.0.1:9",
+        surfaces=(
+            HfRawTextSurfaceConfig(
+                name="textocr_ocr_strings",
+                dataset_id="test/textocr",
+                config_name="default",
+                split="TextOCR",
+                output_filename="textocr/ocr_strings.jsonl.gz",
+                render_mode=HfRawTextRenderMode.JOIN_LIST_FIELD,
+                field="texts",
+                max_rows=2,
+            ),
+        ),
+    )
+
+    result = materialize_hf_raw_text(cfg)
+
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    assert result["metadata"] == str(tmp_path / "metadata.json")
+    assert result["surfaces"] == [
+        {
+            "name": "textocr_ocr_strings",
+            "records": 2,
+            "output_file": str(output_file),
+            "skipped": True,
+        }
+    ]
+    assert metadata[0]["records"] == 2
+    assert metadata[0]["skipped"] is True

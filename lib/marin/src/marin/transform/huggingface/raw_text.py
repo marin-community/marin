@@ -133,6 +133,11 @@ def _output_file_path(cfg: HfRawTextMaterializationConfig, surface: HfRawTextSur
     return posixpath.join(str(cfg.output_path), surface.output_filename)
 
 
+def _existing_record_count(output_file: str) -> int:
+    with open_url(output_file, "rt", encoding="utf-8", compression="gzip") as infile:
+        return sum(1 for line in infile if line.strip())
+
+
 def _write_surface(
     session: requests.Session,
     cfg: HfRawTextMaterializationConfig,
@@ -143,9 +148,9 @@ def _write_surface(
 
     if cfg.skip_existing:
         try:
-            with open_url(output_file, "rt", compression="gzip"):
-                logger.info("Skipping existing raw-text shard %s", output_file)
-                return {"name": surface.name, "records": 0, "output_file": output_file, "skipped": True}
+            record_count = _existing_record_count(output_file)
+            logger.info("Skipping existing raw-text shard %s with %s records", output_file, record_count)
+            return {"name": surface.name, "records": record_count, "output_file": output_file, "skipped": True}
         except FileNotFoundError:
             pass
 
