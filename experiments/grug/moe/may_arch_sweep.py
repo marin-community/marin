@@ -28,7 +28,13 @@ GATE1_CONFIGS: list[tuple[int, float]] = [
     (768, 1.70e18),
 ]
 
-LR_MULTIPLIERS: list[float] = [0.6, 0.8, 1.0, 1.2, 1.4]
+LR_MULTIPLIERS: list[float] = [
+    # 0.6,  # finished/running
+    # 0.8,  # finished/running
+    # 1.0,  # finished/running
+    1.2,
+    # 1.4,  # finished/running
+]
 
 
 def _make_steps() -> list[ExecutorStep]:
