@@ -11,7 +11,11 @@ adding ~612.7B unique tokens from European web crawls.
 import os.path
 
 from fray import ResourceConfig
-from marin.datakit.download.hplt import download_hplt_v3_step, normalize_hplt_v3_step
+from marin.datakit.download.hplt import (
+    download_hplt_v3_raw_step,
+    filter_hplt_v3_step,
+    normalize_hplt_v3_step,
+)
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
@@ -20,9 +24,10 @@ HPLT_DATASETS = {
     "all": ["*.parquet"],
 }
 
-_hplt_v3_download_spec = download_hplt_v3_step()
-hplt_v3_download = _hplt_v3_download_spec.as_executor_step()
-hplt_v3_normalized = normalize_hplt_v3_step(_hplt_v3_download_spec).as_executor_step()
+_hplt_v3_raw_spec = download_hplt_v3_raw_step()
+_hplt_v3_filtered_spec = filter_hplt_v3_step(_hplt_v3_raw_spec)
+hplt_v3_download = _hplt_v3_filtered_spec.as_executor_step()
+hplt_v3_normalized = normalize_hplt_v3_step(_hplt_v3_filtered_spec).as_executor_step()
 
 
 def tokenize_hplt_v3(
