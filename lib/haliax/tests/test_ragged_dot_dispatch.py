@@ -71,3 +71,43 @@ def test_ragged_dot_gpu_auto_uses_triton_when_available(monkeypatch):
     auto_out = ragged_dot(lhs, rhs, group_sizes, implementation="auto")
 
     assert jnp.array_equal(auto_out, expected)
+
+
+def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
+    lhs, rhs, group_sizes = _inputs()
+    calls = []
+
+    def fake_triton_pallas_call(
+        lhs,
+        rhs,
+        group_sizes,
+        ragged_dot_dimension_numbers=ragged_dot_module._DEFAULT_DIM_NUMS,
+    ):
+        calls.append(ragged_dot_dimension_numbers)
+        return jax.lax.ragged_dot_general(
+            lhs=lhs,
+            rhs=rhs,
+            group_sizes=group_sizes,
+            ragged_dot_dimension_numbers=ragged_dot_dimension_numbers,
+        )
+
+    monkeypatch.setattr(ragged_dot_module, "_has_pallas_triton", True)
+    monkeypatch.setattr(ragged_dot_module, "_triton_pallas_call", fake_triton_pallas_call)
+
+    def triton_loss(lhs, rhs):
+        return jnp.sum(ragged_dot_module._ragged_dot_triton_impl(lhs, rhs, group_sizes))
+
+    def xla_loss(lhs, rhs):
+        return jnp.sum(ragged_dot(lhs, rhs, group_sizes, implementation="xla"))
+
+    triton_value, triton_grads = jax.value_and_grad(triton_loss, argnums=(0, 1))(lhs, rhs)
+    xla_value, xla_grads = jax.value_and_grad(xla_loss, argnums=(0, 1))(lhs, rhs)
+
+    assert jnp.allclose(triton_value, xla_value, rtol=1e-5, atol=1e-5)
+    assert jnp.allclose(triton_grads[0], xla_grads[0], rtol=1e-5, atol=1e-5)
+    assert jnp.allclose(triton_grads[1], xla_grads[1], rtol=1e-5, atol=1e-5)
+    assert calls == [
+        ragged_dot_module._DEFAULT_DIM_NUMS,
+        ragged_dot_module._DLHS_DIM_NUMS,
+        ragged_dot_module._DRHS_DIM_NUMS,
+    ]
