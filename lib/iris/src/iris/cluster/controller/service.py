@@ -8,6 +8,7 @@ creates N tasks). Tasks are the unit of scheduling and execution. Job state is
 aggregated from task states.
 """
 
+import dataclasses
 import json
 import logging
 import re
@@ -15,7 +16,6 @@ import secrets
 import threading
 import time
 import uuid
-import dataclasses
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Protocol
@@ -23,24 +23,13 @@ from typing import Any, Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
+from finelog.client import LogServiceProxy
+from finelog.rpc import logging_pb2
+from finelog.server import LogServiceImpl
+from rigging.timing import Timer, Timestamp
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
-from iris.cluster.redaction import redact_request_env_vars
-from iris.cluster.controller.codec import (
-    constraints_from_json,
-    proto_from_json,
-    reservation_entries_from_json,
-    resource_spec_from_scalars,
-)
-from iris.cluster.controller.budget import (
-    UserBudgetDefaults,
-    UserTask,
-    compute_effective_band,
-    compute_user_spend,
-    interleave_by_user,
-    resource_value,
-)
-from iris.rpc.proto_utils import priority_band_name
 from iris.cluster.controller.auth import (
     DEFAULT_JWT_TTL_SECONDS,
     ControllerAuth,
@@ -49,15 +38,21 @@ from iris.cluster.controller.auth import (
     revoke_api_key,
     revoke_login_keys_for_user,
 )
-from iris.rpc.auth import (
-    AuthzAction,
-    authorize,
-    authorize_resource_owner,
-    get_verified_identity,
-    get_verified_user,
-    require_identity,
+from iris.cluster.controller.autoscaler.status import PendingHint
+from iris.cluster.controller.budget import (
+    UserBudgetDefaults,
+    UserTask,
+    compute_effective_band,
+    compute_user_spend,
+    interleave_by_user,
+    resource_value,
 )
-from iris.cluster.bundle import BundleStore
+from iris.cluster.controller.codec import (
+    constraints_from_json,
+    proto_from_json,
+    reservation_entries_from_json,
+    resource_spec_from_scalars,
+)
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     ControllerDB,
@@ -68,6 +63,9 @@ from iris.cluster.controller.db import (
     running_tasks_by_worker,
     task_row_can_be_scheduled,
 )
+from iris.cluster.controller.provider import ProviderError
+from iris.cluster.controller.query import execute_raw_query
+from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     API_KEY_PROJECTION,
     ATTEMPT_PROJECTION,
@@ -86,22 +84,15 @@ from iris.cluster.controller.schema import (
     WorkerRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.query import execute_raw_query
-from iris.rpc import query_pb2
-from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.stores import TASK_RESOURCE_HISTORY_RETENTION, ControllerStore
 from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
     task_updates_from_proto,
 )
-from iris.cluster.controller.provider import ProviderError
-from finelog.client import LogServiceProxy
-from finelog.rpc import logging_pb2
-from finelog.server import LogServiceImpl
-from iris.cluster.log_store_helpers import build_log_source, worker_log_key
+from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.process_status import get_process_status
+from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
@@ -112,14 +103,18 @@ from iris.cluster.types import (
     get_tpu_count,
     is_job_finished,
 )
+from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc import logging_pb2 as iris_logging_pb2
-from iris.rpc import vm_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
-from iris.rpc import worker_pb2
-from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
+from iris.rpc.auth import (
+    AuthzAction,
+    authorize,
+    authorize_resource_owner,
+    get_verified_identity,
+    get_verified_user,
+    require_identity,
+)
+from iris.rpc.proto_utils import job_state_friendly, priority_band_name, task_state_friendly
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Timestamp, Timer
 
 logger = logging.getLogger(__name__)
 
@@ -881,36 +876,42 @@ def _live_user_stats(db: ControllerDB) -> list[UserStats]:
     return list(by_user.values())
 
 
-def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) -> list[TaskDetailRow]:
+def _attempts_for_worker(
+    db: ControllerDB, worker_id: WorkerId, limit: int = 50
+) -> list[controller_pb2.Controller.WorkerTaskAttempt]:
+    """Return per-attempt history for ``worker_id``, newest first.
+
+    Indexed scan of ``task_attempts`` via ``idx_task_attempts_worker_task``;
+    each retry of the same task is its own row so the dashboard can render
+    independent state/duration per attempt rather than inheriting from the
+    parent task (which produced bogus duplicate-RUNNING rows).
+    """
     with db.read_snapshot() as q:
-        history_rows = q.raw(
-            "SELECT wth.task_id FROM worker_task_history wth "
-            "WHERE wth.worker_id = ? ORDER BY wth.assigned_at_ms DESC LIMIT ?",
-            (str(worker_id), limit),
-            decoders={"task_id": JobName.from_wire},
-        )
-        task_ids = [r.task_id for r in history_rows]
-        if not task_ids:
-            return []
-        task_wires = [tid.to_wire() for tid in task_ids]
-        placeholders = ",".join("?" for _ in task_wires)
-        tasks = TASK_DETAIL_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "
-                f"FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
-                tuple(task_wires),
-            ),
-        )
-        attempts = ATTEMPT_PROJECTION.decode(
+        rows = ATTEMPT_PROJECTION.decode(
             q.fetchall(
                 f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
-                f"WHERE ta.task_id IN ({placeholders}) "
-                "ORDER BY ta.task_id ASC, ta.attempt_id ASC",
-                tuple(task_wires),
+                "WHERE ta.worker_id = ? "
+                "ORDER BY COALESCE(ta.started_at_ms, ta.created_at_ms) DESC "
+                "LIMIT ?",
+                (str(worker_id), limit),
             ),
         )
-    task_map = {t.task_id: t for t in tasks_with_attempts(tasks, attempts)}
-    return [task for tid in task_ids if (task := task_map.get(tid)) is not None]
+    out: list[controller_pb2.Controller.WorkerTaskAttempt] = []
+    for row in rows:
+        proto_attempt = job_pb2.TaskAttempt(
+            attempt_id=row.attempt_id,
+            worker_id=str(row.worker_id) if row.worker_id else "",
+            state=row.state,
+            exit_code=row.exit_code or 0,
+            error=row.error or "",
+            is_worker_failure=attempt_is_worker_failure(row.state),
+        )
+        if row.started_at is not None:
+            proto_attempt.started_at.CopyFrom(timestamp_to_proto(row.started_at))
+        if row.finished_at is not None:
+            proto_attempt.finished_at.CopyFrom(timestamp_to_proto(row.finished_at))
+        out.append(controller_pb2.Controller.WorkerTaskAttempt(task_id=row.task_id.to_wire(), attempt=proto_attempt))
+    return out
 
 
 class AutoscalerProtocol(Protocol):
@@ -1571,7 +1572,8 @@ class ControllerServiceImpl:
                     row.res_cpu_millicores, row.res_memory_bytes, row.res_disk_bytes, row.res_device_json
                 )
 
-        proto.status_text_md = self._store.tasks.get_status_text(task_id.to_wire())
+        proto.status_text_detail_md = self._store.tasks.get_status_text_detail(task_id.to_wire())
+        proto.status_text_summary_md = self._store.tasks.get_status_text_summary(task_id.to_wire())
 
         return controller_pb2.Controller.GetTaskStatusResponse(task=proto, job_resources=job_resources)
 
@@ -1626,6 +1628,8 @@ class ControllerServiceImpl:
             # Users should check job detail page for scheduling diagnostics
             if task.state == job_pb2.TASK_STATE_PENDING:
                 proto_task_status.can_be_scheduled = task_row_can_be_scheduled(task)
+
+            proto_task_status.status_text_summary_md = self._store.tasks.get_status_text_summary(task.task_id.to_wire())
 
             task_statuses.append(proto_task_status)
 
@@ -2103,28 +2107,15 @@ class ControllerServiceImpl:
             status_message=worker_status_message(worker),
         )
 
-        # Fetch worker daemon logs via LogService
-        worker_log_entries: list[iris_logging_pb2.LogEntry] = []
-        try:
-            fetch_resp = self._log_service.fetch_logs(
-                logging_pb2.FetchLogsRequest(
-                    source=worker_log_key(worker.worker_id),
-                    max_lines=200,
-                    tail=True,
-                ),
-                ctx,
-            )
-            worker_log_entries = _to_iris_log_entries(fetch_resp.entries)
-        except Exception:
-            logger.debug("Failed to fetch worker logs for %s", request.id, exc_info=True)
-
-        # Collect recent task history for this worker
-        tasks = _tasks_for_worker(self._db, worker.worker_id, limit=50)
-        recent_tasks = [task_to_proto(task) for task in tasks]
+        # Worker daemon logs are NOT inlined here — when the worker is
+        # unreachable the LogService proxy blocks for its full timeout
+        # (~10s) and stalls the worker page render. The dashboard fetches
+        # them in parallel via LogService.FetchLogs with
+        # source=/system/worker/<worker_id>.
+        recent_attempts = _attempts_for_worker(self._db, worker.worker_id, limit=50)
 
         resp = controller_pb2.Controller.GetWorkerStatusResponse(
-            worker_log_entries=worker_log_entries,
-            recent_tasks=recent_tasks,
+            recent_attempts=recent_attempts,
         )
         resp.worker.CopyFrom(worker_health)
         resource_history = detail.resource_history
@@ -2740,5 +2731,5 @@ class ControllerServiceImpl:
         task = _read_task_with_attempts(self._db, task_id)
         if task is None:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
-        self._transitions.record_task_status_text(task_id, request.status_text_md)
+        self._transitions.record_task_status_text(task_id, request.status_text_detail_md, request.status_text_summary_md)
         return job_pb2.SetTaskStatusTextResponse()

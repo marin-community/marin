@@ -12,13 +12,12 @@ import argparse
 import logging
 import os
 
-from rigging.log_setup import configure_logging
-from rigging.filesystem import marin_prefix
-
 from marin.datakit.canonical import fineweb_edu
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
+from rigging.filesystem import marin_prefix
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import pytest
-
 from iris.cluster.providers.k8s.types import parse_k8s_cpu, parse_k8s_quantity
 
 

@@ -4,9 +4,8 @@
 """Tests for entrypoint construction and bash script generation."""
 
 import pytest
-
-from iris.cluster.types import Entrypoint
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint, runtime_entrypoint_to_bash_script
+from iris.cluster.types import Entrypoint
 from iris.rpc import job_pb2
 
 

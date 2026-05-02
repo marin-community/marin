@@ -7,14 +7,14 @@ See https://github.com/marin-community/marin/issues/5005.
 """
 
 from fray.types import ResourceConfig
-
-from experiments.evals.long_tail_ppl_runnable import runnable_long_tail_raw_validation_sets
 from marin.evaluation.perplexity_gap import (
     GapFinderModelConfig,
     model_perplexity_gap_from_scores,
     model_perplexity_scores,
 )
 from marin.execution.executor import executor_main
+
+from experiments.evals.long_tail_ppl_runnable import runnable_long_tail_raw_validation_sets
 
 RESOURCE_CONFIG = ResourceConfig.with_tpu("v5p-8", regions=["us-central1"])
 MAX_DOCS_PER_DATASET = 256

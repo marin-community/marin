@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from levanter.tracker.background import BackgroundTracker
 from levanter.tracker.helpers import capture_time, log_optimizer_hyperparams
 from levanter.tracker.tracker import CompositeTracker, NoopConfig, NoopTracker, Tracker, TrackerConfig
 from levanter.tracker.tracker_fns import (
@@ -21,6 +22,7 @@ from levanter.tracker.tracker_fns import (
 __all__ = [
     "Tracker",
     "TrackerConfig",
+    "BackgroundTracker",
     "CompositeTracker",
     "log_optimizer_hyperparams",
     "NoopTracker",

@@ -15,22 +15,22 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum, auto
-import dupekit
 
-from marin.execution.executor import THIS_OUTPUT_PATH
 import draccus
+import dupekit
 import msgspec
 from rigging.filesystem import url_to_fs
+from rigging.log_setup import configure_logging
+from zephyr import Dataset, ZephyrContext
+from zephyr.readers import load_file
 
+from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.processing.classification.deduplication.dedup_commons import (
     DEFAULT_FILETYPES,
     _collect_input_files,
     _get_extension,
 )
 from marin.utils import rebase_file_path
-from zephyr import Dataset, ZephyrContext
-from zephyr.readers import load_file
-from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

@@ -389,19 +389,30 @@ message Controller {
     // Bootstrap logs (from VM init)
     string bootstrap_logs = 4;
 
-    // Worker daemon logs (proxied from worker via FetchLogs, empty if unhealthy/absent)
-    repeated iris.logging.LogEntry worker_log_entries = 9;
-
     reserved 5;  // was: repeated ProcessLogRecord worker_logs
+    reserved 6;  // was: repeated TaskStatus recent_tasks (replaced by recent_attempts)
+    reserved 9;  // was: repeated LogEntry worker_log_entries (now fetched async via FetchLogs)
 
-    // Recent tasks that ran or are running on this worker (newest first)
-    repeated iris.job.TaskStatus recent_tasks = 6;
+    // Per-attempt history for this worker, newest first. Each retry of the
+    // same task gets its own entry — the dashboard needs distinct rows for
+    // distinct attempts so a failed attempt doesn't render with its
+    // successor's state/duration.
+    repeated WorkerTaskAttempt recent_attempts = 10;
 
     // Current host-level resource snapshot (from latest Ping)
     iris.job.WorkerResourceSnapshot current_resources = 7;
 
     // Recent resource history (ring buffer of Ping snapshots)
     repeated iris.job.WorkerResourceSnapshot resource_history = 8;
+  }
+
+  // One attempt that ran (or is running) on a worker. Per-attempt projection
+  // for the worker-detail Task History view; embeds the canonical TaskAttempt
+  // alongside its parent task_id so the dashboard can render rows without
+  // re-deriving state from a sibling task.
+  message WorkerTaskAttempt {
+    string task_id = 1;
+    iris.job.TaskAttempt attempt = 2;
   }
 
   // --- Provider Status (for direct-dispatch providers like KubernetesProvider) ---

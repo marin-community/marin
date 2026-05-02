@@ -17,6 +17,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import uvicorn
+from finelog.client import LogPusher, LogServiceProxy, RemoteLogHandler
+from finelog.server import LogServiceImpl
+from finelog.server.asgi import build_log_server_asgi
+from finelog.store.mem_store import MemStore
+from rigging.log_setup import slow_log
+from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp, TokenBucket
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
@@ -30,21 +36,33 @@ from iris.cluster.constraints import (
     extract_placement_requirements,
     get_device_variant,
     merge_constraints,
+)
+from iris.cluster.constraints import (
     region_constraint as make_region_constraint,
 )
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.codec import (
-    constraints_from_json,
-    reservation_entries_from_json,
-    resource_spec_from_scalars,
-)
 from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.budget import (
+    UserBudgetDefaults,
+    UserTask,
+    compute_effective_band,
+    compute_user_spend,
+    interleave_by_user,
+    resource_value,
+)
 from iris.cluster.controller.checkpoint import (
     CheckpointResult,
     backup_databases,
     upload_checkpoint,
     write_checkpoint,
 )
+from iris.cluster.controller.codec import (
+    constraints_from_json,
+    reservation_entries_from_json,
+    resource_spec_from_scalars,
+)
+from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
     ControllerDB,
     healthy_active_workers_with_attributes,
@@ -53,6 +71,14 @@ from iris.cluster.controller.db import (
     running_tasks_by_worker,
     task_row_can_be_scheduled,
     timed_out_executing_tasks,
+)
+from iris.cluster.controller.provider import TaskProvider
+from iris.cluster.controller.scheduler import (
+    JobRequirements,
+    Scheduler,
+    SchedulingContext,
+    WorkerCapacity,
+    WorkerSnapshot,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
@@ -72,33 +98,14 @@ from iris.cluster.controller.schema import (
     proto_decoder,
     tasks_with_attempts,
 )
-from iris.cluster.controller.budget import (
-    UserBudgetDefaults,
-    UserTask,
-    compute_effective_band,
-    compute_user_spend,
-    interleave_by_user,
-    resource_value,
-)
-from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-from iris.cluster.controller.provider import TaskProvider
-from iris.cluster.controller.scheduler import (
-    JobRequirements,
-    Scheduler,
-    SchedulingContext,
-    WorkerCapacity,
-    WorkerSnapshot,
-)
-from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
+    DIRECT_PROVIDER_PROMOTION_RATE,
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
     ClusterCapacity,
     ControllerTransitions,
-    DIRECT_PROVIDER_PROMOTION_RATE,
     HeartbeatApplyRequest,
     ReservationClaim,
     SchedulingEvent,
@@ -106,28 +113,21 @@ from iris.cluster.controller.transitions import (
     log_event,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from finelog.client import LogPusher, LogServiceProxy, RemoteLogHandler
-from finelog.server import LogServiceImpl
-from finelog.server.asgi import build_log_server_asgi
-from finelog.store.mem_store import MemStore
 from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
+from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.types import find_free_port, resolve_external_host
-from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
 from iris.cluster.types import (
     JobName,
+    WorkerId,
     WorkerStatus,
     WorkerStatusMap,
-    WorkerId,
     get_gpu_count,
     get_tpu_count,
     is_job_finished,
 )
-from rigging.log_setup import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
-from iris.rpc.auth import TokenVerifier
-from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp, TokenBucket
+from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider, TokenVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -1352,6 +1352,14 @@ class Controller:
         # timeout_keep_alive: uvicorn defaults to 5s, which races with client polling
         # intervals of the same length, causing TCP resets on idle connections. Use 120s
         # to safely cover long polling gaps during job waits.
+        # proxy_headers / forwarded_allow_ips: production traffic arrives via
+        # GCP IAP + an HTTPS load balancer. Without trusting their forwarded
+        # headers, ``scope["server"]`` is the controller's bind address, so
+        # any absolute URL built by Starlette (notably the trailing-slash
+        # redirect on routes like ``/proxy/<name>``) leaks the internal IP
+        # back to the browser as ``http://10.x.x.x:10000/...`` — unreachable
+        # outside the VPC. Trusting all upstream IPs is safe because the
+        # controller's only ingress is the LB.
         server_config = uvicorn.Config(
             self._dashboard.app,
             host=self._config.host,
@@ -1359,6 +1367,8 @@ class Controller:
             log_level="warning",
             log_config=None,
             timeout_keep_alive=120,
+            proxy_headers=True,
+            forwarded_allow_ips="*",
         )
         self._server = uvicorn.Server(server_config)
         self._threads.spawn_server(self._server, name="controller-server")

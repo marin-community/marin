@@ -5,9 +5,7 @@
 
 from __future__ import annotations
 
-from contextlib import ExitStack
 import hashlib
-from io import BytesIO
 import json
 import logging
 import os.path
@@ -16,13 +14,18 @@ import shutil
 import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Iterable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import StrEnum
+from io import BytesIO
 
 import fsspec
+import requests
 from fray import ResourceConfig
 from pydantic import BaseModel, ConfigDict
-import requests
+from rigging.filesystem import marin_prefix
+from zephyr import Dataset, ZephyrContext, counters, load_zip_members
+
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
@@ -35,11 +38,8 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
     write_ingestion_metadata_json,
 )
-from marin.utils import fsspec_mkdirs
-
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import marin_prefix
-from zephyr import Dataset, ZephyrContext, counters, load_zip_members
+from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 

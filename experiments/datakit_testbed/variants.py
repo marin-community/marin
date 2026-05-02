@@ -19,9 +19,6 @@ import logging
 import os
 
 from fray import ResourceConfig
-from rigging.filesystem import marin_prefix
-from rigging.log_setup import configure_logging
-
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
 from marin.execution.executor import Executor, ExecutorMainConfig, ExecutorStep, executor_main
@@ -30,6 +27,8 @@ from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, compute_fuzzy_dups_attrs
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
+from rigging.filesystem import marin_prefix
+from rigging.log_setup import configure_logging
 
 from experiments.datakit_testbed.mixture import weights_from_tokenized_bucket_stats
 from experiments.datakit_testbed.sampler import build_testbed_steps

@@ -10,10 +10,9 @@ from typing import Any, ClassVar, cast
 
 import jax.numpy as jnp
 import numpy as np
-
 from marin.rl.environments import MarinEnv
-from marin.rl.environments.process_vllm_results import process_vllm_chat_results
 from marin.rl.environments.inference_ctx import BaseInferenceContext
+from marin.rl.environments.process_vllm_results import process_vllm_chat_results
 from marin.rl.types import Rollout, RolloutGroup
 
 logger = logging.getLogger(__name__)
@@ -86,8 +85,9 @@ class PrimeIntellectEnv(MarinEnv):
         """Sample problems and generate responses using the model."""
         del prng_key, system_prompt
         self._ensure_verifiers_installed()
-        from verifiers.types import GenerateOutputs
         import subprocess
+
+        from verifiers.types import GenerateOutputs
 
         # Download/install the environment
         subprocess.run(["prime", "env", "install", self.env_id], check=True)

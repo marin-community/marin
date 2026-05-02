@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+import itertools
+import logging
+import os
 import queue
 import tempfile
 import threading
@@ -12,14 +15,12 @@ import uuid
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
-import itertools
-import os
 from typing import Any
 
+import msgspec
 import pyarrow as pa
 from rigging.filesystem import open_url, url_to_fs
-import msgspec
-import logging
+
 from zephyr import counters
 
 logger = logging.getLogger(__name__)

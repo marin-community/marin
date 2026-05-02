@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from pathlib import Path
 import xml.etree.ElementTree as ET
 import zipfile
+from pathlib import Path
 
 import pyarrow.parquet as pq
 from marin.datakit.download.diagnostic_logs import (

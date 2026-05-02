@@ -17,37 +17,8 @@ Dataset families are organized in separate modules:
 Use `python -m experiments.pretraining_datasets list` to see all available datasets.
 """
 
-# Import downloads and tokenized dicts from each module
-from experiments.pretraining_datasets.dolma import (
-    DOLMA_LLAMA3_OVERRIDES,
-    DOLMA_OLMO_MIXTURE_WEIGHTS,
-    downloads as dolma_downloads,
-    tokenize_dolma,
-)
 from marin.datakit.download.dolma import DOLMA_DATASETS
-from experiments.pretraining_datasets.dolmino import (
-    DOLMINO_DATASETS,
-    DOLMINO_LLAMA3_OVERRIDES,
-    downloads as dolmino_downloads,
-    tokenize_dolmino,
-    tokenize_dolmino_math,
-    tokenize_dolmino_subset,
-)
-from experiments.pretraining_datasets.nemotron import (
-    NEMOTRON_DATASETS,
-    NEMOTRON_LLAMA3_OVERRIDES,
-    NEMOTRON_WEIGHTS,
-    nemotron_cc_download,
-    nemotron_mix,
-    nemotron_mix_block_shuffle,
-    tokenize_nemotron,
-    tokenize_nemotron_subset,
-)
-from experiments.pretraining_datasets.nemotron_v2 import (
-    NEMOTRON_V2_DATASETS,
-    downloads as nemotron_v2_downloads,
-    tokenize_nemotron_v2_family,
-)
+
 from experiments.pretraining_datasets.common_corpus import (
     common_corpus_download,
     tokenize_common_corpus,
@@ -56,11 +27,46 @@ from experiments.pretraining_datasets.diagnostic_logs import (
     ghalogs_download,
     tokenize_ghalogs,
 )
+from experiments.pretraining_datasets.dolma import (
+    DOLMA_LLAMA3_OVERRIDES,
+    DOLMA_OLMO_MIXTURE_WEIGHTS,
+    tokenize_dolma,
+)
+from experiments.pretraining_datasets.dolma import (
+    downloads as dolma_downloads,
+)
+from experiments.pretraining_datasets.dolmino import (
+    DOLMINO_DATASETS,
+    DOLMINO_LLAMA3_OVERRIDES,
+    tokenize_dolmino,
+    tokenize_dolmino_math,
+    tokenize_dolmino_subset,
+)
+from experiments.pretraining_datasets.dolmino import (
+    downloads as dolmino_downloads,
+)
+from experiments.pretraining_datasets.nemotron import (
+    NEMOTRON_DATASETS,
+    NEMOTRON_LLAMA3_OVERRIDES,
+    NEMOTRON_WEIGHTS,
+    nemotron_cc_download,
+    nemotron_mix,
+    tokenize_nemotron,
+    tokenize_nemotron_subset,
+)
+from experiments.pretraining_datasets.nemotron_v2 import (
+    NEMOTRON_V2_DATASETS,
+    tokenize_nemotron_v2_family,
+)
+from experiments.pretraining_datasets.nemotron_v2 import (
+    downloads as nemotron_v2_downloads,
+)
 from experiments.pretraining_datasets.nsf_awards import (
     nsf_awards_download,
     nsf_awards_tokenized,
 )
-from experiments.pretraining_datasets.simple import downloads as simple_downloads, tokenized as simple_tokenized
+from experiments.pretraining_datasets.simple import downloads as simple_downloads
+from experiments.pretraining_datasets.simple import tokenized as simple_tokenized
 
 # Re-export constants
 __all__ = [
@@ -75,7 +81,6 @@ __all__ = [
     "NEMOTRON_V2_DATASETS",
     "NEMOTRON_WEIGHTS",
     "nemotron_mix",
-    "nemotron_mix_block_shuffle",
     "nsf_awards_download",
     "nsf_awards_tokenized",
     "tokenize_dolma",

@@ -6,7 +6,6 @@
 import sys
 
 import pytest
-
 from iris.cli.job import (
     build_resources,
     load_env_vars,

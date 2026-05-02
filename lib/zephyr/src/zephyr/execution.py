@@ -19,29 +19,28 @@ import logging
 import os
 import pickle
 import sys
-from datetime import datetime, timezone
 import threading
 import time
 import traceback
 import uuid
 from collections import Counter, defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 import cloudpickle
-from rigging.filesystem import open_url, url_to_fs
 from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from fray.client import JobHandle
 from fray.types import Entrypoint, JobRequest
-from rigging.filesystem import marin_temp_bucket
-from rigging.timing import ExponentialBackoff, log_time
-
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from rigging.filesystem import marin_temp_bucket, open_url, url_to_fs
+from rigging.timing import ExponentialBackoff, log_time
+
 from zephyr.dataset import Dataset
 from zephyr.plan import (
     Join,
@@ -55,7 +54,7 @@ from zephyr.plan import (
     compute_plan,
 )
 from zephyr.shuffle import ListShard, MemChunk, _write_scatter
-from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
+from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir, unique_temp_path
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +108,6 @@ class PickleDiskChunk:
         the same shard.  The resulting path is used directly for reads —
         no rename step is required.
         """
-        from zephyr.writers import unique_temp_path
-
         ensure_parent_dir(path)
         data = list(data)
         count = len(data)
@@ -194,14 +191,13 @@ def _write_pickle_chunks(
 
     Returns a ListShard containing PickleDiskChunk references.
     """
-    chunk_size = INTERMEDIATE_CHUNK_SIZE
     chunks: list[Iterable] = []
     batch: list = []
     pidx = 0
 
     for item in items:
         batch.append(item)
-        if chunk_size > 0 and len(batch) >= chunk_size:
+        if len(batch) >= INTERMEDIATE_CHUNK_SIZE:
             chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
             chunks.append(chunk_ref)
             pidx += 1
@@ -572,9 +568,18 @@ class ZephyrCoordinator:
         mib_rate = byte_rate / (1024 * 1024)
         lines.append(f"\n**Throughput** — {items:,} items ({item_rate:.1f}/s), {mib:.1f} MiB ({mib_rate:.1f} MiB/s)")
 
-        status_text_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
+        detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
+
+        current_stage_desc = _get_stage_description(plan_stages[current_stage_index]) if plan_stages else ""
+        summary_lines = [f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})"]
+        summary_lines.append(f"{completed}/{total_shards} shards ({pct}%)")
+        if items > 0:
+            summary_lines.append(f"{item_rate:.0f} items/s")
+            summary_lines.append(f"{mib_rate:.1f} MiB/s")
+        summary_md = "  \n".join(summary_lines)
+
         try:
-            iris_client.report_task_status_text(job_info.task_id, status_text_md)
+            iris_client.report_task_status_text(job_info.task_id, detail_md, summary_md)
         except Exception:
             logger.warning("Failed to report task status text to Iris controller", exc_info=True)
 
@@ -1180,6 +1185,8 @@ class ZephyrWorker:
         # Each worker owns its runner instance; the heartbeat thread polls
         # ``live_counters()`` off it while a task is in flight.
         self._stage_runner: StageRunner = stage_runner_factory()
+        self._current_task: ShardTask | None = None  # set while executing a shard
+        self._task_monotonic_start: float = 0.0
 
         # Capture shutdown_event from the actor context while the ContextVar
         # is still set (child threads in Python <3.12 don't inherit it).
@@ -1198,6 +1205,53 @@ class ZephyrWorker:
             name=f"zephyr-poll-{self._worker_id}",
         )
         self._polling_thread.start()
+
+    def _report_worker_iris_status(self) -> None:
+        """Push worker status text to Iris for UI display. Called on each heartbeat."""
+        iris_client = ctx.client if (ctx := get_iris_ctx()) is not None else None
+        if iris_client is None:
+            return
+        job_info = get_job_info()
+        if job_info is None:
+            return
+
+        task = self._current_task
+        if task is None:
+            summary_md = "idle"
+            detail_md = "idle"
+        else:
+            stage_name = task.stage_name
+            shard_idx = task.shard_idx
+            total_shards = task.total_shards
+            elapsed = time.monotonic() - self._task_monotonic_start
+
+            item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
+            byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
+
+            items = self._last_reported_counters.get(item_key, 0)
+            bytes_processed = self._last_reported_counters.get(byte_key, 0)
+            item_rate = items / elapsed if elapsed > 0 else 0.0
+            byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
+            mib = bytes_processed / (1024 * 1024)
+            mib_rate = byte_rate / (1024 * 1024)
+
+            summary_lines = [f"**{stage_name}**", f"shard {shard_idx + 1}/{total_shards}"]
+            summary_md = "  \n".join(summary_lines)
+            detail_lines = [
+                f"**Stage**: {stage_name}",
+                f"**Shard**: {shard_idx + 1}/{total_shards}",
+            ]
+            if items > 0:
+                detail_lines += [
+                    f"**Items**: {items:,} ({item_rate:.1f}/s)",
+                    f"**Throughput**: {mib:.1f} MiB ({mib_rate:.1f} MiB/s)",
+                ]
+            detail_md = "  \n".join(detail_lines)
+
+        try:
+            iris_client.report_task_status_text(job_info.task_id, detail_md, summary_md)
+        except Exception:
+            logger.warning("Failed to report worker status text to Iris controller", exc_info=True)
 
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
         """Snapshot the running task's counters, or None when idle/unchanged.
@@ -1257,6 +1311,7 @@ class ZephyrWorker:
                 consecutive_failures = 0
                 if heartbeat_count % 10 == 1:
                     logger.debug("[%s] Sent heartbeat #%d", self._worker_id, heartbeat_count)
+                self._report_worker_iris_status()
             except Exception as e:
                 consecutive_failures += 1
                 logger.warning(
@@ -1332,14 +1387,15 @@ class ZephyrWorker:
                 task.shard_idx,
                 attempt,
             )
+            self._current_task = task
+            self._task_monotonic_start = time.monotonic()
             try:
-                t_0 = time.monotonic()
                 result, task_counters = self._execute_shard(task, config)
                 logger.info(
                     "[%s] Task for shard %d completed in %.2f seconds",
                     self._worker_id,
                     task.shard_idx,
-                    time.monotonic() - t_0,
+                    time.monotonic() - self._task_monotonic_start,
                 )
                 # Block until coordinator records the result. This ensures
                 # report_result is fully processed before the next pull_task,
@@ -1362,6 +1418,8 @@ class ZephyrWorker:
                     task.shard_idx,
                     "".join(traceback.format_exc()),
                 ).result()
+            finally:
+                self._current_task = None
 
     def _execute_shard(self, task: ShardTask, config: dict) -> tuple[TaskResult, dict[str, int]]:
         """Hand the task to the configured ``StageRunner``.

@@ -31,7 +31,6 @@ from pathlib import Path
 import click
 import duckdb
 import fsspec
-
 from iris.cluster.config import IrisConfig
 from iris.cluster.controller.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
 from rigging.filesystem import get_bucket_location, region_from_prefix

@@ -26,7 +26,10 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 logger = logging.getLogger(__name__)
 DEFAULT_VLLM_TPU_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
 DEFAULT_VLLM_GPU_DOCKER_IMAGE: str = "nvcr.io/nvidia/vllm:25.12.post1-py3"
-VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu",)
+VLLM_DOCKER_SIDECAR_UNSUPPORTED_MESSAGE = (
+    "Docker sidecar vLLM mode is not supported for Iris jobs because Iris workers do not mount "
+    "/var/run/docker.sock; use native vLLM by leaving MARIN_VLLM_MODE unset or setting it to 'native'."
+)
 
 _SENSITIVE_ENV_KEYS = frozenset(
     {
@@ -236,14 +239,17 @@ class NativeVllmServerBackend(VllmServerBackend):
 
 
 def resolve_vllm_mode(mode: Literal["native", "docker"] | None) -> Literal["native", "docker"]:
-    # Default to native vLLM. The Docker sidecar path requires a mounted
-    # /var/run/docker.sock (docker-alongside-docker), which Iris workers do not
-    # provide. Set MARIN_VLLM_MODE=docker to opt in for Ray-era flows that still
-    # need the sidecar.
+    # Native is the only supported Iris vLLM mode. The old Docker sidecar path
+    # requires docker-alongside-docker, and Iris workers do not mount
+    # /var/run/docker.sock. See GitHub issue #4750.
     mode_str = (mode if mode is not None else os.environ.get("MARIN_VLLM_MODE", "native")).lower()
-    if mode_str not in ("native", "docker"):
-        raise ValueError(f"Unknown MARIN_VLLM_MODE={mode_str!r}; expected 'native' or 'docker'.")
-    return mode_str  # type: ignore[return-value]
+    if mode_str == "native":
+        return mode_str
+    if mode_str == "docker":
+        raise ValueError(VLLM_DOCKER_SIDECAR_UNSUPPORTED_MESSAGE)
+    raise ValueError(
+        f"Unknown MARIN_VLLM_MODE={mode_str!r}; expected 'native'. Docker sidecar mode is unsupported on Iris."
+    )
 
 
 def _resolve_vllm_backend(

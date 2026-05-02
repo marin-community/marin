@@ -10,16 +10,16 @@ import time
 from dataclasses import asdict, dataclass
 from threading import Event, Thread
 
+import marin.execution.executor_step_status as executor_step_status
 import pytest
 from draccus.utils import Dataclass
 from fray.types import ResourceConfig
-import marin.execution.executor_step_status as executor_step_status
-from marin.execution import THIS_OUTPUT_PATH
 from marin.evaluation.perplexity_gap import (
     GapFinderModelConfig,
     model_perplexity_scores,
     raw_text_dataset,
 )
+from marin.execution import THIS_OUTPUT_PATH
 from marin.execution.executor import (
     Executor,
     ExecutorStep,

@@ -22,12 +22,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from fray import ResourceConfig
+from zephyr import Dataset, ZephyrContext, ZephyrExecutionResult
+
 from marin.utils import (
     fsspec_exists,
     fsspec_glob,
     rebase_file_path,
 )
-from zephyr import Dataset, ZephyrContext, ZephyrExecutionResult
 
 
 class FilterType(StrEnum):

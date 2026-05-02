@@ -4,9 +4,9 @@
 """Structural tests for the Datakit Testbed ferry DAG."""
 
 import pytest
+from marin.datakit.sources import DatakitSource, all_sources
 
 from experiments.datakit_testbed.sampler import build_testbed_steps
-from marin.datakit.sources import DatakitSource, all_sources
 
 _ALL = all_sources()
 _ALL_LIST = list(_ALL.values())

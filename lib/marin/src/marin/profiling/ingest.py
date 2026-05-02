@@ -20,12 +20,6 @@ from urllib.parse import urlparse
 
 import wandb
 
-from marin.profiling.semantics import (
-    canonical_op_name,
-    classify_semantic_family,
-    estimate_flop_proxy,
-    extract_shape_signature,
-)
 from marin.profiling.schema import (
     BreakdownPart,
     CommunicationOp,
@@ -41,8 +35,14 @@ from marin.profiling.schema import (
     StepClassSummary,
     StepTimeSummary,
     TimeBreakdown,
-    TraceProvenance,
     TraceOverview,
+    TraceProvenance,
+)
+from marin.profiling.semantics import (
+    canonical_op_name,
+    classify_semantic_family,
+    estimate_flop_proxy,
+    extract_shape_signature,
 )
 
 logger = logging.getLogger(__name__)

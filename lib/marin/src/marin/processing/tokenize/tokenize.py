@@ -20,7 +20,6 @@ import braceexpand
 import draccus
 import fsspec
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url, url_to_fs
 from datasets import load_dataset_builder
 from fray import ResourceConfig
 from levanter.data.text import (
@@ -31,16 +30,17 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
     preprocessor_for_format,
 )
-from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
 from levanter.store.cache import consolidate_shard_caches
 from levanter.store.tree_store import TreeStore
+from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
+from rigging.filesystem import open_url, url_to_fs
+from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.dataset import FileEntry
 from zephyr.readers import InputFileSpec, load_file
 
 from marin.execution.executor import InputName, VersionedValue
 from marin.utils import fsspec_exists, fsspec_isdir
-from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

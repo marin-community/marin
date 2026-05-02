@@ -5,6 +5,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -20,8 +21,11 @@ try:
     from openai.types import Completion
     from openai.types.chat import ChatCompletion
 
-    from levanter.inference.engine import InferenceEngineConfig
-    from levanter.inference.openai import InferenceServer, InferenceServerConfig
+    from levanter.inference.engine import (
+        InferenceEngineConfig,
+        score_token_sequence_logprobs,
+    )
+    from levanter.inference.openai import InferenceResponse, InferenceServer, InferenceServerConfig
 
 except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
@@ -171,6 +175,166 @@ def test_endpoints_exist(test_client):
     assert "/health" in routes
     assert "/v1/completions" in routes
     assert "/v1/chat/completions" in routes
+
+
+class _OpenAITestTokenizer:
+    _id_to_piece = {0: "A", 1: " B", 2: " C", 3: " X"}
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        if add_special_tokens:
+            raise ValueError("The test tokenizer does not define special tokens.")
+        if text == "A":
+            return [0]
+        if text == "A B":
+            return [0, 1]
+        if text == " X":
+            return [3]
+        raise ValueError(f"Unexpected test text: {text}")
+
+    def decode(self, token_ids: list[int], skip_special_tokens: bool = True) -> str:
+        return "".join(self._id_to_piece[int(token_id)] for token_id in token_ids)
+
+    def convert_ids_to_tokens(self, token_id: int) -> str:
+        return self._id_to_piece[int(token_id)]
+
+
+class _DeterministicCompletionScoringModel(eqx.Module):
+    Vocab: hax.Axis = eqx.field(static=True)
+
+    def __init__(self):
+        self.Vocab = hax.Axis("vocab", 4)
+
+    def __call__(
+        self,
+        input_ids: hax.NamedArray,
+        attn_mask: object,
+        pos_ids: hax.NamedArray,
+        key: object,
+    ) -> hax.NamedArray:
+        Pos = input_ids.resolve_axis("position")
+        logits = jnp.full((Pos.size, self.Vocab.size), -8.0, dtype=jnp.float32)
+        if Pos.size > 0:
+            logits = logits.at[0, 1].set(4.0)
+        if Pos.size > 1:
+            logits = logits.at[1, 3].set(3.0)
+        return hax.named(logits, (Pos, self.Vocab))
+
+
+class _FakeCompletionContext:
+    def __init__(self, max_seq_len: int = 4096):
+        self.config = InferenceServerConfig(service=InferenceEngineConfig(max_seq_len=max_seq_len))
+        self.model = _DeterministicCompletionScoringModel()
+        self.tokenizer = _OpenAITestTokenizer()
+        self.submitted_requests = 0
+
+    def submit_request(
+        self,
+        prompt_tokens: list[int],
+        max_tokens: int,
+        temperature: float,
+        stop_tokens: list[int] | None,
+        seed: int | None,
+        future,
+        n_generations: int = 1,
+        echo_logprobs_top_k: int | None = None,
+    ) -> str:
+        if (
+            prompt_tokens != [0, 1]
+            or max_tokens != 1
+            or temperature != 0
+            or stop_tokens is not None
+            or seed != 1234
+            or n_generations != 1
+            or echo_logprobs_top_k != 1
+        ):
+            raise ValueError("The deterministic test context only supports one fixed completion request.")
+        self.submitted_requests += 1
+        echo_token_ids = prompt_tokens + [3]
+        future.set_result(
+            [
+                InferenceResponse(
+                    request_id="req_0",
+                    text=" X",
+                    tokens=[3],
+                    prompt_tokens=len(prompt_tokens),
+                    completion_tokens=1,
+                    logprobs=[-123.0],
+                    echo_token_ids=echo_token_ids,
+                    echo_logprobs=score_token_sequence_logprobs(self.model, echo_token_ids, echo_logprobs_top_k),
+                )
+            ]
+        )
+        return "req_0"
+
+
+def test_completion_echo_logprobs_are_lm_eval_aligned():
+    ctx = _FakeCompletionContext()
+    app = InferenceServer._create_app(ctx)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/completions",
+            json={
+                "model": "gpt2",
+                "prompt": "A B",
+                "temperature": 0,
+                "max_tokens": 1,
+                "logprobs": 1,
+                "seed": 1234,
+                "echo": True,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    choice = response.json()["choices"][0]
+    logprobs = choice["logprobs"]
+    expected_prompt_logprob = float(jax.nn.log_softmax(jnp.array([-8.0, 4.0, -8.0, -8.0]))[1])
+    expected_completion_logprob = float(jax.nn.log_softmax(jnp.array([-8.0, -8.0, -8.0, 3.0]))[3])
+
+    assert choice["text"] == "A B X"
+    assert logprobs["tokens"] == ["A", " B", " X"]
+    assert logprobs["token_logprobs"] == pytest.approx([0.0, expected_prompt_logprob, expected_completion_logprob])
+    assert logprobs["text_offset"] == [0, 1, 3]
+    assert len(logprobs["tokens"]) == len(logprobs["token_logprobs"])
+    assert len(logprobs["tokens"]) == len(logprobs["top_logprobs"])
+    assert logprobs["top_logprobs"][0] == {"A": 0.0}
+    assert logprobs["top_logprobs"][1][" B"] == pytest.approx(expected_prompt_logprob)
+    assert logprobs["top_logprobs"][2][" X"] == pytest.approx(expected_completion_logprob)
+
+
+def test_completion_echo_logprobs_rejects_scored_sequence_over_context():
+    ctx = _FakeCompletionContext(max_seq_len=2)
+    app = InferenceServer._create_app(ctx)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/completions",
+            json={
+                "model": "gpt2",
+                "prompt": ["A", "A B"],
+                "temperature": 0,
+                "max_tokens": 1,
+                "logprobs": 1,
+                "seed": 1234,
+                "echo": True,
+            },
+        )
+
+    assert response.status_code == 400, response.text
+    assert "echo logprobs" in response.json()["detail"]
+    assert ctx.submitted_requests == 0
+
+
+def test_score_token_sequence_logprobs_empty_and_single_token_sequences():
+    model = _DeterministicCompletionScoringModel()
+
+    empty_result = score_token_sequence_logprobs(model, [], top_k=1)
+    assert empty_result.token_logprobs == []
+    assert empty_result.top_token_logprobs == []
+
+    single_token_result = score_token_sequence_logprobs(model, [2], top_k=3)
+    assert single_token_result.token_logprobs == [0.0]
+    assert single_token_result.top_token_logprobs == [{2: 0.0}]
 
 
 @pytest.mark.slow

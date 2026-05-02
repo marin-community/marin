@@ -7,7 +7,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
-
 from marin.rl.curriculum import LessonStats, PerformanceStats, is_plateaued
 
 sns.set_theme(style="darkgrid")

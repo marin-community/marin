@@ -3,11 +3,25 @@
 
 """Issue #5094: opt-in public diagnostic-log sourcing for training."""
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 
 import click
 from levanter.data.text import TextLmDatasetFormat
+from marin.datakit.download.diagnostic_logs import (
+    DEFAULT_GHALOGS_MATERIALIZE_SHARDS,
+    DEFAULT_GHALOGS_MAX_MEMBERS,
+    DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
+    DEFAULT_LOGHUB_MAX_FILES,
+    GHALOGS_STAGED_PREFIX,
+    blocked_sources,
+    extract_ghalogs,
+    extract_logchunks_step,
+    extract_loghub_step,
+    materialize_ghalogs_step,
+    source_inventory,
+    source_manifest,
+)
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -20,20 +34,6 @@ from marin.execution.executor import (
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 from experiments.llama import llama3_tokenizer
-from marin.datakit.download.diagnostic_logs import (
-    DEFAULT_GHALOGS_MAX_MEMBERS,
-    DEFAULT_GHALOGS_MATERIALIZE_SHARDS,
-    DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
-    DEFAULT_LOGHUB_MAX_FILES,
-    GHALOGS_STAGED_PREFIX,
-    blocked_sources,
-    extract_ghalogs,
-    extract_logchunks_step,
-    extract_loghub_step,
-    materialize_ghalogs_step,
-    source_inventory,
-    source_manifest,
-)
 
 _GHALOGS_STAGED_SOURCE = InputName.hardcoded(GHALOGS_STAGED_PREFIX)
 

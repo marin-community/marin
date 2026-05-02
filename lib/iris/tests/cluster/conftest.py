@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from unittest.mock import Mock
 
 import pytest
-
+from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller.db import ControllerDB
@@ -30,13 +30,11 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from finelog.server import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
 # ---------------------------------------------------------------------------
