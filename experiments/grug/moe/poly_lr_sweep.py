@@ -27,10 +27,10 @@ GATE1_CONFIGS: list[tuple[int, float]] = [
 
 POWERS: list[float] = [1.5, 2.0]
 LR_MULTIPLIERS: list[float] = [
-    1.0,
-    # 1.1,  # already submitted
-    # 1.2,  # already submitted
-    # 1.4,  # already submitted
+    # 1.0,  # already submitted
+    1.1,
+    1.2,
+    1.4,
 ]
 
 
