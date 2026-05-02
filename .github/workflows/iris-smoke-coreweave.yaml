@@ -168,7 +168,7 @@ jobs:
           # tolerated below via continue-on-error.
           uv run python scripts/workflows/iris_monitor.py collect \
             --job-id "ci-smoke" \
-            --controller-url "$IRIS_CONTROLLER_URL" \
+            --iris-config lib/iris/examples/coreweave-ci.yaml \
             --provider coreweave \
             --output-dir "$LOG_DIR" \
             --namespace "$IRIS_NAMESPACE" \
