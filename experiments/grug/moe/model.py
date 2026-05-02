@@ -71,7 +71,8 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
-    qk_gate_mode: str = "none"  # "none" (use qk_mult), "simple", or "gated_norm"
+    # "none" (use qk_mult), "k_simple", "k_gated_norm", "q_simple", "q_gated_norm"
+    qk_gate_mode: str = "none"
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -132,12 +133,13 @@ class CausalSelfAttention(eqx.Module):
         qk_gate_up: jax.Array | None = None
         qk_scale: jax.Array | None = None
 
-        if cfg.qk_gate_mode == "simple":
-            qk_gate = reshard(jnp.zeros((d, n)), P(None, None))
+        gate_heads = m if cfg.qk_gate_mode.startswith("k_") else n
+        if cfg.qk_gate_mode in ("k_simple", "q_simple"):
+            qk_gate = reshard(jnp.zeros((d, gate_heads)), P(None, None))
             qk_scale = reshard(jnp.full((n,), 2.0), P(None))
-        elif cfg.qk_gate_mode == "gated_norm":
+        elif cfg.qk_gate_mode in ("k_gated_norm", "q_gated_norm"):
             qk_gate = reshard(_init_weight(k_gd, (d, _QK_GATE_RANK), cfg.initializer_std), P(None, None))
-            qk_gate_up = reshard(_init_weight(k_gu, (_QK_GATE_RANK, n), cfg.initializer_std), P(None, None))
+            qk_gate_up = reshard(_init_weight(k_gu, (_QK_GATE_RANK, gate_heads), cfg.initializer_std), P(None, None))
             qk_scale = reshard(jnp.full((n,), 2.0), P(None))
 
         return CausalSelfAttention(
@@ -165,15 +167,16 @@ class CausalSelfAttention(eqx.Module):
         k = rms_norm(k)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         if self.qk_gate is not None:
-            # QK gated norm: k = norm(k) * gate(x) * scale
             if self.qk_gate_up is not None:
-                # Gated norm: sigmoid(silu(x @ w_down) @ w_up) * scale
                 gate_hidden = jax.nn.silu(jnp.einsum("bsd,dr->bsr", x, self.qk_gate))
                 gate = jax.nn.sigmoid(jnp.einsum("bsr,rn->bsn", gate_hidden, self.qk_gate_up))
             else:
-                # Simple: sigmoid(x @ gate)
                 gate = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.qk_gate))
-            k = k * (gate[..., None] * self.qk_scale[None, None, :, None])
+            if self.cfg.qk_gate_mode.startswith("k_"):
+                k = k * gate[..., None]
+            else:
+                q = q * gate[..., None]
+            q = q * self.qk_scale[None, None, :, None]
         else:
             q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)

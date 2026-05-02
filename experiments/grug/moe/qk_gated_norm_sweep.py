@@ -26,8 +26,10 @@ GATE1_CONFIGS: list[tuple[int, float]] = [
 ]
 
 VARIANTS: list[tuple[str, str]] = [
-    ("simple", "simple"),
-    ("gated-norm", "gated_norm"),
+    ("k-simple", "k_simple"),
+    ("k-gated-norm", "k_gated_norm"),
+    ("q-simple", "q_simple"),
+    ("q-gated-norm", "q_gated_norm"),
 ]
 
 
