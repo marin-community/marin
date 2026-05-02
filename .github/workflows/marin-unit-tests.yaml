@@ -61,7 +61,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20.10.0"
-      
+
       - name: Test with pytest
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -69,4 +69,4 @@ jobs:
           RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
         run: |
           # Ensure we select the CPU torch wheels (and JAX CPU) for unit tests on GitHub runners.
-          PYTHONPATH=tests:. uv run --package marin --extra cpu --frozen pytest -n 2 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
+          PYTHONPATH=tests:. uv run --package marin --extra cpu --frozen pytest -n 4 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci and not integration' -v tests/

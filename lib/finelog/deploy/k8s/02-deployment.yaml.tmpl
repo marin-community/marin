@@ -26,6 +26,11 @@ spec:
       labels:
         app: {{ name }}
     spec:
+      # The container runs as UID 1000 (finelog). fsGroup makes kubelet
+      # chown the mounted PV to GID 1000 so writes succeed; without this
+      # the PV root inherits root:root and parquet flushes EACCES.
+      securityContext:
+        fsGroup: 1000
       containers:
         - name: finelog
           image: {{ image }}

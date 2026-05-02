@@ -3,14 +3,11 @@
 
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-from rigging.log_setup import configure_logging
-
+import logging
 import os
 from typing import TypeVar
 
 from fray import ResourceConfig
-from rigging.filesystem import marin_temp_bucket, region_from_metadata, check_path_in_region
-
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
@@ -21,8 +18,8 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
-
-import logging
+from rigging.filesystem import check_path_in_region, marin_temp_bucket, region_from_metadata
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

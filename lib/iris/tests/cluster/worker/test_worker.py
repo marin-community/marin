@@ -11,7 +11,6 @@ from unittest.mock import Mock
 
 import pytest
 from connectrpc.request import RequestContext
-
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
     ContainerErrorKind,
@@ -22,21 +21,21 @@ from iris.cluster.runtime.types import (
     ExecutionStage,
 )
 from iris.cluster.types import Entrypoint, JobName
-from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
+from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import job_pb2
-from iris.rpc import worker_pb2
-from rigging.timing import Duration
 from iris.cluster.worker.worker_types import LogLine
+from iris.rpc import job_pb2, worker_pb2
+from iris.test_util import wait_for_condition
+from rigging.timing import Duration
+
 from tests.cluster.worker.conftest import (
     FakeContainerHandle,
     FakeLogReader,
     create_mock_container_handle,
     create_run_task_request,
 )
-from iris.test_util import wait_for_condition
 
 pytestmark = pytest.mark.timeout(10)
 
@@ -1087,6 +1086,39 @@ def test_stop_preserve_containers_does_not_kill_tasks(mock_worker, mock_runtime)
     mock_worker.stop(preserve_containers=True)
     # The task should still be in RUNNING state (not KILLED)
     assert task.status == job_pb2.TASK_STATE_RUNNING
+
+
+def test_start_wires_log_pusher_into_adopted_attempts(mock_bundle_store, mock_runtime, tmp_path):
+    """Regression for #5261.
+
+    Worker.start() must construct the LogPusher *before* adopting containers,
+    otherwise adopted TaskAttempts capture ``log_pusher=None`` permanently
+    and silently drop every container log line for the rest of the task.
+    """
+    container = _make_discovered_container()
+    mock_runtime.discover_containers = Mock(return_value=[container])
+
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+        # Unreachable controller; lifecycle thread retries register and exits on stop().
+        controller_address="http://127.0.0.1:1",
+        poll_interval=Duration.from_seconds(0.05),
+    )
+    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+
+    try:
+        worker.start()
+
+        assert worker._log_pusher is not None
+        task = worker.get_task(container.task_id, container.attempt_id)
+        assert task is not None
+        # The adopted attempt must reference the worker's live pusher, not None.
+        assert task._log_pusher is worker._log_pusher
+    finally:
+        worker.stop()
 
 
 def test_task_attempt_adopt_factory():

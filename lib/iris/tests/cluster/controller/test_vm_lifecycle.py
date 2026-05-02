@@ -32,7 +32,6 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 
 import pytest
-
 from iris.cluster.controller.vm_lifecycle import (
     _build_controller_vm_config,
     start_controller,

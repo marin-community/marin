@@ -17,17 +17,17 @@ import google.auth.credentials
 import google.auth.transport.requests
 import httpx
 from google.cloud import tpu_v2alpha1
+from rigging.timing import Timestamp
 
+from iris.cluster.providers.gcp.local import LocalSliceHandle
 from iris.cluster.providers.types import (
     InfraError,
     QuotaExhaustedError,
     ResourceNotFoundError,
 )
-from iris.cluster.providers.gcp.local import LocalSliceHandle
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import TPU_TOPOLOGIES
 from iris.rpc import config_pb2
-from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 

@@ -27,6 +27,7 @@ from typing import Protocol, cast
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from rigging.timing import Duration, Timestamp
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
@@ -36,10 +37,9 @@ from iris.cluster.client import (
     get_job_info,
     resolve_job_user,
 )
-from iris.rpc.auth import AuthTokenInjector, TokenProvider
-from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
 from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
 from iris.cluster.log_store_helpers import build_log_source
+from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -53,9 +53,9 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.rpc.proto_utils import job_state_friendly
 from iris.time_proto import timestamp_from_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -792,6 +792,18 @@ class IrisClient:
             TaskStatus proto containing state, worker assignment, and metrics
         """
         return self._cluster_client.get_task_status(task_name)
+
+    def report_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
+        """Push markdown status text to the controller for UI display.
+
+        Called from within a running task to report progress or state.
+
+        Args:
+            task_id: Full task ID of the currently-running task.
+            detail_md: Full markdown for the task detail page.
+            summary_md: Short summary (up to ~3 lines) for the task list table.
+        """
+        self._cluster_client.report_task_status_text(task_id, detail_md, summary_md)
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.

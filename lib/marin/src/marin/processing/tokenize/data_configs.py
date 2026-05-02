@@ -7,9 +7,8 @@ import os
 from functools import lru_cache
 
 import numpy
-
 from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, BlockShuffleConfig, DatasetComponent, LmDataConfig
-from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from levanter.tokenizers import load_tokenizer
 
 from marin.execution import unwrap_versioned_value
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -323,14 +322,6 @@ def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LmDataConfig:
     )
 
 
-def _load_tokenizer(tokenizer_name: str) -> MarinTokenizer:
-    """Load and cache a tokenizer by name.
-
-    Delegates to levanter.tokenizers.load_tokenizer which is already lru_cached.
-    """
-    return load_tokenizer(tokenizer_name)
-
-
 @lru_cache(maxsize=128)
 def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
     """Return the vocabulary size for a tokenizer name.
@@ -350,7 +341,7 @@ def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
         "Consider adding it to _KNOWN_VOCAB_SIZES in data_configs.py to avoid network calls during dry-runs.",
         resolved_name,
     )
-    tokenizer = _load_tokenizer(resolved_name)
+    tokenizer = load_tokenizer(resolved_name)
     return tokenizer.vocab_size
 
 
@@ -364,8 +355,8 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     if tokenizer1 in _EQUIVALENT_TOKENIZERS and tokenizer2 in _EQUIVALENT_TOKENIZERS:
         return True
 
-    t1 = _load_tokenizer(tokenizer1)
-    t2 = _load_tokenizer(tokenizer2)
+    t1 = load_tokenizer(tokenizer1)
+    t2 = load_tokenizer(tokenizer2)
 
     # Compare vocab sizes
     if len(t1.get_vocab()) != len(t2.get_vocab()):

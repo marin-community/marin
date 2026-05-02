@@ -7,7 +7,6 @@ import pytest
 from connectrpc._headers import Headers
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-
 from iris.rpc.auth import (
     AuthInterceptor,
     AuthTokenInjector,

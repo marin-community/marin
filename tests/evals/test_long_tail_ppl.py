@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from levanter.data.text import HfDatasetSourceConfig
+from marin.evaluation.perplexity_gap import _to_dataset_component, raw_text_dataset
+from marin.processing.tokenize import HfDatasetSpec
 
 from experiments.evals.long_tail_ppl import (
     GAME_MUSIC_ISSUE,
@@ -11,9 +14,6 @@ from experiments.evals.long_tail_ppl import (
     long_tail_raw_validation_sets,
     render_long_tail_ppl_registry_markdown,
 )
-from levanter.data.text import HfDatasetSourceConfig
-from marin.evaluation.perplexity_gap import _to_dataset_component, raw_text_dataset
-from marin.processing.tokenize import HfDatasetSpec
 
 
 def test_long_tail_raw_validation_sets_render_deterministic_paths_and_tags():

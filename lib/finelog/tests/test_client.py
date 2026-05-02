@@ -10,9 +10,8 @@ import time
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-
-from finelog.client import pusher as pusher_mod
 from finelog.client import LogPusher, RemoteLogHandler
+from finelog.client import pusher as pusher_mod
 from finelog.rpc import logging_pb2
 
 

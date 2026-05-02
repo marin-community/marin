@@ -16,16 +16,15 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.service import (
     CloudGcpService,
     TpuCreateRequest,
     VmCreateRequest,
 )
-from iris.rpc import config_pb2
 from iris.cluster.providers.types import InfraError, QuotaExhaustedError, ResourceNotFoundError
 from iris.cluster.service_mode import ServiceMode
+from iris.rpc import config_pb2
 
 
 @pytest.fixture

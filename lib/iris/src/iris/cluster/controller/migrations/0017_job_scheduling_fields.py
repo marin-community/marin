@@ -36,8 +36,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     if not _has_column(conn, "jobs", "request_proto"):
         return  # Column already removed by 0028; backfill not needed.
 
-    from iris.rpc import job_pb2
-    from iris.rpc import controller_pb2
+    from iris.rpc import controller_pb2, job_pb2
 
     rows = conn.execute("SELECT job_id, request_proto FROM jobs WHERE request_proto IS NOT NULL").fetchall()
     for job_id, request_blob in rows:

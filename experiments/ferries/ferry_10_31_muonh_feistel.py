@@ -6,13 +6,11 @@
 
 import dataclasses
 
-from levanter.optim import MuonHConfig
-
-from experiments.defaults import SimpleTrainConfig, default_train
-from experiments.qwen3 import qwen3_1_7b, qwen3_8b
 from fray.cluster import ResourceConfig
+from levanter.optim import MuonHConfig
 from marin.execution.executor import executor_main
 
+from experiments.defaults import SimpleTrainConfig, default_train
 from experiments.ferries.initial_ferry import (
     BATCH_SIZE_1B,
     BATCH_SIZE_8B,
@@ -22,6 +20,7 @@ from experiments.ferries.initial_ferry import (
 from experiments.ferries.initial_ferry import (
     _build_varying_mixture_for_steps as _base_build_varying_mixture_for_steps,
 )
+from experiments.qwen3 import qwen3_1_7b, qwen3_8b
 
 muonh_cfg_1b = MuonHConfig(
     learning_rate=0.01,

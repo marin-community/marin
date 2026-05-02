@@ -5,27 +5,25 @@
 
 import sys
 from dataclasses import dataclass
-from types import SimpleNamespace
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
 from levanter.inference.openai import ChatMessage
-from openai.types.chat import ChatCompletionMessage
-from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
-from transformers import AutoTokenizer
-
 from marin.rl.environments.inference_ctx import (
-    LevanterInferenceContext,
-    LevanterInferenceContextConfig,
     MODEL_MAPPINGS,
     MODEL_TRANSPOSE_KEYS,
+    LevanterInferenceContext,
+    LevanterInferenceContextConfig,
     VLLMSamplingConfig,
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
 )
-from marin.rl.environments.inference_ctx.vllm import InferenceMode
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
+from marin.rl.environments.inference_ctx.vllm import InferenceMode
+from openai.types.chat import ChatCompletionMessage
+from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
+from transformers import AutoTokenizer
 
 _LLAMA3_MODEL_ID = "NousResearch/Meta-Llama-3-8B-Instruct"
 
@@ -303,6 +301,31 @@ def test_vllm_sync_engine_receives_kv_cache_metrics_flag(monkeypatch):
     vLLMInferenceContext._get_llm_engine(config)
 
     assert calls["kv_cache_metrics"] is True
+    assert calls["seed"] == 0
+
+
+def test_vllm_sync_engine_receives_engine_seed(monkeypatch):
+    calls = {}
+
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setattr(vLLMInferenceContext, "_patch_tpu_inference_registry", staticmethod(lambda: None))
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.LLM", _FakeLLM)
+
+    config = vLLMInferenceContextConfig(
+        model_name="test-model",
+        max_model_len=1024,
+        tensor_parallel_size=2,
+        gpu_memory_utilization=0.9,
+        sampling_params=VLLMSamplingConfig(),
+        seed=1234,
+    )
+
+    vLLMInferenceContext._get_llm_engine(config)
+
+    assert calls["seed"] == 1234
 
 
 def test_vllm_async_engine_receives_kv_cache_metrics_flag(monkeypatch):
@@ -328,6 +351,32 @@ def test_vllm_async_engine_receives_kv_cache_metrics_flag(monkeypatch):
     vLLMInferenceContext._get_llm_engine(config)
 
     assert calls["kv_cache_metrics"] is True
+    assert calls["seed"] == 0
+
+
+def test_vllm_async_engine_receives_engine_seed(monkeypatch):
+    calls = {}
+
+    class _FakeSyncVLLMWrapper:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setattr(vLLMInferenceContext, "_patch_tpu_inference_registry", staticmethod(lambda: None))
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.SyncVLLMWrapper", _FakeSyncVLLMWrapper)
+
+    config = vLLMInferenceContextConfig(
+        model_name="test-model",
+        max_model_len=1024,
+        tensor_parallel_size=2,
+        gpu_memory_utilization=0.9,
+        sampling_params=VLLMSamplingConfig(),
+        mode=InferenceMode.ASYNC,
+        seed=1234,
+    )
+
+    vLLMInferenceContext._get_llm_engine(config)
+
+    assert calls["seed"] == 1234
 
 
 def test_worker_extension_uses_public_sync_weights():
