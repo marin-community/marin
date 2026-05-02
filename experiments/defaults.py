@@ -364,6 +364,7 @@ def default_train(
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
+    wandb_project: str | None = None,
     override_output_path: str | None = None,
 ) -> ExecutorStep:
     """
@@ -424,7 +425,7 @@ def default_train(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                project="marin",
+                project=wandb_project or "marin",
                 name=wandb_name,
                 tags=[*tags],
                 group=wandb_group,

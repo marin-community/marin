@@ -67,15 +67,114 @@ namespace `delphi-1e20-p67m33-20b-lr0.5-f74454` to the wrong east5 namespace
 - Do not use `MARIN_I_WILL_PAY_FOR_ALL_FEES=1` in launch recipes to paper over
   cross-region placement. It hides the bug and can allow expensive behavior.
 
+### Iris quota / priority bands — interactive vs batch
+
+**Source of truth:** `lib/iris/examples/marin.yaml:198-223` (researcher tier — `ahmedah` is in this group with `budget_limit=75000` and `max_band=PRIORITY_BAND_INTERACTIVE`).
+
+**Spend formula** (`lib/iris/src/iris/cluster/controller/budget.py:68-76`):
+
+```
+resource_value(task) = 1000 * accelerator_count + RAM_GB + 5 * CPU_cores
+user_spend = sum(resource_value(t) for t in user's ASSIGNED/BUILDING/RUNNING tasks)
+```
+
+It is a **snapshot of in-flight work**, not historic usage. Spend drops as tasks complete.
+
+**Demotion rule** (`compute_effective_band` in `budget.py:109-126`, called every scheduling tick on BOTH pending tasks (`controller.py:2016`, `service.py:2554`) AND running tasks (`controller.py:494`)):
+
+```python
+if user_spend > limit and task.priority_band != PRODUCTION:
+    effective_band = max(task.priority_band, BATCH)   # downgrade INTERACTIVE → BATCH
+```
+
+Crucial implications:
+
+1. **Going over quota retroactively downgrades ALL in-flight INTERACTIVE jobs of that user**, not just future submissions. The `priority_band` field on the task row is unchanged; the *effective* band is recomputed every tick from current `user_spend`. So a task that was treated as INTERACTIVE one second ago can become BATCH-effective the next second if you submit something that pushes you over 75k.
+2. **Demotion is reversible.** As tasks complete and spend drops back below 75k, remaining INTERACTIVE tasks regain their priority on the next tick.
+3. **PRODUCTION is never demoted** — admin tier only (`runner, power, dlwh, rav, romain, held, larry`).
+4. **BATCH has no per-user cap.** Cluster-wide queue, lower preemption priority. That's how `michaelryan` runs 313 BATCH tasks with 1.6 M total spend (16× over the 75k threshold).
+5. The `--priority` CLI flag chooses the *task's* band. Once your effective band is BATCH (either because you chose it or because you got demoted), you compete in the BATCH queue.
+
+**Concrete numbers for our 12-job sweep:**
+
+| Run shape | Per-job spend | Per-job mix | Total at full deployment |
+|---|---:|---|---:|
+| 6 × 1e20 on v5p-32 | ~32,000 | 32 chips × 1000 + RAM/CPU | ~192,000 |
+| 6 × 1e21 on v5p-64 | ~64,000 | 64 chips × 1000 + RAM/CPU | ~384,000 |
+| **Sum** |  |  | **~576,000 (~7.7× the 75k INTERACTIVE limit)** |
+
+We submitted with `--priority batch` so we're already at BATCH-effective from the start; no further demotion penalty applies. This was the right call for an unattended 12-job sweep — but it means our jobs are preemptable by anyone's higher-band work.
+
+### Open question for the user — how do we want sweeps to schedule?
+
+Two regimes, mutually exclusive:
+
+**A. Best-effort BATCH (current setup)**
+- Submit with `--priority batch`.
+- All 12 jobs run in parallel (no spend ceiling).
+- **Preemptable** by other users' INTERACTIVE/PRODUCTION work, especially when the cluster is busy. Levanter handles preemption via the 10-min temp checkpoint, so progress isn't lost — just stalled while waiting to reschedule. Wall-time becomes "training time + preemption recovery".
+- Best for: research sweeps where total throughput matters more than predictable wall-time.
+
+**B. INTERACTIVE under quota — guaranteed-finish**
+- Submit with `--priority interactive`.
+- Must keep total in-flight spend ≤ 75,000. With 1e20 ≈ 32k/job and 1e21 ≈ 64k/job:
+  - Max 2 × 1e20 simultaneously = 64k ✓
+  - Or 1 × 1e21 simultaneously = 64k ✓
+  - 1 × 1e20 + 1 × 1e21 = 96k ✗ (already over)
+- 12-job sweep would have to **serialize**: ~6 × 1e21 wall-time (~24h serial) + ~3 × 2-1e20 wall-time (~21h serial). Roughly 2× the current parallel wall-time, but with **strong preemption priority** — you'd outrank ~95% of current cluster traffic.
+- Best for: critical runs that must finish before a deadline, or recovery from a failed sweep where re-launching everything from scratch would be wasteful.
+
+**Hybrid (third option):** submit the 1e20 jobs as INTERACTIVE in pairs (each pair fits under 75k) and the 1e21 jobs serially as INTERACTIVE — gets the priority benefit but ties up scheduling latency. Probably overcomplicated; pick A or B.
+
+The current sweep is already running under (A). The question is **what we want to do for the *next* sweep launch and any future midtraining runs**:
+
+- → "Best-effort BATCH" is fine for exploration. Accept some preemption risk; we can tolerate stalls.
+- → "Interactive guaranteed-finish" is the right call when we have a known-good recipe and just need the run to land before a deadline.
+- → Mixed by stage: BATCH for LR-search sweeps (we'll re-run anyway), INTERACTIVE for the final-recipe runs that produce the publishable numbers.
+
+**Please confirm which regime you want as the default for future sweeps.** This is the only knob that affects launch behavior; the rest of the framework (val carve-out, K=0.20, 10% checkpoints, etc.) is independent.
+
 ### Branch state
 
-- Remote `origin/midtrain_data` currently points at `4b40df269`.
-- Local `midtrain_data` has since merged `origin/main` at
-  `ecd8fbca7 Merge remote-tracking branch 'origin/main' into midtrain_data`.
-  That merge is local only unless a later agent pushes it.
+- Remote `origin/midtrain_data` currently points at `bfacf9f76` (pre-flight TypeError fallback) after the recent push sequence (`6d0c9f3ef` heuristic+spec → `058fe76a0` 10% ckpts → `bfacf9f76` pre-flight fallback).
 - Expect unrelated local dirty files in this worktree, including this logbook,
-  analysis scripts/plots, `experiments/defaults.py`, and `tests/test_training.py`.
+  analysis scripts/plots, and `tests/test_training.py`.
   Do not stage them casually.
+
+### W&B project routing — fixed (2026-05-02)
+
+`experiments/defaults.py:427` had hard-coded `project="marin"` in `WandbConfig` since `b804686ae3` ("wip", David Hall, 2025-04-03). The matching DPO helper (`default_train_dpo`, line 664) was already correct. The fix:
+
+```python
+# experiments/defaults.py — default_train signature
+def default_train(
+    ...,
+    wandb_project: str | None = None,
+    ...
+)
+
+# experiments/defaults.py — WandbConfig
+tracker=WandbConfig(project=wandb_project or "marin", ...),
+
+# experiments/exp_delphi_math_10b_midtrain.py — every run
+default_train(..., wandb_project="delphi-midtraining", ...)
+```
+
+Setting `WANDB_PROJECT` env var alone never worked because Levanter's `wandb.init(project=self.project, ...)` passes the explicit string from `WandbConfig`, overriding the env. With the fix, every Delphi midtraining run from this branch routes to `https://wandb.ai/marin-community/delphi-midtraining`.
+
+Caveat: the 2 runs from sweep `20260501-235704` that started before the fix landed at `marin-community/marin/runs/delphi-1e20-p67m33-4p94b-lr0.{33,5}-*`. Filter that project by `delphi-` prefix or by tag `delphi-midtrain` if you need to find them.
+
+Implication for any other `default_train` caller: setting `wandb_project="..."` now routes that experiment to a different project. Default behavior (kwarg unset) is unchanged → still routes to `marin-community/marin`. So no regression for existing callers.
+
+### Correction on iris quota framing (2026-05-02)
+
+Earlier I claimed an in-flight 12-job sweep would already be over the 75k quota. **Wrong.** Per `lib/iris/src/iris/cluster/controller/db.py:144`, `ACTIVE_TASK_STATES = {ASSIGNED, BUILDING, RUNNING}` — `PENDING` tasks **don't count** toward `user_spend`. So:
+
+- A coordinator + a coscheduling-pending child = ~5 spend (just the 1 coordinator CPU).
+- Spend only jumps when the child enters BUILDING/RUNNING (i.e. coscheduling acquires TPU workers).
+- `ahmedah` was at 34,400 / 75,000 = 45.9% during the sweep launch (under quota).
+
+Realistic projection: as the autoscaler ramps v5p capacity and pending children start RUNNING, spend climbs. Crossing 75k auto-demotes ALL of the user's INTERACTIVE work to BATCH-effective on the next scheduler tick (`compute_effective_band`). So an INTERACTIVE submission has *temporary* INTERACTIVE priority — until the user crosses 75k from concurrent jobs starting to RUN, at which point everything degrades to BATCH-effective. Reverses as jobs finish.
 
 > **How to use this file (for any agent that lands here later).**
 >

@@ -542,6 +542,7 @@ def _build_runs() -> list[ExecutorStep]:
                         "delphi-midtrain",
                     ),
                     eval_harness_tasks=(),
+                    wandb_project="delphi-midtraining",
                     override_output_path=_OUTPUT_PATH_OVERRIDE,
                 )
             )
