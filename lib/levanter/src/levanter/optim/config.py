@@ -339,6 +339,9 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
                             schedule = _inv_sqrt_decay_schedule(learning_rate, min_lr, warmup_steps, 10000)
                         case "inv":
                             schedule = _inv_decay_schedule(learning_rate, min_lr, lr_decay_steps)
+                        case s if s.startswith("poly"):
+                            power = float(s[4:])
+                            schedule = optax.polynomial_schedule(learning_rate, min_lr, power, lr_decay_steps)
                         case _:
                             raise ValueError(f"Unknown lr_schedule: {self.lr_schedule}")
                 elif isinstance(self.lr_schedule, LrSchedule):
