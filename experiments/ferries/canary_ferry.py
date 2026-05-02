@@ -10,6 +10,7 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
     CANARY_ACCELERATOR   tpu | gpu
     CANARY_BATCH_SIZE    per-device batch size
     CANARY_CACHE_COPY_MAX_WORKERS gpu-only cache-copy worker cap
+    CANARY_PROFILER_ENABLED enable JAX profiling; defaults to true on TPU, false on GPU
     CANARY_TARGET_TOKENS total training tokens
     RUN_ID               unique run identifier
 """
@@ -57,12 +58,27 @@ def _env_int(key: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def _env_bool(key: str, default: bool) -> bool:
+    raw = os.environ.get(key, "")
+    if not raw:
+        return default
+
+    normalized = raw.lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+
+    raise ValueError(f"Unknown {key}={raw!r}, expected a boolean value")
+
+
 def _build_step_from_env() -> ExecutorStep:
     accelerator = os.environ.get("CANARY_ACCELERATOR", "tpu")
     if accelerator not in ("tpu", "gpu"):
         raise ValueError(f"Unknown CANARY_ACCELERATOR={accelerator!r}, expected 'tpu' or 'gpu'")
 
     run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    profiler_enabled = _env_bool("CANARY_PROFILER_ENABLED", accelerator == "tpu")
 
     if accelerator == "tpu":
         batch_size = _env_int("CANARY_BATCH_SIZE", 512)
@@ -146,7 +162,7 @@ def _build_step_from_env() -> ExecutorStep:
             optimizer=versioned(CANARY_OPTIMIZER),
             grug_trainer=versioned(CANARY_TRAINER),
             eval=versioned(eval_config) if eval_config is not None else None,
-            profiler=ProfilerConfig(enabled=True),
+            profiler=ProfilerConfig(enabled=profiler_enabled),
         ),
     )
 
