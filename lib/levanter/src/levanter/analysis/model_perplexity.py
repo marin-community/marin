@@ -30,6 +30,8 @@ SUMMARY_FILENAME = "summary.json"
 TOKEN_COUNTS_FILENAME = "token_counts.parquet"
 TOKEN_COUNT_SUMMARY_FILENAME = "token_counts_summary.json"
 DEFAULT_RARE_TOKEN_LIMIT = 32
+EVAL_RUNTIME_METRIC_FIELDS = ("tokens", "eval_seconds", "tokens_per_second", "bytes_per_second")
+TRACKED_EVAL_RUNTIME_SCALAR_FIELDS = EVAL_RUNTIME_METRIC_FIELDS[:-1]
 
 
 @dataclass(frozen=True)
@@ -300,7 +302,7 @@ def attach_model_score_metrics(
     *,
     model_a_score_summary: dict[str, Any],
     model_b_score_summary: dict[str, Any],
-) -> dict[str, Any]:
+) -> None:
     for section in ("datasets", "dataset_groups"):
         a_rows = {row["name"]: row for row in model_a_score_summary.get(section, [])}
         b_rows = {row["name"]: row for row in model_b_score_summary.get(section, [])}
@@ -308,15 +310,28 @@ def attach_model_score_metrics(
             name = row["name"]
             _attach_prefixed_score_metrics(row, prefix="model_a", score_row=a_rows.get(name))
             _attach_prefixed_score_metrics(row, prefix="model_b", score_row=b_rows.get(name))
-    return summary
 
 
 def _attach_prefixed_score_metrics(row: dict[str, Any], *, prefix: str, score_row: dict[str, Any] | None) -> None:
     if score_row is None:
         return
 
-    for metric_name in ("tokens", "eval_seconds", "tokens_per_second", "bytes_per_second"):
+    for metric_name in EVAL_RUNTIME_METRIC_FIELDS:
         row[f"{prefix}_{metric_name}"] = score_row.get(metric_name)
+
+
+def add_prefixed_runtime_metric_scalars(
+    scalars: dict[str, float],
+    *,
+    key_prefix: str,
+    row: dict[str, Any],
+    prefix: str,
+) -> None:
+    for metric_name in TRACKED_EVAL_RUNTIME_SCALAR_FIELDS:
+        value = row.get(f"{prefix}_{metric_name}")
+        if value is None:
+            continue
+        scalars[f"{key_prefix}/{prefix}_{metric_name}"] = float(value)
 
 
 def _scored_documents_table(scored_documents: Sequence[ScoredDocument]) -> pa.Table:

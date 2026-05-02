@@ -20,8 +20,13 @@ from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
 import levanter.tracker
-from levanter.analysis.model_perplexity import ModelScoreReportBuilder, ScoredDocument, write_model_score_files
-from levanter.analysis.model_perplexity import attach_model_score_metrics
+from levanter.analysis.model_perplexity import (
+    ModelScoreReportBuilder,
+    ScoredDocument,
+    add_prefixed_runtime_metric_scalars,
+    attach_model_score_metrics,
+    write_model_score_files,
+)
 from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
     RawTextDocument,
@@ -134,6 +139,9 @@ class _ModelRunner:
         losses = self.compute_losses(self.model, batch)
         return np.asarray(jax.device_get(losses), dtype=np.float64)
 
+    def warmup(self) -> None:
+        _check_finite_losses(self.label, self._score_chunk_batch([]))
+
 
 def score_main(config: ModelPerplexityConfig) -> None:
     levanter.initialize(config)
@@ -152,6 +160,8 @@ def score_main(config: ModelPerplexityConfig) -> None:
             compute_axis_mapping=compute_axis_mapping,
             parameter_axis_mapping=parameter_axis_mapping,
         )
+        logger.info("Warming up scorer for %s", runner.label)
+        runner.warmup()
 
         report = ModelScoreReportBuilder(model_name=runner.label)
         scored_documents: list[ScoredDocument] = []
@@ -241,6 +251,10 @@ def main(config: GapFinderConfig) -> None:
             compute_axis_mapping=compute_axis_mapping,
             parameter_axis_mapping=parameter_axis_mapping,
         )
+        logger.info("Warming up scorer for %s", runner_a.label)
+        runner_a.warmup()
+        logger.info("Warming up scorer for %s", runner_b.label)
+        runner_b.warmup()
 
         report = GapReportBuilder(
             model_a_name=runner_a.label,
@@ -440,6 +454,7 @@ def _elapsed_share(
         return 0.0
     if batch_total_tokens > 0:
         return total_elapsed * float(token_count) / float(batch_total_tokens)
+    # The batch contained only docs that were too short to score, so split the fixed overhead evenly.
     return total_elapsed / float(batch_size)
 
 
@@ -495,53 +510,33 @@ def _summary_scalars(summary: dict[str, Any]) -> dict[str, float]:
         scalars[f"gap/datasets/{row['name']}/bpb_gap"] = float(row["gap_bpb"])
         scalars[f"gap/datasets/{row['name']}/model_a_bpb"] = float(row["model_a_bpb"])
         scalars[f"gap/datasets/{row['name']}/model_b_bpb"] = float(row["model_b_bpb"])
-        _add_optional_metric(scalars, f"gap/datasets/{row['name']}/model_a_tokens", row.get("model_a_tokens"))
-        _add_optional_metric(
+        add_prefixed_runtime_metric_scalars(
             scalars,
-            f"gap/datasets/{row['name']}/model_a_eval_seconds",
-            row.get("model_a_eval_seconds"),
+            key_prefix=f"gap/datasets/{row['name']}",
+            row=row,
+            prefix="model_a",
         )
-        _add_optional_metric(
+        add_prefixed_runtime_metric_scalars(
             scalars,
-            f"gap/datasets/{row['name']}/model_a_tokens_per_second",
-            row.get("model_a_tokens_per_second"),
-        )
-        _add_optional_metric(scalars, f"gap/datasets/{row['name']}/model_b_tokens", row.get("model_b_tokens"))
-        _add_optional_metric(
-            scalars,
-            f"gap/datasets/{row['name']}/model_b_eval_seconds",
-            row.get("model_b_eval_seconds"),
-        )
-        _add_optional_metric(
-            scalars,
-            f"gap/datasets/{row['name']}/model_b_tokens_per_second",
-            row.get("model_b_tokens_per_second"),
+            key_prefix=f"gap/datasets/{row['name']}",
+            row=row,
+            prefix="model_b",
         )
     for row in summary["dataset_groups"]:
         if row["gap_bpb"] is None:
             continue
         scalars[f"gap/groups/{row['name']}/bpb_gap"] = float(row["gap_bpb"])
-        _add_optional_metric(scalars, f"gap/groups/{row['name']}/model_a_tokens", row.get("model_a_tokens"))
-        _add_optional_metric(
+        add_prefixed_runtime_metric_scalars(
             scalars,
-            f"gap/groups/{row['name']}/model_a_eval_seconds",
-            row.get("model_a_eval_seconds"),
+            key_prefix=f"gap/groups/{row['name']}",
+            row=row,
+            prefix="model_a",
         )
-        _add_optional_metric(
+        add_prefixed_runtime_metric_scalars(
             scalars,
-            f"gap/groups/{row['name']}/model_a_tokens_per_second",
-            row.get("model_a_tokens_per_second"),
-        )
-        _add_optional_metric(scalars, f"gap/groups/{row['name']}/model_b_tokens", row.get("model_b_tokens"))
-        _add_optional_metric(
-            scalars,
-            f"gap/groups/{row['name']}/model_b_eval_seconds",
-            row.get("model_b_eval_seconds"),
-        )
-        _add_optional_metric(
-            scalars,
-            f"gap/groups/{row['name']}/model_b_tokens_per_second",
-            row.get("model_b_tokens_per_second"),
+            key_prefix=f"gap/groups/{row['name']}",
+            row=row,
+            prefix="model_b",
         )
     for row in summary["pattern_buckets"]:
         if row["gap_bpb"] is None:

@@ -47,6 +47,7 @@ from levanter.main.perplexity_gap import (
     _accumulate_token_losses,
     _check_finite_losses,
     _document_batches,
+    _elapsed_share,
     _log_report_artifact,
     main,
 )
@@ -551,9 +552,11 @@ def test_compare_scored_documents_attaches_per_dataset_score_metrics():
     assert dataset_row["model_a_tokens"] == 2
     assert dataset_row["model_a_eval_seconds"] == pytest.approx(0.5)
     assert dataset_row["model_a_tokens_per_second"] == pytest.approx(4.0)
+    assert dataset_row["model_a_bytes_per_second"] == pytest.approx(6.0)
     assert dataset_row["model_b_tokens"] == 1
     assert dataset_row["model_b_eval_seconds"] == pytest.approx(0.25)
     assert dataset_row["model_b_tokens_per_second"] == pytest.approx(4.0)
+    assert dataset_row["model_b_bytes_per_second"] == pytest.approx(12.0)
 
 
 def test_render_report_markdown_escapes_table_boundaries():
@@ -598,6 +601,10 @@ def test_document_batches_do_not_cross_dataset_boundaries():
         ["dataset/a", "dataset/a"],
         ["dataset/b"],
     ]
+
+
+def test_elapsed_share_evenly_splits_zero_token_batches():
+    assert _elapsed_share(6.0, token_count=0, batch_total_tokens=0, batch_size=3) == pytest.approx(2.0)
 
 
 def test_check_finite_losses_raises_on_non_finite_values():
