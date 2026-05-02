@@ -707,8 +707,13 @@ DNA_SCALING_HEURISTIC = CompletedAdamHHeuristic(
     max_batch_size=8192,
 )
 
-TRANSFER_VERSION = "v0.14"
-TRANSFER_HIDDEN_SIZE = 1920  # ~1.12B params
+TRANSFER_VERSION = "v0.15"
+# Three model sizes for transfer validation. Primary (largest) gets the full sweep —
+# positive control, negative control, LR grid, and beta2 grid. Smaller sizes get the
+# LR grid only (all 7 points, including center). Sizes are taken from the parameter
+# scaling sweep so the transfer study anchors directly on its grid.
+TRANSFER_HIDDEN_SIZES: tuple[int, ...] = (1152, 1408, 1920)  # ~255M, ~476M, ~1.12B params
+TRANSFER_PRIMARY_HIDDEN_SIZE = TRANSFER_HIDDEN_SIZES[-1]
 TRANSFER_TARGET_TOKENS = 10_000_000_000
 TRANSFER_BATCH_SIZE = 4096
 TRANSFER_NUM_POINTS = 7
@@ -824,9 +829,13 @@ def _print_transfer_preview():
         DNA_SCALING_HEURISTIC.reference_tokens,
     )
 
+    smaller_sizes = tuple(h for h in TRANSFER_HIDDEN_SIZES if h != TRANSFER_PRIMARY_HIDDEN_SIZE)
+
     print("=" * 70)
     print(f"Transfer validation sweep preview — {TRANSFER_VERSION}")
-    print(f"  model: hidden={TRANSFER_HIDDEN_SIZE}, batch={TRANSFER_BATCH_SIZE}, tokens={TRANSFER_TARGET_TOKENS:.0e}")
+    print(f"  primary model (controls + LR + beta2): hidden={TRANSFER_PRIMARY_HIDDEN_SIZE}")
+    print(f"  smaller models (LR only): hidden={smaller_sizes}")
+    print(f"  batch={TRANSFER_BATCH_SIZE}, tokens={TRANSFER_TARGET_TOKENS:.0e}")
     num_steps = TRANSFER_TARGET_TOKENS // (TRANSFER_BATCH_SIZE * _model_seq_len())
     print(f"  num_steps: {num_steps}")
     print()
@@ -855,12 +864,19 @@ def _print_transfer_preview():
         print(f"    grid ({len(grid)} points, {len(off_center)} off-center): {[f'{v:.6g}' for v in sorted(grid)]}")
     print()
 
-    total = (
-        1
-        + 1
-        + sum(len(_build_transfer_grid(ax, getattr(TRANSFER_OPTIMIZER, ax.field))) - 1 for ax in TRANSFER_SWEEP_AXES)
+    primary_off_center = sum(
+        len(_build_transfer_grid(ax, getattr(TRANSFER_OPTIMIZER, ax.field))) - 1 for ax in TRANSFER_SWEEP_AXES
     )
-    print(f"Total runs: {total} (1 positive + 1 negative + {total - 2} off-center)")
+    primary_total = 2 + primary_off_center
+    lr_axis = next(ax for ax in TRANSFER_SWEEP_AXES if ax.field == "learning_rate")
+    lr_n = len(_build_transfer_grid(lr_axis, TRANSFER_OPTIMIZER.learning_rate))
+    smaller_total = lr_n * len(smaller_sizes)
+    total = primary_total + smaller_total
+    print(
+        f"Total runs: {total} ("
+        f"primary {TRANSFER_PRIMARY_HIDDEN_SIZE}: {primary_total} = 1 pos + 1 neg + {primary_off_center} off-center; "
+        f"smaller: {smaller_total} = {lr_n} LR points x {len(smaller_sizes)} sizes)"
+    )
     print("=" * 70)
 
 
@@ -948,26 +964,39 @@ def _build_scaled_train_step(
 # --- Sweep orchestration ---
 
 
-def _get_transfer_steps(all_steps: list[ExecutorStep]) -> list[ExecutorStep]:
-    """Parse SWEEP_TRANSFER_INDICES env var (CSV of indices into all_steps) or return all."""
-    raw = _csv_env("SWEEP_TRANSFER_INDICES", ())
-    if not raw:
+def _filter_transfer_include(all_steps: list[ExecutorStep]) -> list[ExecutorStep]:
+    """Filter runs by SWEEP_TRANSFER_INCLUDE (CSV of substring tokens, OR-matched against run name).
+
+    Unset = include all. A step is kept when any token is a substring of its name.
+    Examples:
+        SWEEP_TRANSFER_INCLUDE="p255M,p476M"  # smaller-model LR runs
+        SWEEP_TRANSFER_INCLUDE="control"      # positive + negative controls
+        SWEEP_TRANSFER_INCLUDE="p1B-beta2"    # 1B beta2 sweep only
+    """
+    tokens = _csv_env("SWEEP_TRANSFER_INCLUDE", ())
+    if not tokens:
         return all_steps
-    indices = tuple(int(i) for i in raw)
-    n = len(all_steps)
-    invalid = [i for i in indices if not 0 <= i < n]
-    if invalid:
-        raise ValueError(f"Invalid indices {invalid}. Must be in [0, {n})")
-    return [all_steps[i] for i in indices]
+    selected = [s for s in all_steps if any(token in s.name for token in tokens)]
+    if not selected:
+        raise ValueError(
+            f"SWEEP_TRANSFER_INCLUDE={tokens} matched no runs. " f"Available run names: {[s.name for s in all_steps]}"
+        )
+    return selected
 
 
 def run_transfer_validation_sweep():
-    """Sweep LR, beta1, beta2 in isolation at full-epoch scale with ~4B model.
+    """Sweep LR + beta2 in isolation across multiple model sizes.
 
-    Positive control: transferred optimizer (scaled via DNA_SCALING_HEURISTIC).
-    Negative control: heuristic at reference point (unscaled, to validate transfer helps).
-    Per-axis sweeps: 7 points centered at transferred value, 3 axes, center deduplicated.
-    Total: 1 positive + 1 negative + 18 off-center = 20 runs.
+    Primary (largest) size: positive control + negative control + LR grid + beta2 grid,
+        with center deduplicated against the positive control.
+    Smaller sizes: LR grid only, all 7 points (no center dedup, no controls). The
+        center point is the most informative single value at each scale, so we keep it.
+
+    Run names embed the param count via `_format_params` (e.g. `-p1B-`, `-p476M-`,
+    `-p255M-`), which is also what `SWEEP_TRANSFER_INCLUDE` matches against.
+
+    Selection: SWEEP_TRANSFER_INCLUDE="<token1>,<token2>,..." filters to runs whose
+    name contains any token (substring, OR-matched). Unset = run all.
     """
     if _preview_mode():
         _print_transfer_preview()
@@ -975,26 +1004,26 @@ def run_transfer_validation_sweep():
 
     version = TRANSFER_VERSION
     mixture = _build_data_mixture()
-    model_config = _build_model_config(TRANSFER_HIDDEN_SIZE, REFERENCE_HPARAMS.initializer_range)
-    num_params = model_config.total_trainable_params(DNA_SCALING_HEURISTIC.vocab_size)
     wandb_group = f"dna-bolinas-transfer-sweep-{version}"
     tpu_types = _tpu_types_from_env("TRANSFER", TRANSFER_TPU_TYPES)
-
-    base_tags = (
-        "sweep",
-        "dna",
-        "bolinas",
-        "transfer",
-        version,
-        f"params={num_params}",
-        f"tokens={TRANSFER_TARGET_TOKENS}",
-        f"bs={TRANSFER_BATCH_SIZE}",
-    )
 
     num_steps = TRANSFER_TARGET_TOKENS // (TRANSFER_BATCH_SIZE * _model_seq_len())
     checkpointer = _periodic_checkpoint(keep_every=num_steps // 3, interval_hours=1)
 
-    def _make_step(optimizer: AdamHConfig, run_name: str, tags: tuple[str, ...]) -> ExecutorStep:
+    # Negative control: heuristic evaluated at its reference point (B0, T0) — i.e. the
+    # raw reference-optimal hparams without transfer scaling. If scaling works, the
+    # positive control (transferred) should outperform this.
+    negative_optimizer = DNA_SCALING_HEURISTIC.build_optimizer_config(
+        DNA_SCALING_HEURISTIC.reference_batch_size,
+        DNA_SCALING_HEURISTIC.reference_tokens,
+    )
+
+    def _make_step(
+        optimizer: AdamHConfig,
+        model_config,
+        run_name: str,
+        tags: tuple[str, ...],
+    ) -> ExecutorStep:
         return _build_scaled_train_step(
             optimizer=optimizer,
             model_config=model_config,
@@ -1011,53 +1040,71 @@ def run_transfer_validation_sweep():
 
     all_steps: list[ExecutorStep] = []
 
-    # Positive control: transferred (scaled) optimizer
-    all_steps.append(
-        _make_step(
-            TRANSFER_OPTIMIZER,
-            f"dna-bolinas-transfer-{version}-positive-control",
-            (*base_tags, "role=positive-control"),
-        )
-    )
+    for hidden_size in TRANSFER_HIDDEN_SIZES:
+        is_primary = hidden_size == TRANSFER_PRIMARY_HIDDEN_SIZE
+        model_config = _build_model_config(hidden_size, REFERENCE_HPARAMS.initializer_range)
+        num_params = model_config.total_trainable_params(DNA_SCALING_HEURISTIC.vocab_size)
+        params_label = _format_params(num_params)
+        run_prefix = f"dna-bolinas-transfer-{version}-p{params_label}"
 
-    # Negative control: heuristic evaluated at its reference point (B0, T0) — i.e. the
-    # raw reference-optimal hparams without transfer scaling. If scaling works, the
-    # positive control (transferred) should outperform this.
-    negative_optimizer = DNA_SCALING_HEURISTIC.build_optimizer_config(
-        DNA_SCALING_HEURISTIC.reference_batch_size,
-        DNA_SCALING_HEURISTIC.reference_tokens,
-    )
-    all_steps.append(
-        _make_step(
-            negative_optimizer,
-            f"dna-bolinas-transfer-{version}-negative-control",
-            (*base_tags, "role=negative-control"),
+        base_tags = (
+            "sweep",
+            "dna",
+            "bolinas",
+            "transfer",
+            version,
+            f"hidden={hidden_size}",
+            f"params={num_params}",
+            f"tokens={TRANSFER_TARGET_TOKENS}",
+            f"bs={TRANSFER_BATCH_SIZE}",
         )
-    )
 
-    # Per-axis sweeps: 7 points each, center deduplicated as positive control above
-    if not _warmup_mode():
-        for axis in TRANSFER_SWEEP_AXES:
+        if is_primary:
+            # Positive control: transferred (scaled) optimizer at this size
+            all_steps.append(
+                _make_step(
+                    TRANSFER_OPTIMIZER,
+                    model_config,
+                    f"{run_prefix}-positive-control",
+                    (*base_tags, "role=positive-control"),
+                )
+            )
+            all_steps.append(
+                _make_step(
+                    negative_optimizer,
+                    model_config,
+                    f"{run_prefix}-negative-control",
+                    (*base_tags, "role=negative-control"),
+                )
+            )
+            sweep_axes = TRANSFER_SWEEP_AXES
+            dedupe_center = True
+        else:
+            # Smaller sizes: only the LR axis, and no center dedup since there is no
+            # positive control at this scale to absorb the center run.
+            sweep_axes = tuple(ax for ax in TRANSFER_SWEEP_AXES if ax.field == "learning_rate")
+            dedupe_center = False
+
+        if _warmup_mode():
+            continue  # warmup keeps controls only (primary size)
+
+        for axis in sweep_axes:
             center = getattr(TRANSFER_OPTIMIZER, axis.field)
             grid = _build_transfer_grid(axis, center)
             for i, value in enumerate(grid):
-                if value == center:
+                if dedupe_center and value == center:
                     continue  # deduplicated as positive control
                 swept_optimizer = replace(TRANSFER_OPTIMIZER, **{axis.field: value})
                 all_steps.append(
                     _make_step(
                         swept_optimizer,
-                        f"dna-bolinas-transfer-{version}-{axis.field}-{i}",
+                        model_config,
+                        f"{run_prefix}-{axis.field}-{i}",
                         (*base_tags, f"axis={axis.field}", f"{axis.field}={value}"),
                     )
                 )
 
-    # TODO: Remove this filter — temporary hack to run a subset of steps
-    # _skip = ("-negative-control", "-positive-control", *[f"-learning_rate-{i}" for i in range(TRANSFER_NUM_POINTS)])
-    # all_steps = [s for s in all_steps if not any(s.name.endswith(k) for k in _skip)]
-    all_steps = [s for s in all_steps if any(s.name.endswith(f"-beta2-{i}") for i in (7, 8, 9))]
-
-    all_steps = _get_transfer_steps(all_steps)
+    all_steps = _filter_transfer_include(all_steps)
 
     executor_main(steps=all_steps, description=f"DNA Bolinas transfer validation {version}")
 
@@ -1089,7 +1136,10 @@ SCALING_HIDDEN_SIZES: tuple[int, ...] = (640, 768, 896, 1152, 1408, 1920, 2432, 
 assert (
     SCALING_BATCH_SIZE <= DNA_SCALING_HEURISTIC.max_batch_size
 ), f"SCALING_BATCH_SIZE={SCALING_BATCH_SIZE} exceeds heuristic max_batch_size={DNA_SCALING_HEURISTIC.max_batch_size}"
-assert TRANSFER_HIDDEN_SIZE in SCALING_HIDDEN_SIZES, "Scaling sweep must include the transfer validation model"
+_missing_transfer_sizes = set(TRANSFER_HIDDEN_SIZES) - set(SCALING_HIDDEN_SIZES)
+assert (
+    not _missing_transfer_sizes
+), f"Scaling sweep must include all transfer validation models; missing: {_missing_transfer_sizes}"
 
 
 def _scaling_target_tokens() -> int:

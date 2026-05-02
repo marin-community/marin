@@ -50,7 +50,7 @@ tokenized dataset sizes in gs://marin-dna-us-central1/tokenized/:
 
 - Online: unweighted CE loss nats / BPB (cf. [marin#2310](https://github.com/marin-community/marin/pull/2310)), stratified by `region` (inferred from dataset source or added as explicit field)
 - Online: VEP ([marin#3144](https://github.com/marin-community/marin/pull/3144), [marin#3333](https://github.com/marin-community/marin/pull/3333))
-- Online: `LL(functional)`, `LL(non-functional)`, `LL(functional) - LL(non-functional)` ([bolinas#8](https://github.com/Open-Athena/bolinas-dna/issues/8))
+- Online: `LL(functional)`, `LL(non-functional)`, `LL(functional) - LL(non-functional)` ([bolinas#8](https://github.com/Open-Athena/bolinas-dna/issues/8), [marin#3483](https://github.com/marin-community/marin/pull/3483))
 - Offline (final checkpoint at largest scale): VEP by variant type
 - Offline: VEP vs `LL(functional) - LL(non-functional)` and validation loss
 

@@ -13,7 +13,7 @@ from levanter.trainer import TrainerConfig
 from experiments.dna.exp109_bolinas_scaling_sweep import (
     REFERENCE_HPARAMS,
     TOKENIZER,
-    TRANSFER_HIDDEN_SIZE,
+    TRANSFER_PRIMARY_HIDDEN_SIZE,
     _build_model_config,
 )
 from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2_255, convert_to_levanter_task_config
@@ -31,7 +31,7 @@ RUN = f"dna-bolinas-transfer-v0.14-vep-{REGION}-v0.2"
 
 
 def run_sweep_eval():
-    model_config = _build_model_config(TRANSFER_HIDDEN_SIZE, REFERENCE_HPARAMS.initializer_range)
+    model_config = _build_model_config(TRANSFER_PRIMARY_HIDDEN_SIZE, REFERENCE_HPARAMS.initializer_range)
 
     config = EvalHarnessMainConfig(
         eval_harness=LmEvalHarnessConfig(
