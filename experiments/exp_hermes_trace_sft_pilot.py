@@ -7,7 +7,10 @@ import dataclasses
 import math
 import re
 
+from fray.cluster import ResourceConfig
 from levanter.data.text import ChatLmDatasetFormat
+from marin.execution.executor import ExecutorStep, executor_main
+from marin.processing.tokenize import lm_mixture_data_config
 
 from experiments.defaults import default_sft, default_tokenize
 from experiments.evals.evals import default_sft_eval
@@ -15,9 +18,6 @@ from experiments.llama import llama_8b
 from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import INSTRUCTION_DATASET_NAME_TO_CONFIG, get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
-from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main
-from marin.processing.tokenize import lm_mixture_data_config
 
 SLUGIFY_PATTERN = re.compile(r"[^a-z0-9]+")
 TARGET_EPOCHS = 3

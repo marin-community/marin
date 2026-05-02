@@ -62,13 +62,13 @@ from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
     convert_conversation_to_dolma,
 )
-from marin.transform.conversation.transform_conversation import (
-    TransformSFTDatasetConfig,
-    transform_hf_dataset,
-)
 from marin.transform.conversation.trace_normalization import (
     hermes_trace_row_id,
     normalize_hermes_trace_messages,
+)
+from marin.transform.conversation.transform_conversation import (
+    TransformSFTDatasetConfig,
+    transform_hf_dataset,
 )
 
 from experiments.llama import llama3_tokenizer

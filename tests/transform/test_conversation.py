@@ -7,7 +7,6 @@ import dataclasses
 import json
 from pathlib import Path
 
-from experiments.posttrain.instruction_datasets import get_adapter_signature_string, instruction_response_adapter
 from marin.core.conversation import OpenAIChatMessage
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import transform_conversation_to_dolma
@@ -16,6 +15,8 @@ from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
     transform_row,
 )
+
+from experiments.posttrain.instruction_datasets import get_adapter_signature_string, instruction_response_adapter
 
 OPENAI_FORMAT_SAMPLE = {
     "messages": [

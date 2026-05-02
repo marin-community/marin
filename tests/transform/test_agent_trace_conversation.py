@@ -7,14 +7,14 @@ import json
 from pathlib import Path
 
 import pytest
-
-from experiments.posttrain.instruction_datasets import INSTRUCTION_DATASET_NAME_TO_CONFIG
 from marin.core.conversation import OpenAIChatMessage
 from marin.transform.conversation.trace_normalization import (
     hermes_trace_row_id,
     normalize_hermes_trace_messages,
 )
 from marin.transform.conversation.transform_conversation import TransformSFTDatasetConfig, transform_row
+
+from experiments.posttrain.instruction_datasets import INSTRUCTION_DATASET_NAME_TO_CONFIG
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "agent_traces"
 EXPECTED_HERMES_FEATURES = ["id", "conversations", "tools", "category", "subcategory", "task"]
