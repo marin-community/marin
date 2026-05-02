@@ -9,8 +9,8 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from marin.rl.objectives import make_rloo_objective
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
-from marin.rl.rl_losses import RLOOLoss
 
 from tests.rl.integration.config import (
     DummyTokenizer,
@@ -44,7 +44,7 @@ def test_train_worker_checkpoint_restart(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
+            objective=make_rloo_objective(kl_coef=0.0, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
         ),
         curriculum=create_test_curriculum_config(),
         tokenizer=DummyTokenizer(),
@@ -96,7 +96,7 @@ def test_train_worker_checkpoint_restart(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
+            objective=make_rloo_objective(kl_coef=0.0, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
         ),
         curriculum=create_test_curriculum_config(),
         tokenizer=DummyTokenizer(),

@@ -37,13 +37,13 @@ from levanter.trainer import Trainer, TrainerConfig
 from marin.rl import weight_transfer
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.model_utils import load_model_from_checkpoint
+from marin.rl.objectives import ObjectiveRuntime, ObjectiveRuntimeConfig, ObjectiveSpec, build_objective_runtime
 from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.weight_transfer import WeightTransferConfig
 
-from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, RolloutWithCount
-from .rl_losses import RLLossModule
+from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, StoredTrajectory
 from .rollout_storage import RolloutStorageConfig
-from .train_batch import create_training_batch_from_rollouts
+from .train_batch import create_sequence_batch_from_trajectories
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +142,8 @@ class TrainWorkerConfig:
     replay_buffer: ReplayBufferConfig
     weight_transfer: WeightTransferConfig
     curriculum_config: CurriculumConfig
-    loss: RLLossModule
+    objective: ObjectiveSpec
+    scorer_vocab_tile_size: int | None
     tokenizer: MarinTokenizer
     run_id: str
 
@@ -171,6 +172,7 @@ class StreamingRolloutLoader:
         self,
         data_loader: ReplayDataLoader,
         config: TrainWorkerConfig,
+        objective_runtime: ObjectiveRuntime,
     ):
         """Initialize the streaming rollout loader.
 
@@ -180,6 +182,7 @@ class StreamingRolloutLoader:
         """
         self.data_loader = data_loader
         self.config = config
+        self.objective_runtime = objective_runtime
         self.timeout = 60.0
 
         # Get max_seq_len from curriculum (total sequence length for prompt + response)
@@ -199,7 +202,7 @@ class StreamingRolloutLoader:
 
         # Track batch preparation timing for RL throughput diagnostics.
         self._last_batch_prep_timing = BatchPrepTiming()
-        self._last_rollouts: list[RolloutWithCount] | None = None
+        self._last_trajectories: list[StoredTrajectory] | None = None
 
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
@@ -208,12 +211,12 @@ class StreamingRolloutLoader:
 
         while True:
             fetch_start = time.time()
-            rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
+            trajectories = self.data_loader.get_trajectories(timeout=self.timeout)
             fetch_time = time.time() - fetch_start
 
-            self._last_rollouts = rollouts
+            self._last_trajectories = trajectories
 
-            if not rollouts:
+            if not trajectories:
                 cumulative_wait += fetch_time
                 if cumulative_wait >= max_cumulative_wait:
                     raise TimeoutError(f"No rollouts received after {cumulative_wait:.0f}s total wait")
@@ -227,9 +230,13 @@ class StreamingRolloutLoader:
 
             # Measure batch creation time
             batch_start = time.time()
-            batch = create_training_batch_from_rollouts(
-                rollouts, self.max_tokens, self.pad_token_id, self.pad_to_multiple
+            sequence_batch, batch_info = create_sequence_batch_from_trajectories(
+                [trajectory.trajectory for trajectory in trajectories],
+                self.max_tokens,
+                self.pad_token_id,
+                self.pad_to_multiple,
             )
+            batch = self.objective_runtime.prepare_batch(sequence_batch, batch_info)
             batch_time = time.time() - batch_start
 
             # Measure sharding time
@@ -241,12 +248,12 @@ class StreamingRolloutLoader:
             timing = BatchPrepTiming(fetch_time=fetch_time, batch_time=batch_time, shard_time=shard_time)
             self._last_batch_prep_timing = timing
             logger.info(
-                "Batch prep: fetch=%.3fs, create=%.3fs, shard=%.3fs, total=%.3fs, rollouts=%d",
+                "Batch prep: fetch=%.3fs, create=%.3fs, shard=%.3fs, total=%.3fs, trajectories=%d",
                 fetch_time,
                 batch_time,
                 shard_time,
                 timing.total_time,
-                len(rollouts),
+                len(trajectories),
             )
 
             yield sharded_batch
@@ -266,7 +273,7 @@ class TrainWorker:
     replay_loader: ReplayDataLoader
     transfer_server: weight_transfer.WeightTransferServer
     tokenizer: MarinTokenizer
-    loss_module: RLLossModule
+    objective_runtime: ObjectiveRuntime
     initial_model: LmHeadModel | None
     reference_model: LmHeadModel | None
 
@@ -292,7 +299,18 @@ class TrainWorker:
         self._runtime = runtime
         self._should_stop = False
         self.tokenizer = config.tokenizer
-        self.loss_module = config.loss
+        self.objective_runtime = build_objective_runtime(
+            ObjectiveRuntimeConfig(
+                objective=config.objective,
+                vocab_tile_size=config.scorer_vocab_tile_size,
+            )
+        )
+        logger.info(
+            "Using objective runtime backend=%s requirements=%s scorer_vocab_tile_size=%s",
+            self.objective_runtime.score_source.backend_name,
+            self.objective_runtime.score_requirements,
+            config.scorer_vocab_tile_size,
+        )
 
         self.rollout_reader = config.rollout_storage.create_reader()
 
@@ -300,7 +318,6 @@ class TrainWorker:
             config=config.replay_buffer,
             local_batch_size=config.trainer.train_batch_size,
             total_processes=jax.process_count(),
-            loss_module=self.loss_module,
             seed=config.seed,
         )
 
@@ -313,6 +330,7 @@ class TrainWorker:
         self.data_loader = StreamingRolloutLoader(
             self.replay_loader,
             config,
+            self.objective_runtime,
         )
 
         self.transfer_server = weight_transfer.create_weight_transfer_server(
@@ -365,8 +383,12 @@ class TrainWorker:
     def _drop_bootstrap_model_references(self) -> None:
         """Release one-shot bootstrap model references once trainer state exists."""
         self.initial_model = None
-        if not self.loss_module.needs_reference_model():
+        if not self._needs_reference_model():
             self.reference_model = None
+
+    def _needs_reference_model(self) -> bool:
+        """Return whether the active objective runtime needs a fixed reference model."""
+        return self.objective_runtime.score_requirements.reference_logprobs
 
     def _seed_initial_rollout_state(self, rollout_state: InitialRolloutState) -> None:
         """Seed replay/run state before replay ingestion starts."""
@@ -442,7 +464,7 @@ class TrainWorker:
         debug_weight_transfer = self.config.weight_transfer.debug_weight_transfer
         if (debug_checkpointer or debug_weight_transfer) and hasattr(signal, "SIGUSR2"):
             faulthandler.register(signal.SIGUSR2, file=sys.stderr, all_threads=True)
-        logger.info("Starting RLOO training with Levanter...")
+        logger.info("Starting objective-driven RL training with Levanter...")
 
         checkpoint_debug_provider_name = f"{self.config.run_id}-checkpoint-debug"
         if debug_checkpointer:
@@ -454,7 +476,7 @@ class TrainWorker:
         try:
             config = self.config
             optimizer = config.optimizer.build(config.trainer.num_train_steps)
-            loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
+            loss_fn = self.objective_runtime.create_loss_fn(reference_model=self.reference_model)
 
             @jax.jit
             def _loss_function(model, batch, key):
@@ -551,9 +573,9 @@ class TrainWorker:
         trainer.add_hook(_log_step_timing, every=1)
 
         def _log_samples_hook(info: levanter.callbacks.StepInfo):
-            rollouts = self.data_loader._last_rollouts
-            if rollouts is not None:
-                self._log_samples(trainer, info.step, rollouts)
+            trajectories = self.data_loader._last_trajectories
+            if trajectories is not None:
+                self._log_samples(trainer, info.step, trajectories)
 
         trainer.add_hook(_log_samples_hook, every=1)
 
@@ -619,16 +641,16 @@ class TrainWorker:
         trainer.tracker.log(metrics, step=step)
         logger.info("Successfully transferred weights with ID %d (transfer_time=%.2fs)", step, transfer_time)
 
-    def _log_samples(self, trainer, step, rollouts):
+    def _log_samples(self, trainer, step, trajectories: list[StoredTrajectory]):
         """Log trainer samples for the first 5 prompts to wandb table."""
         # group by prompt
         prompts = {}
-        for r_adv in rollouts:
-            r = r_adv.rollout
-            pid = r.env_example_id
+        for stored_trajectory in trajectories:
+            trajectory = stored_trajectory.trajectory
+            pid = trajectory.env_example_id
             if pid not in prompts:
                 prompts[pid] = []
-            prompts[pid].append(r)
+            prompts[pid].append(trajectory)
 
         # take first 5 prompts
         first_5_pids = list(prompts.keys())[:5]
@@ -636,11 +658,11 @@ class TrainWorker:
         columns = ["step", "prompt_id", "prompt", "response", "reward"]
         data = []
         for pid in first_5_pids:
-            prompt_rs = prompts[pid]
-            prompt_text = self.tokenizer.decode(prompt_rs[0].prompt_tokens, skip_special_tokens=False)
-            for r in prompt_rs:
-                response_text = self.tokenizer.decode(r.response_tokens, skip_special_tokens=False)
-                data.append([step, pid, prompt_text, response_text, float(r.episode_reward)])
+            prompt_trajectories = prompts[pid]
+            prompt_text = self.tokenizer.decode(prompt_trajectories[0].prompt_tokens, skip_special_tokens=False)
+            for trajectory in prompt_trajectories:
+                response_text = self.tokenizer.decode(trajectory.response_tokens, skip_special_tokens=False)
+                data.append([step, pid, prompt_text, response_text, float(trajectory.episode_reward)])
 
         table = wandb.Table(columns=columns, data=data)
         trainer.tracker.log({"train/samples": table}, step=step)
