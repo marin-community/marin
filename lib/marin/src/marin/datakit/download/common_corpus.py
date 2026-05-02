@@ -5,12 +5,12 @@
 
 import os
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
+from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
-from zephyr import Dataset, ZephyrContext, counters
 
 HF_DATASET_ID = "PleIAs/common_corpus"
 OPEN_TYPES = ["Open Science", "Open Government", "Open Culture"]

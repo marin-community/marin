@@ -14,6 +14,9 @@ from pathlib import Path
 
 import click
 from connectrpc.errors import ConnectError
+from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_cmd
+from rigging.config_discovery import list_cluster_configs
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.cli.build import (
     build_image,
@@ -27,14 +30,9 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     prepare_slice_config,
 )
 from iris.cluster.providers.types import Labels
-from iris.rpc import config_pb2
-from iris.rpc import vm_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
-from rigging.config_discovery import list_cluster_configs
-from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 # =============================================================================
 # Helpers
@@ -413,6 +411,71 @@ def cluster_restart(ctx):
     ctx.invoke(cluster_stop)
     click.echo("")
     ctx.invoke(cluster_start)
+
+
+# =============================================================================
+# Log server (finelog) shim
+# =============================================================================
+
+
+@cluster.group("log-server")
+def log_server() -> None:
+    """Manage the log server referenced by this cluster's log_server_config."""
+
+
+def _require_log_server_config(ctx: click.Context) -> str:
+    cfg = ctx.obj.get("config")
+    if cfg is None:
+        raise click.ClickException("--config is required for cluster log-server commands")
+    if not cfg.log_server_config:
+        raise click.ClickException(
+            "cluster does not declare log_server_config; "
+            "set it or manage the log server via `finelog deploy` directly"
+        )
+    return cfg.log_server_config
+
+
+@log_server.command("up")
+@click.pass_context
+def log_server_up(ctx: click.Context) -> None:
+    """Provision/refresh the cluster's finelog deployment (idempotent)."""
+    name = _require_log_server_config(ctx)
+    up_cmd.callback(name=name)
+
+
+@log_server.command("down")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation; for k8s also deletes the PVC.")
+@click.pass_context
+def log_server_down(ctx: click.Context, yes: bool) -> None:
+    """Tear down the cluster's finelog deployment."""
+    name = _require_log_server_config(ctx)
+    down_cmd.callback(name=name, yes=yes)
+
+
+@log_server.command("restart")
+@click.pass_context
+def log_server_restart(ctx: click.Context) -> None:
+    """Restart the cluster's finelog deployment."""
+    name = _require_log_server_config(ctx)
+    restart_cmd.callback(name=name)
+
+
+@log_server.command("status")
+@click.pass_context
+def log_server_status(ctx: click.Context) -> None:
+    """Show the cluster's finelog deployment status."""
+    name = _require_log_server_config(ctx)
+    status_cmd.callback(name=name)
+
+
+@log_server.command("logs")
+@click.option("--tail", type=int, default=200, show_default=True)
+@click.option("-f", "--follow", is_flag=True, help="Stream logs")
+@click.pass_context
+def log_server_logs(ctx: click.Context, tail: int, follow: bool) -> None:
+    """Tail the cluster's finelog deployment logs."""
+    name = _require_log_server_config(ctx)
+    logs_cmd.callback(name=name, tail=tail, follow=follow)
 
 
 @cluster.command("create-slice")

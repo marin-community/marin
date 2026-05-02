@@ -20,7 +20,7 @@ import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import equinox as eqx
 import haliax as hax
@@ -31,15 +31,11 @@ import wandb
 from jax.experimental import multihost_utils
 from levanter.inference.openai import InferenceServer
 from levanter.models.lm_model import LmConfig
+from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
-from levanter.tokenizers import MarinTokenizer
-from typing import Literal
-
 from levanter.utils.mesh import MeshConfig
 from marin.rl.curriculum import CurriculumConfig
-from marin.rl.runtime import RLRuntimeHandles
-from marin.rl.run_state import RolloutTransferCounters
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
 from marin.rl.environments.inference_ctx import (
@@ -55,6 +51,8 @@ from marin.rl.environments.inference_ctx.staging import (
 )
 from marin.rl.metrics import pass_at_k_estimator
 from marin.rl.model_utils import load_model_from_checkpoint
+from marin.rl.run_state import RolloutTransferCounters
+from marin.rl.runtime import RLRuntimeHandles
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .types import (
@@ -63,8 +61,8 @@ from .types import (
     RolloutMetadata,
     RolloutStats,
 )
-from .weight_transfer.base import WeightUpdate
 from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_weight_transfer_client
+from .weight_transfer.base import WeightUpdate
 
 logger = logging.getLogger(__name__)
 

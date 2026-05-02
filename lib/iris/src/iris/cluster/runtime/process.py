@@ -43,8 +43,8 @@ from iris.cluster.runtime.profile import (
     build_pyspy_cmd,
     resolve_cpu_spec,
     resolve_memory_spec,
+    run_pyspy_dump,
 )
-from iris.cluster.runtime.profile import run_pyspy_dump
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerPhase,

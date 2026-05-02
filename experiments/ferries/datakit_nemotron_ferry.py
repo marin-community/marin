@@ -16,15 +16,6 @@ import json
 import logging
 import os
 
-from rigging.filesystem import (
-    check_path_in_region,
-    marin_temp_bucket,
-    region_from_metadata,
-    url_to_fs,
-)
-from rigging.log_setup import configure_logging
-from rigging.timing import log_time
-
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import Artifact
@@ -44,6 +35,14 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     compute_minhash_attrs,
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
+from rigging.filesystem import (
+    check_path_in_region,
+    marin_temp_bucket,
+    region_from_metadata,
+    url_to_fs,
+)
+from rigging.log_setup import configure_logging
+from rigging.timing import log_time
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +86,6 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=NEMOTRON_RAW_PATH,
     )
 
-    medium_input = f"{download.output_path}/{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_MEDIUM_DIR}"
-
     # Sizes mirror validate_normalize_phase1.py, which ran successfully on
     # nemotron_v1 in eu-west4. 512 workers across all fan-out stages.
     normalized = normalize_step(
@@ -96,7 +93,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         download=download,
         text_field="text",
         id_field="id",
-        input_path=medium_input,
+        relative_input_path=f"{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_MEDIUM_DIR}",
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="5g"),
         max_workers=512,
         override_output_path=f"{base}/normalize",

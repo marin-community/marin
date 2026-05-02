@@ -58,36 +58,7 @@ jobs:
       - name: Test with pytest
         run: |
           # Test with specific JAX version, excluding TPU tests
-          PYTHONPATH=tests:src:. uv run --package marin-levanter --frozen --with "jax[cpu]==0.8.0" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
-
-  levanter-ray-tests:
-    needs: changes
-    if: needs.changes.outputs.should_run == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: lib/levanter
-
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install uv and Python
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: "0.7.20"
-          python-version: "3.11"
-          enable-cache: true
-          working-directory: lib/levanter
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Set up Python
-        run: uv python install
-      - name: Install dependencies
-        run: uv sync --package marin-levanter --dev --group test --frozen
-      - name: Test with pytest
-        run: |
-          PYTHONPATH=tests:src:. uv run --package marin-levanter --frozen pytest tests -m "ray" --durations=20
+          PYTHONPATH=tests:src:. uv run --package marin-levanter --frozen --with "jax[cpu]==0.9.2" pytest tests -m "not entry and not slow and not tpu and not torch" --durations=20
 
   levanter-entry-tests:
     needs: changes
@@ -174,6 +145,11 @@ jobs:
             --index https://pypi.org/simple \
             --index-strategy unsafe-best-match
 
+      - name: Install FFmpeg runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
       - name: Test torch-marked suite
         run: |
           # run directly on CPU to avoid GPU dependency issues
@@ -195,7 +171,6 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-          JAX_VERSION: "0.8.0"
         run: |
           bash infra/tpu-ci/clean-tpu.sh
 
@@ -206,7 +181,8 @@ jobs:
           mkdir -p /tmp/uv-cache
           chmod 777 /tmp/uv-cache
 
-          # Run Levanter tests with specific JAX version
+          # Run Levanter tests with the package TPU extra so CI validates the
+          # explicit jax/jaxlib/libtpu pins shipped by marin-levanter.
           # TPU collection imports call jax.devices(), so keep pytest single-process here.
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
@@ -239,9 +215,9 @@ jobs:
               fi && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
               timeout --kill-after=5 --signal=TERM 890 \
-              uv run --package marin-levanter --frozen --group test --with 'jax[tpu]==$JAX_VERSION' \
+              uv run --package marin-levanter --frozen --group test --extra tpu \
               pytest -n 0 lib/levanter/tests \
-              -m 'not entry and not ray and not slow and not torch' \
+              -m 'not entry and not slow and not torch' \
               --ignore=lib/levanter/tests/test_audio.py \
               --ignore=lib/levanter/tests/test_new_cache.py \
               --ignore=lib/levanter/tests/test_hf_checkpoints.py \

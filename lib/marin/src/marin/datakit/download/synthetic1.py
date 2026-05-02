@@ -9,11 +9,12 @@ single document by concatenating prompt + score tag + response.
 
 import hashlib
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import strip_think_tags
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "PrimeIntellect/SYNTHETIC-1"
@@ -71,7 +72,7 @@ def transform(input_path: str, output_path: str) -> None:
         .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="synthetic1-transform", resources=ResourceConfig(cpu=1, ram="4g"))
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)
 
 
 def download_synthetic1_step() -> StepSpec:
@@ -90,4 +91,13 @@ def download_synthetic1_step() -> StepSpec:
             output_path=output_path,
         ),
         hash_attrs={"version": "v1"},
+    )
+
+
+def synthetic1_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the full ``(download+transform, normalize)`` chain for synthetic-1."""
+    processed = download_synthetic1_step()
+    return (
+        processed,
+        normalize_step(name="normalized/synthetic-1", download=processed),
     )

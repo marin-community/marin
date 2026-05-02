@@ -1,9 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 import itertools
+import logging
+from collections.abc import Iterator
 from typing import Any, TypeVar
 
-from collections.abc import Iterator
+import dupekit
+import pyarrow as pa
+from fray import ResourceConfig
+from zephyr import ZephyrContext, counters, write_parquet_file
+from zephyr.dataset import Dataset
+
 from marin.processing.classification.deduplication.dedup_commons import (
     DEFAULT_FILETYPES,
     DedupMode,
@@ -13,16 +20,9 @@ from marin.processing.classification.deduplication.dedup_commons import (
     _init_wandb,
     _load_batches,
     finalize_dedup,
-    group_files,
     make_document_dedup_aggregator,
 )
-import dupekit
 from marin.utils import rebase_file_path
-import pyarrow as pa
-import logging
-from fray.v2 import ResourceConfig
-from zephyr import ZephyrContext, counters, write_parquet_file
-from zephyr.dataset import Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ def dedup_exact_paragraph(
         filetypes = DEFAULT_FILETYPES
 
     input_files = _collect_input_files(input_paths=input_paths, filetypes=filetypes)
-    idx_to_path = dict(list(enumerate(sorted(input_files))))
+    idx_to_path = dict(list(enumerate(input_files)))
     path_to_idx = {v: k for k, v in idx_to_path.items()}
 
     _init_wandb(mode=DedupMode.EXACT_PARAGRAPH, input_paths=input_paths)
@@ -153,17 +153,15 @@ def dedup_exact_paragraph(
                 "file_idx": item["file_idx"],
             }
 
-    def _flat_map_paragraph_hashes(paths: list[str]) -> Iterator[dict]:
-        for path in paths:
-            for batch in _load_batches(path):
-                hashes = compute_paragraph_hashes(batch).to_pylist()
-                counters.increment("hash/paragraphs", len(hashes))
-                for hash_record in hashes:
-                    yield {"file_idx": path_to_idx[path], "id": hash_record.pop("doc_id"), **hash_record}
+    def _flat_map_paragraph_hashes(path: str) -> Iterator[dict]:
+        for batch in _load_batches(path):
+            hashes = compute_paragraph_hashes(batch).to_pylist()
+            counters.increment("hash/paragraphs", len(hashes))
+            for hash_record in hashes:
+                yield {"file_idx": path_to_idx[path], "id": hash_record.pop("doc_id"), **hash_record}
 
-    file_groups = group_files(input_files, max_parallelism)
     shard_results = ctx.execute(
-        Dataset.from_list(file_groups)
+        Dataset.from_list(input_files)
         .flat_map(_flat_map_paragraph_hashes)
         .group_by(
             lambda record: record["hash"],
@@ -197,7 +195,7 @@ def dedup_exact_document(
         filetypes = DEFAULT_FILETYPES
 
     input_files = _collect_input_files(input_paths=input_paths, filetypes=filetypes)
-    idx_to_path = dict(list(enumerate(sorted(input_files))))
+    idx_to_path = dict(list(enumerate(input_files)))
     path_to_idx = {v: k for k, v in idx_to_path.items()}
 
     _init_wandb(mode=DedupMode.EXACT_DOCUMENT, input_paths=input_paths)
@@ -239,17 +237,15 @@ def dedup_exact_document(
                 "file_idx": item["file_idx"],
             }
 
-    def _flat_map_document_hashes(paths: list[str]) -> Iterator[dict]:
-        for path in paths:
-            for batch in _load_batches(path):
-                hashes = compute_document_hashes(batch).to_pylist()
-                counters.increment("hash/documents", len(hashes))
-                for hash_record in hashes:
-                    yield {"file_idx": path_to_idx[path], **hash_record}
+    def _flat_map_document_hashes(path: str) -> Iterator[dict]:
+        for batch in _load_batches(path):
+            hashes = compute_document_hashes(batch).to_pylist()
+            counters.increment("hash/documents", len(hashes))
+            for hash_record in hashes:
+                yield {"file_idx": path_to_idx[path], **hash_record}
 
-    file_groups = group_files(input_files, max_parallelism)
     shard_results = ctx.execute(
-        Dataset.from_list(file_groups)
+        Dataset.from_list(input_files)
         .flat_map(_flat_map_document_hashes)
         .group_by(
             lambda record: record["hash"],

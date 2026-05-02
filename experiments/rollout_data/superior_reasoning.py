@@ -8,11 +8,12 @@ Usage:
       -- python -m experiments.rollout_data.superior_reasoning
 """
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from marin.datakit.download.superior_reasoning import download_superior_reasoning_step
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize
+
 from experiments.marin_models import marin_tokenizer
 
 

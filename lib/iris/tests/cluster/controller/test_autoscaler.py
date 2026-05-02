@@ -13,8 +13,8 @@ Integration tests with real GcpWorkerProvider are in test_autoscaler_integration
 import time
 
 import pytest
-
-from iris.cluster.controller.autoscaler import Autoscaler, DEFAULT_UNRESOLVABLE_TIMEOUT
+from iris.cluster.constraints import DeviceType, WellKnownAttribute
+from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Autoscaler
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
@@ -23,23 +23,27 @@ from iris.cluster.providers.types import (
     QuotaExhaustedError,
     SliceStatus,
 )
+from iris.cluster.types import WorkerStatus
+from iris.rpc import config_pb2, vm_pb2
+from iris.time_proto import duration_to_proto
+from rigging.timing import Duration, Timestamp
+
 from tests.cluster.providers.conftest import (
     FakeSliceHandle,
     make_mock_platform,
     make_mock_slice_handle,
     make_mock_worker_handle,
 )
-from iris.cluster.constraints import DeviceType, WellKnownAttribute
-from iris.cluster.types import WorkerStatus
-from iris.rpc import config_pb2, vm_pb2
-from iris.time_proto import duration_to_proto
-from rigging.timing import Duration, Timestamp
 
 from .conftest import (
     make_autoscaler,
     make_demand_entries,
-    make_big_demand_entries as _make_big_demand_entries,
     make_scale_group_config,
+)
+from .conftest import (
+    make_big_demand_entries as _make_big_demand_entries,
+)
+from .conftest import (
     mark_discovered_ready as _mark_discovered_ready,
 )
 
@@ -1213,6 +1217,46 @@ class TestPerGroupWorkerConfig:
 
         assert wc is not None
         assert wc.worker_attributes["team"] == "euw4"
+
+    def test_worker_cache_dir_override_applied(self):
+        """WorkerSettings.cache_dir overrides the base WorkerConfig.cache_dir."""
+        base_wc = config_pb2.WorkerConfig(
+            docker_image="test:latest",
+            port=10001,
+            controller_address="controller:10000",
+            cache_dir="/dev/shm/iris",
+        )
+        sg_config = make_scale_group_config(name="cpu-group", max_slices=5)
+        sg_config.worker.cache_dir = "/var/lib/iris-cache"
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"cpu-group": group}, base_worker_config=base_wc)
+
+        wc = autoscaler._per_group_worker_config(group)
+
+        assert wc is not None
+        assert wc.cache_dir == "/var/lib/iris-cache"
+        # base is unchanged
+        assert base_wc.cache_dir == "/dev/shm/iris"
+
+    def test_worker_cache_dir_falls_through_when_unset(self):
+        """When WorkerSettings.cache_dir is empty, base cache_dir is preserved."""
+        base_wc = config_pb2.WorkerConfig(
+            docker_image="test:latest",
+            port=10001,
+            controller_address="controller:10000",
+            cache_dir="/dev/shm/iris",
+        )
+        sg_config = make_scale_group_config(name="tpu-group", max_slices=5)
+        sg_config.worker.attributes["custom-label"] = "value"
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"tpu-group": group}, base_worker_config=base_wc)
+
+        wc = autoscaler._per_group_worker_config(group)
+
+        assert wc is not None
+        assert wc.cache_dir == "/dev/shm/iris"
 
     def test_derives_region_and_zone_from_scale_group_when_missing(self):
         """Derived region and zone are injected when worker attrs omit them."""

@@ -15,6 +15,9 @@ from levanter.data.audio import AudioDatasetSourceConfig, AudioIODatasetConfig, 
 from levanter.store.cache import SerialCacheWriter
 
 
+pytestmark = pytest.mark.torch
+
+
 @skip_if_no_soundlibs
 @skip_if_hf_model_not_accessible("openai/whisper-tiny")
 def test_whisper_batch_processor():
@@ -51,12 +54,11 @@ def test_hf_audio_loading_source():
         audio, sample, text = next(audio_iterator)
 
 
-@pytest.mark.skip("Ray randomly OSErrors.")
+@pytest.mark.skip("Audio cache pipeline is flaky in this test environment.")
 @skip_if_no_soundlibs
 @skip_if_hf_model_not_accessible("openai/whisper-tiny")
-@pytest.mark.ray
 @pytest.mark.asyncio
-async def test_hf_audio_ray_pipeline():
+async def test_hf_audio_cache_pipeline():
     # Use the Real Librispeech Valudation. Testing one doesn't support streaming.
     with tempfile.TemporaryDirectory() as tmpdir:
         ac = AudioIODatasetConfig(

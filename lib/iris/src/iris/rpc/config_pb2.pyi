@@ -1,3 +1,4 @@
+from . import job_pb2 as _job_pb2
 from . import time_pb2 as _time_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
@@ -133,7 +134,7 @@ class VmConfig(_message.Message):
     def __init__(self, name: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., gcp: _Optional[_Union[GcpVmConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualVmConfig, _Mapping]] = ...) -> None: ...
 
 class GcpSliceConfig(_message.Message):
-    __slots__ = ("mode", "zone", "runtime_version", "topology", "machine_type", "service_account")
+    __slots__ = ("mode", "zone", "runtime_version", "topology", "machine_type", "service_account", "enable_external_ip")
     class GcpSliceMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
         __slots__ = ()
         GCP_SLICE_MODE_TPU: _ClassVar[GcpSliceConfig.GcpSliceMode]
@@ -146,13 +147,15 @@ class GcpSliceConfig(_message.Message):
     TOPOLOGY_FIELD_NUMBER: _ClassVar[int]
     MACHINE_TYPE_FIELD_NUMBER: _ClassVar[int]
     SERVICE_ACCOUNT_FIELD_NUMBER: _ClassVar[int]
+    ENABLE_EXTERNAL_IP_FIELD_NUMBER: _ClassVar[int]
     mode: GcpSliceConfig.GcpSliceMode
     zone: str
     runtime_version: str
     topology: str
     machine_type: str
     service_account: str
-    def __init__(self, mode: _Optional[_Union[GcpSliceConfig.GcpSliceMode, str]] = ..., zone: _Optional[str] = ..., runtime_version: _Optional[str] = ..., topology: _Optional[str] = ..., machine_type: _Optional[str] = ..., service_account: _Optional[str] = ...) -> None: ...
+    enable_external_ip: bool
+    def __init__(self, mode: _Optional[_Union[GcpSliceConfig.GcpSliceMode, str]] = ..., zone: _Optional[str] = ..., runtime_version: _Optional[str] = ..., topology: _Optional[str] = ..., machine_type: _Optional[str] = ..., service_account: _Optional[str] = ..., enable_external_ip: _Optional[bool] = ...) -> None: ...
 
 class CoreweaveSliceConfig(_message.Message):
     __slots__ = ("region", "instance_type", "gpu_class", "infiniband")
@@ -234,7 +237,7 @@ class ScaleGroupResources(_message.Message):
     def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device_type: _Optional[_Union[AcceleratorType, str]] = ..., device_variant: _Optional[str] = ..., device_count: _Optional[int] = ..., capacity_type: _Optional[_Union[CapacityType, str]] = ...) -> None: ...
 
 class WorkerSettings(_message.Message):
-    __slots__ = ("attributes",)
+    __slots__ = ("attributes", "cache_dir")
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -243,8 +246,10 @@ class WorkerSettings(_message.Message):
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
+    CACHE_DIR_FIELD_NUMBER: _ClassVar[int]
     attributes: _containers.ScalarMap[str, str]
-    def __init__(self, attributes: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    cache_dir: str
+    def __init__(self, attributes: _Optional[_Mapping[str, str]] = ..., cache_dir: _Optional[str] = ...) -> None: ...
 
 class ScaleGroupConfig(_message.Message):
     __slots__ = ("name", "buffer_slices", "max_slices", "resources", "num_vms", "priority", "scale_up_rate_limit", "scale_down_rate_limit", "slice_template", "worker", "quota_pool", "allocation_tier")
@@ -508,8 +513,33 @@ class KubernetesProviderConfig(_message.Message):
     controller_address: str
     def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., colocation_topology_key: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ...) -> None: ...
 
+class UserBudgetTier(_message.Message):
+    __slots__ = ("user_ids", "budget_limit", "max_band")
+    USER_IDS_FIELD_NUMBER: _ClassVar[int]
+    BUDGET_LIMIT_FIELD_NUMBER: _ClassVar[int]
+    MAX_BAND_FIELD_NUMBER: _ClassVar[int]
+    user_ids: _containers.RepeatedScalarFieldContainer[str]
+    budget_limit: int
+    max_band: _job_pb2.PriorityBand
+    def __init__(self, user_ids: _Optional[_Iterable[str]] = ..., budget_limit: _Optional[int] = ..., max_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ...) -> None: ...
+
+class EndpointSpec(_message.Message):
+    __slots__ = ("uri", "metadata")
+    class MetadataEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    URI_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
+    uri: str
+    metadata: _containers.ScalarMap[str, str]
+    def __init__(self, uri: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+
 class IrisClusterConfig(_message.Message):
-    __slots__ = ("name", "platform", "defaults", "storage", "controller", "scale_groups", "auth", "kubernetes_provider", "worker_provider")
+    __slots__ = ("name", "platform", "defaults", "storage", "controller", "scale_groups", "auth", "kubernetes_provider", "worker_provider", "user_budgets", "endpoints", "log_server_config")
     class ScaleGroupsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -517,6 +547,13 @@ class IrisClusterConfig(_message.Message):
         key: str
         value: ScaleGroupConfig
         def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[ScaleGroupConfig, _Mapping]] = ...) -> None: ...
+    class EndpointsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: EndpointSpec
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[EndpointSpec, _Mapping]] = ...) -> None: ...
     NAME_FIELD_NUMBER: _ClassVar[int]
     PLATFORM_FIELD_NUMBER: _ClassVar[int]
     DEFAULTS_FIELD_NUMBER: _ClassVar[int]
@@ -526,6 +563,9 @@ class IrisClusterConfig(_message.Message):
     AUTH_FIELD_NUMBER: _ClassVar[int]
     KUBERNETES_PROVIDER_FIELD_NUMBER: _ClassVar[int]
     WORKER_PROVIDER_FIELD_NUMBER: _ClassVar[int]
+    USER_BUDGETS_FIELD_NUMBER: _ClassVar[int]
+    ENDPOINTS_FIELD_NUMBER: _ClassVar[int]
+    LOG_SERVER_CONFIG_FIELD_NUMBER: _ClassVar[int]
     name: str
     platform: PlatformConfig
     defaults: DefaultsConfig
@@ -535,4 +575,7 @@ class IrisClusterConfig(_message.Message):
     auth: AuthConfig
     kubernetes_provider: KubernetesProviderConfig
     worker_provider: WorkerProviderConfig
-    def __init__(self, name: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., auth: _Optional[_Union[AuthConfig, _Mapping]] = ..., kubernetes_provider: _Optional[_Union[KubernetesProviderConfig, _Mapping]] = ..., worker_provider: _Optional[_Union[WorkerProviderConfig, _Mapping]] = ...) -> None: ...
+    user_budgets: _containers.RepeatedCompositeFieldContainer[UserBudgetTier]
+    endpoints: _containers.MessageMap[str, EndpointSpec]
+    log_server_config: str
+    def __init__(self, name: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., auth: _Optional[_Union[AuthConfig, _Mapping]] = ..., kubernetes_provider: _Optional[_Union[KubernetesProviderConfig, _Mapping]] = ..., worker_provider: _Optional[_Union[WorkerProviderConfig, _Mapping]] = ..., user_budgets: _Optional[_Iterable[_Union[UserBudgetTier, _Mapping]]] = ..., endpoints: _Optional[_Mapping[str, EndpointSpec]] = ..., log_server_config: _Optional[str] = ...) -> None: ...

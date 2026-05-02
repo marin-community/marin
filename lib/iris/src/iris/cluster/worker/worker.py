@@ -11,14 +11,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import uvicorn
+from finelog.client import LogPusher, RemoteLogHandler
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos
-from iris.cluster.log_store import worker_log_key
-from iris.cluster.runtime.docker import DockerRuntime
-from iris.log_server.client import LogPusher, RemoteLogHandler
-from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
-from iris.cluster.types import JobName, TaskAttempt as TaskAttemptId
 from iris.cluster.bundle import BundleStore
+from iris.cluster.log_store_helpers import worker_log_key
+from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
+from iris.cluster.types import JobName
+from iris.cluster.types import TaskAttempt as TaskAttemptId
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
@@ -36,14 +38,10 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import config_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
-from iris.rpc import worker_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -191,13 +189,15 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        # LogPusher and RemoteLogHandler are created before registration so
-        # pre-register failures (container bring-up, disk/health probes,
-        # registration rejection) leave remote logs. Attachment relies on
-        # ``self._worker_id`` having been resolved locally (IRIS_WORKER_ID,
-        # slice_id + TPU index, or GCE instance name); the rare case where
-        # the controller assigns the id is handled by re-attaching post-
-        # register.
+        # LogPusher and RemoteLogHandler are created in start() before container
+        # adoption and registration. Building before adoption ensures adopted
+        # attempts capture a live pusher (regression #5261). Building before
+        # registration ensures pre-register failures (container bring-up,
+        # disk/health probes, registration rejection) leave remote logs.
+        # Attachment relies on ``self._worker_id`` having been resolved locally
+        # (IRIS_WORKER_ID, slice_id + TPU index, or GCE instance name); the rare
+        # case where the controller assigns the id is handled by re-attaching
+        # post-register.
         self._log_pusher: LogPusher | None = None
         self._log_handler: RemoteLogHandler | None = None
 
@@ -226,6 +226,20 @@ class Worker:
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
 
     def start(self) -> None:
+        # Build the LogPusher *before* adopting containers so adopted attempts
+        # capture a live pusher rather than a permanent ``None`` (regression #5261).
+        # The pusher only depends on auth + the resolver callback, neither of
+        # which need the uvicorn server or controller client to exist yet.
+        interceptors: tuple[AuthTokenInjector, ...] = ()
+        if self._config.controller_address and self._config.auth_token:
+            interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
+        if self._config.controller_address:
+            self._log_pusher = LogPusher(
+                "/system/log-server",
+                interceptors=interceptors,
+                resolver=self._resolve_log_service,
+            )
+
         # Try to adopt running containers from a previous worker process.
         # If adoption succeeds, skip the destructive cleanup that would kill them.
         adopted = self.adopt_running_containers()
@@ -255,18 +269,10 @@ class Worker:
 
         # Create controller client if controller configured
         if self._config.controller_address:
-            interceptors = ()
-            if self._config.auth_token:
-                interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
             self._controller_client = ControllerServiceClientSync(
                 address=self._config.controller_address,
                 timeout_ms=10_000,
                 interceptors=interceptors,
-            )
-            self._log_pusher = LogPusher(
-                "/system/log-server",
-                interceptors=interceptors,
-                resolver=self._resolve_log_service,
             )
 
             # Start lifecycle thread: register + serve + reset loop

@@ -10,15 +10,16 @@ from collections.abc import Iterator
 
 import requests
 import zstandard
-from rigging.filesystem import open_url
-from marin.datakit.normalize import normalize_step
-from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_exists
 from fray.cluster import ResourceConfig
 from requests.adapters import HTTPAdapter
+from rigging.filesystem import open_url
 from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
+
+from marin.datakit.normalize import normalize_step
+from marin.execution.step_spec import StepSpec
+from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -158,5 +159,5 @@ def normalize_nemotron_v1_step(download: StepSpec, *, split: str) -> StepSpec:
         text_field="text",
         id_field="id",
         file_extensions=(".jsonl.zst",),
-        input_path=f"{download.output_path}/{_NEMOTRON_V1_DATA_ROOT}/{rel_path}",
+        relative_input_path=f"{_NEMOTRON_V1_DATA_ROOT}/{rel_path}",
     )

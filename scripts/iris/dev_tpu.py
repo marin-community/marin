@@ -23,16 +23,15 @@ from pathlib import Path
 
 import click
 import yaml
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
-
 from iris.client import IrisClient, JobAlreadyExists
-from iris.cluster.constraints import zone_constraint
 from iris.cluster.config import IrisConfig
+from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device
 from iris.dev_tpu import DevTpuState, DevTpuWorker, GcpNodeRef, parse_worker_host
 from iris.rpc import job_pb2
 from marin.cluster import gcp
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 logger = logging.getLogger(__name__)
 

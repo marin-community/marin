@@ -31,6 +31,9 @@ except ImportError:
     DynamicClient = None  # type: ignore[assignment,misc]
 
 
+from rigging.log_setup import slow_log
+from rigging.timing import Deadline, ExponentialBackoff
+
 from iris.cluster.providers.k8s.types import (
     ExecResult,
     K8sResource,
@@ -42,8 +45,6 @@ from iris.cluster.providers.k8s.types import (
     parse_k8s_quantity,
 )
 from iris.cluster.providers.types import find_free_port
-from rigging.log_setup import slow_log
-from rigging.timing import Deadline, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 

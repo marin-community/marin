@@ -5,12 +5,11 @@
 
 from collections import defaultdict
 
-from iris.cluster.controller.budget import UserTask, compute_effective_band, interleave_by_user
+from iris.cluster.controller.budget import UserBudgetDefaults, UserTask, compute_effective_band, interleave_by_user
 from iris.cluster.controller.controller import SchedulingOutcome, _schedulable_tasks
 from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
 from .conftest import (
@@ -131,7 +130,8 @@ def test_depth_boost_within_band():
             environment=parent_req.environment,
             replicas=1,
         )
-        state.submit_job(child_id, child_req, Timestamp.now())
+        with state._store.transaction() as cur:
+            state.submit_job(cur, child_id, child_req, Timestamp.now())
         child_tasks = query_tasks_for_job(state, child_id)
 
         schedulable = _schedulable_tasks(state._db)
@@ -171,7 +171,8 @@ def test_child_inherits_parent_band():
             environment=parent_req.environment,
             replicas=1,
         )
-        state.submit_job(child_id, child_req, Timestamp.now())
+        with state._store.transaction() as cur:
+            state.submit_job(cur, child_id, child_req, Timestamp.now())
         child_tasks = query_tasks_for_job(state, child_id)
 
         # Child should have inherited PRODUCTION band
@@ -183,8 +184,8 @@ def test_child_inherits_parent_band():
             )
 
 
-def test_user_budget_row_created_on_submit():
-    """Submitting a job creates a user_budgets row with defaults."""
+def test_submit_does_not_create_user_budgets_row():
+    """Submitting a job does NOT create a user_budgets row; absence = defaults."""
     with make_controller_state() as state:
         _submit_user_job(state, "newuser", "first-job")
 
@@ -192,9 +193,10 @@ def test_user_budget_row_created_on_submit():
             "SELECT budget_limit, max_band FROM user_budgets WHERE user_id = ?",
             ("newuser",),
         )
-        assert row is not None, "user_budgets row should be created on first job submission"
-        assert row["budget_limit"] == 0  # default unlimited
-        assert row["max_band"] == job_pb2.PRIORITY_BAND_INTERACTIVE  # default
+        assert row is None, (
+            "user_budgets row should NOT be created on first job submission; "
+            "unlisted users fall through to UserBudgetDefaults at read time"
+        )
 
 
 def test_default_band_is_interactive():
@@ -222,7 +224,9 @@ def test_user_over_budget_tasks_become_batch():
         # Compute effective bands — alice's tasks should become BATCH
         tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
         for task in schedulable:
-            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, UserBudgetDefaults()
+            )
             tasks_by_band[band].append(task.task_id)
 
         alice_ids = {t.task_id for t in alice_tasks}
@@ -245,7 +249,9 @@ def test_user_within_budget_keeps_interactive():
         user_budget_limits = {"alice": 50000}
 
         for task in schedulable:
-            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, UserBudgetDefaults()
+            )
             assert band == job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
@@ -259,7 +265,9 @@ def test_production_never_downgraded_by_budget():
         user_budget_limits = {"alice": 100}
 
         for task in schedulable:
-            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, UserBudgetDefaults()
+            )
             assert band == job_pb2.PRIORITY_BAND_PRODUCTION
 
 
@@ -273,7 +281,9 @@ def test_zero_budget_means_unlimited():
         user_budget_limits = {"alice": 0}
 
         for task in schedulable:
-            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, UserBudgetDefaults()
+            )
             assert band == job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
@@ -300,21 +310,25 @@ def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_pa
         tpu_req.resources.device.tpu.variant = "v5p-8"
         inject_device_constraints(tpu_req)
         jid = JobName.from_string(f"/alice/tpu-job-{i}")
-        ctrl._transitions.submit_job(jid, tpu_req, Timestamp.now())
+        with ctrl._transitions._store.transaction() as cur:
+            ctrl._transitions.submit_job(cur, jid, tpu_req, Timestamp.now())
 
     # Submit 1 CPU task for alice — this should be placeable on the CPU worker
     cpu_jid = JobName.from_string("/alice/cpu-job")
     cpu_req = make_job_request(name="/alice/cpu-job", cpu=1, replicas=1)
     inject_device_constraints(cpu_req)
-    ctrl._transitions.submit_job(cpu_jid, cpu_req, Timestamp.now())
+    with ctrl._transitions._store.transaction() as cur:
+        ctrl._transitions.submit_job(cur, cpu_jid, cpu_req, Timestamp.now())
 
     # Register exactly 1 CPU worker — no TPU workers
-    ctrl._transitions.register_or_refresh_worker(
-        worker_id=WorkerId("cpu-worker"),
-        address="cpu-worker:8080",
-        metadata=make_worker_metadata(cpu=4, memory_bytes=8 * 1024**3),
-        ts=Timestamp.now(),
-    )
+    with ctrl._transitions._store.transaction() as cur:
+        ctrl._transitions.register_or_refresh_worker(
+            cur,
+            worker_id=WorkerId("cpu-worker"),
+            address="cpu-worker:8080",
+            metadata=make_worker_metadata(cpu=4, memory_bytes=8 * 1024**3),
+            ts=Timestamp.now(),
+        )
 
     outcome = ctrl._run_scheduling()
 
