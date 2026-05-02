@@ -48,6 +48,14 @@ PREFERENCE_DATA_SAMPLE = {
     "metadata_field": "pref_test",
 }
 
+NUMINA_COT_SAMPLE = {
+    "messages": [
+        {"role": "user", "content": "What is 2 + 2?"},
+        {"role": "assistant", "content": "We add the numbers and get 4."},
+    ],
+    "source": "amc_aime",
+}
+
 
 class TestTransformAdapters:
     """Test the different adapter formats."""
@@ -126,6 +134,35 @@ class TestTransformRow:
         assert "<|start_think|>" in response_message.content
         assert "<|end_think|>" in response_message.content
         assert "<think>" not in response_message.content
+
+    def test_transform_multi_turn_row_preserves_metadata(self):
+        """Test multi-turn rows like NuminaMath-CoT keep messages and metadata."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            conversation_column="messages",
+            role_key="role",
+            content_key="content",
+            user_value="user",
+            assistant_value="assistant",
+            system_value="system",
+        )
+
+        cfg = TransformSFTDatasetConfig(
+            source="AI-MO/NuminaMath-CoT",
+            revision="9d8d210",
+            output_path="/tmp/output",
+            metadata_columns=["source"],
+            adapter=adapter,
+        )
+
+        result = transform_row(NUMINA_COT_SAMPLE, cfg, adapter)
+
+        assert result is not None
+        assert result.source == "AI-MO/NuminaMath-CoT"
+        assert result.metadata == {"source": "amc_aime"}
+        assert len(result.messages) == 2
+        assert result.messages[0].role == "user"
+        assert result.messages[1].role == "assistant"
 
 
 class TestPreferenceDataTransform:
