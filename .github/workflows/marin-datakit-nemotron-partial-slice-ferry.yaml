@@ -1,0 +1,168 @@
+name: Marin - Datakit Nemotron Partial-Slice Ferry
+
+# Gate 2 baseline for the zephyr-perf skill: a partial slice of the
+# nemotron-medium quality slice — `datakit_nemotron_ferry --stride 5`
+# (every 5th input file, ~1/5 of the full medium slice, target ~2.5h wall).
+# Runs weekly on Tuesday so the full-slice ferry (Monday 01:00 UTC) has
+# finished before this one starts and they don't compete for cluster capacity.
+
+on:
+  schedule:
+    - cron: '0 1 * * 2'  # Weekly, Tuesday 01:00 UTC
+  workflow_dispatch:
+    inputs:
+      stride:
+        description: 'Stride for nemotron-medium subsetting (default 5)'
+        type: string
+        required: false
+        default: '5'
+      sft_general_path:
+        description: 'gs:// path to staged Nemotron-SFT-General (parent dir, contains Nemotron-SFT-General/). Empty = skip the SFT chain.'
+        type: string
+        required: false
+        default: 'gs://marin-eu-west4/raw/nemotron_pretraining_sft_v1-10f77e'
+
+permissions:
+  contents: read
+
+jobs:
+  datakit-nemotron-partial-slice-ferry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6h — slice target ~2.5h, generous headroom
+    concurrency:
+      group: datakit-nemotron-partial-slice-ferry
+      cancel-in-progress: true
+    env:
+      SMOKE_RUN_ID: datakit-nemotron-partial-slice-ferry-${{ github.run_id }}-${{ github.run_attempt }}
+      FERRY_STATUS_PATH: gs://marin-eu-west4/tmp/ttl=1d/ci/datakit-nemotron-partial-slice-ferry-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
+      STRIDE: ${{ github.event.inputs.stride || '5' }}
+      SFT_GENERAL_PATH: ${{ github.event.inputs.sft_general_path || 'gs://marin-eu-west4/raw/nemotron_pretraining_sft_v1-10f77e' }}
+      WANDB_ENTITY: marin-community
+      WANDB_PROJECT: marin
+      IRIS_CONFIG: lib/iris/examples/marin.yaml
+      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
+          chmod 600 ~/.ssh/google_compute_engine
+          chmod 644 ~/.ssh/google_compute_engine.pub
+
+      - name: Submit datakit nemotron partial-slice ferry
+        id: submit
+        shell: bash -l {0}
+        run: |
+          # SFT-General is opt-in via the workflow_dispatch input; pass the
+          # flag only when a non-empty path was supplied so the script can
+          # run medium-only by default.
+          SFT_FLAG=()
+          if [ -n "$SFT_GENERAL_PATH" ]; then
+            SFT_FLAG=(--sft-general-path "$SFT_GENERAL_PATH")
+          fi
+          JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+            job run --no-wait \
+            --region=europe-west4 \
+            --memory=3G --disk=5G --cpu=1 --extra=cpu \
+            --priority production \
+            -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
+            -e FERRY_STATUS_PATH "$FERRY_STATUS_PATH" \
+            -e WANDB_ENTITY "$WANDB_ENTITY" \
+            -e WANDB_PROJECT "$WANDB_PROJECT" \
+            -e WANDB_API_KEY "$WANDB_API_KEY" \
+            -e HF_TOKEN "$HF_TOKEN" \
+            -- python -m experiments.ferries.datakit_nemotron_ferry \
+                --stride "$STRIDE" "${SFT_FLAG[@]}")
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+          echo "Submitted job: $JOB_ID (stride=$STRIDE)"
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      - name: Wait for datakit nemotron partial-slice ferry
+        shell: bash -l {0}
+        run: |
+          JOB_ID="${{ steps.submit.outputs.job_id }}"
+          echo "Polling job status: $JOB_ID"
+          while true; do
+            STATE=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+              job list --json --prefix "$JOB_ID" \
+              | jq -r --arg id "$JOB_ID" '[.[] | select(.job_id == $id)][0].state // empty')
+            case "$STATE" in
+              JOB_STATE_SUCCEEDED)
+                echo "Job succeeded"
+                exit 0
+                ;;
+              JOB_STATE_PENDING|JOB_STATE_BUILDING|JOB_STATE_RUNNING)
+                echo "$(date -u +%H:%M:%S) Job state: $STATE"
+                sleep 30
+                ;;
+              "")
+                echo "Job not found: $JOB_ID"
+                exit 1
+                ;;
+              *)
+                echo "Job finished with state: $STATE"
+                .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+                  job list --json --prefix "$JOB_ID" \
+                  | jq --arg id "$JOB_ID" '.[] | {job_id, state, error}' || true
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Capture failure diagnostics
+        if: failure() || cancelled()
+        run: |
+          echo "=== Controller logs ==="
+          .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+            process logs --max-lines=200 || true
+          echo "=== Job list ==="
+          .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+            job list --json 2>/dev/null | jq '.[0:5]' || true
+
+  # Separate job so Slack always fires, even if the main job is force-killed
+  # after its grace window. See the datakit-smoke workflow for rationale.
+  notify-slack:
+    needs: datakit-nemotron-partial-slice-ferry
+    if: always() && (needs.datakit-nemotron-partial-slice-ferry.result == 'failure' || needs.datakit-nemotron-partial-slice-ferry.result == 'cancelled') && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEXT: ":red_circle: *Datakit Nemotron Partial-Slice Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
+          curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"
