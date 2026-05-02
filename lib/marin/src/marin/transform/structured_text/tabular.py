@@ -49,7 +49,7 @@ class TabularStagingConfig:
     """Configuration for a byte-preserving tabular staging step.
 
     Attributes:
-        input_path: fsspec URL (or glob) pointing at the raw source files.
+        input_path: fsspec URL pointing at the raw source files.
             Files are read in sorted order to make the cap deterministic.
         output_path: fsspec URL for the staged JSONL output directory.
         source_label: Identifier written into each record's ``source`` field,
@@ -202,17 +202,27 @@ def _read_text_file_lines(fs, path: str) -> list[str]:
     return text.splitlines(keepends=True)
 
 
-def _first_non_blank_line(lines: Iterable[str]) -> str | None:
-    for line in lines:
+def _first_non_blank_line(lines: Iterable[str]) -> tuple[int, str] | None:
+    for index, line in enumerate(lines):
         if line.strip():
-            return line
+            return index, line
     return None
 
 
-def _doc_id(source_label: str, file_path: str, chunk_index: int) -> str:
+def _relative_source_path(input_path: str, file_path: str) -> str:
+    """Return a stable path for ids/provenance relative to ``input_path`` when possible."""
+    _, root = url_to_fs(input_path)
+    normalized_root = root.rstrip("/")
+    prefix = f"{normalized_root}/"
+    if file_path.startswith(prefix):
+        return file_path[len(prefix) :]
+    return os.path.basename(file_path)
+
+
+def _doc_id(source_label: str, relative_path: str, chunk_index: int) -> str:
     """Deterministic document id derived from the source path and chunk index."""
-    basename = os.path.basename(file_path)
-    digest = hashlib.sha1(file_path.encode("utf-8")).hexdigest()[:8]
+    basename = os.path.basename(relative_path)
+    digest = hashlib.sha1(relative_path.encode("utf-8")).hexdigest()[:8]
     return f"{source_label}:{basename}:{digest}:{chunk_index:04d}"
 
 
@@ -270,18 +280,21 @@ def stage_tabular_source(cfg: TabularStagingConfig) -> dict[str, int | str]:
                 lines = _read_text_file_lines(fs, path)
                 if not lines:
                     continue
+                relative_path = _relative_source_path(cfg.input_path, path)
 
                 if cfg.preserve_header:
-                    header = _first_non_blank_line(lines)
-                    if header is not None:
-                        header_idx = lines.index(header)
+                    header_info = _first_non_blank_line(lines)
+                    if header_info is not None:
+                        header_idx, header = header_info
                         body_lines = lines[:header_idx] + lines[header_idx + 1 :]
                     else:
+                        header = None
                         body_lines = lines
                 else:
                     header = None
                     body_lines = lines
 
+                hit_source_cap = False
                 for chunk_index, chunk in enumerate(
                     chunk_lines_by_bytes(
                         body_lines,
@@ -300,14 +313,15 @@ def stage_tabular_source(cfg: TabularStagingConfig) -> dict[str, int | str]:
                             text_bytes,
                             cfg.max_bytes_per_source,
                         )
+                        hit_source_cap = True
                         break
 
                     record = {
-                        "id": _doc_id(cfg.source_label, path, chunk_index),
+                        "id": _doc_id(cfg.source_label, relative_path, chunk_index),
                         "text": text,
                         "source": cfg.source_label,
                         "provenance": {
-                            "file": path,
+                            "file": relative_path,
                             "chunk_index": chunk_index,
                             "header_preserved": cfg.preserve_header and header is not None,
                             **cfg.extra_metadata,
@@ -317,9 +331,8 @@ def stage_tabular_source(cfg: TabularStagingConfig) -> dict[str, int | str]:
                     outfile.write("\n")
                     total_text_bytes += text_bytes
                     record_count += 1
-                else:
-                    continue
-                break  # propagate inner break when per-source cap was hit
+                if hit_source_cap:
+                    break
 
     logger.info(
         "Staged %d records (%d bytes of text) to %s",

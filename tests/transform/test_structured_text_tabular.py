@@ -154,4 +154,8 @@ def test_stage_tabular_source_respects_per_source_cap(tmp_path):
     )
 
     assert result["record_count"] >= 1
-    assert result["bytes_written"] <= 1200
+    assert result["bytes_written"] <= 800
+
+    records = _read_staged_records(output_dir)
+    processed_files = {record["provenance"]["file"] for record in records}
+    assert len(processed_files) < 4
