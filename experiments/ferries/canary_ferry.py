@@ -13,6 +13,10 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
     CANARY_PROFILER_ENABLED enable JAX profiling; defaults to true on TPU, false on GPU
     CANARY_TARGET_TOKENS total training tokens
     RUN_ID               unique run identifier
+
+GPU canaries disable Levanter watch-stat logging; those per-parameter
+norms are useful for experiments but add avoidable memory pressure to this
+health check.
 """
 
 import dataclasses
@@ -21,6 +25,7 @@ import os
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.data.text import BlockShuffleConfig, TextLmDatasetFormat
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
@@ -79,6 +84,7 @@ def _build_step_from_env() -> ExecutorStep:
 
     run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
     profiler_enabled = _env_bool("CANARY_PROFILER_ENABLED", accelerator == "tpu")
+    watch_config = WatchConfig()
 
     if accelerator == "tpu":
         batch_size = _env_int("CANARY_BATCH_SIZE", 512)
@@ -131,6 +137,7 @@ def _build_step_from_env() -> ExecutorStep:
             wandb_group = "canary-ferry-moe-gpu"
             wandb_tags = ["canary", "ferry", "grug", "moe", "gpu"]
         eval_config = None
+        watch_config = WatchConfig(watch_targets=[])
 
     num_steps = target_tokens // (batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len)
     if num_steps <= 0:
@@ -163,6 +170,7 @@ def _build_step_from_env() -> ExecutorStep:
             grug_trainer=versioned(CANARY_TRAINER),
             eval=versioned(eval_config) if eval_config is not None else None,
             profiler=ProfilerConfig(enabled=profiler_enabled),
+            watch=watch_config,
         ),
     )
 
