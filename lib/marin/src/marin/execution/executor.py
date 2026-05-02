@@ -931,8 +931,6 @@ def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
             return {k: recurse(v) for k, v in obj.items()}
         if isinstance(obj, list):
             return [recurse(x) for x in obj]
-        if isinstance(obj, tuple):
-            return tuple(recurse(x) for x in obj)
         return obj
 
     return recurse(value)  # type: ignore
@@ -1096,10 +1094,6 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
             # Recurse through lists
             for i, x in enumerate(obj):
                 recurse(x, new_prefix + f"[{i}]")
-        elif isinstance(obj, tuple):
-            # Recurse through tuples
-            for i, x in enumerate(obj):
-                recurse(x, new_prefix + f"[{i}]")
         elif isinstance(obj, dict):
             # Recurse through dicts
             for i, x in obj.items():
@@ -1133,9 +1127,6 @@ def _max_mirror_budget(config: Any) -> float | None:
             for field in fields(obj):
                 recurse(getattr(obj, field.name))
         elif isinstance(obj, list):
-            for x in obj:
-                recurse(x)
-        elif isinstance(obj, tuple):
             for x in obj:
                 recurse(x)
         elif isinstance(obj, dict):
@@ -1193,9 +1184,6 @@ def instantiate_config(
         elif isinstance(obj, list):
             # Recurse through lists
             return [recurse(x) for x in obj]
-        elif isinstance(obj, tuple):
-            # Recurse through tuples
-            return tuple(recurse(x) for x in obj)
         elif isinstance(obj, dict):
             # Recurse through dicts
             return dict((i, recurse(x)) for i, x in obj.items())
