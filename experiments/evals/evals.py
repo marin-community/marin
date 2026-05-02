@@ -23,6 +23,7 @@ from marin.execution.executor import (
     versioned,
 )
 from marin.execution.remote import remote
+from marin.inference.vllm_server import validate_vllm_mode_env
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
 from experiments.evals.evalchemy_results_compiler import compile_evalchemy_results_fn
@@ -66,11 +67,10 @@ def evaluate_lm_evaluation_harness(
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
         env_vars (dict[str, str] | None): Extra env vars to set on the child iris worker.
-            Needed for vLLM-on-TPU bring-up (e.g. ``MARIN_VLLM_MODE=native``,
-            ``VLLM_ENABLE_V1_MULTIPROCESSING=0``) and code-eval-dependent tasks
-            like humaneval (``HF_ALLOW_CODE_EVAL=1``). The coordinator's own
-            ``os.environ`` does NOT propagate to iris-spawned children — these
-            vars must be threaded through ``remote()``.
+            Needed for vLLM-on-TPU bring-up (e.g. ``VLLM_ENABLE_V1_MULTIPROCESSING=0``)
+            and code-eval-dependent tasks like humaneval (``HF_ALLOW_CODE_EVAL=1``).
+            The coordinator's own ``os.environ`` does NOT propagate to iris-spawned
+            children — these vars must be threaded through ``remote()``.
     """
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness/{model_name}",
@@ -440,6 +440,9 @@ def evaluate_harbor(
         # SWE-bench Verified
         evaluate_harbor("claude-opus-4", None, "swebench-verified", "1.0", max_eval_instances=10)
     """
+
+    if model_path is not None:
+        validate_vllm_mode_env()
 
     # Harbor config goes in engine_kwargs
     engine_kwargs = {

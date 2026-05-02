@@ -2,20 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import glob
 import logging
 import os
-import shlex
 import shutil
-import socket
 import subprocess
 import tempfile
 import time
-import uuid
-from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
 from urllib.parse import urlparse
 
 import requests
@@ -24,47 +18,20 @@ from rigging.filesystem import marin_prefix
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
 logger = logging.getLogger(__name__)
-DEFAULT_VLLM_TPU_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
-DEFAULT_VLLM_GPU_DOCKER_IMAGE: str = "nvcr.io/nvidia/vllm:25.12.post1-py3"
-VLLM_DOCKER_SIDECAR_UNSUPPORTED_MESSAGE = (
-    "Docker sidecar vLLM mode is not supported for Iris jobs because Iris workers do not mount "
-    "/var/run/docker.sock; use native vLLM by leaving MARIN_VLLM_MODE unset or setting it to 'native'."
-)
-
-_SENSITIVE_ENV_KEYS = frozenset(
-    {
-        "HF_TOKEN",
-        "WANDB_API_KEY",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "AZURE_OPENAI_API_KEY",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "GITHUB_TOKEN",
-    }
+_REMOVED_VLLM_MODE_MESSAGE = (
+    "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
+    "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
 
 
 @dataclass(frozen=True)
 class VllmServerHandle:
-    """A handle for a running vLLM server (native or Docker sidecar)."""
+    """A handle for a running native vLLM server."""
 
     server_url: str
     port: int
-    process: subprocess.Popen[str] | None = None
-    log_dir: str | None = None
-    docker_container_name: str | None = None
-    docker_image: str | None = None
-    docker_run_cmd: str | None = None
-
-    @property
-    def mode(self) -> Literal["native", "docker"]:
-        if self.docker_container_name:
-            return "docker"
-        if self.process is not None or self.log_dir is not None:
-            return "native"
-        raise RuntimeError("Unable to infer vLLM server mode from handle state.")
+    process: subprocess.Popen[str]
+    log_dir: str
 
 
 def resolve_model_name_or_path(model: ModelConfig) -> tuple[str, ModelConfig]:
@@ -96,173 +63,18 @@ def _native_logs_tail(log_dir: str | None, *, max_lines: int = 200) -> str:
     )
 
 
-def _docker_container_running(container_name: str) -> bool:
-    result = subprocess.run(
-        ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return False
-    output = result.stdout.strip().lower()
-    if output == "true":
-        return True
-    if output == "false":
-        return False
-    raise RuntimeError(f"Unexpected output from docker inspect: {output!r}")
+def validate_vllm_mode_env() -> None:
+    mode = os.environ.get("MARIN_VLLM_MODE")
+    if mode is None or mode.strip().lower() in {"", "native"}:
+        return
+    raise ValueError(_REMOVED_VLLM_MODE_MESSAGE)
 
 
-def _docker_logs_tail(container_name: str, *, max_lines: int = 200) -> str:
-    result = subprocess.run(
-        ["docker", "logs", "--tail", str(max_lines), container_name],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        stderr = (result.stderr or "").strip()
-        return f"<failed to read docker logs for {container_name}: {stderr}>"
-    return result.stdout
-
-
-def _docker_inspect(container_name: str) -> str:
-    result = subprocess.run(
-        ["docker", "inspect", container_name],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        stderr = (result.stderr or "").strip()
-        return f"failed to inspect container {container_name}: {stderr}"
-    return result.stdout
-
-
-class VllmServerBackend(ABC):
-    @abstractmethod
-    def start(
-        self,
-        *,
-        model_name_or_path: str,
-        host: str,
-        port: int | None,
-        timeout_seconds: int,
-        extra_cli_args: list[str] | None,
-    ) -> VllmServerHandle:
-        raise NotImplementedError
-
-    @abstractmethod
-    def logs_tail(self, handle: VllmServerHandle, *, max_lines: int = 200) -> str:
-        raise NotImplementedError
-
-    @abstractmethod
-    def diagnostics(self, handle: VllmServerHandle, *, max_lines: int = 200) -> dict[str, str]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def stop(self, handle: VllmServerHandle) -> None:
-        raise NotImplementedError
-
-
-class DockerVllmServerBackend(VllmServerBackend):
-    def __init__(self, docker_image: str | None, docker_run_args: list[str] | None) -> None:
-        self._docker_image = docker_image
-        self._docker_run_args = docker_run_args
-
-    def start(
-        self,
-        *,
-        model_name_or_path: str,
-        host: str,
-        port: int | None,
-        timeout_seconds: int,
-        extra_cli_args: list[str] | None,
-    ) -> VllmServerHandle:
-        return _start_vllm_docker_server(
-            model_name_or_path=model_name_or_path,
-            host=host,
-            port=port,
-            timeout_seconds=timeout_seconds,
-            extra_cli_args=extra_cli_args,
-            docker_image=self._docker_image,
-            docker_run_args=self._docker_run_args,
-        )
-
-    def logs_tail(self, handle: VllmServerHandle, *, max_lines: int = 200) -> str:
-        return _docker_logs_tail(handle.docker_container_name, max_lines=max_lines)
-
-    def diagnostics(self, handle: VllmServerHandle, *, max_lines: int = 200) -> dict[str, str]:
-        diagnostics: dict[str, str] = {}
-        if handle.docker_run_cmd:
-            diagnostics["vLLM Docker run command (redacted)"] = handle.docker_run_cmd
-        diagnostics["vLLM Docker logs (tail)"] = self.logs_tail(handle, max_lines=max_lines)
-        diagnostics["vLLM Docker inspect"] = _docker_inspect(handle.docker_container_name)
-        return diagnostics
-
-    def stop(self, handle: VllmServerHandle) -> None:
-        container_name = handle.docker_container_name
-        subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True, text=True)
-
-
-class NativeVllmServerBackend(VllmServerBackend):
-    def start(
-        self,
-        *,
-        model_name_or_path: str,
-        host: str,
-        port: int | None,
-        timeout_seconds: int,
-        extra_cli_args: list[str] | None,
-    ) -> VllmServerHandle:
-        return _start_vllm_native_server(
-            model_name_or_path=model_name_or_path,
-            host=host,
-            port=port,
-            timeout_seconds=timeout_seconds,
-            extra_cli_args=extra_cli_args,
-        )
-
-    def logs_tail(self, handle: VllmServerHandle, *, max_lines: int = 200) -> str:
-        return _native_logs_tail(handle.log_dir, max_lines=max_lines)
-
-    def diagnostics(self, handle: VllmServerHandle, *, max_lines: int = 200) -> dict[str, str]:
-        diagnostics: dict[str, str] = {}
-        if handle.log_dir:
-            diagnostics["vLLM native log dir"] = handle.log_dir
-        diagnostics["vLLM native logs (tail)"] = self.logs_tail(handle, max_lines=max_lines)
-        return diagnostics
-
-    def stop(self, handle: VllmServerHandle) -> None:
-        if handle.process is not None:
-            handle.process.kill()
-
-
-def resolve_vllm_mode(mode: Literal["native", "docker"] | None) -> Literal["native", "docker"]:
-    # Native is the only supported Iris vLLM mode. The old Docker sidecar path
-    # requires docker-alongside-docker, and Iris workers do not mount
-    # /var/run/docker.sock. See GitHub issue #4750.
-    mode_str = (mode if mode is not None else os.environ.get("MARIN_VLLM_MODE", "native")).lower()
-    if mode_str == "native":
-        return mode_str
-    if mode_str == "docker":
-        raise ValueError(VLLM_DOCKER_SIDECAR_UNSUPPORTED_MESSAGE)
-    raise ValueError(
-        f"Unknown MARIN_VLLM_MODE={mode_str!r}; expected 'native'. Docker sidecar mode is unsupported on Iris."
-    )
-
-
-def _resolve_vllm_backend(
-    mode: Literal["native", "docker"],
-    *,
-    docker_image: str | None,
-    docker_run_args: list[str] | None,
-) -> VllmServerBackend:
-    if mode == "docker":
-        return DockerVllmServerBackend(docker_image, docker_run_args)
-    if mode == "native":
-        return NativeVllmServerBackend()
-    raise ValueError(f"Unknown vLLM mode {mode!r}; expected 'native' or 'docker'.")
+def _native_diagnostics(handle: VllmServerHandle, *, max_lines: int = 200) -> dict[str, str]:
+    return {
+        "vLLM native log dir": handle.log_dir,
+        "vLLM native logs (tail)": _native_logs_tail(handle.log_dir, max_lines=max_lines),
+    }
 
 
 def _is_object_store_path(path: str) -> bool:
@@ -317,7 +129,7 @@ def _poll_until_ready(
         timeout_seconds: Maximum seconds to wait before raising ``TimeoutError``.
         poll_interval_seconds: Seconds between consecutive polls.
         check_alive: Optional callable invoked each iteration *before* the HTTP
-            probe. Should raise if the underlying server process / container is
+            probe. Should raise if the underlying server process is
             no longer alive (the exception propagates directly to the caller).
     """
     models_url = f"{server_url}/models"
@@ -364,27 +176,17 @@ class VllmEnvironment:
         self,
         model: ModelConfig,
         *,
-        mode: Literal["native", "docker"] | None = None,
         host: str = "127.0.0.1",
         port: int | None = None,
         timeout_seconds: int = 3600,
-        docker_image: str | None = None,
-        docker_run_args: list[str] | None = None,
         extra_args: list[str] | None = None,
     ) -> None:
+        validate_vllm_mode_env()
         self.model_name_or_path, self.model = resolve_model_name_or_path(model)
-        self.mode = resolve_vllm_mode(mode)
         self.host = host
         self.port = port
         self.timeout_seconds = timeout_seconds
-        self.docker_image = docker_image
-        self.docker_run_args = docker_run_args
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
-        self._backend = _resolve_vllm_backend(
-            self.mode,
-            docker_image=self.docker_image,
-            docker_run_args=self.docker_run_args,
-        )
 
         self.vllm_server: VllmServerHandle | None = None
         self.model_id: str | None = None
@@ -394,16 +196,13 @@ class VllmEnvironment:
             logger.info(
                 "Starting vLLM environment",
                 extra={
-                    "mode": self.mode,
                     "model_name_or_path": self.model_name_or_path,
                     "host": self.host,
                     "port": self.port,
-                    "docker_image": self.docker_image,
-                    "docker_run_args": self.docker_run_args,
                 },
             )
             try:
-                self.vllm_server = self._backend.start(
+                self.vllm_server = _start_vllm_native_server(
                     model_name_or_path=self.model_name_or_path,
                     host=self.host,
                     port=self.port,
@@ -415,7 +214,6 @@ class VllmEnvironment:
                     "vLLM environment ready",
                     extra={
                         "server_url": self.vllm_server.server_url,
-                        "container": self.vllm_server.docker_container_name,
                         "model_id": self.model_id,
                     },
                 )
@@ -423,7 +221,7 @@ class VllmEnvironment:
                 logger.exception("Failed to start vLLM environment", extra=self.debug_snapshot())
                 if self.vllm_server is not None:
                     try:
-                        diagnostics = self._backend.diagnostics(self.vllm_server)
+                        diagnostics = _native_diagnostics(self.vllm_server)
                         for label, value in diagnostics.items():
                             logger.error("%s:\n%s", label, value)
                     except Exception:
@@ -436,7 +234,7 @@ class VllmEnvironment:
 
     def close(self) -> None:
         if self.vllm_server is not None:
-            self._backend.stop(self.vllm_server)
+            self.vllm_server.process.kill()
             self.vllm_server = None
 
     @property
@@ -447,325 +245,29 @@ class VllmEnvironment:
 
     def debug_snapshot(self) -> dict[str, str | int | None]:
         return {
-            "mode": self.mode,
             "model_name_or_path": self.model_name_or_path,
             "host": self.host,
             "port": self.port,
             "server_url": self.vllm_server.server_url if self.vllm_server else None,
-            "docker_container_name": self.vllm_server.docker_container_name if self.vllm_server else None,
-            "docker_image": self.vllm_server.docker_image if self.vllm_server else self.docker_image,
-            "docker_run_cmd": self.vllm_server.docker_run_cmd if self.vllm_server else None,
+            "log_dir": self.vllm_server.log_dir if self.vllm_server else None,
         }
 
     def logs_tail(self, *, max_lines: int = 200) -> str:
         if self.vllm_server is None:
             raise RuntimeError("vLLM server is not running in this environment.")
-        return self._backend.logs_tail(self.vllm_server, max_lines=max_lines)
+        return _native_logs_tail(self.vllm_server.log_dir, max_lines=max_lines)
 
     def diagnostics(self, *, max_lines: int = 200) -> dict[str, str]:
         if self.vllm_server is None:
             return {}
-        return self._backend.diagnostics(self.vllm_server, max_lines=max_lines)
-
-
-def _pick_free_port(host: str) -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind((host, 0))
-        return int(sock.getsockname()[1])
-
-
-def _detect_tpu_environment() -> bool:
-    """Return True when running on TPU hardware.
-
-    Some containerized TPU environments do not consistently set `TPU_NAME`, so
-    we also detect TPU device nodes and other TPU-related environment variables.
-    """
-
-    if os.environ.get("TPU_NAME"):
-        return True
-
-    # GKE TPU device plugin exposes /dev/accel* device nodes.
-    if glob.glob("/dev/accel*"):
-        return True
-
-    # v5+/v6e TPUs expose devices under /dev/vfio/ (VFIO passthrough); the
-    # /dev/vfio/vfio control node exists even without TPUs, so skip it.
-    # See lib/iris/src/iris/cluster/runtime/docker.py:_discover_tpu_device_mappings
-    # for the authoritative v4-vs-v5+ device-node split.
-    if any(os.path.basename(p) != "vfio" for p in glob.glob("/dev/vfio/*")):
-        return True
-
-    # Heuristic fallbacks for TPU pods / libtpu environments.
-    for key in (
-        "TPU_ACCELERATOR_TYPE",
-        "TPU_WORKER_ID",
-        "TPU_WORKER_HOSTNAMES",
-        "TPU_MESH_CONTROLLER_ADDRESS",
-        "TPU_VISIBLE_DEVICES",
-    ):
-        if os.environ.get(key):
-            return True
-
-    return False
-
-
-def _detect_nvidia_gpu_environment() -> bool:
-    for key in ("NVIDIA_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
-        if os.environ.get(key):
-            return True
-    return bool(glob.glob("/dev/nvidia[0-9]*"))
-
-
-def _detect_resource_type() -> Literal["tpu", "gpu", "unknown"]:
-    if _detect_tpu_environment():
-        return "tpu"
-    if _detect_nvidia_gpu_environment():
-        return "gpu"
-    return "unknown"
-
-
-def _resolve_docker_gpu_arg() -> str | None:
-    raw_value = os.environ.get("NVIDIA_VISIBLE_DEVICES") or os.environ.get("CUDA_VISIBLE_DEVICES")
-    if raw_value is not None:
-        value = raw_value.strip()
-        if not value:
-            return None
-        lowered = value.lower()
-        if lowered == "all":
-            return "all"
-        devices = [device.strip() for device in value.split(",") if device.strip()]
-        if devices:
-            return f"device={','.join(devices)}"
-        return None
-
-    if _detect_nvidia_gpu_environment():
-        return "all"
-    return None
-
-
-def _docker_run_args_for_resource(
-    *,
-    resource_type: Literal["tpu", "gpu", "unknown"],
-    docker_run_args: list[str] | None,
-) -> list[str]:
-    docker_args: list[str] = []
-    existing_args = docker_run_args or []
-
-    has_privileged = any(arg == "--privileged" or arg.startswith("--privileged=") for arg in existing_args)
-    has_gpus = any(arg == "--gpus" or arg.startswith("--gpus=") for arg in existing_args)
-
-    if resource_type == "tpu" and not has_privileged:
-        docker_args.append("--privileged")
-    if resource_type == "gpu" and not has_gpus:
-        gpu_arg = _resolve_docker_gpu_arg()
-        if gpu_arg is not None:
-            docker_args.extend(["--gpus", gpu_arg])
-
-    if not any(arg.startswith("--shm-size") for arg in existing_args):
-        docker_args.append("--shm-size=100gb")
-    docker_args.extend(existing_args)
-    return docker_args
-
-
-def _build_docker_run_command(
-    *,
-    image: str,
-    model_name_or_path: str,
-    host: str,
-    port: int,
-    container_name: str,
-    env: dict[str, str],
-    volumes: list[tuple[str, str]],
-    extra_vllm_args: list[str],
-    docker_run_args: list[str],
-) -> list[str]:
-    """Build `docker run ... vllm serve ...` as argv.
-
-    This is split out for unit testing without invoking Docker.
-    """
-
-    # Avoid `--rm` so that if the container exits immediately we can still collect logs/inspect output.
-    # We explicitly clean up with `docker rm -f` via `VllmServerHandle.stop()`.
-    cmd: list[str] = ["docker", "run", "-d", "--net=host", "--name", container_name]
-
-    cmd.extend(docker_run_args)
-
-    # Volumes
-    for src, dst in volumes:
-        cmd.extend(["-v", f"{src}:{dst}"])
-
-    # Env
-    for key, value in sorted(env.items()):
-        cmd.extend(["-e", f"{key}={value}"])
-
-    cmd.append(image)
-    cmd.extend(
-        [
-            "vllm",
-            "serve",
-            model_name_or_path,
-            "--host",
-            host,
-            "--port",
-            str(port),
-            "--trust-remote-code",
-        ]
-    )
-    cmd.extend(extra_vllm_args)
-    return cmd
-
-
-def _require_docker_available() -> None:
-    if not os.path.exists("/var/run/docker.sock"):
-        raise RuntimeError(
-            "Docker socket not available at /var/run/docker.sock. "
-            "This job requires docker-alongside-docker (mount the socket into the current container)."
-        )
-    if shutil.which("docker") is None:
-        raise RuntimeError(
-            "`docker` CLI not found on PATH. Install the Docker client in the current image to run vLLM as a sidecar."
-        )
-
-
-def _redact_docker_run_command(cmd: list[str]) -> str:
-    redacted = list(cmd)
-    i = 0
-    while i < len(redacted):
-        if redacted[i] == "-e" and i + 1 < len(redacted):
-            kv = redacted[i + 1]
-            if "=" in kv:
-                key, value = kv.split("=", 1)
-                if key in _SENSITIVE_ENV_KEYS and value:
-                    redacted[i + 1] = f"{key}=<redacted>"
-        i += 1
-    return shlex.join(redacted)
-
-
-def _start_vllm_docker_server(
-    *,
-    model_name_or_path: str,
-    host: str = "127.0.0.1",
-    port: int | None = None,
-    timeout_seconds: int = 3600,
-    poll_interval_seconds: int = 5,
-    extra_cli_args: list[str] | None = None,
-    docker_image: str | None = None,
-    docker_run_args: list[str] | None = None,
-    container_name: str | None = None,
-) -> VllmServerHandle:
-    """Start a vLLM server in a sibling Docker container and wait until it is ready.
-
-    Raises RuntimeError/TimeoutError with helpful Docker logs on failure.
-    """
-
-    _require_docker_available()
-
-    resource_type = _detect_resource_type()
-    if docker_image is None:
-        if resource_type == "tpu":
-            docker_image = DEFAULT_VLLM_TPU_DOCKER_IMAGE
-        elif resource_type == "gpu":
-            docker_image = DEFAULT_VLLM_GPU_DOCKER_IMAGE
-        else:
-            raise RuntimeError(
-                f"Cannot determine default docker image for unknown resource type {resource_type!r}. "
-                "Please explicitly specify docker_image parameter."
-            )
-        logger.info(f"No docker_image specified; defaulting to {docker_image} for {resource_type}.")
-
-    env: dict[str, str] = _build_vllm_env_dict()
-    explain_cache_misses = os.environ.get("JAX_EXPLAIN_CACHE_MISSES")
-    if explain_cache_misses is not None:
-        env["JAX_EXPLAIN_CACHE_MISSES"] = explain_cache_misses
-    env["TPU_MIN_LOG_LEVEL"] = os.environ.get("TPU_MIN_LOG_LEVEL", "3")
-    env["TPU_STDERR_LOG_LEVEL"] = os.environ.get("TPU_STDERR_LOG_LEVEL", "3")
-    for key in ("HF_TOKEN", "WANDB_API_KEY"):
-        value = os.environ.get(key)
-        if value:
-            env[key] = value
-
-    docker_args = _docker_run_args_for_resource(
-        resource_type=resource_type,
-        docker_run_args=docker_run_args,
-    )
-
-    if resource_type == "tpu":
-        logger.info(
-            "Starting vLLM Docker sidecar with "
-            f"TPU_MIN_LOG_LEVEL={env.get('TPU_MIN_LOG_LEVEL')} "
-            f"TPU_STDERR_LOG_LEVEL={env.get('TPU_STDERR_LOG_LEVEL')}"
-        )
-    else:
-        logger.info(f"Starting vLLM Docker sidecar for {resource_type} resources.")
-
-    resolved_port = port if port is not None else _pick_free_port(host)
-    resolved_name = container_name or f"marin-vllm-{uuid.uuid4().hex[:10]}-{resolved_port}"
-
-    cmd = _build_docker_run_command(
-        image=docker_image,
-        model_name_or_path=model_name_or_path,
-        host=host,
-        port=resolved_port,
-        container_name=resolved_name,
-        env=env,
-        volumes=[("/tmp", "/tmp")],
-        extra_vllm_args=list(extra_cli_args or []),
-        docker_run_args=docker_args,
-    )
-    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
-    if result.returncode != 0:
-        stderr = (result.stderr or "").strip()
-        stdout = (result.stdout or "").strip()
-        raise RuntimeError(
-            "Failed to start vLLM Docker sidecar.\n"
-            f"Image: {docker_image}\n"
-            f"Command: {_redact_docker_run_command(cmd)}\n"
-            f"Exit code: {result.returncode}\n"
-            f"--- stdout ---\n{stdout}\n"
-            f"--- stderr ---\n{stderr}"
-        )
-
-    server_url = f"http://{host}:{resolved_port}/v1"
-    handle = VllmServerHandle(
-        server_url=server_url,
-        port=resolved_port,
-        docker_container_name=resolved_name,
-        docker_image=docker_image,
-        docker_run_cmd=_redact_docker_run_command(cmd),
-    )
-
-    def _check_docker_alive() -> None:
-        if not _docker_container_running(resolved_name):
-            logs = _docker_logs_tail(resolved_name)
-            inspect = _docker_inspect(resolved_name)
-            raise RuntimeError(
-                "vLLM Docker sidecar exited before becoming ready.\n"
-                f"Container: {resolved_name}\n"
-                f"Image: {docker_image}\n"
-                f"Command: {_redact_docker_run_command(cmd)}\n"
-                f"--- docker logs (tail) ---\n{logs}\n"
-                f"--- docker inspect ---\n{inspect[:8000]}"
-            )
-
-    try:
-        _poll_until_ready(
-            handle.server_url,
-            timeout_seconds=timeout_seconds,
-            poll_interval_seconds=poll_interval_seconds,
-            check_alive=_check_docker_alive,
-        )
-    except Exception:
-        subprocess.run(["docker", "rm", "-f", resolved_name], check=False, capture_output=True, text=True)
-        raise
-
-    return handle
+        return _native_diagnostics(self.vllm_server, max_lines=max_lines)
 
 
 def _default_jax_compilation_cache_dir() -> str:
     return f"{marin_prefix()}/compilation-cache"
 
 
-# Canonical vLLM environment defaults shared by Docker and native backends.
+# Canonical vLLM environment defaults for the native subprocess.
 # Each (key, default) pair is resolved from the current environment at call time.
 _VLLM_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
     # tpu_inference defaults MODEL_IMPL_TYPE=auto, which selects flax_nnx for many
@@ -777,37 +279,6 @@ _VLLM_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
     ("JAX_ENABLE_COMPILATION_CACHE", "1"),
 )
 
-# Keys that are passed through to the container when set in the host environment.
-_VLLM_PASSTHROUGH_KEYS: tuple[str, ...] = (
-    "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
-    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
-    "VLLM_TPU_SKIP_PRECOMPILE",
-)
-
-
-def _build_vllm_env_dict() -> dict[str, str]:
-    """Build the canonical vLLM environment dict (fresh, not inheriting os.environ).
-
-    Used by the Docker backend which passes an explicit env dict.
-    """
-    cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir())
-    env: dict[str, str] = {
-        "TOKENIZERS_PARALLELISM": "false",
-        "JAX_COMPILATION_CACHE_DIR": cache_dir,
-        # vllm-tpu uses XLA compilation caches; this env var is the one it keys off.
-        "VLLM_XLA_CACHE_PATH": os.environ.get("VLLM_XLA_CACHE_PATH", cache_dir),
-        # Cache aggressively for iterative bring-up workflows.
-        "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": os.environ.get("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1"),
-        "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": os.environ.get("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2"),
-    }
-    for key, default in _VLLM_ENV_DEFAULTS:
-        env[key] = os.environ.get(key, default)
-    for key in _VLLM_PASSTHROUGH_KEYS:
-        value = os.environ.get(key)
-        if value is not None:
-            env[key] = value
-    return env
-
 
 def _vllm_env() -> dict[str, str]:
     """Build the vLLM environment for the native (subprocess) backend.
@@ -815,9 +286,16 @@ def _vllm_env() -> dict[str, str]:
     Starts from ``os.environ`` and applies the canonical defaults.
     """
     env = dict(os.environ)
-    canonical = _build_vllm_env_dict()
-    for key, value in canonical.items():
-        env.setdefault(key, value)
+    cache_dir = env.get("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir())
+    env.setdefault("TOKENIZERS_PARALLELISM", "false")
+    env.setdefault("JAX_COMPILATION_CACHE_DIR", cache_dir)
+    # vllm-tpu uses XLA compilation caches; this env var is the one it keys off.
+    env.setdefault("VLLM_XLA_CACHE_PATH", cache_dir)
+    # Cache aggressively for iterative bring-up workflows.
+    env.setdefault("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1")
+    env.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2")
+    for key, default in _VLLM_ENV_DEFAULTS:
+        env.setdefault(key, default)
     return env
 
 

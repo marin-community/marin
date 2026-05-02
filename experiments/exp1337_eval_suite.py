@@ -90,7 +90,6 @@ from experiments.models import (
 # The coordinator's ``os.environ`` does NOT propagate to iris-spawned children;
 # they must be threaded through ``remote(env_vars=...)`` at step-construction time.
 #
-#   * MARIN_VLLM_MODE=native           — skip docker-mode (no /var/run/docker.sock on iris).
 #   * VLLM_ENABLE_V1_MULTIPROCESSING=0 — keep APIServer + EngineCore in one process so the
 #     v5p TPU stays claimed by a single process; otherwise the spawned EngineCore child can't
 #     re-open libtpu and JAX falls back to CPU, surfacing as ``AttributeError`` on
@@ -103,7 +102,6 @@ from experiments.models import (
 #   * HF_ALLOW_CODE_EVAL=1 — HF ``evaluate``'s code_eval refuses to run generated code without
 #     it; HumanEval pass@1 needs it. Inert for the GSM8K exact_match task.
 VLLM_GENERATION_ENV_VARS: dict[str, str] = {
-    "MARIN_VLLM_MODE": "native",
     "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
     "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
     "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION": "1",
