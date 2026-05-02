@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 
 import pytest
-
 from iris.test_util import SentinelFile, wait_for_condition
 from rigging.timing import Duration
 

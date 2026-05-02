@@ -43,11 +43,9 @@ import psutil
 from iris.client.client import IrisClient, Job, ResourceSpec
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.types import Entrypoint, EnvironmentSpec, get_tpu_topology, tpu_device
-from rigging.log_setup import configure_logging
-from iris.rpc import config_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

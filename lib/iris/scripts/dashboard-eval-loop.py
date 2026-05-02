@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from claude_agent_sdk import query, ClaudeAgentOptions, TextBlock
+from claude_agent_sdk import ClaudeAgentOptions, TextBlock, query
 
 
 @dataclass

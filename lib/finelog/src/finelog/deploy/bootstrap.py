@@ -60,7 +60,11 @@ sudo systemctl start docker || true
 
 # Cache directory on the boot disk. Finelog offloads parquet segments to GCS
 # via FINELOG_REMOTE_DIR, so the boot disk only needs working space.
+# Owned by UID/GID 1000 to match the in-container `finelog` user (the
+# Dockerfile's chown is shadowed by this bind mount).
 sudo mkdir -p {{ cache_dir }}
+# 1000 matches the finelog user **inside** the container
+sudo chown -R 1000:1000 {{ cache_dir }}
 
 echo "[finelog-init] Pulling image: {{ docker_image }}"
 sudo docker pull {{ docker_image }}

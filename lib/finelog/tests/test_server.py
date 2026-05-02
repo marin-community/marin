@@ -11,10 +11,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from starlette.testclient import TestClient
-
 from finelog.server.asgi import build_log_server_asgi
 from finelog.server.service import LogServiceImpl
+from starlette.testclient import TestClient
 
 
 @pytest.fixture

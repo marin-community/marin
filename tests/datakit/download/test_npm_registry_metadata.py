@@ -9,7 +9,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-
 from marin.datakit.download.npm_registry_metadata import (
     DEFAULT_OUTPUT_FILENAME,
     DownloadNpmRegistryMetadataConfig,

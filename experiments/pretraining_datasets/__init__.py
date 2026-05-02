@@ -12,12 +12,13 @@ Dataset families are organized in separate modules:
 - simple: Single-corpus datasets
 """
 
+from marin.datakit.download.dolma import DOLMA_DATASETS
+
 from experiments.pretraining_datasets.dolma import (
     DOLMA_LLAMA3_OVERRIDES,
     DOLMA_OLMO_MIXTURE_WEIGHTS,
     tokenize_dolma,
 )
-from marin.datakit.download.dolma import DOLMA_DATASETS
 from experiments.pretraining_datasets.dolmino import (
     DOLMINO_DATASETS,
     DOLMINO_LLAMA3_OVERRIDES,
@@ -30,7 +31,6 @@ from experiments.pretraining_datasets.nemotron import (
     NEMOTRON_LLAMA3_OVERRIDES,
     NEMOTRON_WEIGHTS,
     nemotron_mix,
-    nemotron_mix_block_shuffle,
     tokenize_nemotron,
     tokenize_nemotron_subset,
 )
@@ -54,7 +54,6 @@ __all__ = [
     "NEMOTRON_V2_DATASETS",
     "NEMOTRON_WEIGHTS",
     "nemotron_mix",
-    "nemotron_mix_block_shuffle",
     "nsf_awards_download",
     "nsf_awards_tokenized",
     "tokenize_dolma",

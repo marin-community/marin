@@ -23,8 +23,8 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
 )
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner
+from marin.execution.step_spec import StepSpec
 
 ISSUE_5062 = 5062
 EPIC_5005 = 5005

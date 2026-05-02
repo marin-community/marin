@@ -1,8 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from experiments.two_stage.two_stage_config import TwoStageConfig, two_stage_train_step
 from marin.execution.executor import executor_main
+
+from experiments.two_stage.two_stage_config import TwoStageConfig, two_stage_train_step
 
 if __name__ == "__main__":
     train_steps = [

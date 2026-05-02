@@ -13,7 +13,6 @@ from typing import TypeVar
 import fsspec
 import jax
 from fsspec import AbstractFileSystem
-
 from levanter.checkpoint import load_checkpoint
 
 logger = logging.getLogger(__name__)

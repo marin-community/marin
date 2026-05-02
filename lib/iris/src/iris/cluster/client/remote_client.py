@@ -6,27 +6,25 @@
 import logging
 import time
 import uuid
-from pathlib import Path
-
 from collections.abc import Iterable
+from pathlib import Path
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
+from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
+from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.cluster.client.bundle import BundleCreator
-from finelog.rpc import logging_pb2
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
 from iris.time_proto import duration_to_proto
 from iris.version import client_revision_date
-from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -487,15 +485,17 @@ class RemoteClusterClient:
 
         return call_with_retry("get_autoscaler_status", _call)
 
-    def report_task_status_text(self, task_id: JobName, status_text_md: str) -> None:
-        """Push a markdown status string to the controller for UI display.
+    def report_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
+        """Push markdown status text to the controller for UI display.
 
         Args:
             task_id: Full task ID of the currently-running task.
-            status_text_md: Human-readable markdown status string.
+            detail_md: Full markdown for the task detail page.
+            summary_md: Short summary (up to ~3 lines) for the task list table.
         """
         request = job_pb2.SetTaskStatusTextRequest(
             task_id=task_id.to_wire(),
-            status_text_md=status_text_md,
+            status_text_detail_md=detail_md,
+            status_text_summary_md=summary_md,
         )
         self._client.set_task_status_text(request)

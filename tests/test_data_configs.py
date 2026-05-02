@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 from marin.processing.tokenize.data_configs import _are_tokenizers_equivalent
 
 

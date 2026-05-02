@@ -35,9 +35,9 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 
 from experiments.midtraining_datasets import finemath_3_plus
-from experiments.pretraining_datasets.simple import downloads
 from experiments.pretraining_datasets.dolmino import downloads as dolmino_downloads
 from experiments.pretraining_datasets.nemotron import nemotron_cc_download
+from experiments.pretraining_datasets.simple import downloads
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

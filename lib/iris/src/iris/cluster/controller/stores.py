@@ -35,6 +35,8 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from threading import RLock
 
+from rigging.timing import Duration, Timestamp
+
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.codec import resource_spec_from_scalars
 from iris.cluster.controller.db import (
@@ -59,7 +61,6 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.types import TERMINAL_JOB_STATES, TERMINAL_TASK_STATES, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -951,23 +952,31 @@ class TaskStore:
 
     def __init__(self, db: ControllerDB) -> None:
         self._db = db
-        self._status_text: dict[str, str] = {}  # task_id wire → status_text_md
+        self._status_text_detail: dict[str, str] = {}  # task_id wire → detail markdown
+        self._status_text_summary: dict[str, str] = {}  # task_id wire → summary markdown
 
-    def set_status_text(self, task_id: str, status_text_md: str) -> None:
+    def set_status_text(self, task_id: str, detail_md: str, summary_md: str) -> None:
         """Store the latest markdown status text for a task (in memory only)."""
-        self._status_text[task_id] = status_text_md
+        self._status_text_detail[task_id] = detail_md
+        self._status_text_summary[task_id] = summary_md
 
-    def get_status_text(self, task_id: str) -> str:
-        """Return the latest markdown status text for a task, or empty string if none."""
-        return self._status_text.get(task_id, "")
+    def get_status_text_detail(self, task_id: str) -> str:
+        """Return the latest detail markdown for a task, or empty string if none."""
+        return self._status_text_detail.get(task_id, "")
+
+    def get_status_text_summary(self, task_id: str) -> str:
+        """Return the latest summary markdown for a task, or empty string if none."""
+        return self._status_text_summary.get(task_id, "")
 
     def remove_status_text_by_job_ids(self, job_ids: Sequence[JobName]) -> None:
         """Evict status-text cache entries for all tasks owned by any of ``job_ids``."""
         if not job_ids:
             return
         prefixes = tuple(f"{jid.to_wire()}/" for jid in job_ids)
-        for key in [k for k in self._status_text if k.startswith(prefixes)]:
-            del self._status_text[key]
+        for key in [k for k in self._status_text_detail if k.startswith(prefixes)]:
+            del self._status_text_detail[key]
+        for key in [k for k in self._status_text_summary if k.startswith(prefixes)]:
+            del self._status_text_summary[key]
 
     # -- Reads ---------------------------------------------------------------
 
@@ -1622,6 +1631,41 @@ class TaskAttemptStore:
                 params.error,
                 params.task_id.to_wire(),
                 params.attempt_id,
+            ),
+        )
+
+    def bulk_finalize_active(
+        self,
+        cur: TransactionCursor,
+        job_ids: Sequence[JobName],
+        state: int,
+        error: str,
+        finished_at_ms: int,
+        active_states: set[int],
+    ) -> None:
+        """Mark every still-active attempt under ``job_ids`` as terminal.
+
+        Pairs with TaskStore.bulk_kill_non_terminal so cancel_job leaves no
+        orphan task_attempts rows where state stays ACTIVE long after the
+        owning task has gone terminal.
+        """
+        if not job_ids:
+            return
+        wire_ids = [jid.to_wire() for jid in job_ids]
+        job_placeholders = ",".join("?" for _ in wire_ids)
+        active_placeholders = ",".join("?" for _ in active_states)
+        cur.execute(
+            "UPDATE task_attempts SET state = ?, error = COALESCE(error, ?), "
+            "finished_at_ms = COALESCE(finished_at_ms, ?) "
+            f"WHERE task_id IN ("
+            f"  SELECT task_id FROM tasks WHERE job_id IN ({job_placeholders})"
+            f") AND state IN ({active_placeholders})",
+            (
+                state,
+                error,
+                finished_at_ms,
+                *wire_ids,
+                *active_states,
             ),
         )
 
