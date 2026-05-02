@@ -23,7 +23,7 @@ from typing import Any, Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
-from finelog.client import LogServiceProxy
+from finelog.client.proxy import LogServiceProxy
 from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
 from rigging.timing import Timer, Timestamp

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- href is rewritten at serve time from X-Forwarded-Prefix; fetch() and
+         vue-router both resolve relative URLs against this. -->
+    <base href="/" />
+    <title><%= title %></title>
+    <script>
+      try {
+        var stored = localStorage.getItem('finelog-dark-mode');
+        if (stored === 'true' || (stored === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch(e) {}
+    </script>
+  </head>
+  <body class="bg-surface text-text font-sans antialiased">
+    <div id="app"></div>
+  </body>
+</html>

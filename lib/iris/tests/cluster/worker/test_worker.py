@@ -728,12 +728,12 @@ def test_port_binding_failure(mock_bundle_store, tmp_path):
 # ============================================================================
 
 
-def _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime):
-    """Build a Worker and attach a fake LogPusher (normally built in start())."""
+def _worker_with_mock_client(config, mock_bundle_store, mock_runtime):
+    """Build a Worker and attach a fake LogClient (normally built in start())."""
     worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
 
-    class _FakePusher:
-        def push(self, key, entries):
+    class _FakeClient:
+        def write_batch(self, key, entries):
             pass
 
         def flush(self, timeout=None):
@@ -742,7 +742,7 @@ def _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime):
         def close(self):
             pass
 
-    worker._log_pusher = _FakePusher()
+    worker._log_client = _FakeClient()
     return worker
 
 
@@ -758,7 +758,7 @@ def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_stor
         default_task_image="mock-image",
         worker_id="w-1",
     )
-    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
+    worker = _worker_with_mock_client(config, mock_bundle_store, mock_runtime)
 
     try:
         worker._attach_log_handler()
@@ -776,7 +776,7 @@ def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runti
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
     )
-    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
+    worker = _worker_with_mock_client(config, mock_bundle_store, mock_runtime)
 
     worker._attach_log_handler()
     assert worker._log_handler is None
@@ -793,7 +793,7 @@ def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runti
         default_task_image="mock-image",
         worker_id="w-1",
     )
-    worker = _worker_with_mock_pusher(config, mock_bundle_store, mock_runtime)
+    worker = _worker_with_mock_client(config, mock_bundle_store, mock_runtime)
 
     try:
         worker._attach_log_handler()
@@ -1088,11 +1088,11 @@ def test_stop_preserve_containers_does_not_kill_tasks(mock_worker, mock_runtime)
     assert task.status == job_pb2.TASK_STATE_RUNNING
 
 
-def test_start_wires_log_pusher_into_adopted_attempts(mock_bundle_store, mock_runtime, tmp_path):
+def test_start_wires_log_client_into_adopted_attempts(mock_bundle_store, mock_runtime, tmp_path):
     """Regression for #5261.
 
-    Worker.start() must construct the LogPusher *before* adopting containers,
-    otherwise adopted TaskAttempts capture ``log_pusher=None`` permanently
+    Worker.start() must construct the LogClient *before* adopting containers,
+    otherwise adopted TaskAttempts capture ``log_client=None`` permanently
     and silently drop every container log line for the rest of the task.
     """
     container = _make_discovered_container()
@@ -1112,11 +1112,11 @@ def test_start_wires_log_pusher_into_adopted_attempts(mock_bundle_store, mock_ru
     try:
         worker.start()
 
-        assert worker._log_pusher is not None
+        assert worker._log_client is not None
         task = worker.get_task(container.task_id, container.attempt_id)
         assert task is not None
-        # The adopted attempt must reference the worker's live pusher, not None.
-        assert task._log_pusher is worker._log_pusher
+        # The adopted attempt must reference the worker's live client, not None.
+        assert task._log_client is worker._log_client
     finally:
         worker.stop()
 
@@ -1130,7 +1130,7 @@ def test_task_attempt_adopt_factory():
     attempt = TaskAttempt.adopt(
         discovered=container,
         container_handle=handle,
-        log_pusher=None,
+        log_client=None,
         port_allocator=port_allocator,
     )
 

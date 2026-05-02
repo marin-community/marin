@@ -9,12 +9,16 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 
 ## Source Layout
 
-- `src/finelog/proto/logging.proto` — RPC definitions (package `finelog.logging`)
+- `src/finelog/proto/logging.proto` — log-service RPC definitions (package `finelog.logging`)
+- `src/finelog/proto/finelog_stats.proto` — stats-service RPC definitions (package `finelog.stats`)
 - `src/finelog/rpc/` — generated `_pb2`/`_connect` modules
-- `src/finelog/types.py` — shared types: `LogReadResult`, store/pusher protocols, key-related constants
+- `src/finelog/types.py` — shared types: `LogReadResult`, `LogWriterProtocol`, key-related constants
 - `src/finelog/store/` — `MemStore` (in-memory) and `DuckDBLogStore` (Parquet + DuckDB)
-- `src/finelog/server/` — `LogServiceImpl`, ASGI builder, minimal CLI launcher
-- `src/finelog/client/` — `LogPusher`, `LogServiceProxy`, `RemoteLogHandler`
+- `src/finelog/server/` — `LogServiceImpl`, `StatsServiceImpl`, ASGI builder, CLI launcher
+- `src/finelog/client/` — `LogClient` (single user-facing entry; covers logs and stats),
+  `RemoteLogHandler`, error types in `errors.py`. `proxy.py` hosts
+  `LogServiceProxy`, an internal server-side adapter used when iris mounts the
+  log service as a forwarding proxy; not re-exported.
 - `tests/` — store + server tests
 - `deploy/` — Dockerfile, k8s manifests, GCP snippets
 

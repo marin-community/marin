@@ -5,6 +5,14 @@
 !lib/finelog/pyproject.toml
 !lib/finelog/src/
 !lib/finelog/config/
+!lib/finelog/dashboard/package.json
+!lib/finelog/dashboard/package-lock.json
+!lib/finelog/dashboard/rsbuild.config.ts
+!lib/finelog/dashboard/tsconfig.json
+!lib/finelog/dashboard/tailwind.config.ts
+!lib/finelog/dashboard/postcss.config.cjs
+!lib/finelog/dashboard/env.d.ts
+!lib/finelog/dashboard/src/
 
 !lib/rigging/
 

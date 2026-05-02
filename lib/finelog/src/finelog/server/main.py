@@ -28,6 +28,8 @@ from rigging.log_setup import configure_logging
 
 from finelog.server.asgi import build_log_server_asgi
 from finelog.server.service import LogServiceImpl
+from finelog.server.stats_service import StatsServiceImpl
+from finelog.store.layout_migration import migrate_to_namespaced_layout
 
 logger = logging.getLogger("finelog.server")
 
@@ -41,8 +43,15 @@ def run_log_server(
     """Start a standalone log server, block until SIGTERM/SIGINT."""
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Synchronous migration before the store is constructed and before
+    # uvicorn binds the listening socket. A multi-minute walk just delays the
+    # accept(); clients see "connection refused" or block on connect — same
+    # observable behavior as a slow boot.
+    migrate_to_namespaced_layout(log_dir)
+
     service = LogServiceImpl(log_dir=log_dir, remote_log_dir=remote_log_dir)
-    app = build_log_server_asgi(service)
+    stats_service = StatsServiceImpl(log_store=service.log_store)
+    app = build_log_server_asgi(service, stats_service=stats_service)
 
     config = uvicorn.Config(
         app,
