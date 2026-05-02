@@ -24,17 +24,12 @@ from experiments.grug.moe.launch import (
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 GATE1_CONFIGS: list[tuple[int, float]] = [
-    (512, 2.19e17),
-    (768, 1.70e18),
+    # (512, 2.19e17),  # done
+    # (768, 1.70e18),  # done/running
+    (1024, 9.00e18),
 ]
 
-LR_MULTIPLIERS: list[float] = [
-    # 0.6,  # finished/running
-    # 0.8,  # finished/running
-    # 1.0,  # finished/running
-    1.2,
-    # 1.4,  # finished/running
-]
+LR_MULTIPLIERS: list[float] = [0.6, 0.8, 1.0, 1.2, 1.4]
 
 
 def _make_steps() -> list[ExecutorStep]:
