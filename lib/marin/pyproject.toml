@@ -134,7 +134,16 @@ conflicts = [
 
 [project.optional-dependencies]
 
-gpu = ["jax[cuda12]==0.9.2", "torch==2.10.0", "torchvision==0.25.0"]
+gpu = [
+  "jax[cuda12]==0.9.2",
+  # JAX 0.9.2 all-to-all fails on CW H100s with NCCL 2.27.x. This can be
+  # removed once the resolved GPU stack no longer admits NCCL <2.28.3.
+  "nvidia-nccl-cu12>=2.28.3; sys_platform == 'linux'",
+  # torch 2.10.0+cu128 pins nvidia-nccl-cu12==2.27.5, which reintroduces the
+  # bad all-to-all stack above. torch 2.11.0+cu128 resolves NCCL 2.28.9.
+  "torch==2.11.0",
+  "torchvision==0.26.0",
+]
 tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.38", "torch==2.10.0", "torchvision==0.25.0"]
 
 cpu = [
@@ -210,8 +219,10 @@ torchvision = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
     { index = "pytorch-cpu", extra = "vllm" },
-    # GPU index only when --extra gpu
-    { index = "pytorch-cu128", extra = "gpu" },
+    # The GPU extra pins a plain torchvision version so non-Linux platforms can
+    # use PyPI wheels. Only Linux GPU installs should route to PyTorch's cu128
+    # index for the matching CUDA wheel.
+    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
 ]
 resiliparse = { index = "marin-resiliparse" }
 # Use CUDA PyTorch for --extra=gpu on Linux, CPU PyTorch for TPU/CPU/vLLM builds.
