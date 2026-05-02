@@ -111,7 +111,7 @@ jobs:
         id: submit
         shell: bash -l {0}
         run: |
-          JOB_ID=$(.venv/bin/iris --controller-url="$IRIS_CONTROLLER_URL" \
+          JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" \
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             -e MARIN_PREFIX s3://marin-na/marin/ \
@@ -141,7 +141,7 @@ jobs:
         run: |
           uv run python scripts/workflows/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
-            --controller-url "$IRIS_CONTROLLER_URL" \
+            --iris-config "$IRIS_CONFIG" \
             --poll-interval 30 \
             --timeout 10500 \
             --github-output
@@ -180,7 +180,7 @@ jobs:
           mkdir -p "$DIAG_DIR"
           uv run python scripts/workflows/iris_monitor.py collect \
             --job-id "$JOB_ID" \
-            --controller-url "$IRIS_CONTROLLER_URL" \
+            --iris-config "$IRIS_CONFIG" \
             --provider coreweave \
             --output-dir "$DIAG_DIR" \
             --namespace "$IRIS_NAMESPACE" \
