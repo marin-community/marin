@@ -71,6 +71,7 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
+    qk_gate_mode: str = "none"  # "none" (use qk_mult), "simple", or "gated_norm"
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -108,24 +109,46 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
+_QK_GATE_RANK: int = 64
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
+    qk_gate: jax.Array | None
+    qk_gate_up: jax.Array | None
+    qk_scale: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
-        k_q, k_k, k_v, k_o = random.split(key, 4)
+        k_q, k_k, k_v, k_o, k_gd, k_gu = random.split(key, 6)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+
+        qk_gate: jax.Array | None = None
+        qk_gate_up: jax.Array | None = None
+        qk_scale: jax.Array | None = None
+
+        if cfg.qk_gate_mode == "simple":
+            qk_gate = reshard(jnp.zeros((d, n)), P(None, None))
+            qk_scale = reshard(jnp.full((n,), 2.0), P(None))
+        elif cfg.qk_gate_mode == "gated_norm":
+            qk_gate = reshard(_init_weight(k_gd, (d, _QK_GATE_RANK), cfg.initializer_std), P(None, None))
+            qk_gate_up = reshard(_init_weight(k_gu, (_QK_GATE_RANK, n), cfg.initializer_std), P(None, None))
+            qk_scale = reshard(jnp.full((n,), 2.0), P(None))
+
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            qk_gate=qk_gate,
+            qk_gate_up=qk_gate_up,
+            qk_scale=qk_scale,
             cfg=cfg,
         )
 
@@ -141,7 +164,18 @@ class CausalSelfAttention(eqx.Module):
         q = rms_norm(q)
         k = rms_norm(k)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
-        q = q * self.cfg.qk_mult
+        if self.qk_gate is not None:
+            # QK gated norm: k = norm(k) * gate(x) * scale
+            if self.qk_gate_up is not None:
+                # Gated norm: sigmoid(silu(x @ w_down) @ w_up) * scale
+                gate_hidden = jax.nn.silu(jnp.einsum("bsd,dr->bsr", x, self.qk_gate))
+                gate = jax.nn.sigmoid(jnp.einsum("bsr,rn->bsn", gate_hidden, self.qk_gate_up))
+            else:
+                # Simple: sigmoid(x @ gate)
+                gate = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.qk_gate))
+            k = k * (gate[..., None] * self.qk_scale[None, None, :, None])
+        else:
+            q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))

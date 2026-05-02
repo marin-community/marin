@@ -80,6 +80,8 @@ class GrugMoeAdamHConfig(OptimizerConfig):
             path_lower = path_str.lower()
             if "token_embed" in path_lower:
                 return "adam"
+            if "qk_gate" in path_lower or "qk_scale" in path_lower:
+                return "adam"
             if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
                 return "adam"
             if ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
