@@ -13,6 +13,7 @@ from fray.types import ResourceConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.layers.attention import AttentionBackend
+from levanter.lora import LoraConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -23,6 +24,8 @@ from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName
 from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
+from marin.rl.lora_manifest import RUN_MANIFEST_FILENAME, RolloutPolicyFormat
+from marin.rl.model_utils import is_hf_checkpoint
 from marin.rl.placement import marin_prefix_for_region, resolve_launcher_region, singleton_region_list
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
@@ -34,6 +37,9 @@ from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 logger = logging.getLogger(__name__)
 
 RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=0.5, ram="4g", disk="30g")
+ADAPTER_ARTIFACTS_DIR = "adapter_artifacts"
+EXPORTS_DIR = "exports"
+MERGED_EXPORT_DIR = "merged"
 
 
 ModelArtifact = ExecutorStep | InputName | str
@@ -70,6 +76,10 @@ class RLExperimentConfig:
     model_config: ModelConfig
     rl_loss: RLLossModule
     experiment_name_suffix: str
+    lora: LoraConfig | None = None
+    rollout_policy_format: RolloutPolicyFormat = "merged"
+    adapter_artifacts_path: str | None = None
+    merged_hf_export_path: str | None = None
 
     # trainer params
     train_batch_size: int = 1024
@@ -219,6 +229,14 @@ def _build_rl_job_config(
     tags = [*config.tags, config.model_config.name.split("/")[-1]]
     checkpoints_path = join_path(output_path, "checkpoints")
     rollout_storage_path = join_path(output_path, "rollouts")
+    run_manifest_path = join_path(output_path, RUN_MANIFEST_FILENAME)
+    adapter_artifacts_path = config.adapter_artifacts_path
+    if adapter_artifacts_path is None and config.lora is not None and is_hf_checkpoint(model_path):
+        adapter_artifacts_path = join_path(output_path, ADAPTER_ARTIFACTS_DIR)
+
+    merged_hf_export_path = config.merged_hf_export_path
+    if merged_hf_export_path is None and config.lora is not None:
+        merged_hf_export_path = join_path(join_path(output_path, EXPORTS_DIR), MERGED_EXPORT_DIR)
 
     trainer_config = TrainerConfig(
         tracker=WandbConfig(
@@ -276,6 +294,7 @@ def _build_rl_job_config(
         train_params=TrainParams(
             optimizer=opt_config,
             rl_loss=config.rl_loss,
+            lora=config.lora,
             replay_buffer=ReplayBufferConfig(
                 capacity=config.replay_buffer_capacity,
                 alpha=config.replay_buffer_alpha,
@@ -286,6 +305,7 @@ def _build_rl_job_config(
         curriculum=curriculum_config,
         tokenizer=model_path,
         inference_type="vllm",
+        rollout_policy_format=config.rollout_policy_format,
         inference_config=vLLMInferenceContextConfig(
             model_name=model_path,
             canonical_model_name=config.model_config.name,
@@ -306,6 +326,9 @@ def _build_rl_job_config(
         initial_checkpoint=model_path,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
+        run_manifest_path=run_manifest_path,
+        adapter_artifacts_path=adapter_artifacts_path,
+        merged_hf_export_path=merged_hf_export_path,
         run_id=name,
         log_freq=1,
         run_config=RunConfig(

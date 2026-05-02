@@ -292,6 +292,9 @@ class vLLMInferenceContext(BaseInferenceContext):
         )
 
     def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
+        if state_dict is None:
+            raise ValueError("vLLM weight reload requires a full state_dict payload")
+
         t0 = time.time()
         logger.info("reload_model: starting prefix cache reset")
         # Reset prefix cache before syncing weights to free up memory

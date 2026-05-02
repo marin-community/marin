@@ -48,6 +48,7 @@ import json
 import logging
 import os
 import re
+import urllib.parse
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, TypeVar, Union
 
@@ -151,6 +152,9 @@ class LowRankLinear(eqx.Module):
         # Peft always uses out_first=True (i.e. normal Torch convention) for linear, even for gpt2-style Conv1d
         lora_A = hnn.Linear.init(In, _R, key=key_A, use_bias=False, out_first=True)
         lora_B = hnn.Linear.init(_R, Out, key=key_B, use_bias=False, out_first=True)
+        # Match common LoRA initialization semantics: keep one factor random and zero the other so the
+        # initial adapter delta is exactly zero.
+        lora_B = dataclasses.replace(lora_B, weight=hax.zeros_like(lora_B.weight))
         dropout = hnn.Dropout(dropout_prob)
 
         return LowRankLinear(lora_A, lora_B, dropout, alpha / r)
@@ -341,7 +345,8 @@ def save_peft_pretrained(
             as a repo name + branch
         upload_kwargs: kwargs to pass to the upload function
     """
-    os.makedirs(path, exist_ok=True)
+    if urllib.parse.urlparse(path).scheme == "":
+        os.makedirs(path, exist_ok=True)
     hf_config = to_hf_config(config, base_model_name_or_path=base_model_name_or_path)
     state_dict = lora_state_dict(lora_model, prefix=prefix)
 
