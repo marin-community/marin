@@ -179,3 +179,17 @@ def test_executor_output_path_scopes_temporary_checkpoints():
         checkpointer.expanded_temporary_path("my-run-abc123") == "gs://marin-us-central1/tmp/ttl=14d/"
         "checkpoints-temp/marin-us-central1/checkpoints/my-run-abc123/checkpoints"
     )
+
+
+def test_enforce_run_id_rejects_executor_output_path_mismatch():
+    config = TrainLmOnPodConfig(
+        train_config=train_lm.TrainLmConfig(
+            data={},
+            trainer=TrainerConfig(id="wrong-run-id", checkpointer=CheckpointerConfig()),
+        ),
+        resources=ResourceConfig.with_tpu("v4-8"),
+        output_path="gs://marin-us-central1/checkpoints/right-run-id",
+    )
+
+    with pytest.raises(ValueError, match="does not match output path basename"):
+        _enforce_run_id(config)

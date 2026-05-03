@@ -102,3 +102,103 @@ def test_delphi_midtrain_ignores_local_non_v5p_region(monkeypatch):
     resources = delphi._midtrain_tpu_resources("v5p-64")
 
     assert resources.regions is None
+
+
+def test_delphi_resume_output_path_sets_all_run_identity():
+    import experiments.exp_delphi_math_10b_midtrain as delphi
+
+    output_path = "gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.67-ecbd27"
+
+    assert delphi._resume_run_id_from_output_path(output_path) == "delphi-1e21-p67m33-9p25b-lr0.67-ecbd27"
+    assert delphi._resume_identity_env_vars(output_path) == {
+        "RUN_ID": "delphi-1e21-p67m33-9p25b-lr0.67-ecbd27",
+        "WANDB_RUN_ID": "delphi-1e21-p67m33-9p25b-lr0.67-ecbd27",
+        "WANDB_RESUME": "allow",
+    }
+
+
+def test_delphi_resume_env_requires_min_step_unless_empty_resume():
+    import experiments.exp_delphi_math_10b_midtrain as delphi
+
+    output_path = "gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.67-ecbd27"
+
+    with pytest.raises(ValueError, match="requires MIDTRAIN_EXPECT_RESUME_MIN_STEP"):
+        delphi._validate_resume_env_contract(
+            resume_output_path=output_path,
+            expected_min_step=None,
+            allow_empty=False,
+        )
+
+    delphi._validate_resume_env_contract(
+        resume_output_path=output_path,
+        expected_min_step=2600,
+        allow_empty=False,
+    )
+    delphi._validate_resume_env_contract(
+        resume_output_path=output_path,
+        expected_min_step=None,
+        allow_empty=True,
+    )
+
+
+def test_delphi_resume_output_path_must_match_selected_cell(monkeypatch):
+    import experiments.exp_delphi_math_10b_midtrain as delphi
+
+    monkeypatch.setattr(delphi, "_MIDTRAIN_MIX_NAME", delphi.PRETRAIN_67P_MATH_33P_HIGHQUALITY_NEMO_MATH_NAME)
+    token_budget = delphi._token_budget_for_base(delphi.BASES["1e21-v5"])
+
+    delphi._validate_resume_output_path_matches_run(
+        "gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.67-ecbd27",
+        base_tag="1e21-v5",
+        lr_factor=0.67,
+        token_budget=token_budget,
+    )
+
+    with pytest.raises(ValueError, match="does not match selected Delphi midtraining run"):
+        delphi._validate_resume_output_path_matches_run(
+            "gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.5-114e49",
+            base_tag="1e21-v5",
+            lr_factor=0.67,
+            token_budget=token_budget,
+        )
+
+
+def test_delphi_resume_checkpoint_preflight_rejects_low_step(monkeypatch):
+    import experiments.exp_delphi_math_10b_midtrain as delphi
+
+    output_path = "gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.67-ecbd27"
+    monkeypatch.setattr(
+        delphi,
+        "_discover_latest_resume_checkpoint",
+        lambda path: f"{path}/checkpoints/step-1013",
+    )
+
+    with pytest.raises(ValueError, match="below MIDTRAIN_EXPECT_RESUME_MIN_STEP=2600"):
+        delphi._verify_resume_checkpoint_namespace(
+            output_path,
+            expected_min_step=2600,
+            allow_empty=False,
+        )
+
+
+def test_delphi_resume_checkpoint_preflight_requires_checkpoint_unless_explicitly_empty(monkeypatch):
+    import experiments.exp_delphi_math_10b_midtrain as delphi
+
+    output_path = "gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.67-ecbd27"
+    monkeypatch.setattr(delphi, "_discover_latest_resume_checkpoint", lambda path: None)
+
+    with pytest.raises(FileNotFoundError, match="No checkpoint found for resume output path"):
+        delphi._verify_resume_checkpoint_namespace(
+            output_path,
+            expected_min_step=None,
+            allow_empty=False,
+        )
+
+    assert (
+        delphi._verify_resume_checkpoint_namespace(
+            output_path,
+            expected_min_step=None,
+            allow_empty=True,
+        )
+        is None
+    )

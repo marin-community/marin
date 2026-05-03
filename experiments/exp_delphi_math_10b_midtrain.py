@@ -34,6 +34,13 @@ marin-<region> bucket has it on first open.
     -e MIDTRAIN_SELECT_BASE 1e21-v5 -e MIDTRAIN_SELECT_LR 0.67 \\
     -- python experiments/exp_delphi_math_10b_midtrain.py
 
+To resume a failed sweep point, use exactly one identity source:
+``MIDTRAIN_RESUME_OUTPUT_PATH``. The script derives the executor output path,
+Levanter ``RUN_ID``, and ``WANDB_RUN_ID`` from that path and refuses legacy
+``MIDTRAIN_OUTPUT_PATH_OVERRIDE``. For recoveries, set
+``MIDTRAIN_EXPECT_RESUME_MIN_STEP`` to the last known-good checkpoint step, or
+a conservative floor below it, so stale namespaces fail before training starts.
+
 With no env vars set, all 9 steps are generated (useful for dry-runs /
 introspection; do NOT actually ``executor_main`` on the full list).
 
@@ -43,13 +50,16 @@ numbers, and verification plan.
 
 import logging
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 
 from fray.cluster import ResourceConfig
 from haliax import Axis
+from levanter.checkpoint import discover_latest_checkpoint
 from levanter.main.train_lm import CheckpointInitMode
 from levanter.optim import AdamHConfig
 from marin.execution.executor import ExecutorStep, MirroredValue, executor_main, mirrored
+from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem import marin_region
 
 from experiments.defaults import default_train
@@ -413,6 +423,48 @@ def _midtrain_tpu_resources(tpu_type: str) -> ResourceConfig:
     return ResourceConfig.with_tpu(tpu_type, regions=[region])
 
 
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y"}:
+        return True
+    if normalized in {"0", "false", "no", "n"}:
+        return False
+    raise ValueError(f"{name} must be a boolean flag, got {value!r}")
+
+
+def _optional_int_env(name: str) -> int | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+
+
+def _validate_resume_env_contract(
+    *,
+    resume_output_path: str | None,
+    expected_min_step: int | None,
+    allow_empty: bool,
+) -> None:
+    if resume_output_path is None:
+        if expected_min_step is not None:
+            raise ValueError("MIDTRAIN_EXPECT_RESUME_MIN_STEP requires MIDTRAIN_RESUME_OUTPUT_PATH")
+        if allow_empty:
+            raise ValueError("MIDTRAIN_ALLOW_EMPTY_RESUME requires MIDTRAIN_RESUME_OUTPUT_PATH")
+        return
+
+    if expected_min_step is None and not allow_empty:
+        raise ValueError(
+            "MIDTRAIN_RESUME_OUTPUT_PATH requires MIDTRAIN_EXPECT_RESUME_MIN_STEP unless "
+            "MIDTRAIN_ALLOW_EMPTY_RESUME=1 is set for an intentional pre-checkpoint namespace-preserving restart."
+        )
+
+
 # Env-var filters: set these to restrict the generated sweep to a single
 # point so each can be launched as its own iris coordinator job. Step hashes
 # are unchanged by filtering — already-succeeded outputs (e.g. the v10
@@ -421,10 +473,25 @@ _SELECT_BASE = os.environ.get("MIDTRAIN_SELECT_BASE")  # e.g. "1e21-v5"
 _SELECT_LR = os.environ.get("MIDTRAIN_SELECT_LR")  # e.g. "0.67"
 _RUN_NAME_SUFFIX = os.environ.get("MIDTRAIN_RUN_NAME_SUFFIX")
 _INIT_CKPT_PATH = os.environ.get("MIDTRAIN_INIT_CKPT_PATH")
-_OUTPUT_PATH_OVERRIDE = os.environ.get("MIDTRAIN_OUTPUT_PATH_OVERRIDE")
+_LEGACY_OUTPUT_PATH_OVERRIDE = os.environ.get("MIDTRAIN_OUTPUT_PATH_OVERRIDE")
+_RESUME_OUTPUT_PATH = os.environ.get("MIDTRAIN_RESUME_OUTPUT_PATH")
+_RESUME_EXPECT_MIN_STEP = _optional_int_env("MIDTRAIN_EXPECT_RESUME_MIN_STEP")
+_ALLOW_EMPTY_RESUME = _env_flag("MIDTRAIN_ALLOW_EMPTY_RESUME")
+_OUTPUT_PATH_OVERRIDE = _RESUME_OUTPUT_PATH
 
-if _OUTPUT_PATH_OVERRIDE and (_SELECT_BASE is None or _SELECT_LR is None):
-    raise ValueError("MIDTRAIN_OUTPUT_PATH_OVERRIDE requires MIDTRAIN_SELECT_BASE and MIDTRAIN_SELECT_LR")
+if _LEGACY_OUTPUT_PATH_OVERRIDE:
+    raise ValueError(
+        "MIDTRAIN_OUTPUT_PATH_OVERRIDE is disabled for Delphi midtraining because it can split "
+        "checkpoint, Levanter, and W&B identity. Use MIDTRAIN_RESUME_OUTPUT_PATH instead; the "
+        "script will derive output_path, RUN_ID, and WANDB_RUN_ID from that one value."
+    )
+if _RESUME_OUTPUT_PATH and (_SELECT_BASE is None or _SELECT_LR is None):
+    raise ValueError("MIDTRAIN_RESUME_OUTPUT_PATH requires MIDTRAIN_SELECT_BASE and MIDTRAIN_SELECT_LR")
+_validate_resume_env_contract(
+    resume_output_path=_RESUME_OUTPUT_PATH,
+    expected_min_step=_RESUME_EXPECT_MIN_STEP,
+    allow_empty=_ALLOW_EMPTY_RESUME,
+)
 
 
 def _lr_str(lr_factor: float) -> str:
@@ -452,6 +519,114 @@ def _build_run_name(base_tag: str, lr_factor: float, token_budget: int) -> str:
     if len(name) > 64:
         raise ValueError(f"Midtraining run name must stay within W&B's 64-char limit, got {len(name)}: {name}")
     return name
+
+
+_CHECKPOINT_STEP_RE = re.compile(r"(?:^|/)step-(\d+)/?$")
+
+
+def _resume_run_id_from_output_path(output_path: str) -> str:
+    run_id = os.path.basename(output_path.rstrip("/"))
+    if not run_id:
+        raise ValueError(f"MIDTRAIN_RESUME_OUTPUT_PATH must end in a run id, got {output_path!r}")
+    return run_id
+
+
+def _resume_identity_env_vars(output_path: str) -> dict[str, str]:
+    run_id = _resume_run_id_from_output_path(output_path)
+    return {
+        "RUN_ID": run_id,
+        "WANDB_RUN_ID": run_id,
+        "WANDB_RESUME": "allow",
+    }
+
+
+def _validate_resume_output_path_matches_run(
+    output_path: str,
+    *,
+    base_tag: str,
+    lr_factor: float,
+    token_budget: int,
+) -> None:
+    expected_prefix = _build_run_name(base_tag, lr_factor, token_budget)
+    run_id = _resume_run_id_from_output_path(output_path)
+    if run_id == expected_prefix or run_id.startswith(f"{expected_prefix}-"):
+        return
+    raise ValueError(
+        "MIDTRAIN_RESUME_OUTPUT_PATH does not match selected Delphi midtraining run. "
+        f"Selected run prefix is {expected_prefix!r}, but resume path ends in {run_id!r}. "
+        "Check MIDTRAIN_SELECT_BASE, MIDTRAIN_SELECT_LR, MIDTRAIN_MIX_NAME, and the old failed output path."
+    )
+
+
+def _with_resume_identity(train_cfg: SimpleTrainConfig, output_path: str) -> SimpleTrainConfig:
+    env_vars = {
+        **(train_cfg.env_vars or {}),
+        **_resume_identity_env_vars(output_path),
+    }
+    return replace(train_cfg, env_vars=env_vars)
+
+
+def _resume_checkpoint_search_paths(output_path: str) -> tuple[str, str]:
+    output_path = output_path.rstrip("/")
+    return os.path.join(output_path, "checkpoints"), temporary_checkpoint_base_path(output_path)
+
+
+def _discover_latest_resume_checkpoint(output_path: str) -> str | None:
+    permanent_path, temporary_path = _resume_checkpoint_search_paths(output_path)
+    return discover_latest_checkpoint(permanent_path, temporary_path)
+
+
+def _checkpoint_step_from_path(checkpoint_path: str) -> int | None:
+    match = _CHECKPOINT_STEP_RE.search(checkpoint_path.rstrip("/"))
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _verify_resume_checkpoint_namespace(
+    output_path: str,
+    *,
+    expected_min_step: int | None,
+    allow_empty: bool,
+) -> str | None:
+    latest_checkpoint = _discover_latest_resume_checkpoint(output_path)
+    if latest_checkpoint is None:
+        if expected_min_step is not None:
+            raise FileNotFoundError(
+                f"No checkpoint found for resume output path {output_path!r}, "
+                f"but MIDTRAIN_EXPECT_RESUME_MIN_STEP={expected_min_step} was set."
+            )
+        if allow_empty:
+            logger.warning(
+                "No checkpoint found for MIDTRAIN_RESUME_OUTPUT_PATH=%s. Continuing only because "
+                "MIDTRAIN_ALLOW_EMPTY_RESUME=1 was set.",
+                output_path,
+            )
+            return None
+        permanent_path, temporary_path = _resume_checkpoint_search_paths(output_path)
+        raise FileNotFoundError(
+            "No checkpoint found for resume output path "
+            f"{output_path!r}. Checked permanent path {permanent_path!r} and temp path {temporary_path!r}. "
+            "Set MIDTRAIN_ALLOW_EMPTY_RESUME=1 only for intentional namespace-preserving restarts before "
+            "any checkpoint exists."
+        )
+
+    step = _checkpoint_step_from_path(latest_checkpoint)
+    if expected_min_step is not None:
+        if step is None:
+            raise ValueError(
+                f"Latest checkpoint {latest_checkpoint!r} does not encode a step; cannot verify "
+                f"MIDTRAIN_EXPECT_RESUME_MIN_STEP={expected_min_step}."
+            )
+        if step < expected_min_step:
+            raise ValueError(
+                f"Latest checkpoint for {output_path!r} is {latest_checkpoint!r} at step {step}, "
+                f"below MIDTRAIN_EXPECT_RESUME_MIN_STEP={expected_min_step}. This is probably the wrong "
+                "checkpoint namespace."
+            )
+
+    logger.info("Resume preflight found checkpoint %s for output path %s", latest_checkpoint, output_path)
+    return latest_checkpoint
 
 
 def _build_runs() -> list[ExecutorStep]:
@@ -509,6 +684,14 @@ def _build_runs() -> list[ExecutorStep]:
             )
 
             name = _build_run_name(base_tag, lr_factor, token_budget)
+            if _OUTPUT_PATH_OVERRIDE is not None:
+                _validate_resume_output_path_matches_run(
+                    _OUTPUT_PATH_OVERRIDE,
+                    base_tag=base_tag,
+                    lr_factor=lr_factor,
+                    token_budget=token_budget,
+                )
+                train_cfg = _with_resume_identity(train_cfg, _OUTPUT_PATH_OVERRIDE)
 
             data_tags = (
                 (f"midtraining_mix={_MIDTRAIN_MIX_NAME}", "midtraining-mix")
@@ -570,6 +753,13 @@ def _run_pre_flight_safety_checks() -> None:
     on the only component with a val carve-out and avoiding the unresolved
     versioned wrappers from pretrain replay.
     """
+    if _RESUME_OUTPUT_PATH is not None:
+        _verify_resume_checkpoint_namespace(
+            _RESUME_OUTPUT_PATH,
+            expected_min_step=_RESUME_EXPECT_MIN_STEP,
+            allow_empty=_ALLOW_EMPTY_RESUME,
+        )
+
     if not _MIDTRAIN_MIX_NAME:
         logger.warning(
             "MIDTRAIN_MIX_NAME unset; skipping val/train disjointness check. "

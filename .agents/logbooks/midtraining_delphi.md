@@ -1,5 +1,29 @@
 # Delphi × Nemotron-CC-Math 10 B midtraining — logbook
 
+## WARNING — resume identity must come from one old output path
+
+Do not relaunch a failed Delphi midtraining run with hand-written
+`MIDTRAIN_OUTPUT_PATH_OVERRIDE`, `RUN_ID`, or `WANDB_RUN_ID`. The monitoring
+agent must use **one** source of truth:
+
+```bash
+-e MIDTRAIN_RESUME_OUTPUT_PATH gs://marin-<region>/checkpoints/<old-run-id> \
+-e MIDTRAIN_EXPECT_RESUME_MIN_STEP <last-known-good-checkpoint-step-or-floor>
+```
+
+`experiments/exp_delphi_math_10b_midtrain.py` now derives the executor output
+path, Levanter `RUN_ID`, and `WANDB_RUN_ID` from
+`MIDTRAIN_RESUME_OUTPUT_PATH`; it refuses legacy `MIDTRAIN_OUTPUT_PATH_OVERRIDE`.
+Startup requires `MIDTRAIN_EXPECT_RESUME_MIN_STEP`, discovers the latest
+permanent/temp checkpoint, and fails before training if no checkpoint exists or
+if the checkpoint is below the expected floor. Use
+`MIDTRAIN_ALLOW_EMPTY_RESUME=1` only for an intentional namespace-preserving
+restart before any checkpoint has ever been written.
+
+Generic Marin training now also rejects executor-backed training when the
+resolved run id does not match the output path basename. This is meant to catch
+bad recoveries before W&B/checkpoint namespaces split again.
+
 ## README / IMPORTANT — current handoff state as of 2026-05-02 06:07 UTC
 
 This logbook now tracks both the midtraining experiments and the cross-region
@@ -50,15 +74,28 @@ Never assume a failed/preempted training run will resume just because the
 human-readable step name is unchanged. Marin's real checkpoint/W&B identity
 includes the executor output hash.
 
+**2026-05-02 repeat incident:** this exact mistake happened again for `1e21
+p67m33`. The crashed `lr0.67` run
+`delphi-1e21-p67m33-9p25b-lr0.67-ecbd27` reached step ~2651, but a recovery
+landed in the new namespace
+`delphi-1e21-p67m33-9p25b-lr0.67-99752407` and started from step 0 instead of
+resuming `ecbd27`. The same pattern happened for `lr0.5`: crashed
+`114e49` reached step ~3541, while recovery `fdc4ebf1` started in a new
+namespace. See ops postmortem
+`.agents/ops/2026-05-02-delphi-midtrain-resume-namespace.md`.
+
 Before relaunching any failed Delphi midtraining run:
 
 1. Find the exact old output path and run id from `.executor_info`, logs, W&B,
    or GCS.
 2. Check both permanent checkpoints and temporary checkpoints.
-3. Relaunch with the exact old output path forced, e.g. `MIDTRAIN_OUTPUT_PATH_OVERRIDE`
-   or `ExecutorStep.with_output_path(...)`.
-4. Verify startup logs show the same run id/output path and
-   `Resuming training from step ...`.
+3. Relaunch this Delphi script with `MIDTRAIN_RESUME_OUTPUT_PATH=<old-output-path>`,
+   not `MIDTRAIN_OUTPUT_PATH_OVERRIDE`.
+4. Set `MIDTRAIN_EXPECT_RESUME_MIN_STEP=<last-known-good-step>` so stale
+   namespaces fail before training starts.
+5. Verify startup logs show the same run id/output path and
+   `Resuming training from step ...`. If that line is absent, the recovery has
+   not been proven, even if training is making progress.
 
 For the 2026-04-27 incident, `p67m33/lr0.5` drifted from the original central
 namespace `delphi-1e20-p67m33-20b-lr0.5-f74454` to the wrong east5 namespace

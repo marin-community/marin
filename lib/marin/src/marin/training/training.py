@@ -40,7 +40,9 @@ class TrainLmOnPodConfig:
     """Base output directory to be used for training, mainly for use with executor framework."""
     impute_run_id_from_output_path: bool = True
     """
-    If true and out_path is not None, the run id will be set to the basename of the out_path plus a random string.
+    If true and out_path is not None, the run id will be set to the basename of
+    the out_path. Explicit trainer/RUN_ID values are allowed only if they match
+    that basename.
 
     Note that trainer.id and the RUN_ID env variable take precedence, in that order.
     """
@@ -65,7 +67,9 @@ class TrainDpoOnPodConfig:
     """Base output directory to be used for training, mainly for use with executor framework."""
     impute_run_id_from_output_path: bool = True
     """
-    If true and out_path is not None, the run id will be set to the basename of the out_path plus a random string.
+    If true and out_path is not None, the run id will be set to the basename of
+    the out_path. Explicit trainer/RUN_ID values are allowed only if they match
+    that basename.
 
     Note that trainer.id and the RUN_ID env variable take precedence, in that order.
     """
@@ -100,6 +104,10 @@ def _output_path_temp_component(output_path: str) -> str:
     if parsed.scheme:
         return f"{parsed.scheme}{parsed.path}".strip("/")
     return output_path.strip("/")
+
+
+def _output_path_basename(output_path: str) -> str:
+    return os.path.basename(output_path.rstrip("/"))
 
 
 def temporary_checkpoint_base_path(output_path: str) -> str:
@@ -178,6 +186,16 @@ def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     if not run_id:
         run_id = _cli_helpers_module().default_run_id()
         logger.warning(f"Run ID not set. Using default: {run_id}")
+
+    if config.impute_run_id_from_output_path and config.output_path is not None:
+        expected_run_id = _output_path_basename(config.output_path)
+        if run_id != expected_run_id:
+            raise ValueError(
+                f"Resolved run ID {run_id!r} does not match output path basename {expected_run_id!r} "
+                f"for output path {config.output_path!r}. Executor-backed training requires the checkpoint "
+                "namespace and W&B/Levanter run id to match. Set RUN_ID/WANDB_RUN_ID from the output path, "
+                "or set impute_run_id_from_output_path=False only for intentional custom layouts."
+            )
 
     append_id_to_checkpoints = not config.impute_run_id_from_output_path
     checkpointer_config = replace(
