@@ -71,6 +71,9 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
+    qk_norm_scope: str = "per_head"  # "per_head" or "full"
+    qk_gate_target: str = "none"  # "none" (use qk_mult), "q", or "k"
+    qk_gate_type: str = "scalar"  # "scalar", "simple", or "gated_norm"
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -108,24 +111,50 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
+_QK_GATE_RANK: int = 64
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
+    qk_gate_w: jax.Array | None
+    qk_gate_up: jax.Array | None
+    qk_scale: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
-        k_q, k_k, k_v, k_o = random.split(key, 4)
+        k_q, k_k, k_v, k_o, k_gd, k_gu = random.split(key, 6)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+
+        qk_gate_w: jax.Array | None = None
+        qk_gate_up: jax.Array | None = None
+        qk_scale: jax.Array | None = None
+
+        if cfg.qk_gate_target != "none":
+            gate_heads = m if cfg.qk_gate_target == "k" else n
+            qk_scale = reshard(jnp.full((n,), 2.0), P(None))
+
+            if cfg.qk_gate_type == "scalar":
+                pass  # scale only, no gate
+            elif cfg.qk_gate_type == "simple":
+                qk_gate_w = reshard(jnp.zeros((d, gate_heads)), P(None, None))
+            elif cfg.qk_gate_type == "gated_norm":
+                qk_gate_w = reshard(_init_weight(k_gd, (d, _QK_GATE_RANK), cfg.initializer_std), P(None, None))
+                qk_gate_up = reshard(_init_weight(k_gu, (_QK_GATE_RANK, gate_heads), cfg.initializer_std), P(None, None))
+
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            qk_gate_w=qk_gate_w,
+            qk_gate_up=qk_gate_up,
+            qk_scale=qk_scale,
             cfg=cfg,
         )
 
@@ -135,13 +164,39 @@ class CausalSelfAttention(eqx.Module):
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
+        q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
+        k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
-        q = rms_norm(q)
-        k = rms_norm(k)
+
+        if self.cfg.qk_norm_scope == "full":
+            q = rearrange(rms_norm(q_flat), "... (n d) -> ... n d", d=head_dim)
+            k = rearrange(rms_norm(k_flat), "... (m d) -> ... m d", d=head_dim)
+        else:
+            q = rms_norm(rearrange(q_flat, "... (n d) -> ... n d", d=head_dim))
+            k = rms_norm(rearrange(k_flat, "... (m d) -> ... m d", d=head_dim))
+
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
-        q = q * self.cfg.qk_mult
+
+        if self.qk_scale is not None:
+            # Compute gate if present
+            if self.qk_gate_w is not None:
+                if self.qk_gate_up is not None:
+                    gate = jax.nn.sigmoid(
+                        jnp.einsum(
+                            "bsr,rn->bsn", jax.nn.silu(jnp.einsum("bsd,dr->bsr", x, self.qk_gate_w)), self.qk_gate_up
+                        )
+                    )
+                else:
+                    gate = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.qk_gate_w))
+                # Apply gate to target
+                if self.cfg.qk_gate_target == "k":
+                    k = k * gate[..., None]
+                else:
+                    q = q * gate[..., None]
+            # Scale always on q
+            q = q * self.qk_scale[None, None, :, None]
+        else:
+            q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
