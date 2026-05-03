@@ -7,6 +7,7 @@ import functools
 import logging
 import os
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Literal, NotRequired, TypeAlias, TypeVar, TypedDict
@@ -861,50 +862,49 @@ class LmDataConfig:
         return self._validation_datasets_unwrapped(Pos)
 
     def build_caches(self, split: str) -> dict[str, TreeCache[dict]]:
-        caches: dict[str, TreeCache[dict]] = {}
+        # Filter eligible components first; the heavy lifting (per-cache GCS
+        # ledger reads, shard-store opens) runs in a thread pool below — startup
+        # latency was dominated by N sequential round-trips for N components.
+        items: list[tuple[str, "DatasetComponent"]] = []
         for name, component in self.components.items():
             if split == "train" and not self._has_nonzero_weight(name):
                 continue
-
             if isinstance(component, DirectDatasetComponent):
                 continue
-
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")
+            items.append((name, component))
 
+        if not items:
+            return {}
+
+        def _build_one(item: tuple[str, "DatasetComponent"]) -> tuple[str, TreeCache[dict] | None]:
+            name, component = item
             cache_root = _component_cache_dir(name, component, self.cache_dir)
+            cache_path = os.path.join(cache_root, split)
             source = component.source
 
             if source is None:
                 try:
-                    caches[name] = load_lm_dataset_cache(
-                        os.path.join(cache_root, split), component.format, self.the_tokenizer, self.enforce_eos
+                    return name, load_lm_dataset_cache(
+                        cache_path, component.format, self.the_tokenizer, self.enforce_eos
                     )
                 except FileNotFoundError:
                     raise ValueError(f"No source and no cache found for component {name} split {split}")
-                continue
 
             shard_source = source.get_shard_source(split)
             if shard_source is None:
-                cache_path = os.path.join(cache_root, split)
                 if not fsspec_utils.exists(cache_path):
                     logger.warning(f"No source for {name} in {split} split and no cache at {cache_path}, skipping")
-                    continue
-                caches[name] = load_lm_dataset_cache(
-                    cache_path, component.format, self.the_tokenizer, self.enforce_eos
-                )
-                continue
+                    return name, None
+                return name, load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
 
-            cache_path = os.path.join(cache_root, split)
             if not self.auto_build_caches:
                 if not fsspec_utils.exists(cache_path):
                     raise FileNotFoundError(f"Cache not found at {cache_path} and auto_build_caches is disabled")
-                caches[name] = load_lm_dataset_cache(
-                    cache_path, component.format, self.the_tokenizer, self.enforce_eos
-                )
-                continue
+                return name, load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
 
-            caches[name] = build_lm_dataset_cache(
+            return name, build_lm_dataset_cache(
                 cache_path,
                 shard_source,
                 component.format,
@@ -913,6 +913,14 @@ class LmDataConfig:
                 self.enforce_eos,
             )
 
+        caches: dict[str, TreeCache[dict]] = {}
+        # I/O-bound (GCS metadata fetches); threads work fine. Cap parallelism
+        # so we don't stress GCS on very large component lists.
+        max_workers = min(32, len(items))
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="build_caches") as pool:
+            for name, cache in pool.map(_build_one, items):
+                if cache is not None:
+                    caches[name] = cache
         return caches
 
     @property
