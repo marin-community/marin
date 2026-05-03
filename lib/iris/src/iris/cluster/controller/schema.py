@@ -900,15 +900,6 @@ WORKERS = Table(
         ),
         Column("committed_gpu", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column("committed_tpu", "INTEGER", "NOT NULL", python_type=int, decoder=int),
-        Column("snapshot_host_cpu_percent", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_memory_used_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_memory_total_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_disk_used_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_disk_total_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_running_task_count", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_total_process_count", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_net_recv_bps", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_net_sent_bps", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
         # Migration 0016
         Column("total_cpu_millicores", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("total_memory_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
@@ -986,63 +977,6 @@ WORKER_TASK_HISTORY = Table(
         # Probed on task delete by the new FK cascade; without it each delete
         # scans the full history table.
         "CREATE INDEX IF NOT EXISTS idx_worker_task_history_task" " ON worker_task_history(task_id)",
-    ),
-)
-
-WORKER_RESOURCE_HISTORY = Table(
-    "worker_resource_history",
-    "wrh",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column(
-            "worker_id",
-            "TEXT",
-            "NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE",
-            python_type=WorkerId,
-            decoder=decode_worker_id,
-        ),
-        Column("snapshot_host_cpu_percent", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_memory_used_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_memory_total_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_disk_used_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_disk_total_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_running_task_count", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_total_process_count", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_net_recv_bps", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_net_sent_bps", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("timestamp_ms", "INTEGER", "NOT NULL", python_type=Timestamp, decoder=decode_timestamp_ms),
-    ),
-    indexes=(
-        "CREATE INDEX IF NOT EXISTS idx_worker_resource_history_worker"
-        " ON worker_resource_history(worker_id, id DESC)",
-        # Migration 0010_dashboard
-        "CREATE INDEX IF NOT EXISTS idx_worker_resource_history_ts"
-        " ON worker_resource_history(worker_id, timestamp_ms DESC)",
-    ),
-)
-
-TASK_RESOURCE_HISTORY = Table(
-    "task_resource_history",
-    "trh",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column(
-            "task_id",
-            "TEXT",
-            "NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE",
-            python_type=JobName,
-            decoder=JobName.from_wire,
-        ),
-        Column("attempt_id", "INTEGER", "NOT NULL"),
-        Column("cpu_millicores", "INTEGER", "NOT NULL DEFAULT 0"),
-        Column("memory_mb", "INTEGER", "NOT NULL DEFAULT 0"),
-        Column("disk_mb", "INTEGER", "NOT NULL DEFAULT 0"),
-        Column("memory_peak_mb", "INTEGER", "NOT NULL DEFAULT 0"),
-        Column("timestamp_ms", "INTEGER", "NOT NULL", python_type=Timestamp, decoder=decode_timestamp_ms),
-    ),
-    indexes=(
-        "CREATE INDEX IF NOT EXISTS idx_task_resource_history_task_attempt"
-        " ON task_resource_history(task_id, attempt_id, id DESC)",
     ),
 )
 
@@ -1311,8 +1245,6 @@ MAIN_TABLES: tuple[Table, ...] = (
     WORKERS,
     WORKER_ATTRIBUTES,
     WORKER_TASK_HISTORY,
-    WORKER_RESOURCE_HISTORY,
-    TASK_RESOURCE_HISTORY,
     ENDPOINTS,
     DISPATCH_QUEUE,
     SCALING_GROUPS,

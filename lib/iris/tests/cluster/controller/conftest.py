@@ -610,7 +610,6 @@ def dispatch_task(state: ControllerTransitions, task: TaskDetailRow, worker_id: 
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task.task_id,
@@ -651,7 +650,6 @@ def transition_task(
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task_id,

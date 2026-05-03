@@ -90,7 +90,6 @@ def _assign_and_transition(
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
             ),
         )
@@ -100,7 +99,6 @@ def _assign_and_transition(
                 cur,
                 HeartbeatApplyRequest(
                     worker_id=worker_id,
-                    worker_resource_snapshot=None,
                     updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=target_state, error=error)],
                 ),
             )
@@ -1188,6 +1186,7 @@ def test_list_workers_filter_by_contains(service, state):
         None,
     )
     assert by_substring.total_count == 4
+
 
 
 # =============================================================================

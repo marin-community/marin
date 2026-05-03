@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { useControllerRpc } from '@/composables/useRpc'
+import { useControllerRpc, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import type {
@@ -9,6 +9,7 @@ import type {
   GetTaskStatusResponse,
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
+import { decodeArrowIpc } from '@/utils/arrow'
 
 import { controllerRpcCall } from '@/composables/useRpc'
 import { useProfileAction } from '@/composables/useProfileAction'
@@ -71,11 +72,52 @@ const diskUsedMb = computed(() => {
   return raw ? parseFloat(raw) : 0
 })
 
+// --- Per-task resource history sourced from finelog stats (iris.task) ---
+//
+// One row per attempt-resource update emitted by the worker. The namespace
+// is registered eagerly by every worker at startup, so any task we can
+// navigate to has a registered table. Rows come back ts DESC; reverse for
+// the sparkline (oldest -> newest).
+interface TaskStatRow {
+  ts?: string
+  cpu_millicores?: number
+  memory_mb?: number
+}
+
+interface QueryResponse {
+  arrowIpc?: string
+}
+
+function buildTaskStatsSql(taskId: string): string {
+  // QueryRequest has no param binding; manual DuckDB single-quote escape.
+  const escaped = taskId.replace(/'/g, "''")
+  return `
+SELECT ts, cpu_millicores, memory_mb
+FROM "iris.task"
+WHERE task_id = '${escaped}'
+ORDER BY ts DESC
+LIMIT 200
+`.trim()
+}
+
+const { data: taskStatsData, refresh: fetchTaskStats } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({ sql: buildTaskStatsSql(props.taskId) }),
+)
+
+const taskStatsRows = computed<TaskStatRow[]>(() => {
+  const ipc = taskStatsData.value?.arrowIpc
+  if (!ipc) return []
+  return decodeArrowIpc(ipc).rows as TaskStatRow[]
+})
+
+const orderedTaskStats = computed(() => taskStatsRows.value.slice().reverse())
+
 const cpuHistory = computed(() =>
-  (task.value?.resourceHistory ?? []).map(r => (r.cpuMillicores ?? 0) / 1000)
+  orderedTaskStats.value.map((r) => Number(r.cpu_millicores ?? 0) / 1000)
 )
 const memHistory = computed(() =>
-  (task.value?.resourceHistory ?? []).map(r => r.memoryMb ? parseFloat(r.memoryMb) : 0)
+  orderedTaskStats.value.map((r) => Number(r.memory_mb ?? 0))
 )
 
 // Use job-level resource limits for gauge totals when available.
@@ -116,15 +158,29 @@ const { active: autoRefreshActive, start: startRefresh, stop: stopRefresh } = us
   5_000,
   false,
 )
+const { start: startStatsRefresh, stop: stopStatsRefresh } = useAutoRefresh(
+  fetchTaskStats,
+  5_000,
+  false,
+)
 
 watch(isActive, (active) => {
-  if (active) startRefresh()
-  else stopRefresh()
+  if (active) {
+    startRefresh()
+    startStatsRefresh()
+  } else {
+    stopRefresh()
+    stopStatsRefresh()
+  }
 })
 
 onMounted(async () => {
   await fetchTask()
-  if (isActive.value) startRefresh()
+  fetchTaskStats()
+  if (isActive.value) {
+    startRefresh()
+    startStatsRefresh()
+  }
 })
 
 const router = useRouter()
@@ -152,9 +208,15 @@ function selectAttempt(attemptId: number) {
 // Clear stale data first so loading/error states render correctly if the fetch fails.
 watch(() => props.taskId, async () => {
   taskResponse.value = null
+  taskStatsData.value = null
   stopRefresh()
+  stopStatsRefresh()
   await fetchTask()
-  if (isActive.value) startRefresh()
+  fetchTaskStats()
+  if (isActive.value) {
+    startRefresh()
+    startStatsRefresh()
+  }
 })
 </script>
 

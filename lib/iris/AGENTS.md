@@ -58,6 +58,10 @@ Always run `build:check` after editing `.vue` or `.ts` files to catch type error
 - Avoid `TYPE_CHECKING`. Use real imports. If you hit a cycle, prefer refactoring or use a `Protocol` at the boundary.
 - Prefer spiral plans: each stage should be independently testable (proto → server stub → client wiring → end-to-end test).
 
+### Decisions vs measurements
+
+The controller SQLite DB stores the *registry and decisions*: worker liveness verdict, task↔worker assignments, scheduling state. Time-series *measurements* (per-tick utilization, per-attempt resource snapshots) live in the finelog stats namespaces (`iris.worker`, `iris.task`) and are queried via the controller-bundled StatsService. New columns that record measurements should be added as stats namespaces, not controller tables.
+
 ## Environment Variables
 
 Never use `os.environ` to pass env vars to Iris jobs. Tasks run in Docker containers — the submitter's process environment is not available inside the container.

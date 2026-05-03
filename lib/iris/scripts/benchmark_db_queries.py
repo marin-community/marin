@@ -96,8 +96,6 @@ _CLONE_TABLES = [
     "worker_attributes",
     "dispatch_queue",
     "worker_task_history",
-    "worker_resource_history",
-    "task_resource_history",
     "endpoints",
     "reservation_claims",
     "meta",
@@ -601,25 +599,6 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
             f"apply_heartbeats_batch ({len(heartbeat_requests)}w, {total_tasks}t)",
             lambda: hb_transitions.apply_heartbeats_batch(heartbeat_requests),
         )
-
-        # prune_worker_resource_history runs in the background prune loop every
-        # 10 minutes. It was previously inlined into apply_heartbeats_batch as
-        # a per-worker SELECT+DELETE pair, adding ~N*2 queries to each sync
-        # cycle's write transaction. Benchmark it here so we can track its cost
-        # as a background operation.
-        workers_over_limit = hb_db.fetchall(
-            "SELECT COUNT(DISTINCT worker_id) as cnt FROM worker_resource_history "
-            "GROUP BY worker_id HAVING COUNT(*) >= ?",
-            (500,),
-        )
-        n_over = len(workers_over_limit)
-        if n_over:
-            bench(
-                f"prune_worker_resource_history ({n_over} workers over limit)",
-                lambda: hb_transitions.prune_worker_resource_history(),
-            )
-        else:
-            print("  prune_worker_resource_history                     (skipped, no workers over limit)")
     finally:
         hb_db.close()
         shutil.rmtree(hb_db._db_dir, ignore_errors=True)
