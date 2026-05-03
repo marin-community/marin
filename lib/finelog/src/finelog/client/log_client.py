@@ -3,27 +3,16 @@
 
 """Top-level finelog client.
 
-:class:`LogClient` is the single client surface for both the legacy log
-service (``write_batch`` / ``query``, mirroring today's ``LogPusher`` and
-``LogServiceProxy.fetch_logs``) and the new stats service
-(``get_table`` / ``drop_table``). Internally every write — log entries
-included — flows through a per-namespace :class:`Table`, which owns the
-in-memory buffer and the background flush thread that used to live in
-``LogPusher``.
+:class:`LogClient` is the single client surface for the stats service.
+The privileged ``log`` namespace (``write_batch`` / ``query``) and
+arbitrary user namespaces (``get_table`` / ``drop_table``) all flow
+through ``StatsService.WriteRows`` for writes and ``StatsService.Query``
+for reads. Each namespace owns a :class:`Table` with an in-memory buffer
+and a background flush thread.
 
-The two namespaces presented to callers are:
-
-* ``log`` — the privileged log namespace. ``write_batch`` / ``query``
-  delegate to it via the legacy ``LogService`` RPCs (PushLogs / FetchLogs),
-  preserving the on-the-wire shape and the existing server impl.
-* any other registered namespace — created via ``get_table`` and backed by
-  ``StatsService.WriteRows`` for writes and a per-table client-side
-  buffer.
-
-The implementation is sync and uses one ``LogServiceClientSync`` plus one
-``StatsServiceClientSync`` against the resolved endpoint. Resolver
-invalidation on connection-refused mirrors the old ``LogPusher`` behavior;
-the cached client is dropped and re-resolved on the next attempt.
+The implementation is sync and holds one ``StatsServiceClientSync``
+against the resolved endpoint. On a connection-refused error the cached
+client is dropped and the resolver is invoked again on the next attempt.
 """
 
 from __future__ import annotations
@@ -62,7 +51,6 @@ from finelog.errors import (
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
-from finelog.rpc.logging_connect import LogServiceClientSync
 from finelog.store.log_namespace import LOG_REGISTERED_SCHEMA
 from finelog.store.schema import (
     IMPLICIT_SEQ_COLUMN,
@@ -73,7 +61,8 @@ from finelog.store.schema import (
     schema_to_arrow,
     schema_to_proto,
 )
-from finelog.types import is_retryable_error
+from finelog.store.sql_escape import quote_literal
+from finelog.types import REGEX_META_RE, is_retryable_error, parse_attempt_id, str_to_log_level
 
 # Detached from the root logger: ``RemoteLogHandler`` lives on the root
 # logger and writes through the ``log`` Table, so any diagnostics that
@@ -525,7 +514,6 @@ class LogClient:
 
         self._lock = threading.Lock()
         self._closed = False
-        self._log_client: LogServiceClientSync | None = None
         self._stats_client: StatsServiceClientSync | None = None
 
         # Open Tables keyed by namespace. The log namespace's Table is
@@ -583,15 +571,8 @@ class LogClient:
             tbl.close()
         with self._lock:
             self._closed = True
-            log_client = self._log_client
             stats_client = self._stats_client
-            self._log_client = None
             self._stats_client = None
-        if log_client is not None:
-            try:
-                log_client.close()
-            except Exception:
-                logger.debug("LogClient.close: log client close raised", exc_info=True)
         if stats_client is not None:
             try:
                 stats_client.close()
@@ -607,12 +588,13 @@ class LogClient:
         if not messages:
             return
         table = self._get_log_table()
-        table.write([(key, list(messages))])
+        table.write(_log_entries_to_rows(key, messages))
 
     def query(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
-        """Read from the ``log`` namespace via the legacy FetchLogs RPC."""
-        client = self._get_log_client()
-        return client.fetch_logs(request)
+        """Read from the ``log`` namespace via ``StatsService.Query``."""
+        sql = _logs_query_sql(request)
+        result = self._stats_query(sql)
+        return _logs_query_response_from_arrow(result, request)
 
     def flush(self, timeout: float | None = None) -> FlushResult:
         """Flush the ``log`` namespace's Table, if any.
@@ -708,30 +690,17 @@ class LogClient:
                 return tbl
             if self._closed:
                 raise RuntimeError("LogClient is closed")
+            # The "log" namespace is auto-registered server-side; skip
+            # register_table here.
             tbl = Table(
                 namespace=LOG_NAMESPACE,
                 schema=LOG_REGISTERED_SCHEMA,
-                flusher=self._log_flush,
-                row_encoder=_encode_log_row,
+                flusher=self._stats_flush,
+                row_encoder=_make_stats_row_encoder(schema_to_arrow(LOG_REGISTERED_SCHEMA), LOG_REGISTERED_SCHEMA),
                 thread_name="finelog-log-client",
             )
             self._tables[LOG_NAMESPACE] = tbl
             return tbl
-
-    def _get_log_client(self) -> LogServiceClientSync:
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("LogClient is closed")
-            if self._log_client is not None:
-                return self._log_client
-            address = self._resolve()
-            self._log_client = LogServiceClientSync(
-                address=address,
-                timeout_ms=self._timeout_ms,
-                interceptors=self._interceptors,
-            )
-            logger.info("LogClient resolved %s -> %s (log)", self._server_url, address)
-            return self._log_client
 
     def _get_stats_client(self) -> StatsServiceClientSync:
         with self._lock:
@@ -756,40 +725,15 @@ class LogClient:
 
     def _invalidate(self, reason: str) -> None:
         with self._lock:
-            log_client = self._log_client
             stats_client = self._stats_client
-            self._log_client = None
             self._stats_client = None
-        if log_client is None and stats_client is None:
+        if stats_client is None:
             return
         logger.info("LogClient: invalidating cached endpoint for %s (%s)", self._server_url, reason)
-        for c in (log_client, stats_client):
-            if c is None:
-                continue
-            try:
-                c.close()
-            except Exception:
-                logger.debug("LogClient invalidate: cached client close raised", exc_info=True)
-
-    # --- log namespace flusher ---
-
-    def _log_flush(self, _ns: str, payloads: list[tuple[str, list[logging_pb2.LogEntry]]]) -> None:
-        """Flush log-namespace items. Each payload is ``(key, [LogEntry, ...])``."""
-        # Group by key — multiple writes to different keys may have piled up.
-        grouped: dict[str, list[logging_pb2.LogEntry]] = {}
-        for key, entries in payloads:
-            grouped.setdefault(key, []).extend(entries)
-        client = self._get_log_client()
         try:
-            for key, entries in grouped.items():
-                client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
-        except ConnectError as exc:
-            if is_retryable_error(exc):
-                self._invalidate(_format_exc_summary(exc))
-            raise
-        except (ConnectionError, OSError, TimeoutError) as exc:
-            self._invalidate(_format_exc_summary(exc))
-            raise
+            stats_client.close()
+        except Exception:
+            logger.debug("LogClient invalidate: cached client close raised", exc_info=True)
 
     # --- stats namespace query ---
 
@@ -884,14 +828,109 @@ def _make_stats_row_encoder(arrow_schema: pa.Schema, schema: Schema) -> Callable
     return encode
 
 
-def _encode_log_row(row: tuple[str, list[logging_pb2.LogEntry]]) -> tuple[tuple[str, list[logging_pb2.LogEntry]], int]:
-    """Row encoder for the log namespace.
+def _log_entries_to_rows(key: str, messages: Sequence[logging_pb2.LogEntry]) -> list[Any]:
+    """Widen LogEntry protos into rows matching LOG_REGISTERED_SCHEMA columns."""
+    rows: list[Any] = []
+    for entry in messages:
+        rows.append(
+            types.SimpleNamespace(
+                key=key,
+                source=entry.source,
+                data=entry.data,
+                epoch_ms=entry.timestamp.epoch_ms,
+                level=int(entry.level),
+            )
+        )
+    return rows
 
-    Each row is a ``(key, [LogEntry, ...])`` tuple; the byte cost is the
-    exact serialized proto size, matching the WriteRows body cap.
+
+_LOG_QUERY_COLUMNS = ("seq", "key", "source", "data", "epoch_ms", "level")
+
+# Default row cap when callers leave ``max_lines`` unset; mirrors the
+# old LogServiceImpl.fetch_logs default.
+_DEFAULT_FETCH_MAX_LINES = 1000
+
+
+def _logs_query_sql(request: logging_pb2.FetchLogsRequest) -> str:
+    """Translate a FetchLogsRequest into SQL against the ``log`` view.
+
+    ``source`` is matched literally when it has no regex metacharacters;
+    otherwise it is passed to ``regexp_matches``. ``min_level`` always
+    keeps level=UNKNOWN rows so unparsed lines remain visible.
     """
-    _key, entries = row
-    return row, sum(e.ByteSize() for e in entries)
+    where_parts: list[str] = []
+    source = request.source
+
+    if source:
+        if REGEX_META_RE.search(source):
+            where_parts.append(f"regexp_matches(key, {quote_literal(source)})")
+        else:
+            where_parts.append(f"key = {quote_literal(source)}")
+
+    cursor = request.cursor
+    if cursor:
+        where_parts.append(f"seq > {int(cursor)}")
+
+    if request.since_ms:
+        where_parts.append(f"epoch_ms > {int(request.since_ms)}")
+
+    if request.substring:
+        where_parts.append(f"contains(data, {quote_literal(request.substring)})")
+
+    min_level_enum = str_to_log_level(request.min_level)
+    if min_level_enum > 0:
+        where_parts.append(f"(level = 0 OR level >= {int(min_level_enum)})")
+
+    max_lines = request.max_lines if request.max_lines > 0 else _DEFAULT_FETCH_MAX_LINES
+
+    where_clause = " WHERE " + " AND ".join(where_parts) if where_parts else ""
+    order = "ORDER BY seq DESC" if request.tail else "ORDER BY seq"
+    select_cols = ", ".join(_LOG_QUERY_COLUMNS)
+
+    return f'SELECT {select_cols} FROM "{LOG_NAMESPACE}"' f"{where_clause} {order} LIMIT {int(max_lines)}"
+
+
+def _logs_query_response_from_arrow(
+    table: pa.Table,
+    request: logging_pb2.FetchLogsRequest,
+) -> logging_pb2.FetchLogsResponse:
+    """Decode an Arrow result into FetchLogsResponse.
+
+    Tail-mode rows arrive newest-first; we reverse them so callers always
+    see chronological output. The returned cursor is max(seq).
+    """
+    seqs = table.column("seq").to_pylist()
+    keys = table.column("key").to_pylist()
+    sources = table.column("source").to_pylist()
+    datas = table.column("data").to_pylist()
+    epochs = table.column("epoch_ms").to_pylist()
+    levels = table.column("level").to_pylist()
+
+    rows: list[tuple] = list(zip(seqs, keys, sources, datas, epochs, levels, strict=True))
+
+    if request.tail and request.max_lines > 0:
+        rows.reverse()
+
+    if not rows:
+        return logging_pb2.FetchLogsResponse(entries=[], cursor=request.cursor)
+
+    is_pattern = bool(REGEX_META_RE.search(request.source)) if request.source else True
+    fixed_attempt = parse_attempt_id(request.source) if (request.source and not is_pattern) else 0
+
+    entries = []
+    for seq, key, source, data, epoch_ms, level in rows:
+        del seq  # cursor uses the max below
+        entry = logging_pb2.LogEntry(source=source, data=data, level=level)
+        entry.timestamp.epoch_ms = epoch_ms
+        if is_pattern:
+            entry.key = key
+            entry.attempt_id = parse_attempt_id(key)
+        else:
+            entry.attempt_id = fixed_attempt
+        entries.append(entry)
+
+    max_seq = max(seqs)
+    return logging_pb2.FetchLogsResponse(entries=entries, cursor=max_seq)
 
 
 _MISSING = object()

@@ -35,6 +35,8 @@ from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 from starlette.testclient import TestClient
 
+from tests.cluster.conftest import fake_log_client_from_service
+
 from .conftest import (
     check_task_can_be_scheduled,
     make_test_entrypoint,
@@ -165,35 +167,37 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 
 
 @pytest.fixture
-def service(state, scheduler, tmp_path):
+def log_service() -> LogServiceImpl:
+    return LogServiceImpl()
+
+
+@pytest.fixture
+def service(state, scheduler, tmp_path, log_service):
     controller_mock = _make_controller_mock(state, scheduler)
-    log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
         state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
 
 
 @pytest.fixture
-def client(service):
-    dashboard = ControllerDashboard(service, log_service=service._log_service)
+def client(service, log_service):
+    dashboard = ControllerDashboard(service, log_service=log_service)
     return TestClient(dashboard.app)
 
 
 @pytest.fixture
-def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
-    """Service with autoscaler enabled for tests."""
+def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_service):
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
-    log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
         state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
 
 
@@ -592,9 +596,9 @@ def mock_autoscaler():
 
 
 @pytest.fixture
-def client_with_autoscaler(service_with_autoscaler):
+def client_with_autoscaler(service_with_autoscaler, log_service):
     """Dashboard test client with autoscaler enabled."""
-    dashboard = ControllerDashboard(service_with_autoscaler, log_service=service_with_autoscaler._log_service)
+    dashboard = ControllerDashboard(service_with_autoscaler, log_service=log_service)
     return TestClient(dashboard.app)
 
 
@@ -1114,14 +1118,12 @@ def test_auth_config_returns_disabled_by_default(client):
     assert data["provider"] is None
 
 
-def test_auth_config_returns_enabled_when_verifier_set(service):
+def test_auth_config_returns_enabled_when_verifier_set(service, log_service):
     """Auth config endpoint reports auth enabled with provider name."""
     from iris.rpc.auth import StaticTokenVerifier
 
     verifier = StaticTokenVerifier({"test-token": "test-user"})
-    dashboard = ControllerDashboard(
-        service, log_service=service._log_service, auth_verifier=verifier, auth_provider="gcp"
-    )
+    dashboard = ControllerDashboard(service, log_service=log_service, auth_verifier=verifier, auth_provider="gcp")
     authed_client = TestClient(dashboard.app)
 
     resp = authed_client.get("/auth/config")
@@ -1149,9 +1151,9 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
         state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
-    dashboard = ControllerDashboard(svc, log_service=svc._log_service)
+    dashboard = ControllerDashboard(svc, log_service=log_service)
     k8s_client = TestClient(dashboard.app)
 
     resp = k8s_client.get("/auth/config")
@@ -1181,9 +1183,9 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
         state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
-    dashboard = ControllerDashboard(svc, log_service=svc._log_service)
+    dashboard = ControllerDashboard(svc, log_service=log_service)
     return TestClient(dashboard.app), k8s, provider
 
 

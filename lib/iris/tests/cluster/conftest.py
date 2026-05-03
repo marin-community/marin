@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from unittest.mock import Mock
 
 import pytest
+from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
@@ -36,6 +37,24 @@ from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
+
+
+class _FakeLogClientFromService:
+    """LogClient.query adapter that delegates to an in-process LogServiceImpl."""
+
+    def __init__(self, log_service: LogServiceImpl) -> None:
+        self._log_service = log_service
+
+    def query(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
+        return self._log_service.fetch_logs(request, ctx=None)
+
+    def close(self) -> None:
+        return
+
+
+def fake_log_client_from_service(log_service: LogServiceImpl) -> _FakeLogClientFromService:
+    return _FakeLogClientFromService(log_service)
+
 
 # ---------------------------------------------------------------------------
 # Constraint builders
@@ -426,7 +445,7 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
         store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
     )
 
     return ServiceTestHarness(
@@ -452,7 +471,7 @@ def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
         store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
     )
 
     return ServiceTestHarness(

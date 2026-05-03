@@ -1208,7 +1208,7 @@ class Controller:
             self._store,
             controller=self,
             bundle_store=self._bundle_store,
-            log_service=self._remote_log_service,
+            log_client=self._log_client,
             auth=config.auth,
             system_endpoints={},
             user_budget_defaults=config.user_budget_defaults,

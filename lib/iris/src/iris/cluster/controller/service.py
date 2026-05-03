@@ -23,9 +23,8 @@ from typing import Any, Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
-from finelog.client.proxy import LogServiceProxy
+from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from finelog.server import LogServiceImpl
 from rigging.timing import Timer, Timestamp
 
 from iris.cluster.bundle import BundleStore
@@ -1042,7 +1041,7 @@ class ControllerServiceImpl:
         store: Controller store bundle (per-entity stores + transaction / read_snapshot).
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
-        log_service: LogService for fetching logs (in-process or remote proxy).
+        log_client: LogClient for reading task logs through StatsService.Query.
     """
 
     def __init__(
@@ -1051,7 +1050,7 @@ class ControllerServiceImpl:
         store: ControllerStore,
         controller: ControllerProtocol,
         bundle_store: BundleStore,
-        log_service: LogServiceImpl | LogServiceProxy,
+        log_client: LogClient,
         auth: ControllerAuth | None = None,
         system_endpoints: dict[str, str] | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
@@ -1061,7 +1060,7 @@ class ControllerServiceImpl:
         self._db = store._db
         self._controller = controller
         self._bundle_store = bundle_store
-        self._log_service = log_service
+        self._log_client = log_client
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
@@ -2053,7 +2052,7 @@ class ControllerServiceImpl:
             min_level=request.min_level,
         )
 
-        fetch_response = self._log_service.fetch_logs(fetch_request, ctx)
+        fetch_response = self._log_client.query(fetch_request)
         entries = fetch_response.entries
 
         batch = controller_pb2.Controller.TaskLogBatch(

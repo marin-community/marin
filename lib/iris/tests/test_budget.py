@@ -26,6 +26,7 @@ from iris.rpc.auth import VerifiedIdentity, _verified_identity
 from iris.rpc.proto_utils import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
 from rigging.timing import Timestamp
 
+from tests.cluster.conftest import fake_log_client_from_service
 from tests.cluster.controller.conftest import (
     MockController,
     make_controller_state,
@@ -277,7 +278,7 @@ def service(state, tmp_path) -> ControllerServiceImpl:
         state._store,
         controller=MockController(),
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=ControllerAuth(provider="static"),
     )
 

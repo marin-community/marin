@@ -11,8 +11,8 @@ import logging
 import subprocess
 from dataclasses import dataclass, field
 
+from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from finelog.rpc.logging_connect import LogServiceClientSync
 
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.types import JobName
@@ -120,7 +120,7 @@ def gather_bug_report(
     """Gather all diagnostic data for a job into a BugReport."""
     interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
     client = ControllerServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
-    log_client = LogServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
+    log_client = LogClient.connect(controller_url, timeout_ms=30000, interceptors=interceptors)
     try:
         return _gather(client, log_client, job_id, tail=tail)
     finally:
@@ -130,7 +130,7 @@ def gather_bug_report(
 
 def _gather(
     client: ControllerServiceClientSync,
-    log_client: LogServiceClientSync,
+    log_client: LogClient,
     job_id: JobName,
     *,
     tail: int,
@@ -160,7 +160,7 @@ def _gather(
         try:
             # Fetch all attempts for this task, taking only the last `tail` lines.
             source = build_log_source(JobName.from_wire(task.task_id))
-            log_resp = log_client.fetch_logs(
+            log_resp = log_client.query(
                 logging_pb2.FetchLogsRequest(
                     source=source,
                     max_lines=tail,

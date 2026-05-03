@@ -48,15 +48,9 @@ def k8s() -> InMemoryK8sService:
 
 @pytest.fixture
 def log_service() -> LogServiceImpl:
-    svc = LogServiceImpl()
-    original_fetch = svc.fetch_logs
-
-    def fetch_logs(request, ctx):
-        svc._log_store._compact_step()
-        return original_fetch(request, ctx)
-
-    svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
-    return svc
+    # Memory-mode store: pushes are visible to queries immediately, no
+    # compaction needed.
+    return LogServiceImpl()
 
 
 @pytest.fixture

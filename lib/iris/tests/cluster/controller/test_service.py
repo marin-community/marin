@@ -31,6 +31,8 @@ from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
+from tests.cluster.conftest import fake_log_client_from_service
+
 from .conftest import (
     make_job_request,
     make_test_entrypoint,
@@ -692,7 +694,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -723,7 +725,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -1282,7 +1284,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=auth,
     )
 
@@ -1318,7 +1320,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=auth,
     )
 

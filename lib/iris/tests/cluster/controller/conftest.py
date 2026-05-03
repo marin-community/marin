@@ -67,6 +67,7 @@ from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 
+from tests.cluster.conftest import fake_log_client_from_service
 from tests.cluster.providers.conftest import make_mock_platform
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
@@ -157,7 +158,10 @@ def log_service(state, tmp_path) -> LogServiceImpl:
     original_fetch = svc.fetch_logs
 
     def fetch_logs(request, ctx):
-        svc._log_store._compact_step()
+        # Force a flush + compaction so just-pushed data is queryable
+        # within the same test, bypassing the production 1s bg tick.
+        svc._log_store._force_flush()
+        svc._log_store._force_compaction()
         return original_fetch(request, ctx)
 
     svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
@@ -173,7 +177,7 @@ def controller_service(state, log_service, mock_controller, tmp_path) -> Control
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
 
 
