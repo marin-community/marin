@@ -19,11 +19,13 @@ from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.inference_ctx.render import AssistantTurnParseResult, ToolSpec
 
 # TODO(chris): use a different weight transfer method update model, take it out from here
 from marin.rl.weight_transfer.arrow_flight import update_model
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
+from openai.types.chat.chat_completion import Choice
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +98,12 @@ class LevanterInferenceContext(BaseInferenceContext):
         top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
+        tools: list[ToolSpec] | None = None,
     ) -> list[ChatCompletion]:
         """Call OpenAI API in batches with concurrency control."""
+        if tools:
+            raise NotImplementedError("LevanterInferenceContext does not support tool-calling prompts.")
+
         if max_tokens is None:
             max_tokens = self.max_tokens
 
@@ -144,3 +150,6 @@ class LevanterInferenceContext(BaseInferenceContext):
         loop.close()
 
         return all_completions
+
+    def assistant_turn_from_choice(self, choice: Choice) -> AssistantTurnParseResult:
+        raise NotImplementedError("LevanterInferenceContext does not support structured tool-call parsing.")

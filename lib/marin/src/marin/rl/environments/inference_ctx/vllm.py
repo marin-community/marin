@@ -11,7 +11,7 @@ from enum import StrEnum
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import load_tokenizer
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.inference_ctx.base import AssistantTurnParseResult, BaseInferenceContext, ToolSpec
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
 from marin.rl.environments.inference_ctx.render import Llama3Renderer, Message, Qwen3Renderer, Renderer
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
@@ -134,7 +134,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         else:
             raise ValueError(f"Unsupported model type for {model_name}. Only Qwen3 and Llama3.1 models are supported.")
 
-    def _render_messages_to_tokens(self, messages: list[Message]) -> list[int]:
+    def _render_messages_to_tokens(self, messages: list[Message], tools: list[ToolSpec] | None = None) -> list[int]:
         """Render a list of messages to token IDs using the appropriate renderer.
 
         Uses the renderer's build_generation_prompt method to generate the complete
@@ -146,7 +146,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         Returns:
             List of token IDs ready to be passed to vLLM
         """
-        return self.renderer.build_generation_prompt(messages)
+        return self.renderer.build_generation_prompt(messages, tools=tools)
 
     @staticmethod
     def _patch_tpu_inference_registry():
@@ -322,6 +322,10 @@ class vLLMInferenceContext(BaseInferenceContext):
     def shutdown(self) -> None:
         pass
 
+    def assistant_turn_from_choice(self, choice: Choice) -> AssistantTurnParseResult:
+        response_tokens = self.response_tokens_from_choice(choice)
+        return self.renderer.parse_response(response_tokens.tolist())
+
     def batch_completions(
         self,
         prompts: list[str] | list[list[dict]],
@@ -331,6 +335,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
+        tools: list[ToolSpec] | None = None,
     ) -> list[ChatCompletion]:
         """Batch completions from the inference server.
 
@@ -341,6 +346,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             max_tokens: Maximum tokens to generate
             stop: Stop sequences
             system_prompt: Optional system prompt (only used if prompts are strings)
+            tools: Optional tool schemas to render into the prompt
         """
         if SamplingParams is None:
             raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
@@ -376,7 +382,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         # Render messages to token IDs using the appropriate renderer
         prompt_token_ids = []
         for messages in message_lists:
-            tokens = self._render_messages_to_tokens(messages)
+            tokens = self._render_messages_to_tokens(messages, tools=tools)
             prompt_token_ids.append(tokens)
 
         # Pass token IDs directly to vLLM
