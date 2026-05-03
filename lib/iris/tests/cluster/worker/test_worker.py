@@ -7,7 +7,7 @@ import hashlib
 import socket
 import time
 import zipfile
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from connectrpc.request import RequestContext
@@ -23,6 +23,7 @@ from iris.cluster.runtime.types import (
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
+from iris.cluster.worker.stats import IrisTaskStat, IrisWorkerStat
 from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
@@ -836,14 +837,11 @@ def _ping_request() -> worker_pb2.Worker.PingRequest:
 
 def test_handle_ping_emits_worker_stat(mock_worker):
     """One handle_ping call produces one row on the iris.worker table."""
-    from iris.cluster.worker.stats import IrisWorkerStat
-
     table = _FakeStatsTable()
     mock_worker._worker_stats_table = table
     mock_worker._worker_id = "w-test"
 
-    response = mock_worker.handle_ping(_ping_request())
-    assert response.healthy is True or response.healthy is False  # health probe may pass or fail
+    mock_worker.handle_ping(_ping_request())
 
     assert len(table.writes) == 1
     rows = table.writes[0]
@@ -880,8 +878,6 @@ def test_handle_ping_no_table_is_noop(mock_worker):
 
 def test_attempt_emits_task_stat_when_resource_usage_collected(mock_worker, mock_runtime):
     """Each poll loop iteration that collects ContainerStats writes one iris.task row."""
-    from iris.cluster.worker.stats import IrisTaskStat
-
     table = _FakeStatsTable()
     # Inject the task stats table into the worker so submit_task wires it via log_client.
     # Simpler: run a task and patch the attempt's _task_stats_table directly before run.
@@ -1199,8 +1195,6 @@ def test_start_wires_log_client_into_adopted_attempts(mock_bundle_store, mock_ru
     without a real controller or finelog server. ``get_table`` is patched so
     the eager iris.worker / iris.task registration in ``start()`` succeeds.
     """
-    from unittest.mock import MagicMock, patch
-
     container = _make_discovered_container()
     mock_runtime.discover_containers = Mock(return_value=[container])
 
@@ -1244,8 +1238,6 @@ def test_preserve_containers_then_new_worker_adopts_with_live_log_client(mock_bu
     restart must end with adopted attempts pointed at the *new* worker's live
     client and tables.
     """
-    from unittest.mock import MagicMock, patch
-
     from iris.managed_thread import ThreadContainer
 
     container = _make_discovered_container(worker_id="worker-rt")
@@ -1545,8 +1537,6 @@ def test_docker_worker_restart_round_trip_adopts_surviving_container(docker_runt
     identity. This exercises the real discover_containers / adopt_container
     path through Worker.start(), which the mock-runtime test cannot.
     """
-    from unittest.mock import MagicMock, patch
-
     from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
     from iris.managed_thread import ThreadContainer
 

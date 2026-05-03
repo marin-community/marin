@@ -6,8 +6,6 @@
 from datetime import datetime
 
 from iris.cluster.worker.stats import (
-    TASK_STATS_NAMESPACE,
-    WORKER_STATS_NAMESPACE,
     IrisTaskStat,
     IrisWorkerStat,
     WorkerStatus,
@@ -15,11 +13,6 @@ from iris.cluster.worker.stats import (
     build_worker_stat,
 )
 from iris.rpc import job_pb2
-
-
-def test_namespace_constants():
-    assert WORKER_STATS_NAMESPACE == "iris.worker"
-    assert TASK_STATS_NAMESPACE == "iris.task"
 
 
 def test_build_worker_stat_shape():
