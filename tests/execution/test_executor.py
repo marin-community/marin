@@ -9,6 +9,7 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass
 from threading import Event, Thread
+from typing import NamedTuple
 
 import pytest
 from draccus.utils import Dataclass
@@ -793,6 +794,30 @@ def test_tuple_values_are_resolved_in_executor_configs():
         "/out/tracker",
         {"mirrored": "mirror://documents/data"},
     )
+
+
+def test_namedtuple_values_are_resolved_without_losing_type():
+    class Coords(NamedTuple):
+        x: object
+        y: object
+
+    @dataclass(frozen=True)
+    class Cfg:
+        coords: Coords
+
+    dependency = ExecutorStep(name="dependency", fn=lambda _: None, config=None)
+    cfg = Cfg(
+        coords=Coords(
+            output_path_of(dependency, "artifact"),
+            this_output_path("tracker"),
+        )
+    )
+
+    resolved = instantiate_config(cfg, output_path="/out", output_paths={dependency: "/dependency"}, prefix="/bucket")
+
+    assert isinstance(resolved.coords, Coords)
+    assert resolved.coords.x == "/dependency/artifact"
+    assert resolved.coords.y == "/out/tracker"
 
 
 def test_mirrored_nesting_raises():
