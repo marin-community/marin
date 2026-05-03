@@ -244,19 +244,39 @@ class Worker:
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
 
     def start(self) -> None:
-        # Build the LogClient *before* adopting containers so adopted attempts
-        # capture a live client rather than a permanent ``None`` (regression #5261).
-        # The client only depends on auth + the resolver callback, neither of
-        # which need the uvicorn server or controller client to exist yet.
+        # Ordering matters here. Three invariants drive it:
+        #   1. LogClient must exist before adoption so adopted attempts capture
+        #      a live client (regression #5261). LogClient.connect is pure
+        #      construction — no I/O — so it can come first cheaply.
+        #   2. iris.worker / iris.task tables must be registered before adoption
+        #      runs. TaskAttempt.__init__ eagerly calls log_client.get_table,
+        #      which goes through the resolver (_resolve_log_service) — and the
+        #      resolver requires self._controller_client to be set. After the
+        #      controller_client is built and the tables are registered once,
+        #      the per-attempt get_table inside adoption is a cache hit.
+        #   3. The uvicorn server must be up before we register with the
+        #      controller, so the controller's first ping lands on a ready
+        #      worker. Lifecycle thread is spawned last for that reason.
         interceptors: tuple[AuthTokenInjector, ...] = ()
         if self._config.controller_address and self._config.auth_token:
             interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
+
         if self._config.controller_address:
             self._log_client = LogClient.connect(
                 "/system/log-server",
                 interceptors=interceptors,
                 resolver=self._resolve_log_service,
             )
+            self._controller_client = ControllerServiceClientSync(
+                address=self._config.controller_address,
+                timeout_ms=10_000,
+                interceptors=interceptors,
+            )
+            # Register stats namespaces eagerly. Schema bugs surface here at
+            # startup rather than silently producing empty namespaces.
+            assert self._log_client is not None
+            self._worker_stats_table = self._log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
+            self._task_stats_table = self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
 
         # Try to adopt running containers from a previous worker process.
         # If adoption succeeds, skip the destructive cleanup that would kill them.
@@ -264,7 +284,8 @@ class Worker:
         if adopted == 0:
             self._cleanup_all_iris_containers()
 
-        # Start HTTP server
+        # Bring the HTTP server up last so the worker is ready to serve
+        # controller pings the moment registration completes.
         # timeout_keep_alive=120: default 5s races with controller heartbeat intervals,
         # causing TCP resets on idle connections.
         self._server = uvicorn.Server(
@@ -278,29 +299,13 @@ class Worker:
             )
         )
         self._threads.spawn_server(self._server, name="worker-server")
-
-        # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server.started,
             timeout=Duration.from_seconds(5.0),
         )
 
-        # Create controller client if controller configured
+        # Start lifecycle thread: register + serve + reset loop
         if self._config.controller_address:
-            self._controller_client = ControllerServiceClientSync(
-                address=self._config.controller_address,
-                timeout_ms=10_000,
-                interceptors=interceptors,
-            )
-
-            # Register stats namespaces eagerly. The LogClient resolver depends on
-            # _controller_client, so this must follow its construction. Schema bugs
-            # surface here at startup rather than silently producing empty namespaces.
-            assert self._log_client is not None
-            self._worker_stats_table = self._log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
-            self._task_stats_table = self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
-
-            # Start lifecycle thread: register + serve + reset loop
             self._threads.spawn(target=self._run_lifecycle, name="worker-lifecycle")
 
     def _cleanup_all_iris_containers(self) -> None:

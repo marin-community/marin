@@ -1235,6 +1235,149 @@ def test_start_wires_log_client_into_adopted_attempts(mock_bundle_store, mock_ru
             worker.stop()
 
 
+def test_preserve_containers_then_new_worker_adopts_with_live_log_client(mock_bundle_store, mock_runtime, tmp_path):
+    """Round-trip: worker A stops with preserve_containers=True, worker B adopts.
+
+    Asserts that worker B's adopted TaskAttempts capture B's live LogClient and
+    B's freshly registered stats tables — not stale references to A's. This is
+    the wiring contract that the Worker.start() ordering must keep intact: every
+    restart must end with adopted attempts pointed at the *new* worker's live
+    client and tables.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from iris.managed_thread import ThreadContainer
+
+    container = _make_discovered_container(worker_id="worker-rt")
+    # Same container survives across the stop/start; mock_runtime keeps reporting
+    # it from discover_containers because preserve_containers=True leaves it
+    # running in real life. Adopt with an always-running status so the monitor
+    # thread doesn't drive the task to FAILED before assertions.
+    always_running = [ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000
+    mock_runtime.discover_containers = Mock(return_value=[container])
+    mock_runtime.adopt_container = Mock(
+        side_effect=lambda cid: create_mock_container_handle(status_sequence=always_running)
+    )
+
+    def make_config():
+        return WorkerConfig(
+            port=0,
+            port_range=(50000, 50200),
+            cache_dir=tmp_path / "cache",
+            default_task_image="mock-image",
+            controller_address="http://127.0.0.1:1",
+            poll_interval=Duration.from_seconds(0.05),
+            worker_id="worker-rt",
+        )
+
+    fake_a = MagicMock(name="log_client_A")
+    fake_a.get_table.side_effect = lambda ns, schema: MagicMock(name=f"table_A:{ns}")
+    fake_b = MagicMock(name="log_client_B")
+    fake_b.get_table.side_effect = lambda ns, schema: MagicMock(name=f"table_B:{ns}")
+
+    # Phase A: start worker A and verify it captured fake_a end-to-end.
+    worker_a = Worker(
+        make_config(),
+        bundle_store=mock_bundle_store,
+        container_runtime=mock_runtime,
+        threads=ThreadContainer(name="worker-a"),
+    )
+    with (
+        patch("iris.cluster.worker.worker.LogClient.connect", return_value=fake_a),
+        patch.object(worker_a, "_cleanup_all_iris_containers"),
+    ):
+        try:
+            worker_a.start()
+            assert worker_a._log_client is fake_a
+            assert worker_a._task_stats_table is not None
+            task_a = worker_a.get_task(container.task_id, container.attempt_id)
+            assert task_a is not None
+            # Task identity propagated from DiscoveredContainer.
+            assert task_a.task_id == JobName.from_wire(container.task_id)
+            assert task_a.attempt_id == container.attempt_id
+            assert task_a.container_id == "container123"
+            assert task_a.has_container
+            assert task_a.status == job_pb2.TASK_STATE_RUNNING
+            assert task_a._log_client is fake_a
+            assert task_a._task_stats_table is not None
+            stats_table_a = worker_a._task_stats_table
+
+            # Worker A's PollTasks should report the adopted task as RUNNING.
+            poll_resp_a = worker_a.handle_poll_tasks(
+                worker_pb2.Worker.PollTasksRequest(
+                    expected_tasks=[
+                        job_pb2.WorkerTaskStatus(
+                            task_id=container.task_id,
+                            attempt_id=container.attempt_id,
+                        )
+                    ],
+                )
+            )
+            assert len(poll_resp_a.tasks) == 1
+            assert poll_resp_a.tasks[0].state == job_pb2.TASK_STATE_RUNNING
+        finally:
+            worker_a.stop(preserve_containers=True)
+
+    # After stop(), the LogClient and cached stats tables are released so
+    # post-shutdown writes are no-ops.
+    assert worker_a._log_client is None
+    assert worker_a._task_stats_table is None
+    assert worker_a._worker_stats_table is None
+
+    # Phase B: a fresh worker B starts against the same surviving container and
+    # must wire adopted attempts to its OWN live client and tables, not A's.
+    worker_b = Worker(
+        make_config(),
+        bundle_store=mock_bundle_store,
+        container_runtime=mock_runtime,
+        threads=ThreadContainer(name="worker-b"),
+    )
+    with (
+        patch("iris.cluster.worker.worker.LogClient.connect", return_value=fake_b),
+        patch.object(worker_b, "_cleanup_all_iris_containers"),
+    ):
+        try:
+            worker_b.start()
+            assert worker_b._log_client is fake_b
+            assert worker_b._log_client is not fake_a
+            assert worker_b._task_stats_table is not None
+            task_b = worker_b.get_task(container.task_id, container.attempt_id)
+            assert task_b is not None
+            # Same container, same task identity — a fresh attempt object, but
+            # bound to the same task_id / attempt_id / container_id.
+            assert task_b is not task_a
+            assert task_b.task_id == task_a.task_id
+            assert task_b.attempt_id == task_a.attempt_id
+            assert task_b.container_id == task_a.container_id
+            assert task_b.has_container
+            assert task_b.status == job_pb2.TASK_STATE_RUNNING
+            assert task_b._log_client is fake_b
+            # Crucially: B's adopted attempt must NOT reference A's stale table.
+            assert task_b._task_stats_table is not stats_table_a
+
+            # Worker B's PollTasks should also report the surviving task as RUNNING.
+            poll_resp_b = worker_b.handle_poll_tasks(
+                worker_pb2.Worker.PollTasksRequest(
+                    expected_tasks=[
+                        job_pb2.WorkerTaskStatus(
+                            task_id=container.task_id,
+                            attempt_id=container.attempt_id,
+                        )
+                    ],
+                )
+            )
+            assert len(poll_resp_b.tasks) == 1
+            assert poll_resp_b.tasks[0].state == job_pb2.TASK_STATE_RUNNING
+        finally:
+            worker_b.stop()
+
+    # Stop A's detached task threads explicitly so the test doesn't leak
+    # them. preserve_containers=True intentionally detaches these threads so a
+    # follow-up worker can adopt the live container; in production the new
+    # worker takes ownership of monitoring, but in the test we own cleanup.
+    worker_a._task_threads.stop()
+
+
 def test_task_attempt_adopt_factory():
     """TaskAttempt.adopt() creates a properly initialized attempt."""
     port_allocator = PortAllocator(port_range=(50000, 50100))
@@ -1390,3 +1533,117 @@ def test_docker_adopt_container(docker_runtime, tmp_path):
         assert adopted_handle.container_id == cid
     finally:
         handle.cleanup()
+
+
+@pytest.mark.docker
+def test_docker_worker_restart_round_trip_adopts_surviving_container(docker_runtime, mock_bundle_store, tmp_path):
+    """End-to-end round trip with a real DockerRuntime.
+
+    Container is created out of band, worker A starts and adopts it, then
+    stops with preserve_containers=True. Worker B starts against the same
+    DockerRuntime and adopts the still-running container with matching
+    identity. This exercises the real discover_containers / adopt_container
+    path through Worker.start(), which the mock-runtime test cannot.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
+    from iris.managed_thread import ThreadContainer
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    task_id = "/test-user/restart-job/0"
+    job_id = "/test-user/restart-job"
+    worker_id = "worker-restart"
+
+    cfg = ContainerConfig(
+        image="iris-task:latest",
+        entrypoint=job_pb2.RuntimeEntrypoint(
+            run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
+        ),
+        env={},
+        mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
+        workdir_host_path=workdir,
+        task_id=task_id,
+        attempt_id=0,
+        job_id=job_id,
+        worker_id=worker_id,
+    )
+
+    pre_handle = docker_runtime.create_container(cfg)
+    pre_handle.run()
+    container_id = pre_handle.container_id
+    assert container_id is not None
+
+    def make_config():
+        return WorkerConfig(
+            port=0,
+            port_range=(50000, 50200),
+            cache_dir=tmp_path / "cache",
+            default_task_image="iris-task:latest",
+            controller_address="http://127.0.0.1:1",
+            poll_interval=Duration.from_seconds(0.1),
+            worker_id=worker_id,
+        )
+
+    fake_a = MagicMock(name="log_client_A")
+    fake_a.get_table.side_effect = lambda ns, schema: MagicMock(name=f"table_A:{ns}")
+    fake_b = MagicMock(name="log_client_B")
+    fake_b.get_table.side_effect = lambda ns, schema: MagicMock(name=f"table_B:{ns}")
+
+    # Worker A: real DockerRuntime, start, adopt the surviving container.
+    worker_a = Worker(
+        make_config(),
+        bundle_store=mock_bundle_store,
+        container_runtime=docker_runtime,
+        threads=ThreadContainer(name="worker-a"),
+    )
+    with patch("iris.cluster.worker.worker.LogClient.connect", return_value=fake_a):
+        try:
+            worker_a.start()
+
+            task_a = worker_a.get_task(task_id, 0)
+            assert task_a is not None, "Worker A failed to adopt the pre-existing container"
+            assert task_a.task_id == JobName.from_wire(task_id)
+            assert task_a.attempt_id == 0
+            assert task_a.container_id == container_id
+            assert task_a.has_container
+            assert task_a.status == job_pb2.TASK_STATE_RUNNING
+            assert task_a._log_client is fake_a
+        finally:
+            worker_a.stop(preserve_containers=True)
+
+    # Container should still be running after preserve_containers stop.
+    discovered = docker_runtime.discover_containers()
+    survivors = [d for d in discovered if d.task_id == task_id]
+    assert len(survivors) == 1, "Container should survive preserve_containers stop"
+    assert survivors[0].running is True
+
+    # Worker B: fresh worker, same DockerRuntime, adopts the survivor.
+    worker_b = Worker(
+        make_config(),
+        bundle_store=mock_bundle_store,
+        container_runtime=docker_runtime,
+        threads=ThreadContainer(name="worker-b"),
+    )
+    with patch("iris.cluster.worker.worker.LogClient.connect", return_value=fake_b):
+        try:
+            worker_b.start()
+
+            task_b = worker_b.get_task(task_id, 0)
+            assert task_b is not None, "Worker B failed to adopt the surviving container"
+            assert task_b is not task_a
+            assert task_b.task_id == task_a.task_id
+            assert task_b.attempt_id == task_a.attempt_id
+            assert task_b.container_id == container_id
+            assert task_b.has_container
+            assert task_b.status == job_pb2.TASK_STATE_RUNNING
+            assert task_b._log_client is fake_b
+        finally:
+            # Clean stop on B kills the container so the docker_runtime fixture
+            # has nothing left to clean. pre_handle's underlying container is
+            # the same one B was monitoring, so it's gone too.
+            worker_b.stop()
+
+    worker_a._task_threads.stop()
