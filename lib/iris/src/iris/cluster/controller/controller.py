@@ -18,7 +18,7 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import LogClient, RemoteLogHandler
-from finelog.client.proxy import LogServiceProxy
+from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
 from finelog.server import LogServiceImpl
 from finelog.server.asgi import build_log_server_asgi
 from finelog.server.stats_service import StatsServiceImpl
@@ -1178,6 +1178,7 @@ class Controller:
 
         log_client_interceptors = _log_client_interceptors(config)
         self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
+        self._remote_stats_service = StatsServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
 
         # Providers that collect logs outside the worker process push directly
         # to the log server via RPC.
@@ -1221,6 +1222,7 @@ class Controller:
             auth_verifier=config.auth_verifier,
             auth_provider=config.auth_provider,
             auth_optional=config.auth.optional if config.auth else False,
+            finelog_stats_service=self._remote_stats_service,
         )
 
         # Background loop state
@@ -1445,6 +1447,7 @@ class Controller:
         self._log_handler.close()
         self._log_client.close()
         self._remote_log_service.close()
+        self._remote_stats_service.close()
         if self._log_service:
             self._log_service.close()
         self._db.close()

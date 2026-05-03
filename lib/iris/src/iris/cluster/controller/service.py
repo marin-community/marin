@@ -1760,45 +1760,6 @@ class ControllerServiceImpl:
             has_more=has_more,
         )
 
-    def _list_workers_stats_safe(self) -> controller_pb2.Controller.ListWorkersResponse | None:
-        """Build the worker list from the stats service, soft-failing to None.
-
-        Returns ``None`` if the stats client is missing, the namespace can't
-        be registered, or the SQL query raises a transport-level error.
-        Schema-mapping bugs (KeyError / TypeError / AttributeError out of
-        ``_stats_table_to_list_response``) are deliberately not caught — they
-        must surface so operators can see and fix them.
-        """
-        if self._stats_log_client is None:
-            return None
-        try:
-            table = self._get_stats_worker_table()
-            if table is None:
-                return None
-            result = table.query(_LATEST_WORKER_ROW_SQL.format(minutes=_STATS_PANE_LOOKBACK_MINUTES))
-        except (StatsError, ConnectError, ConnectionError, OSError, TimeoutError) as exc:
-            logger.warning("stats pane query failed: %s: %s", type(exc).__name__, exc)
-            return None
-        return _stats_table_to_list_response(result)
-
-    def _get_stats_worker_table(self):
-        """Lazily register and cache the iris.worker stats Table."""
-        if self._stats_worker_table is not None:
-            return self._stats_worker_table
-        if self._stats_log_client is None:
-            return None
-        try:
-            self._stats_worker_table = self._stats_log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
-        except (StatsError, ConnectError, ConnectionError, OSError, TimeoutError) as exc:
-            logger.warning(
-                "stats pane: register %s failed: %s: %s",
-                WORKER_STATS_NAMESPACE,
-                type(exc).__name__,
-                exc,
-            )
-            return None
-        return self._stats_worker_table
-
     # --- Endpoint Management ---
 
     def register_endpoint(
