@@ -66,11 +66,12 @@ def _index_html_with_base(raw: bytes, prefix: str) -> bytes:
     return raw.replace(_BASE_HREF_PLACEHOLDER, replacement, 1)
 
 
-# Cap on concurrent FetchLogs RPCs. Each read can fan out into DuckDB scans
-# across hundreds of MB of parquet; allowing unbounded parallelism evicts the
-# page cache and wedges the process. Tune alongside the working-set caps in
-# duckdb_store.py.
+# Cap on concurrent read RPCs. Both FetchLogs and Query fan out into
+# DuckDB scans across hundreds of MB of parquet; unbounded parallelism
+# evicts the page cache and wedges the process. Tune alongside the
+# working-set caps in duckdb_store.py.
 _MAX_CONCURRENT_FETCH_LOGS = 4
+_MAX_CONCURRENT_QUERY = 4
 
 # CRON(2026-05-12) -- remove this legacy workaround as all workers & clients
 # will be updated by this point.
@@ -101,21 +102,17 @@ def build_log_server_asgi(
     *,
     interceptors: Iterable[Interceptor] = (),
     max_concurrent_fetch_logs: int = _MAX_CONCURRENT_FETCH_LOGS,
+    max_concurrent_query: int = _MAX_CONCURRENT_QUERY,
     stats_service: StatsServiceImpl | None = None,
 ) -> Starlette:
-    """Build the ASGI app that serves both the LogService and StatsService.
+    """Build the ASGI app that serves LogService and (optionally) StatsService.
 
-    A ``ConcurrencyLimitInterceptor`` is appended to ``interceptors`` to cap
-    parallel ``FetchLogs`` RPCs. Callers override ``max_concurrent_fetch_logs``
-    in tests that want to exercise the cap deterministically.
-
-    ``stats_service`` is optional for tests that don't exercise the stats
-    surface; production wiring (``run_log_server``) always supplies one
-    backed by the same ``LogStore`` as ``service``.
+    A ``ConcurrencyLimitInterceptor`` is appended to each service's chain
+    to cap parallel ``FetchLogs`` and ``Query`` RPCs.
     """
-    chain: list[Interceptor] = list(interceptors)
-    chain.append(ConcurrencyLimitInterceptor({"FetchLogs": max_concurrent_fetch_logs}))
-    log_wsgi_app = LogServiceWSGIApplication(service=service, interceptors=tuple(chain))
+    log_chain: list[Interceptor] = list(interceptors)
+    log_chain.append(ConcurrencyLimitInterceptor({"FetchLogs": max_concurrent_fetch_logs}))
+    log_wsgi_app = LogServiceWSGIApplication(service=service, interceptors=tuple(log_chain))
 
     async def _health(_: Request) -> PlainTextResponse:
         return PlainTextResponse("ok")
@@ -125,7 +122,9 @@ def build_log_server_asgi(
         Mount(log_wsgi_app.path, app=WSGIMiddleware(log_wsgi_app)),
     ]
     if stats_service is not None:
-        stats_wsgi_app = StatsServiceWSGIApplication(service=stats_service, interceptors=tuple(interceptors))
+        stats_chain: list[Interceptor] = list(interceptors)
+        stats_chain.append(ConcurrencyLimitInterceptor({"Query": max_concurrent_query}))
+        stats_wsgi_app = StatsServiceWSGIApplication(service=stats_service, interceptors=tuple(stats_chain))
         routes.append(Mount(stats_wsgi_app.path, app=WSGIMiddleware(stats_wsgi_app)))
 
     # Dashboard. dist/static/* is content-hashed (cache-friendly); dist/index.html
