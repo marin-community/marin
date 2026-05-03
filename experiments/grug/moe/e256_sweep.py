@@ -21,9 +21,9 @@ from experiments.grug.moe.launch import (
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 CONFIGS: list[tuple[int, float]] = [
-    (512, 2.19e17),
-    (768, 1.70e18),
-    (1024, 9.00e18),
+    # (512, 2.19e17),  # finished
+    # (768, 1.70e18),  # finished
+    # (1024, 9.00e18),  # finished
     (1280, 2.83e19),
 ]
 
@@ -44,7 +44,7 @@ def _make_steps() -> list[ExecutorStep]:
                     data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
                     output_path=this_output_path(),
                     run_id=run_id,
-                    resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+                    resources=versioned(ResourceConfig.with_tpu("v5p-32")),
                     enable_cross_region_ckpt_read=True,
                     steps=versioned(num_steps),
                     batch_size=versioned(batch),
