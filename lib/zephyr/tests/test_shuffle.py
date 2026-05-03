@@ -112,9 +112,13 @@ def test_max_chunk_rows_per_shard(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_needs_external_sort_triggers():
+def test_needs_external_sort_triggers(tmp_path):
+    # Use a local path: ScatterFileIterator.__post_init__ resolves the fs at
+    # construction; a gs:// path would force gcsfs auth on import (~15s in CI)
+    # even though this test never reads from the file.
+    fake_path = str(tmp_path / "fake.shuffle")
     shard = ScatterReader(
-        iterators=[ScatterFileIterator(path="gs://fake/path.shuffle", chunks=tuple((i, 1) for i in range(1000)))],
+        iterators=[ScatterFileIterator(path=fake_path, chunks=tuple((i, 1) for i in range(1000)))],
         max_chunk_rows=1000,
         avg_item_bytes=1000.0,
     )
