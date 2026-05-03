@@ -122,9 +122,6 @@ DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
 _BACKOFF_INITIAL = 0.5
 _BACKOFF_MAX = 30.0
 
-# Floor on per-row byte cost applied to log entries only.
-_EST_BYTES_PER_LOG_ENTRY = 256
-
 # Throttle overflow warnings.
 _OVERFLOW_LOG_INTERVAL = 5.0
 
@@ -312,11 +309,12 @@ class Table:
                 if self._row_encoder is not None:
                     payload, size = self._row_encoder(row)
                 else:
-                    # Log path: payload is (key, [LogEntry, ...]); size is the
-                    # sum of the raw entry bytes plus a fixed header per entry.
+                    # Log path: payload is (key, [LogEntry, ...]). Use the
+                    # exact serialized proto size for byte-cap accounting so
+                    # the buffer cap matches the WriteRows body size.
                     payload = row
                     _key, entries = row
-                    size = sum(_EST_BYTES_PER_LOG_ENTRY + len(e.data) for e in entries)
+                    size = sum(e.ByteSize() for e in entries)
                 self._pushed_seq += 1
                 self._queue.append(_PendingItem(self._pushed_seq, payload, size))
                 self._queue_bytes += size
