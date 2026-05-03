@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import pyarrow as pa
 import pytest
+from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.store.duckdb_store import DuckDBLogStore
 from finelog.store.schema import (
     MAX_WRITE_ROWS_BYTES,
     Column,
-    ColumnType,
     NamespaceNotFoundError,
     Schema,
     SchemaValidationError,
@@ -65,9 +65,9 @@ def test_write_rows_unknown_namespace_raises(store: DuckDBLogStore):
 def test_write_rows_missing_nullable_column_filled_with_null(store: DuckDBLogStore):
     schema = Schema(
         columns=(
-            Column(name="worker_id", type=ColumnType.STRING),
-            Column(name="note", type=ColumnType.STRING, nullable=True),
-            Column(name="timestamp_ms", type=ColumnType.INT64),
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="note", type=stats_pb2.COLUMN_TYPE_STRING, nullable=True),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         ),
     )
     store.register_table("iris.worker", schema)
@@ -155,8 +155,8 @@ def test_write_rows_dictionary_encoded_column_decoded(store: DuckDBLogStore):
 def test_write_rows_nested_type_rejected(store: DuckDBLogStore):
     schema = Schema(
         columns=(
-            Column(name="worker_id", type=ColumnType.STRING),
-            Column(name="timestamp_ms", type=ColumnType.INT64),
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         ),
     )
     store.register_table("iris.worker", schema)
@@ -185,7 +185,7 @@ def test_write_rows_too_many_rows_rejected(store: DuckDBLogStore):
     # We don't actually want to allocate 1M rows; instead write a small batch
     # whose row count we'll fudge by repeating. Use a moderately-large batch
     # that fits in 16 MiB but exceeds the 1M row cap when combined.
-    schema = Schema(columns=(Column(name="timestamp_ms", type=ColumnType.INT64),))
+    schema = Schema(columns=(Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),))
     store.register_table("ns.bulk", schema)
     n = 1_000_001
     arr = pa.array([0] * n, type=pa.int64())

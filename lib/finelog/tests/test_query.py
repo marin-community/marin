@@ -15,8 +15,9 @@ import time
 import duckdb
 import pyarrow as pa
 import pytest
+from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.schema import Column, ColumnType, Schema
+from finelog.store.schema import Column, Schema
 from finelog.store.sql_escape import quote_ident, quote_literal
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
@@ -92,9 +93,9 @@ def test_query_multi_namespace_join(store: DuckDBLogStore):
     store.register_table("iris.worker", _worker_schema())
     task_schema = Schema(
         columns=(
-            Column(name="worker_id", type=ColumnType.STRING, nullable=False),
-            Column(name="task_count", type=ColumnType.INT64, nullable=False),
-            Column(name="timestamp_ms", type=ColumnType.INT64, nullable=False),
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="task_count", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         ),
     )
     store.register_table("iris.task", task_schema)

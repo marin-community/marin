@@ -684,9 +684,6 @@ class DuckDBLogStore:
     def _log_namespace(self) -> LogNamespace:
         return self._namespaces[LOG_NAMESPACE_NAME]
 
-    def _compact_step(self) -> None:
-        self._log_namespace._compact_step()
-
     def _force_flush(self) -> None:
         self._log_namespace._flush_step()
 

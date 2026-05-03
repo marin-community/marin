@@ -12,7 +12,7 @@ The error types live in :mod:`finelog.errors` and are re-exported here so
 callers can ``from finelog.client import SchemaConflictError`` etc.
 """
 
-from finelog.client.log_client import LogClient, Table, schema_from_dataclass
+from finelog.client.log_client import FlushResult, LogClient, Table, schema_from_dataclass
 from finelog.client.remote_log_handler import RemoteLogHandler
 from finelog.errors import (
     InvalidNamespaceError,
@@ -24,6 +24,7 @@ from finelog.errors import (
 )
 
 __all__ = [
+    "FlushResult",
     "InvalidNamespaceError",
     "LogClient",
     "NamespaceNotFoundError",

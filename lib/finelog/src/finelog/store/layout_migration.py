@@ -147,7 +147,18 @@ def _read_sentinel_state(sentinel: Path) -> str | None:
     if not sentinel.exists():
         return None
     raw = sentinel.read_text()
-    payload = json.loads(raw)
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("layout migration: malformed sentinel at %s; treating as missing", sentinel)
+        return None
+    if not isinstance(payload, dict):
+        logger.warning(
+            "layout migration: sentinel at %s is not a JSON object (got %s); treating as missing",
+            sentinel,
+            type(payload).__name__,
+        )
+        return None
     state = payload.get("state")
     if state not in (_STATE_IN_PROGRESS, _STATE_DONE):
         return None

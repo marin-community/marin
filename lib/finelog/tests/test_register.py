@@ -10,10 +10,10 @@ through the ASGI layer.
 from __future__ import annotations
 
 import pytest
+from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.store.duckdb_store import DuckDBLogStore
 from finelog.store.schema import (
     Column,
-    ColumnType,
     InvalidNamespaceError,
     Schema,
     SchemaConflictError,
@@ -78,8 +78,8 @@ def test_register_rejects_schema_without_ordering_key(store: DuckDBLogStore):
     # No key_column and no implicit timestamp_ms column.
     schema = Schema(
         columns=(
-            Column(name="worker_id", type=ColumnType.STRING),
-            Column(name="mem_bytes", type=ColumnType.INT64),
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="mem_bytes", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         ),
         key_column="",
     )
@@ -90,8 +90,8 @@ def test_register_rejects_schema_without_ordering_key(store: DuckDBLogStore):
 def test_register_accepts_implicit_timestamp_ms_int64(store: DuckDBLogStore):
     schema = Schema(
         columns=(
-            Column(name="worker_id", type=ColumnType.STRING),
-            Column(name="timestamp_ms", type=ColumnType.INT64),
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         ),
         key_column="",
     )
@@ -101,8 +101,8 @@ def test_register_accepts_implicit_timestamp_ms_int64(store: DuckDBLogStore):
 def test_register_accepts_implicit_timestamp_ms_timestamp(store: DuckDBLogStore):
     schema = Schema(
         columns=(
-            Column(name="worker_id", type=ColumnType.STRING),
-            Column(name="timestamp_ms", type=ColumnType.TIMESTAMP_MS),
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_TIMESTAMP_MS, nullable=False),
         ),
         key_column="",
     )
@@ -112,8 +112,8 @@ def test_register_accepts_implicit_timestamp_ms_timestamp(store: DuckDBLogStore)
 def test_register_accepts_explicit_key_column(store: DuckDBLogStore):
     schema = Schema(
         columns=(
-            Column(name="worker_id", type=ColumnType.STRING),
-            Column(name="ts", type=ColumnType.TIMESTAMP_MS),
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="ts", type=stats_pb2.COLUMN_TYPE_TIMESTAMP_MS, nullable=False),
         ),
         key_column="ts",
     )
@@ -122,7 +122,7 @@ def test_register_accepts_explicit_key_column(store: DuckDBLogStore):
 
 def test_register_rejects_explicit_key_missing_from_columns(store: DuckDBLogStore):
     schema = Schema(
-        columns=(Column(name="worker_id", type=ColumnType.STRING),),
+        columns=(Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),),
         key_column="ts",  # not in columns
     )
     with pytest.raises(SchemaValidationError):
@@ -132,8 +132,8 @@ def test_register_rejects_explicit_key_missing_from_columns(store: DuckDBLogStor
 def test_register_rejects_explicit_key_wrong_type(store: DuckDBLogStore):
     schema = Schema(
         columns=(
-            Column(name="worker_id", type=ColumnType.STRING),
-            Column(name="ts", type=ColumnType.STRING),  # wrong type for key
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="ts", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),  # wrong type for key
         ),
         key_column="ts",
     )
@@ -156,17 +156,17 @@ def test_register_idempotent_returns_existing_schema(store: DuckDBLogStore):
 def test_register_subset_returns_full_registered_schema(store: DuckDBLogStore):
     full = Schema(
         columns=(
-            Column(name="worker_id", type=ColumnType.STRING),
-            Column(name="mem_bytes", type=ColumnType.INT64),
-            Column(name="cpu_pct", type=ColumnType.FLOAT64, nullable=True),
-            Column(name="timestamp_ms", type=ColumnType.INT64),
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="mem_bytes", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+            Column(name="cpu_pct", type=stats_pb2.COLUMN_TYPE_FLOAT64, nullable=True),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         ),
     )
     store.register_table("iris.worker", full)
     subset = Schema(
         columns=(
-            Column(name="worker_id", type=ColumnType.STRING),
-            Column(name="timestamp_ms", type=ColumnType.INT64),
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         ),
     )
     effective = store.register_table("iris.worker", subset)
@@ -177,7 +177,7 @@ def test_register_additive_nullable_extension_merges(store: DuckDBLogStore):
     base = _worker_schema()
     store.register_table("iris.worker", base)
     extended = Schema(
-        columns=(*base.columns, Column(name="note", type=ColumnType.STRING, nullable=True)),
+        columns=(*base.columns, Column(name="note", type=stats_pb2.COLUMN_TYPE_STRING, nullable=True)),
     )
     effective = store.register_table("iris.worker", extended)
     assert effective.column_names() == ("worker_id", "mem_bytes", "timestamp_ms", "note")
@@ -190,7 +190,7 @@ def test_register_non_additive_new_non_nullable_rejects(store: DuckDBLogStore):
     base = _worker_schema()
     store.register_table("iris.worker", base)
     bad = Schema(
-        columns=(*base.columns, Column(name="cpu_pct", type=ColumnType.FLOAT64, nullable=False)),
+        columns=(*base.columns, Column(name="cpu_pct", type=stats_pb2.COLUMN_TYPE_FLOAT64, nullable=False)),
     )
     with pytest.raises(SchemaConflictError):
         store.register_table("iris.worker", bad)
@@ -201,9 +201,9 @@ def test_register_type_change_rejects(store: DuckDBLogStore):
     store.register_table("iris.worker", base)
     bad = Schema(
         columns=(
-            Column(name="worker_id", type=ColumnType.STRING),
-            Column(name="mem_bytes", type=ColumnType.FLOAT64),  # was INT64
-            Column(name="timestamp_ms", type=ColumnType.INT64),
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="mem_bytes", type=stats_pb2.COLUMN_TYPE_FLOAT64, nullable=False),  # was INT64
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         ),
     )
     with pytest.raises(SchemaConflictError):

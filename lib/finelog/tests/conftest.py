@@ -15,8 +15,9 @@ import io
 import pyarrow as pa
 import pyarrow.ipc as paipc
 import pytest
+from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.schema import Column, ColumnType, Schema
+from finelog.store.schema import Column, Schema
 
 
 def _ipc_bytes(batch: pa.RecordBatch) -> bytes:
@@ -34,9 +35,9 @@ def _ipc_to_table(payload: bytes) -> pa.Table:
 def _worker_schema() -> Schema:
     return Schema(
         columns=(
-            Column(name="worker_id", type=ColumnType.STRING, nullable=False),
-            Column(name="mem_bytes", type=ColumnType.INT64, nullable=False),
-            Column(name="timestamp_ms", type=ColumnType.INT64, nullable=False),
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="mem_bytes", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         ),
         key_column="",
     )

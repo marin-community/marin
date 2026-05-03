@@ -13,9 +13,10 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.schema import Column, ColumnType, Schema
+from finelog.store.schema import Column, Schema
 
 from tests.conftest import _ipc_bytes, _worker_schema
 
@@ -32,9 +33,9 @@ def test_compaction_across_additive_evolution(tmp_path: Path):
     try:
         s1 = Schema(
             columns=(
-                Column(name="a", type=ColumnType.STRING),
-                Column(name="b", type=ColumnType.INT64),
-                Column(name="timestamp_ms", type=ColumnType.INT64),
+                Column(name="a", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+                Column(name="b", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+                Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
             ),
         )
         store.register_table("ns.evolve", s1)
@@ -54,7 +55,7 @@ def test_compaction_across_additive_evolution(tmp_path: Path):
 
         # Evolve schema to add nullable c.
         s2 = Schema(
-            columns=(*s1.columns, Column(name="c", type=ColumnType.FLOAT64, nullable=True)),
+            columns=(*s1.columns, Column(name="c", type=stats_pb2.COLUMN_TYPE_FLOAT64, nullable=True)),
         )
         store.register_table("ns.evolve", s2)
         batch2 = pa.RecordBatch.from_pydict(
@@ -138,9 +139,8 @@ def test_log_namespace_round_trip_after_stage2(tmp_path: Path):
     store = DuckDBLogStore(log_dir=tmp_path / "data")
     try:
         store.append("/job/test/0:0", [_entry(f"line-{i}", epoch_ms=i) for i in range(5)])
-        # Drain pending to chunks so the read sees the data without waiting
-        # on the bg flush thread (parity with the existing log-store tests).
-        store._compact_step()
+        # ``get_logs`` snapshots in-RAM chunks via ``query_snapshot``, so the
+        # read sees these rows without waiting on the bg flush thread.
         result = store.get_logs("/job/test/0:0")
         assert [e.data for e in result.entries] == [f"line-{i}" for i in range(5)]
     finally:

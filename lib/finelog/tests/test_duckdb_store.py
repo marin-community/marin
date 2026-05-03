@@ -20,22 +20,11 @@ def _entry(data: str, epoch_ms: int = 0) -> logging_pb2.LogEntry:
     return e
 
 
-def _make_store(**kwargs) -> DuckDBLogStore:
-    """Wrap get_logs to force a sync pending->chunks step before reads."""
-    store = DuckDBLogStore(**kwargs)
-    original = store.get_logs
-
-    def get_logs(*args, **kw):
-        store._compact_step()
-        return original(*args, **kw)
-
-    store.get_logs = get_logs  # type: ignore[method-assign]
-    return store
-
-
 @pytest.fixture()
 def store():
-    s = _make_store()
+    # ``get_logs`` already snapshots in-RAM chunks via ``query_snapshot``,
+    # so reads see appended rows without waiting on the bg flush thread.
+    s = DuckDBLogStore()
     yield s
     s.close()
 
@@ -76,7 +65,7 @@ def test_flush_and_compaction(tmp_path: Path):
     # The log namespace's parquet files live under {data_dir}/log/, not
     # directly under {data_dir}.
     namespace_dir = data_dir / "log"
-    store = _make_store(log_dir=data_dir)
+    store = DuckDBLogStore(log_dir=data_dir)
     try:
         for batch in range(3):
             store.append(KEY, [_entry(f"b{batch}-{i}", epoch_ms=batch * 10 + i) for i in range(5)])
@@ -96,11 +85,11 @@ def test_flush_and_compaction(tmp_path: Path):
 
 def test_persistent_log_dir(tmp_path: Path):
     log_dir = tmp_path / "logs"
-    s1 = _make_store(log_dir=log_dir)
+    s1 = DuckDBLogStore(log_dir=log_dir)
     s1.append(KEY, [_entry(f"line-{i}", epoch_ms=i) for i in range(5)])
     s1.close()
 
-    s2 = _make_store(log_dir=log_dir)
+    s2 = DuckDBLogStore(log_dir=log_dir)
     try:
         result = s2.get_logs(KEY)
         assert len(result.entries) == 5

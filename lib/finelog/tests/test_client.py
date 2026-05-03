@@ -24,7 +24,7 @@ import pyarrow.ipc as paipc
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.client import LogClient, RemoteLogHandler, schema_from_dataclass
+from finelog.client import FlushResult, LogClient, RemoteLogHandler, schema_from_dataclass
 from finelog.client import log_client as log_client_mod
 from finelog.errors import (
     InvalidNamespaceError,
@@ -34,7 +34,7 @@ from finelog.errors import (
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
-from finelog.store.schema import Column, ColumnType, Schema, schema_to_proto
+from finelog.store.schema import Column, Schema, schema_to_proto
 
 # ---------------------------------------------------------------------------
 # RemoteLogHandler tests against a tiny fake LogClient.
@@ -53,8 +53,8 @@ class FakeLogClient:
         if self._fail:
             raise ConnectionError("server unavailable")
 
-    def flush(self, timeout: float | None = None) -> bool:
-        return True
+    def flush(self, timeout: float | None = None) -> FlushResult:
+        return FlushResult.SUCCEEDED
 
     def close(self) -> None:
         pass
@@ -206,7 +206,7 @@ def test_connect_returns_usable_client(tracked_clients):
     client = LogClient.connect("http://h:1")
     try:
         client.write_batch("key", [logging_pb2.LogEntry(source="t", data="hi")])
-        assert client.flush(timeout=5.0) is True
+        assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
         log_clients, _ = tracked_clients
         assert log_clients and log_clients[0].pushes[0].key == "key"
     finally:
@@ -226,7 +226,7 @@ def test_connect_accepts_host_port_tuple(tracked_clients):
     client = LogClient.connect(("h", 1234))
     try:
         client.write_batch("k", [logging_pb2.LogEntry(source="t", data="x")])
-        assert client.flush(timeout=5.0) is True
+        assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
         log_clients, _ = tracked_clients
         assert log_clients[0].address == "http://h:1234"
     finally:
@@ -244,7 +244,7 @@ def test_resolver_runs_per_resolve(tracked_clients):
     client = LogClient.connect("/system/log-server", resolver=resolver)
     try:
         client.write_batch("k", [logging_pb2.LogEntry(source="t", data="x")])
-        assert client.flush(timeout=5.0) is True
+        assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
     finally:
         client.close()
     assert resolver_calls == ["/system/log-server"]
@@ -265,12 +265,12 @@ def test_invalidates_on_connection_refused(tracked_clients, monkeypatch):
     client = LogClient.connect("http://h:1")
     try:
         client.write_batch("k", [logging_pb2.LogEntry(source="t", data="primer")])
-        assert client.flush(timeout=5.0) is True
+        assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
         # Seed a single retryable error; the next send will fail and trigger
         # invalidation, then the retry succeeds against a freshly resolved client.
         log_clients[0].errors.append(ConnectError(Code.UNAVAILABLE, "down"))
         client.write_batch("k", [logging_pb2.LogEntry(source="t", data="retry")])
-        assert client.flush(timeout=5.0) is True
+        assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
         assert len(log_clients) >= 2, "expected re-resolution to construct a new client"
         assert any(p.entries[0].data == "retry" for p in log_clients[1].pushes)
     finally:
@@ -309,7 +309,7 @@ def test_get_table_with_dataclass_round_trips(tracked_clients):
         assert tuple(c.name for c in table.schema.columns) == ("worker_id", "timestamp_ms", "mem_bytes", "note")
         # Writes are routed through the Table buffer; flush forces a send.
         table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=128, note="ok")])
-        assert table.flush(timeout=5.0) is True
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
         # Decode the IPC bytes to confirm the row landed correctly.
         write_req = stats_clients[0].writes[0]
         decoded = paipc.open_stream(pa.BufferReader(write_req.arrow_ipc)).read_all()
@@ -323,8 +323,8 @@ def test_get_table_with_dataclass_round_trips(tracked_clients):
 def test_get_table_with_explicit_schema(tracked_clients):
     schema = Schema(
         columns=(
-            Column(name="ts", type=ColumnType.INT64, nullable=False),
-            Column(name="value", type=ColumnType.FLOAT64, nullable=False),
+            Column(name="ts", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+            Column(name="value", type=stats_pb2.COLUMN_TYPE_FLOAT64, nullable=False),
         ),
         key_column="ts",
     )
@@ -333,7 +333,7 @@ def test_get_table_with_explicit_schema(tracked_clients):
         table = client.get_table("iris.metric", schema)
         assert table.schema.key_column == "ts"
         table.write([SimpleNamespace(ts=1, value=1.5)])
-        assert table.flush(timeout=5.0) is True
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
     finally:
         client.close()
 
@@ -570,7 +570,7 @@ def test_remote_log_handler_writes_via_log_client(tracked_clients):
     log.addHandler(handler)
     try:
         log.info("end-to-end")
-        assert client.flush(timeout=5.0) is True
+        assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
         log_clients, _ = tracked_clients
         assert log_clients[0].pushes[0].key == "proc"
     finally:
@@ -584,7 +584,7 @@ def test_table_flush_waits_for_in_flight(tracked_clients):
     try:
         table = client.get_table("iris.worker", WorkerStat)
         table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=1) for _ in range(10)])
-        assert table.flush(timeout=5.0) is True
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
         # All rows landed exactly once.
         _, stats_clients = tracked_clients
         total_rows = sum(_decode_ipc_row_count(w.arrow_ipc) for w in stats_clients[0].writes)

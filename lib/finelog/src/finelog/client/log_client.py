@@ -38,7 +38,9 @@ import types
 import typing
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 import pyarrow as pa
@@ -46,6 +48,7 @@ import pyarrow.ipc as paipc
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import Interceptor
+from rigging.log_setup import LOG_DATEFMT, LOG_FORMAT, LevelPrefixFormatter
 from rigging.timing import ExponentialBackoff, RateLimiter
 
 from finelog.errors import (
@@ -62,7 +65,7 @@ from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 from finelog.rpc.logging_connect import LogServiceClientSync
 from finelog.store.schema import (
     Column,
-    ColumnType,
+    ColumnTypeValue,
     Schema,
     schema_from_proto,
     schema_to_arrow,
@@ -94,7 +97,7 @@ logger = logging.getLogger(__name__)
 logger.propagate = False
 if not logger.handlers:
     _stderr_handler = _QuietStreamHandler(sys.stderr)
-    _stderr_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    _stderr_handler.setFormatter(LevelPrefixFormatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT))
     logger.addHandler(_stderr_handler)
     if logger.level == logging.NOTSET:
         logger.setLevel(logging.INFO)
@@ -126,6 +129,13 @@ _EST_BYTES_PER_LOG_ENTRY = 256
 _OVERFLOW_LOG_INTERVAL = 5.0
 
 
+class FlushResult(StrEnum):
+    """Outcome of a :meth:`Table.flush` / :meth:`LogClient.flush` call."""
+
+    SUCCEEDED = "succeeded"
+    TIMEOUT = "timeout"
+
+
 def _format_exc_summary(exc: BaseException) -> str:
     """Collapse a ConnectError to ``ClassName(CODE)``; otherwise ``ClassName: msg``."""
     if isinstance(exc, ConnectError):
@@ -137,13 +147,13 @@ def _format_exc_summary(exc: BaseException) -> str:
 # Dataclass schema inference.
 # ---------------------------------------------------------------------------
 
-_PRIMITIVE_TYPE_MAP: dict[Any, ColumnType] = {
-    str: ColumnType.STRING,
-    int: ColumnType.INT64,
-    float: ColumnType.FLOAT64,
-    bool: ColumnType.BOOL,
-    bytes: ColumnType.BYTES,
-    datetime: ColumnType.TIMESTAMP_MS,
+_PRIMITIVE_TYPE_MAP: dict[Any, ColumnTypeValue] = {
+    str: stats_pb2.COLUMN_TYPE_STRING,
+    int: stats_pb2.COLUMN_TYPE_INT64,
+    float: stats_pb2.COLUMN_TYPE_FLOAT64,
+    bool: stats_pb2.COLUMN_TYPE_BOOL,
+    bytes: stats_pb2.COLUMN_TYPE_BYTES,
+    datetime: stats_pb2.COLUMN_TYPE_TIMESTAMP_MS,
 }
 
 
@@ -209,15 +219,13 @@ def schema_from_dataclass(cls: type) -> Schema:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(slots=True)
 class _PendingItem:
     """One queued row payload plus an estimated byte cost."""
 
-    __slots__ = ("payload", "seq", "size_bytes")
-
-    def __init__(self, seq: int, payload: Any, size_bytes: int) -> None:
-        self.seq = seq
-        self.payload = payload
-        self.size_bytes = size_bytes
+    seq: int
+    payload: Any
+    size_bytes: int
 
 
 class Table:
@@ -343,25 +351,33 @@ class Table:
             )
         return result
 
-    def flush(self, timeout: float | None = None) -> bool:
-        """Block until rows enqueued before this call have been processed."""
+    def flush(self, timeout: float | None = None) -> FlushResult:
+        """Block until rows enqueued before this call have been processed.
+
+        Returns:
+            ``FlushResult.SUCCEEDED`` if every row enqueued before the call
+            was drained (or the table is empty); ``FlushResult.TIMEOUT`` if
+            ``timeout`` elapsed before the drain completed. A closed table
+            counts as ``SUCCEEDED`` if every pre-call row was already
+            processed, otherwise ``TIMEOUT``.
+        """
         with self._cond:
             target = self._pushed_seq
             if target == 0 or self._processed_seq >= target:
-                return True
+                return FlushResult.SUCCEEDED
             self._cond.notify_all()
             deadline = (time.monotonic() + timeout) if timeout is not None else None
             while self._processed_seq < target:
                 if self._closed:
-                    return self._processed_seq >= target
+                    return FlushResult.SUCCEEDED if self._processed_seq >= target else FlushResult.TIMEOUT
                 if deadline is None:
                     self._cond.wait(timeout=1.0)
                 else:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        return False
+                        return FlushResult.TIMEOUT
                     self._cond.wait(timeout=remaining)
-            return True
+            return FlushResult.SUCCEEDED
 
     def close(self) -> None:
         """Stop the flush thread after one best-effort drain."""
@@ -602,11 +618,15 @@ class LogClient:
         client = self._get_log_client()
         return client.fetch_logs(request)
 
-    def flush(self, timeout: float | None = None) -> bool:
-        """Flush the ``log`` namespace's Table, if any."""
+    def flush(self, timeout: float | None = None) -> FlushResult:
+        """Flush the ``log`` namespace's Table, if any.
+
+        Returns ``FlushResult.SUCCEEDED`` immediately when no log table has
+        been created yet (nothing to drain).
+        """
         table = self._tables.get(LOG_NAMESPACE)
         if table is None:
-            return True
+            return FlushResult.SUCCEEDED
         return table.flush(timeout=timeout)
 
     # ------------------------------------------------------------------
@@ -756,7 +776,7 @@ class LogClient:
 
     # --- log namespace flusher ---
 
-    def _log_flush(self, _ns: str, payloads: list[Any]) -> None:
+    def _log_flush(self, _ns: str, payloads: list[tuple[str, list[logging_pb2.LogEntry]]]) -> None:
         """Flush log-namespace items. Each payload is ``(key, [LogEntry, ...])``."""
         # Group by key — multiple writes to different keys may have piled up.
         grouped: dict[str, list[logging_pb2.LogEntry]] = {}
@@ -845,7 +865,9 @@ def _row_to_record_batch(row: Any, arrow_schema: pa.Schema, schema: Schema) -> p
         try:
             arr = pa.array(raw, type=field.type, from_pandas=False)
         except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError, ValueError) as exc:
-            raise SchemaValidationError(f"column {col.name!r}: failed to encode row as {col.type.value}: {exc}") from exc
+            raise SchemaValidationError(
+                f"column {col.name!r}: failed to encode row as " f"{stats_pb2.ColumnType.Name(col.type)}: {exc}"
+            ) from exc
         columns.append(arr)
     return pa.RecordBatch.from_arrays(columns, schema=arrow_schema)
 

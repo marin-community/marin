@@ -48,15 +48,16 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from rigging.timing import RateLimiter
 
+from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.store.rwlock import RWLock
 from finelog.store.schema import (
     Column,
-    ColumnType,
     Schema,
     duckdb_type_for,
     schema_to_arrow,
 )
+from finelog.store.sql_escape import quote_ident, quote_literal
 from finelog.types import REGEX_META_RE, LogReadResult, parse_attempt_id, str_to_log_level
 
 logger = logging.getLogger(__name__)
@@ -66,12 +67,12 @@ logger = logging.getLogger(__name__)
 # by going through the namespace registry.
 LOG_REGISTERED_SCHEMA = Schema(
     columns=(
-        Column(name="seq", type=ColumnType.INT64, nullable=False),
-        Column(name="key", type=ColumnType.STRING, nullable=False),
-        Column(name="source", type=ColumnType.STRING, nullable=False),
-        Column(name="data", type=ColumnType.STRING, nullable=False),
-        Column(name="epoch_ms", type=ColumnType.INT64, nullable=False),
-        Column(name="level", type=ColumnType.INT32, nullable=False),
+        Column(name="seq", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+        Column(name="key", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+        Column(name="source", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+        Column(name="data", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+        Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+        Column(name="level", type=stats_pb2.COLUMN_TYPE_INT32, nullable=False),
     ),
     key_column="epoch_ms",
 )
@@ -517,9 +518,6 @@ class LogNamespace:
             self._wake.wait(timeout=min(self._flush_rl.time_until_next(), 1.0))
             self._wake.clear()
 
-    def _compact_step(self) -> None:
-        """Compatibility hook: appends already materialize Arrow chunks."""
-
     def _flush_step(self) -> None:
         """Seal any RAM data into a Parquet segment on disk."""
         with self._flush_lock:
@@ -751,21 +749,21 @@ class LogNamespace:
         present_columns = self._present_input_columns(input_paths)
         select_exprs: list[str] = []
         for col in self.schema.columns:
-            ident = _sql_quote_ident(col.name)
+            ident = quote_ident(col.name)
             if col.name in present_columns:
                 select_exprs.append(ident)
             else:
                 select_exprs.append(f"NULL::{duckdb_type_for(col)} AS {ident}")
 
         # Self-generated paths from _tmp_filename — no SQL injection surface.
-        paths_sql = ", ".join(f"'{_sql_escape_str(str(p))}'" for p in input_paths)
+        paths_sql = ", ".join(quote_literal(str(p)) for p in input_paths)
         select_clause = ", ".join(select_exprs)
         order_clause = self._compaction_order_clause()
         return (
             f"COPY (SELECT {select_clause} "
             f"FROM read_parquet([{paths_sql}], union_by_name=true) "
             f"{order_clause}) "
-            f"TO '{_sql_escape_str(str(staging_path))}' "
+            f"TO {quote_literal(str(staging_path))} "
             f"(FORMAT 'parquet', ROW_GROUP_SIZE {_ROW_GROUP_SIZE}, COMPRESSION 'zstd', COMPRESSION_LEVEL 1)"
         )
 
@@ -786,7 +784,7 @@ class LogNamespace:
         names = self.schema.column_names()
         if "seq" in names and "key" in names:
             return "ORDER BY key, seq"
-        order_col = _sql_quote_ident(self.schema.key_column or "timestamp_ms")
+        order_col = quote_ident(self.schema.key_column or "timestamp_ms")
         return f"ORDER BY {order_col}"
 
     def sealed_segments(self) -> list[LocalSegment]:
@@ -1130,11 +1128,3 @@ _ARROW_TO_DUCKDB: dict[pa.DataType, str] = {
 
 def _arrow_to_duckdb_type(arrow_type: pa.DataType) -> str:
     return _ARROW_TO_DUCKDB[arrow_type]
-
-
-def _sql_quote_ident(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
-
-
-def _sql_escape_str(text: str) -> str:
-    return text.replace("'", "''")

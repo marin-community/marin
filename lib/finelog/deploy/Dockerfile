@@ -84,8 +84,7 @@ COPY --from=dashboard /build/dashboard/dist ./dashboard/dist
 # is unnecessary.
 RUN groupadd --system --gid 1000 finelog \
     && useradd --system --uid 1000 --gid finelog --home-dir /app --no-create-home finelog \
-    && mkdir -p /var/cache/finelog \
-    && chown finelog:finelog /var/cache/finelog
+    && mkdir -p /var/cache/finelog
 
 VOLUME ["/var/cache/finelog"]
 

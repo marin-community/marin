@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from enum import StrEnum
 
 import pyarrow as pa
 
@@ -37,65 +36,43 @@ from finelog.errors import (
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 
+# Logical column types are owned by the proto schema (single source of truth).
+# ``stats_pb2.ColumnType`` is an ``int``-valued enum with members like
+# ``COLUMN_TYPE_STRING``; we key the Arrow / DuckDB lookups on those int
+# values directly. Use ``stats_pb2.ColumnType.Name(value)`` for human-readable
+# names in error messages and JSON.
+ColumnTypeValue = int
 
-class ColumnType(StrEnum):
-    """Logical column types supported by the stats service.
-
-    Maps 1:1 to a subset of pyarrow types. Not every Arrow type is admissible
-    — nested lists / structs / unions are rejected at register and write time.
-    """
-
-    STRING = "string"
-    INT64 = "int64"
-    INT32 = "int32"
-    FLOAT64 = "float64"
-    BOOL = "bool"
-    TIMESTAMP_MS = "timestamp_ms"
-    BYTES = "bytes"
-
-
-_ARROW_TYPE_FOR: dict[ColumnType, pa.DataType] = {
-    ColumnType.STRING: pa.string(),
-    ColumnType.INT64: pa.int64(),
-    ColumnType.INT32: pa.int32(),
-    ColumnType.FLOAT64: pa.float64(),
-    ColumnType.BOOL: pa.bool_(),
-    ColumnType.TIMESTAMP_MS: pa.timestamp("ms"),
-    ColumnType.BYTES: pa.binary(),
+_ARROW_TYPE_FOR: dict[ColumnTypeValue, pa.DataType] = {
+    stats_pb2.COLUMN_TYPE_STRING: pa.string(),
+    stats_pb2.COLUMN_TYPE_INT64: pa.int64(),
+    stats_pb2.COLUMN_TYPE_INT32: pa.int32(),
+    stats_pb2.COLUMN_TYPE_FLOAT64: pa.float64(),
+    stats_pb2.COLUMN_TYPE_BOOL: pa.bool_(),
+    stats_pb2.COLUMN_TYPE_TIMESTAMP_MS: pa.timestamp("ms"),
+    stats_pb2.COLUMN_TYPE_BYTES: pa.binary(),
 }
 
-_DUCKDB_TYPE_FOR: dict[ColumnType, str] = {
-    ColumnType.STRING: "VARCHAR",
-    ColumnType.INT64: "BIGINT",
-    ColumnType.INT32: "INTEGER",
-    ColumnType.FLOAT64: "DOUBLE",
-    ColumnType.BOOL: "BOOLEAN",
-    ColumnType.TIMESTAMP_MS: "TIMESTAMP_MS",
-    ColumnType.BYTES: "BLOB",
+_DUCKDB_TYPE_FOR: dict[ColumnTypeValue, str] = {
+    stats_pb2.COLUMN_TYPE_STRING: "VARCHAR",
+    stats_pb2.COLUMN_TYPE_INT64: "BIGINT",
+    stats_pb2.COLUMN_TYPE_INT32: "INTEGER",
+    stats_pb2.COLUMN_TYPE_FLOAT64: "DOUBLE",
+    stats_pb2.COLUMN_TYPE_BOOL: "BOOLEAN",
+    stats_pb2.COLUMN_TYPE_TIMESTAMP_MS: "TIMESTAMP_MS",
+    stats_pb2.COLUMN_TYPE_BYTES: "BLOB",
 }
 
-# Inverse lookup for Arrow → ColumnType. Some Arrow types (e.g. dictionary)
+# Inverse lookup for Arrow → ColumnType value. Some Arrow types (e.g. dictionary)
 # decode to a value type before this map is consulted; see ``_arrow_to_column_type``.
-_COLUMN_TYPE_FOR_ARROW: dict[pa.DataType, ColumnType] = {v: k for k, v in _ARROW_TYPE_FOR.items()}
-
-_PROTO_COLUMN_TYPE_FOR: dict[ColumnType, stats_pb2.ColumnType.ValueType] = {
-    ColumnType.STRING: stats_pb2.COLUMN_TYPE_STRING,
-    ColumnType.INT64: stats_pb2.COLUMN_TYPE_INT64,
-    ColumnType.INT32: stats_pb2.COLUMN_TYPE_INT32,
-    ColumnType.FLOAT64: stats_pb2.COLUMN_TYPE_FLOAT64,
-    ColumnType.BOOL: stats_pb2.COLUMN_TYPE_BOOL,
-    ColumnType.TIMESTAMP_MS: stats_pb2.COLUMN_TYPE_TIMESTAMP_MS,
-    ColumnType.BYTES: stats_pb2.COLUMN_TYPE_BYTES,
-}
-
-_COLUMN_TYPE_FOR_PROTO: dict[stats_pb2.ColumnType.ValueType, ColumnType] = {
-    v: k for k, v in _PROTO_COLUMN_TYPE_FOR.items()
-}
+_COLUMN_TYPE_FOR_ARROW: dict[pa.DataType, ColumnTypeValue] = {v: k for k, v in _ARROW_TYPE_FOR.items()}
 
 
 # Valid types for the ordering key column. INT64 covers epoch-ms ints; the
 # explicit timestamp accommodates dataclass schemas that carry datetime fields.
-_KEY_COLUMN_TYPES: frozenset[ColumnType] = frozenset({ColumnType.INT64, ColumnType.TIMESTAMP_MS})
+_KEY_COLUMN_TYPES: frozenset[ColumnTypeValue] = frozenset(
+    {stats_pb2.COLUMN_TYPE_INT64, stats_pb2.COLUMN_TYPE_TIMESTAMP_MS}
+)
 
 # Default implicit key column name when Schema.key_column is empty.
 IMPLICIT_KEY_COLUMN = "timestamp_ms"
@@ -104,7 +81,9 @@ IMPLICIT_KEY_COLUMN = "timestamp_ms"
 @dataclass(frozen=True)
 class Column:
     name: str
-    type: ColumnType
+    # ``stats_pb2.ColumnType`` value (an int). Use the proto enum members
+    # (e.g. ``stats_pb2.COLUMN_TYPE_STRING``) when constructing ``Column``.
+    type: ColumnTypeValue
     nullable: bool = False
 
 
@@ -141,16 +120,16 @@ class Schema:
 def schema_from_proto(msg: stats_pb2.Schema) -> Schema:
     cols: list[Column] = []
     for c in msg.columns:
-        if c.type == stats_pb2.COLUMN_TYPE_UNKNOWN or c.type not in _COLUMN_TYPE_FOR_PROTO:
+        if c.type == stats_pb2.COLUMN_TYPE_UNKNOWN or c.type not in _ARROW_TYPE_FOR:
             raise SchemaValidationError(f"column {c.name!r}: unknown column type {c.type!r}")
-        cols.append(Column(name=c.name, type=_COLUMN_TYPE_FOR_PROTO[c.type], nullable=c.nullable))
+        cols.append(Column(name=c.name, type=c.type, nullable=c.nullable))
     return Schema(columns=tuple(cols), key_column=msg.key_column)
 
 
 def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
     msg = stats_pb2.Schema(key_column=schema.key_column)
     for c in schema.columns:
-        msg.columns.append(stats_pb2.Column(name=c.name, type=_PROTO_COLUMN_TYPE_FOR[c.type], nullable=c.nullable))
+        msg.columns.append(stats_pb2.Column(name=c.name, type=c.type, nullable=c.nullable))
     return msg
 
 
@@ -165,16 +144,23 @@ def duckdb_type_for(col: Column) -> str:
 
 
 def schema_to_json(schema: Schema) -> str:
+    # Persist the proto enum *name* (e.g. "COLUMN_TYPE_STRING") for stability:
+    # int values are not guaranteed across proto edits the way names are.
     payload = {
         "key_column": schema.key_column,
-        "columns": [{"name": c.name, "type": c.type.value, "nullable": c.nullable} for c in schema.columns],
+        "columns": [
+            {"name": c.name, "type": stats_pb2.ColumnType.Name(c.type), "nullable": c.nullable} for c in schema.columns
+        ],
     }
     return json.dumps(payload)
 
 
 def schema_from_json(text: str) -> Schema:
     payload = json.loads(text)
-    cols = tuple(Column(name=c["name"], type=ColumnType(c["type"]), nullable=c["nullable"]) for c in payload["columns"])
+    cols = tuple(
+        Column(name=c["name"], type=stats_pb2.ColumnType.Value(c["type"]), nullable=c["nullable"])
+        for c in payload["columns"]
+    )
     return Schema(columns=cols, key_column=payload.get("key_column", ""))
 
 
@@ -201,7 +187,8 @@ def resolve_key_column(schema: Schema) -> str:
             raise SchemaValidationError(f"key_column={schema.key_column!r} is not present in the schema columns")
         if col.type not in _KEY_COLUMN_TYPES:
             raise SchemaValidationError(
-                f"key_column={schema.key_column!r} must be INT64 or TIMESTAMP_MS, got {col.type.value}"
+                f"key_column={schema.key_column!r} must be INT64 or TIMESTAMP_MS, "
+                f"got {stats_pb2.ColumnType.Name(col.type)}"
             )
         return schema.key_column
 
@@ -210,7 +197,8 @@ def resolve_key_column(schema: Schema) -> str:
         raise SchemaValidationError(f"schema declares no key_column and has no implicit '{IMPLICIT_KEY_COLUMN}' column")
     if implicit.type not in _KEY_COLUMN_TYPES:
         raise SchemaValidationError(
-            f"implicit key column '{IMPLICIT_KEY_COLUMN}' must be INT64 or TIMESTAMP_MS, " f"got {implicit.type.value}"
+            f"implicit key column '{IMPLICIT_KEY_COLUMN}' must be INT64 or TIMESTAMP_MS, "
+            f"got {stats_pb2.ColumnType.Name(implicit.type)}"
         )
     return IMPLICIT_KEY_COLUMN
 
@@ -256,7 +244,9 @@ def merge_schemas(registered: Schema, requested: Schema) -> Schema:
             continue
         if existing.type != rc.type:
             raise SchemaConflictError(
-                f"column {rc.name!r}: type mismatch registered={existing.type.value} " f"requested={rc.type.value}"
+                f"column {rc.name!r}: type mismatch "
+                f"registered={stats_pb2.ColumnType.Name(existing.type)} "
+                f"requested={stats_pb2.ColumnType.Name(rc.type)}"
             )
         if existing.nullable != rc.nullable:
             raise SchemaConflictError(
@@ -275,8 +265,8 @@ def merge_schemas(registered: Schema, requested: Schema) -> Schema:
 # ---------------------------------------------------------------------------
 
 
-def _arrow_to_column_type(arrow_type: pa.DataType) -> ColumnType:
-    """Map an Arrow datatype back to a ColumnType, decoding dictionary types.
+def _arrow_to_column_type(arrow_type: pa.DataType) -> ColumnTypeValue:
+    """Map an Arrow datatype back to a ColumnType value, decoding dictionary types.
 
     Dictionary-encoded columns are accepted transparently; we report the
     *value* type. Nested types (list, struct, union, map) are rejected.
@@ -354,7 +344,9 @@ def validate_and_align_batch(batch: pa.RecordBatch, registered: Schema) -> pa.Re
             actual_type = _arrow_to_column_type(field.type)
             if actual_type != col.type:
                 raise SchemaValidationError(
-                    f"column {col.name!r}: type mismatch registered={col.type.value} " f"batch={actual_type.value}"
+                    f"column {col.name!r}: type mismatch "
+                    f"registered={stats_pb2.ColumnType.Name(col.type)} "
+                    f"batch={stats_pb2.ColumnType.Name(actual_type)}"
                 )
             aligned_arrays.append(array)
         else:
