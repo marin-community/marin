@@ -1,20 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Top-level finelog client.
-
-:class:`LogClient` is the single client surface for the stats service.
-The privileged ``log`` namespace (``write_batch`` / ``query``) and
-arbitrary user namespaces (``get_table`` / ``drop_table``) all flow
-through ``StatsService.WriteRows`` for writes and ``StatsService.Query``
-for reads. Each namespace owns a :class:`Table` with an in-memory buffer
-and a background flush thread.
-
-The implementation is sync and holds one ``StatsServiceClientSync``
-against the resolved endpoint. On a connection-refused error the cached
-client is dropped and the resolver is invoked again on the next attempt.
-"""
-
 from __future__ import annotations
 
 import dataclasses
@@ -64,27 +50,19 @@ from finelog.store.schema import (
 from finelog.store.sql_escape import quote_literal
 from finelog.types import REGEX_META_RE, is_retryable_error, parse_attempt_id, str_to_log_level
 
-# Detached from the root logger: ``RemoteLogHandler`` lives on the root
-# logger and writes through the ``log`` Table, so any diagnostics that
-# reached the root would feed back into the same buffer — a re-entrant
-# loop that silently amplifies during failure storms. Diagnostics go to
-# stderr directly with ``propagate = False``.
-
 
 class _QuietStreamHandler(logging.StreamHandler):
-    """StreamHandler that drops emit failures silently.
-
-    The flush thread is a daemon that outlives pytest's stderr capture
-    (and interpreter shutdown), so any emit failure is a dead-stream
-    symptom of teardown. Swallowing avoids the cascade of
-    "--- Logging error ---" tracebacks during teardown.
-    """
+    # The flush thread is a daemon that outlives pytest's stderr capture (and
+    # interpreter shutdown). Swallow emit failures so teardown does not
+    # cascade "--- Logging error ---" tracebacks.
 
     def handleError(self, record: logging.LogRecord) -> None:
         pass
 
 
 logger = logging.getLogger(__name__)
+# RemoteLogHandler lives on the root logger and writes through this Table;
+# propagating to root would re-enter the same buffer during failure storms.
 logger.propagate = False
 if not logger.handlers:
     _stderr_handler = _QuietStreamHandler(sys.stderr)
@@ -94,46 +72,27 @@ if not logger.handlers:
         logger.setLevel(logging.INFO)
 
 
-# ---------------------------------------------------------------------------
-# Top-level constants matching today's LogPusher behavior.
-# ---------------------------------------------------------------------------
-
 LOG_NAMESPACE = "log"
-"""Privileged namespace name. ``write_batch`` and ``query`` route here."""
-
 DEFAULT_FLUSH_INTERVAL = 1.0
-"""Default time-based flush interval for a Table's bg thread."""
-
 DEFAULT_BATCH_ROWS = 10_000
-"""Default row threshold that wakes the bg thread."""
-
+# Per-Table queue cap in bytes. Matches WriteRows max body size.
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
-"""Default per-Table queue cap in bytes (matches WriteRows max body size)."""
 
 _BACKOFF_INITIAL = 0.5
 _BACKOFF_MAX = 30.0
-
-# Throttle overflow warnings.
 _OVERFLOW_LOG_INTERVAL = 5.0
 
 
 class FlushResult(StrEnum):
-    """Outcome of a :meth:`Table.flush` / :meth:`LogClient.flush` call."""
-
     SUCCEEDED = "succeeded"
     TIMEOUT = "timeout"
 
 
 def _format_exc_summary(exc: BaseException) -> str:
-    """Collapse a ConnectError to ``ClassName(CODE)``; otherwise ``ClassName: msg``."""
     if isinstance(exc, ConnectError):
         return f"{type(exc).__name__}({exc.code.name})"
     return f"{type(exc).__name__}: {exc}"
 
-
-# ---------------------------------------------------------------------------
-# Dataclass schema inference.
-# ---------------------------------------------------------------------------
 
 _PRIMITIVE_TYPE_MAP: dict[Any, ColumnTypeValue] = {
     str: stats_pb2.COLUMN_TYPE_STRING,
@@ -148,8 +107,6 @@ _PRIMITIVE_TYPE_MAP: dict[Any, ColumnTypeValue] = {
 def _strip_optional(annotation: Any) -> tuple[Any, bool]:
     """Return ``(inner, nullable)`` for ``T | None`` annotations.
 
-    Accepts both ``typing.Optional[T]`` and PEP 604 ``T | None`` forms.
-    Handles arbitrary union order (``T | None`` and ``None | T``).
     Multi-arm unions other than ``T | None`` are not supported.
     """
     origin = typing.get_origin(annotation)
@@ -165,16 +122,11 @@ def _strip_optional(annotation: Any) -> tuple[Any, bool]:
 
 
 def _is_pep604_union(annotation: Any) -> bool:
-    """Return True for the PEP 604 ``X | Y`` union form."""
     return isinstance(annotation, types.UnionType)
 
 
 def schema_from_dataclass(cls: type) -> Schema:
     """Infer a :class:`Schema` from a dataclass class.
-
-    Each dataclass field maps to a Column in declaration order. Unsupported
-    field types (collections, nested dataclasses, custom classes) raise
-    :class:`SchemaValidationError`.
 
     The inferred ``key_column`` is taken from a ``ClassVar[str]`` named
     ``key_column`` if present, otherwise empty (the server falls back to the
@@ -206,15 +158,8 @@ def schema_from_dataclass(cls: type) -> Schema:
     return Schema(columns=tuple(columns), key_column=key_column)
 
 
-# ---------------------------------------------------------------------------
-# Table — per-namespace buffered writer.
-# ---------------------------------------------------------------------------
-
-
 @dataclass(slots=True)
 class _PendingItem:
-    """One queued row payload plus an estimated byte cost."""
-
     seq: int
     payload: Any
     size_bytes: int
@@ -223,17 +168,10 @@ class _PendingItem:
 class Table:
     """Handle to a registered namespace.
 
-    Each Table owns:
-
-    - A bounded in-memory queue (default: 10k rows or 16 MiB, whichever
-      first), oldest-drop on overflow.
-    - A background flush thread that flushes on size threshold, time
-      interval (default 1s), or explicit ``flush()``.
-    - Retry/backoff with resolver invalidation on transient server
-      failures.
-
-    The Table is created via :meth:`LogClient.get_table`. Closing the
-    LogClient drains every Table and joins all flush threads.
+    Owns a bounded in-memory queue (oldest-drop on overflow), a background
+    flush thread, and retry/backoff with resolver invalidation on transient
+    server failures. Created via :meth:`LogClient.get_table`; closing the
+    LogClient drains every Table.
     """
 
     def __init__(
@@ -280,10 +218,6 @@ class Table:
         )
         self._thread.start()
 
-    # ------------------------------------------------------------------
-    # Public API.
-    # ------------------------------------------------------------------
-
     @property
     def namespace(self) -> str:
         return self._namespace
@@ -313,18 +247,8 @@ class Table:
         """Run Postgres-flavored SQL against the stats service.
 
         Reference namespaces by name in the FROM clause (e.g.
-        ``FROM "iris.worker"``); the server registers a DuckDB view per
-        registered namespace before executing and never rewrites the SQL.
-
-        The result is materialized into a ``pa.Table``. If the row count
-        exceeds ``max_rows``, raises :class:`QueryResultTooLargeError`
-        rather than silently truncating — callers can re-issue with a
-        higher cap or add a LIMIT/aggregation.
-
-        DuckDB-side errors (catalog, parser, binder) propagate as
-        :class:`SchemaValidationError` (the proto carries them as
-        INVALID_ARGUMENT). Network-level failures propagate as
-        ConnectionError / ConnectError.
+        ``FROM "iris.worker"``). Raises :class:`QueryResultTooLargeError`
+        if the row count exceeds ``max_rows``.
         """
         if self._querier is None:
             raise StatsError(f"Table({self._namespace}) has no query path (log namespace?)")
@@ -337,15 +261,7 @@ class Table:
         return result
 
     def flush(self, timeout: float | None = None) -> FlushResult:
-        """Block until rows enqueued before this call have been processed.
-
-        Returns:
-            ``FlushResult.SUCCEEDED`` if every row enqueued before the call
-            was drained (or the table is empty); ``FlushResult.TIMEOUT`` if
-            ``timeout`` elapsed before the drain completed. A closed table
-            counts as ``SUCCEEDED`` if every pre-call row was already
-            processed, otherwise ``TIMEOUT``.
-        """
+        """Block until rows enqueued before this call have been processed."""
         with self._cond:
             target = self._pushed_seq
             if target == 0 or self._processed_seq >= target:
@@ -375,10 +291,6 @@ class Table:
         with self._cond:
             self._closed = True
             self._cond.notify_all()
-
-    # ------------------------------------------------------------------
-    # Internal — buffer management (caller holds ``_cond``).
-    # ------------------------------------------------------------------
 
     def _trim_oldest_locked(self) -> None:
         dropped = 0
@@ -419,10 +331,6 @@ class Table:
             self._queue.appendleft(item)
             self._queue_bytes += item.size_bytes
         self._trim_oldest_locked()
-
-    # ------------------------------------------------------------------
-    # Internal — drain thread.
-    # ------------------------------------------------------------------
 
     def _run(self) -> None:
         while True:
@@ -475,25 +383,15 @@ class Table:
                 summary,
             )
             if not retryable:
-                # Non-retryable failures drop the batch — surfacing them as
-                # blocked queue would back up indefinitely. Mirrors the old
-                # LogPusher (which only re-buffered for retryable errors).
+                # Non-retryable failures drop the batch; rebuffering would
+                # back up the queue indefinitely.
                 return items[-1].seq, []
             return 0, items
         return items[-1].seq, []
 
 
-# ---------------------------------------------------------------------------
-# LogClient — top-level client.
-# ---------------------------------------------------------------------------
-
-
 class LogClient:
     """Domain client for the finelog process.
-
-    Hides Connect/RPC details. Both LogService methods (``write_batch``,
-    ``query``) and StatsService methods (``get_table``, ``drop_table``) are
-    exposed through this single surface.
 
     Construct with :meth:`connect`. ``close()`` drains every open Table and
     closes the underlying RPC connections; subsequent writes raise.
@@ -516,14 +414,10 @@ class LogClient:
         self._closed = False
         self._stats_client: StatsServiceClientSync | None = None
 
-        # Open Tables keyed by namespace. The log namespace's Table is
-        # constructed lazily on first write_batch / query so connect()
-        # does not pay the resolver cost when a caller only needs stats.
+        # The log namespace's Table is constructed lazily on first
+        # write_batch/query so connect() does not pay the resolver cost
+        # when a caller only needs stats.
         self._tables: dict[str, Table] = {}
-
-    # ------------------------------------------------------------------
-    # Construction / lifecycle.
-    # ------------------------------------------------------------------
 
     @staticmethod
     def connect(
@@ -536,11 +430,9 @@ class LogClient:
         """Construct a LogClient against ``endpoint``.
 
         ``endpoint`` is either an HTTP URL string or a ``(host, port)``
-        tuple. The optional ``resolver`` mirrors today's ``LogPusher``: the
-        client passes ``server_url`` through it before constructing the
-        underlying RPC client, so callers who advertise their endpoint via
-        a registry (e.g. iris's ``/system/log-server``) can plug that lookup
-        in here.
+        tuple. The optional ``resolver`` is invoked on each re-resolve so
+        callers who advertise their endpoint via a registry (e.g. iris's
+        ``/system/log-server``) can plug that lookup in here.
         """
         if isinstance(endpoint, tuple):
             host, port = endpoint
@@ -557,10 +449,8 @@ class LogClient:
     def close(self) -> None:
         """Drain and join every open Table, then close the RPC clients.
 
-        Tables are drained *before* the client is marked closed so the bg
-        flush threads can complete one final send through the cached RPC
-        clients. Marking ``_closed`` first would race with the drain and
-        leave queued rows undelivered.
+        Tables are drained before the client is marked closed so the bg
+        flush threads can complete one final send.
         """
         with self._lock:
             if self._closed:
@@ -574,14 +464,7 @@ class LogClient:
             stats_client = self._stats_client
             self._stats_client = None
         if stats_client is not None:
-            try:
-                stats_client.close()
-            except Exception:
-                logger.debug("LogClient.close: stats client close raised", exc_info=True)
-
-    # ------------------------------------------------------------------
-    # Log-side surface (legacy LogService).
-    # ------------------------------------------------------------------
+            stats_client.close()
 
     def write_batch(self, key: str, messages: Sequence[logging_pb2.LogEntry]) -> None:
         """Append ``messages`` to the ``log`` namespace under ``key``."""
@@ -597,19 +480,11 @@ class LogClient:
         return _logs_query_response_from_arrow(result, request)
 
     def flush(self, timeout: float | None = None) -> FlushResult:
-        """Flush the ``log`` namespace's Table, if any.
-
-        Returns ``FlushResult.SUCCEEDED`` immediately when no log table has
-        been created yet (nothing to drain).
-        """
+        """Flush the ``log`` namespace's Table, if any."""
         table = self._tables.get(LOG_NAMESPACE)
         if table is None:
             return FlushResult.SUCCEEDED
         return table.flush(timeout=timeout)
-
-    # ------------------------------------------------------------------
-    # Stats-side surface.
-    # ------------------------------------------------------------------
 
     def get_table(self, namespace: str, schema: type | Schema) -> Table:
         """Idempotently register ``namespace`` and return a Table handle."""
@@ -651,7 +526,6 @@ class LogClient:
                 raise RuntimeError("LogClient is closed")
             existing = self._tables.get(namespace)
             if existing is not None:
-                # Lost the race; close ours and return the winner.
                 table.close()
                 return existing
             self._tables[namespace] = table
@@ -661,10 +535,8 @@ class LogClient:
         """Remove ``namespace`` from the registry and delete its local data."""
         if namespace == LOG_NAMESPACE:
             raise InvalidNamespaceError("cannot drop the privileged 'log' namespace")
-        # Close any local Table first so its in-flight rows do not race the
-        # registry deletion. Per the design's drop contract, in-flight stats
-        # data is not durable — closing here makes that explicit on the
-        # client side too.
+        # Close the local Table first so in-flight rows do not race the
+        # registry deletion.
         with self._lock:
             tbl = self._tables.pop(namespace, None)
         if tbl is not None:
@@ -675,13 +547,8 @@ class LogClient:
         except ConnectError as exc:
             translated = _translate_connect_error(exc)
             if isinstance(translated, NamespaceNotFoundError):
-                # Spec: "No-op (does not raise) if the namespace was not registered."
                 return
             raise translated from exc
-
-    # ------------------------------------------------------------------
-    # Internals.
-    # ------------------------------------------------------------------
 
     def _get_log_table(self) -> Table:
         with self._lock:
@@ -690,8 +557,7 @@ class LogClient:
                 return tbl
             if self._closed:
                 raise RuntimeError("LogClient is closed")
-            # The "log" namespace is auto-registered server-side; skip
-            # register_table here.
+            # ``log`` is auto-registered server-side; skip register_table.
             tbl = Table(
                 namespace=LOG_NAMESPACE,
                 schema=LOG_REGISTERED_SCHEMA,
@@ -730,20 +596,9 @@ class LogClient:
         if stats_client is None:
             return
         logger.info("LogClient: invalidating cached endpoint for %s (%s)", self._server_url, reason)
-        try:
-            stats_client.close()
-        except Exception:
-            logger.debug("LogClient invalidate: cached client close raised", exc_info=True)
-
-    # --- stats namespace query ---
+        stats_client.close()
 
     def _stats_query(self, sql: str) -> pa.Table:
-        """Run a SQL query and decode the Arrow IPC response into a pa.Table.
-
-        Used by every Table.query — the underlying connection is shared
-        across namespaces because the server resolves namespaces from the
-        FROM clause, not the request.
-        """
         client = self._get_stats_client()
         try:
             response = client.query(stats_pb2.QueryRequest(sql=sql))
@@ -757,10 +612,7 @@ class LogClient:
         reader = paipc.open_stream(pa.BufferReader(bytes(response.arrow_ipc)))
         return reader.read_all()
 
-    # --- stats namespace flusher ---
-
     def _stats_flush(self, namespace: str, batches: list[Any]) -> None:
-        """Flush pre-built Arrow RecordBatches to the stats service."""
         combined = pa.concat_batches(batches)
         sink = io.BytesIO()
         with paipc.new_stream(sink, combined.schema) as writer:
@@ -786,21 +638,16 @@ class LogClient:
 def _row_to_record_batch(row: Any, arrow_schema: pa.Schema, schema: Schema) -> pa.RecordBatch:
     """Convert a single dataclass (or attribute-bearing) row to a 1-row RecordBatch.
 
-    Missing nullable columns are filled with NULL; missing non-nullable columns
-    raise :class:`SchemaValidationError`. ``datetime`` values are accepted
-    directly by pyarrow for timestamp(ms) columns.
+    Missing or None values for non-nullable columns raise
+    :class:`SchemaValidationError`; nullable columns become NULL.
     """
     columns: list[pa.Array] = []
     for col, field in zip(schema.columns, arrow_schema, strict=True):
-        value = _extract_row_value(row, col.name)
-        if value is _MISSING:
+        value = getattr(row, col.name, None)
+        if value is None:
             if not col.nullable:
                 raise SchemaValidationError(f"row missing required (non-nullable) column {col.name!r}")
             raw: list[Any] = [None]
-        elif value is None:
-            if not col.nullable:
-                raise SchemaValidationError(f"row has None for non-nullable column {col.name!r}")
-            raw = [None]
         else:
             raw = [value]
         try:
@@ -814,13 +661,6 @@ def _row_to_record_batch(row: Any, arrow_schema: pa.Schema, schema: Schema) -> p
 
 
 def _make_stats_row_encoder(arrow_schema: pa.Schema, schema: Schema) -> Callable[[Any], tuple[pa.RecordBatch, int]]:
-    """Return a ``row_encoder`` for stats tables.
-
-    The encoder converts each dataclass row to a 1-row RecordBatch and
-    returns ``(batch, batch.nbytes)`` so the byte cap tracks the actual
-    Arrow wire representation.
-    """
-
     def encode(row: Any) -> tuple[pa.RecordBatch, int]:
         batch = _row_to_record_batch(row, arrow_schema, schema)
         return batch, batch.nbytes
@@ -829,7 +669,6 @@ def _make_stats_row_encoder(arrow_schema: pa.Schema, schema: Schema) -> Callable
 
 
 def _log_entries_to_rows(key: str, messages: Sequence[logging_pb2.LogEntry]) -> list[Any]:
-    """Widen LogEntry protos into rows matching LOG_REGISTERED_SCHEMA columns."""
     rows: list[Any] = []
     for entry in messages:
         rows.append(
@@ -845,18 +684,15 @@ def _log_entries_to_rows(key: str, messages: Sequence[logging_pb2.LogEntry]) -> 
 
 
 _LOG_QUERY_COLUMNS = ("seq", "key", "source", "data", "epoch_ms", "level")
-
-# Default row cap when callers leave ``max_lines`` unset; mirrors the
-# old LogServiceImpl.fetch_logs default.
 _DEFAULT_FETCH_MAX_LINES = 1000
 
 
 def _logs_query_sql(request: logging_pb2.FetchLogsRequest) -> str:
     """Translate a FetchLogsRequest into SQL against the ``log`` view.
 
-    ``source`` is matched literally when it has no regex metacharacters;
-    otherwise it is passed to ``regexp_matches``. ``min_level`` always
-    keeps level=UNKNOWN rows so unparsed lines remain visible.
+    ``source`` is matched literally unless it contains regex metacharacters.
+    ``min_level`` always keeps level=UNKNOWN rows so unparsed lines remain
+    visible.
     """
     where_parts: list[str] = []
     source = request.source
@@ -894,11 +730,8 @@ def _logs_query_response_from_arrow(
     table: pa.Table,
     request: logging_pb2.FetchLogsRequest,
 ) -> logging_pb2.FetchLogsResponse:
-    """Decode an Arrow result into FetchLogsResponse.
-
-    Tail-mode rows arrive newest-first; we reverse them so callers always
-    see chronological output. The returned cursor is max(seq).
-    """
+    # Tail-mode rows arrive newest-first; reverse so callers always see
+    # chronological output. Cursor is max(seq).
     seqs = table.column("seq").to_pylist()
     keys = table.column("key").to_pylist()
     sources = table.column("source").to_pylist()
@@ -933,28 +766,13 @@ def _logs_query_response_from_arrow(
     return logging_pb2.FetchLogsResponse(entries=entries, cursor=max_seq)
 
 
-_MISSING = object()
-
-
-def _extract_row_value(row: Any, name: str) -> Any:
-    return getattr(row, name, _MISSING)
-
-
-# ---------------------------------------------------------------------------
-# ConnectError translation.
-# ---------------------------------------------------------------------------
-
-
 def _translate_connect_error(exc: ConnectError) -> Exception:
-    """Map server-side Connect codes to public error types."""
     msg = str(exc)
     if exc.code == Code.NOT_FOUND:
         return NamespaceNotFoundError(msg)
     if exc.code == Code.INVALID_ARGUMENT:
-        # Cannot tell SchemaValidation vs InvalidNamespace from Connect codes;
-        # use SchemaValidationError as the structural error and let callers
-        # match on the message if they need finer discrimination. Tests assert
-        # against either. Both are subclasses of StatsError.
+        # Connect codes can't distinguish SchemaValidation from InvalidNamespace;
+        # match on the message text. Both subclass StatsError.
         if "namespace" in msg.lower() and "name" in msg.lower():
             return InvalidNamespaceError(msg)
         return SchemaValidationError(msg)

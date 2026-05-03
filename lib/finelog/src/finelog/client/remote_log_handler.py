@@ -3,10 +3,8 @@
 
 """``logging.Handler`` that ships records through a :class:`LogClient`.
 
-Replaces the old ``RemoteLogHandler``-on-``LogPusher`` shape. The handler
-formats records with its formatter, builds a :class:`LogEntry`, and calls
-``client.write_batch(key, [entry])``. Batching, retries, and backoff live
-inside the LogClient's per-namespace Table.
+Batching, retries, and backoff live inside the LogClient's per-namespace
+Table; the handler just formats records and calls ``write_batch``.
 """
 
 from __future__ import annotations

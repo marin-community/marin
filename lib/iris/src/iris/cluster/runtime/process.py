@@ -84,15 +84,10 @@ atexit.register(_cleanup_all_runtimes)
 # =============================================================================
 
 
-# Inline Python launcher run in the child to set PR_SET_PDEATHSIG before
-# exec'ing the real command. We can't use ``preexec_fn`` for this: that path
-# forces CPython's _posixsubprocess to fall back to fork()+exec, which trips
-# Linux's overcommit heuristic on workers carrying large VMS (pyarrow +
-# finelog client). Without preexec_fn, CPython uses vfork()/posix_spawn,
-# which share the parent's address space and don't charge overcommit.
-#
-# PR_SET_PDEATHSIG is preserved across execve as long as the effective UID
-# doesn't change, so setting it here propagates into the user command.
+# Set PR_SET_PDEATHSIG in a tiny launcher then exec the real command.
+# ``preexec_fn`` would force CPython onto fork()+exec, which trips Linux's
+# overcommit heuristic on workers with large VMS; this path keeps
+# vfork()/posix_spawn. PDEATHSIG survives execve.
 _PDEATHSIG_LAUNCHER_CODE = (
     "import ctypes,ctypes.util,os,signal,sys;"
     "ctypes.CDLL(ctypes.util.find_library('c'),use_errno=True)"

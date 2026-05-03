@@ -27,8 +27,7 @@ from finelog.server.stats_service import StatsServiceImpl
 
 logger = logging.getLogger(__name__)
 
-# Vue dashboard build output. Path from this file (server/asgi.py) up to
-# lib/finelog/ is four parent directories, then down into dashboard/dist.
+# Up four parents from server/asgi.py reaches lib/finelog/.
 _VUE_DIST_DIR = Path(__file__).parent.parent.parent.parent / "dashboard" / "dist"
 _DOCKER_VUE_DIST_DIR = Path("/app/dashboard/dist")
 
@@ -47,11 +46,9 @@ _NOT_BUILT_HTML = (
     "</body></html>"
 )
 
-# The dashboard template ships with `<base href="/">` so URLs resolve against
-# the origin root by default. When fronted by a reverse proxy at a sub-path
-# (e.g. https://foo.bar/proxy/log-server/), the proxy sets X-Forwarded-Prefix
-# and we rewrite the base href so fetch()/vue-router/asset URLs all resolve
-# under that prefix instead.
+# When fronted by a reverse proxy at a sub-path the proxy sends
+# X-Forwarded-Prefix; we rewrite <base href="/"> so vue-router/asset URLs
+# resolve under that prefix instead of the origin root.
 _BASE_HREF_PLACEHOLDER = b'<base href="/"'
 
 
@@ -127,10 +124,9 @@ def build_log_server_asgi(
         stats_wsgi_app = StatsServiceWSGIApplication(service=stats_service, interceptors=tuple(stats_chain))
         routes.append(Mount(stats_wsgi_app.path, app=WSGIMiddleware(stats_wsgi_app)))
 
-    # Dashboard. dist/static/* is content-hashed (cache-friendly); dist/index.html
-    # is the SPA shell served for "/" and any unknown path so Vue Router can
-    # take over client-side. Resolved at request time so the server still boots
-    # cleanly when the dist hasn't been built yet (tests, fresh checkout).
+    # SPA shell at "/" and any unknown path so Vue Router can take over
+    # client-side. Static assets under dist/static/* are content-hashed.
+    # Resolved at request time so the server boots cleanly without a built dist.
     dist = _vue_dist_dir()
     if dist is not None:
         routes.append(Mount("/static", app=StaticFiles(directory=dist / "static"), name="static"))

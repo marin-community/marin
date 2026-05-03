@@ -3,32 +3,13 @@
 
 """Per-namespace log storage state.
 
-Two implementations satisfy :class:`LogNamespaceProtocol`:
-
-- :class:`DiskLogNamespace` — production path. Owns chunked Arrow tables,
-  the in-flight sealed buffer, the local Parquet segment registry, the
-  sequence counter, the background flush thread, GCS offload, and the
-  registered Arrow schema.
-- :class:`MemoryLogNamespace` — test/debug path. Holds rows as a single
-  Arrow table per namespace; no flush, compaction, eviction, or background
-  threads. Used only when :class:`DuckDBLogStore` is constructed without a
-  ``log_dir``.
-
-Every namespace carries its own registered
-:class:`finelog.store.schema.Schema`. The disk variant projects to that
-schema's column order during the flush / compaction pipeline.
-
-Concurrency
------------
+:class:`DiskLogNamespace` is the production path; :class:`MemoryLogNamespace`
+backs the in-memory store mode. Both satisfy :class:`LogNamespaceProtocol`.
 
 The two global locks (insertion mutex + query-visibility rwlock) live on the
-:class:`NamespaceRegistry` and are passed to each namespace at construction.
-The disk variant's mutating methods (append, flush, compaction, GC) acquire
-those locks; the namespace itself does not own additional locks beyond a
-per-namespace flush mutex that prevents two writers from racing on the same
-``tmp_*.parquet`` filename when both the test ``_force_flush`` hook and the
-bg thread fire concurrently. The memory variant only takes the insertion
-lock around its single Arrow table.
+registry and are passed in at construction. The disk variant additionally
+owns a per-namespace flush mutex preventing the test ``_force_flush`` hook
+from racing the bg thread on the same ``tmp_*.parquet`` filename.
 """
 
 from __future__ import annotations
@@ -68,8 +49,7 @@ from finelog.types import REGEX_META_RE, LogReadResult, parse_attempt_id, str_to
 logger = logging.getLogger(__name__)
 
 # The user-declared schema for the "log" namespace. The registry stamps
-# the implicit ``seq`` column on top before storing — the on-disk layout
-# always carries (seq, key, source, data, epoch_ms, level).
+# the implicit ``seq`` column on top.
 LOG_REGISTERED_SCHEMA = Schema(
     columns=(
         Column(name="key", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
@@ -78,9 +58,8 @@ LOG_REGISTERED_SCHEMA = Schema(
         Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         Column(name="level", type=stats_pb2.COLUMN_TYPE_INT32, nullable=False),
     ),
-    # Per-source tail reads (``WHERE key = $key ORDER BY seq DESC``) are
-    # the dominant log access pattern; sorting by ``key`` first colocates
-    # same-source rows in the same parquet row groups for pruning.
+    # Per-source tail reads (``WHERE key = $key ORDER BY seq DESC``) dominate;
+    # sorting by ``key`` first colocates same-source rows for row-group pruning.
     key_column="key",
 )
 
@@ -90,8 +69,7 @@ _LOG_PREFIX = "logs_"
 
 _ROW_GROUP_SIZE = 16_384
 
-# Hard ceiling on the per-read parquet working set. Caps cumulative on-disk
-# bytes opened in a single query; safety net for pathological body-LIKE
+# Hard ceiling on the per-read parquet working set; safety net for body-LIKE
 # queries that cannot be pruned by row-group statistics.
 _MAX_PARQUET_BYTES_PER_READ = 2_500 * 1024 * 1024
 
@@ -118,13 +96,7 @@ def _min_seq_from_filename(name: str) -> int | None:
 
 
 def _read_seq_bounds(path: Path) -> tuple[int, int]:
-    """Compute (min_seq, max_seq) for a segment using filename + parquet metadata.
-
-    The ``min_seq`` is encoded in the filename. ``max_seq = min_seq + num_rows - 1``
-    where ``num_rows`` comes from the Parquet footer. This works uniformly for
-    both the log namespace (where seq is a row-level column) and other
-    namespaces (where the filename counter is per-batch).
-    """
+    """Compute (min_seq, max_seq) for a segment via filename + parquet metadata."""
     min_seq = _min_seq_from_filename(path.name)
     if min_seq is None:
         return 0, 0
@@ -139,17 +111,10 @@ def _read_seq_bounds(path: Path) -> tuple[int, int]:
 
 
 def _discover_segments(log_dir: Path) -> list[Path]:
-    """Return every on-disk segment (tmp + log), chronological by filename."""
     return sorted(list(log_dir.glob(f"{_TMP_PREFIX}*.parquet")) + list(log_dir.glob(f"{_LOG_PREFIX}*.parquet")))
 
 
 def _recover_next_seq(log_dir: Path) -> int:
-    """Walk segments and return the next sequence to assign.
-
-    Returns ``max(min_seq + num_rows) + 1`` across all segments, or 1 if
-    none exist. Sequence values are dense (no gaps) by construction; recovery
-    only needs the global maximum.
-    """
     next_seq = 1
     for p in _discover_segments(log_dir):
         _, max_seq = _read_seq_bounds(p)
@@ -159,11 +124,9 @@ def _recover_next_seq(log_dir: Path) -> int:
 
 
 def _merge_chunks(chunks: list[pa.Table]) -> list[pa.Table]:
-    """Compact the chunk list by merging adjacent same-order-of-magnitude tables.
+    """Log-structured merge: keep each chunk at least 2x the previous one.
 
-    Maintains the invariant that each chunk is at least 2x the size of the
-    previous one (log-structured merge), keeping ``len(chunks)`` logarithmic
-    in total row count.
+    Bounds ``len(chunks)`` logarithmically in total row count.
     """
     if len(chunks) < 2:
         return chunks
@@ -178,12 +141,6 @@ def _merge_chunks(chunks: list[pa.Table]) -> list[pa.Table]:
 
 @dataclass
 class _SealedBuffer:
-    """Pre-flush snapshot being written to Parquet by the bg thread.
-
-    Visible to readers via the active RAM tables so data in flight isn't
-    invisible during the write.
-    """
-
     table: pa.Table
     min_seq: int
     max_seq: int
@@ -191,8 +148,6 @@ class _SealedBuffer:
 
 @dataclass
 class LocalSegment:
-    """Metadata for a sealed Parquet segment on disk."""
-
     path: str
     size_bytes: int
     min_seq: int = 0
@@ -200,14 +155,7 @@ class LocalSegment:
 
 
 def _stamp_seq_column(batch: pa.RecordBatch, first_seq: int, arrow_schema: pa.Schema) -> pa.Table:
-    """Return ``batch`` projected to ``arrow_schema`` with ``seq`` filled in.
-
-    The batch arrives wire-aligned (without seq); the namespace assigns a
-    contiguous monotonic run starting at ``first_seq`` and projects to
-    the storage layout. ``arrow_schema`` carries the implicit ``seq``
-    column at its position in the registered schema (prepended by
-    :func:`finelog.store.schema.with_implicit_seq`).
-    """
+    """Project ``batch`` to ``arrow_schema`` with the implicit seq column filled."""
     seq_array = pa.array(range(first_seq, first_seq + batch.num_rows), type=pa.int64())
     arrays: list[pa.Array] = []
     for field in arrow_schema:
@@ -219,13 +167,7 @@ def _stamp_seq_column(batch: pa.RecordBatch, first_seq: int, arrow_schema: pa.Sc
 
 
 def _build_log_table(buffer: list[tuple], arrow_schema: pa.Schema) -> pa.Table:
-    """Build an Arrow table for the log namespace's row tuples.
-
-    The tuple layout is fixed at ``(seq, key, source, data, epoch_ms,
-    level)`` — see :meth:`DiskLogNamespace.append_log_batch`. Other
-    namespaces don't go through this function; they call
-    :meth:`append_record_batch` with a pre-aligned RecordBatch.
-    """
+    """Build an Arrow table from log-namespace ``(seq, key, source, data, epoch_ms, level)`` tuples."""
     if not buffer:
         return arrow_schema.empty_table()
     n = 6
@@ -244,18 +186,7 @@ def _build_log_table(buffer: list[tuple], arrow_schema: pa.Schema) -> pa.Table:
     return pa.table(arrays, schema=arrow_schema)
 
 
-# ---------------------------------------------------------------------------
-# Protocol
-# ---------------------------------------------------------------------------
-
-
 class LogNamespaceProtocol(Protocol):
-    """Surface every namespace variant exposes to :class:`DuckDBLogStore`.
-
-    Used by the registry so it can hold either :class:`DiskLogNamespace` or
-    :class:`MemoryLogNamespace` without branching.
-    """
-
     name: str
     schema: Schema
 
@@ -292,23 +223,13 @@ class LogNamespaceProtocol(Protocol):
     def stop_and_join(self) -> None: ...
 
 
-# ---------------------------------------------------------------------------
-# Disk implementation
-# ---------------------------------------------------------------------------
-
-
 class DiskLogNamespace:
     """Disk-backed per-namespace storage.
 
     Owns the in-memory write buffer, the on-disk Parquet segment registry,
-    the flush thread, and the compaction state for a single namespace. The
-    registered schema (an Arrow schema derived from
-    :class:`finelog.store.schema.Schema`) drives the flush and compaction
-    pipelines.
-
+    the flush thread, and the compaction state for a single namespace.
     The ``log`` namespace exposes a key/source/data read API on top of the
-    same storage; that path is hardcoded for log columns and is not used by
-    other namespaces.
+    same storage; that path is hardcoded for log columns.
     """
 
     def __init__(
@@ -339,14 +260,10 @@ class DiskLogNamespace:
         self._max_tmp_segments_before_compact = max_tmp_segments_before_compact
         self._evict_hook = evict_hook
 
-        # Locks supplied by the registry. The insertion lock is acquired by
-        # every mutator (append, compact step, flush snapshot, segment-list
-        # mutations); the rwlock guards file ops against in-flight reads.
         self._insertion_lock = insertion_lock
         self._query_visibility_lock = query_visibility_lock
-        # Local flush mutex prevents two flushers (test hook + bg thread)
-        # racing on the same tmp filename. This is namespace-local because
-        # filenames are derived from the namespace's own _next_seq.
+        # Prevents the test ``_force_flush`` hook racing the bg thread on
+        # the same tmp filename (both derive from this namespace's _next_seq).
         self._flush_lock = Lock()
 
         self._compaction_conn = compaction_conn
@@ -377,17 +294,15 @@ class DiskLogNamespace:
                 logger.info("Dropping stale tmp segment %s covered by compacted logs_ range", s.path)
                 try:
                     Path(s.path).unlink()
-                except Exception:
+                except OSError:
                     logger.warning("Failed to unlink stale tmp segment %s", s.path, exc_info=True)
                 continue
             self._local_segments.append(s)
 
         self._flush_rl = RateLimiter(flush_interval_sec)
         self._compaction_rl = RateLimiter(compaction_interval_sec)
-        # Mark all rate limiters as just-run so the bg loop doesn't fire a
-        # spurious tick at startup. Without this, the very first iteration
-        # would race the caller's first ``append_*`` and could compact a
-        # partially-written set of tmp segments.
+        # Mark just-run so the bg loop doesn't fire a spurious tick at startup
+        # and compact a partially-written set of tmp segments.
         self._flush_rl.mark_run()
         self._compaction_rl.mark_run()
         self._stop = threading.Event()
@@ -403,18 +318,8 @@ class DiskLogNamespace:
         )
         self._bg_thread.start()
 
-    # ------------------------------------------------------------------
-    # Append API
-    # ------------------------------------------------------------------
-
     def append_log_batch(self, items: list[tuple[str, list]]) -> None:
-        """Log-namespace-only append for ``PushLogs`` RPCs.
-
-        Each ``(key, entries)`` pair becomes a contiguous run of rows with
-        synthesized ``seq`` values starting at the namespace's
-        ``_next_seq``. The register-time Schema for the log namespace is
-        :data:`LOG_REGISTERED_SCHEMA`.
-        """
+        """Log-namespace-only append for ``PushLogs`` RPCs."""
         with self._insertion_lock:
             for key, entries in items:
                 if not entries:
@@ -431,16 +336,7 @@ class DiskLogNamespace:
             self._wake.set()
 
     def append_record_batch(self, batch: pa.RecordBatch) -> None:
-        """Generic append for stats namespaces.
-
-        ``batch`` is the wire-aligned batch (sans the implicit ``seq``
-        column) returned by
-        :func:`finelog.store.schema.validate_and_align_batch`. The
-        namespace stamps a contiguous run of ``seq`` values starting at
-        ``_next_seq`` onto the batch and concatenates it onto the in-RAM
-        chunk list. A flush is signaled if the total RAM working set
-        exceeds ``segment_target_bytes``.
-        """
+        """Stamp ``seq`` values onto ``batch`` and append it to the in-RAM chunks."""
         if batch.num_rows == 0:
             return
         with self._insertion_lock:
@@ -452,10 +348,6 @@ class DiskLogNamespace:
             needs_drain = self._ram_bytes_locked() >= self._segment_target_bytes
         if needs_drain:
             self._wake.set()
-
-    # ------------------------------------------------------------------
-    # Read API (log-namespace-specific)
-    # ------------------------------------------------------------------
 
     def get_logs(
         self,
@@ -496,12 +388,7 @@ class DiskLogNamespace:
             include_key_in_select=True,
         )
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
     def close(self) -> None:
-        """Stop the bg thread and drain any remaining data."""
         self._stop.set()
         self._wake.set()
         self._bg_thread.join()
@@ -509,44 +396,22 @@ class DiskLogNamespace:
         self._compaction_step(compact_single=True)
 
     def stop_and_join(self) -> None:
-        """Stop the bg thread and join it, without flushing or compacting.
-
-        Used by ``DropTable``: the local segment directory is about to be
-        deleted, so flushing in-memory data to disk would be wasted I/O.
-        After this call no further file writes happen for this namespace.
-        """
+        """Stop the bg thread without flushing or compacting (used by ``DropTable``)."""
         self._stop.set()
         self._wake.set()
         self._bg_thread.join()
 
-    # ------------------------------------------------------------------
-    # Schema evolution
-    # ------------------------------------------------------------------
-
     def update_schema(self, new_schema: Schema) -> None:
-        """Replace the registered schema with an additively-evolved version.
-
-        Caller (the registry) is responsible for verifying the new schema is
-        an additive-nullable extension of the current one. Stats writes for
-        the previously-registered subset continue to work; missing columns
-        on the wire are filled with NULL during validate-and-align.
-        """
         _assert_additive_schema_evolution(self.schema, new_schema)
         self.schema = new_schema
         self._arrow_schema = schema_to_arrow(new_schema)
 
-    # ------------------------------------------------------------------
-    # Internal: background thread
-    # ------------------------------------------------------------------
-
     def _ram_bytes_locked(self) -> int:
-        """Total bytes across every in-RAM holder. Caller holds the insertion lock."""
         chunks_b = sum(t.nbytes for t in self._chunks)
         flushing_b = self._flushing.table.nbytes if self._flushing is not None else 0
         return chunks_b + flushing_b
 
     def _bg_loop(self) -> None:
-        """Drive compact, flush, and compaction on rate-limited schedules."""
         while not self._stop.is_set():
             with self._insertion_lock:
                 force_drain = self._ram_bytes_locked() >= self._segment_target_bytes
@@ -565,7 +430,6 @@ class DiskLogNamespace:
             self._wake.clear()
 
     def _flush_step(self) -> None:
-        """Seal any RAM data into a Parquet segment on disk."""
         with self._flush_lock:
             with self._insertion_lock:
                 if not self._chunks:
@@ -599,22 +463,15 @@ class DiskLogNamespace:
             self._evict_hook()
 
     def _derive_seq_bounds_locked(self, table: pa.Table) -> tuple[int, int]:
-        """Return ``(min_seq, max_seq)`` from the implicit seq column."""
         seq_col = table.column(IMPLICIT_SEQ_COLUMN)
         return pc.min(seq_col).as_py(), pc.max(seq_col).as_py()
 
     def _sort_for_flush(self, table: pa.Table) -> pa.Table:
-        """Sort a sealed buffer by ``(key_column, seq)`` (or just seq)."""
         keys = self._compaction_sort_keys()
         return table.sort_by([(name, "ascending") for name in keys])
 
     def _compaction_sort_keys(self) -> tuple[str, ...]:
-        """Return the column names that compaction sorts on.
-
-        Order: ``key_column`` (if set) → implicit ``seq``. Sorting by the
-        primary key first colocates same-key rows in the same parquet row
-        groups so range scans on the key prune efficiently.
-        """
+        # key_column first so range scans on it prune row groups efficiently.
         if self.schema.key_column:
             return (self.schema.key_column, IMPLICIT_SEQ_COLUMN)
         return (IMPLICIT_SEQ_COLUMN,)
@@ -706,7 +563,7 @@ class DiskLogNamespace:
             for t in tmps:
                 try:
                     Path(t.path).unlink(missing_ok=True)
-                except Exception:
+                except OSError:
                     logger.warning("Failed to unlink tmp segment %s", t.path, exc_info=True)
         finally:
             self._query_visibility_lock.write_release()
@@ -728,13 +585,11 @@ class DiskLogNamespace:
         self._evict_hook()
 
     def _build_compaction_sql(self, input_paths: list[Path], staging_path: Path) -> str:
-        """Compose the COPY statement that compacts ``input_paths`` to ``staging_path``.
+        """Compose the COPY that merges ``input_paths`` to ``staging_path``.
 
-        Generates one SELECT expression per registered column. Columns
-        missing from *every* input segment are synthesized as
-        ``NULL::TYPE AS name``; columns present in at least one input are
-        projected by name and ``union_by_name=true`` fills NULL where they
-        are absent from individual segments.
+        Columns missing from every input become ``NULL::TYPE AS name``.
+        ``union_by_name=true`` fills NULL where a column is absent from
+        individual segments.
         """
         present_columns = self._present_input_columns(input_paths)
         select_exprs: list[str] = []
@@ -758,7 +613,6 @@ class DiskLogNamespace:
         )
 
     def _present_input_columns(self, input_paths: list[Path]) -> set[str]:
-        """Return the union of column names present across all input segments."""
         present: set[str] = set()
         for p in input_paths:
             schema = pq.read_schema(p)
@@ -766,28 +620,16 @@ class DiskLogNamespace:
         return present
 
     def _compaction_order_clause(self) -> str:
-        """Return the ORDER BY clause for compaction."""
         cols = ", ".join(quote_ident(name) for name in self._compaction_sort_keys())
         return f"ORDER BY {cols}"
 
     def sealed_segments(self) -> list[LocalSegment]:
-        """Return flushed (logs_*) segments only, oldest first.
-
-        Caller must hold the registry's query-visibility read lock so the
-        list isn't mutated mid-snapshot. Tmp segments are deliberately
-        excluded — queries see only flushed/compacted data.
-        """
+        """Return flushed (logs_*) segments only, oldest first."""
         with self._insertion_lock:
             return [s for s in self._local_segments if not _is_tmp_path(s.path)]
 
     def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]:
-        """Return all currently queryable local segments and RAM tables.
-
-        The stats SQL path should see rows as soon as ``write_rows`` accepts
-        them, not only after background flush/compaction. The caller holds the
-        registry's query-visibility read lock across query execution so parquet
-        files in the returned segment list cannot be unlinked mid-scan.
-        """
+        """Return all currently queryable local segments and RAM tables."""
         with self._insertion_lock:
             ram_tables = list(self._chunks)
             if self._flushing is not None:
@@ -795,21 +637,11 @@ class DiskLogNamespace:
             return list(self._local_segments), ram_tables
 
     def all_segments_unlocked(self) -> list[LocalSegment]:
-        """Return a snapshot of every locally-tracked segment (tmp + sealed).
-
-        Caller MUST hold the registry's insertion lock — this method does
-        not take it. Used by the registry's eviction pass which already
-        owns the lock for the snapshot phase.
-        """
+        """Snapshot every locally-tracked segment. Caller MUST hold the insertion lock."""
         return list(self._local_segments)
 
     def evict_segment(self, path: str) -> int:
-        """Remove ``path`` from local tracking and unlink the file.
-
-        Caller holds the registry's query-visibility write lock so a
-        concurrent query cannot observe a torn segment list. Returns the
-        size in bytes freed (or 0 if the segment was not tracked).
-        """
+        """Remove ``path`` from tracking and unlink the file. Returns bytes freed."""
         with self._insertion_lock:
             new: deque[LocalSegment] = deque()
             removed_bytes = 0
@@ -821,31 +653,23 @@ class DiskLogNamespace:
             self._local_segments = new
         try:
             Path(path).unlink(missing_ok=True)
-        except Exception:
+        except OSError:
             logger.warning("Failed to delete evicted segment %s", path, exc_info=True)
         return removed_bytes
 
     def remove_local_storage(self) -> None:
-        """Delete every tracked segment file plus the namespace directory.
-
-        Used by ``DropTable``. Caller holds the query-visibility write
-        lock; the namespace must already be detached from the registry
-        (the bg flush thread joined, the registry row removed) so no
-        concurrent code holds a reference to this namespace.
-        """
+        """Delete every tracked segment file plus the namespace directory."""
         for s in list(self._local_segments):
             try:
                 Path(s.path).unlink(missing_ok=True)
-            except Exception:
+            except OSError:
                 logger.warning("Failed to delete %s during drop", s.path, exc_info=True)
         self._local_segments.clear()
-        # Remove any stragglers (e.g. half-written .parquet.tmp) plus the
-        # directory itself. ``rmdir`` only removes an empty directory; if
-        # something unexpected is left we log and leave the directory.
+        # Sweep stragglers (e.g. half-written .parquet.tmp) before rmdir.
         for p in list(self._data_dir.glob("*")):
             try:
                 p.unlink()
-            except Exception:
+            except OSError:
                 logger.warning("Failed to delete stray file %s during drop", p, exc_info=True)
         try:
             self._data_dir.rmdir()
@@ -853,11 +677,6 @@ class DiskLogNamespace:
             logger.warning("Namespace dir %s not empty after drop", self._data_dir)
 
     def _offload_to_gcs(self, filename: str, filepath: Path) -> None:
-        """Copy a Parquet file to GCS (best-effort).
-
-        Per spec, the remote layout mirrors local: per-namespace prefix at
-        ``{remote_log_dir}/{namespace}/{filename}``.
-        """
         if not self._remote_log_dir:
             return
 
@@ -877,10 +696,6 @@ class DiskLogNamespace:
             int((time.monotonic() - upload_start) * 1000),
         )
 
-    # ------------------------------------------------------------------
-    # Internal: read
-    # ------------------------------------------------------------------
-
     def _execute_read(
         self,
         where_parts: list[str],
@@ -891,7 +706,7 @@ class DiskLogNamespace:
         include_key_in_select: bool,
         exact_key: str | None = None,
     ) -> LogReadResult:
-        # Hold the rwlock across the whole query so GC / compaction can't
+        # Hold the rwlock across the whole query so GC/compaction can't
         # unlink a file that DuckDB may still open lazily.
         self._query_visibility_lock.read_acquire()
         try:
@@ -916,7 +731,6 @@ class DiskLogNamespace:
         tail: bool,
         include_key_in_select: bool,
     ) -> list[tuple]:
-        """Snapshot RAM + segments, run one DuckDB query."""
         with self._insertion_lock:
             segments = list(self._local_segments)
             ram_tables: list[pa.Table] = list(self._chunks)
@@ -939,23 +753,13 @@ class DiskLogNamespace:
             return conn.execute(sql, params).fetchall()
 
 
-# ---------------------------------------------------------------------------
-# Memory implementation
-# ---------------------------------------------------------------------------
-
-
 class MemoryLogNamespace:
     """In-process Arrow-backed namespace for tests and embedded use.
 
-    Holds every appended row in a single Arrow table per namespace. There is
-    no segmentation, no flush, no compaction, no eviction, and no background
-    thread. The query path is the same as :class:`DiskLogNamespace`'s — the
-    table is exposed via :meth:`query_snapshot` and consumed by the registry
-    as a RAM table.
-
-    The registered schema may evolve (additive nullable extension); the
-    backing table is reprojected to the new schema on each
-    :meth:`update_schema` call.
+    Holds every appended row in a single Arrow table; no segmentation,
+    flush, compaction, eviction, or background thread. The registered
+    schema may evolve (additive nullable extension); the backing table is
+    reprojected on each :meth:`update_schema` call.
     """
 
     def __init__(
@@ -973,17 +777,10 @@ class MemoryLogNamespace:
         self._insertion_lock = insertion_lock
         self._query_visibility_lock = query_visibility_lock
         self._read_pool = read_pool
-        # Single Arrow table holding every appended row. Initialised empty
-        # against the registered schema so consumers can register it with
-        # DuckDB before any rows arrive.
+        # Empty against the registered schema so consumers can register it
+        # with DuckDB before any rows arrive.
         self._table: pa.Table = self._arrow_schema.empty_table()
-        # Per-row counter for the log namespace; matches the disk variant's
-        # invariant that ``seq`` is dense and monotonic.
         self._next_seq = 1
-
-    # ------------------------------------------------------------------
-    # Append API
-    # ------------------------------------------------------------------
 
     def append_log_batch(self, items: list[tuple[str, list]]) -> None:
         with self._insertion_lock:
@@ -1007,10 +804,6 @@ class MemoryLogNamespace:
             self._next_seq += batch.num_rows
             stamped = _stamp_seq_column(batch, first_seq, self._arrow_schema)
             self._table = pa.concat_tables([self._table, stamped])
-
-    # ------------------------------------------------------------------
-    # Read API (log-namespace-specific)
-    # ------------------------------------------------------------------
 
     def get_logs(
         self,
@@ -1038,8 +831,8 @@ class MemoryLogNamespace:
             include_key_in_select = True
             exact_key = None
 
-        # Snapshot the table under the insertion lock; rwlock not needed
-        # because there are no files to unlink.
+        # Insertion lock alone suffices; rwlock unneeded because there are
+        # no files to unlink.
         with self._insertion_lock:
             table = self._table
 
@@ -1057,10 +850,6 @@ class MemoryLogNamespace:
 
         return _shape_log_read_result(rows, tail, max_lines, cursor, include_key_in_select, exact_key)
 
-    # ------------------------------------------------------------------
-    # Snapshot API consumed by the registry
-    # ------------------------------------------------------------------
-
     def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]:
         with self._insertion_lock:
             return [], [self._table]
@@ -1071,10 +860,6 @@ class MemoryLogNamespace:
     def all_segments_unlocked(self) -> list[LocalSegment]:
         return []
 
-    # ------------------------------------------------------------------
-    # Schema evolution
-    # ------------------------------------------------------------------
-
     def update_schema(self, new_schema: Schema) -> None:
         _assert_additive_schema_evolution(self.schema, new_schema)
         new_arrow = schema_to_arrow(new_schema)
@@ -1083,13 +868,7 @@ class MemoryLogNamespace:
             self.schema = new_schema
             self._arrow_schema = new_arrow
 
-    # ------------------------------------------------------------------
-    # Lifecycle / no-ops
-    # ------------------------------------------------------------------
-
     def evict_segment(self, path: str) -> int:
-        # Memory mode does not participate in eviction; the registry never
-        # gets candidate paths because all_segments_unlocked() is empty.
         return 0
 
     def remove_local_storage(self) -> None:
@@ -1103,29 +882,13 @@ class MemoryLogNamespace:
         return
 
 
-# ---------------------------------------------------------------------------
-# Helpers (private)
-# ---------------------------------------------------------------------------
-
-
 class _ReadPoolProtocol(Protocol):
-    """Structural type the namespace variants use for read connections.
-
-    The registry's :class:`_ConnectionPool` implements this; tests can
-    substitute any object that yields a ``(cursor, ram_table_names)`` pair.
-    """
-
     def checkout(
         self, buffer_tables: list[pa.Table]
     ) -> AbstractContextManager[tuple[duckdb.DuckDBPyConnection, list[str]]]: ...
 
 
 def _assert_additive_schema_evolution(old: Schema, new: Schema) -> None:
-    """Verify ``new`` is an additive-nullable extension of ``old``.
-
-    Raises ``AssertionError`` on any non-additive change (column dropped,
-    type changed, nullability changed, new non-nullable column).
-    """
     old_columns = {c.name: c for c in old.columns}
     new_columns = {c.name: c for c in new.columns}
     for name, old_col in old_columns.items():
@@ -1148,11 +911,6 @@ def _shape_log_read_result(
     include_key_in_select: bool,
     exact_key: str | None,
 ) -> LogReadResult:
-    """Convert a fetched row list into the proto-shaped read result.
-
-    Both namespace variants funnel through this so the response shape
-    stays in lockstep — only the SQL pipeline upstream differs.
-    """
     if tail and max_lines > 0:
         rows.reverse()
 
@@ -1162,19 +920,19 @@ def _shape_log_read_result(
     max_seq = max(r[0] for r in rows)
 
     if include_key_in_select:
+        # row: (seq, key, source, data, epoch_ms, level)
         entries = []
         for r in rows:
-            # r: (seq, key, source, data, epoch_ms, level)
             entry = logging_pb2.LogEntry(source=r[2], data=r[3], level=r[5])
             entry.timestamp.epoch_ms = r[4]
             entry.key = r[1]
             entry.attempt_id = parse_attempt_id(r[1])
             entries.append(entry)
     else:
+        # row: (seq, source, data, epoch_ms, level)
         entries = []
         attempt_id = parse_attempt_id(exact_key) if exact_key else 0
         for r in rows:
-            # r: (seq, source, data, epoch_ms, level)
             entry = logging_pb2.LogEntry(source=r[1], data=r[2], level=r[4])
             entry.timestamp.epoch_ms = r[3]
             entry.attempt_id = attempt_id
@@ -1184,7 +942,6 @@ def _shape_log_read_result(
 
 
 def _cap_segments(segments: list[LocalSegment]) -> list[LocalSegment]:
-    """Cap a segment list at the per-read working-set ceiling, newest-first."""
     if not segments:
         return segments
     newest_first = sorted(segments, key=lambda s: s.min_seq, reverse=True)
@@ -1200,7 +957,6 @@ def _cap_segments(segments: list[LocalSegment]) -> list[LocalSegment]:
 
 
 def _regex_literal_prefix(pattern: str) -> str:
-    """Extract the literal prefix from a regex pattern."""
     match = REGEX_META_RE.search(pattern)
     if match is None:
         return pattern
@@ -1245,13 +1001,7 @@ def _add_common_filters(
 
 
 def _project_to_schema(table: pa.Table, target: pa.Schema) -> pa.Table:
-    """Cast/extend ``table`` to match ``target`` column order, filling NULL.
-
-    Mirrors :meth:`DiskLogNamespace._build_compaction_sql`'s union-by-name
-    semantics: columns absent from ``table`` are added as nulls; columns
-    present are cast to the target type if needed; columns not in
-    ``target`` are dropped.
-    """
+    """Cast/extend ``table`` to match ``target``: missing columns become nulls."""
     cols = []
     for field in target:
         if field.name in table.schema.names:
@@ -1265,12 +1015,8 @@ def _project_to_schema(table: pa.Table, target: pa.Schema) -> pa.Table:
 
 
 def _build_union_source(parquet_files: list[str], ram_table_names: list[str], arrow_schema: pa.Schema) -> str:
-    """SQL source: local Parquet files UNION ALL ram tables.
-
-    File paths are self-generated (``tmp_*.parquet`` / ``logs_*.parquet``) so
-    no SQL injection risk from f-string embedding. RAM table names are
-    generated internally (``_ram_<cid>_<i>``).
-    """
+    # Both parquet paths and ram table names are self-generated, so f-string
+    # embedding has no SQL-injection surface.
     parts: list[str] = []
     if parquet_files:
         file_list = ", ".join(f"'{f}'" for f in parquet_files)
