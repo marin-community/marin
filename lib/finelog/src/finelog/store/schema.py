@@ -108,10 +108,17 @@ class Schema:
             additive evolutions.
         key_column: Explicit ordering key column name. Empty means the server
             falls back to ``timestamp_ms``.
+        compaction_sort_prefix: Optional column-name prefix to sort segments
+            by during compaction, before the implicit ``seq`` column. Use it
+            when the dominant query filters on a non-numeric column (so it
+            can't be the ``key_column``) and benefits from row-group pruning
+            on that column. Empty means compaction sorts by ``(key_column,
+            seq)`` (or ``(seq,)`` when no key_column is set).
     """
 
     columns: tuple[Column, ...]
     key_column: str = ""
+    compaction_sort_prefix: tuple[str, ...] = ()
 
     def column(self, name: str) -> Column | None:
         for c in self.columns:
@@ -172,7 +179,11 @@ def with_implicit_seq(schema: Schema) -> Schema:
     if any(c.name == IMPLICIT_SEQ_COLUMN for c in schema.columns):
         return schema
     seq_col = Column(name=IMPLICIT_SEQ_COLUMN, type=stats_pb2.COLUMN_TYPE_INT64, nullable=False)
-    return Schema(columns=(seq_col, *schema.columns), key_column=schema.key_column)
+    return Schema(
+        columns=(seq_col, *schema.columns),
+        key_column=schema.key_column,
+        compaction_sort_prefix=schema.compaction_sort_prefix,
+    )
 
 
 def without_implicit_seq(schema: Schema) -> Schema:
@@ -184,7 +195,11 @@ def without_implicit_seq(schema: Schema) -> Schema:
     if not any(c.name == IMPLICIT_SEQ_COLUMN for c in schema.columns):
         return schema
     cols = tuple(c for c in schema.columns if c.name != IMPLICIT_SEQ_COLUMN)
-    return Schema(columns=cols, key_column=schema.key_column)
+    return Schema(
+        columns=cols,
+        key_column=schema.key_column,
+        compaction_sort_prefix=schema.compaction_sort_prefix,
+    )
 
 
 def schema_to_arrow(schema: Schema) -> pa.Schema:
@@ -202,6 +217,7 @@ def schema_to_json(schema: Schema) -> str:
     # int values are not guaranteed across proto edits the way names are.
     payload = {
         "key_column": schema.key_column,
+        "compaction_sort_prefix": list(schema.compaction_sort_prefix),
         "columns": [
             {"name": c.name, "type": stats_pb2.ColumnType.Name(c.type), "nullable": c.nullable} for c in schema.columns
         ],
@@ -215,7 +231,11 @@ def schema_from_json(text: str) -> Schema:
         Column(name=c["name"], type=stats_pb2.ColumnType.Value(c["type"]), nullable=c["nullable"])
         for c in payload["columns"]
     )
-    return Schema(columns=cols, key_column=payload.get("key_column", ""))
+    return Schema(
+        columns=cols,
+        key_column=payload.get("key_column", ""),
+        compaction_sort_prefix=tuple(payload.get("compaction_sort_prefix", ())),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +331,11 @@ def merge_schemas(registered: Schema, requested: Schema) -> Schema:
         return registered
 
     merged_cols = tuple(list(registered.columns) + extras)
-    return Schema(columns=merged_cols, key_column=registered.key_column)
+    return Schema(
+        columns=merged_cols,
+        key_column=registered.key_column,
+        compaction_sort_prefix=registered.compaction_sort_prefix,
+    )
 
 
 # ---------------------------------------------------------------------------
