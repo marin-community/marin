@@ -174,11 +174,7 @@ def compute_minhash_attrs(
         ctx_kwargs["max_workers"] = max_workers
     ctx = ZephyrContext(**ctx_kwargs)
 
-    # Per-shard write paths mirror the source basenames (preserves the
-    # co-partition convention documented on ``MinHashAttrData``). The output
-    # pattern closes over the ordered shard list so shard_idx → source path is
-    # deterministic; ``Dataset.from_list`` assigns ``shard_idx = i`` per item
-    # (zephyr/plan.py:553).
+    # Preserve source basenames; zephyr's `{basename}` placeholder is synthetic.
     output_basenames = tuple(os.path.basename(p) for p in source_shards)
 
     def _output_path(shard_idx: int, total_shards: int, ad: str = attr_dir, bn: tuple = output_basenames) -> str:
