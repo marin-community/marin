@@ -33,7 +33,7 @@ def _make_steps() -> list[ExecutorStep]:
     for dim, budget in CONFIGS:
         model, optimizer, batch, num_steps = build_from_heuristic(budget=budget, hidden_dim=dim)
         model = dataclasses.replace(model, num_experts=256)
-        run_id = f"e256-d{dim}-{budget:.2e}"
+        run_id = f"e256-d{dim}-{budget:.2e}-v2"
 
         steps.append(
             ExecutorStep(
@@ -44,7 +44,7 @@ def _make_steps() -> list[ExecutorStep]:
                     data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
                     output_path=this_output_path(),
                     run_id=run_id,
-                    resources=versioned(ResourceConfig.with_tpu("v5p-32")),
+                    resources=versioned(ResourceConfig.with_tpu("v5p-8")),
                     enable_cross_region_ckpt_read=True,
                     steps=versioned(num_steps),
                     batch_size=versioned(batch),
