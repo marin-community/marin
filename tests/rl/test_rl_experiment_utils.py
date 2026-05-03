@@ -10,6 +10,7 @@ from levanter.models.llama import LlamaConfig
 from marin.execution.artifact import PathMetadata
 from marin.execution.executor import ExecutorStep, output_path_of
 from marin.rl.curriculum import CurriculumConfig
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.model_utils import is_hf_checkpoint
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
@@ -71,7 +72,7 @@ def _test_config(
             config_class_path=config_class_path(LlamaConfig),
         ),
         rl_loss=RLOOLoss(
-            kl_coef=0.0,
+            kl=KLConfig(mode=KLMode.NONE, beta=0.0),
             clip_epsilon_low=0.2,
             clip_epsilon_high=0.28,
             synchronous=True,
