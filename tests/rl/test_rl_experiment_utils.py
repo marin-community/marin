@@ -53,6 +53,14 @@ def _default_launcher_region(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
 
 
+@pytest.fixture(autouse=True)
+def _stub_tpu_region_lookup(monkeypatch):
+    monkeypatch.setattr(
+        "marin.rl.placement.infer_tpu_variant_regions_from_iris",
+        lambda _variants: ["us-central1", "us-east5", "europe-west4"],
+    )
+
+
 def _test_config(
     *,
     train_tpu_type: str,
@@ -191,8 +199,12 @@ def test_build_rl_job_config_resolves_runtime_output_paths(monkeypatch):
 
     assert job_config.trainer.checkpointer.base_path == "gs://marin-us-central1/rl_testing/rl-test/checkpoints"
     assert job_config.rollout_storage.path == "gs://marin-us-central1/rl_testing/rl-test/rollouts"
+    assert job_config.metadata_path == "gs://marin-us-central1/rl_testing/rl-test/metadata"
     assert job_config.inference_config.load_format == "runai_streamer"
     assert job_config.inference_config.canonical_model_name == MODEL_NAME
+    assert job_config.eval_tracker is not None
+    assert job_config.eval_tracker.name == "rl-test-eval"
+    assert job_config.eval_owner_worker_index == 0
 
 
 def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_path(monkeypatch):

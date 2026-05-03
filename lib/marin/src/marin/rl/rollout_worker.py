@@ -53,6 +53,7 @@ from marin.rl.metrics import pass_at_k_estimator
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.run_state import RolloutTransferCounters
 from marin.rl.runtime import RLRuntimeHandles
+from marin.rl.telemetry import EventShardWriter, StepProvenance, TelemetryEvent, TrackerRunRef, TrackerStream
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .types import (
@@ -146,6 +147,35 @@ class _NoOpTracker:
     def log(self, metrics, step=None):
         pass
 
+    def log_summary(self, metrics):
+        pass
+
+    def log_artifact(self, artifact_path, *, name=None, artifact_type=None):
+        pass
+
+    @property
+    def run_id(self) -> str | None:
+        return None
+
+    @property
+    def run_name(self) -> str | None:
+        return None
+
+    @property
+    def run_url(self) -> str | None:
+        return None
+
+    @property
+    def entity(self) -> str | None:
+        return None
+
+    @property
+    def project(self) -> str | None:
+        return None
+
+    def as_tracker_ref(self, *, stream: TrackerStream, worker_index: int | None = None) -> TrackerRunRef | None:
+        return None
+
     def finish(self):
         pass
 
@@ -182,6 +212,7 @@ class RolloutTracker:
     """
 
     def __init__(self, config: RolloutTrackerConfig, run_id: str):
+        self._config = config
         run_name = config.name or run_id
         self._run = wandb.init(
             entity=config.entity,
@@ -198,6 +229,46 @@ class RolloutTracker:
             self._run.log(metrics)
             return
         self._run.log(metrics, step=step)
+
+    def log_summary(self, metrics: Mapping[str, Any]) -> None:
+        self._run.summary.update(metrics)
+
+    def log_artifact(self, artifact_path, *, name: str | None = None, artifact_type: str | None = None):
+        self._run.log_artifact(artifact_path, name=name, type=artifact_type)
+
+    @property
+    def run_id(self) -> str | None:
+        return getattr(self._run, "id", None)
+
+    @property
+    def run_name(self) -> str | None:
+        return getattr(self._run, "name", None)
+
+    @property
+    def run_url(self) -> str | None:
+        return getattr(self._run, "url", None)
+
+    @property
+    def entity(self) -> str | None:
+        return getattr(self._run, "entity", None) or self._config.entity
+
+    @property
+    def project(self) -> str | None:
+        return getattr(self._run, "project", None) or self._config.project
+
+    def as_tracker_ref(self, *, stream: TrackerStream, worker_index: int | None = None) -> TrackerRunRef:
+        tracker_run_id = self.run_id
+        if tracker_run_id is None:
+            raise RuntimeError("Tracker run ID is unavailable")
+        return TrackerRunRef(
+            stream=stream,
+            tracker_run_id=tracker_run_id,
+            project=self.project,
+            entity=self.entity,
+            run_name=self.run_name,
+            run_url=self.run_url,
+            worker_index=worker_index,
+        )
 
     def finish(self):
         self._run.finish()
@@ -220,8 +291,14 @@ class RolloutWorkerConfig:
     inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig
     """Configuration for inference context."""
 
+    root_run_id: str | None = None
+    """Stable RL job run id used for shared telemetry and artifact paths."""
+
     tracker_config: RolloutTrackerConfig | None = None
     """Configuration for the rollout worker's tracker. If None, tracking is disabled."""
+
+    eval_tracker_config: RolloutTrackerConfig | None = None
+    """Configuration for the dedicated eval tracker."""
 
     seed: int = 0
     """Random seed to use for sampling."""
@@ -245,6 +322,15 @@ class RolloutWorkerConfig:
 
     worker_index: int = 0
     """Index of this worker among all rollout workers."""
+
+    eval_owner_worker_index: int = 0
+    """Worker index responsible for owning the eval tracker stream."""
+
+    metadata_path: str | None = None
+    """Base metadata path for local RL telemetry artifacts."""
+
+    instance_id: str | None = None
+    """Coordinator invocation identifier used for per-attempt artifact naming."""
 
 
 def find_open_port() -> int:
@@ -413,6 +499,8 @@ class RolloutWorker:
     _tokenizer: MarinTokenizer
     _environments: dict[str, MarinEnv]
     tracker: Any  # levanter.Tracker or RolloutTracker
+    _event_writer: EventShardWriter | None
+    _eval_event_writer: EventShardWriter | None
 
     def __init__(self, config: RolloutWorkerConfig, runtime: RLRuntimeHandles):
         config.trainer.id = f"{config.run_id}-rollout"
@@ -445,12 +533,15 @@ class RolloutWorker:
         self._current_train_step: int = -1
         self._last_transfer_counters = RolloutTransferCounterSnapshot()
         self._last_eval_train_step: int | None = None
+        self._event_writer = None
+        self._eval_event_writer = None
 
         self._tokenizer = config.tokenizer
 
         # Event to signal that the first weight transfer has completed.
         # For inflight weight updates, we block inference until initial weights are received.
         self._first_weights_received = threading.Event()
+        self._initialize_telemetry()
 
         logger.info("Starting rollout policy context with weight transfer config %s", self.config.weight_transfer)
 
@@ -486,6 +577,70 @@ class RolloutWorker:
                 daemon=True,
             )
             self.weight_transfer_thread.start()
+
+    def _initialize_telemetry(self) -> None:
+        metadata_path = self.config.metadata_path
+        instance_id = self.config.instance_id
+        if metadata_path is None or instance_id is None:
+            return
+
+        telemetry_run_id = self.config.root_run_id or self.config.run_id
+
+        self._event_writer = EventShardWriter(
+            metadata_path=metadata_path,
+            run_id=telemetry_run_id,
+            stream=TrackerStream.ROLLOUT,
+            instance_id=instance_id,
+            worker_index=self.config.worker_index,
+        )
+        self._event_writer.append(
+            TelemetryEvent(
+                run_id=telemetry_run_id,
+                stream=TrackerStream.ROLLOUT,
+                event_type="worker_started",
+                provenance=StepProvenance(
+                    instance_id=instance_id,
+                    worker_index=self.config.worker_index,
+                ),
+                payload={"worker_role": "rollout"},
+            )
+        )
+        self._register_artifact_ref(self._event_writer.artifact_ref())
+
+        tracker_ref_fn = getattr(self.tracker, "as_tracker_ref", None)
+        register_tracker = getattr(self._runtime.run_state, "register_tracker_ref", None)
+        if tracker_ref_fn is not None and register_tracker is not None:
+            tracker_ref = tracker_ref_fn(stream=TrackerStream.ROLLOUT, worker_index=self.config.worker_index)
+            if tracker_ref is not None:
+                register_tracker.remote(tracker_ref).result()
+
+        if self.config.worker_index != self.config.eval_owner_worker_index:
+            return
+
+        self._eval_event_writer = EventShardWriter(
+            metadata_path=metadata_path,
+            run_id=telemetry_run_id,
+            stream=TrackerStream.EVAL,
+            instance_id=instance_id,
+        )
+        self._eval_event_writer.append(
+            TelemetryEvent(
+                run_id=telemetry_run_id,
+                stream=TrackerStream.EVAL,
+                event_type="stream_initialized",
+                provenance=StepProvenance(
+                    instance_id=instance_id,
+                    worker_index=self.config.worker_index,
+                ),
+                payload={"worker_role": "eval_owner"},
+            )
+        )
+        self._register_artifact_ref(self._eval_event_writer.artifact_ref())
+
+    def _register_artifact_ref(self, artifact_ref) -> None:
+        register_artifact = getattr(self._runtime.run_state, "register_artifact_ref", None)
+        if register_artifact is not None:
+            register_artifact.remote(artifact_ref).result()
 
     def _load_environment(self, lesson_id: str) -> MarinEnv:
         """Load environment from lesson ID."""
