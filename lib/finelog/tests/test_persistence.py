@@ -79,13 +79,14 @@ def test_compaction_across_additive_evolution(tmp_path: Path):
         log_files = sorted(seg_dir.glob("logs_*.parquet"))
         assert len(log_files) == 1
         table = pq.read_table(log_files[0])
-        # Registered order: a, b, timestamp_ms, c.
-        assert table.column_names == ["a", "b", "timestamp_ms", "c"]
+        # Stored order: implicit ``seq`` first, then registered columns
+        # (``a``, ``b``, ``timestamp_ms``) followed by additive ``c``.
+        assert table.column_names == ["seq", "a", "b", "timestamp_ms", "c"]
         # First row (from pre-evolution segment) has c = NULL.
         rows = table.to_pylist()
         rows.sort(key=lambda r: r["timestamp_ms"])
-        assert rows[0] == {"a": "x", "b": 1, "timestamp_ms": 10, "c": None}
-        assert rows[1] == {"a": "y", "b": 2, "timestamp_ms": 20, "c": 2.5}
+        assert rows[0] == {"seq": 1, "a": "x", "b": 1, "timestamp_ms": 10, "c": None}
+        assert rows[1] == {"seq": 2, "a": "y", "b": 2, "timestamp_ms": 20, "c": 2.5}
     finally:
         store.close()
 

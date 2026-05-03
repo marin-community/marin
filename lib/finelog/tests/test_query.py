@@ -73,8 +73,9 @@ def test_query_against_namespace_with_zero_sealed_segments_returns_empty(store: 
     store.register_table("iris.worker", _worker_schema())
     table = store.query('SELECT * FROM "iris.worker"')
     assert table.num_rows == 0
-    # The schema reflects the registered columns even though no segments exist.
-    assert set(table.column_names) == {"worker_id", "mem_bytes", "timestamp_ms"}
+    # The schema reflects the registered columns plus the implicit ``seq``
+    # column the registry stamps onto every namespace.
+    assert set(table.column_names) == {"seq", "worker_id", "mem_bytes", "timestamp_ms"}
 
 
 def test_query_with_where_filter(store: DuckDBLogStore):

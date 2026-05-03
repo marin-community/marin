@@ -77,6 +77,13 @@ _KEY_COLUMN_TYPES: frozenset[ColumnTypeValue] = frozenset(
 # Default implicit key column name when Schema.key_column is empty.
 IMPLICIT_KEY_COLUMN = "timestamp_ms"
 
+# Per-row monotonic counter assigned server-side at write time. Stored on
+# every namespace's parquet segments and visible to SQL queries; not
+# transmitted on the wire and not declared by callers. Acts as the
+# secondary sort key for compaction (paired with the namespace's primary
+# key column) and as the cursor for log-namespace tail reads.
+IMPLICIT_SEQ_COLUMN = "seq"
+
 
 @dataclass(frozen=True)
 class Column:
@@ -122,19 +129,62 @@ class Schema:
 
 
 def schema_from_proto(msg: stats_pb2.Schema) -> Schema:
+    """Decode a wire schema message.
+
+    Wire schemas never carry implicit columns (e.g. ``seq``); a client
+    that includes one is rejected. Server-stored schemas with implicit
+    columns are kept in-process only and never round-trip through the
+    wire form.
+    """
     cols: list[Column] = []
     for c in msg.columns:
         if c.type == stats_pb2.COLUMN_TYPE_UNKNOWN or c.type not in _ARROW_TYPE_FOR:
             raise SchemaValidationError(f"column {c.name!r}: unknown column type {c.type!r}")
+        if c.name == IMPLICIT_SEQ_COLUMN:
+            raise SchemaValidationError(f"column {IMPLICIT_SEQ_COLUMN!r} is reserved (server-assigned implicit column)")
         cols.append(Column(name=c.name, type=c.type, nullable=c.nullable))
     return Schema(columns=tuple(cols), key_column=msg.key_column)
 
 
 def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
+    """Encode a schema for the wire, stripping implicit columns.
+
+    The server stamps implicit columns (``seq``) onto storage; clients
+    neither declare nor receive them, so they are not part of the wire
+    contract.
+    """
     msg = stats_pb2.Schema(key_column=schema.key_column)
     for c in schema.columns:
+        if c.name == IMPLICIT_SEQ_COLUMN:
+            continue
         msg.columns.append(stats_pb2.Column(name=c.name, type=c.type, nullable=c.nullable))
     return msg
+
+
+def with_implicit_seq(schema: Schema) -> Schema:
+    """Return ``schema`` with the implicit ``seq`` column prepended.
+
+    No-op if ``schema`` already declares ``seq``. Used by the registry
+    when persisting / merging schemas; the on-disk parquet layout always
+    carries this column so compaction sorts can fall back to ``(key,
+    seq)`` without per-namespace branches.
+    """
+    if any(c.name == IMPLICIT_SEQ_COLUMN for c in schema.columns):
+        return schema
+    seq_col = Column(name=IMPLICIT_SEQ_COLUMN, type=stats_pb2.COLUMN_TYPE_INT64, nullable=False)
+    return Schema(columns=(seq_col, *schema.columns), key_column=schema.key_column)
+
+
+def without_implicit_seq(schema: Schema) -> Schema:
+    """Return ``schema`` with the implicit ``seq`` column dropped.
+
+    Inverse of :func:`with_implicit_seq`. Used at the registry's user-API
+    boundary to hand back the schema callers actually declared.
+    """
+    if not any(c.name == IMPLICIT_SEQ_COLUMN for c in schema.columns):
+        return schema
+    cols = tuple(c for c in schema.columns if c.name != IMPLICIT_SEQ_COLUMN)
+    return Schema(columns=cols, key_column=schema.key_column)
 
 
 def schema_to_arrow(schema: Schema) -> pa.Schema:
@@ -318,13 +368,16 @@ def validate_and_align_batch(batch: pa.RecordBatch, registered: Schema) -> pa.Re
     """Validate an incoming RecordBatch against a registered schema; return the aligned batch.
 
     Aligns the batch to the registered schema column order, filling missing
-    nullable columns with NULL arrays. The returned batch's schema matches
-    :func:`schema_to_arrow(registered)` exactly so the append path can append
-    it directly to a typed Parquet writer.
+    nullable columns with NULL arrays. Implicit server-assigned columns
+    (``seq``) are skipped — callers do not provide them and the namespace
+    stamps them on at append time. The returned batch's schema matches
+    ``schema_to_arrow(registered minus implicit)`` so the append path can
+    add the implicit columns and write to a typed Parquet writer.
 
     Raises:
-        SchemaValidationError: missing non-nullable column, unknown column
-            name, type mismatch, or nested/union column type.
+        SchemaValidationError: caller declared an implicit column in the
+            batch, missing non-nullable column, unknown column name, type
+            mismatch, or nested/union column type.
     """
     decoded = _decode_dictionary_columns(batch)
 
@@ -333,6 +386,8 @@ def validate_and_align_batch(batch: pa.RecordBatch, registered: Schema) -> pa.Re
     for i, field in enumerate(decoded.schema):
         if field.name in by_name_batch:
             raise SchemaValidationError(f"duplicate column {field.name!r} in batch")
+        if field.name == IMPLICIT_SEQ_COLUMN:
+            raise SchemaValidationError(f"column {IMPLICIT_SEQ_COLUMN!r} is reserved (server-assigned implicit column)")
         by_name_batch[field.name] = (field, decoded.column(i))
 
     for name in by_name_batch:
@@ -343,6 +398,10 @@ def validate_and_align_batch(batch: pa.RecordBatch, registered: Schema) -> pa.Re
     aligned_fields: list[pa.Field] = []
     n_rows = decoded.num_rows
     for col in registered.columns:
+        if col.name == IMPLICIT_SEQ_COLUMN:
+            # Stamped on by the namespace at append time; not part of the
+            # wire-aligned batch.
+            continue
         if col.name in by_name_batch:
             field, array = by_name_batch[col.name]
             actual_type = _arrow_to_column_type(field.type)

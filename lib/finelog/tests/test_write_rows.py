@@ -48,12 +48,14 @@ def test_write_rows_append_round_trip(store: DuckDBLogStore):
     n = store.write_rows("iris.worker", _ipc_bytes(batch))
     assert n == 2
 
-    # Sealed segment carries the registered schema in registered column order.
+    # Sealed segment carries the registered schema in registered column
+    # order plus the implicit ``seq`` column the registry stamps in.
     _seal(store, "iris.worker")
     table = store.query('SELECT * FROM "iris.worker" ORDER BY timestamp_ms')
-    assert sorted(table.column_names) == ["mem_bytes", "timestamp_ms", "worker_id"]
+    assert sorted(table.column_names) == ["mem_bytes", "seq", "timestamp_ms", "worker_id"]
     assert table.column("worker_id").to_pylist() == ["w-1", "w-2"]
     assert table.column("mem_bytes").to_pylist() == [100, 200]
+    assert table.column("seq").to_pylist() == [1, 2]
 
 
 def test_write_rows_unknown_namespace_raises(store: DuckDBLogStore):

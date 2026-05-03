@@ -59,6 +59,8 @@ from finelog.store.schema import (
     merge_schemas,
     resolve_key_column,
     validate_and_align_batch,
+    with_implicit_seq,
+    without_implicit_seq,
 )
 from finelog.store.sql_escape import quote_ident, quote_literal
 from finelog.types import LogReadResult
@@ -342,15 +344,14 @@ class DuckDBLogStore:
         if LOG_NAMESPACE_NAME in self._namespaces:
             return
         log_dir = self._data_dir / LOG_NAMESPACE_DIR if self._data_dir is not None else None
+        stored_schema = with_implicit_seq(LOG_REGISTERED_SCHEMA)
         with self._insertion_lock:
             self._registry_db.upsert(
                 LOG_NAMESPACE_NAME,
-                LOG_REGISTERED_SCHEMA,
+                stored_schema,
                 resolve_key_column(LOG_REGISTERED_SCHEMA),
             )
-            self._namespaces[LOG_NAMESPACE_NAME] = self._make_namespace(
-                LOG_NAMESPACE_NAME, LOG_REGISTERED_SCHEMA, log_dir
-            )
+            self._namespaces[LOG_NAMESPACE_NAME] = self._make_namespace(LOG_NAMESPACE_NAME, stored_schema, log_dir)
             self._namespace_registered_at.setdefault(LOG_NAMESPACE_NAME, len(self._namespace_registered_at))
 
     def _namespace_dir(self, name: str) -> Path | None:
@@ -373,30 +374,34 @@ class DuckDBLogStore:
         Returns the *effective* schema after additive merge with any prior
         registration. See ``design.md`` "Schema evolution" for the full
         rule set.
+
+        The implicit ``seq`` column is stamped onto every stored schema at
+        this boundary so the on-disk layout is uniform across namespaces;
+        callers neither declare nor receive it on the wire.
         """
         # Validate name (regex + path containment) before anything else.
         namespace_dir = self._namespace_dir(name)
         # Validate the schema declares a valid ordering key. Re-raises
         # SchemaValidationError on missing/wrong-typed key column.
         resolved_key = resolve_key_column(schema)
+        stored_schema = with_implicit_seq(schema)
 
         with self._insertion_lock:
             existing_ns = self._namespaces.get(name)
             if existing_ns is None:
-                effective = schema
-                self._registry_db.upsert(name, effective, resolved_key)
-                self._namespaces[name] = self._make_namespace(name, effective, namespace_dir)
+                self._registry_db.upsert(name, stored_schema, resolved_key)
+                self._namespaces[name] = self._make_namespace(name, stored_schema, namespace_dir)
                 self._namespace_registered_at[name] = len(self._namespace_registered_at)
-                return effective
+                return without_implicit_seq(stored_schema)
 
             # Evolve-by-default: merge_schemas raises SchemaConflictError on
             # non-additive change. Identical / subset returns the existing
             # schema unchanged; a true extension returns the union.
-            effective = merge_schemas(existing_ns.schema, schema)
+            effective = merge_schemas(existing_ns.schema, stored_schema)
             if effective != existing_ns.schema:
                 self._registry_db.upsert(name, effective, resolved_key)
                 existing_ns.update_schema(effective)
-            return effective
+            return without_implicit_seq(effective)
 
     def list_namespaces(self) -> list[tuple[str, Schema]]:
         """Snapshot every registered namespace with its current schema.
@@ -411,7 +416,7 @@ class DuckDBLogStore:
                 self._namespaces.items(),
                 key=lambda kv: self._namespace_registered_at.get(kv[0], 0),
             )
-            return [(name, ns.schema) for name, ns in items]
+            return [(name, without_implicit_seq(ns.schema)) for name, ns in items]
 
     def get_table_schema(self, name: str) -> Schema:
         """Return the registered schema for ``name``.
@@ -422,7 +427,7 @@ class DuckDBLogStore:
             ns = self._namespaces.get(name)
             if ns is None:
                 raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
-            return ns.schema
+            return without_implicit_seq(ns.schema)
 
     def write_rows(self, name: str, arrow_ipc_bytes: bytes) -> int:
         """Validate ``arrow_ipc_bytes`` and append the rows to ``name``.

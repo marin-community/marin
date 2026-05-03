@@ -56,6 +56,7 @@ from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.store.rwlock import RWLock
 from finelog.store.schema import (
+    IMPLICIT_SEQ_COLUMN,
     Column,
     Schema,
     duckdb_type_for,
@@ -66,12 +67,11 @@ from finelog.types import REGEX_META_RE, LogReadResult, parse_attempt_id, str_to
 
 logger = logging.getLogger(__name__)
 
-# The registered schema for the "log" namespace. Mirrors the Parquet
-# layout the log RPC has always written, so its read path is unaffected
-# by going through the namespace registry.
+# The user-declared schema for the "log" namespace. The registry stamps
+# the implicit ``seq`` column on top before storing — the on-disk layout
+# always carries (seq, key, source, data, epoch_ms, level).
 LOG_REGISTERED_SCHEMA = Schema(
     columns=(
-        Column(name="seq", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         Column(name="key", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
         Column(name="source", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
         Column(name="data", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
@@ -194,6 +194,25 @@ class LocalSegment:
     size_bytes: int
     min_seq: int = 0
     max_seq: int = 0
+
+
+def _stamp_seq_column(batch: pa.RecordBatch, first_seq: int, arrow_schema: pa.Schema) -> pa.Table:
+    """Return ``batch`` projected to ``arrow_schema`` with ``seq`` filled in.
+
+    The batch arrives wire-aligned (without seq); the namespace assigns a
+    contiguous monotonic run starting at ``first_seq`` and projects to
+    the storage layout. ``arrow_schema`` carries the implicit ``seq``
+    column at its position in the registered schema (prepended by
+    :func:`finelog.store.schema.with_implicit_seq`).
+    """
+    seq_array = pa.array(range(first_seq, first_seq + batch.num_rows), type=pa.int64())
+    arrays: list[pa.Array] = []
+    for field in arrow_schema:
+        if field.name == IMPLICIT_SEQ_COLUMN:
+            arrays.append(seq_array)
+        else:
+            arrays.append(batch.column(field.name))
+    return pa.Table.from_arrays(arrays, schema=arrow_schema)
 
 
 def _build_log_table(buffer: list[tuple], arrow_schema: pa.Schema) -> pa.Table:
@@ -411,17 +430,21 @@ class DiskLogNamespace:
     def append_record_batch(self, batch: pa.RecordBatch) -> None:
         """Generic append for stats namespaces.
 
-        ``batch`` must already be aligned to ``self._arrow_schema`` (caller
-        runs :func:`finelog.store.schema.validate_and_align_batch` first). The
-        batch is concatenated onto the in-RAM chunk list and a flush is
-        signaled if the total RAM working set exceeds ``segment_target_bytes``.
+        ``batch`` is the wire-aligned batch (sans the implicit ``seq``
+        column) returned by
+        :func:`finelog.store.schema.validate_and_align_batch`. The
+        namespace stamps a contiguous run of ``seq`` values starting at
+        ``_next_seq`` onto the batch and concatenates it onto the in-RAM
+        chunk list. A flush is signaled if the total RAM working set
+        exceeds ``segment_target_bytes``.
         """
         if batch.num_rows == 0:
             return
-        table = pa.Table.from_batches([batch], schema=self._arrow_schema)
         with self._insertion_lock:
+            first_seq = self._next_seq
             self._next_seq += batch.num_rows
-            self._chunks.append(table)
+            stamped = _stamp_seq_column(batch, first_seq, self._arrow_schema)
+            self._chunks.append(stamped)
             self._chunks = _merge_chunks(self._chunks)
             needs_drain = self._ram_bytes_locked() >= self._segment_target_bytes
         if needs_drain:
@@ -573,29 +596,26 @@ class DiskLogNamespace:
             self._evict_hook()
 
     def _derive_seq_bounds_locked(self, table: pa.Table) -> tuple[int, int]:
-        """Choose ``(min_seq, max_seq)`` for the sealed buffer.
-
-        For the log namespace, the seq column is per-row and bounds come
-        from the column itself. For other namespaces, the filename counter
-        is per-batch — bounds are derived from ``_next_seq`` and the table's
-        row count. Caller holds the insertion lock.
-        """
-        if "seq" in table.column_names:
-            seq_col = table.column("seq")
-            return pc.min(seq_col).as_py(), pc.max(seq_col).as_py()
-        max_seq = self._next_seq - 1
-        min_seq = max_seq - table.num_rows + 1
-        return min_seq, max_seq
+        """Return ``(min_seq, max_seq)`` from the implicit seq column."""
+        seq_col = table.column(IMPLICIT_SEQ_COLUMN)
+        return pc.min(seq_col).as_py(), pc.max(seq_col).as_py()
 
     def _sort_for_flush(self, table: pa.Table) -> pa.Table:
-        """Sort a sealed buffer by its compaction order.
+        """Sort a sealed buffer by ``(key_column, seq)`` (or just seq)."""
+        keys = self._compaction_sort_keys()
+        return table.sort_by([(name, "ascending") for name in keys])
 
-        For the log namespace this is ``(key, seq)`` so per-key reads scan
-        contiguous runs. Other namespaces rely on the registered key column.
+    def _compaction_sort_keys(self) -> tuple[str, ...]:
+        """Return the column names that compaction sorts on.
+
+        Pairs the namespace's primary key column with the implicit ``seq``
+        column so secondary order is deterministic; namespaces with no
+        primary key (impossible today, since ``resolve_key_column`` always
+        succeeds) fall back to ``seq`` alone.
         """
-        if "seq" in table.column_names and "key" in table.column_names:
-            return table.sort_by([("key", "ascending"), ("seq", "ascending")])
-        return table.sort_by([(self.schema.key_column or "timestamp_ms", "ascending")])
+        if self.schema.key_column:
+            return (self.schema.key_column, IMPLICIT_SEQ_COLUMN)
+        return (IMPLICIT_SEQ_COLUMN,)
 
     def _write_new_segment(self, sealed: _SealedBuffer) -> None:
         filename = _tmp_filename(sealed.min_seq)
@@ -744,16 +764,9 @@ class DiskLogNamespace:
         return present
 
     def _compaction_order_clause(self) -> str:
-        """Return the ORDER BY clause for compaction.
-
-        For the log namespace the order is ``(key, seq)`` so per-key reads
-        get contiguous row ranges. Other namespaces sort by their key column.
-        """
-        names = self.schema.column_names()
-        if "seq" in names and "key" in names:
-            return "ORDER BY key, seq"
-        order_col = quote_ident(self.schema.key_column or "timestamp_ms")
-        return f"ORDER BY {order_col}"
+        """Return the ORDER BY clause for compaction."""
+        cols = ", ".join(quote_ident(name) for name in self._compaction_sort_keys())
+        return f"ORDER BY {cols}"
 
     def sealed_segments(self) -> list[LocalSegment]:
         """Return flushed (logs_*) segments only, oldest first.
@@ -987,10 +1000,11 @@ class MemoryLogNamespace:
     def append_record_batch(self, batch: pa.RecordBatch) -> None:
         if batch.num_rows == 0:
             return
-        new_chunk = pa.Table.from_batches([batch], schema=self._arrow_schema)
         with self._insertion_lock:
+            first_seq = self._next_seq
             self._next_seq += batch.num_rows
-            self._table = pa.concat_tables([self._table, new_chunk])
+            stamped = _stamp_seq_column(batch, first_seq, self._arrow_schema)
+            self._table = pa.concat_tables([self._table, stamped])
 
     # ------------------------------------------------------------------
     # Read API (log-namespace-specific)

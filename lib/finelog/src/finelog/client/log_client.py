@@ -64,6 +64,7 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 from finelog.rpc.logging_connect import LogServiceClientSync
 from finelog.store.schema import (
+    IMPLICIT_SEQ_COLUMN,
     Column,
     ColumnTypeValue,
     Schema,
@@ -194,6 +195,10 @@ def schema_from_dataclass(cls: type) -> Schema:
     columns: list[Column] = []
     type_hints = typing.get_type_hints(cls, include_extras=False)
     for field in dataclasses.fields(cls):
+        if field.name == IMPLICIT_SEQ_COLUMN:
+            raise SchemaValidationError(
+                f"dataclass {cls.__name__}: field {field.name!r} is reserved " f"(server-assigned implicit column)"
+            )
         annotation = type_hints.get(field.name, field.type)
         inner, nullable = _strip_optional(annotation)
         col_type = _PRIMITIVE_TYPE_MAP.get(inner)
