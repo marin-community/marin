@@ -9,7 +9,6 @@ GitHub issue: https://github.com/marin-community/marin/issues/5371
 """
 
 import dataclasses
-import math
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
@@ -24,12 +23,13 @@ from experiments.grug.moe.launch import (
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 GATE1_CONFIGS: list[tuple[int, float]] = [
-    # (512, 2.19e17),  # done
-    # (768, 1.70e18),  # done/running
+    (512, 2.19e17),
+    (768, 1.70e18),
     (1024, 9.00e18),
+    (1280, 2.83e19),
 ]
 
-LR_MULTIPLIERS: list[float] = [0.6, 0.8, 1.0, 1.2, 1.4]
+LR_MULTIPLIERS: list[float] = [1.0]
 
 
 def _make_steps() -> list[ExecutorStep]:
@@ -37,15 +37,13 @@ def _make_steps() -> list[ExecutorStep]:
     for lr_mult in LR_MULTIPLIERS:
         for dim, budget in GATE1_CONFIGS:
             model, optimizer, batch, num_steps = build_from_heuristic(budget=budget, hidden_dim=dim)
-            shared_dim = math.ceil(dim / 2 / 128) * 128
             model = dataclasses.replace(
                 model,
                 partial_key_offset="every_4th",
                 use_partial_rope=True,
                 last_layer_pko=True,
                 num_experts=256,
-                num_experts_per_token=6,
-                shared_expert_intermediate_dim=shared_dim,
+                num_experts_per_token=4,
             )
             optimizer = dataclasses.replace(
                 optimizer,
