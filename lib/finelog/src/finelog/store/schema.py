@@ -84,7 +84,11 @@ class Column:
     # ``stats_pb2.ColumnType`` value (an int). Use the proto enum members
     # (e.g. ``stats_pb2.COLUMN_TYPE_STRING``) when constructing ``Column``.
     type: ColumnTypeValue
-    nullable: bool = False
+    # Defaults to nullable: an older client emitting an existing column should
+    # remain valid as schemas evolve. Override with ``nullable=False`` for the
+    # initial creation of a column where the producer guarantees presence
+    # (e.g. the implicit ``timestamp_ms`` key).
+    nullable: bool = True
 
 
 @dataclass(frozen=True)
