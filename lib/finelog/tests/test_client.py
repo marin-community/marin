@@ -623,7 +623,6 @@ def test_table_close_drains_queue_when_thread_starts_late(monkeypatch):
 
     monkeypatch.setattr(log_client_mod.threading, "Thread", DeferredThread)
 
-    # Use a custom row_encoder so write() doesn't fall into the log-tuple path.
     table = log_client_mod.Table(
         namespace="iris.worker",
         schema=Schema(columns=()),

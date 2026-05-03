@@ -253,7 +253,7 @@ class Table:
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
         max_buffer_rows: int = DEFAULT_BATCH_ROWS,
         thread_name: str | None = None,
-        row_encoder: Callable[[Any], tuple[Any, int]] | None = None,
+        row_encoder: Callable[[Any], tuple[Any, int]],
     ) -> None:
         self._namespace = namespace
         self._schema = schema
@@ -306,15 +306,7 @@ class Table:
             if self._closing or self._closed:
                 raise RuntimeError(f"Table({self._namespace}) is closed")
             for row in rows_list:
-                if self._row_encoder is not None:
-                    payload, size = self._row_encoder(row)
-                else:
-                    # Log path: payload is (key, [LogEntry, ...]). Use the
-                    # exact serialized proto size for byte-cap accounting so
-                    # the buffer cap matches the WriteRows body size.
-                    payload = row
-                    _key, entries = row
-                    size = sum(e.ByteSize() for e in entries)
+                payload, size = self._row_encoder(row)
                 self._pushed_seq += 1
                 self._queue.append(_PendingItem(self._pushed_seq, payload, size))
                 self._queue_bytes += size
@@ -714,6 +706,7 @@ class LogClient:
                 namespace=LOG_NAMESPACE,
                 schema=Schema(columns=()),  # log table schema is server-managed
                 flusher=self._log_flush,
+                row_encoder=_encode_log_row,
                 thread_name="finelog-log-client",
             )
             self._tables[LOG_NAMESPACE] = tbl
@@ -883,6 +876,16 @@ def _make_stats_row_encoder(arrow_schema: pa.Schema, schema: Schema) -> Callable
         return batch, batch.nbytes
 
     return encode
+
+
+def _encode_log_row(row: tuple[str, list[logging_pb2.LogEntry]]) -> tuple[tuple[str, list[logging_pb2.LogEntry]], int]:
+    """Row encoder for the log namespace.
+
+    Each row is a ``(key, [LogEntry, ...])`` tuple; the byte cost is the
+    exact serialized proto size, matching the WriteRows body cap.
+    """
+    _key, entries = row
+    return row, sum(e.ByteSize() for e in entries)
 
 
 _MISSING = object()
