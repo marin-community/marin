@@ -264,10 +264,8 @@ message Controller {
     // Case-insensitive substring match against worker_id (and address as
     // fallback so address:port searches also work in the dashboard).
     string prefix = 1;
-    // Match against canonical device_type ("cpu", "gpu", "tpu"). Empty = any.
-    // Comparison is case-insensitive and CPU workers (stored with empty
-    // device_type) are matched by the canonical name "cpu".
-    string type = 2;
+    reserved 2;  // was: string type (device-type filter; dropped — name search covers it).
+    reserved type;
     WorkerSortField sort_field = 3;
     SortDirection sort_direction = 4;
     int32 offset = 5;

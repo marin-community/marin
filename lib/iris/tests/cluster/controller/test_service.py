@@ -1155,41 +1155,6 @@ def test_list_workers_pagination(service, state):
     assert page3.has_more is False
 
 
-def test_list_workers_filter_by_device_type(service, state):
-    """type filter restricts results to one accelerator class."""
-    _register_workers_for_query(service, state, count_cpu=2, count_gpu=3)
-
-    gpu_only = service.list_workers(
-        controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(type="gpu"),
-        ),
-        None,
-    )
-    assert gpu_only.total_count == 3
-    assert all(w.worker_id.startswith("gpu-worker-") for w in gpu_only.workers)
-
-    # CPU workers are stored with device_type == "" but the public query
-    # vocabulary uses the canonical "cpu". Verify the filter normalizes both
-    # sides — a regression here would silently break the Fleet UI's CPU tab.
-    cpu_only = service.list_workers(
-        controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(type="cpu"),
-        ),
-        None,
-    )
-    assert cpu_only.total_count == 2
-    assert all(w.worker_id.startswith("cpu-worker-") for w in cpu_only.workers)
-
-    # Filter is case-insensitive.
-    upper_cpu = service.list_workers(
-        controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(type="CPU"),
-        ),
-        None,
-    )
-    assert upper_cpu.total_count == 2
-
-
 def test_list_workers_filter_by_prefix(service, state):
     """prefix matches worker_id substring (case-insensitive) and address."""
     _register_workers_for_query(service, state, count_cpu=2, count_gpu=2)

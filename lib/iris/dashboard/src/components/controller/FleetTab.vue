@@ -24,11 +24,9 @@ const SORT_FIELD_MAP: Record<string, string> = {
 
 type SortField = 'workerId' | 'lastHeartbeat' | 'device'
 type SortDir = 'asc' | 'desc'
-type DeviceFilter = '' | 'cpu' | 'gpu' | 'tpu'
 
 const SORT_FIELDS: SortField[] = ['workerId', 'lastHeartbeat', 'device']
 const SORT_DIRS: SortDir[] = ['asc', 'desc']
-const DEVICE_FILTERS: DeviceFilter[] = ['', 'cpu', 'gpu', 'tpu']
 
 const route = useRoute()
 const router = useRouter()
@@ -48,21 +46,16 @@ function parsePage(v: string): number {
   const n = Number(v)
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0
 }
-function parseDevice(v: string): DeviceFilter {
-  return DEVICE_FILTERS.includes(v as DeviceFilter) ? (v as DeviceFilter) : ''
-}
 
 const page = ref(parsePage(queryStr(route.query.page)))
 const sortField = ref<SortField>(parseSort(queryStr(route.query.sort)))
 const sortDir = ref<SortDir>(parseDir(queryStr(route.query.dir)))
 const prefixFilter = ref(queryStr(route.query.prefix))
 const localPrefix = ref(queryStr(route.query.prefix))
-const deviceFilter = ref<DeviceFilter>(parseDevice(queryStr(route.query.device)))
 
 const { data, loading, error, refresh } = useControllerRpc<ListWorkersResponse>('ListWorkers', () => ({
   query: {
     prefix: prefixFilter.value || undefined,
-    type: deviceFilter.value || undefined,
     sortField: SORT_FIELD_MAP[sortField.value],
     sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
     offset: page.value * PAGE_SIZE,
@@ -78,15 +71,15 @@ const totalCount = computed(() => data.value?.totalCount ?? 0)
 const hasMore = computed(() => data.value?.hasMore ?? false)
 const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / PAGE_SIZE)))
 
-watch([page, sortField, sortDir, prefixFilter, deviceFilter], () => {
+watch([page, sortField, sortDir, prefixFilter], () => {
   refresh()
 })
 
-watch([prefixFilter, deviceFilter], () => {
+watch(prefixFilter, () => {
   page.value = 0
 })
 
-watch([page, sortField, sortDir, prefixFilter, deviceFilter], () => {
+watch([page, sortField, sortDir, prefixFilter], () => {
   router.replace({
     query: {
       ...route.query,
@@ -94,7 +87,7 @@ watch([page, sortField, sortDir, prefixFilter, deviceFilter], () => {
       dir: sortDir.value !== 'asc' ? sortDir.value : undefined,
       page: page.value !== 0 ? String(page.value) : undefined,
       prefix: prefixFilter.value || undefined,
-      device: deviceFilter.value || undefined,
+      device: undefined,
     },
   })
 })
@@ -106,11 +99,10 @@ function handleFilterSubmit() {
 function handleFilterClear() {
   localPrefix.value = ''
   prefixFilter.value = ''
-  deviceFilter.value = ''
   page.value = 0
 }
 
-const hasActiveFilter = computed(() => !!prefixFilter.value || !!deviceFilter.value)
+const hasActiveFilter = computed(() => !!prefixFilter.value)
 
 const columns: Column[] = [
   { key: 'workerId', label: 'Worker ID', mono: true },
@@ -139,17 +131,6 @@ const columns: Column[] = [
     <!-- Filter bar -->
     <div class="mb-4 flex flex-wrap items-center gap-2 sm:gap-3">
       <form class="flex flex-wrap flex-1 sm:flex-initial gap-2" @submit.prevent="handleFilterSubmit">
-        <select
-          v-model="deviceFilter"
-          class="px-3 py-1.5 text-sm border border-surface-border rounded
-                 bg-surface text-text
-                 focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
-        >
-          <option value="">All devices</option>
-          <option value="cpu">CPU</option>
-          <option value="gpu">GPU</option>
-          <option value="tpu">TPU</option>
-        </select>
         <input
           v-model="localPrefix"
           type="text"
