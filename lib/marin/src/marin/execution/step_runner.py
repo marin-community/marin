@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import contextvars
 import dataclasses
-from datetime import timedelta
 import json
 import logging
 import os
@@ -27,27 +26,29 @@ import time
 import uuid
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 
 import levanter.utils.fsspec_utils as fsspec_utils
-from rigging.filesystem import open_url, url_to_fs
-
 from fray.client import JobHandle, JobStatus
 from fray.local_backend import LocalJobHandle
+from rigging.filesystem import open_url, url_to_fs
+
 from marin.execution.artifact import Artifact
+
+# Re-export for backward compatibility
 from marin.execution.executor_step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_SUCCESS,
-    StepAlreadyDone,
+    PreviousTaskFailedError,
     StatusFile,
+    StepAlreadyDone,
     step_lock,
+    worker_id,
 )
 from marin.execution.remote import RemoteCallable
 from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
-
-# Re-export for backward compatibility
-from marin.execution.executor_step_status import PreviousTaskFailedError, worker_id
 
 logger = logging.getLogger(__name__)
 

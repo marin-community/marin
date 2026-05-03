@@ -18,21 +18,19 @@ transitions.py:2030-2111.
 """
 
 from iris.cluster.controller.transitions import (
+    RESERVATION_HOLDER_JOB_NAME,
     Assignment,
     HeartbeatApplyRequest,
-    RESERVATION_HOLDER_JOB_NAME,
     TaskUpdate,
 )
 from iris.rpc import job_pb2
 
 from tests.cluster.controller.conftest import (
     fail_worker,
+    make_job_request,
     query_task,
     query_task_with_attempts,
     query_tasks_for_job,
-)
-from tests.cluster.controller.conftest import (
-    make_job_request,
     submit_job,
 )
 from tests.cluster.controller.test_reservation import (

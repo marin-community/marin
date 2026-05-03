@@ -19,7 +19,7 @@ edition = "2023";
 // controller.proto and worker.proto respectively.
 package iris.job;
 
-import "logging.proto";
+import "iris_logging.proto";
 import "time.proto";
 
 // ============================================================================
@@ -234,6 +234,11 @@ message TaskStatus {
   string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
   // Historical resource snapshots (oldest first). Populated only in GetTaskStatus detail view.
   repeated ResourceUsage resource_history = 20;
+  // Markdown status text pushed by the task (held in memory only, not in history).
+  // Full detail view shown on the task detail page.
+  string status_text_detail_md = 21;
+  // Short summary shown in the task list table (up to ~3 lines).
+  string status_text_summary_md = 22;
 }
 
 // Record of a single task execution attempt
@@ -601,3 +606,12 @@ message WorkerTaskStatus {
   reserved 9;  // was log_entries (pushed via LogService now)
   string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
 }
+
+// Status text update pushed by a running task to the coordinator.
+message SetTaskStatusTextRequest {
+  string task_id = 1;                    // Full task ID: "/job/full/path/with/task/0"
+  string status_text_detail_md = 2;     // Full markdown detail for the task detail page
+  string status_text_summary_md = 3;    // Short summary (up to ~3 lines) for the task list table
+}
+
+message SetTaskStatusTextResponse {}

@@ -14,6 +14,8 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from rigging.timing import Duration, Timestamp
+
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -23,7 +25,6 @@ from iris.cluster.providers.types import (
     WorkerStatus,
 )
 from iris.cluster.worker.worker import Worker
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

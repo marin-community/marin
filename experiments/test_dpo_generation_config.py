@@ -11,16 +11,16 @@ After the run completes, check the HF checkpoint output for generation_config.js
 Expected content: {"eos_token_id": [128001, 128009], "bos_token_id": 128000}
 """
 
+from fray.cluster import ResourceConfig
 from levanter.data.text import PreferenceChatLmDatasetFormat
+from marin.execution.executor import executor_main
+from marin.processing.tokenize import lm_data_config
 
 from experiments.defaults import default_dpo, default_tokenize
 from experiments.llama import LLAMA3_CHAT_STOP_TOKEN_IDS, llama_8b
 from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.preference_datasets import get_preference_dataset
 from experiments.simple_dpo_config import SimpleDPOConfig
-from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
-from marin.processing.tokenize import lm_data_config
 
 DATASET_NAME = "HuggingFaceH4/ultrafeedback_binarized"
 

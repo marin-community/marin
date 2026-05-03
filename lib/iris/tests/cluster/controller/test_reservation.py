@@ -13,7 +13,15 @@ Tests cover:
 """
 
 import pytest
-
+from iris.cluster.constraints import (
+    AttributeValue,
+    Constraint,
+    ConstraintOp,
+    WellKnownAttribute,
+    device_variant_constraint,
+    get_device_type,
+    get_device_variant,
+)
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.controller import (
     RESERVATION_TAINT_KEY,
@@ -27,9 +35,8 @@ from iris.cluster.controller.controller import (
     _worker_matches_reservation_entry,
     job_requirements_from_job,
 )
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
-
 from iris.cluster.controller.db import task_row_can_be_scheduled
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
 from iris.cluster.controller.schema import WorkerRow
 from iris.cluster.controller.transitions import (
     RESERVATION_HOLDER_JOB_NAME,
@@ -38,30 +45,41 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.constraints import (
-    AttributeValue,
-    Constraint,
-    ConstraintOp,
-    WellKnownAttribute,
-    device_variant_constraint,
-    get_device_type,
-    get_device_variant,
-)
 from iris.cluster.types import JobName, WorkerId, is_job_finished
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
+
 from tests.cluster.controller.conftest import (
     hydrate_worker_attributes as _with_attrs,
+)
+from tests.cluster.controller.conftest import (
     make_job_request,
+)
+from tests.cluster.controller.conftest import (
     query_job as _query_job,
+)
+from tests.cluster.controller.conftest import (
     query_job_row as _query_job_row,
+)
+from tests.cluster.controller.conftest import (
     query_task as _query_task,
+)
+from tests.cluster.controller.conftest import (
     query_task_with_attempts as _query_task_with_attempts,
+)
+from tests.cluster.controller.conftest import (
     query_tasks_for_job as _query_tasks_for_job,
+)
+from tests.cluster.controller.conftest import (
     query_worker as _query_worker,
+)
+from tests.cluster.controller.conftest import (
     schedulable_tasks as _schedulable_tasks,
+)
+from tests.cluster.controller.conftest import (
     submit_job as _submit_job_tasks,
+)
+from tests.cluster.controller.conftest import (
     worker_running_tasks as _worker_running_tasks,
 )
 

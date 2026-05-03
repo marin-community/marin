@@ -7,13 +7,13 @@ Resurrect the 32B with doctored opt state to clip the updates
 
 import dataclasses
 
+from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
 from levanter.optim.clip_update_norm import ClipUpdateNormConfig
+from marin.execution import executor_main
 
 from experiments.defaults import default_train
 from experiments.tootsie.exp1295_32b import llama_32b_remat, llama_32b_tootsie, llama_32b_train_config, nemotron_mix
-from fray.cluster import ResourceConfig
-from marin.execution import executor_main
 
 # We have doctored the opt state to include update history from
 # gs://marin-us-central2/checkpoints/llama-32b-tootsie-2/checkpoints/step-77096 for clipping

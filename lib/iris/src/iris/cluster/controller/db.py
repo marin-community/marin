@@ -10,16 +10,18 @@ import queue
 import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace as dc_replace
+from dataclasses import dataclass, field
+from dataclasses import replace as dc_replace
 from pathlib import Path
 from threading import Lock, RLock
 from typing import Any
+
+from rigging.timing import Deadline, Duration, Timestamp
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
 from iris.rpc import job_pb2
-from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

@@ -18,10 +18,10 @@ Example usage:
 
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
+from marin.execution.executor import executor_main
 
 from experiments.defaults import SimpleTrainConfig, default_train
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
-from marin.execution.executor import executor_main
 
 # Define the LlamaConfig for a 1.4B parameter model
 # This follows the 1B-1x competition scale in the DCLM benchmark

@@ -448,9 +448,8 @@ class AudioMixtureDatasetConfig(AudioTaskConfig):
     """ configuration of each dataset source (urls, hf dataset id, etc.) """
     train_weights: Dict[str, float] = field(default_factory=dict)
     """ weights for each dataset source. They will be normalized to sum to 1. """
-    shuffle: bool | int = False
-    """whether to shuffle the dataset. True means shuffle the whole dataset, False means don't shuffle.
-    If you want to shuffle in eras, set this to the era length"""
+    shuffle: bool = False
+    """whether to shuffle the dataset. True means shuffle the whole dataset, False means don't shuffle."""
     stop_strategy: str = field(default=StopStrategy.RESTART_STRATEGY)
     mixture_block_size: int = 2048
     """ block size for the mixture dataset."""
@@ -483,8 +482,6 @@ class AudioMixtureDatasetConfig(AudioTaskConfig):
         def shuffle_ds(ds, key):
             if self.shuffle is True:
                 ds = ds.shuffle(key)
-            elif isinstance(self.shuffle, int):
-                ds = ds.era_shuffle(self.shuffle, key=key)
 
             return ds
 

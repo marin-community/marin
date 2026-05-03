@@ -3,6 +3,7 @@
 
 """Tests for KubernetesProvider integration with controller and transitions."""
 
+from finelog.rpc import logging_pb2
 from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.controller.transitions import (
     DirectProviderBatch,
@@ -10,7 +11,6 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
 )
 from iris.cluster.types import JobName
-from iris.rpc import logging_pb2
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 

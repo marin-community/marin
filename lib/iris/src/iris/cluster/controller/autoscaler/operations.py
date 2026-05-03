@@ -9,12 +9,13 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
-from iris.cluster.providers.types import SliceHandle
+from rigging.timing import Duration, Timestamp
+
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
+from iris.cluster.providers.types import SliceHandle
 from iris.rpc import config_pb2, vm_pb2
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

@@ -20,7 +20,6 @@ import braceexpand
 import draccus
 import fsspec
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url, url_to_fs
 from datasets import load_dataset_builder
 from fray import ResourceConfig
 from levanter.data.text import (
@@ -31,16 +30,17 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
     preprocessor_for_format,
 )
-from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
 from levanter.store.cache import consolidate_shard_caches
 from levanter.store.tree_store import TreeStore
+from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
+from rigging.filesystem import open_url, url_to_fs
+from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.dataset import FileEntry
 from zephyr.readers import InputFileSpec, load_file
 
 from marin.execution.executor import InputName, VersionedValue
 from marin.utils import fsspec_exists, fsspec_isdir
-from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +305,13 @@ def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Ite
     # load_tokenizer is @lru_cache, so this only loads once per worker process.
     tokenizer: MarinTokenizer = load_tokenizer(name, backend=backend)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
+    # Levanter's BatchTokenizer ships ``long_string_workaround`` opt-in but the
+    # behavior is desirable always: per-record texts above ``_workaround_len``
+    # (10K chars) get split at safe whitespace boundaries before the underlying
+    # ``encode_batch`` is called, then merged back. No-op for short records.
+    # Without this, a single multi-MB outlier passes one giant string to the
+    # Rust tokenizer and OOMs the worker.
+    batch_processor._long_string_workaround = True
 
     batch_count = 0
     record_count = 0

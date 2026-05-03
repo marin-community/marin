@@ -286,9 +286,8 @@ def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
 
 def test_replace_from_reattaches_profiles_db(tmp_path: Path) -> None:
     """replace_from() must re-attach the profiles DB so profile tables remain accessible."""
-    from rigging.timing import Timestamp
-
     from iris.cluster.controller.db import get_task_profiles, insert_task_profile
+    from rigging.timing import Timestamp
 
     db = ControllerDB(db_dir=tmp_path)
     insert_task_profile(db, "task-1", b"profile-data", Timestamp.now())
@@ -493,4 +492,241 @@ def test_backfill_attempt_finished_at_migration(tmp_path: Path) -> None:
     assert out[("/u/D", 0)] == 6000
     assert out[("/u/E", 0)] == 7200
     assert out[("/u/E", 1)] is None
+    conn.close()
+
+
+def test_finalize_orphan_attempts_migration(tmp_path: Path) -> None:
+    """0038 finalizes task_attempts orphaned by the cancel_job bug.
+
+    Two orphan classes must be healed: (1) attempt active while task is
+    terminal, (2) attempt active but superseded by a newer attempt_id on
+    the same task. Healthy active attempts must not be touched.
+    """
+    import importlib
+
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite3"))
+    conn.execute(
+        """
+        CREATE TABLE tasks (
+            task_id TEXT PRIMARY KEY,
+            state INTEGER NOT NULL,
+            current_attempt_id INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE task_attempts (
+            task_id TEXT NOT NULL,
+            attempt_id INTEGER NOT NULL,
+            state INTEGER NOT NULL,
+            finished_at_ms INTEGER,
+            error TEXT,
+            PRIMARY KEY (task_id, attempt_id)
+        )
+        """
+    )
+    # /u/killed: task was KILLED by cancel_job but attempt is still RUNNING.
+    conn.execute("INSERT INTO tasks VALUES ('/u/killed', 6, 0)")  # 6 = KILLED
+    conn.execute("INSERT INTO task_attempts VALUES ('/u/killed', 0, 3, NULL, NULL)")  # 3 = RUNNING
+
+    # /u/super: task is RUNNING on attempt 1; attempt 0 was abandoned but never
+    # finalized.
+    conn.execute("INSERT INTO tasks VALUES ('/u/super', 3, 1)")
+    conn.execute("INSERT INTO task_attempts VALUES ('/u/super', 0, 3, NULL, NULL)")  # orphan
+    conn.execute("INSERT INTO task_attempts VALUES ('/u/super', 1, 3, NULL, NULL)")  # current
+
+    # /u/healthy: task RUNNING on attempt 0; attempt is current and active.
+    # Must not be touched.
+    conn.execute("INSERT INTO tasks VALUES ('/u/healthy', 3, 0)")
+    conn.execute("INSERT INTO task_attempts VALUES ('/u/healthy', 0, 3, NULL, NULL)")
+
+    # /u/already_done: task succeeded normally — attempt already terminal. The
+    # COALESCE(error, ...) clause must not overwrite a NULL error with the
+    # reconcile message for rows the migration shouldn't touch at all.
+    conn.execute("INSERT INTO tasks VALUES ('/u/already_done', 4, 0)")  # 4 = SUCCEEDED
+    conn.execute("INSERT INTO task_attempts VALUES ('/u/already_done', 0, 4, 9999, NULL)")
+    conn.commit()
+
+    mod = importlib.import_module("iris.cluster.controller.migrations.0038_finalize_orphan_attempts")
+    mod.migrate(conn)
+    conn.commit()
+
+    out = {
+        (r[0], r[1]): (r[2], r[3], r[4])
+        for r in conn.execute("SELECT task_id, attempt_id, state, finished_at_ms, error FROM task_attempts").fetchall()
+    }
+
+    # Orphans: PREEMPTED (state 10), finished_at_ms stamped, reason recorded.
+    killed_state, killed_finished, killed_error = out[("/u/killed", 0)]
+    assert killed_state == 10
+    assert killed_finished is not None and killed_finished > 0
+    assert "Reconciled" in killed_error
+
+    super_state, super_finished, super_error = out[("/u/super", 0)]
+    assert super_state == 10
+    assert super_finished is not None and super_finished > 0
+    assert "Reconciled" in super_error
+
+    # Live attempt for /u/super and the healthy attempt are untouched.
+    assert out[("/u/super", 1)] == (3, None, None)
+    assert out[("/u/healthy", 0)] == (3, None, None)
+
+    # Already-terminal row preserved.
+    assert out[("/u/already_done", 0)] == (4, 9999, None)
+
+    # Idempotency: rerun is a no-op.
+    mod.migrate(conn)
+    conn.commit()
+    out2 = {
+        (r[0], r[1]): (r[2], r[3], r[4])
+        for r in conn.execute("SELECT task_id, attempt_id, state, finished_at_ms, error FROM task_attempts").fetchall()
+    }
+    assert out2 == out
+    conn.close()
+
+
+def test_requeue_split_coscheduled_jobs_migration(tmp_path: Path) -> None:
+    """0039 force-requeues coscheduled jobs whose tasks are split across slices.
+
+    Sets up: one coscheduled v5p-64 job J split across two ``md_tpu_name``
+    groups (tpu-A workers w0,w1 / tpu-B workers w2,w3) and one healthy
+    same-slice coscheduled job K (tpu-C workers w4,w5). Expectation: every
+    task of J resets to PENDING with worker cleared, attempts marked
+    PREEMPTED, and worker resources are decommitted; K is untouched.
+    """
+    import importlib
+
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite3"))
+    conn.executescript(
+        """
+        CREATE TABLE jobs (
+            job_id TEXT PRIMARY KEY,
+            is_reservation_holder INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE job_config (
+            job_id TEXT PRIMARY KEY,
+            has_coscheduling INTEGER NOT NULL,
+            res_cpu_millicores INTEGER NOT NULL,
+            res_memory_bytes INTEGER NOT NULL,
+            res_device_json TEXT NOT NULL
+        );
+        CREATE TABLE tasks (
+            task_id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            state INTEGER NOT NULL,
+            current_attempt_id INTEGER NOT NULL,
+            current_worker_id TEXT,
+            current_worker_address TEXT,
+            error TEXT,
+            finished_at_ms INTEGER
+        );
+        CREATE TABLE task_attempts (
+            task_id TEXT NOT NULL,
+            attempt_id INTEGER NOT NULL,
+            state INTEGER NOT NULL,
+            finished_at_ms INTEGER,
+            error TEXT,
+            PRIMARY KEY (task_id, attempt_id)
+        );
+        CREATE TABLE workers (
+            worker_id TEXT PRIMARY KEY,
+            committed_cpu_millicores INTEGER NOT NULL,
+            committed_mem_bytes INTEGER NOT NULL,
+            committed_gpu INTEGER NOT NULL,
+            committed_tpu INTEGER NOT NULL,
+            md_tpu_name TEXT NOT NULL DEFAULT ''
+        );
+        """
+    )
+
+    # Coscheduled split job J: 4 tasks across two slices (A: w0,w1 / B: w2,w3).
+    conn.execute("INSERT INTO jobs VALUES ('/u/J', 0)")
+    conn.execute('INSERT INTO job_config VALUES (\'/u/J\', 1, 1000, 4096, \'{"tpu": {"variant":"v5p-64","count": 4}}\')')
+    for i, w in enumerate(("w0", "w1", "w2", "w3")):
+        tid = f"/u/J/{i}"
+        conn.execute(f"INSERT INTO tasks VALUES ('{tid}', '/u/J', 3, 0, '{w}', '{w}:8080', NULL, NULL)")
+        conn.execute(f"INSERT INTO task_attempts VALUES ('{tid}', 0, 3, NULL, NULL)")
+
+    # Coscheduled healthy job K: 2 tasks on the same slice C (w4, w5).
+    conn.execute("INSERT INTO jobs VALUES ('/u/K', 0)")
+    conn.execute('INSERT INTO job_config VALUES (\'/u/K\', 1, 500, 2048, \'{"tpu": {"variant":"v5p-16","count": 4}}\')')
+    for i, w in enumerate(("w4", "w5")):
+        tid = f"/u/K/{i}"
+        conn.execute(f"INSERT INTO tasks VALUES ('{tid}', '/u/K', 3, 0, '{w}', '{w}:8080', NULL, NULL)")
+        conn.execute(f"INSERT INTO task_attempts VALUES ('{tid}', 0, 3, NULL, NULL)")
+
+    # Workers: each w0..w5 has the J / K task's resources committed.
+    workers = [
+        ("w0", 1000, 4096, 4, "tpu-A"),
+        ("w1", 1000, 4096, 4, "tpu-A"),
+        ("w2", 1000, 4096, 4, "tpu-B"),
+        ("w3", 1000, 4096, 4, "tpu-B"),
+        ("w4", 500, 2048, 4, "tpu-C"),
+        ("w5", 500, 2048, 4, "tpu-C"),
+    ]
+    for wid, cpu, mem, tpu, name in workers:
+        conn.execute(f"INSERT INTO workers VALUES ('{wid}', {cpu}, {mem}, 0, {tpu}, '{name}')")
+    conn.commit()
+
+    mod = importlib.import_module("iris.cluster.controller.migrations.0039_requeue_split_coscheduled_jobs")
+    mod.migrate(conn)
+    conn.commit()
+
+    # J: every task back to PENDING, worker cleared, attempt PREEMPTED.
+    j_tasks = {
+        r[0]: (r[1], r[2], r[3], r[4])
+        for r in conn.execute(
+            "SELECT task_id, state, current_worker_id, current_worker_address, finished_at_ms FROM tasks "
+            "WHERE job_id = '/u/J'"
+        ).fetchall()
+    }
+    for tid, (state, worker, addr, finished) in j_tasks.items():
+        assert state == 1, f"{tid} state={state}, expected PENDING"
+        assert worker is None, f"{tid} worker not cleared: {worker}"
+        assert addr is None
+        assert finished is None
+    j_attempts = {
+        (r[0], r[1]): (r[2], r[3], r[4])
+        for r in conn.execute(
+            "SELECT task_id, attempt_id, state, finished_at_ms, error FROM task_attempts " "WHERE task_id LIKE '/u/J/%'"
+        ).fetchall()
+    }
+    for key, (state, finished, error) in j_attempts.items():
+        assert state == 10, f"{key} attempt state={state}, expected PREEMPTED"
+        assert finished is not None and finished > 0
+        assert "Reconciled" in error and "split-slice" in error
+
+    # J's workers fully decommitted.
+    for wid in ("w0", "w1", "w2", "w3"):
+        cpu, mem, tpu = conn.execute(
+            "SELECT committed_cpu_millicores, committed_mem_bytes, committed_tpu FROM workers WHERE worker_id = ?",
+            (wid,),
+        ).fetchone()
+        assert (cpu, mem, tpu) == (0, 0, 0), f"{wid} not fully decommitted: cpu={cpu} mem={mem} tpu={tpu}"
+
+    # K: completely untouched.
+    k_tasks = list(
+        conn.execute("SELECT state, current_worker_id, finished_at_ms FROM tasks WHERE job_id = '/u/K'").fetchall()
+    )
+    for state, worker, finished in k_tasks:
+        assert state == 3 and worker is not None and finished is None
+    k_attempts = list(
+        conn.execute("SELECT state, finished_at_ms FROM task_attempts WHERE task_id LIKE '/u/K/%'").fetchall()
+    )
+    for state, finished in k_attempts:
+        assert state == 3 and finished is None
+    for wid, want_cpu, want_mem, want_tpu, _ in workers[4:]:
+        cpu, mem, tpu = conn.execute(
+            "SELECT committed_cpu_millicores, committed_mem_bytes, committed_tpu FROM workers WHERE worker_id = ?",
+            (wid,),
+        ).fetchone()
+        assert (cpu, mem, tpu) == (want_cpu, want_mem, want_tpu), f"{wid} state mutated"
+
+    # Idempotent rerun: no-op once split jobs are healed.
+    snap = list(conn.execute("SELECT task_id, state, current_worker_id FROM tasks").fetchall())
+    mod.migrate(conn)
+    conn.commit()
+    snap2 = list(conn.execute("SELECT task_id, state, current_worker_id FROM tasks").fetchall())
+    assert snap == snap2
     conn.close()

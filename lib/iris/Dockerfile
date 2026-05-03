@@ -52,16 +52,21 @@ FROM base AS deps
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Rigging is a workspace-local dep not on PyPI with a compatible API.
+# Rigging and finelog are workspace-local deps not on PyPI with compatible APIs.
 # Copy only metadata first so source changes don't bust the dep cache.
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
+COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
+# finelog's pyproject force-includes config/ in the wheel, so the directory
+# must exist even for `uv sync --no-install-project`.
+COPY lib/finelog/config/ ./lib/finelog/config/
 COPY lib/iris/pyproject.toml ./lib/iris/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\n' > pyproject.toml \
+    printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging", "lib/finelog"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\nmarin-finelog = { workspace = true }\n' > pyproject.toml \
     && uv sync --package marin-iris --no-install-project
 
-# Now copy full source for both rigging and iris, then install.
+# Now copy full source for rigging, finelog, and iris, then install.
 COPY lib/rigging/src/ ./lib/rigging/src/
+COPY lib/finelog/src/ ./lib/finelog/src/
 COPY lib/iris/src/ ./lib/iris/src/
 COPY lib/iris/examples/ ./lib/iris/examples/
 RUN --mount=type=cache,target=/root/.cache/uv \

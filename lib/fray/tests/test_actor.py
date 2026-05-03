@@ -6,7 +6,6 @@
 import threading
 
 import pytest
-
 from fray import LocalClient
 
 

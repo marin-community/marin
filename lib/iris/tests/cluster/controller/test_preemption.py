@@ -4,7 +4,6 @@
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
 from iris.cluster.controller.budget import UserBudgetDefaults, compute_effective_band
-from iris.cluster.controller.transitions import RESERVATION_HOLDER_JOB_NAME, _resolve_task_failure_state
 from iris.cluster.controller.controller import (
     PreemptionCandidate,
     RunningTaskInfo,
@@ -12,11 +11,15 @@ from iris.cluster.controller.controller import (
     _run_preemption_pass,
 )
 from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
+from iris.cluster.controller.transitions import (
+    RESERVATION_HOLDER_JOB_NAME,
+    Assignment,
+    HeartbeatApplyRequest,
+    TaskUpdate,
+    _resolve_task_failure_state,
+)
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
-
-from iris.cluster.controller.transitions import Assignment, HeartbeatApplyRequest, TaskUpdate
+from iris.rpc import controller_pb2, job_pb2
 
 from .conftest import (
     ControllerTestHarness,
@@ -57,6 +60,33 @@ def _cpu_requirements(cpu_cores: int = 1) -> JobRequirements:
         constraints=[],
         is_coscheduled=False,
         coscheduling_group_by=None,
+    )
+
+
+def _tpu_resources(variant: str, count: int = 4) -> job_pb2.ResourceSpecProto:
+    spec = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
+    spec.device.tpu.variant = variant
+    spec.device.tpu.count = count
+    return spec
+
+
+def _tpu_requirements(variant: str, *, is_coscheduled: bool = False) -> JobRequirements:
+    return JobRequirements(
+        resources=_tpu_resources(variant),
+        constraints=[],
+        is_coscheduled=is_coscheduled,
+        coscheduling_group_by="tpu-name" if is_coscheduled else None,
+    )
+
+
+def _tpu_capacity(worker_id: WorkerId) -> WorkerCapacity:
+    """Worker fully committed to a TPU task (0 available)."""
+    return WorkerCapacity(
+        worker_id=worker_id,
+        available_cpu_millicores=0,
+        available_memory=0,
+        available_gpus=0,
+        available_tpus=0,
     )
 
 
@@ -247,6 +277,182 @@ def test_coscheduled_not_preempted():
 
     preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
     assert len(preemptions) == 0
+
+
+# ---------------------------------------------------------------------------
+# Same-variant gating + slice eviction
+# ---------------------------------------------------------------------------
+
+
+def test_solo_preempts_same_variant_tpu():
+    """A solo PRODUCTION TPU task evicts a solo BATCH victim of the same variant."""
+    w1 = WorkerId("w1")
+    ctx = _make_simple_context([_tpu_capacity(w1)])
+
+    victim = RunningTaskInfo(
+        task_id=JobName.from_wire("/alice/batch-job:0"),
+        worker_id=w1,
+        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        resource_value=1000,
+        is_coscheduled=False,
+        resources=_tpu_resources("v5p-8"),
+        device_variant="v5p-8",
+    )
+
+    preemptor_id = JobName.from_wire("/bob/prod-job:0")
+    unscheduled = [
+        PreemptionCandidate(preemptor_id, _tpu_requirements("v5p-8"), job_pb2.PRIORITY_BAND_PRODUCTION),
+    ]
+
+    preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
+    assert preemptions == [(preemptor_id, victim.task_id)]
+
+
+def test_solo_does_not_preempt_different_variant():
+    """A v5p-256 preemptor cannot evict a v5p-8 solo victim (variant mismatch)."""
+    w1 = WorkerId("w1")
+    ctx = _make_simple_context([_tpu_capacity(w1)])
+
+    victim = RunningTaskInfo(
+        task_id=JobName.from_wire("/alice/batch-job:0"),
+        worker_id=w1,
+        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        resource_value=1000,
+        is_coscheduled=False,
+        resources=_tpu_resources("v5p-8"),
+        device_variant="v5p-8",
+    )
+
+    preemptor_id = JobName.from_wire("/bob/prod-job:0")
+    unscheduled = [
+        PreemptionCandidate(preemptor_id, _tpu_requirements("v5p-256"), job_pb2.PRIORITY_BAND_PRODUCTION),
+    ]
+
+    preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
+    assert preemptions == []
+
+
+def test_coscheduled_preemptor_evicts_same_variant_slice():
+    """A coscheduled PROD job of N tasks evicts an entire coscheduled BATCH slice
+    of the same variant; one slice eviction satisfies all N preemptor siblings."""
+    workers = [WorkerId(f"w{i}") for i in range(4)]
+    ctx = _make_simple_context([_tpu_capacity(w) for w in workers])
+
+    victim_job = JobName.from_wire("/alice/cosched-batch")
+    victims = [
+        RunningTaskInfo(
+            task_id=victim_job.child(str(i)),
+            worker_id=workers[i],
+            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            resource_value=1000,
+            is_coscheduled=True,
+            resources=_tpu_resources("v5p-8"),
+            device_variant="v5p-8",
+        )
+        for i in range(4)
+    ]
+
+    preemptor_job = JobName.from_wire("/bob/cosched-prod")
+    req = _tpu_requirements("v5p-8", is_coscheduled=True)
+    unscheduled = [
+        PreemptionCandidate(preemptor_job.child(str(i)), req, job_pb2.PRIORITY_BAND_PRODUCTION) for i in range(4)
+    ]
+
+    preemptions = _run_preemption_pass(unscheduled, victims, ctx)
+    # Exactly N pairs emitted, one preemptor task per victim sibling.
+    assert len(preemptions) == 4
+    assert {p[1] for p in preemptions} == {v.task_id for v in victims}
+    # All pairs are attributed to a single preemptor sibling — the rest
+    # short-circuit via the satisfied_preemptor_jobs guard.
+    preemptors_used = {p[0] for p in preemptions}
+    assert len(preemptors_used) == 1
+
+
+def test_coscheduled_preemptor_does_not_evict_different_variant_slice():
+    """v5p-256 coscheduled preemptor cannot tear down a v5p-8 slice."""
+    workers = [WorkerId(f"w{i}") for i in range(4)]
+    ctx = _make_simple_context([_tpu_capacity(w) for w in workers])
+
+    victim_job = JobName.from_wire("/alice/cosched-batch")
+    victims = [
+        RunningTaskInfo(
+            task_id=victim_job.child(str(i)),
+            worker_id=workers[i],
+            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            resource_value=1000,
+            is_coscheduled=True,
+            resources=_tpu_resources("v5p-8"),
+            device_variant="v5p-8",
+        )
+        for i in range(4)
+    ]
+
+    preemptor_job = JobName.from_wire("/bob/cosched-prod")
+    req = _tpu_requirements("v5p-256", is_coscheduled=True)
+    unscheduled = [
+        PreemptionCandidate(preemptor_job.child(str(i)), req, job_pb2.PRIORITY_BAND_PRODUCTION) for i in range(4)
+    ]
+
+    preemptions = _run_preemption_pass(unscheduled, victims, ctx)
+    assert preemptions == []
+
+
+def test_coscheduled_preemptor_skips_undersized_slice():
+    """Slice eviction requires len(victim_group) >= preemptor sibling count."""
+    workers = [WorkerId(f"w{i}") for i in range(2)]
+    ctx = _make_simple_context([_tpu_capacity(w) for w in workers])
+
+    victim_job = JobName.from_wire("/alice/small-batch")
+    victims = [
+        RunningTaskInfo(
+            task_id=victim_job.child(str(i)),
+            worker_id=workers[i],
+            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            resource_value=1000,
+            is_coscheduled=True,
+            resources=_tpu_resources("v5p-8"),
+            device_variant="v5p-8",
+        )
+        for i in range(2)
+    ]
+
+    preemptor_job = JobName.from_wire("/bob/big-prod")
+    req = _tpu_requirements("v5p-8", is_coscheduled=True)
+    unscheduled = [
+        PreemptionCandidate(preemptor_job.child(str(i)), req, job_pb2.PRIORITY_BAND_PRODUCTION)
+        for i in range(4)  # needs 4, slice has 2
+    ]
+
+    preemptions = _run_preemption_pass(unscheduled, victims, ctx)
+    assert preemptions == []
+
+
+def test_solo_preemptor_does_not_tear_down_slice():
+    """A non-coscheduled preemptor never evicts a coscheduled slice, even on a variant match."""
+    workers = [WorkerId(f"w{i}") for i in range(4)]
+    ctx = _make_simple_context([_tpu_capacity(w) for w in workers])
+
+    victim_job = JobName.from_wire("/alice/cosched-batch")
+    victims = [
+        RunningTaskInfo(
+            task_id=victim_job.child(str(i)),
+            worker_id=workers[i],
+            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            resource_value=1000,
+            is_coscheduled=True,
+            resources=_tpu_resources("v5p-8"),
+            device_variant="v5p-8",
+        )
+        for i in range(4)
+    ]
+
+    preemptor_id = JobName.from_wire("/bob/solo-prod:0")
+    unscheduled = [
+        PreemptionCandidate(preemptor_id, _tpu_requirements("v5p-8"), job_pb2.PRIORITY_BAND_PRODUCTION),
+    ]
+
+    preemptions = _run_preemption_pass(unscheduled, victims, ctx)
+    assert preemptions == []
 
 
 # ---------------------------------------------------------------------------
@@ -721,7 +927,7 @@ def test_preempt_task_retries_when_budget_remains():
 
         attempt_id_before = query_task(state, task.task_id).current_attempt_id
         with state._store.transaction() as cur:
-            state.preempt_task(cur, task.task_id, reason="Evicted by /bob/prod:0")
+            result = state.preempt_task(cur, task.task_id, reason="Evicted by /bob/prod:0")
 
         # Task retries to PENDING
         updated = query_task(state, task.task_id)
@@ -732,6 +938,12 @@ def test_preempt_task_retries_when_budget_remains():
         attempt = query_attempt(state, task.task_id, attempt_id_before)
         assert attempt is not None
         assert attempt.state == job_pb2.TASK_STATE_PREEMPTED
+
+        # Even though the task retries, the worker process from the prior attempt
+        # must be stopped — otherwise the next assignment lands on the same TPU
+        # alongside a still-running ghost process.
+        assert task.task_id in result.tasks_to_kill
+        assert result.task_kill_workers[task.task_id] == w1
 
 
 def test_preempt_task_terminal_when_budget_exhausted():
@@ -765,6 +977,57 @@ def test_preempt_task_terminal_when_budget_exhausted():
         attempt = query_attempt(state, task.task_id, updated.current_attempt_id)
         assert attempt is not None
         assert attempt.state == job_pb2.TASK_STATE_PREEMPTED
+
+
+def test_preempt_task_requeues_coscheduled_siblings_on_retry():
+    """When a coscheduled task is preempted but retries (PENDING), siblings are
+    bounced to PENDING so the job re-coschedules atomically. Without this, the
+    retry could land on a different slice from the still-RUNNING siblings,
+    splitting the SPMD mesh."""
+    from iris.cluster.constraints import WellKnownAttribute
+
+    with make_controller_state() as state:
+        for i in range(2):
+            meta = make_worker_metadata()
+            meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+            meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+            register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+        req = controller_pb2.Controller.LaunchJobRequest(
+            name="cosched-preempt-retry",
+            entrypoint=make_test_entrypoint(),
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            replicas=2,
+            environment=job_pb2.EnvironmentConfig(),
+            max_retries_preemption=3,
+        )
+        req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+        tasks = submit_job(state, "cosched-preempt-retry", req)
+        assert len(tasks) == 2
+
+        for i, task in enumerate(tasks):
+            dispatch_task(state, task, WorkerId(f"w{i}"))
+
+        with state._store.transaction() as cur:
+            result = state.preempt_task(cur, tasks[0].task_id, reason="evicted")
+
+        # Preempted task retries to PENDING with attempt PREEMPTED.
+        preempted = query_task(state, tasks[0].task_id)
+        assert preempted.state == job_pb2.TASK_STATE_PENDING
+        assert preempted.preemption_count == 1
+
+        # Sibling bounced to PENDING so the job re-coschedules atomically;
+        # its preemption budget is preserved (only the original victim pays).
+        sibling = query_task(state, tasks[1].task_id)
+        assert sibling.state == job_pb2.TASK_STATE_PENDING
+        assert sibling.preemption_count == 0
+
+        # Both workers must receive a StopTask RPC so neither leaks a process
+        # onto the TPU when the scheduler reuses the slot.
+        assert tasks[0].task_id in result.tasks_to_kill
+        assert tasks[1].task_id in result.tasks_to_kill
+        assert result.task_kill_workers[tasks[0].task_id] == WorkerId("w0")
+        assert result.task_kill_workers[tasks[1].task_id] == WorkerId("w1")
 
 
 def test_preempt_task_cascades_coscheduled_siblings():

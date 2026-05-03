@@ -13,7 +13,6 @@ from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
-from marin.execution.remote import remote
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
@@ -23,6 +22,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from marin.execution.remote import remote
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
 from experiments.evals.evalchemy_results_compiler import compile_evalchemy_results_fn
@@ -56,6 +56,7 @@ def evaluate_lm_evaluation_harness(
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
+    env_vars: dict[str, str] | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
@@ -64,10 +65,21 @@ def evaluate_lm_evaluation_harness(
         model_name (str): Name of the model.
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
+        env_vars (dict[str, str] | None): Extra env vars to set on the child iris worker.
+            Needed for vLLM-on-TPU bring-up (e.g. ``MARIN_VLLM_MODE=native``,
+            ``VLLM_ENABLE_V1_MULTIPROCESSING=0``) and code-eval-dependent tasks
+            like humaneval (``HF_ALLOW_CODE_EVAL=1``). The coordinator's own
+            ``os.environ`` does NOT propagate to iris-spawned children — these
+            vars must be threaded through ``remote()``.
     """
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness/{model_name}",
-        fn=remote(evaluate, resources=resource_config, pip_dependency_groups=EVAL_DEPENDENCY_GROUPS),
+        fn=remote(
+            evaluate,
+            resources=resource_config,
+            pip_dependency_groups=EVAL_DEPENDENCY_GROUPS,
+            env_vars=env_vars,
+        ),
         config=EvaluationConfig(
             evaluator="lm_evaluation_harness",
             model_name=model_name,

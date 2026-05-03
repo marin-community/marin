@@ -1,9 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from rigging.log_setup import configure_logging
-from rigging.filesystem import marin_prefix
-
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
@@ -13,6 +10,8 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
+from rigging.filesystem import marin_prefix
+from rigging.log_setup import configure_logging
 
 
 def build_steps() -> list[StepSpec]:
@@ -24,7 +23,7 @@ def build_steps() -> list[StepSpec]:
     normalized = normalize_step(
         name="normalized/fineweb-edu-sample-10bt",
         download=raw,
-        input_path=raw.output_path + "/sample/10BT",
+        relative_input_path="sample/10BT",
     )
     minhash = StepSpec(
         name="minhash/fineweb-edu-sample-10bt",

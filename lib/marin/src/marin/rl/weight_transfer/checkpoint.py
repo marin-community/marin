@@ -16,10 +16,10 @@ from collections import deque
 
 import jax
 import levanter.checkpoint as levanter_checkpoint
-from rigging.filesystem import url_to_fs
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
+from rigging.filesystem import url_to_fs
 
 from .base import (
     WeightTransferClient,

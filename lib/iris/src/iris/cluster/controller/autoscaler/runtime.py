@@ -23,14 +23,9 @@ import logging
 from collections import deque
 from collections.abc import Sequence
 
+from rigging.timing import Duration, Timestamp
+
 from iris.cluster.constraints import Constraint
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import (
-    CloudSliceState,
-    QuotaExhaustedError,
-    RemoteWorkerHandle,
-    SliceHandle,
-)
 from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
     ScalingAction,
@@ -38,6 +33,8 @@ from iris.cluster.controller.autoscaler.models import (
 )
 from iris.cluster.controller.autoscaler.operations import (
     restart_worker as restart_worker_operation,
+)
+from iris.cluster.controller.autoscaler.operations import (
     terminate_slices_for_workers as terminate_slices_for_workers_operation,
 )
 from iris.cluster.controller.autoscaler.planning import ScalePlan, build_scale_plan
@@ -50,11 +47,17 @@ from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.providers.protocols import WorkerInfraProvider
+from iris.cluster.providers.types import (
+    CloudSliceState,
+    QuotaExhaustedError,
+    RemoteWorkerHandle,
+    SliceHandle,
+)
 from iris.cluster.types import WorkerStatusMap
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_proto import duration_from_proto, timestamp_to_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

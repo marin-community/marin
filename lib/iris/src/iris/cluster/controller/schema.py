@@ -17,8 +17,9 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Generic, TypeVar
 
-from iris.cluster.types import JobName, WorkerId
 from rigging.timing import Timestamp
+
+from iris.cluster.types import JobName, WorkerId
 
 T = TypeVar("T")
 RowDecoder = Callable[[sqlite3.Row], Any]

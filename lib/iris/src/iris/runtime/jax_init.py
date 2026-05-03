@@ -15,10 +15,11 @@ import atexit
 import logging
 import os
 
+from rigging.timing import Duration, ExponentialBackoff
+
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from rigging.timing import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 

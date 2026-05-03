@@ -37,8 +37,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow.parquet as pq
 from fray import ResourceConfig
-from rigging.filesystem import url_to_fs
-
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.artifact import Artifact
@@ -46,6 +44,7 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import check_cache
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_glob, fsspec_mkdirs
+from rigging.filesystem import url_to_fs
 
 from experiments.datakit_testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
 

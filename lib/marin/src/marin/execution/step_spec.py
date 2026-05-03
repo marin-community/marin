@@ -75,14 +75,19 @@ class StepSpec:
 
     @cached_property
     def dep_paths(self) -> list[str]:
-        """Output paths of all dependencies."""
+        """Physical and resolved output paths of all dependencies."""
         return [dep.output_path for dep in self.deps]
+
+    @cached_property
+    def dep_names(self) -> list[str]:
+        """Logical names with hashes of all dependencies, used for hashing and reporting."""
+        return [dep.name_with_hash for dep in self.deps]
 
     @cached_property
     def hash_id(self) -> str:
         """Hash ID of the step, used for cache invalidation and output path generation."""
         content = json.dumps(
-            {"name": self.name, "attrs": self.hash_attrs, "deps": sorted(self.dep_paths)},
+            {"name": self.name, "attrs": self.hash_attrs, "deps": sorted(self.dep_names)},
             sort_keys=True,
         )
         return hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
@@ -117,7 +122,7 @@ class StepSpec:
         The exists to allow for incremental migration from ``ExecutorStep`` to ``StepSpec``:
         steps can be authored as ``StepSpec`` and used in existing pipelines without modification.
         """
-        from marin.execution.executor import ExecutorStep, VersionedValue, THIS_OUTPUT_PATH
+        from marin.execution.executor import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
 
         dep_steps = [dep.as_executor_step() for dep in self.deps]
 

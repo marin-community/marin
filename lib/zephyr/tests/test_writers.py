@@ -7,12 +7,10 @@ import os
 import tempfile
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import vortex
-
-import pyarrow as pa
-
 from zephyr.writers import (
     atomic_rename,
     infer_arrow_schema,
@@ -245,6 +243,7 @@ def test_atomic_rename_s3_directory_preserves_layout(tmp_path):
     that.
     """
     from unittest.mock import patch
+
     from fsspec.implementations.local import LocalFileSystem
 
     dest = tmp_path / "dest"
@@ -265,6 +264,7 @@ def test_atomic_rename_s3_directory_preserves_layout(tmp_path):
 def test_atomic_rename_s3_single_file(tmp_path):
     """S3 atomic_rename works correctly for single-file outputs."""
     from unittest.mock import patch
+
     from fsspec.implementations.local import LocalFileSystem
 
     dest = tmp_path / "output.jsonl"

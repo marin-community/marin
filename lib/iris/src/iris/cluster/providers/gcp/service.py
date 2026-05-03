@@ -17,17 +17,17 @@ import google.auth.credentials
 import google.auth.transport.requests
 import httpx
 from google.cloud import tpu_v2alpha1
+from rigging.timing import Timestamp
 
+from iris.cluster.providers.gcp.local import LocalSliceHandle
 from iris.cluster.providers.types import (
     InfraError,
     QuotaExhaustedError,
     ResourceNotFoundError,
 )
-from iris.cluster.providers.gcp.local import LocalSliceHandle
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import TPU_TOPOLOGIES
 from iris.rpc import config_pb2
-from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +148,7 @@ class TpuCreateRequest:
     service_account: str | None = None
     network: str | None = None
     subnetwork: str | None = None
+    enable_external_ip: bool = True
 
 
 @dataclass
@@ -562,7 +563,7 @@ class CloudGcpService:
             body["schedulingConfig"] = {"preemptible": True}
         if request.service_account:
             body["serviceAccount"] = {"email": request.service_account}
-        network_config: dict = {"enableExternalIps": True}
+        network_config: dict = {"enableExternalIps": request.enable_external_ip}
         if request.network:
             network_config["network"] = request.network
         if request.subnetwork:
@@ -651,7 +652,7 @@ class CloudGcpService:
             labels=request.labels or {},
             metadata=request.metadata or {},
             network_config=tpu_v2alpha1.NetworkConfig(
-                enable_external_ips=True,
+                enable_external_ips=request.enable_external_ip,
                 network=request.network or "",
                 subnetwork=request.subnetwork or "",
             ),

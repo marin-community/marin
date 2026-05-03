@@ -18,7 +18,6 @@ import sqlite3
 import time
 
 import pytest
-
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import _tasks_for_listing
 from iris.cluster.types import JobName

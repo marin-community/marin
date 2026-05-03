@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
-import pytest
-import pyarrow as pa
 from typing import Any
+
 import dupekit
+import pyarrow as pa
+import pytest
 
 # Legacy Python Implementations for baseline
 

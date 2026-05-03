@@ -6,13 +6,15 @@
 Read-only queries do NOT belong here — callers use db.read_snapshot() directly.
 """
 
-import threading
-import time
 import json
 import logging
-from dataclasses import dataclass, field
+import threading
+import time
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import NamedTuple
+
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
 from iris.cluster.controller.codec import (
@@ -35,28 +37,28 @@ from iris.cluster.controller.db import (
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
+from iris.cluster.controller.schema import (
+    EndpointRow,
+    JobDetailRow,
+    WorkerDetailRow,
+)
 from iris.cluster.controller.stores import (
     ActiveTaskRow,
     ControllerStore,
     EndpointStore,
     JobConfigInsertParams,
     JobInsertParams,
-    ResourceUsageInsertParams,
     JobStore,
+    ResourceUsageInsertParams,
     TaskAttemptStore,
     TaskAttemptUpdateParams,
+    TaskInsertParams,
     TaskScope,
     TaskStateUpdateParams,
-    TaskInsertParams,
     TaskStore,
     WorkerAttributeParams,
     WorkerStore,
     WorkerUpsertParams,
-)
-from iris.cluster.controller.schema import (
-    EndpointRow,
-    JobDetailRow,
-    WorkerDetailRow,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
@@ -67,10 +69,8 @@ from iris.cluster.types import (
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -592,6 +592,59 @@ def _terminate_coscheduled_siblings(
     return tasks_to_kill, task_kill_workers
 
 
+def _requeue_coscheduled_siblings(
+    cur: TransactionCursor,
+    attempts: TaskAttemptStore,
+    tasks: TaskStore,
+    workers: WorkerStore,
+    registry,
+    siblings: Iterable[ActiveTaskRow],
+    failed_task_id: JobName,
+    resources: "job_pb2.ResourceSpecProto",
+    now_ms: int,
+) -> tuple[set[JobName], dict[JobName, WorkerId]]:
+    """Bounce coscheduled siblings to PENDING so the job re-coschedules atomically.
+
+    Used when one task of a coscheduled job hits a transient failure that will
+    retry. Without this, only the failed task returns to PENDING and the
+    scheduler may place its retry on a different slice from the still-RUNNING
+    siblings, splitting the coscheduled job. Sibling preemption_count and
+    failure_count are left untouched — they didn't actually fail, so only the
+    originally-failing task pays its retry budget.
+
+    Reservation-holder siblings are skipped; they never hold worker resources
+    and don't participate in the slice.
+    """
+    tasks_to_kill: set[JobName] = set()
+    task_kill_workers: dict[JobName, WorkerId] = {}
+    error = f"Coscheduled sibling {failed_task_id.to_wire()} bounced for atomic re-scheduling"
+
+    for sib in siblings:
+        if sib.is_reservation_holder:
+            continue
+        worker_id_str = str(sib.current_worker_id) if sib.current_worker_id is not None else None
+        _terminate_task(
+            cur,
+            attempts,
+            tasks,
+            workers,
+            registry,
+            sib.task_id.to_wire(),
+            sib.current_attempt_id,
+            job_pb2.TASK_STATE_PENDING,
+            error,
+            now_ms,
+            attempt_state=job_pb2.TASK_STATE_PREEMPTED,
+            worker_id=worker_id_str,
+            resources=resources if sib.current_worker_id is not None else None,
+        )
+        if sib.current_worker_id is not None:
+            task_kill_workers[sib.task_id] = sib.current_worker_id
+            tasks_to_kill.add(sib.task_id)
+
+    return tasks_to_kill, task_kill_workers
+
+
 def _resolve_preemption_policy(jobs: JobStore, cur: TransactionCursor, job_id: JobName) -> int:
     """Resolve the effective preemption policy for a job.
 
@@ -1051,6 +1104,13 @@ class ControllerTransitions:
                 self._store.workers.decommit_resources(cur, row.current_worker_id, row.resources)
         now_ms = Timestamp.now().epoch_ms()
         self._store.tasks.bulk_kill_non_terminal(cur, subtree, reason, now_ms, TERMINAL_TASK_STATES)
+        # Without this, the current attempt row stays state=RUNNING forever
+        # (apply_heartbeat skips terminal tasks so the per-attempt finalize
+        # never fires). Dashboard queries that read task_attempts then report
+        # the killed task as still running on its old worker.
+        self._store.attempts.bulk_finalize_active(
+            cur, subtree, job_pb2.TASK_STATE_KILLED, reason, now_ms, set(ACTIVE_TASK_STATES)
+        )
         # Deliberately excludes JOB_STATE_WORKER_FAILED from the guard set:
         # worker-failed jobs should still be cancellable (transitioned to KILLED).
         cancel_guard_states = TERMINAL_JOB_STATES - {job_pb2.JOB_STATE_WORKER_FAILED}
@@ -1469,27 +1529,43 @@ class ControllerTransitions:
             if update.new_state in TERMINAL_TASK_STATES:
                 delete_task_endpoints(cur, self._store.endpoints, update.task_id.to_wire())
 
-            # Coscheduled jobs: a terminal host failure should cascade to siblings.
-            if jc is not None and task_state in FAILURE_TASK_STATES:
-                has_cosched = bool(int(jc["has_coscheduling"]))
-                siblings = _find_coscheduled_siblings(cur, self._store.tasks, task.job_id, update.task_id, has_cosched)
+            # Coscheduled jobs: any failure of a sibling must clear the slice so
+            # the job re-coschedules atomically. Branch on whether this task is
+            # going terminal (kill siblings outright) or being downgraded to
+            # PENDING for retry (requeue siblings, preserving their budgets).
+            reported_failure = int(update.new_state) in FAILURE_TASK_STATES
+            if jc is not None and bool(int(jc["has_coscheduling"])) and reported_failure:
+                siblings = _find_coscheduled_siblings(cur, self._store.tasks, task.job_id, update.task_id, True)
                 resources = resource_spec_from_scalars(
                     int(jc["res_cpu_millicores"]),
                     int(jc["res_memory_bytes"]),
                     int(jc["res_disk_bytes"]),
                     jc["res_device_json"],
                 )
-                cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                    cur,
-                    self._store.attempts,
-                    self._store.tasks,
-                    self._store.workers,
-                    self._store.endpoints,
-                    siblings,
-                    update.task_id,
-                    resources,
-                    now_ms,
-                )
+                if task_state in FAILURE_TASK_STATES:
+                    cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
+                        cur,
+                        self._store.attempts,
+                        self._store.tasks,
+                        self._store.workers,
+                        self._store.endpoints,
+                        siblings,
+                        update.task_id,
+                        resources,
+                        now_ms,
+                    )
+                else:
+                    cascade_kill, cascade_workers = _requeue_coscheduled_siblings(
+                        cur,
+                        self._store.attempts,
+                        self._store.tasks,
+                        self._store.workers,
+                        self._store.endpoints,
+                        siblings,
+                        update.task_id,
+                        resources,
+                        now_ms,
+                    )
                 tasks_to_kill.update(cascade_kill)
                 task_kill_workers.update(cascade_workers)
 
@@ -1631,8 +1707,7 @@ class ControllerTransitions:
 
         # ── Pass 2b: transitions via existing state machine ───────────
         for req_idx, treq in transition_entries:
-            tx_result = self._apply_task_transitions(cur, treq, now_ms)
-            results[req_idx] = TxResult(tasks_to_kill=tx_result.tasks_to_kill)
+            results[req_idx] = self._apply_task_transitions(cur, treq, now_ms)
 
         return results
 
@@ -1706,6 +1781,38 @@ class ControllerTransitions:
                     task_kill_workers.update(child_task_kill_workers)
             if new_task_state == job_pb2.TASK_STATE_WORKER_FAILED:
                 tasks_to_kill.add(task_id)
+
+            # Coscheduled siblings on surviving slice workers must clear so the
+            # job re-coschedules atomically; otherwise the bounced task may
+            # land on a different slice from its still-RUNNING siblings.
+            if not is_reservation_holder and task_row.has_coscheduling:
+                siblings = _find_coscheduled_siblings(cur, self._store.tasks, parent_job_id, task_id, True)
+                if new_task_state in FAILURE_TASK_STATES:
+                    sib_kill, sib_workers = _terminate_coscheduled_siblings(
+                        cur,
+                        self._store.attempts,
+                        self._store.tasks,
+                        self._store.workers,
+                        self._store.endpoints,
+                        siblings,
+                        task_id,
+                        task_row.resources,
+                        now_ms,
+                    )
+                else:
+                    sib_kill, sib_workers = _requeue_coscheduled_siblings(
+                        cur,
+                        self._store.attempts,
+                        self._store.tasks,
+                        self._store.workers,
+                        self._store.endpoints,
+                        siblings,
+                        task_id,
+                        task_row.resources,
+                        now_ms,
+                    )
+                tasks_to_kill.update(sib_kill)
+                task_kill_workers.update(sib_workers)
         _remove_worker(cur, self._store.workers, worker_id)
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
@@ -1854,6 +1961,26 @@ class ControllerTransitions:
             preemption_count=preemption_count,
         )
 
+        # Coscheduled retry: bounce siblings back to PENDING so the job
+        # re-coschedules atomically. Without this, the lone preempted task's
+        # retry can land on a different slice from its still-RUNNING siblings,
+        # splitting the SPMD mesh across pods.
+        if new_state == job_pb2.TASK_STATE_PENDING and row.has_coscheduling:
+            siblings = _find_coscheduled_siblings(cur, self._store.tasks, row.job_id, task_id, True)
+            sibling_kills, sibling_workers = _requeue_coscheduled_siblings(
+                cur,
+                self._store.attempts,
+                self._store.tasks,
+                self._store.workers,
+                self._store.endpoints,
+                siblings,
+                task_id,
+                row.resources,
+                now_ms,
+            )
+            tasks_to_kill.update(sibling_kills)
+            task_kill_workers.update(sibling_workers)
+
         # Recompute job state and cascade if terminal
         job_id = row.job_id
         new_job_state = self._recompute_job_state(cur, job_id)
@@ -1875,8 +2002,14 @@ class ControllerTransitions:
                 tasks_to_kill.update(child_kills)
                 task_kill_workers.update(child_workers)
 
-        if new_state == job_pb2.TASK_STATE_PREEMPTED:
+        # Always send a StopTask RPC to the worker that was running this attempt:
+        # _terminate_task decommits the worker's resources but does not stop the
+        # remote process. Without the kill RPC the worker keeps running the old
+        # code while the scheduler reuses the freed slot for a new task,
+        # producing two concurrent processes on the same TPU.
+        if attempt_worker_id is not None:
             tasks_to_kill.add(task_id)
+            task_kill_workers[task_id] = WorkerId(attempt_worker_id)
 
         log_event("task_preempted", task_id.to_wire(), reason=reason)
 
@@ -2075,6 +2208,7 @@ class ControllerTransitions:
                 # Invalidate endpoint cache BEFORE the CASCADE so the cache
                 # drops rows SQLite is about to delete for us.
                 self._store.endpoints.remove_by_job_ids(cur, [job_name])
+                self._store.tasks.remove_status_text_by_job_ids([job_name])
                 self._store.jobs.delete(cur, job_name)
             log_event("job_pruned", job_name.to_wire())
             jobs_deleted += 1
@@ -2226,6 +2360,12 @@ class ControllerTransitions:
                     metadata=cfg.metadata,
                     ts=now,
                 )
+
+    # --- Task Status Text ---
+
+    def record_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
+        """Update the task's markdown status text for UI display (held in memory only)."""
+        self._store.tasks.set_status_text(task_id.to_wire(), detail_md, summary_md)
 
     # --- Endpoint Management ---
 
@@ -2498,27 +2638,41 @@ class ControllerTransitions:
             if update.new_state in TERMINAL_TASK_STATES:
                 delete_task_endpoints(cur, self._store.endpoints, update.task_id.to_wire())
 
-            # Coscheduled sibling cascade.
-            if jc_row is not None and task_state in FAILURE_TASK_STATES:
-                has_cosched = bool(int(jc_row["has_coscheduling"]))
-                siblings = _find_coscheduled_siblings(cur, self._store.tasks, task.job_id, update.task_id, has_cosched)
+            # Coscheduled sibling cascade. Branch on terminal vs transient (see
+            # apply_state_updates above for the full rationale).
+            reported_failure = int(update.new_state) in FAILURE_TASK_STATES
+            if jc_row is not None and bool(int(jc_row["has_coscheduling"])) and reported_failure:
+                siblings = _find_coscheduled_siblings(cur, self._store.tasks, task.job_id, update.task_id, True)
                 job_resources = resource_spec_from_scalars(
                     int(jc_row["res_cpu_millicores"]),
                     int(jc_row["res_memory_bytes"]),
                     int(jc_row["res_disk_bytes"]),
                     jc_row["res_device_json"],
                 )
-                cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                    cur,
-                    self._store.attempts,
-                    self._store.tasks,
-                    self._store.workers,
-                    self._store.endpoints,
-                    siblings,
-                    update.task_id,
-                    job_resources,
-                    now_ms,
-                )
+                if task_state in FAILURE_TASK_STATES:
+                    cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
+                        cur,
+                        self._store.attempts,
+                        self._store.tasks,
+                        self._store.workers,
+                        self._store.endpoints,
+                        siblings,
+                        update.task_id,
+                        job_resources,
+                        now_ms,
+                    )
+                else:
+                    cascade_kill, cascade_workers = _requeue_coscheduled_siblings(
+                        cur,
+                        self._store.attempts,
+                        self._store.tasks,
+                        self._store.workers,
+                        self._store.endpoints,
+                        siblings,
+                        update.task_id,
+                        job_resources,
+                        now_ms,
+                    )
                 tasks_to_kill.update(cascade_kill)
                 task_kill_workers.update(cascade_workers)
 

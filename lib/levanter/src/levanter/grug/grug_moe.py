@@ -24,7 +24,7 @@ import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call, tree_checkpoint_name
 from jax import shard_map
-from jax.sharding import PartitionSpec as P, get_abstract_mesh
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh, get_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
@@ -38,19 +38,29 @@ MoeImplementation: TypeAlias = Literal["ring", "ragged_all_to_all"]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 
 
-def _mesh_has_axis(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> bool:
+def _current_mesh() -> Mesh | jax.sharding.AbstractMesh:
+    try:
+        mesh = get_mesh()
+    except ValueError:
+        mesh = None
+    if mesh is not None and not mesh.empty:
+        return mesh
+    return get_abstract_mesh()
+
+
+def _mesh_has_axis(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: str) -> bool:
     if mesh is None or mesh.empty:
         return False
     return axis_name in mesh.shape
 
 
-def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
+def _mesh_axis_size(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: str) -> int:
     if mesh is None or mesh.empty:
         return 1
     return int(mesh.shape.get(axis_name, 1))
 
 
-def _batch_spec(mesh: jax.sharding.AbstractMesh | None) -> P:
+def _batch_spec(mesh: Mesh | jax.sharding.AbstractMesh | None) -> P:
     if _mesh_has_axis(mesh, "expert"):
         return P(("data", "expert"))
     return P(("data",))
@@ -131,12 +141,30 @@ def _moe_mlp_local(
     return out, jnp.array(0, dtype=jnp.int32)
 
 
-def _batch_spec_from_x(x: jax.Array, mesh: jax.sharding.AbstractMesh | None) -> P:
+def _batch_spec_from_x(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None) -> P:
     sharding = getattr(x, "sharding", None)
     spec = getattr(sharding, "spec", None)
-    if spec is not None and len(spec) > 0:
+    if spec is not None and len(spec) > 0 and spec[0] is not None:
         return P(spec[0])
     return _batch_spec(mesh)
+
+
+def _is_replicated_spec(spec: P) -> bool:
+    return all(axis is None for axis in spec)
+
+
+def _value_spec_or_default(x: jax.Array, default: P, *, replace_replicated: bool = False) -> P:
+    sharding = getattr(x, "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec is not None and not (replace_replicated and _is_replicated_spec(spec)):
+        return spec
+    return default
+
+
+def _reshard_for_shard_map(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None, spec: P) -> jax.Array:
+    if mesh is not None and not mesh.empty:
+        return reshard(x, NamedSharding(mesh, spec))
+    return x
 
 
 def _sort_activations(inputs: jax.Array, sort_indices: jax.Array) -> jax.Array:
@@ -529,7 +557,7 @@ def moe_mlp(
     dropped expert assignments from EP capacity clipping.
     """
     if mesh is None:
-        mesh = get_abstract_mesh()
+        mesh = _current_mesh()
 
     if isinstance(activation, ActivationFunctionEnum):
         activation_fn = activation.to_jax_fn()
@@ -576,7 +604,6 @@ def moe_mlp(
         return out
 
     batch_spec = _batch_spec_from_x(x, mesh)
-    local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
 
     if has_expert_axis and expert_axis_size > 1:
         if num_experts % expert_axis_size != 0:
@@ -588,6 +615,15 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
+
+        w_up_gate_spec = P("expert", None, None)
+        w_down_spec = P("expert", None, None)
+
+        x = _reshard_for_shard_map(x, mesh, batch_spec)
+        selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
+        combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
+        w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
+        w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
         shard_fn = shard_map(
             partial(
@@ -601,8 +637,8 @@ def moe_mlp(
                 batch_spec,
                 batch_spec,
                 batch_spec,
-                P("expert", None, None),
-                P("expert", None, None),
+                w_up_gate_spec,
+                w_down_spec,
             ),
             out_specs=(batch_spec, P()),
             check_vma=False,
@@ -613,7 +649,21 @@ def moe_mlp(
         return out
 
     # Fallback path for no expert axis (or expert axis size 1) keeps routing
-    # semantics without EP collectives.
+    # semantics without EP collectives. JAX 0.9 requires shard_map in_specs to
+    # match the actual input sharding, so reshard ordinary inputs to the mesh
+    # specs that preserve data-axis parallelism.
+    x_spec = _value_spec_or_default(x, batch_spec, replace_replicated=True)
+    selected_experts_spec = _value_spec_or_default(selected_experts, batch_spec, replace_replicated=True)
+    combine_weights_spec = _value_spec_or_default(combine_weights, batch_spec, replace_replicated=True)
+    w_up_gate_spec = _value_spec_or_default(w_up_gate, P(*(None for _ in range(w_up_gate.ndim))))
+    w_down_spec = _value_spec_or_default(w_down, P(*(None for _ in range(w_down.ndim))))
+
+    x = _reshard_for_shard_map(x, mesh, x_spec)
+    selected_experts = _reshard_for_shard_map(selected_experts, mesh, selected_experts_spec)
+    combine_weights = _reshard_for_shard_map(combine_weights, mesh, combine_weights_spec)
+    w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
+    w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
+
     shard_fn = shard_map(
         partial(
             _moe_mlp_local,
@@ -622,13 +672,13 @@ def moe_mlp(
         ),
         mesh=mesh,
         in_specs=(
-            batch_spec,
-            batch_spec,
-            batch_spec,
-            local_expert_spec,
-            local_expert_spec,
+            x_spec,
+            selected_experts_spec,
+            combine_weights_spec,
+            w_up_gate_spec,
+            w_down_spec,
         ),
-        out_specs=(batch_spec, P()),
+        out_specs=(x_spec, P()),
         check_vma=False,
     )
     out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)

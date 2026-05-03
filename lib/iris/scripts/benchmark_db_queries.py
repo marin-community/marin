@@ -27,12 +27,11 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 import click
-
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     _building_counts,
@@ -53,6 +52,7 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
+    EndpointRow,
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
@@ -71,7 +71,6 @@ from iris.cluster.controller.service import (
     _worker_addresses_for_tasks,
     _worker_roster,
 )
-from iris.cluster.controller.schema import EndpointRow
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -81,8 +80,7 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
 )
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, WorkerId
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
 _results: list[tuple[str, float, float, int]] = []

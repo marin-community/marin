@@ -16,9 +16,9 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 import numpy as np
-from rigging.filesystem import url_to_fs
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
+from rigging.filesystem import url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +142,7 @@ class CurriculumConfig:
     """Temperature for sampling weight distribution."""
 
     actor_name: str = "curriculum"
-    """Name for the Ray actor (shared between rollout and train workers)."""
+    """Name for the curriculum actor shared between rollout and train workers."""
 
     minimum_sample_probability: float = 0.1
     """Minimum probability for sampling any active lesson."""

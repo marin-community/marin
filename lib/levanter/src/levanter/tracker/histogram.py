@@ -116,11 +116,13 @@ def _shardmap_histogram(a: NamedArray, bins):
     spec = hax.partitioning.pspec_for_axis(a.axes)
     flattened_spec = _flattened_spec(spec)
 
-    def _wrapped_hist(arr):
-        return _single_shard_histogram(arr, bin_edges=bins, reduce_mesh=flattened_spec)
+    def _wrapped_hist(arr, bin_edges):
+        return _single_shard_histogram(arr, bin_edges=bin_edges, reduce_mesh=flattened_spec)
 
-    shard_h = shard_map(_wrapped_hist)
-    res = shard_h(a)
+    shard_h = shard_map(
+        _wrapped_hist, in_specs=(spec, jax.sharding.PartitionSpec()), out_specs=jax.sharding.PartitionSpec()
+    )
+    res = shard_h(a, bins)
 
     # the filter misses the last bin, so we need to add it
     if res.size >= 1:

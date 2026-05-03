@@ -8,13 +8,12 @@ on a 30M parameter DCLM model using TPU hardware.
 import dataclasses
 
 from fray.cluster import ResourceConfig
-
-from experiments.evals.task_configs import CORE_TASKS
-from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from marin.execution.executor import executor_main, versioned
 
 from experiments.defaults import default_train
+from experiments.evals.task_configs import CORE_TASKS
 from experiments.llama import llama_30m
+from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from experiments.simple_train_config import SimpleTrainConfig
 
 RESOURCES = ResourceConfig.with_tpu("v4-8")

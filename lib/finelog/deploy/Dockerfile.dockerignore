@@ -1,0 +1,18 @@
+# Only lib/finelog/ and lib/rigging/ are needed in the build context.
+# Exclude everything else, then selectively re-include.
+*
+
+!lib/finelog/pyproject.toml
+!lib/finelog/src/
+!lib/finelog/config/
+
+!lib/rigging/
+
+# Exclude build artifacts within included paths
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+**/node_modules
+**/.venv

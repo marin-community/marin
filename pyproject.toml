@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     # workspaces
     "marin-iris",
+    "marin-finelog",
     "marin-fray",
     "marin-haliax",
     "marin-levanter",
@@ -33,13 +34,14 @@ override-dependencies = [
     "antlr4-python3-runtime==4.11",
     "python-multipart>=0.0.22",
     "wheel>=0.46.2",
-    "datasets>=3.1.0,<4.0.0",
-    "equinox>=0.11.10",  # Override vizier's pin for JAX 0.8 compatibility
+    "datasets>=3.1.0,<5.0.0",
+    "equinox>=0.11.10",  # Override vizier's pin for modern JAX compatibility
 ]
 
 [tool.uv.workspace]
 members = [
     "lib/iris",
+    "lib/finelog",
     "lib/fray",
     "lib/haliax",
     "lib/levanter",
@@ -50,6 +52,7 @@ members = [
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
+marin-finelog = { workspace = true }
 marin-fray = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
@@ -84,10 +87,14 @@ extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
-ignore = ["F722", "B008", "UP015", "A005", "I001", "E741"]
+ignore = ["F722", "B008", "UP015", "A005", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["experiments"]
+known-third-party = ["wandb"]
 
 
 [tool.mypy]
@@ -157,7 +164,7 @@ missing-import = false
 # Unexpected keyword arguments (47 occurrences) - dynamic configs from transformers, dataclasses
 unexpected-keyword = false
 
-# Missing attributes (315 occurrences) - often from untyped libraries like ray, jax, etc.
+# Missing attributes (315 occurrences) - often from untyped libraries like JAX, etc.
 # These are mostly false positives from libraries without complete type stubs
 missing-attribute = false
 
@@ -226,4 +233,4 @@ testpaths = ["tests", "experiments"]
 # Don't run TPU, slow, or integration tests by default. Integration tests
 # require external infrastructure (Iris cluster, GCS, gated HF repos, etc.)
 # and are run from dedicated CI workflows.
-addopts = "--session-timeout=480 -m 'not tpu_ci and not slow and not integration'"
+addopts = "--session-timeout=600 -m 'not tpu_ci and not slow and not integration'"

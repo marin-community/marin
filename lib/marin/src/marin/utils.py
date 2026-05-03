@@ -15,9 +15,9 @@ import braceexpand
 import datasets
 import fsspec
 import requests
+from huggingface_hub.utils import HfHubHTTPError
 from rigging.filesystem import url_to_fs
 from rigging.timing import ExponentialBackoff, retry_with_backoff
-from huggingface_hub.utils import HfHubHTTPError
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -102,17 +102,13 @@ _HF_RETRY_KEYWORDS = (
 
 
 def _hf_should_retry(exc: Exception) -> bool:
-    if isinstance(exc, HfHubHTTPError):
-        status = getattr(exc, "status_code", None)
-        response = getattr(exc, "response", None)
-        if response is not None and hasattr(response, "status_code"):
-            status = response.status_code
-        if status is None:
-            return True
-        return status == 429 or status >= 500
     if isinstance(exc, requests.exceptions.HTTPError):
+        # HfHubHTTPError subclasses HTTPError; retry it on unknown status because the
+        # hub SDK can raise without an attached response on transient failures.
         status = getattr(getattr(exc, "response", None), "status_code", None)
-        return status == 429 or (status is not None and status >= 500)
+        if status is None:
+            return isinstance(exc, HfHubHTTPError)
+        return status == 429 or status >= 500
     if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
         return True
     message = str(exc).lower()
@@ -247,10 +243,10 @@ def _hacky_remove_tpu_lockfile():
     This is a hack to remove the lockfile that TPU pods create on the host filesystem.
 
     libtpu only allows one process to access the TPU at a time, and it uses a lockfile to enforce this.
-    Ordinarily a lockfile would be removed when the process exits, but in the case of Ray, the process is
-    a long-running daemon that doesn't typically exit until the node is shut down. This means that the lockfile
-    persists across Ray tasks. This doesn't apply to tasks that fork a new process to do the TPU work, but
-    does apply to tasks that run the TPU code in the same process as the Ray worker.
+    Ordinarily a lockfile would be removed when the process exits, but a long-running worker process may not exit until
+    the node is shut down. This means that the lockfile can persist across tasks. This doesn't apply to tasks that fork a
+    new process to do the TPU work, but does apply to tasks that run the TPU code in the same long-running worker
+    process.
     """
     try:
         os.unlink("/tmp/libtpu_lockfile")

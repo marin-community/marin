@@ -8,6 +8,9 @@ and uses the mixture frmo 1880
 
 import dataclasses
 
+from fray.cluster import ResourceConfig
+from marin.execution.executor import executor_main
+
 from experiments.defaults import default_sft
 from experiments.evals.evals import default_sft_eval
 from experiments.exp1880_sft_baseline import mixture_config
@@ -17,8 +20,6 @@ from experiments.tootsie.exp1529_32b_mantis_cooldown import (
     qwen3_32b_remat,
     tootsie_32b_cooldown_mantis,
 )
-from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
 
 TRAIN_BATCH_SIZE = 2048
 # Matches the 3-epoch budget from exp1880_sft_baseline (computed against that mixture).
