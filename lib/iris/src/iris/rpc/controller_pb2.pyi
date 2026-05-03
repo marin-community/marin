@@ -254,18 +254,18 @@ class Controller(_message.Message):
         status_message: str
         def __init__(self, worker_id: _Optional[str] = ..., healthy: _Optional[bool] = ..., consecutive_failures: _Optional[int] = ..., last_heartbeat: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., running_job_ids: _Optional[_Iterable[str]] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[_job_pb2.WorkerMetadata, _Mapping]] = ..., status_message: _Optional[str] = ...) -> None: ...
     class WorkerQuery(_message.Message):
-        __slots__ = ("prefix", "sort_field", "sort_direction", "offset", "limit")
-        PREFIX_FIELD_NUMBER: _ClassVar[int]
+        __slots__ = ("contains", "sort_field", "sort_direction", "offset", "limit")
+        CONTAINS_FIELD_NUMBER: _ClassVar[int]
         SORT_FIELD_FIELD_NUMBER: _ClassVar[int]
         SORT_DIRECTION_FIELD_NUMBER: _ClassVar[int]
         OFFSET_FIELD_NUMBER: _ClassVar[int]
         LIMIT_FIELD_NUMBER: _ClassVar[int]
-        prefix: str
+        contains: str
         sort_field: Controller.WorkerSortField
         sort_direction: Controller.SortDirection
         offset: int
         limit: int
-        def __init__(self, prefix: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.WorkerSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ...) -> None: ...
+        def __init__(self, contains: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.WorkerSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ...) -> None: ...
     class ListWorkersRequest(_message.Message):
         __slots__ = ("query",)
         QUERY_FIELD_NUMBER: _ClassVar[int]

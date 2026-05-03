@@ -50,12 +50,12 @@ function parsePage(v: string): number {
 const page = ref(parsePage(queryStr(route.query.page)))
 const sortField = ref<SortField>(parseSort(queryStr(route.query.sort)))
 const sortDir = ref<SortDir>(parseDir(queryStr(route.query.dir)))
-const prefixFilter = ref(queryStr(route.query.prefix))
-const localPrefix = ref(queryStr(route.query.prefix))
+const containsFilter = ref(queryStr(route.query.contains))
+const localContains = ref(queryStr(route.query.contains))
 
 const { data, loading, error, refresh } = useControllerRpc<ListWorkersResponse>('ListWorkers', () => ({
   query: {
-    prefix: prefixFilter.value || undefined,
+    contains: containsFilter.value || undefined,
     sortField: SORT_FIELD_MAP[sortField.value],
     sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
     offset: page.value * PAGE_SIZE,
@@ -71,38 +71,41 @@ const totalCount = computed(() => data.value?.totalCount ?? 0)
 const hasMore = computed(() => data.value?.hasMore ?? false)
 const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / PAGE_SIZE)))
 
-watch([page, sortField, sortDir, prefixFilter], () => {
+watch([page, sortField, sortDir, containsFilter], () => {
   refresh()
 })
 
-watch(prefixFilter, () => {
+watch(containsFilter, () => {
   page.value = 0
 })
 
-watch([page, sortField, sortDir, prefixFilter], () => {
+watch([page, sortField, sortDir, containsFilter], () => {
   router.replace({
     query: {
       ...route.query,
       sort: sortField.value !== 'workerId' ? sortField.value : undefined,
       dir: sortDir.value !== 'asc' ? sortDir.value : undefined,
       page: page.value !== 0 ? String(page.value) : undefined,
-      prefix: prefixFilter.value || undefined,
+      contains: containsFilter.value || undefined,
+      // Clear legacy URL params from older bookmarks so they don't carry
+      // stale state on top of the new filter.
+      prefix: undefined,
       device: undefined,
     },
   })
 })
 
 function handleFilterSubmit() {
-  prefixFilter.value = localPrefix.value
+  containsFilter.value = localContains.value
 }
 
 function handleFilterClear() {
-  localPrefix.value = ''
-  prefixFilter.value = ''
+  localContains.value = ''
+  containsFilter.value = ''
   page.value = 0
 }
 
-const hasActiveFilter = computed(() => !!prefixFilter.value)
+const hasActiveFilter = computed(() => !!containsFilter.value)
 
 const columns: Column[] = [
   { key: 'workerId', label: 'Worker ID', mono: true },
@@ -132,7 +135,7 @@ const columns: Column[] = [
     <div class="mb-4 flex flex-wrap items-center gap-2 sm:gap-3">
       <form class="flex flex-wrap flex-1 sm:flex-initial gap-2" @submit.prevent="handleFilterSubmit">
         <input
-          v-model="localPrefix"
+          v-model="localContains"
           type="text"
           placeholder="Filter by worker ID or address..."
           class="flex-1 sm:flex-initial sm:w-64 px-3 py-1.5 text-sm border border-surface-border rounded

@@ -1155,13 +1155,13 @@ def test_list_workers_pagination(service, state):
     assert page3.has_more is False
 
 
-def test_list_workers_filter_by_prefix(service, state):
-    """prefix matches worker_id substring (case-insensitive) and address."""
+def test_list_workers_filter_by_contains(service, state):
+    """contains matches worker_id substring (case-insensitive) and address."""
     _register_workers_for_query(service, state, count_cpu=2, count_gpu=2)
 
     by_id = service.list_workers(
         controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(prefix="GPU-WORKER"),
+            query=controller_pb2.Controller.WorkerQuery(contains="GPU-WORKER"),
         ),
         None,
     )
@@ -1170,12 +1170,22 @@ def test_list_workers_filter_by_prefix(service, state):
 
     by_address = service.list_workers(
         controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(prefix="cpu-host1"),
+            query=controller_pb2.Controller.WorkerQuery(contains="cpu-host1"),
         ),
         None,
     )
     assert by_address.total_count == 1
     assert by_address.workers[0].worker_id == "cpu-worker-01"
+
+    # Substring (not just prefix): a token that appears in the middle of
+    # worker_id should still match.
+    by_substring = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(contains="worker-0"),
+        ),
+        None,
+    )
+    assert by_substring.total_count == 4
 
 
 # =============================================================================

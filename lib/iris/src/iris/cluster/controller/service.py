@@ -622,7 +622,7 @@ def _filter_and_sort_workers(
     workers: list[WorkerDetailRow],
     query: controller_pb2.Controller.WorkerQuery,
 ) -> list[WorkerDetailRow]:
-    """Apply the ``WorkerQuery`` prefix filter and sort the cached roster.
+    """Apply the ``WorkerQuery`` contains filter and sort the cached roster.
 
     Filtering and sorting happen in Python against the cached worker roster
     rather than in SQL: the roster is bounded by cluster size (low thousands)
@@ -630,10 +630,10 @@ def _filter_and_sort_workers(
     per request is much smaller than reissuing the SELECT + worker_attributes
     fan-out.
     """
-    prefix = query.prefix.lower() if query.prefix else ""
-    if prefix:
+    needle = query.contains.lower() if query.contains else ""
+    if needle:
         workers = [
-            w for w in workers if prefix in str(w.worker_id).lower() or (w.address and prefix in w.address.lower())
+            w for w in workers if needle in str(w.worker_id).lower() or (w.address and needle in w.address.lower())
         ]
 
     sort_field = query.sort_field or controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID
