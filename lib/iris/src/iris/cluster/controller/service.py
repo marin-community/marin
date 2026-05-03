@@ -641,10 +641,8 @@ def _filter_and_sort_workers(
     if sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT:
         workers = sorted(workers, key=lambda w: w.last_heartbeat.epoch_ms(), reverse=descending)
     elif sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE:
-        # CPU workers persist with ``device_type == ""`` (registration sets it
-        # only for accelerator workers); the empty string sorts first under
-        # ascending order, which is consistent with treating CPU as the "no
-        # accelerator" baseline.
+        # CPU workers persist with ``device_type == ""``; under ascending sort
+        # they group first (treating CPU as the no-accelerator baseline).
         workers = sorted(workers, key=lambda w: (w.device_type, str(w.worker_id)), reverse=descending)
     else:
         workers = sorted(workers, key=lambda w: str(w.worker_id), reverse=descending)

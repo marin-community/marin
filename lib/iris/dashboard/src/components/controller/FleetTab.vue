@@ -87,10 +87,6 @@ watch([page, sortField, sortDir, containsFilter], () => {
       dir: sortDir.value !== 'asc' ? sortDir.value : undefined,
       page: page.value !== 0 ? String(page.value) : undefined,
       contains: containsFilter.value || undefined,
-      // Clear legacy URL params from older bookmarks so they don't carry
-      // stale state on top of the new filter.
-      prefix: undefined,
-      device: undefined,
     },
   })
 })
