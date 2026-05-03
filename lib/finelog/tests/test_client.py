@@ -1,15 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for LogClient buffering, Table semantics, and RemoteLogHandler.
-
-These tests exercise the public client surface. They use
-``LogClient.connect`` plus a monkeypatched ``StatsServiceClientSync`` to
-drive the underlying RPC behavior without spinning a real server.
-Integration tests covering the wire path live in
-``tests/test_stats_service.py`` and ``tests/test_stats_query_drop.py``.
-"""
-
 from __future__ import annotations
 
 import io
@@ -36,14 +27,8 @@ from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.store.schema import Column, Schema, schema_to_proto
 
-# ---------------------------------------------------------------------------
-# RemoteLogHandler tests against a tiny fake LogClient.
-# ---------------------------------------------------------------------------
-
 
 class FakeLogClient:
-    """Minimal LogClient stand-in for the handler tests."""
-
     def __init__(self, *, fail: bool = False) -> None:
         self.batches: list[tuple[str, list[logging_pb2.LogEntry]]] = []
         self._fail = fail
@@ -76,7 +61,6 @@ def test_handler_writes_batches():
 
 
 def test_no_deadlock_on_write_failure():
-    """Handler re-entry on write failure must not deadlock."""
     client = FakeLogClient(fail=True)
     handler = RemoteLogHandler(client, key="test")
     handler.setLevel(logging.DEBUG)
@@ -100,14 +84,7 @@ def test_no_deadlock_on_write_failure():
     assert finished, "RemoteLogHandler deadlocked on write failure"
 
 
-# ---------------------------------------------------------------------------
-# LogClient end-to-end tests using monkeypatched RPC clients.
-# ---------------------------------------------------------------------------
-
-
 class _FakeStatsServiceClient:
-    """Records register/write/drop/query; tracks state for round-trip tests."""
-
     def __init__(self, address, **_kwargs):
         self.address = address
         self.registered: dict[str, stats_pb2.Schema] = {}
@@ -115,7 +92,6 @@ class _FakeStatsServiceClient:
         self.drops: list[str] = []
         self.queries: list[str] = []
         self.errors: list[Exception] = []
-        # Tests that exercise query() install this to return a pa.Table.
         self.query_handler = None
 
     def register_table(self, request):
@@ -126,7 +102,6 @@ class _FakeStatsServiceClient:
         if self.errors:
             raise self.errors.pop(0)
         self.writes.append(request)
-        # Decode the IPC stream so tests can introspect rows.
         return stats_pb2.WriteRowsResponse(rows_written=_decode_ipc_row_count(request.arrow_ipc))
 
     def drop_table(self, request):
@@ -164,15 +139,15 @@ def _decode_ipc_table(blob: bytes) -> pa.Table:
 @pytest.fixture
 def tracked_clients(monkeypatch):
     """Patch the StatsService client class to record every constructed instance."""
-    stats_clients: list[_FakeStatsServiceClient] = []
+    clients: list[_FakeStatsServiceClient] = []
 
     def stats_factory(address, timeout_ms=10_000, interceptors=()):
         c = _FakeStatsServiceClient(address, timeout_ms=timeout_ms, interceptors=interceptors)
-        stats_clients.append(c)
+        clients.append(c)
         return c
 
     monkeypatch.setattr(log_client_mod, "StatsServiceClientSync", stats_factory)
-    return stats_clients
+    return clients
 
 
 def test_connect_returns_usable_client(tracked_clients):
@@ -180,9 +155,8 @@ def test_connect_returns_usable_client(tracked_clients):
     try:
         client.write_batch("key", [logging_pb2.LogEntry(source="t", data="hi")])
         assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
-        stats_clients = tracked_clients
-        assert stats_clients and stats_clients[0].writes[0].namespace == "log"
-        decoded = _decode_ipc_table(stats_clients[0].writes[0].arrow_ipc)
+        assert tracked_clients and tracked_clients[0].writes[0].namespace == "log"
+        decoded = _decode_ipc_table(tracked_clients[0].writes[0].arrow_ipc)
         assert decoded.column("key").to_pylist() == ["key"]
         assert decoded.column("data").to_pylist() == ["hi"]
     finally:
@@ -192,7 +166,6 @@ def test_connect_returns_usable_client(tracked_clients):
 def test_close_is_idempotent(tracked_clients):
     client = LogClient.connect("http://h:1")
     client.close()
-    # Second call must not raise. write after close raises.
     client.close()
     with pytest.raises(RuntimeError):
         client.write_batch("k", [logging_pb2.LogEntry(source="t", data="x")])
@@ -236,29 +209,25 @@ def test_invalidates_on_connection_refused(tracked_clients, monkeypatch):
     """
     monkeypatch.setattr(log_client_mod, "_BACKOFF_INITIAL", 1e-9)
     monkeypatch.setattr(log_client_mod, "_BACKOFF_MAX", 1e-9)
-    stats_clients = tracked_clients
     client = LogClient.connect("http://h:1")
     try:
         client.write_batch("k", [logging_pb2.LogEntry(source="t", data="primer")])
         assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
-        # Seed a single retryable error; the next send will fail and trigger
-        # invalidation, then the retry succeeds against a freshly resolved client.
-        stats_clients[0].errors.append(ConnectError(Code.UNAVAILABLE, "down"))
+        tracked_clients[0].errors.append(ConnectError(Code.UNAVAILABLE, "down"))
         client.write_batch("k", [logging_pb2.LogEntry(source="t", data="retry")])
         assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
-        assert len(stats_clients) >= 2, "expected re-resolution to construct a new client"
+        assert len(tracked_clients) >= 2, "expected re-resolution to construct a new client"
 
         def _retry_landed(req):
             decoded = _decode_ipc_table(req.arrow_ipc)
             return "retry" in decoded.column("data").to_pylist()
 
-        assert any(_retry_landed(w) for w in stats_clients[1].writes)
+        assert any(_retry_landed(w) for w in tracked_clients[1].writes)
     finally:
         client.close()
 
 
 def test_query_round_trips(tracked_clients):
-    stats_clients = tracked_clients
     client = LogClient.connect("http://h:1")
     try:
 
@@ -275,9 +244,9 @@ def test_query_round_trips(tracked_clients):
             )
 
         client.get_table("iris.worker", WorkerStat)
-        stats_clients[0].query_handler = handler
+        tracked_clients[0].query_handler = handler
         resp = client.query(logging_pb2.FetchLogsRequest(source="key", max_lines=10))
-        sql = stats_clients[0].queries[0]
+        sql = tracked_clients[0].queries[0]
         assert '"log"' in sql
         assert "key = 'key'" in sql
         assert "LIMIT 10" in sql
@@ -285,11 +254,6 @@ def test_query_round_trips(tracked_clients):
         assert [e.data for e in resp.entries] == ["hi"]
     finally:
         client.close()
-
-
-# ---------------------------------------------------------------------------
-# Stats-side: get_table, write, drop_table.
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -301,17 +265,14 @@ class WorkerStat:
 
 
 def test_get_table_with_dataclass_round_trips(tracked_clients):
-    stats_clients = tracked_clients
     client = LogClient.connect("http://h:1")
     try:
         table = client.get_table("iris.worker", WorkerStat)
         assert table.namespace == "iris.worker"
         assert tuple(c.name for c in table.schema.columns) == ("worker_id", "timestamp_ms", "mem_bytes", "note")
-        # Writes are routed through the Table buffer; flush forces a send.
         table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=128, note="ok")])
         assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
-        # Decode the IPC bytes to confirm the row landed correctly.
-        write_req = stats_clients[0].writes[0]
+        write_req = tracked_clients[0].writes[0]
         decoded = paipc.open_stream(pa.BufferReader(write_req.arrow_ipc)).read_all()
         assert decoded.num_rows == 1
         assert decoded.column_names == ["worker_id", "timestamp_ms", "mem_bytes", "note"]
@@ -348,12 +309,11 @@ def test_get_table_rejects_log_namespace(tracked_clients):
 
 
 def test_drop_table_calls_server(tracked_clients):
-    stats_clients = tracked_clients
     client = LogClient.connect("http://h:1")
     try:
         client.get_table("iris.worker", WorkerStat)
         client.drop_table("iris.worker")
-        assert stats_clients[0].drops == ["iris.worker"]
+        assert tracked_clients[0].drops == ["iris.worker"]
     finally:
         client.close()
 
@@ -368,47 +328,37 @@ def test_drop_table_rejects_log_namespace(tracked_clients):
 
 
 def test_drop_table_unknown_is_no_op(tracked_clients, monkeypatch):
-    stats_clients = tracked_clients
     client = LogClient.connect("http://h:1")
     try:
-        # Pre-create the stats client and seed it to raise NOT_FOUND.
         client.get_table("iris.worker", WorkerStat)
-        original_drop = stats_clients[0].drop_table
+        original_drop = tracked_clients[0].drop_table
 
         def fail_drop(request):
             raise ConnectError(Code.NOT_FOUND, "namespace not registered")
 
-        stats_clients[0].drop_table = fail_drop  # type: ignore[method-assign]
+        tracked_clients[0].drop_table = fail_drop  # type: ignore[method-assign]
         client.drop_table("iris.unknown")  # must not raise
-        stats_clients[0].drop_table = original_drop  # type: ignore[method-assign]
+        tracked_clients[0].drop_table = original_drop  # type: ignore[method-assign]
     finally:
         client.close()
 
 
 def test_get_table_propagates_schema_conflict(tracked_clients, monkeypatch):
-    stats_clients = tracked_clients
     client = LogClient.connect("http://h:1")
     try:
-        # Touch the stats client so it exists.
         client.get_table("iris.metric", WorkerStat)
 
         def conflict(request):
             raise ConnectError(Code.FAILED_PRECONDITION, "type mismatch")
 
-        stats_clients[0].register_table = conflict  # type: ignore[method-assign]
+        tracked_clients[0].register_table = conflict  # type: ignore[method-assign]
         with pytest.raises(SchemaConflictError):
             client.get_table("iris.other", WorkerStat)
     finally:
         client.close()
 
 
-# ---------------------------------------------------------------------------
-# Table.query: SQL round-trip via the StatsService.
-# ---------------------------------------------------------------------------
-
-
 def test_table_query_round_trips(tracked_clients):
-    stats_clients = tracked_clients
     client = LogClient.connect("http://h:1")
     try:
         table = client.get_table("iris.worker", WorkerStat)
@@ -416,21 +366,20 @@ def test_table_query_round_trips(tracked_clients):
         def handler(_sql: str) -> pa.Table:
             return pa.table({"worker_id": ["w-1", "w-2"], "mem_bytes": [10, 20]})
 
-        stats_clients[0].query_handler = handler
+        tracked_clients[0].query_handler = handler
         result = table.query('SELECT worker_id, mem_bytes FROM "iris.worker"')
         assert result.column_names == ["worker_id", "mem_bytes"]
         assert result.column("worker_id").to_pylist() == ["w-1", "w-2"]
-        assert stats_clients[0].queries == ['SELECT worker_id, mem_bytes FROM "iris.worker"']
+        assert tracked_clients[0].queries == ['SELECT worker_id, mem_bytes FROM "iris.worker"']
     finally:
         client.close()
 
 
 def test_table_query_raises_on_too_large(tracked_clients):
-    stats_clients = tracked_clients
     client = LogClient.connect("http://h:1")
     try:
         table = client.get_table("iris.worker", WorkerStat)
-        stats_clients[0].query_handler = lambda _sql: pa.table({"worker_id": ["w"] * 5})
+        tracked_clients[0].query_handler = lambda _sql: pa.table({"worker_id": ["w"] * 5})
         with pytest.raises(QueryResultTooLargeError):
             table.query('SELECT * FROM "iris.worker"', max_rows=2)
     finally:
@@ -438,31 +387,23 @@ def test_table_query_raises_on_too_large(tracked_clients):
 
 
 def test_table_query_translates_invalid_argument(tracked_clients):
-    stats_clients = tracked_clients
     client = LogClient.connect("http://h:1")
     try:
         table = client.get_table("iris.worker", WorkerStat)
-        stats_clients[0].errors.append(ConnectError(Code.INVALID_ARGUMENT, "syntax error"))
+        tracked_clients[0].errors.append(ConnectError(Code.INVALID_ARGUMENT, "syntax error"))
         with pytest.raises(SchemaValidationError):
             table.query("not valid sql")
     finally:
         client.close()
 
 
-# ---------------------------------------------------------------------------
-# Table buffering and overflow.
-# ---------------------------------------------------------------------------
-
-
 def test_close_drains_pending_log_rows(tracked_clients):
-    stats_clients = tracked_clients
     client = LogClient.connect("http://h:1")
     entry = logging_pb2.LogEntry(source="t", data="line")
     client.write_batch("k", [entry, entry])
     client.close()
-    # Close drains, so the entries land before close returns.
-    assert stats_clients[0].writes
-    total = sum(_decode_ipc_table(w.arrow_ipc).num_rows for w in stats_clients[0].writes)
+    assert tracked_clients[0].writes
+    total = sum(_decode_ipc_table(w.arrow_ipc).num_rows for w in tracked_clients[0].writes)
     assert total == 2
 
 
@@ -476,21 +417,21 @@ def test_table_overflow_drops_oldest(tracked_clients, caplog):
     a fast bg flush would empty the queue between writes and the
     overflow trigger would never fire.
     """
-    stats_clients = tracked_clients
     client = LogClient.connect("http://h:1")
     try:
-        client.get_table("iris.worker", WorkerStat)  # creates the stats RPC client
+        client.get_table("iris.worker", WorkerStat)
         flush_lock = threading.Event()
 
         def blocked_write(request):
             flush_lock.wait()
             return stats_pb2.WriteRowsResponse(rows_written=0)
 
-        stats_clients[0].write_rows = blocked_write  # type: ignore[method-assign]
+        tracked_clients[0].write_rows = blocked_write  # type: ignore[method-assign]
         table = client._tables["iris.worker"]
         table._max_buffer_rows = 4
         table._max_buffer_bytes = 1024
-        table._batch_rows = 1_000_000  # disable size-triggered notify; rely on time-based wakeup only
+        # Disable size-triggered notify so only the time-based wakeup fires.
+        table._batch_rows = 1_000_000
         # Bypass the rate limiter so the very first overflow logs.
         table._overflow_log_limiter = log_client_mod.RateLimiter(interval_seconds=0)
         client_logger = logging.getLogger("finelog.client.log_client")
@@ -499,23 +440,15 @@ def test_table_overflow_drops_oldest(tracked_clients, caplog):
         try:
             for i in range(20):
                 table.write([WorkerStat(worker_id=f"w-{i}", timestamp_ms=i, mem_bytes=i)])
-            # Overflow trim runs in the calling thread; assert immediately.
             assert any("buffer overflow" in r.message for r in caplog.records)
-            # Only the four most-recent rows survive; older ones were dropped.
-            # Payloads are now pre-built RecordBatches; extract via column().
             with table._cond:
                 surviving_ids = [item.payload.column("worker_id")[0].as_py() for item in table._queue]
             assert surviving_ids == ["w-16", "w-17", "w-18", "w-19"]
         finally:
             client_logger.removeHandler(caplog.handler)
-            flush_lock.set()  # unblock the bg thread so close() returns
+            flush_lock.set()
     finally:
         client.close()
-
-
-# ---------------------------------------------------------------------------
-# Dataclass schema inference unit tests.
-# ---------------------------------------------------------------------------
 
 
 def test_schema_from_dataclass_basic():
@@ -557,11 +490,6 @@ def test_schema_from_dataclass_rejects_unsupported_type():
         schema_from_dataclass(Stat)
 
 
-# ---------------------------------------------------------------------------
-# Wire path: end-to-end with an in-process LogServiceImpl.
-# ---------------------------------------------------------------------------
-
-
 def test_remote_log_handler_writes_via_log_client(tracked_clients):
     client = LogClient.connect("http://h:1")
     handler = RemoteLogHandler(client, key="proc")
@@ -571,8 +499,7 @@ def test_remote_log_handler_writes_via_log_client(tracked_clients):
     try:
         log.info("end-to-end")
         assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
-        stats_clients = tracked_clients
-        decoded = _decode_ipc_table(stats_clients[0].writes[0].arrow_ipc)
+        decoded = _decode_ipc_table(tracked_clients[0].writes[0].arrow_ipc)
         assert decoded.column("key").to_pylist() == ["proc"]
     finally:
         log.removeHandler(handler)
@@ -586,9 +513,7 @@ def test_table_flush_waits_for_in_flight(tracked_clients):
         table = client.get_table("iris.worker", WorkerStat)
         table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=1) for _ in range(10)])
         assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
-        # All rows landed exactly once.
-        stats_clients = tracked_clients
-        total_rows = sum(_decode_ipc_row_count(w.arrow_ipc) for w in stats_clients[0].writes)
+        total_rows = sum(_decode_ipc_row_count(w.arrow_ipc) for w in tracked_clients[0].writes)
         assert total_rows == 10
     finally:
         client.close()
@@ -599,8 +524,7 @@ def test_table_close_drains_queue(tracked_clients):
     table = client.get_table("iris.worker", WorkerStat)
     table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=1) for _ in range(5)])
     table.close()
-    stats_clients = tracked_clients
-    total = sum(_decode_ipc_row_count(w.arrow_ipc) for w in stats_clients[0].writes)
+    total = sum(_decode_ipc_row_count(w.arrow_ipc) for w in tracked_clients[0].writes)
     assert total == 5
     client.close()
 
@@ -638,8 +562,10 @@ def test_table_close_drains_queue_when_thread_starts_late(monkeypatch):
 
 
 def test_schema_from_proto_consistency():
-    """schema_to_proto is the inverse of schema_from_proto for inferred schemas."""
     s = schema_from_dataclass(WorkerStat)
     proto = schema_to_proto(s)
-    # Names round-trip in order.
-    assert [c.name for c in proto.columns] == [c.name for c in s.columns]
+    assert len(proto.columns) == len(s.columns)
+    for proto_col, src_col in zip(proto.columns, s.columns, strict=True):
+        assert proto_col.name == src_col.name
+        assert proto_col.type == src_col.type
+        assert proto_col.nullable == src_col.nullable

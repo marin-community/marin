@@ -1,12 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the WriteRows RPC: append round-trip, error cases,
-dict-encoded column decode, nested-type rejection, and size/row caps.
-All tests operate directly on ``DuckDBLogStore`` without going through
-the ASGI layer.
-"""
-
 from __future__ import annotations
 
 import pyarrow as pa
@@ -22,10 +16,6 @@ from finelog.store.schema import (
 )
 
 from tests.conftest import _ipc_bytes, _seal, _worker_schema
-
-# ---------------------------------------------------------------------------
-# WriteRows: happy path + validation
-# ---------------------------------------------------------------------------
 
 
 def test_write_rows_append_round_trip(store: DuckDBLogStore):
@@ -48,8 +38,6 @@ def test_write_rows_append_round_trip(store: DuckDBLogStore):
     n = store.write_rows("iris.worker", _ipc_bytes(batch))
     assert n == 2
 
-    # Sealed segment carries the registered schema in registered column
-    # order plus the implicit ``seq`` column the registry stamps in.
     _seal(store, "iris.worker")
     table = store.query('SELECT * FROM "iris.worker" ORDER BY timestamp_ms')
     assert sorted(table.column_names) == ["mem_bytes", "seq", "timestamp_ms", "worker_id"]
@@ -73,7 +61,6 @@ def test_write_rows_missing_nullable_column_filled_with_null(store: DuckDBLogSto
         ),
     )
     store.register_table("iris.worker", schema)
-    # Batch omits the nullable "note" column entirely.
     batch = pa.RecordBatch.from_pydict(
         {"worker_id": ["w-1"], "timestamp_ms": [1]},
         schema=pa.schema(
@@ -129,7 +116,6 @@ def test_write_rows_type_mismatch_rejected(store: DuckDBLogStore):
 
 def test_write_rows_dictionary_encoded_column_decoded(store: DuckDBLogStore):
     store.register_table("iris.worker", _worker_schema())
-    # Dictionary-encoded string column.
     dict_arr = pa.DictionaryArray.from_arrays(pa.array([0, 1, 0]), pa.array(["w-1", "w-2"]))
     batch = pa.RecordBatch.from_arrays(
         [
@@ -149,7 +135,6 @@ def test_write_rows_dictionary_encoded_column_decoded(store: DuckDBLogStore):
     assert n == 3
     _seal(store, "iris.worker")
     table = store.query('SELECT worker_id FROM "iris.worker" ORDER BY timestamp_ms')
-    # Decoded to plain string after the storage round-trip.
     assert table.schema.field("worker_id").type == pa.string()
     assert table.column("worker_id").to_pylist() == ["w-1", "w-2", "w-1"]
 
@@ -162,8 +147,7 @@ def test_write_rows_nested_type_rejected(store: DuckDBLogStore):
         ),
     )
     store.register_table("iris.worker", schema)
-    # Even if "tags" isn't in the registered schema, its type triggers the
-    # nested-rejection rule before the unknown-column check.
+    # The list type triggers the nested-rejection rule before the unknown-column check.
     batch = pa.RecordBatch.from_arrays(
         [
             pa.array(["w-1"]),
@@ -184,9 +168,6 @@ def test_write_rows_oversize_request_rejected(store: DuckDBLogStore):
 
 
 def test_write_rows_too_many_rows_rejected(store: DuckDBLogStore):
-    # We don't actually want to allocate 1M rows; instead write a small batch
-    # whose row count we'll fudge by repeating. Use a moderately-large batch
-    # that fits in 16 MiB but exceeds the 1M row cap when combined.
     schema = Schema(columns=(Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),))
     store.register_table("ns.bulk", schema)
     n = 1_000_001

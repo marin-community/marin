@@ -1,12 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the RegisterTable RPC: name validation, schema validation (key
-column rules), idempotency, additive schema evolution, and type/key-change
-rejection. All tests operate directly on ``DuckDBLogStore`` without going
-through the ASGI layer.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -22,10 +16,6 @@ from finelog.store.schema import (
 )
 
 from tests.conftest import _worker_schema
-
-# ---------------------------------------------------------------------------
-# RegisterTable: name validation
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -49,7 +39,7 @@ def test_register_accepts_valid_names(store: DuckDBLogStore, name: str):
     "name",
     [
         "",
-        "Iris.Worker",  # uppercase
+        "Iris.Worker",
         ".starts-dot",
         "1starts-digit",
         "x" * 65,
@@ -64,19 +54,11 @@ def test_register_rejects_invalid_names(store: DuckDBLogStore, name: str):
 
 
 def test_register_rejects_path_traversal(store: DuckDBLogStore):
-    # The regex check filters these too, but we confirm path containment is
-    # exercised by names containing dots.
     with pytest.raises(InvalidNamespaceError):
         store.register_table("../escape", _worker_schema())
 
 
-# ---------------------------------------------------------------------------
-# RegisterTable: schema validation (ordering key)
-# ---------------------------------------------------------------------------
-
-
 def test_register_rejects_schema_without_ordering_key(store: DuckDBLogStore):
-    # No key_column and no implicit timestamp_ms column.
     schema = Schema(
         columns=(
             Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
@@ -124,15 +106,10 @@ def test_register_accepts_explicit_key_column(store: DuckDBLogStore):
 def test_register_rejects_explicit_key_missing_from_columns(store: DuckDBLogStore):
     schema = Schema(
         columns=(Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),),
-        key_column="ts",  # not in columns
+        key_column="ts",
     )
     with pytest.raises(SchemaValidationError):
         store.register_table("iris.worker", schema)
-
-
-# ---------------------------------------------------------------------------
-# RegisterTable: evolve-by-default
-# ---------------------------------------------------------------------------
 
 
 def test_register_idempotent_returns_existing_schema(store: DuckDBLogStore):
@@ -170,7 +147,6 @@ def test_register_additive_nullable_extension_merges(store: DuckDBLogStore):
     )
     effective = store.register_table("iris.worker", extended)
     assert effective.column_names() == ("seq", "worker_id", "mem_bytes", "timestamp_ms", "note")
-    # Re-registering the base schema after evolution returns the merged schema.
     again = store.register_table("iris.worker", base)
     assert again == effective
 

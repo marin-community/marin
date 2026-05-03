@@ -1,12 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared fixtures and helpers for cluster-level tests.
-
-Provides constraint builders, resource spec fixtures, and the
-ServiceTestHarness used across scheduling, controller, and integration tests.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -40,8 +34,6 @@ from rigging.timing import Timestamp
 
 
 class _FakeLogClientFromService:
-    """LogClient.query adapter that delegates to an in-process LogServiceImpl."""
-
     def __init__(self, log_service: LogServiceImpl) -> None:
         self._log_service = log_service
 

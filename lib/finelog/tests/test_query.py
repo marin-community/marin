@@ -1,12 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the Query RPC: SQL escape unit tests, round-trip via sealed
-segment, empty namespace, WHERE filter, multi-namespace JOIN, unknown-ns SQL
-error, and query-vs-compaction snapshot semantics (lock-through-fetch
-correctness for concurrent compaction commits and compaction during query).
-"""
-
 from __future__ import annotations
 
 import threading
@@ -17,14 +11,11 @@ import pyarrow as pa
 import pytest
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.store.duckdb_store import DuckDBLogStore
+from finelog.store.log_namespace import _is_tmp_path
 from finelog.store.schema import Column, Schema
 from finelog.store.sql_escape import quote_ident, quote_literal
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
-
-# ---------------------------------------------------------------------------
-# SQL escape helpers
-# ---------------------------------------------------------------------------
 
 
 def test_quote_ident_doubles_embedded_quotes():
@@ -35,18 +26,12 @@ def test_quote_literal_doubles_single_quotes():
     assert quote_literal("o'brien") == "'o''brien'"
 
 
-# ---------------------------------------------------------------------------
-# Query: happy paths
-# ---------------------------------------------------------------------------
-
-
 def test_query_round_trip_via_sealed_segment(store: DuckDBLogStore):
     store.register_table("iris.worker", _worker_schema())
     store.write_rows(
         "iris.worker",
         _ipc_bytes(_worker_batch(["w-1", "w-2"], [100, 200], [1, 2])),
     )
-    # Force a flush so the data is in a sealed segment readable by Query.
     _seal(store, "iris.worker")
 
     table = store.query('SELECT worker_id, mem_bytes FROM "iris.worker" ORDER BY worker_id')
@@ -68,13 +53,10 @@ def test_query_sees_unflushed_rows(store: DuckDBLogStore):
 
 
 def test_query_against_namespace_with_zero_sealed_segments_returns_empty(store: DuckDBLogStore):
-    # Register but never write/flush. The view should be a typed empty view
-    # so SELECT * returns zero rows (not a DuckDB error).
+    # Empty namespace must yield a typed empty view, not a DuckDB error.
     store.register_table("iris.worker", _worker_schema())
     table = store.query('SELECT * FROM "iris.worker"')
     assert table.num_rows == 0
-    # The schema reflects the registered columns plus the implicit ``seq``
-    # column the registry stamps onto every namespace.
     assert set(table.column_names) == {"seq", "worker_id", "mem_bytes", "timestamp_ms"}
 
 
@@ -90,7 +72,6 @@ def test_query_with_where_filter(store: DuckDBLogStore):
 
 
 def test_query_multi_namespace_join(store: DuckDBLogStore):
-    # Both namespaces share worker_id; join lets us correlate rows.
     store.register_table("iris.worker", _worker_schema())
     task_schema = Schema(
         columns=(
@@ -133,36 +114,21 @@ def test_query_multi_namespace_join(store: DuckDBLogStore):
 
 
 def test_query_unknown_namespace_in_sql_raises(store: DuckDBLogStore):
-    # An unregistered namespace name in the FROM clause has no matching view
-    # in the per-query connection, so DuckDB raises a Catalog error.
     with pytest.raises(duckdb.CatalogException):
         store.query('SELECT * FROM "nope.unknown"')
 
 
-# ---------------------------------------------------------------------------
-# Query: lock-through-fetch
-# ---------------------------------------------------------------------------
-
-
 def test_query_blocks_concurrent_compaction_commit(store: DuckDBLogStore):
-    """A holder of the query-visibility read lock blocks compaction's commit.
-
-    Compaction's commit step takes the query-visibility *write* lock to
-    rename the staged file and unlink the inputs. While a reader holds
-    the read side, the writer must queue.
-    """
+    """A reader holding the query-visibility lock blocks compaction's commit."""
     store.register_table("iris.worker", _worker_schema())
-    # Produce two tmp segments so _compaction_step has actual work.
     ns = store._namespaces["iris.worker"]
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))
     ns._flush_step()
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["b"], [2], [2])))
     ns._flush_step()
 
-    # Hold the read lock manually and run compaction in a thread. We poll
-    # the rwlock's ``_pending_writers`` counter (incremented inside
-    # ``write_acquire`` while the thread is blocked) to confirm the
-    # compaction thread has actually queued — no sleep, no timing race.
+    # Hold the read lock; poll _pending_writers to confirm the compaction
+    # thread has queued without relying on sleep.
     rwlock = store._query_visibility_lock
     rwlock.read_acquire()
     try:
@@ -175,9 +141,6 @@ def test_query_blocks_concurrent_compaction_commit(store: DuckDBLogStore):
         t = threading.Thread(target=run_compaction, daemon=True)
         t.start()
 
-        # Wait until the compaction thread is parked inside write_acquire.
-        # ``_pending_writers`` is incremented under ``rwlock._cond``; we
-        # use the same condition variable to wait without polling.
         with rwlock._cond:
             deadline = time.monotonic() + 5.0
             while rwlock._pending_writers == 0:
@@ -186,35 +149,21 @@ def test_query_blocks_concurrent_compaction_commit(store: DuckDBLogStore):
                     raise AssertionError("compaction thread never queued for the write lock")
                 rwlock._cond.wait(timeout=remaining)
 
-        # Writer is queued and parked; the compaction has *not* completed
-        # because we still hold the read side.
         assert not compaction_done.is_set()
     finally:
         rwlock.read_release()
 
-    # Releasing the read lock lets the writer proceed; the thread
-    # finishes promptly.
     t.join(timeout=5.0)
     assert compaction_done.is_set()
-    # Compaction completed: a single sealed segment replaces the two tmps.
     ns = store._namespaces["iris.worker"]
     sealed = ns.sealed_segments()
     assert len(sealed) == 1
     all_segments = ns.all_segments_unlocked()
-    from finelog.store.log_namespace import _is_tmp_path
-
     assert not any(_is_tmp_path(s.path) for s in all_segments)
 
 
 def test_query_completes_on_snapshot_during_compaction(store: DuckDBLogStore):
-    """Compaction does not invalidate the path list captured by an entering query.
-
-    Run a query end-to-end before compaction (sees the inputs), then run
-    compaction (the inputs are replaced by a single merged file), then
-    run another query (sees the merged result). Both queries return the
-    same rows; this verifies the read path is independent of which
-    physical files happen to back the namespace at any moment.
-    """
+    """Read path is independent of which physical files back the namespace."""
     store.register_table("iris.worker", _worker_schema())
     ns = store._namespaces["iris.worker"]
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))
@@ -227,8 +176,6 @@ def test_query_completes_on_snapshot_during_compaction(store: DuckDBLogStore):
     table = store.query('SELECT worker_id FROM "iris.worker" ORDER BY worker_id')
     assert table.column("worker_id").to_pylist() == ["a", "b"]
 
-    # After a re-compaction the result is still correct (now read from
-    # the single merged segment).
-    ns._compaction_step()  # may merge the two logs_ if multiple tmps exist; otherwise no-op
+    ns._compaction_step()
     table2 = store.query('SELECT worker_id FROM "iris.worker" ORDER BY worker_id')
     assert table2.column("worker_id").to_pylist() == ["a", "b"]

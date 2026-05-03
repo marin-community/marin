@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration tests for the DuckDB-backed LogStore."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -22,8 +20,6 @@ def _entry(data: str, epoch_ms: int = 0) -> logging_pb2.LogEntry:
 
 @pytest.fixture()
 def store():
-    # ``get_logs`` already snapshots in-RAM chunks via ``query_snapshot``,
-    # so reads see appended rows without waiting on the bg flush thread.
     s = DuckDBLogStore()
     yield s
     s.close()
@@ -56,14 +52,11 @@ def test_regex_pattern_query(store: DuckDBLogStore):
     store.append("/job/other/0:0", [_entry("c", epoch_ms=3)])
     result = store.get_logs("/job/test/.*")
     assert sorted(e.data for e in result.entries) == ["a", "b"]
-    # attempt_id parsed from key suffix
     assert all(e.attempt_id == 0 for e in result.entries)
 
 
 def test_flush_and_compaction(tmp_path: Path):
     data_dir = tmp_path / "logs"
-    # The log namespace's parquet files live under {data_dir}/log/, not
-    # directly under {data_dir}.
     namespace_dir = data_dir / "log"
     store = DuckDBLogStore(log_dir=data_dir)
     try:

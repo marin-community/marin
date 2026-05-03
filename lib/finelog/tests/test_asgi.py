@@ -1,12 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end Connect/ASGI tests for the StatsService: register+write,
-query+drop, and the rejection/error cases for DropTable (log namespace
-protected, unknown namespace returns 404). All tests drive the full HTTP
-stack via Starlette's ``TestClient`` without mocking the store layer.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,39 +14,25 @@ from starlette.testclient import TestClient
 
 from tests.conftest import _ipc_bytes, _ipc_to_table, _worker_batch
 
-# ---------------------------------------------------------------------------
-# Connect/RPC end-to-end via the StatsService ASGI app
-# ---------------------------------------------------------------------------
+
+def _worker_schema_proto() -> stats_pb2.Schema:
+    return stats_pb2.Schema(
+        columns=[
+            stats_pb2.Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            stats_pb2.Column(name="mem_bytes", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+            stats_pb2.Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+        ],
+    )
 
 
 def test_stats_service_register_and_write_via_asgi(tmp_path: Path):
-    """End-to-end: register a table and write rows via the Connect RPCs."""
     log_service = LogServiceImpl(log_dir=tmp_path / "data")
     stats_service = StatsServiceImpl(log_store=log_service.log_store)
     app = build_log_server_asgi(log_service, stats_service=stats_service)
 
     try:
         with TestClient(app) as client:
-            schema_msg = stats_pb2.Schema(
-                columns=[
-                    stats_pb2.Column(
-                        name="worker_id",
-                        type=stats_pb2.COLUMN_TYPE_STRING,
-                        nullable=False,
-                    ),
-                    stats_pb2.Column(
-                        name="mem_bytes",
-                        type=stats_pb2.COLUMN_TYPE_INT64,
-                        nullable=False,
-                    ),
-                    stats_pb2.Column(
-                        name="timestamp_ms",
-                        type=stats_pb2.COLUMN_TYPE_INT64,
-                        nullable=False,
-                    ),
-                ],
-            )
-            req = stats_pb2.RegisterTableRequest(namespace="iris.worker", schema=schema_msg)
+            req = stats_pb2.RegisterTableRequest(namespace="iris.worker", schema=_worker_schema_proto())
             resp = client.post(
                 "/finelog.stats.StatsService/RegisterTable",
                 content=req.SerializeToString(),
@@ -66,7 +46,6 @@ def test_stats_service_register_and_write_via_asgi(tmp_path: Path):
                 "timestamp_ms",
             ]
 
-            # Write a batch.
             batch = pa.RecordBatch.from_pydict(
                 {"worker_id": ["w-1"], "mem_bytes": [100], "timestamp_ms": [1]},
                 schema=pa.schema(
@@ -91,24 +70,17 @@ def test_stats_service_register_and_write_via_asgi(tmp_path: Path):
 
 
 def test_query_and_drop_via_asgi(tmp_path: Path):
-    """Full Connect round-trip for Query and DropTable."""
     log_service = LogServiceImpl(log_dir=tmp_path / "data")
     stats_service = StatsServiceImpl(log_store=log_service.log_store)
     app = build_log_server_asgi(log_service, stats_service=stats_service)
 
     try:
         with TestClient(app) as client:
-            # Register + write enough data that a query returns rows.
-            schema_msg = stats_pb2.Schema(
-                columns=[
-                    stats_pb2.Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
-                    stats_pb2.Column(name="mem_bytes", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
-                    stats_pb2.Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
-                ],
-            )
             resp = client.post(
                 "/finelog.stats.StatsService/RegisterTable",
-                content=stats_pb2.RegisterTableRequest(namespace="iris.worker", schema=schema_msg).SerializeToString(),
+                content=stats_pb2.RegisterTableRequest(
+                    namespace="iris.worker", schema=_worker_schema_proto()
+                ).SerializeToString(),
                 headers={"Content-Type": "application/proto"},
             )
             assert resp.status_code == 200, resp.text
@@ -123,13 +95,10 @@ def test_query_and_drop_via_asgi(tmp_path: Path):
             )
             assert resp.status_code == 200, resp.text
 
-            # Force a flush + compaction so the data is in a sealed segment
-            # (queries see only logs_*.parquet).
             ns = log_service.log_store._namespaces["iris.worker"]
             ns._flush_step()
             ns._compaction_step(compact_single=True)
 
-            # Query.
             resp = client.post(
                 "/finelog.stats.StatsService/Query",
                 content=stats_pb2.QueryRequest(
@@ -144,7 +113,6 @@ def test_query_and_drop_via_asgi(tmp_path: Path):
             assert result_table.column("worker_id").to_pylist() == ["w-1", "w-2"]
             assert result_table.column("mem_bytes").to_pylist() == [100, 200]
 
-            # DropTable.
             resp = client.post(
                 "/finelog.stats.StatsService/DropTable",
                 content=stats_pb2.DropTableRequest(namespace="iris.worker").SerializeToString(),
@@ -152,7 +120,6 @@ def test_query_and_drop_via_asgi(tmp_path: Path):
             )
             assert resp.status_code == 200, resp.text
 
-            # Subsequent query against the dropped namespace fails.
             resp = client.post(
                 "/finelog.stats.StatsService/Query",
                 content=stats_pb2.QueryRequest(sql='SELECT * FROM "iris.worker"').SerializeToString(),
@@ -182,10 +149,8 @@ def test_drop_table_log_namespace_rejected_via_asgi(tmp_path: Path):
 
 def test_index_html_base_href_rewrite():
     raw = b'<html><head><base href="/" /></head></html>'
-    # No prefix -> untouched.
     assert _index_html_with_base(raw, "") == raw
     assert _index_html_with_base(raw, "/") == raw
-    # Prefix gets normalized to leading + trailing slash.
     assert _index_html_with_base(raw, "/proxy/log-server") == (
         b'<html><head><base href="/proxy/log-server/" /></head></html>'
     )
@@ -215,26 +180,18 @@ def test_drop_table_unknown_namespace_via_asgi(tmp_path: Path):
 
 
 def test_list_namespaces_and_get_table_schema_via_asgi(tmp_path: Path):
-    """ListNamespaces returns every registered namespace (including the
-    privileged ``log``) with its current schema; GetTableSchema returns the
-    same schema and 404s on unknown names."""
     log_service = LogServiceImpl(log_dir=tmp_path / "data")
     stats_service = StatsServiceImpl(log_store=log_service.log_store)
     app = build_log_server_asgi(log_service, stats_service=stats_service)
 
     try:
         with TestClient(app) as client:
-            schema_msg = stats_pb2.Schema(
-                columns=[
-                    stats_pb2.Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
-                    stats_pb2.Column(name="mem_bytes", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
-                    stats_pb2.Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
-                ],
-            )
             for ns in ("iris.worker", "metrics.cpu"):
                 resp = client.post(
                     "/finelog.stats.StatsService/RegisterTable",
-                    content=stats_pb2.RegisterTableRequest(namespace=ns, schema=schema_msg).SerializeToString(),
+                    content=stats_pb2.RegisterTableRequest(
+                        namespace=ns, schema=_worker_schema_proto()
+                    ).SerializeToString(),
                     headers={"Content-Type": "application/proto"},
                 )
                 assert resp.status_code == 200, resp.text

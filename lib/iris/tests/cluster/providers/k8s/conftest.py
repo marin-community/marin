@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared fixtures and helpers for Kubernetes provider tests."""
-
 from __future__ import annotations
 
 import pytest
@@ -23,12 +21,7 @@ from iris.rpc import job_pb2
 
 
 class InProcessLogClient:
-    """Test-friendly LogClient stand-in that calls LogServiceImpl directly.
-
-    Satisfies :class:`finelog.types.LogWriterProtocol` without spinning up
-    a real Connect endpoint, so provider tests can assert what landed in
-    the log store without RPC plumbing.
-    """
+    """LogClient stand-in that calls LogServiceImpl directly (no RPC plumbing)."""
 
     def __init__(self, log_service: LogServiceImpl) -> None:
         self._log_service = log_service
@@ -48,8 +41,6 @@ def k8s() -> InMemoryK8sService:
 
 @pytest.fixture
 def log_service() -> LogServiceImpl:
-    # Memory-mode store: pushes are visible to queries immediately, no
-    # compaction needed.
     return LogServiceImpl()
 
 

@@ -1,13 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared fixtures and helpers for finelog stats-service tests.
-
-Pytest auto-discovers the ``store`` fixture. Non-fixture helpers
-(``_ipc_bytes``, ``_worker_schema``, etc.) are imported directly from
-this module by the test files that need them.
-"""
-
 from __future__ import annotations
 
 import io
@@ -21,7 +14,6 @@ from finelog.store.schema import Column, Schema
 
 
 def _ipc_bytes(batch: pa.RecordBatch) -> bytes:
-    """Serialize a single RecordBatch as an Arrow IPC stream."""
     sink = io.BytesIO()
     with paipc.new_stream(sink, batch.schema) as writer:
         writer.write_batch(batch)
@@ -57,12 +49,7 @@ def _worker_batch(worker_ids: list[str], mem_bytes: list[int], ts: list[int]) ->
 
 
 def _seal(store: DuckDBLogStore, namespace: str) -> None:
-    """Force a flush + compaction so the namespace's data is queryable.
-
-    The query path reads only sealed segments; a fresh ``_flush_step``
-    produces a tmp segment which is deliberately invisible to queries
-    until compaction promotes it.
-    """
+    """Flush and compact so the namespace's data is visible to queries."""
     ns = store._namespaces[namespace]
     ns._flush_step()
     ns._compaction_step(compact_single=True)
@@ -70,13 +57,6 @@ def _seal(store: DuckDBLogStore, namespace: str) -> None:
 
 @pytest.fixture()
 def store(tmp_path):
-    """Disk-backed ``DuckDBLogStore`` rooted at a per-test ``tmp_path``.
-
-    Most stats/log tests poke the disk pipeline directly — flush, compact,
-    sealed-segment counting, eviction. Memory-mode (``DuckDBLogStore()``
-    with no log_dir) is exercised separately by tests that explicitly
-    construct it.
-    """
     s = DuckDBLogStore(log_dir=tmp_path / "store")
     yield s
     s.close()

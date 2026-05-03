@@ -1,12 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for persistence and rehydration: compaction across additive schema
-evolution (NULL backfill for pre-evolution segments), registry survival across
-store restarts, log-namespace round-trip after stage-2 compaction, and eager
-registration of the log namespace on store open.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,15 +14,10 @@ from finelog.store.schema import Column, Schema, with_implicit_seq
 
 from tests.conftest import _ipc_bytes, _worker_schema
 
-# ---------------------------------------------------------------------------
-# Compaction across additive evolution
-# ---------------------------------------------------------------------------
-
 
 def test_compaction_across_additive_evolution(tmp_path: Path):
-    # Start with (a, b), write a row, evolve to (a, b, c), write another row,
-    # trigger compaction. Result has all three columns in registered order
-    # with NULL for the column that wasn't yet declared at first write.
+    """Evolve a schema between flushes; compaction backfills NULL for the
+    new column on pre-evolution rows."""
     store = DuckDBLogStore(log_dir=tmp_path / "data")
     try:
         s1 = Schema(
@@ -51,9 +40,8 @@ def test_compaction_across_additive_evolution(tmp_path: Path):
         )
         store.write_rows("ns.evolve", _ipc_bytes(batch1))
         ns = store._namespaces["ns.evolve"]
-        ns._flush_step()  # write tmp_001 with (a, b, timestamp_ms)
+        ns._flush_step()
 
-        # Evolve schema to add nullable c.
         s2 = Schema(
             columns=(*s1.columns, Column(name="c", type=stats_pb2.COLUMN_TYPE_FLOAT64, nullable=True)),
         )
@@ -70,30 +58,22 @@ def test_compaction_across_additive_evolution(tmp_path: Path):
             ),
         )
         store.write_rows("ns.evolve", _ipc_bytes(batch2))
-        ns._flush_step()  # write tmp_002 with all four columns
+        ns._flush_step()
 
-        # Trigger compaction.
         ns._compaction_step()
         seg_dir = tmp_path / "data" / "ns.evolve"
         assert sorted(p.name for p in seg_dir.glob("tmp_*.parquet")) == []
         log_files = sorted(seg_dir.glob("logs_*.parquet"))
         assert len(log_files) == 1
         table = pq.read_table(log_files[0])
-        # Stored order: implicit ``seq`` first, then registered columns
-        # (``a``, ``b``, ``timestamp_ms``) followed by additive ``c``.
+        # Implicit ``seq`` first, then registered columns, additive ``c`` last.
         assert table.column_names == ["seq", "a", "b", "timestamp_ms", "c"]
-        # First row (from pre-evolution segment) has c = NULL.
         rows = table.to_pylist()
         rows.sort(key=lambda r: r["timestamp_ms"])
         assert rows[0] == {"seq": 1, "a": "x", "b": 1, "timestamp_ms": 10, "c": None}
         assert rows[1] == {"seq": 2, "a": "y", "b": 2, "timestamp_ms": 20, "c": 2.5}
     finally:
         store.close()
-
-
-# ---------------------------------------------------------------------------
-# Registry persistence and rehydration across restarts
-# ---------------------------------------------------------------------------
 
 
 def test_registry_survives_restart(tmp_path: Path):
@@ -115,19 +95,11 @@ def test_registry_survives_restart(tmp_path: Path):
 
     s2 = DuckDBLogStore(log_dir=tmp_path / "data")
     try:
-        # Re-register with the same schema is idempotent. Returns the
-        # registered schema, which means rehydration worked.
         effective = s2.register_table("iris.worker", schema)
         assert effective == with_implicit_seq(schema)
-        # And writes continue to work without re-registering.
         s2.write_rows("iris.worker", _ipc_bytes(batch))
     finally:
         s2.close()
-
-
-# ---------------------------------------------------------------------------
-# Log namespace parity
-# ---------------------------------------------------------------------------
 
 
 def _entry(data: str, epoch_ms: int) -> logging_pb2.LogEntry:
@@ -140,8 +112,6 @@ def test_log_namespace_round_trip_after_stage2(tmp_path: Path):
     store = DuckDBLogStore(log_dir=tmp_path / "data")
     try:
         store.append("/job/test/0:0", [_entry(f"line-{i}", epoch_ms=i) for i in range(5)])
-        # ``get_logs`` snapshots in-RAM chunks via ``query_snapshot``, so the
-        # read sees these rows without waiting on the bg flush thread.
         result = store.get_logs("/job/test/0:0")
         assert [e.data for e in result.entries] == [f"line-{i}" for i in range(5)]
     finally:
@@ -151,7 +121,6 @@ def test_log_namespace_round_trip_after_stage2(tmp_path: Path):
 def test_log_namespace_eagerly_registered(tmp_path: Path):
     store = DuckDBLogStore(log_dir=tmp_path / "data")
     try:
-        # The log namespace exists before any explicit register_table call.
         assert "log" in store._namespaces
     finally:
         store.close()

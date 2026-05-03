@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration tests for the finelog server ASGI wiring."""
-
 from __future__ import annotations
 
 import threading
@@ -27,7 +25,6 @@ def service(tmp_path: Path):
 
 
 def test_fetch_logs_concurrency_cap_enforced_by_interceptor(service: LogServiceImpl):
-    """Parallel FetchLogs calls never exceed the configured concurrency cap."""
     limit = 2
     release = threading.Event()
     in_flight = 0
@@ -82,7 +79,6 @@ def test_fetch_logs_concurrency_cap_enforced_by_interceptor(service: LogServiceI
 
 
 def test_push_then_fetch_round_trip(tmp_path: Path):
-    """End-to-end: push entries via RPC, then fetch them back."""
     from finelog.store.duckdb_store import DuckDBLogStore
 
     svc = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
@@ -179,13 +175,9 @@ def test_query_concurrency_cap_enforced_by_interceptor(tmp_path: Path):
 
 
 def test_legacy_iris_logging_path_compat():
-    """Pre-#5212 workers send to /iris.logging.LogService/* (the package was
-    renamed when finelog was extracted from iris). The wire format is
-    identical between iris.logging and finelog.logging — same field numbers
-    on PushLogsRequest/LogEntry/etc — so a server-side path rewrite restores
-    delivery without any worker-side change. Removable once those workers
-    have rotated out.
-    """
+    """Pre-#5212 workers send to /iris.logging.LogService/*; verify the
+    server-side path rewrite still routes them. Removable once those
+    workers have rotated out."""
     from finelog.store.duckdb_store import DuckDBLogStore
 
     svc = LogServiceImpl(log_store=DuckDBLogStore())
