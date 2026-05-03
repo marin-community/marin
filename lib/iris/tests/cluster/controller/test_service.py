@@ -1188,7 +1188,6 @@ def test_list_workers_filter_by_contains(service, state):
     assert by_substring.total_count == 4
 
 
-
 # =============================================================================
 # Constraint Injection Tests
 # =============================================================================
