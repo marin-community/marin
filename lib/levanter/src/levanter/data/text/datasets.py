@@ -19,6 +19,7 @@ import numpy as np
 from draccus import ChoiceRegistry, field
 from haliax import Axis
 from jaxtyping import PRNGKeyArray
+from rigging.timing import log_time
 
 import levanter
 from levanter.data import AsyncDataset
@@ -862,9 +863,6 @@ class LmDataConfig:
         return self._validation_datasets_unwrapped(Pos)
 
     def build_caches(self, split: str) -> dict[str, TreeCache[dict]]:
-        # Filter eligible components first; the heavy lifting (per-cache GCS
-        # ledger reads, shard-store opens) runs in a thread pool below — startup
-        # latency was dominated by N sequential round-trips for N components.
         items: list[tuple[str, "DatasetComponent"]] = []
         for name, component in self.components.items():
             if split == "train" and not self._has_nonzero_weight(name):
@@ -914,10 +912,11 @@ class LmDataConfig:
             )
 
         caches: dict[str, TreeCache[dict]] = {}
-        # I/O-bound (GCS metadata fetches); threads work fine. Cap parallelism
-        # so we don't stress GCS on very large component lists.
         max_workers = min(32, len(items))
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="build_caches") as pool:
+        with (
+            log_time(f"build_caches[{split}] over {len(items)} components"),
+            ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="build_caches") as pool,
+        ):
             for name, cache in pool.map(_build_one, items):
                 if cache is not None:
                     caches[name] = cache
