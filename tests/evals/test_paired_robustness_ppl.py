@@ -1,9 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from marin.execution.executor import InputName
+
 from experiments.evals.paired_robustness_ppl import (
-    DEFAULT_SAMPLE_CAP,
     ALL_PAIRED_TEXT_VIEWS,
+    DEFAULT_SAMPLE_CAP,
     PairedRobustnessFamily,
     PairedTextView,
     linearized_text_views_for_example,
@@ -11,7 +13,6 @@ from experiments.evals.paired_robustness_ppl import (
     paired_robustness_raw_validation_sets,
     paired_robustness_slices,
 )
-from marin.execution.executor import InputName
 
 
 def test_paired_robustness_slices_define_expected_held_out_inventory():
