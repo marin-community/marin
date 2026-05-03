@@ -14,6 +14,14 @@ Chinchilla; bump ``num_train_steps`` if you want a compute-balanced point.
 A v5p-8 should still fit this model but at lower MFU than the smaller runs;
 v5p-16 would help throughput.
 
+The 3B model spikes host-RAM during checkpoint serialization beyond the 128 GB
+budget shared by the smaller runs, so train_lm gets OOM-killed at every temp
+checkpoint save (~250 steps). Iris auto-recovers, but progress slows ~10x.
+This script overrides ``ram="256g"`` for 3b only and pins
+``override_output_path`` to the existing checkpoint dir so the bumped run
+resumes from the same checkpoint instead of starting over (which a resources
+change would otherwise force via the executor hash).
+
 Usage::
 
     uv run iris --config=lib/iris/examples/marin.yaml job run \\
@@ -21,6 +29,7 @@ Usage::
         python -m experiments.protein.train_protein_3b_distance_masked
 """
 
+from fray.v2 import ResourceConfig
 from levanter.models.llama import LlamaConfig
 
 from experiments.protein.protein_train_common import build_distance_masked_train_step
@@ -35,11 +44,22 @@ protein_llama_3b = LlamaConfig(
     num_layers=32,
 )
 
+PROTEIN_RESOURCES_USE5_3B = ResourceConfig.with_tpu(
+    "v5p-8",
+    slice_count=1,
+    cpu=32,
+    ram="256g",
+    disk="50g",
+    zone="us-east5-a",
+)
+
 protein_model_3b_distance_masked = build_distance_masked_train_step(
     name="protein-contacts-3b-distance-masked",
     model_config=protein_llama_3b,
     learning_rate=3.5e-4,
     extra_tags=("3b",),
+    resources=PROTEIN_RESOURCES_USE5_3B,
+    override_output_path="gs://marin-us-east5/checkpoints/protein-contacts-3b-distance-masked-ef3aa5",
 )
 
 
