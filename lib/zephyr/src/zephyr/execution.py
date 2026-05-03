@@ -1576,53 +1576,57 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
         actor_config=ActorConfig(max_concurrency=100),
     )
     coordinator = hosted.handle
-    coordinator.initialize.remote(
-        config.chunk_storage_prefix,
-        coordinator,
-        config.no_workers_timeout,
-    ).result()
-
-    # Create workers (child jobs)
-    num_shards = config.plan.num_shards
-    actual_workers = min(config.max_workers, num_shards) if num_shards > 0 else 0
     worker_group = None
-
-    if actual_workers > 0:
-        # Worker name includes attempt ID so that if a stale coordinator
-        # process from a previous attempt is still running, its shutdown
-        # targets the old name and cannot kill this attempt's workers.
-        worker_name = f"zephyr-{config.name}-p{config.pipeline_id}-workers-a{attempt_id}"
-        logger.info("Starting %d workers (max=%d, shards=%d)", actual_workers, config.max_workers, num_shards)
-        worker_group = client.create_actor_group(
-            ZephyrWorker,
-            coordinator,
-            config.stage_runner_factory,
-            name=worker_name,
-            count=actual_workers,
-            resources=config.worker_resources,
-            actor_config=ActorConfig(max_task_retries=10),
-        )
-        worker_group.wait_ready(count=1, timeout=3600.0)
-
-        # Let the coordinator poll worker job health in its maintenance loop
-        coordinator.set_worker_group.remote(worker_group).result()
-
+    # host_actor starts a non-daemon uvicorn thread; the finally below must
+    # run on every exit path or the process will stay alive after the main
+    # body raises and the Iris task will be stuck RUNNING.
     try:
-        results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
-        counters = coordinator.get_counters.remote().result(timeout=10.0) or {}
-        payload = ZephyrExecutionResult(results=results, counters=counters)
+        coordinator.initialize.remote(
+            config.chunk_storage_prefix,
+            coordinator,
+            config.no_workers_timeout,
+        ).result()
 
-        ensure_parent_dir(result_path)
-        with open_url(result_path, "wb") as f:
-            f.write(cloudpickle.dumps(payload))
-    except Exception as e:
-        # Persist the exception so the caller can recover the original type
-        # (important for non-retryable error detection).
-        with suppress(Exception):
+        # Create workers (child jobs)
+        num_shards = config.plan.num_shards
+        actual_workers = min(config.max_workers, num_shards) if num_shards > 0 else 0
+
+        if actual_workers > 0:
+            # Worker name includes attempt ID so that if a stale coordinator
+            # process from a previous attempt is still running, its shutdown
+            # targets the old name and cannot kill this attempt's workers.
+            worker_name = f"zephyr-{config.name}-p{config.pipeline_id}-workers-a{attempt_id}"
+            logger.info("Starting %d workers (max=%d, shards=%d)", actual_workers, config.max_workers, num_shards)
+            worker_group = client.create_actor_group(
+                ZephyrWorker,
+                coordinator,
+                config.stage_runner_factory,
+                name=worker_name,
+                count=actual_workers,
+                resources=config.worker_resources,
+                actor_config=ActorConfig(max_task_retries=10),
+            )
+            worker_group.wait_ready(count=1, timeout=3600.0)
+
+            # Let the coordinator poll worker job health in its maintenance loop
+            coordinator.set_worker_group.remote(worker_group).result()
+
+        try:
+            results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
+            counters = coordinator.get_counters.remote().result(timeout=10.0) or {}
+            payload = ZephyrExecutionResult(results=results, counters=counters)
+
             ensure_parent_dir(result_path)
             with open_url(result_path, "wb") as f:
-                f.write(cloudpickle.dumps(e))
-        raise
+                f.write(cloudpickle.dumps(payload))
+        except Exception as e:
+            # Persist the exception so the caller can recover the original type
+            # (important for non-retryable error detection).
+            with suppress(Exception):
+                ensure_parent_dir(result_path)
+                with open_url(result_path, "wb") as f:
+                    f.write(cloudpickle.dumps(e))
+            raise
     finally:
         # Signal coordinator shutdown first so workers receive SHUTDOWN from
         # pull_task and self-terminate via shutdown_event → exit_actor()
