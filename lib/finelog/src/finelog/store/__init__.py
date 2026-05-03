@@ -15,7 +15,7 @@ import logging
 
 from finelog.rpc import logging_pb2
 from finelog.store.duckdb_store import DuckDBLogStore as LogStore
-from finelog.types import _EST_BYTES_PER_ROW, LogReadResult, str_to_log_level
+from finelog.types import LogReadResult, str_to_log_level
 
 
 class LogCursor:
@@ -61,7 +61,6 @@ class LogStoreHandler(logging.Handler):
 
 
 __all__ = [
-    "_EST_BYTES_PER_ROW",
     "LogCursor",
     "LogReadResult",
     "LogStore",

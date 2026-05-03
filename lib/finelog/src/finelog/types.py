@@ -24,9 +24,6 @@ from finelog.rpc import logging_pb2
 # Characters that indicate a regex pattern (vs. a literal key).
 REGEX_META_RE = re.compile(r"[.*+?\[\](){}^$|\\]")
 
-# Rough per-row size estimate for backpressure accounting in DuckDBLogStore.
-_EST_BYTES_PER_ROW = 256
-
 
 @dataclass
 class LogReadResult:

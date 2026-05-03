@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Protocol
 
+from finelog.client.log_client import FlushResult
 from finelog.rpc import logging_pb2
 from finelog.types import str_to_log_level
 
@@ -26,7 +27,7 @@ class _WriteBatchClient(Protocol):
 
     def write_batch(self, key: str, messages: list[logging_pb2.LogEntry]) -> None: ...
 
-    def flush(self, timeout: float | None = None) -> bool: ...
+    def flush(self, timeout: float | None = None) -> FlushResult: ...
 
 
 class RemoteLogHandler(logging.Handler):
