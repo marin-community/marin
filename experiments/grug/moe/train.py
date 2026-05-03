@@ -5,9 +5,14 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import json
 import logging
+import os
+import socket
+import subprocess
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -46,6 +51,35 @@ from experiments.grug.moe.model import GrugModelConfig, Transformer
 # `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
+
+BYTES_PER_GIB = 1024**3
+CANARY_RUNTIME_CONFIG_MARKER = "CANARY_RUNTIME_CONFIG_JSON"
+CANARY_COMPILE_MEMORY_MARKER = "CANARY_COMPILE_MEMORY_JSON"
+CANARY_GPU_MEMORY_MARKER = "CANARY_GPU_MEMORY_JSON"
+COMPILE_MEMORY_BYTE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("argument", "argument_size_in_bytes"),
+    ("output", "output_size_in_bytes"),
+    ("alias", "alias_size_in_bytes"),
+    ("temp", "temp_size_in_bytes"),
+    ("code", "generated_code_size_in_bytes"),
+    ("peak", "peak_memory_in_bytes"),
+    ("host_argument", "host_argument_size_in_bytes"),
+    ("host_output", "host_output_size_in_bytes"),
+    ("host_alias", "host_alias_size_in_bytes"),
+    ("host_temp", "host_temp_size_in_bytes"),
+    ("host_code", "host_generated_code_size_in_bytes"),
+)
+
+
+@dataclass(frozen=True)
+class CanaryDiagnosticsConfig:
+    """Low-overhead diagnostics emitted only for explicitly enabled canary runs."""
+
+    enabled: bool = False
+    compile_memory_enabled: bool = True
+    gpu_memory_snapshot_interval: int = 10
+    compile_temp_baseline_bytes: int | None = None
+    nvidia_smi_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -226,6 +260,394 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
     return log_mixture_stage
 
 
+def _bytes_to_gib(value: int | float) -> float:
+    return float(value) / BYTES_PER_GIB
+
+
+def _env_bool(key: str, default: bool) -> bool:
+    raw = os.environ.get(key, "")
+    if not raw:
+        return default
+
+    normalized = raw.lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+
+    raise ValueError(f"Unknown {key}={raw!r}, expected a boolean value")
+
+
+def _env_int(key: str, default: int) -> int:
+    raw = os.environ.get(key, "")
+    return int(raw) if raw else default
+
+
+def _env_float_or_none(key: str) -> float | None:
+    raw = os.environ.get(key, "")
+    return float(raw) if raw else None
+
+
+def _canary_diagnostics_from_env() -> CanaryDiagnosticsConfig:
+    enabled = _env_bool("CANARY_MEMORY_DIAGNOSTICS", False)
+    compile_temp_baseline_gib = _env_float_or_none("CANARY_COMPILE_TEMP_BASELINE_GIB")
+    return CanaryDiagnosticsConfig(
+        enabled=enabled,
+        compile_memory_enabled=_env_bool("CANARY_COMPILE_MEMORY_ENABLED", enabled),
+        gpu_memory_snapshot_interval=_env_int("CANARY_GPU_MEMORY_INTERVAL", 10),
+        compile_temp_baseline_bytes=(
+            int(compile_temp_baseline_gib * BYTES_PER_GIB) if compile_temp_baseline_gib is not None else None
+        ),
+        nvidia_smi_enabled=_env_bool("CANARY_NVIDIA_SMI_ENABLED", True),
+    )
+
+
+def _jsonable_scalar(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _exception_payload(exc: BaseException) -> dict[str, str]:
+    return {"error_type": type(exc).__name__, "error": str(exc)}
+
+
+def _canary_base_payload(*, phase: str | None = None, step: int | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "hostname": socket.gethostname(),
+        "process_index": jax.process_index(),
+        "process_count": jax.process_count(),
+        "local_device_count": jax.local_device_count(),
+    }
+    if phase is not None:
+        payload["phase"] = phase
+    if step is not None:
+        payload["step"] = step
+    return payload
+
+
+def _log_canary_marker(marker: str, payload: dict[str, Any]) -> None:
+    logger.info("%s %s", marker, json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str))
+
+
+def _device_identity(device) -> dict[str, Any]:
+    return {
+        "id": _jsonable_scalar(getattr(device, "id", None)),
+        "platform": str(getattr(device, "platform", "unknown")),
+        "kind": str(getattr(device, "device_kind", "unknown")),
+        "process_index": _jsonable_scalar(getattr(device, "process_index", None)),
+    }
+
+
+def _compile_memory_payload(memory_analysis) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for name, attr in COMPILE_MEMORY_BYTE_FIELDS:
+        try:
+            value = getattr(memory_analysis, attr)
+        except AttributeError:
+            continue
+
+        if value is None:
+            continue
+
+        try:
+            bytes_value = int(value)
+        except (TypeError, ValueError):
+            continue
+        payload[f"{name}_bytes"] = bytes_value
+        payload[f"{name}_gib"] = _bytes_to_gib(bytes_value)
+
+    return payload
+
+
+def _log_canary_compile_memory(
+    diagnostics: CanaryDiagnosticsConfig,
+    train_step,
+    state: GrugTrainState,
+    batch,
+    *,
+    compute_watch: bool,
+    step: int,
+) -> None:
+    if not diagnostics.enabled or not diagnostics.compile_memory_enabled:
+        return
+
+    payload = _canary_base_payload(phase="compile_train_step", step=step)
+    payload["compute_watch"] = compute_watch
+    try:
+        compiled = train_step.lower(state, batch, compute_watch=compute_watch).compile()
+        memory_analysis = compiled.memory_analysis()
+    except AttributeError as exc:
+        payload.update({"status": "unsupported", **_exception_payload(exc)})
+        _log_canary_marker(CANARY_COMPILE_MEMORY_MARKER, payload)
+        return
+    except Exception as exc:
+        payload.update({"status": "error", **_exception_payload(exc)})
+        _log_canary_marker(CANARY_COMPILE_MEMORY_MARKER, payload)
+        return
+
+    if memory_analysis is None:
+        payload.update({"status": "unsupported", "reason": "compiled executable returned no memory analysis"})
+        _log_canary_marker(CANARY_COMPILE_MEMORY_MARKER, payload)
+        return
+
+    payload["status"] = "ok"
+    payload.update(_compile_memory_payload(memory_analysis))
+
+    temp_bytes = payload.get("temp_bytes")
+    summary: dict[str, float | int] = {}
+    if isinstance(temp_bytes, int):
+        summary["canary/compile/temp_bytes"] = temp_bytes
+        summary["canary/compile/temp_gib"] = _bytes_to_gib(temp_bytes)
+        if diagnostics.compile_temp_baseline_bytes is not None and diagnostics.compile_temp_baseline_bytes > 0:
+            ratio = temp_bytes / diagnostics.compile_temp_baseline_bytes
+            payload["temp_baseline_ratio"] = ratio
+            summary["canary/compile/temp_baseline_ratio"] = ratio
+
+    peak_bytes = payload.get("peak_bytes")
+    if isinstance(peak_bytes, int):
+        summary["canary/compile/peak_bytes"] = peak_bytes
+        summary["canary/compile/peak_gib"] = _bytes_to_gib(peak_bytes)
+
+    _log_canary_marker(CANARY_COMPILE_MEMORY_MARKER, payload)
+    if summary:
+        levanter.tracker.log_summary(summary)
+
+
+def _memory_stat_int(stats: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        if key not in stats or stats[key] is None:
+            continue
+        try:
+            return int(stats[key])
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _jax_device_memory_snapshot() -> tuple[dict[str, Any], int | None]:
+    devices = []
+    max_bytes = None
+    any_supported = False
+    for device in jax.local_devices():
+        device_payload = _device_identity(device)
+        try:
+            stats = device.memory_stats()
+        except AttributeError as exc:
+            devices.append({**device_payload, "status": "unsupported", **_exception_payload(exc)})
+            continue
+        except Exception as exc:
+            devices.append({**device_payload, "status": "error", **_exception_payload(exc)})
+            continue
+
+        if stats is None:
+            devices.append({**device_payload, "status": "unsupported", "reason": "memory_stats returned None"})
+            continue
+
+        try:
+            stats_payload = {str(key): _jsonable_scalar(value) for key, value in stats.items()}
+            used_bytes = _memory_stat_int(stats, "bytes_in_use", "bytes_used", "used_bytes")
+            peak_bytes = _memory_stat_int(stats, "peak_bytes_in_use", "peak_bytes_used", "peak_used_bytes")
+            limit_bytes = _memory_stat_int(stats, "bytes_limit", "memory_limit", "total_bytes")
+        except Exception as exc:
+            devices.append({**device_payload, "status": "error", **_exception_payload(exc)})
+            continue
+
+        any_supported = True
+        device_payload.update(
+            {
+                "status": "ok",
+                "stats": stats_payload,
+                "used_bytes": used_bytes,
+                "peak_bytes": peak_bytes,
+                "limit_bytes": limit_bytes,
+            }
+        )
+        for key in ("used_bytes", "peak_bytes", "limit_bytes"):
+            bytes_value = device_payload.get(key)
+            if isinstance(bytes_value, int):
+                device_payload[f"{key[:-6]}_gib"] = _bytes_to_gib(bytes_value)
+                max_bytes = bytes_value if max_bytes is None else max(max_bytes, bytes_value)
+        devices.append(device_payload)
+
+    status = "ok" if any_supported else "unsupported"
+    return {"status": status, "devices": devices}, max_bytes
+
+
+def _nvidia_smi_memory_snapshot() -> tuple[dict[str, Any], int | None]:
+    command = [
+        "nvidia-smi",
+        "--query-gpu=index,memory.used,memory.total",
+        "--format=csv,noheader,nounits",
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=5)
+    except FileNotFoundError as exc:
+        return {"status": "unsupported", **_exception_payload(exc)}, None
+    except subprocess.TimeoutExpired as exc:
+        return {"status": "error", **_exception_payload(exc)}, None
+
+    if result.returncode != 0:
+        return {"status": "error", "returncode": result.returncode, "stderr": result.stderr.strip()}, None
+
+    devices = []
+    max_used_bytes = None
+    for line in result.stdout.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) != 3:
+            continue
+        index, used_mib, total_mib = parts
+        try:
+            device_index = int(index)
+            used_mib_value = float(used_mib)
+            total_mib_value = float(total_mib)
+        except ValueError:
+            continue
+
+        used_bytes = int(used_mib_value * 1024**2)
+        total_bytes = int(total_mib_value * 1024**2)
+        max_used_bytes = used_bytes if max_used_bytes is None else max(max_used_bytes, used_bytes)
+        devices.append(
+            {
+                "index": device_index,
+                "used_mib": used_mib_value,
+                "total_mib": total_mib_value,
+                "used_bytes": used_bytes,
+                "total_bytes": total_bytes,
+                "used_gib": _bytes_to_gib(used_bytes),
+                "total_gib": _bytes_to_gib(total_bytes),
+            }
+        )
+
+    if not devices:
+        return {"status": "unsupported", "reason": "nvidia-smi returned no GPU rows"}, None
+
+    return {"status": "ok", "devices": devices}, max_used_bytes
+
+
+def _log_canary_gpu_memory(
+    diagnostics: CanaryDiagnosticsConfig,
+    *,
+    phase: str,
+    step: int | None,
+    peak_used_bytes: int | None,
+) -> int | None:
+    if not diagnostics.enabled:
+        return peak_used_bytes
+
+    try:
+        jax_snapshot, jax_max_bytes = _jax_device_memory_snapshot()
+    except Exception as exc:
+        jax_snapshot, jax_max_bytes = {"status": "error", **_exception_payload(exc)}, None
+
+    if diagnostics.nvidia_smi_enabled:
+        try:
+            nvidia_snapshot, nvidia_max_bytes = _nvidia_smi_memory_snapshot()
+        except Exception as exc:
+            nvidia_snapshot, nvidia_max_bytes = {"status": "error", **_exception_payload(exc)}, None
+    else:
+        nvidia_snapshot, nvidia_max_bytes = {"status": "disabled"}, None
+
+    snapshot_max_bytes = max(
+        (value for value in (jax_max_bytes, nvidia_max_bytes) if value is not None),
+        default=None,
+    )
+    if snapshot_max_bytes is not None:
+        peak_used_bytes = snapshot_max_bytes if peak_used_bytes is None else max(peak_used_bytes, snapshot_max_bytes)
+
+    payload = _canary_base_payload(phase=phase, step=step)
+    payload.update(
+        {
+            "status": "ok" if snapshot_max_bytes is not None else "unsupported",
+            "jax_device_memory": jax_snapshot,
+            "nvidia_smi_memory": nvidia_snapshot,
+            "snapshot_max_used_bytes": snapshot_max_bytes,
+            "peak_used_bytes": peak_used_bytes,
+        }
+    )
+    if snapshot_max_bytes is not None:
+        payload["snapshot_max_used_gib"] = _bytes_to_gib(snapshot_max_bytes)
+    if peak_used_bytes is not None:
+        payload["peak_used_gib"] = _bytes_to_gib(peak_used_bytes)
+
+    _log_canary_marker(CANARY_GPU_MEMORY_MARKER, payload)
+    if peak_used_bytes is not None:
+        levanter.tracker.log_summary(
+            {
+                "canary/gpu/peak_used_bytes": peak_used_bytes,
+                "canary/gpu/peak_used_gib": _bytes_to_gib(peak_used_bytes),
+            }
+        )
+        if step is not None and snapshot_max_bytes is not None:
+            levanter.tracker.log({"canary/gpu/max_used_gib": _bytes_to_gib(snapshot_max_bytes)}, step=step)
+
+    return peak_used_bytes
+
+
+def _log_canary_runtime_config(
+    *,
+    diagnostics: CanaryDiagnosticsConfig,
+    config: GrugRunConfig,
+    batch_schedule: BatchSchedule,
+    profiler_enabled: bool,
+    profiler_num_steps: int,
+) -> None:
+    if not diagnostics.enabled:
+        return
+
+    devices = jax.devices()
+    local_devices = jax.local_devices()
+    watch_config = config.trainer.trainer.watch
+    payload = _canary_base_payload(phase="after_backend_init")
+    payload.update(
+        {
+            "status": "ok",
+            "run_id": config.trainer.trainer.id,
+            "env_run_id": os.environ.get("RUN_ID"),
+            "config_id": os.environ.get("CANARY_CONFIG_ID"),
+            "jax_version": jax.__version__,
+            "jaxlib_version": getattr(jax.lib, "__version__", "unknown"),
+            "backend": jax.default_backend(),
+            "device_count": jax.device_count(),
+            "device_kinds": sorted({str(getattr(device, "device_kind", "unknown")) for device in devices}),
+            "device_platforms": sorted({str(getattr(device, "platform", "unknown")) for device in devices}),
+            "local_device_kinds": sorted({str(getattr(device, "device_kind", "unknown")) for device in local_devices}),
+            "train_batch_size": batch_schedule.batch_size_at_step(0),
+            "max_seq_len": config.model.max_seq_len,
+            "train_steps": config.trainer.trainer.num_train_steps,
+            "watch_enabled": watch_config.is_enabled,
+            "watch_interval": watch_config.interval,
+            "profiler_enabled": profiler_enabled,
+            "profiler_start_step": config.trainer.trainer.profiler.start_step,
+            "profiler_num_steps": profiler_num_steps,
+            "canary_compile_memory_enabled": diagnostics.compile_memory_enabled,
+            "canary_gpu_memory_snapshot_interval": diagnostics.gpu_memory_snapshot_interval,
+        }
+    )
+    _log_canary_marker(CANARY_RUNTIME_CONFIG_MARKER, payload)
+    levanter.tracker.log_summary(
+        {
+            "canary/runtime/device_count": jax.device_count(),
+            "canary/runtime/local_device_count": jax.local_device_count(),
+            "canary/runtime/train_batch_size": batch_schedule.batch_size_at_step(0),
+            "canary/runtime/max_seq_len": config.model.max_seq_len,
+            "canary/runtime/train_steps": config.trainer.trainer.num_train_steps,
+            "canary/runtime/profiler_enabled": profiler_enabled,
+            "canary/runtime/watch_enabled": watch_config.is_enabled,
+        }
+    )
+
+
 @register_dataclass
 @dataclass(frozen=True)
 class GrugTrainState:
@@ -366,6 +788,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
+    canary_diagnostics = _canary_diagnostics_from_env()
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
@@ -382,6 +805,22 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     with trainer.use_device_mesh():
         mesh = trainer.device_mesh
         batch_schedule = trainer.batch_schedule
+        profiler_cfg = trainer.profiler
+        profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=trainer.num_train_steps)
+        profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
+        _log_canary_runtime_config(
+            diagnostics=canary_diagnostics,
+            config=config,
+            batch_schedule=batch_schedule,
+            profiler_enabled=profiler_enabled,
+            profiler_num_steps=profiler_num_steps,
+        )
+        canary_peak_used_bytes = _log_canary_gpu_memory(
+            canary_diagnostics,
+            phase="after_backend_init",
+            step=None,
+            peak_used_bytes=None,
+        )
 
         train_dataset = build_train_dataset(
             config.data,
@@ -416,6 +855,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        canary_peak_used_bytes = _log_canary_gpu_memory(
+            canary_diagnostics,
+            phase="after_trainer_state_init",
+            step=int(state.step),
+            peak_used_bytes=canary_peak_used_bytes,
+        )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
@@ -431,10 +876,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 mesh=mesh,
                 eval_cfg=eval_cfg,
             )
-
-        profiler_cfg = trainer.profiler
-        profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=trainer.num_train_steps)
-        profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
 
         log_every = max(1, config.trainer.log_every)
         iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
@@ -478,6 +919,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
+        canary_compile_memory_logged = False
 
         # Main optimization loop.
         try:
@@ -490,10 +932,45 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
+                if not canary_compile_memory_logged:
+                    _log_canary_compile_memory(
+                        canary_diagnostics,
+                        train_step,
+                        state,
+                        batch,
+                        compute_watch=compute_watch,
+                        step=current_step,
+                    )
+                    canary_compile_memory_logged = True
+                    canary_peak_used_bytes = _log_canary_gpu_memory(
+                        canary_diagnostics,
+                        phase="after_compile",
+                        step=current_step,
+                        peak_used_bytes=canary_peak_used_bytes,
+                    )
+
                 state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
+                if canary_diagnostics.enabled:
+                    if step == 0:
+                        canary_peak_used_bytes = _log_canary_gpu_memory(
+                            canary_diagnostics,
+                            phase="after_step_0",
+                            step=step,
+                            peak_used_bytes=canary_peak_used_bytes,
+                        )
+                    elif (
+                        canary_diagnostics.gpu_memory_snapshot_interval > 0
+                        and step % canary_diagnostics.gpu_memory_snapshot_interval == 0
+                    ):
+                        canary_peak_used_bytes = _log_canary_gpu_memory(
+                            canary_diagnostics,
+                            phase="after_step_interval",
+                            step=step,
+                            peak_used_bytes=canary_peak_used_bytes,
+                        )
 
                 if jnp.isnan(metrics["train/loss"]):
                     logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
@@ -555,6 +1032,7 @@ def run_grug(config: GrugRunConfig) -> None:
 
 
 __all__ = [
+    "CanaryDiagnosticsConfig",
     "GrugEvalConfig",
     "GrugRunConfig",
     "GrugTrainState",
