@@ -1,0 +1,63 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Experiment 53: Alternative datasets based on distance from CDS.
+
+Question: Can we improve performance by using distance-based heuristics to identify
+5' and 3' regions relative to CDS (coding sequences), similar to SpeciesLM?
+
+https://github.com/Open-Athena/bolinas-dna/issues/53
+"""
+
+import dataclasses
+
+from experiments.dna.defaults import (
+    DNA_TOKENIZER_V1,
+    FAST_RUN_CONFIG_V1,
+    dna_effective_seq_len,
+    dna_tokenize_rw_v1,
+    dna_train,
+)
+from experiments.qwen3 import qwen3_0_6b_hd128
+from marin.execution.executor import executor_main
+
+SEQ_LEN = 256
+model_config = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=dna_effective_seq_len(SEQ_LEN, DNA_TOKENIZER_V1))
+
+DATASETS = {
+    "three_prime_utr_baseline": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v12_256_128",
+    "upstream_of_cds_512": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v13_256_128",
+    "downstream_of_cds_512": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v14_256_128",
+    "downstream_of_cds_256": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v15_256_128",
+}
+
+
+def dataset_name(dataset: str) -> str:
+    """Extract dataset name from HuggingFace path (org/name -> name)."""
+    return dataset.split("/")[-1]
+
+
+# Double batch size for 256 context to match tokens/batch with 512 context
+train_config_256 = dataclasses.replace(FAST_RUN_CONFIG_V1, train_batch_size=FAST_RUN_CONFIG_V1.train_batch_size * 2)
+
+training_steps = []
+for region, dataset in DATASETS.items():
+    name = dataset_name(dataset)
+
+    tokenized = dna_tokenize_rw_v1(
+        name=f"{name}-rw01",
+        dataset=dataset,
+    )
+
+    train_step = dna_train(
+        name=f"exp53-{region}-r01",
+        tokenized=tokenized,
+        model_config=model_config,
+        train_config=train_config_256,
+        tags=["dna", "exp53", "distance_from_cds", "fast"],
+    )
+    training_steps.append(train_step)
+
+if __name__ == "__main__":
+    executor_main(steps=training_steps)

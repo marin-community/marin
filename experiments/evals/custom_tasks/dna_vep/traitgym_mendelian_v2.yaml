@@ -1,0 +1,9 @@
+task: traitgym_mendelian_v2
+class: !function dna_vep_llr_eval.DnaVepLlrEvalTask
+dataset_path: bolinas-dna/evals-traitgym_mendelian_v2_harness_256
+dataset_name: default
+# "train" encompasses both training and validation variants in the original dataset.
+test_split: train
+llr_transform: negate
+metrics:
+  - auprc

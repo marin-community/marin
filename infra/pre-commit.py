@@ -378,6 +378,8 @@ def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
             return yaml.safe_load(f)
 
     yaml.add_constructor("!include", include_constructor, Loader=yaml.SafeLoader)
+    # lm-eval-harness uses !function to reference Python classes from YAML task configs
+    yaml.add_constructor("!function", lambda loader, node: loader.construct_scalar(node), Loader=yaml.SafeLoader)
 
     for file_path in config_files:
         if file_path.suffix == ".toml":

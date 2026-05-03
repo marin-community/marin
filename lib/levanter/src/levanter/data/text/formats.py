@@ -12,7 +12,7 @@ from draccus import ChoiceRegistry
 from levanter.data._preprocessor import BatchProcessor
 from levanter.tokenizers import MarinTokenizer
 
-from ._batch_tokenizer import BatchTokenizer
+from ._batch_tokenizer import BatchTokenizer, DNABatchTokenizer
 
 
 class LmDatasetFormatBase(ChoiceRegistry):
@@ -92,6 +92,42 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
     ) -> BatchProcessor[dict, dict]:
         del tokenizer, enforce_eos, enforce_bos
         return PrebuiltCacheProcessor(self.input_ids_key, self.loss_weights_key)
+
+
+@LmDatasetFormatBase.register_subclass("dna")
+@dataclass(frozen=True)
+class DNALmDatasetFormat(LmDatasetFormatBase):
+    """Dataset configuration for DNA sequences with case-based loss weighting.
+
+    Supports position-wise loss weighting based on character case:
+    - Uppercase nucleotides (ACGT): weight = uppercase_weight
+    - Lowercase nucleotides (acgt): weight = lowercase_weight
+
+    Common use cases:
+    - Repeat masking: lowercase_weight=0.01 (down-weight repetitive elements)
+    - Functional positions only: uppercase_weight=1.0, lowercase_weight=0.0
+    - Nonfunctional positions only: uppercase_weight=0.0, lowercase_weight=1.0
+
+    Attributes:
+        text_key: Field name containing the DNA sequence.
+        uppercase_weight: Loss weight for uppercase positions.
+        lowercase_weight: Loss weight for lowercase positions.
+    """
+
+    text_key: str = "seq"
+    uppercase_weight: float = 1.0
+    lowercase_weight: float = 1.0
+
+    def build_preprocessor(
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        del enforce_eos, enforce_bos
+        return DNABatchTokenizer(
+            tokenizer,
+            text_field=self.text_key,
+            uppercase_weight=self.uppercase_weight,
+            lowercase_weight=self.lowercase_weight,
+        )
 
 
 class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):

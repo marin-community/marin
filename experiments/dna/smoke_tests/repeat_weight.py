@@ -1,0 +1,73 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Infrastructure experiment testing repeat weight downweighting strategies.
+
+This experiment compares three loss weighting approaches on animal promoter sequences:
+1. Standard: TextLmDatasetFormat with uniform loss weights (no soft masking)
+2. Repeat weight 1.0: DNALmDatasetFormat with uniform weights (control)
+3. Repeat weight 0.01: DNALmDatasetFormat with 0.01 loss weight on soft-masked positions
+"""
+
+import dataclasses
+
+from experiments.dna.defaults import (
+    DNA_TOKENIZER_V1,
+    PROMOTERS_DATASET_V1,
+    SHORT_RUN_CONFIG_V1,
+    dna_effective_seq_len,
+    dna_tokenize_rw_v1,
+    dna_tokenize_std_v1,
+    dna_train,
+)
+from experiments.qwen3 import qwen3_0_6b_hd128
+from marin.execution.executor import executor_main
+
+SEQ_LEN = 512
+model_config = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=dna_effective_seq_len(SEQ_LEN, DNA_TOKENIZER_V1))
+
+# =============================================================================
+# Standard (no repeat weighting) - uses TextLmDatasetFormat
+# =============================================================================
+
+data_standard = dna_tokenize_std_v1("animal-promoters-standard", PROMOTERS_DATASET_V1)
+
+train_standard = dna_train(
+    name="animal-promoters-standard-r08",
+    tokenized=data_standard,
+    model_config=model_config,
+    train_config=SHORT_RUN_CONFIG_V1,
+    tags=["dna", "animal-promoters"],
+)
+
+# =============================================================================
+# Repeat weight 1.0 (control - uniform weighting via DNALmDatasetFormat)
+# =============================================================================
+
+data_rw_1_0 = dna_tokenize_rw_v1("animal-promoters-repeat-weight-1.0", PROMOTERS_DATASET_V1, lowercase_weight=1.0)
+
+train_rw_1_0 = dna_train(
+    name="animal-promoters-repeat-weight-1.0-r01",
+    tokenized=data_rw_1_0,
+    model_config=model_config,
+    train_config=SHORT_RUN_CONFIG_V1,
+    tags=["dna", "animal-promoters"],
+)
+
+# =============================================================================
+# Repeat weight 0.01 (strong downweighting)
+# =============================================================================
+
+data_rw_0_01 = dna_tokenize_rw_v1("animal-promoters-repeat-weight-0.01", PROMOTERS_DATASET_V1)
+
+train_rw_0_01 = dna_train(
+    name="animal-promoters-repeat-weight-0.01-r01",
+    tokenized=data_rw_0_01,
+    model_config=model_config,
+    train_config=SHORT_RUN_CONFIG_V1,
+    tags=["dna", "animal-promoters"],
+)
+
+if __name__ == "__main__":
+    executor_main(steps=[train_standard, train_rw_1_0, train_rw_0_01])
