@@ -1,0 +1,86 @@
+// Copyright The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+package finelog.logging;
+
+// Timestamp representing milliseconds since Unix epoch. Inlined here (not a
+// separate time.proto) so the file basename does not collide with iris's
+// time.proto in the protobuf descriptor pool when both packages load.
+message Timestamp {
+  int64 epoch_ms = 1;
+}
+
+// Best-effort parsed log level for a log entry.
+enum LogLevel {
+  LOG_LEVEL_UNKNOWN = 0;   // Could not parse a level from the log line
+  LOG_LEVEL_DEBUG = 1;
+  LOG_LEVEL_INFO = 2;
+  LOG_LEVEL_WARNING = 3;
+  LOG_LEVEL_ERROR = 4;
+  LOG_LEVEL_CRITICAL = 5;
+}
+
+// One log entry. Used both for RPC responses and for persistence.
+//
+// Keys are opaque strings — finelog does not parse or interpret them.
+// Conventions like "/user/<job>/<task>:<attempt>" or "/system/worker/<id>"
+// are caller-defined.
+message LogEntry {
+  Timestamp timestamp = 1;
+  string source = 2;      // Free-form: "stdout", "stderr", "build", "process", ...
+  string data = 3;        // Log line content
+  int32 attempt_id = 4;   // Caller-defined; finelog stores and echoes it back
+  LogLevel level = 5;     // Best-effort parsed level (UNKNOWN if unparseable)
+  string key = 6;         // Log store key. Populated on multi-key (regex) queries.
+}
+
+// Collection of log entries for a single source.
+message LogBatch {
+  repeated LogEntry entries = 1;
+}
+
+// ============================================================================
+// LOG SERVICE
+// ============================================================================
+
+message PushLogsRequest {
+  string key = 1;
+  repeated LogEntry entries = 2;
+}
+
+message PushLogsResponse {}
+
+// FetchLogs source supports both exact keys and regex patterns; the server
+// detects regex metacharacters in `source` and dispatches accordingly.
+message FetchLogsRequest {
+  string source = 1;           // Log source key or regex pattern
+  int64 since_ms = 2;          // Only return entries with epoch_ms > since_ms
+  int64 cursor = 3;            // Resume after this autoincrement id (exclusive)
+  string substring = 4;        // Literal substring match on log data
+  int32 max_lines = 5;         // Max entries to return (0 = server default 1000)
+  bool tail = 6;               // Return last N entries instead of first N
+  string min_level = 7;        // Minimum level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+}
+
+message FetchLogsResponse {
+  repeated LogEntry entries = 1;
+  int64 cursor = 2;            // Max autoincrement id seen (cursor for next poll)
+}
+
+service LogService {
+  rpc PushLogs(PushLogsRequest) returns (PushLogsResponse);
+  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
+}

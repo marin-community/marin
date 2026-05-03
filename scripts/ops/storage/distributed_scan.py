@@ -28,7 +28,8 @@ import threading
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any
 
 import click
@@ -36,7 +37,6 @@ import google.auth
 import pyarrow as pa
 import pyarrow.parquet as pq
 from google.cloud import storage
-
 from scripts.storage.constants import (
     ADAPTIVE_MAX_DEPTH,
     ADAPTIVE_SPLIT_THRESHOLD,

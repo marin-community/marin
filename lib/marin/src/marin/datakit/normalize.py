@@ -25,7 +25,7 @@ from enum import StrEnum
 from typing import Any
 
 import dupekit
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
@@ -430,7 +430,7 @@ def normalize_step(
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
     override_output_path: str | None = None,
-    input_path: str | None = None,
+    relative_input_path: str | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
 ) -> StepSpec:
@@ -447,7 +447,7 @@ def normalize_step(
         max_workers: Maximum number of Zephyr workers. Defaults to Zephyr's
             own default (128 for distributed backends).
         override_output_path: Override the computed output path.
-        input_path: Override the input path. Defaults to ``download.output_path``.
+        relative_input_path: Override the input path relative to the download output.
             Useful when normalizing a subdirectory of the download output.
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
@@ -455,7 +455,14 @@ def normalize_step(
         dedup_mode: How to deduplicate records within each output shard.
             Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
     """
-    resolved_input = input_path or download.output_path
+    if relative_input_path:
+        # ``os.path.join`` collapses redundant separators when ``download.output_path``
+        # ends with ``/`` (e.g. ``override_output_path="gs://.../nemotro-cc-eeb783/"``);
+        # naive f-string concatenation would yield ``gs://.../nemotro-cc-eeb783//<rel>``,
+        # which ``_discover_files`` then fails to resolve on GCS.
+        resolved_input = os.path.join(download.output_path, relative_input_path)
+    else:
+        resolved_input = download.output_path
 
     return StepSpec(
         name=name,
@@ -477,7 +484,7 @@ def normalize_step(
             "id_field": id_field,
             "target_partition_bytes": target_partition_bytes,
             "max_whitespace_run_chars": max_whitespace_run_chars,
-            "input_path": resolved_input,
+            "relative_input_path": relative_input_path,
             "file_extensions": file_extensions,
             "dedup_mode": dedup_mode,
         },

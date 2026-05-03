@@ -37,9 +37,9 @@ from pathlib import Path
 
 import fsspec.core
 import zstandard
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.controller.db import ControllerDB
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

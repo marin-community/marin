@@ -16,6 +16,7 @@ import secrets
 import time
 
 import jwt
+from rigging.timing import Timestamp
 
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import API_KEY_PROJECTION, ApiKeyRow
@@ -27,7 +28,6 @@ from iris.rpc.auth import (
     VerifiedIdentity,
     hash_token,
 )
-from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,13 @@ def create_api_key(
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (key_id, key_hash, key_prefix, user_id, name, now.epoch_ms(), expires_at.epoch_ms() if expires_at else None),
     )
+    logger.info(
+        "event=api_key_created entity=%s trigger=- user=%s name=%s expires_at_ms=%s",
+        key_id,
+        user_id,
+        name,
+        expires_at.epoch_ms() if expires_at else "-",
+    )
 
 
 def lookup_api_key_by_hash(db: ControllerDB, key_hash: str) -> ApiKeyRow | None:
@@ -81,7 +88,10 @@ def revoke_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> bool:
             f"UPDATE {db.api_keys_table} SET revoked_at_ms = ? WHERE key_id = ? AND revoked_at_ms IS NULL",
             (now.epoch_ms(), key_id),
         )
-        return cur._cursor.rowcount > 0
+        revoked = cur._cursor.rowcount > 0
+    if revoked:
+        logger.info("event=api_key_revoked entity=%s trigger=-", key_id)
+    return revoked
 
 
 def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list[ApiKeyRow]:
@@ -111,6 +121,11 @@ def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -
                 " WHERE user_id = ? AND name LIKE 'login-%' AND revoked_at_ms IS NULL",
                 (now.epoch_ms(), user_id),
             )
+        logger.info(
+            "event=login_keys_revoked entity=%s trigger=- count=%d",
+            user_id,
+            len(revoked_ids),
+        )
     return revoked_ids
 
 

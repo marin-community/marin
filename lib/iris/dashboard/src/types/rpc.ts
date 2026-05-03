@@ -95,6 +95,8 @@ export interface TaskStatus {
   canBeScheduled?: boolean
   containerId?: string
   resourceHistory?: ResourceUsage[]
+  statusTextDetailMd?: string
+  statusTextSummaryMd?: string
 }
 
 // -- Jobs --
@@ -224,8 +226,18 @@ export interface WorkerHealthStatus {
   statusMessage?: string
 }
 
+export interface WorkerQuery {
+  contains?: string
+  sortField?: string
+  sortDirection?: string
+  offset?: number
+  limit?: number
+}
+
 export interface ListWorkersResponse {
   workers: WorkerHealthStatus[]
+  totalCount: number
+  hasMore: boolean
 }
 
 export interface WorkerResourceSnapshot {
@@ -241,13 +253,20 @@ export interface WorkerResourceSnapshot {
   netSentBps?: string
 }
 
+export interface WorkerTaskAttempt {
+  taskId: string
+  attempt?: TaskAttempt
+}
+
 export interface GetWorkerStatusResponse {
   vm?: VmInfo
   scaleGroup?: string
   worker?: WorkerHealthStatus
   bootstrapLogs?: string
-  workerLogEntries?: LogEntry[]
-  recentTasks?: TaskStatus[]
+  // workerLogEntries removed from this response to avoid blocking the worker
+  // page render on a slow LogService proxy. Fetched separately via
+  // LogService.FetchLogs(source="/system/worker/<worker_id>").
+  recentAttempts?: WorkerTaskAttempt[]
   currentResources?: WorkerResourceSnapshot
   resourceHistory?: WorkerResourceSnapshot[]
 }
@@ -456,19 +475,6 @@ export interface ProcessInfo {
 export interface GetProcessStatusResponse {
   processInfo?: ProcessInfo
   logEntries?: LogEntry[]
-}
-
-// -- Transactions --
-
-export interface TransactionAction {
-  timestamp?: ProtoTimestamp
-  action?: string
-  entityId?: string
-  details?: string
-}
-
-export interface GetTransactionsResponse {
-  actions: TransactionAction[]
 }
 
 // -- Task State Counts (used in job summaries and user summaries) --

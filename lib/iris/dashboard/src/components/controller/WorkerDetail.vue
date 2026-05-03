@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useControllerRpc } from '@/composables/useRpc'
+import { useControllerRpc, logServiceRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import type {
   GetWorkerStatusResponse,
-  TaskStatus,
+  WorkerTaskAttempt,
   WorkerResourceSnapshot,
   LogEntry,
+  FetchLogsResponse,
 } from '@/types/rpc'
-import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime, formatRate, logLevelClass, formatLogTime, formatWorkerDevice } from '@/utils/formatting'
+import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatRate, logLevelClass, formatLogTime, formatWorkerDevice } from '@/utils/formatting'
 
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -36,14 +37,33 @@ const worker = computed(() => data.value?.worker)
 const vm = computed(() => data.value?.vm)
 const currentResources = computed(() => data.value?.currentResources)
 const resourceHistory = computed(() => data.value?.resourceHistory ?? [])
-const recentTasks = computed(() => data.value?.recentTasks ?? [])
-const workerLogEntries = computed(() => data.value?.workerLogEntries ?? [])
+const recentAttempts = computed(() => data.value?.recentAttempts ?? [])
+// Worker daemon logs are fetched independently via LogService.FetchLogs so a
+// slow/unreachable worker can't stall the worker page. Empty until the
+// async fetch completes; failures leave the array empty rather than throw.
+const workerLogEntries = ref<LogEntry[]>([])
 const attributes = computed(() => worker.value?.metadata?.attributes ?? {})
+
+async function fetchWorkerLogs() {
+  try {
+    const resp = await logServiceRpcCall<FetchLogsResponse>('FetchLogs', {
+      source: `/system/worker/${props.workerId}`,
+      maxLines: 200,
+      tail: true,
+    })
+    workerLogEntries.value = resp.entries ?? []
+  } catch {
+    workerLogEntries.value = []
+  }
+}
 
 // Sparkline data from resource history
 const cpuHistory = computed(() => resourceHistory.value.map((s) => s.hostCpuPercent ?? 0))
 const memoryHistory = computed(() =>
   resourceHistory.value.map((s) => parseInt(s.memoryUsedBytes ?? '0', 10))
+)
+const diskHistory = computed(() =>
+  resourceHistory.value.map((s) => parseInt(s.diskUsedBytes ?? '0', 10))
 )
 
 const runningTaskCount = computed(() => worker.value?.runningJobIds?.length ?? 0)
@@ -63,22 +83,45 @@ const memoryDisplay = computed(() => {
   return formatBytes(used)
 })
 
+const diskDisplay = computed(() => {
+  const cr = currentResources.value
+  if (!cr?.diskUsedBytes) return '-'
+  const used = parseInt(cr.diskUsedBytes, 10)
+  const total = parseInt(cr.diskTotalBytes ?? '0', 10)
+  if (total) return `${formatBytes(used)} / ${formatBytes(total)}`
+  return formatBytes(used)
+})
+
+const diskFreePercent = computed(() => {
+  const cr = currentResources.value
+  if (!cr?.diskUsedBytes || !cr?.diskTotalBytes) return null
+  const used = parseInt(cr.diskUsedBytes, 10)
+  const total = parseInt(cr.diskTotalBytes, 10)
+  if (!total) return null
+  return Math.round((1 - used / total) * 100)
+})
+
 const taskColumns: Column[] = [
   { key: 'taskId', label: 'Task ID', mono: true },
+  { key: 'attempt', label: 'Attempt', align: 'right' },
   { key: 'state', label: 'State' },
-  { key: 'memory', label: 'Memory', align: 'right' },
-  { key: 'cpu', label: 'CPU', align: 'right' },
   { key: 'duration', label: 'Duration', align: 'right' },
 ]
 
 useAutoRefresh(fetchWorker, DEFAULT_REFRESH_MS)
-onMounted(fetchWorker)
+useAutoRefresh(fetchWorkerLogs, DEFAULT_REFRESH_MS)
+onMounted(() => {
+  fetchWorker()
+  fetchWorkerLogs()
+})
 
 // Re-fetch when navigating between workers (Vue Router reuses the component).
 // Clear stale data first so loading/error states render correctly if the fetch fails.
 watch(() => props.workerId, () => {
   data.value = null
+  workerLogEntries.value = []
   fetchWorker()
+  fetchWorkerLogs()
 })
 
 function attributeDisplay(val: { stringValue?: string; intValue?: string; floatValue?: string }): string {
@@ -147,6 +190,11 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
         />
         <MetricCard :value="cpuDisplay" label="CPU Usage" />
         <MetricCard :value="memoryDisplay" label="Memory" />
+        <MetricCard
+          :value="diskDisplay"
+          label="Disk"
+          :variant="diskFreePercent !== null && diskFreePercent < 10 ? 'warning' : 'default'"
+        />
         <MetricCard :value="formatWorkerDevice(worker?.metadata)" label="Accelerator" />
       </div>
 
@@ -205,6 +253,12 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
               {{ formatBytes(parseInt(worker.metadata.memoryBytes, 10)) }}
             </span>
           </InfoRow>
+          <InfoRow v-if="diskDisplay !== '-'" label="Disk Usage">
+            <span class="font-mono" :class="diskFreePercent !== null && diskFreePercent < 10 ? 'text-status-danger' : ''">
+              {{ diskDisplay }}
+              <span v-if="diskFreePercent !== null" class="text-text-muted ml-1">({{ diskFreePercent }}% free)</span>
+            </span>
+          </InfoRow>
           <InfoRow label="Accelerator">
             {{ formatWorkerDevice(worker?.metadata) }}
           </InfoRow>
@@ -229,16 +283,27 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div class="rounded-lg border border-surface-border bg-surface p-3">
             <div class="text-xs text-text-secondary mb-2">CPU %</div>
-            <Sparkline :data="cpuHistory" :width="200" :height="40" color="var(--color-accent, #2563eb)" />
+            <Sparkline :data="cpuHistory" :height="40" color="var(--color-accent, #2563eb)" />
             <div class="text-xs font-mono text-text-muted mt-1">
               {{ cpuDisplay }}
             </div>
           </div>
           <div class="rounded-lg border border-surface-border bg-surface p-3">
             <div class="text-xs text-text-secondary mb-2">Memory</div>
-            <Sparkline :data="memoryHistory" :width="200" :height="40" color="var(--color-status-purple, #8b5cf6)" />
+            <Sparkline :data="memoryHistory" :height="40" color="var(--color-status-purple, #8b5cf6)" />
             <div class="text-xs font-mono text-text-muted mt-1">
               {{ memoryDisplay }}
+            </div>
+          </div>
+          <div
+            v-if="diskHistory.some((v) => v > 0)"
+            class="rounded-lg border border-surface-border bg-surface p-3"
+          >
+            <div class="text-xs text-text-secondary mb-2">Disk</div>
+            <Sparkline :data="diskHistory" :height="40" color="var(--color-status-orange, #f97316)" />
+            <div class="text-xs font-mono mt-1" :class="diskFreePercent !== null && diskFreePercent < 10 ? 'text-status-danger' : 'text-text-muted'">
+              {{ diskDisplay }}
+              <span v-if="diskFreePercent !== null" class="ml-1">({{ diskFreePercent }}% free)</span>
             </div>
           </div>
           <div
@@ -248,7 +313,6 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             <div class="text-xs text-text-secondary mb-2">Network Recv</div>
             <Sparkline
               :data="resourceHistory.map((s) => parseInt(s.netRecvBps ?? '0', 10))"
-              :width="200"
               :height="40"
               color="var(--color-status-success, #22c55e)"
             />
@@ -263,7 +327,6 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             <div class="text-xs text-text-secondary mb-2">Network Sent</div>
             <Sparkline
               :data="resourceHistory.map((s) => parseInt(s.netSentBps ?? '0', 10))"
-              :width="200"
               :height="40"
               color="var(--color-status-orange, #f97316)"
             />
@@ -274,39 +337,30 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
         </div>
       </div>
 
-      <!-- Task history -->
-      <div v-if="recentTasks.length > 0" class="mb-6">
+      <!-- Task history (per-attempt: each retry on this worker is its own row) -->
+      <div v-if="recentAttempts.length > 0" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Task History</h3>
         <div class="rounded-lg border border-surface-border bg-surface overflow-hidden">
           <DataTable
             :columns="taskColumns"
-            :rows="recentTasks"
+            :rows="recentAttempts"
             :page-size="25"
             empty-message="No recent tasks"
           >
             <template #cell-taskId="{ row }">
-              <span class="font-mono text-xs">{{ (row as TaskStatus).taskId }}</span>
+              <span class="font-mono text-xs">{{ (row as WorkerTaskAttempt).taskId }}</span>
+            </template>
+            <template #cell-attempt="{ row }">
+              <span class="font-mono text-xs">{{ (row as WorkerTaskAttempt).attempt?.attemptId ?? '-' }}</span>
             </template>
             <template #cell-state="{ row }">
-              <StatusBadge :status="(row as TaskStatus).state" size="sm" />
-            </template>
-            <template #cell-memory="{ row }">
-              <span class="font-mono text-xs">
-                {{ (row as TaskStatus).resourceUsage?.memoryMb
-                  ? parseFloat((row as TaskStatus).resourceUsage!.memoryMb!) + ' MB'
-                  : '-' }}
-              </span>
-            </template>
-            <template #cell-cpu="{ row }">
-              <span class="font-mono text-xs">
-                {{ formatCpuMillicores((row as TaskStatus).resourceUsage?.cpuMillicores) }}
-              </span>
+              <StatusBadge :status="(row as WorkerTaskAttempt).attempt?.state ?? 0" size="sm" />
             </template>
             <template #cell-duration="{ row }">
               <span class="font-mono text-xs">
                 {{ formatDuration(
-                  timestampMs((row as TaskStatus).startedAt),
-                  timestampMs((row as TaskStatus).finishedAt) || undefined,
+                  timestampMs((row as WorkerTaskAttempt).attempt?.startedAt),
+                  timestampMs((row as WorkerTaskAttempt).attempt?.finishedAt) || undefined,
                 ) }}
               </span>
             </template>

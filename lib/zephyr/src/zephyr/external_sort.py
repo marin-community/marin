@@ -208,4 +208,6 @@ def external_sort_merge(
                 rm_fs, rm_path = url_to_fs(path)
                 rm_fs.rm(rm_path)
             except Exception:
-                pass
+                # Spill files live under a per-shard temp dir that the worker
+                # eventually wipes; log so a leaked file is at least traceable.
+                logger.warning("Failed to delete external-sort run file %s", path, exc_info=True)

@@ -6,13 +6,17 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
-from fray.v2 import LocalClient, set_current_client
-
+from fray import LocalClient, set_current_client
 from marin.datakit.normalize import NormalizedData, generate_id, normalize_to_parquet
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs
 from marin.processing.classification.deduplication.fuzzy_minhash import (
+    MinHashAttrData,
+    MinHashParams,
     compute_minhash_attrs,
 )
+from zephyr import write_parquet_file
+
+TEST_MINHASH_PARAMS = MinHashParams(num_perms=286, num_bands=26, ngram_size=5, seed=42)
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +45,24 @@ def _read_cluster_attrs(attr_dir: str) -> list[dict]:
     for pf in sorted(Path(attr_dir).glob("*.parquet")):
         rows.extend(pq.read_table(str(pf)).to_pylist())
     return rows
+
+
+def _write_minhash_attr_dataset(
+    *,
+    output_dir: str,
+    source_main_dir: str,
+    rows: list[dict],
+) -> MinHashAttrData:
+    """Write a one-shard MinHash attr dataset for focused fuzzy-dup tests."""
+    attr_dir = os.path.join(output_dir, "outputs")
+    Path(attr_dir).mkdir(parents=True, exist_ok=True)
+    write_parquet_file(rows, os.path.join(attr_dir, "part-00000.parquet"))
+    return MinHashAttrData(
+        params=TEST_MINHASH_PARAMS,
+        source_main_dir=source_main_dir,
+        attr_dir=attr_dir,
+        counters={},
+    )
 
 
 def test_minhash_attrs_co_partitioned_with_source(fox_corpus):
@@ -126,20 +148,56 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
     into a single node. Each side independently carries its own attr row for
     the shared content hash, with a shared ``dup_cluster_id`` and exactly one
     canonical across the pair.
-    """
-    train_norm = _normalize(fox_corpus["train_dir"], os.path.join(fox_corpus["output_dir"], "norm_train"))
-    test_norm = _normalize(fox_corpus["test_dir"], os.path.join(fox_corpus["output_dir"], "norm_test"))
 
-    train_mh = compute_minhash_attrs(source=train_norm, output_path=os.path.join(fox_corpus["output_dir"], "mh_train"))
-    test_mh = compute_minhash_attrs(source=test_norm, output_path=os.path.join(fox_corpus["output_dir"], "mh_test"))
+    This test targets multi-source fuzzy dedup behavior directly. Normalization
+    and MinHash generation already have separate coverage above.
+    """
+    train_main_dir = os.path.join(fox_corpus["output_dir"], "train_main")
+    test_main_dir = os.path.join(fox_corpus["output_dir"], "test_main")
+    train_mh = _write_minhash_attr_dataset(
+        output_dir=os.path.join(fox_corpus["output_dir"], "mh_train"),
+        source_main_dir=train_main_dir,
+        rows=[
+            {
+                "id": generate_id("Arctic predators have superior auditory capabilities for hunting beneath snow."),
+                "buckets": ["shared-arctic"],
+            },
+            {
+                "id": generate_id("Red canids inhabit northern territories worldwide."),
+                "buckets": ["shared-red"],
+            },
+            {
+                "id": generate_id("Newborn kits emerge sightless and vulnerable."),
+                "buckets": ["train-unique"],
+            },
+        ],
+    )
+    test_mh = _write_minhash_attr_dataset(
+        output_dir=os.path.join(fox_corpus["output_dir"], "mh_test"),
+        source_main_dir=test_main_dir,
+        rows=[
+            {
+                "id": generate_id("Arctic predators have superior auditory capabilities for hunting beneath snow."),
+                "buckets": ["shared-arctic"],
+            },
+            {
+                "id": generate_id("Red canids inhabit northern territories worldwide."),
+                "buckets": ["shared-red"],
+            },
+            {
+                "id": generate_id("Rapid runners represent the most diminutive wild dogs."),
+                "buckets": ["test-unique"],
+            },
+        ],
+    )
 
     dups = compute_fuzzy_dups_attrs(
         inputs=[train_mh, test_mh],
         output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups"),
-        max_parallelism=4,
+        max_parallelism=1,
     )
 
-    assert set(dups.sources.keys()) == {train_norm.main_output_dir, test_norm.main_output_dir}
+    assert set(dups.sources.keys()) == {train_main_dir, test_main_dir}
     for per_source in dups.sources.values():
         assert per_source.attr_dir.rsplit("/", 1)[-1].startswith("source_"), per_source.attr_dir
         assert Path(per_source.attr_dir).exists()
@@ -147,8 +205,8 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
     def rows_by_id(main_dir: str) -> dict[str, dict]:
         return {r["id"]: r for r in _read_cluster_attrs(dups.sources[main_dir].attr_dir)}
 
-    train_rows = rows_by_id(train_norm.main_output_dir)
-    test_rows = rows_by_id(test_norm.main_output_dir)
+    train_rows = rows_by_id(train_main_dir)
+    test_rows = rows_by_id(test_main_dir)
 
     # Each cross-source byte-identical text must appear as an attr row on both
     # sides (keyed by the same content hash), share a dup_cluster_id, and have

@@ -10,9 +10,8 @@ from pathlib import Path
 
 import pytest
 import yaml
-
-from iris.client import IrisClient
 from iris.cli.job import load_env_vars, run_iris_job
+from iris.client import IrisClient
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 
 pytestmark = pytest.mark.e2e

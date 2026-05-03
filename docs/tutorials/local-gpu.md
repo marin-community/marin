@@ -1,8 +1,8 @@
 # Setting up a Local GPU Environment
 
 This guide will walk you through the steps to set up a local GPU environment for Marin.
-By "local", we mean a machine that you run jobs on directly, as opposed to using Ray's autoscaler to launch a cluster of GPU nodes.
-Similar steps will let you run Marin on a cloud GPU environment using Ray's autoscaler, but we defer that to a future guide.
+By "local", we mean a machine that you run jobs on directly, as opposed to dispatching them to a shared cluster via [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md).
+Similar steps will let you run Marin on a cloud GPU environment under Iris (the Marin team runs production GPU workloads on CoreWeave), but we defer that to a future guide.
 
 ## Prerequisites
 
@@ -98,5 +98,5 @@ nano_train_config = SimpleTrainConfig(
 )
 ```
 
-To scale up, you can use Ray's autoscaler to launch a cluster of GPU nodes. We defer that to a future guide,
-but you can see Ray's [autoscaler documentation](https://docs.ray.io/en/latest/cluster/vms/user-guides/launching-clusters/) for more information.
+To scale up, submit to Marin's shared [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) cluster
+via `uv run iris --cluster=marin job run ...` (see `lib/iris/OPS.md` for the CLI reference).

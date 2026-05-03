@@ -10,16 +10,18 @@ import queue
 import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace as dc_replace
+from dataclasses import dataclass, field
+from dataclasses import replace as dc_replace
 from pathlib import Path
 from threading import Lock, RLock
 from typing import Any
+
+from rigging.timing import Deadline, Duration, Timestamp
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
 from iris.rpc import job_pb2
-from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +157,9 @@ EXECUTING_TASK_STATES: frozenset[int] = frozenset(
     }
 )
 
+# All non-terminal task states (ACTIVE plus PENDING). Complement of TERMINAL_TASK_STATES.
+NON_TERMINAL_TASK_STATES: frozenset[int] = ACTIVE_TASK_STATES | {job_pb2.TASK_STATE_PENDING}
+
 # Failure states that trigger coscheduled sibling cascades.
 FAILURE_TASK_STATES: frozenset[int] = frozenset(
     {
@@ -237,7 +242,7 @@ class TransactionCursor:
 
     Post-commit hooks registered via :meth:`on_commit` run after the wrapping
     ``ControllerDB.transaction()`` block commits successfully. They are used
-    by caches (e.g. ``EndpointRegistry``) to update in-memory state atomically
+    by caches (e.g. ``EndpointStore``) to update in-memory state atomically
     with the DB write: rollback suppresses the hook so memory never drifts
     from disk.
     """
@@ -257,6 +262,14 @@ class TransactionCursor:
     def executescript(self, sql: str) -> sqlite3.Cursor:
         """Raw SQL script escape hatch."""
         return self._cursor.executescript(sql)
+
+    def fetchall(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
+        """Execute ``sql`` and return all rows. Mirrors :meth:`QuerySnapshot.fetchall`."""
+        return list(self._cursor.execute(sql, params).fetchall())
+
+    def fetchone(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
+        """Execute ``sql`` and return the first row, or None. Mirrors :meth:`QuerySnapshot.fetchone`."""
+        return self._cursor.execute(sql, params).fetchone()
 
     def on_commit(self, hook: Callable[[], None]) -> None:
         """Register ``hook`` to run after the transaction commits successfully."""
@@ -321,19 +334,14 @@ class ControllerDB:
         self._attr_cache: dict[WorkerId, dict[str, AttributeValue]] | None = None
         self._attr_cache_lock = Lock()
 
-        # Write-through in-memory cache over the ``endpoints`` table. Imported
-        # locally to break the ``db -> endpoint_registry -> db`` import cycle;
-        # this is the single exception to "no local imports" (see AGENTS.md).
-        from iris.cluster.controller.endpoint_registry import EndpointRegistry
+        # Callables invoked at the end of ``replace_from`` so callers with
+        # caches over DB contents (e.g. ``ControllerStore``) can reload them
+        # after a checkpoint restore. Registered via ``register_reopen_hook``.
+        self._reopen_hooks: list[Callable[[], None]] = []
 
-        t0 = time.monotonic()
-        self._endpoint_registry = EndpointRegistry(self)
-        logger.info("EndpointRegistry initialized in %.2fs", time.monotonic() - t0)
-
-    @property
-    def endpoints(self) -> EndpointRegistry:  # noqa: F821
-        """Process-local cache for the ``endpoints`` table; authoritative for reads."""
-        return self._endpoint_registry
+    def register_reopen_hook(self, hook: Callable[[], None]) -> None:
+        """Register a no-arg callable to run at the end of ``replace_from``."""
+        self._reopen_hooks.append(hook)
 
     def _populate_attr_cache(self) -> dict[WorkerId, dict[str, AttributeValue]]:
         """Load all worker attributes from the DB into the cache.
@@ -454,7 +462,7 @@ class ControllerDB:
 
         On successful commit, any hooks registered via ``TransactionCursor.on_commit``
         fire while the write lock is still held — keeping in-memory caches
-        (e.g. ``EndpointRegistry``) in sync with the DB without exposing a
+        (e.g. ``EndpointStore``) in sync with the DB without exposing a
         torn snapshot to concurrent readers.
         """
         with self._lock:
@@ -751,7 +759,8 @@ class ControllerDB:
             self._conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
             self._init_read_pool()
         self.apply_migrations()
-        self._endpoint_registry._load_all()
+        for hook in self._reopen_hooks:
+            hook()
 
     # SQL-canonical read access is exposed through ``snapshot()`` and typed table
     # metadata at module scope. Legacy list/get/count helper methods were removed

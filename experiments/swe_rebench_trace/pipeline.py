@@ -30,7 +30,7 @@ import argparse
 import logging
 import os
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, load_parquet
 
 from experiments.swe_rebench_trace.run_one import trace_swe_row
@@ -122,7 +122,7 @@ def main() -> None:
         args.task_image,
     )
 
-    output_files = list(ctx.execute(pipeline))
+    output_files = ctx.execute(pipeline).results
     logger.info("Pipeline complete: wrote %d shard files", len(output_files))
     for f in output_files:
         print(f)

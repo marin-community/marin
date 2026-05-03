@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-
+from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.auth import (
     WORKER_USER,
@@ -19,15 +19,13 @@ from iris.cluster.controller.auth import (
     create_controller_auth,
     list_api_keys,
 )
-from iris.rpc.auth import VerifiedIdentity, hash_token
-from rigging.timing import Timestamp
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.log_server.server import LogServiceImpl
-from iris.rpc import config_pb2
-from iris.rpc import job_pb2
-from iris.rpc.auth import _verified_identity
+from iris.rpc import config_pb2, job_pb2
+from iris.rpc.auth import VerifiedIdentity, _verified_identity, hash_token
+from rigging.timing import Timestamp
 
 
 @pytest.fixture
@@ -39,7 +37,8 @@ def db(tmp_path):
 
 def _make_service(db, auth=None):
     """Create a ControllerServiceImpl with minimal dependencies for API key tests."""
-    state = ControllerTransitions(db=db)
+    store = ControllerStore(db)
+    state = ControllerTransitions(store=store)
 
     controller_mock = Mock()
     controller_mock.wake = Mock()
@@ -51,7 +50,7 @@ def _make_service(db, auth=None):
 
     return ControllerServiceImpl(
         state,
-        db,
+        store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
         log_service=LogServiceImpl(),

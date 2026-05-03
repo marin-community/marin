@@ -32,10 +32,12 @@ import sys
 import traceback
 from collections.abc import Sequence
 from typing import ClassVar
+
 from rigging.filesystem import filesystem as marin_filesystem
 
 from marin.evaluation.evaluation_config import WANDB_PROJECT, EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.utils import is_remote_path, upload_to_gcs
 from marin.inference.vllm_server import resolve_model_name_or_path
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
 

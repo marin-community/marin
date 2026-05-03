@@ -1,0 +1,74 @@
+# finelog Deployment.
+#
+# Single-writer constraint: keep replicas=1. The store assumes one writer
+# at a time; running multiple replicas will corrupt segments. The Recreate
+# strategy enforces this during rollouts.
+#
+# Resource tuning: requests/limits below are sized for moderate (~few
+# hundred RPS) ingest. Bump CPU limits before memory; ingest is duckdb-
+# bound and CPU-heavy.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ name }}
+  namespace: {{ namespace }}
+  labels:
+    app: {{ name }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ name }}
+  template:
+    metadata:
+      labels:
+        app: {{ name }}
+    spec:
+      # The container runs as UID 1000 (finelog). fsGroup makes kubelet
+      # chown the mounted PV to GID 1000 so writes succeed; without this
+      # the PV root inherits root:root and parquet flushes EACCES.
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: finelog
+          image: {{ image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: rpc
+              containerPort: {{ port }}
+              protocol: TCP
+          env:
+            - name: FINELOG_PORT
+              value: "{{ port }}"
+            - name: FINELOG_REMOTE_DIR
+              value: "{{ remote_log_dir }}"
+          volumeMounts:
+            - name: cache
+              mountPath: /var/cache/finelog
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          livenessProbe:
+            tcpSocket:
+              port: {{ port }}
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: {{ port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: cache
+          persistentVolumeClaim:
+            claimName: {{ name }}-cache

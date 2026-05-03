@@ -5,7 +5,7 @@
 
 The `logs` table was schema-only — no code path ever wrote to it. Controller
 log data has always lived in the RAM buffer + Parquet segments managed by
-`iris.cluster.log_store.duckdb_store.DuckDBLogStore`. SQL consumers that hit
+`finelog.store.duckdb_store.DuckDBLogStore`. SQL consumers that hit
 `logs` saw silent zero-row results, which is worse than a missing-table error.
 """
 

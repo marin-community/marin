@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 
 import httpx
 import pytest
-
 from iris.cluster.providers.gcp.service import (
     CloudGcpService,
     TpuCreateRequest,

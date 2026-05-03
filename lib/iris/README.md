@@ -1,6 +1,6 @@
 # Iris
 
-Distributed job orchestration replacing Ray with simpler primitives.
+Distributed job orchestration for Marin.
 
 ## Quick Start
 

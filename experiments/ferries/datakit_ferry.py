@@ -11,10 +11,6 @@ import json
 import logging
 import os
 
-from rigging.filesystem import marin_temp_bucket, url_to_fs
-from rigging.log_setup import configure_logging
-from rigging.timing import log_time
-
 from fray import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import NormalizedData, normalize_step
@@ -35,6 +31,9 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     compute_minhash_attrs,
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
+from rigging.filesystem import marin_temp_bucket, url_to_fs
+from rigging.log_setup import configure_logging
+from rigging.timing import log_time
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
     normalized = normalize_step(
         name="datakit-smoke/normalize",
         download=downloaded,
-        input_path=f"{downloaded.output_path}/sample/10BT",
+        relative_input_path="sample/10BT",
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="20g"),
         override_output_path=f"{base}/normalize",
     )

@@ -1,15 +1,19 @@
 # SFT (Supervised Fine-Tuning) Quickstart Guide
 
 ## Overview
-Guide for running supervised fine-tuning (SFT) experiments using Marin. Assumes Ray dashboard is running per setup docs.
+Guide for running supervised fine-tuning (SFT) experiments using Marin. Jobs run on the shared Iris cluster; see [`lib/iris/OPS.md`](../lib/iris/OPS.md) for setup.
 The default doc reproduces OLMO SFT
 
 ## Key Steps
 
 ### 1. Basic Commands
-# run Olmo sft with
-```
-python marin/run/ray_run.py --env_vars HF_TOKEN -- python experiments/227_sft.py
+
+Run Olmo SFT with:
+
+```bash
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+  -e HF_TOKEN "$HF_TOKEN" \
+  -- python -m experiments.exp227_sft
 ```
 
 ### 2. Configure Dataset
@@ -41,11 +45,17 @@ In `train_step`, essential parameters:
 
 ```bash
 # Basic run
-python marin/run/ray_run.py --env_vars HF_TOKEN -- python experiments/my_sft.py
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+  -e HF_TOKEN "$HF_TOKEN" \
+  -- python -m experiments.my_sft
 
 # Force specific steps
-python marin/run/ray_run.py --env_vars HF_TOKEN -- python experiments/my_sft.py --force_run '["your_step_name"]'
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+  -e HF_TOKEN "$HF_TOKEN" \
+  -- python -m experiments.my_sft --force_run '["your_step_name"]'
 ```
+
+The outer job is CPU-only; the SFT script uses `executor_main` to submit TPU sub-tasks via Fray (see `lib/iris/OPS.md`).
 
 ### Storage Paths
 
@@ -64,7 +74,7 @@ start with the prefix `tokenized/`
 
 ## Tips
 - Match tokenizer to base model
-- Monitor via Ray dashboard and W&B
+- Monitor via `iris job logs /<user>/<job-id> -f` and W&B (see `lib/iris/OPS.md`).
 - Use `--force_run` during development to re-run jobs or just delete executor state
 - Adjust batch size based on TPU size
 

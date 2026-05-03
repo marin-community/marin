@@ -42,11 +42,9 @@ Nemotron mix. Then sweep the optimizer hyperparameter space with
 `experiments/references/reference_hyperparameter_sweep.py` or an equivalent setup.
 
 ```sh
-RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \
-  --cluster marin-us-central2 \
-  --no_wait \
+uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
-  -- python experiments/references/reference_hyperparameter_sweep.py
+  -- python -m experiments.references.reference_hyperparameter_sweep
 ```
 
 Update `SweepSettings` for your search space, model, budget, and metric.
@@ -176,11 +174,9 @@ SCALING_SUITES = {
 Submit:
 
 ```sh
-RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \
-  --cluster marin-us-central2 \
-  --no_wait \
+uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
-  -- python experiments/isoflop_sweep.py
+  -- python -m experiments.isoflop_sweep
 ```
 
 The analysis step runs as part of the scaling ladder in step 6, not as a separate manual

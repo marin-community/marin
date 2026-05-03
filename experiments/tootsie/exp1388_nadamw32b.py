@@ -7,13 +7,13 @@ Train 32B on Nemotron with Starcoderdata and Proofpile 2 using NAdamW
 
 import dataclasses
 
+from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
+from marin.execution import executor_main
 
 from experiments.defaults import default_train
 from experiments.llama import llama_32b
 from experiments.tootsie.exp1295_32b import llama_32b_tootsie, llama_32b_train_config, nemotron_mix
-from fray.cluster import ResourceConfig
-from marin.execution import executor_main
 
 warmstart_checkpoint = llama_32b_tootsie.cd("checkpoints/step-77096/").nonblocking()
 

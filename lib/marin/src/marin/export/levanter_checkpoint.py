@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import levanter.infra.cli_helpers
-from fray.v2 import current_client
-from fray.v2.types import (
+from fray import current_client
+from fray.types import (
     CpuConfig,
     Entrypoint,
     GpuConfig,

@@ -94,6 +94,9 @@ function formatRelative(iso: string): string {
 function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
   const latest = wf.latest;
   const successRate = wf.successRate;
+  // The API keeps history newest-first for latest-run math. The strip reads
+  // more naturally oldest-to-newest, with the most recent run on the right.
+  const visualHistory = wf.history.map((run, index) => ({ run, index })).reverse();
   // Match the denominator the server uses for `successRate`
   // (githubActions.ts:computeSuccessRate) — completed runs only, not
   // the raw history length which can include queued/in-progress runs.
@@ -141,10 +144,10 @@ function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
               so all 30 fit on a ~340px phone content area without
               wrapping to a second row. */}
           <div className="mt-3 flex gap-px sm:gap-1">
-            {wf.history.map((run, i) => {
+            {visualHistory.map(({ run, index }) => {
               const a = runAppearance(run);
-              const slow = isSlowRun(wf.history, i);
-              const baseline = slow ? slowRunBaseline(wf.history, i) : null;
+              const slow = isSlowRun(wf.history, index);
+              const baseline = slow ? slowRunBaseline(wf.history, index) : null;
               return (
                 <a
                   key={run.id}

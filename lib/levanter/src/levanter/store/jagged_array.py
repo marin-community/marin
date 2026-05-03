@@ -75,9 +75,29 @@ class PreparedBatch:
         return len(self.offsets)
 
     @staticmethod
-    def from_batch(items: Sequence[np.ndarray], item_rank: Optional[int] = None) -> "PreparedBatch":
+    def from_batch(items: Sequence, item_rank: Optional[int] = None) -> "PreparedBatch":
+        if items and not hasattr(items[0], "ndim"):
+            if (item_rank or 1) == 1:
+                return PreparedBatch._from_sequences(items)
+            items = [np.asarray(x) for x in items]
         data, offsets, shapes = _prepare_batch(items, item_rank)
         return PreparedBatch(data, offsets, shapes)
+
+    @staticmethod
+    def _from_sequences(items: Sequence[Sequence]) -> "PreparedBatch":
+        """Build from Python sequences without per-item numpy conversion.
+        Pre-allocates a single flat array and copies each sequence into it."""
+        lengths = np.array([len(item) for item in items], dtype=np.int64)
+        offsets = np.cumsum(lengths)
+        total = int(offsets[-1]) if len(offsets) else 0
+        dtype = np.result_type(items[0][0]) if items and len(items[0]) > 0 else np.int64
+        data = np.empty(total, dtype=dtype)
+        pos = 0
+        for item, length in zip(items, lengths):
+            end = pos + int(length)
+            data[pos:end] = item
+            pos = end
+        return PreparedBatch(data, offsets, None)
 
     @staticmethod
     def concat(batches: Sequence["PreparedBatch"]) -> "PreparedBatch":
@@ -205,10 +225,10 @@ class JaggedArrayStore:
             self._cached_data_size = result
         return result
 
-    async def append_async(self, data: np.ndarray):
+    async def append_async(self, data: Sequence):
         await self.extend_async([data])
 
-    def append(self, data: np.ndarray):
+    def append(self, data: Sequence):
         self.extend([data])
 
     async def trim_to_size_async(self, size: int):
@@ -282,7 +302,7 @@ class JaggedArrayStore:
             self._cached_num_rows = size
             self._cached_data_size = new_max
 
-    async def extend_async(self, arrays: Sequence[np.ndarray] | PreparedBatch):
+    async def extend_async(self, arrays: Sequence[Sequence] | PreparedBatch):
         if isinstance(arrays, PreparedBatch):
             prepared = arrays
         else:
@@ -313,7 +333,7 @@ class JaggedArrayStore:
             self._cached_num_rows = num_rows + num_added
             self._cached_data_size = current_data_size + len(data)
 
-    def extend(self, arrays: Sequence[np.ndarray] | PreparedBatch):
+    def extend(self, arrays: Sequence[Sequence] | PreparedBatch):
         if isinstance(arrays, PreparedBatch):
             prepared = arrays
         else:

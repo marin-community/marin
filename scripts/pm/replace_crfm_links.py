@@ -18,9 +18,10 @@ Requires:
     export GITHUB_TOKEN=your_token
 """
 
+import argparse
 import os
 import re
-import argparse
+
 from github import Github
 
 

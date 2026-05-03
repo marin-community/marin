@@ -54,7 +54,7 @@ Generation tasks (for example AlpacaEval, HumanEval, GSM8K, and MATH) use a fast
 - A common entrypoint is [`run_key_evals.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/run_key_evals.py).
 - Current generation-eval setup is documented in [Running Evaluations with Marin](../tutorials/run-lm-evals.md).
 
-In current Marin workflows, generation evals are commonly run with `Dockerfile.vllm` or on a dedicated vLLM Ray cluster (for example [`marin-us-east5-b-vllm.yaml`](https://github.com/marin-community/marin/blob/main/infra/marin-us-east5-b-vllm.yaml)).
+In current Marin workflows, generation evals are commonly run with `Dockerfile.vllm` or as dedicated vLLM jobs submitted through Iris.
 
 ## Harbor-based evaluation
 

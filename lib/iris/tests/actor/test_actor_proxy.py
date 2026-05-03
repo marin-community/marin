@@ -8,15 +8,14 @@ Tests the full round-trip: external client → proxy → actor server.
 
 import httpx
 import uvicorn
-from starlette.applications import Starlette
-from starlette.routing import Route
-
 from iris.actor import ActorClient, ActorServer
 from iris.actor.resolver import ACTOR_ENDPOINT_HEADER, ProxyResolver
 from iris.cluster.controller.actor_proxy import PROXY_ROUTE
 from iris.cluster.dashboard_common import on_shutdown
 from iris.managed_thread import ThreadContainer
 from rigging.timing import Duration, ExponentialBackoff
+from starlette.applications import Starlette
+from starlette.routing import Route
 
 
 class StatusActor:

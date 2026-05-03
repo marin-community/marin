@@ -97,7 +97,7 @@ One of the most popular ways to leverage a model’s context is retrieval augmen
 | Natural Questions | 60.0% | 59.1% | 56.5% | 57.7% | 63.9% |
 | HotPotQA | 55.0% | 54.2% | 54.7% | 53.0% | 62.9% |
 
-Table 4. The performance of the models measured when each model is given the top 10 passages retrieved from a Wikipedia corpus using bge-large-en-v1.5. Accuracy is measured by matching within the model’s answer. Bold is the highest score. Underlined is the highest score other than GPT-4 Turbo. 
+Table 4. The performance of the models measured when each model is given the top 10 passages retrieved from a Wikipedia corpus using bge-large-en-v1.5. Accuracy is measured by matching within the model’s answer. Bold is the highest score. Underlined is the highest score other than GPT-4 Turbo.
 
 ## Training Efficiency
 
@@ -176,6 +176,8 @@ All scores as reported in the [GPT-4 paper](https://arxiv.org/pdf/2303.08774.pdf
 
 [March 21, 2024
 
-#### Turbocharged Training: Optimizing the Databricks Mosaic AI Stack With FP8](/blog/turbocharged-training-optimizing-databricks-mosaic-ai-stack-fp8 "")[May 5, 2023
+#### Turbocharged Training: Optimizing the Databricks Mosaic AI Stack With FP8](/blog/turbocharged-training-optimizing-databricks-mosaic-ai-stack-fp8 "")
+
+[May 5, 2023
 
 #### Introducing MPT-7B: A New Standard for Open-Source, Commercially Usable LLMs](/blog/mpt-7b "")

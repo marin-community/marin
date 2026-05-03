@@ -7,10 +7,8 @@ import sqlite3
 from unittest.mock import Mock
 
 import pytest
-from starlette.testclient import TestClient
-
+from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
-from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.auth import (
     JwtTokenManager,
     _get_or_create_signing_key,
@@ -23,9 +21,11 @@ from iris.cluster.controller.auth import (
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resolve_auth
 from rigging.timing import Timestamp
+from starlette.testclient import TestClient
 
 _TEST_TOKEN = "valid-test-token"
 _TEST_USER = "test-user"
@@ -44,7 +44,7 @@ def db(tmp_path):
 
 @pytest.fixture
 def state(db, tmp_path):
-    s = ControllerTransitions(db=db)
+    s = ControllerTransitions(store=ControllerStore(db))
     yield s
 
 
@@ -57,7 +57,7 @@ def service(state, tmp_path):
     controller_mock.has_direct_provider = False
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_service=LogServiceImpl(),
@@ -452,11 +452,14 @@ def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optio
     We build a dashboard with a @requires_auth route injected and verify it
     agrees with resolve_auth for every (token, optional) combination.
     """
-    from iris.cluster.controller.dashboard import ControllerDashboard, requires_auth
-
-    from iris.cluster.controller.dashboard import _RouteAuthMiddleware
-    from starlette.routing import Route
+    from iris.cluster.controller.dashboard import (
+        ControllerDashboard,
+        _RouteAuthMiddleware,
+        _SubdomainProxyMiddleware,
+        requires_auth,
+    )
     from starlette.responses import JSONResponse as _J
+    from starlette.routing import Route
 
     @requires_auth
     def _protected(_request):
@@ -469,13 +472,13 @@ def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optio
         auth_provider="static",
         auth_optional=optional,
     )
-    # Inject a @requires_auth route. The app may be wrapped in _RouteAuthMiddleware,
-    # so reach through to the inner Starlette app to add the route.
-    inner_app = dashboard.app
-    if isinstance(inner_app, _RouteAuthMiddleware):
-        inner_app._router.routes.insert(0, Route("/test-protected", _protected))
-    else:
-        inner_app.router.routes.insert(0, Route("/test-protected", _protected))
+    # Inject a @requires_auth route. The app is wrapped in
+    # _SubdomainProxyMiddleware → _RouteAuthMiddleware → Starlette; walk down
+    # to the Starlette router so the new route participates in route matching.
+    app = dashboard.app
+    while isinstance(app, _SubdomainProxyMiddleware | _RouteAuthMiddleware):
+        app = app._app
+    app.router.routes.insert(0, Route("/test-protected", _protected))
 
     client = TestClient(dashboard.app)
     headers = {}

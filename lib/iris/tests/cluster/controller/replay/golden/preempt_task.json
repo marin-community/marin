@@ -1,0 +1,192 @@
+{
+  "dispatch_queue": [
+    {
+      "created_at_ms": 1704067200000,
+      "id": 1,
+      "kind": "run",
+      "payload_proto": "ChgvdGVzdC11c2VyL3ByZWVtcHQtam9iLzAQARoUEhIKBnB5dGhvbgoCLWMKBHBhc3MiACoAMg0I6AcggICAgAQqAEgASABaAA==",
+      "task_id": null,
+      "worker_id": "w-preempt"
+    }
+  ],
+  "endpoints": [],
+  "job_config": [
+    {
+      "bundle_id": "",
+      "constraints_json": null,
+      "coscheduling_group_by": "",
+      "entrypoint_json": "{\"run_command\": {\"argv\": [\"python\", \"-c\", \"pass\"]}}",
+      "environment_json": "{}",
+      "existing_job_policy": 0,
+      "fail_if_exists": 0,
+      "has_coscheduling": 0,
+      "has_reservation": 0,
+      "job_id": "/test-user/preempt-job",
+      "max_retries_failure": 0,
+      "max_retries_preemption": 0,
+      "max_task_failures": 0,
+      "name": "/test-user/preempt-job",
+      "ports_json": "[]",
+      "preemption_policy": 0,
+      "priority_band": 0,
+      "res_cpu_millicores": 1000,
+      "res_device_json": "{}",
+      "res_disk_bytes": 0,
+      "res_memory_bytes": 1073741824,
+      "reservation_json": null,
+      "scheduling_timeout_ms": null,
+      "submit_argv_json": "[]",
+      "task_image": "",
+      "timeout_ms": null
+    }
+  ],
+  "job_workdir_files": [],
+  "jobs": [
+    {
+      "depth": 1,
+      "error": null,
+      "exit_code": null,
+      "finished_at_ms": null,
+      "has_reservation": 0,
+      "is_reservation_holder": 0,
+      "job_id": "/test-user/preempt-job",
+      "name": "/test-user/preempt-job",
+      "num_tasks": 1,
+      "parent_job_id": null,
+      "root_job_id": "/test-user/preempt-job",
+      "root_submitted_at_ms": 1704067200000,
+      "scheduling_deadline_epoch_ms": null,
+      "started_at_ms": 1704067200000,
+      "state": 3,
+      "submitted_at_ms": 1704067200000,
+      "user_id": "test-user"
+    }
+  ],
+  "meta": [
+    {
+      "key": "last_submission_ms",
+      "value": 1704067200000
+    },
+    {
+      "key": "task_priority_insertion",
+      "value": 1
+    }
+  ],
+  "reservation_claims": [],
+  "scaling_groups": [],
+  "slices": [],
+  "task_attempts": [
+    {
+      "attempt_id": 0,
+      "created_at_ms": 1704067200000,
+      "error": "reclaim",
+      "exit_code": null,
+      "finished_at_ms": 1704067200001,
+      "started_at_ms": null,
+      "state": 10,
+      "task_id": "/test-user/preempt-job/0",
+      "worker_id": "w-preempt"
+    }
+  ],
+  "task_resource_history": [],
+  "tasks": [
+    {
+      "container_id": null,
+      "current_attempt_id": 0,
+      "current_worker_address": null,
+      "current_worker_id": null,
+      "error": "reclaim",
+      "exit_code": null,
+      "failure_count": 0,
+      "finished_at_ms": null,
+      "job_id": "/test-user/preempt-job",
+      "max_retries_failure": 0,
+      "max_retries_preemption": 0,
+      "preemption_count": 0,
+      "priority_band": 2,
+      "priority_insertion": 1,
+      "priority_neg_depth": -1,
+      "priority_root_submitted_ms": 1704067200000,
+      "started_at_ms": 1704067200000,
+      "state": 1,
+      "submitted_at_ms": 1704067200000,
+      "task_id": "/test-user/preempt-job/0",
+      "task_index": 0
+    }
+  ],
+  "user_budgets": [],
+  "users": [
+    {
+      "created_at_ms": 1704067200000,
+      "display_name": null,
+      "role": "user",
+      "user_id": "test-user"
+    }
+  ],
+  "worker_attributes": [
+    {
+      "float_value": null,
+      "int_value": null,
+      "key": "device-type",
+      "str_value": "cpu",
+      "value_type": "str",
+      "worker_id": "w-preempt"
+    }
+  ],
+  "worker_resource_history": [],
+  "worker_task_history": [
+    {
+      "assigned_at_ms": 1704067200000,
+      "id": 1,
+      "task_id": "/test-user/preempt-job/0",
+      "worker_id": "w-preempt"
+    }
+  ],
+  "workers": [
+    {
+      "active": 1,
+      "address": "w-preempt:8080",
+      "committed_cpu_millicores": 0,
+      "committed_gpu": 0,
+      "committed_mem_bytes": 0,
+      "committed_tpu": 0,
+      "consecutive_failures": 0,
+      "device_type": "",
+      "device_variant": "",
+      "healthy": 1,
+      "last_heartbeat_ms": 1704067200000,
+      "md_cpu_count": 8,
+      "md_device_json": "{\"cpu\": {\"variant\": \"cpu\"}}",
+      "md_disk_bytes": 17179869184,
+      "md_gce_instance_name": "",
+      "md_gce_zone": "",
+      "md_git_hash": "",
+      "md_gpu_count": 0,
+      "md_gpu_memory_mb": 0,
+      "md_gpu_name": "",
+      "md_hostname": "replay-worker",
+      "md_ip_address": "127.0.0.1",
+      "md_memory_bytes": 17179869184,
+      "md_tpu_chips_per_host_bounds": "",
+      "md_tpu_name": "",
+      "md_tpu_worker_hostnames": "",
+      "md_tpu_worker_id": "",
+      "scale_group": "",
+      "slice_id": "",
+      "snapshot_disk_total_bytes": null,
+      "snapshot_disk_used_bytes": null,
+      "snapshot_host_cpu_percent": null,
+      "snapshot_memory_total_bytes": null,
+      "snapshot_memory_used_bytes": null,
+      "snapshot_net_recv_bps": null,
+      "snapshot_net_sent_bps": null,
+      "snapshot_running_task_count": null,
+      "snapshot_total_process_count": null,
+      "total_cpu_millicores": 8000,
+      "total_gpu_count": 0,
+      "total_memory_bytes": 17179869184,
+      "total_tpu_count": 0,
+      "worker_id": "w-preempt"
+    }
+  ]
+}

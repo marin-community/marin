@@ -25,9 +25,8 @@ from pathlib import Path
 
 import fsspec
 from fray import ResourceConfig, set_current_client
-from fray.v2.iris_backend import FrayIrisClient
-from fray.v2.types import Entrypoint, JobRequest, create_environment
-from rigging.log_setup import configure_logging
+from fray.iris_backend import FrayIrisClient
+from fray.types import Entrypoint, JobRequest, create_environment
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
@@ -47,6 +46,7 @@ from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from marin.schemas.web.convert import ResiliparseConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
+from rigging.log_setup import configure_logging
 
 configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -144,7 +144,10 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             },
             train_config=TrainLmConfig(
                 data=lm_data_config(tokenize_step),
-                hf_save_steps=1,
+                # hf_save_steps=2 (not 1): at num_train_steps=2, final info.step=1 doesn't match
+                # every=2, so Trainer.train's end-of-train run_hooks(force=True) flushes the HF
+                # save exactly once. hf_save_steps=1 would double-fire on info.step=1.
+                hf_save_steps=2,
                 model=Gpt2Config(
                     num_layers=2,
                     num_heads=2,

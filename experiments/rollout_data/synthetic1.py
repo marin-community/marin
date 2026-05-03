@@ -4,13 +4,15 @@
 """PrimeIntellect/SYNTHETIC-1 pretraining dataset.
 
 Usage:
-    uv run lib/marin/src/marin/run/ray_run.py -- python experiments/rollout_data/synthetic1.py
+    uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+      -- python -m experiments.rollout_data.synthetic1
 """
 
 from marin.datakit.download.synthetic1 import download_synthetic1_step
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize
+
 from experiments.marin_models import marin_tokenizer
 
 

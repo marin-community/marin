@@ -8,6 +8,8 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
+from rigging.timing import Duration
+
 from iris.cluster.providers.types import (
     CloudWorkerState,
     CommandResult,
@@ -15,7 +17,6 @@ from iris.cluster.providers.types import (
     WorkerStatus,
 )
 from iris.rpc import vm_pb2
-from rigging.timing import Duration
 
 
 class _RestoredWorkerHandle:

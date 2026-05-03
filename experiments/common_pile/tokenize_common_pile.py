@@ -3,11 +3,12 @@
 
 """Tokenization and mixture configs for the Common Pile v0.1 dataset."""
 
-from experiments.defaults import default_tokenize
-from experiments.llama import llama3_tokenizer
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
+
+from experiments.defaults import default_tokenize
+from experiments.llama import llama3_tokenizer
 
 # Common Pile v0.1 filtered dataset download steps
 arxiv_abstracts_filtered = ExecutorStep(

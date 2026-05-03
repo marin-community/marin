@@ -6,20 +6,19 @@
 from __future__ import annotations
 
 import pytest
-
+from finelog.rpc import logging_pb2
+from finelog.server import LogServiceImpl
 from iris.cluster.controller.transitions import DirectProviderBatch
-from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.providers.k8s.fake import InMemoryK8sService
-from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.k8s.tasks import (
-    K8sTaskProvider,
-    PodConfig,
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
     _RUNTIME_LABEL_VALUE,
+    K8sTaskProvider,
+    PodConfig,
 )
-from iris.log_server.server import LogServiceImpl
-from iris.rpc import logging_pb2
+from iris.cluster.providers.k8s.types import K8sResource
+from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
 
 

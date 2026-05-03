@@ -21,7 +21,7 @@ import os
 
 import dupekit
 import pyarrow as pa
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from pydantic import BaseModel
 from zephyr import Dataset, ZephyrContext, counters, write_parquet_file
 
