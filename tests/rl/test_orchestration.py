@@ -6,7 +6,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from fray.types import JobStatus
+from fray.types import JobStatus, ResourceConfig
 from marin.rl.orchestration import _HostedRuntime, _run_rl_coordinator, _train_worker_entry
 from marin.rl.rl_job import RunConfig
 from marin.rl.rollout_worker import RolloutTrackerConfig
@@ -104,6 +104,19 @@ class _FakeWorkerConfig:
     )
 
 
+def _run_config(
+    *,
+    train_resources: ResourceConfig | None = None,
+    rollout_resources: ResourceConfig | None = None,
+    num_rollout_workers: int = 1,
+) -> RunConfig:
+    return RunConfig(
+        train_resources=train_resources or ResourceConfig.with_tpu("v5p-8", regions=["us-central1"]),
+        rollout_resources=rollout_resources or ResourceConfig.with_tpu("v5p-8", regions=["us-central1"]),
+        num_rollout_workers=num_rollout_workers,
+    )
+
+
 def test_run_rl_coordinator_shuts_down_hosted_actors_when_child_job_fails(monkeypatch):
     shutdown_calls: list[str] = []
     client = _FakeClient()
@@ -115,13 +128,11 @@ def test_run_rl_coordinator_shuts_down_hosted_actors_when_child_job_fails(monkey
     config = SimpleNamespace(
         run_id="rl-test",
         resolved_instance_id="rl-test",
+        inference_type="levanter",
+        inference_config=None,
+        inflight_weight_updates=False,
         pip_dependency_groups=["math"],
-        run_config=RunConfig(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-            num_rollout_workers=1,
-            regions=["us-central1"],
-        ),
+        run_config=_run_config(),
     )
 
     monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
@@ -149,13 +160,11 @@ def test_run_rl_coordinator_stops_rollouts_after_trainer_success(monkeypatch):
     config = SimpleNamespace(
         run_id="rl-test",
         resolved_instance_id="rl-test",
+        inference_type="levanter",
+        inference_config=None,
+        inflight_weight_updates=False,
         pip_dependency_groups=["math"],
-        run_config=RunConfig(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-            num_rollout_workers=2,
-            regions=["us-central1"],
-        ),
+        run_config=_run_config(num_rollout_workers=2),
     )
 
     monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
@@ -185,14 +194,13 @@ def test_run_rl_coordinator_uses_run_config_ram_overrides(monkeypatch):
     config = SimpleNamespace(
         run_id="rl-test",
         resolved_instance_id="rl-test",
+        inference_type="levanter",
+        inference_config=None,
+        inflight_weight_updates=False,
         pip_dependency_groups=["math"],
-        run_config=RunConfig(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-            num_rollout_workers=1,
-            train_ram="300g",
-            inference_ram="300g",
-            regions=["us-central1"],
+        run_config=_run_config(
+            train_resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central1"], ram="300g"),
+            rollout_resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central1"], ram="300g"),
         ),
     )
 
@@ -211,19 +219,19 @@ def test_run_rl_coordinator_uses_run_config_ram_overrides(monkeypatch):
     assert client.submissions[1].resources.ram == "300g"
 
 
-def test_run_rl_coordinator_uses_run_config_zone_for_child_tpu_jobs(monkeypatch):
+def test_run_rl_coordinator_preserves_zone_on_child_tpu_jobs(monkeypatch):
     client = _FakeClient()
     hosted_runtime = _HostedRuntime(runtime=SimpleNamespace(), hosted_actors=[])
     config = SimpleNamespace(
         run_id="rl-test",
         resolved_instance_id="rl-test",
+        inference_type="levanter",
+        inference_config=None,
+        inflight_weight_updates=False,
         pip_dependency_groups=["math"],
-        run_config=RunConfig(
-            train_tpu_type="v6e-8",
-            inference_tpu_type="v6e-8",
-            num_rollout_workers=1,
-            regions=["us-east1"],
-            zone="us-east1-d",
+        run_config=_run_config(
+            train_resources=ResourceConfig.with_tpu("v6e-8", regions=["us-east1"], zone="us-east1-d"),
+            rollout_resources=ResourceConfig.with_tpu("v6e-8", regions=["us-east1"], zone="us-east1-d"),
         ),
     )
 
@@ -248,20 +256,20 @@ def test_run_rl_coordinator_enables_unbuffered_logs_for_debug_checkpointer(monke
     config = SimpleNamespace(
         run_id="rl-test",
         resolved_instance_id="rl-test",
+        inference_type="levanter",
+        inference_config=None,
+        inflight_weight_updates=False,
         pip_dependency_groups=["math"],
-        run_config=RunConfig(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-            num_rollout_workers=1,
-            regions=["us-central1"],
-        ),
+        run_config=_run_config(),
     )
 
     class _DebugRLJob(_FakeRLJob):
         def to_worker_configs(self):
             trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=True)))
             return _FakeWorkerConfig(seed=7, run_id="train", trainer=trainer), _FakeWorkerConfig(
-                seed=11, run_id="rollout"
+                seed=11,
+                run_id="rl-test",
+                tracker_config=RolloutTrackerConfig(project="marin_iris_rl_debug", name="shared-rollout-name"),
             )
 
     monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
@@ -298,13 +306,11 @@ def test_run_rl_coordinator_enables_transfer_debug_env_vars(monkeypatch):
     config = SimpleNamespace(
         run_id="rl-test",
         resolved_instance_id="rl-test",
+        inference_type="levanter",
+        inference_config=None,
+        inflight_weight_updates=False,
         pip_dependency_groups=["math"],
-        run_config=RunConfig(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-            num_rollout_workers=1,
-            regions=["us-central1"],
-        ),
+        run_config=_run_config(),
     )
 
     class _DebugRLJob(_FakeRLJob):
@@ -345,13 +351,11 @@ def test_run_rl_coordinator_assigns_stable_rollout_wandb_names(monkeypatch):
     config = SimpleNamespace(
         run_id="rl-test",
         resolved_instance_id="rl-test-instance",
+        inference_type="levanter",
+        inference_config=None,
+        inflight_weight_updates=False,
         pip_dependency_groups=["math"],
-        run_config=RunConfig(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-            num_rollout_workers=2,
-            regions=["us-central1"],
-        ),
+        run_config=_run_config(num_rollout_workers=2),
     )
 
     monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
