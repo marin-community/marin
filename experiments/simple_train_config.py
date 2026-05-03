@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
+from levanter.main.train_lm import CheckpointInitMode
 from levanter.optim import OptimizerConfig
 from levanter.schedule import IntSchedule
 
@@ -70,6 +71,13 @@ class SimpleTrainConfig:
     reset_data_loader_on_init: bool = True
     """Pairs with initialize_from_checkpoint_path. If True, initialize_from_checkpoint_path will reset the data loader
     so that it starts from step 0. Otherwise, it will resume from the step in the checkpoint."""
+
+    checkpoint_init_mode: CheckpointInitMode = CheckpointInitMode.FULL_STATE
+    """Pairs with initialize_from_checkpoint_path when reset_data_loader_on_init=True. Controls whether the
+    Levanter load branch restores only the model subtree (``MODEL_ONLY``, fresh opt_state + schedule count=0)
+    or the full trainer state (``FULL_STATE``, legacy behavior, preserves inject_hyperparams counts from the
+    pretrain). Default is ``FULL_STATE`` to preserve historical behavior; set to ``MODEL_ONLY`` for fresh-schedule
+    midtraining."""
 
     allow_partial_checkpoint: bool = False
     """

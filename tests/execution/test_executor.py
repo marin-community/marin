@@ -766,6 +766,34 @@ def test_mirrored_instantiate_config():
     assert resolved.input_path == "mirror://documents/data"
 
 
+def test_mirrored_budget_is_propagated_to_config_env_vars(tmp_path):
+    """MirroredValue budgets should survive nested Iris/Fray job submission."""
+
+    @dataclass(frozen=True)
+    class Cfg:
+        input_path: str
+        env_vars: dict[str, str] | None = None
+
+    log = create_log()
+
+    def fn(config: Cfg):
+        append_log(log, config)
+
+    step = ExecutorStep(
+        name="mirror-budget",
+        fn=fn,
+        config=Cfg(input_path=mirrored(versioned("documents/data"), budget_gb=50)),
+    )
+
+    executor = create_executor(str(tmp_path))
+    executor.run(steps=[step])
+
+    result = read_log(log)[0]
+    assert result["input_path"] == "mirror://documents/data"
+    assert float(result["env_vars"]["MARIN_MIRROR_BUDGET_GB"]) == 50
+    cleanup_log(log)
+
+
 def test_mirrored_nesting_raises():
     with pytest.raises(ValueError, match="nest"):
         mirrored(mirrored("x"))

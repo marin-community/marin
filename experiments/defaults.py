@@ -364,6 +364,7 @@ def default_train(
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
+    wandb_project: str | None = None,
     override_output_path: str | None = None,
 ) -> ExecutorStep:
     """
@@ -379,6 +380,7 @@ def default_train(
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
         wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
         wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
+        wandb_project: Optional W&B project. If unset, defaults to $WANDB_PROJECT, then "marin".
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -388,6 +390,8 @@ def default_train(
 
     if wandb_group is None:
         wandb_group = os.environ.get("WANDB_GROUP")
+    if wandb_project is None:
+        wandb_project = os.environ.get("WANDB_PROJECT", "marin")
 
     name = _truncate_wandb_name(name)
 
@@ -424,7 +428,7 @@ def default_train(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                project="marin",
+                project=wandb_project or "marin",
                 name=wandb_name,
                 tags=[*tags],
                 group=wandb_group,
@@ -462,6 +466,7 @@ def default_train(
         initialize_from_checkpoint_path=(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
         ),
+        checkpoint_init_mode=train_config.checkpoint_init_mode,
         initialize_from_hf=hf_checkpoint_path_to_load_from or False,
         pad_tokenizer_to_match_model=train_config.pad_tokenizer_to_match_model,
         z_loss_weight=train_config.z_loss_weight,

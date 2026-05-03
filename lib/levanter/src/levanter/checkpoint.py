@@ -792,7 +792,7 @@ def load_checkpoint(
         the loaded checkpoint, with the same structure as the exemplar tree
 
     """
-    checkpoint_path = str(checkpoint_path)
+    checkpoint_path = _stage_mirror_to_local(str(checkpoint_path))
 
     if is_in_jit():
         logger.warning("Loading checkpoint in jit. This is not recommended and probably won't work.")
@@ -969,7 +969,39 @@ def latest_checkpoint_path(checkpoint_path: PathLike, *additional_paths: PathLik
     if latest is None:
         search_paths = [str(checkpoint_path)] + [str(path) for path in additional_paths]
         raise FileNotFoundError(f"Could not discover checkpoint under any of: {search_paths}")
-    return latest
+    return _stage_mirror_to_local(latest)
+
+
+def _stage_mirror_to_local(checkpoint_path: str) -> str:
+    """Materialize a ``mirror://`` checkpoint directory to the local marin prefix.
+
+    TensorStore's kvstore drivers speak only ``gs``/``s3``/``file``, so a
+    ``mirror://`` URL cannot be passed directly to checkpoint deserialization.
+    This walks the directory via the mirror fsspec protocol, triggers per-file
+    copies into ``${MARIN_PREFIX}/<rel>`` on cache miss, and returns the
+    concrete local URL.
+
+    No-ops on non-``mirror://`` inputs.
+    """
+    if not checkpoint_path.startswith("mirror://"):
+        return checkpoint_path
+
+    # Importing rigging.filesystem registers the "mirror" protocol with fsspec.
+    from rigging.filesystem import marin_prefix  # noqa: F401 — side-effectful import
+
+    rel = checkpoint_path.removeprefix("mirror://")
+    mfs = fsspec.filesystem("mirror")
+
+    files = mfs.find(rel)
+    if not files:
+        raise FileNotFoundError(f"No files found under {checkpoint_path}")
+
+    for file_rel in files:
+        mfs._resolve_path(file_rel)
+
+    local_url = f"{marin_prefix().rstrip('/')}/{rel}"
+    logger.info(f"Staged {checkpoint_path} ({len(files)} files) to {local_url}")
+    return local_url
 
 
 def _discover_latest_checkpoint_single(checkpoint_path: str) -> Optional[str]:
