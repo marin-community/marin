@@ -1168,6 +1168,7 @@ class LmEvalHarnessConfig:
     def _rename_tasks_for_eval_harness(self, this_task, lm_eval_task_name, our_name):
         from lm_eval.api.group import ConfigurableGroup
         from lm_eval.api.task import ConfigurableTask
+        import lm_eval.tasks as tasks
 
         # hacky, but this allows us to run multiple instances of the same task with different fewshot settings
         if isinstance(this_task, dict):
