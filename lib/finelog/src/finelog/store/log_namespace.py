@@ -104,6 +104,7 @@ def _read_seq_bounds(path: Path) -> tuple[int, int]:
         meta = pq.read_metadata(path)
         num_rows = meta.num_rows
     except Exception:
+        logger.warning("Failed to read parquet metadata for %s; treating as empty", path, exc_info=True)
         return 0, 0
     if num_rows <= 0:
         return min_seq, min_seq

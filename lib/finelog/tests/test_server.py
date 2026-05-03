@@ -12,6 +12,7 @@ import pytest
 from finelog.server.asgi import build_log_server_asgi
 from finelog.server.service import LogServiceImpl
 from finelog.server.stats_service import StatsServiceImpl
+from finelog.store.duckdb_store import DuckDBLogStore
 from starlette.testclient import TestClient
 
 
@@ -79,8 +80,6 @@ def test_fetch_logs_concurrency_cap_enforced_by_interceptor(service: LogServiceI
 
 
 def test_push_then_fetch_round_trip(tmp_path: Path):
-    from finelog.store.duckdb_store import DuckDBLogStore
-
     svc = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
     try:
         app = build_log_server_asgi(svc)
@@ -112,8 +111,6 @@ def test_push_then_fetch_round_trip(tmp_path: Path):
 
 
 def test_query_concurrency_cap_enforced_by_interceptor(tmp_path: Path):
-    from finelog.store.duckdb_store import DuckDBLogStore
-
     log_service = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
     stats_service = StatsServiceImpl(log_store=log_service.log_store)
     limit = 2
@@ -178,8 +175,6 @@ def test_legacy_iris_logging_path_compat():
     """Pre-#5212 workers send to /iris.logging.LogService/*; verify the
     server-side path rewrite still routes them. Removable once those
     workers have rotated out."""
-    from finelog.store.duckdb_store import DuckDBLogStore
-
     svc = LogServiceImpl(log_store=DuckDBLogStore())
     try:
         app = build_log_server_asgi(svc)
