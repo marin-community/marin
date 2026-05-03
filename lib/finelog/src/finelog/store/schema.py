@@ -191,10 +191,30 @@ def schema_to_json(schema: Schema) -> str:
     return json.dumps(payload)
 
 
+# Legacy lowercase names persisted by pre-proto-enum versions of the registry.
+# Kept here so older registry DBs rehydrate cleanly; rewritten to the proto-name
+# form on the next schema_to_json round-trip.
+_LEGACY_COLUMN_TYPE_NAMES: dict[str, ColumnTypeValue] = {
+    "string": stats_pb2.COLUMN_TYPE_STRING,
+    "int64": stats_pb2.COLUMN_TYPE_INT64,
+    "int32": stats_pb2.COLUMN_TYPE_INT32,
+    "float64": stats_pb2.COLUMN_TYPE_FLOAT64,
+    "bool": stats_pb2.COLUMN_TYPE_BOOL,
+    "timestamp_ms": stats_pb2.COLUMN_TYPE_TIMESTAMP_MS,
+    "bytes": stats_pb2.COLUMN_TYPE_BYTES,
+}
+
+
+def _column_type_from_json(name: str) -> ColumnTypeValue:
+    if name in _LEGACY_COLUMN_TYPE_NAMES:
+        return _LEGACY_COLUMN_TYPE_NAMES[name]
+    return stats_pb2.ColumnType.Value(name)
+
+
 def schema_from_json(text: str) -> Schema:
     payload = json.loads(text)
     cols = tuple(
-        Column(name=c["name"], type=stats_pb2.ColumnType.Value(c["type"]), nullable=c["nullable"])
+        Column(name=c["name"], type=_column_type_from_json(c["type"]), nullable=c["nullable"])
         for c in payload["columns"]
     )
     return Schema(columns=cols, key_column=payload.get("key_column", ""))
