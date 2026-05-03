@@ -14,15 +14,17 @@ noise panel needed for signal-to-noise estimates.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass, fields
 import json
 import logging
 import os
-from pathlib import Path
+import re
 import sys
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
 from typing import Any
 
 import fsspec
+import pandas as pd
 from fray.cluster import ResourceConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
@@ -33,7 +35,6 @@ from marin.execution.executor import (
     this_output_path,
 )
 from marin.rl.placement import marin_prefix_for_region
-import pandas as pd
 
 from experiments.domain_phase_mix.launch_baseline_scaling_downstream_evals import (
     GENERATION_ENGINE_KWARGS,
@@ -53,6 +54,7 @@ BASELINE_SCALING_DOWNSTREAM_METRICS_CSV = (
 OUTPUT_DIR = METRIC_REGISTRY_DIR / "300m_gsm8k_humaneval_completion"
 STATE_CSV = OUTPUT_DIR / "300m_gsm8k_humaneval_eval_state.csv"
 LAUNCH_MANIFEST_CSV = OUTPUT_DIR / "300m_gsm8k_humaneval_eval_launch_manifest.csv"
+VARIABLE_SUBSET_RESULTS_CSV = OUTPUT_DIR / "300m_gsm8k_humaneval_eval_results_variable_subset_noise.csv"
 
 RUN00097_300M_FIXED_SUBSET_RESULTS_URI = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
@@ -60,6 +62,13 @@ RUN00097_300M_FIXED_SUBSET_RESULTS_URI = (
 )
 RUN00097_300M_FIXED_SUBSET_CHECKPOINT_PREFIX = (
     "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset"
+)
+RUN00097_300M_VARIABLE_SUBSET_RESULTS_URI = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
+    "ngd3dm2_run00097_300m_6b_variable_subset/collect_results-6131cf/results.csv"
+)
+RUN00097_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT = (
+    "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset"
 )
 
 DEFAULT_NAME_PREFIX = "pinlin_calvin_xu/data_mixture/ngd3dm2_300m_gsm8k_humaneval_evals"
@@ -70,6 +79,10 @@ DEFAULT_MAX_CONCURRENT = 256
 DEFAULT_EXPECTED_300M_STEP = 22887
 RESULTS_CSV = "300m_gsm8k_humaneval_eval_results.csv"
 STATE_OUTPUT_CSV = "300m_gsm8k_humaneval_eval_state.csv"
+PANEL_FILTER_ENV = "MARIN_300M_CANDIDATE_PANELS"
+EXECUTOR_STATUS_FILE = ".executor_status"
+STATUS_SUCCESS = "SUCCESS"
+EVAL_OUTPUT_RE = re.compile(r"/(?P<eval_key>gsmhe300m_.+)-[0-9a-f]{6}/\.executor_status$")
 
 GSM8K_METRIC = "lm_eval/gsm8k/exact_match,flexible-extract"
 HUMANEVAL_METRIC = "lm_eval/humaneval/pass@1,create_test"
@@ -194,6 +207,49 @@ def _read_csv(path_or_uri: str | Path) -> pd.DataFrame:
     return pd.read_csv(path_or_uri, low_memory=False)
 
 
+def _normalize_gcs_path(path: object) -> str:
+    value = str(path)
+    return value if value.startswith("gs://") else f"gs://{value}"
+
+
+def _read_text(path: str) -> str:
+    with fsspec.open(path, "rt") as handle:
+        return handle.read().strip()
+
+
+def _status_paths_under_prefix(prefix: str) -> list[str]:
+    root = prefix.rstrip("/")
+    pattern = f"{root}/evaluation/lm_evaluation_harness/gsmhe300m_*/{EXECUTOR_STATUS_FILE}"
+    fs, _, _ = fsspec.get_fs_token_paths(pattern)
+    return sorted(_normalize_gcs_path(path) for path in fs.glob(pattern))
+
+
+def _scan_eval_statuses(prefixes: list[str]) -> dict[str, dict[str, str]]:
+    statuses: dict[str, dict[str, str]] = {}
+    for prefix in prefixes:
+        for status_path in _status_paths_under_prefix(prefix):
+            match = EVAL_OUTPUT_RE.search(status_path)
+            if match is None:
+                continue
+            eval_key = match.group("eval_key")
+            try:
+                status = _read_text(status_path)
+            except OSError as exc:
+                logger.warning("Failed to read executor status %s: %s", status_path, exc)
+                continue
+            output_path = status_path.rsplit(f"/{EXECUTOR_STATUS_FILE}", maxsplit=1)[0]
+            previous = statuses.get(eval_key)
+            if previous is None or (previous["status"] != STATUS_SUCCESS and status == STATUS_SUCCESS):
+                statuses[eval_key] = {
+                    "eval_key": eval_key,
+                    "output_path": output_path,
+                    "prefix": prefix,
+                    "status": status,
+                    "status_path": status_path,
+                }
+    return statuses
+
+
 def _metric_coverage_by_root(paths: list[str | Path]) -> dict[str, dict[str, bool]]:
     coverage: dict[str, dict[str, bool]] = {}
     for path in paths:
@@ -216,7 +272,8 @@ def _metric_coverage_by_root(paths: list[str | Path]) -> dict[str, dict[str, boo
 
 def _metric_registry_candidates(coverage: dict[str, dict[str, bool]]) -> list[EvalCandidate]:
     if not METRICS_WIDE_CSV.exists():
-        raise FileNotFoundError(f"Missing metric registry {METRICS_WIDE_CSV}")
+        logger.info("Metric registry %s is unavailable; using explicit GCS noise panels only", METRICS_WIDE_CSV)
+        return []
     frame = pd.read_csv(METRICS_WIDE_CSV, low_memory=False)
     signal = frame[frame["scale"].eq("300m_6b")].copy()
     candidates: list[EvalCandidate] = []
@@ -274,6 +331,37 @@ def _fixed_seed_noise_candidates(coverage: dict[str, dict[str, bool]]) -> list[E
     return candidates
 
 
+def _variable_subset_noise_candidates(coverage: dict[str, dict[str, bool]]) -> list[EvalCandidate]:
+    frame = _read_csv(RUN00097_300M_VARIABLE_SUBSET_RESULTS_URI)
+    if "cohort" not in frame.columns:
+        raise ValueError(
+            f"Variable-subset noise CSV missing required columns: {RUN00097_300M_VARIABLE_SUBSET_RESULTS_URI}"
+        )
+    seed_rows = frame[frame["cohort"].eq("seed_sweep")].copy()
+    if len(seed_rows) != 10:
+        raise ValueError(f"Expected 10 variable-subset noise rows, found {len(seed_rows)}")
+    candidates: list[EvalCandidate] = []
+    for _, row in seed_rows.iterrows():
+        root = _string_value(row.get("checkpoint_root")).rstrip("/")
+        if not root:
+            raise ValueError(f"Variable-subset row missing checkpoint_root:\n{row.to_string()}")
+        covered = coverage.get(root, {})
+        candidates.append(
+            EvalCandidate(
+                panel="variable_subset_noise_300m_6b",
+                run_name=_string_value(row.get("run_name")),
+                registry_key=f"variable_subset_noise_300m_6b:{_string_value(row.get('run_name'))}",
+                source_experiment=RUN00097_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT,
+                cohort=_string_value(row.get("cohort")),
+                checkpoint_root=root,
+                expected_checkpoint_step=DEFAULT_EXPECTED_300M_STEP,
+                has_gsm8k_metric=covered.get("gsm8k", False),
+                has_humaneval_metric=covered.get("humaneval", False),
+            )
+        )
+    return candidates
+
+
 def _expected_step_from_run_registry(row: pd.Series) -> int:
     for column in ("target_final_checkpoint_step", "target_eval_step", "max_checkpoint_step"):
         value = pd.to_numeric(pd.Series([row.get(column)]), errors="coerce").iloc[0]
@@ -317,9 +405,20 @@ def _registry_extra_candidates(
 
 
 def _candidate_records() -> list[EvalCandidate]:
-    coverage = _metric_coverage_by_root([METRICS_WIDE_CSV, BASELINE_SCALING_DOWNSTREAM_METRICS_CSV])
-    candidates = _metric_registry_candidates(coverage)
-    candidates.extend(_fixed_seed_noise_candidates(coverage))
+    coverage = _metric_coverage_by_root(
+        [
+            METRICS_WIDE_CSV,
+            BASELINE_SCALING_DOWNSTREAM_METRICS_CSV,
+            OUTPUT_DIR / RESULTS_CSV,
+            VARIABLE_SUBSET_RESULTS_CSV,
+        ]
+    )
+    # Prefer explicit noise panels over metric-registry rows. The fixed-subset
+    # rows can also appear in metrics_wide, but downstream noise accounting needs
+    # their panel identity preserved.
+    candidates = _fixed_seed_noise_candidates(coverage)
+    candidates.extend(_variable_subset_noise_candidates(coverage))
+    candidates.extend(_metric_registry_candidates(coverage))
     roots = {candidate.checkpoint_root for candidate in candidates}
     candidates.extend(_registry_extra_candidates(coverage, roots))
 
@@ -328,7 +427,11 @@ def _candidate_records() -> list[EvalCandidate]:
         if candidate.checkpoint_root in by_root:
             continue
         by_root[candidate.checkpoint_root] = candidate
-    return sorted(by_root.values(), key=lambda row: (row.panel, row.run_name))
+    panel_filter = {panel.strip() for panel in os.environ.get(PANEL_FILTER_ENV, "").split(",") if panel.strip()}
+    filtered = by_root.values()
+    if panel_filter:
+        filtered = [candidate for candidate in filtered if candidate.panel in panel_filter]
+    return sorted(filtered, key=lambda row: (row.panel, row.run_name))
 
 
 def _launch_decision(
@@ -448,6 +551,73 @@ def _metric_rows_from_result_paths(
     return records
 
 
+def collect_eval_results_from_prefixes(
+    *,
+    prefixes: list[str],
+    state_rows: list[EvalSpec],
+    output_csv: Path,
+) -> pd.DataFrame:
+    """Collect successful GSM8K/HumanEval child outputs from executor prefixes into one CSV."""
+    statuses = _scan_eval_statuses(prefixes)
+
+    def _status_entry_for_row(row: EvalSpec) -> dict[str, str] | None:
+        entry = statuses.get(row.eval_key)
+        if entry is not None:
+            return entry
+
+        # Retry/completion jobs are sometimes submitted from a remote bundle
+        # whose candidate enumeration differs from the local checkout. Match on
+        # the stable run-name slug so local collection can recover those outputs.
+        run_slug = _slug(row.run_name)
+        matches = [
+            status
+            for eval_key, status in statuses.items()
+            if f"_{run_slug}_" in eval_key or eval_key.endswith(f"_{run_slug}")
+        ]
+        success_matches = [status for status in matches if status["status"] == STATUS_SUCCESS]
+        if len(success_matches) == 1:
+            return success_matches[0]
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
+    records: list[dict[str, Any]] = []
+    for row in state_rows:
+        record = asdict(row)
+        entry = _status_entry_for_row(row)
+        if entry is None:
+            record["collection_status"] = "missing_executor_status"
+            record["collection_error"] = "no_executor_status_found"
+            records.append(record)
+            continue
+        record["executor_status"] = entry["status"]
+        record["executor_eval_key"] = entry["eval_key"]
+        record["result_path"] = entry["output_path"]
+        record["status_path"] = entry["status_path"]
+        if entry["status"] != STATUS_SUCCESS:
+            record["collection_status"] = "executor_not_success"
+            record["collection_error"] = entry["status"]
+            records.append(record)
+            continue
+        metrics, error = _read_eval_metrics(entry["output_path"])
+        record.update(metrics)
+        record["collection_status"] = "collected" if metrics else "missing_metrics"
+        record["collection_error"] = error
+        records.append(record)
+
+    frame = pd.DataFrame.from_records(records)
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(output_csv, index=False)
+    logger.info(
+        "Wrote %d collected rows to %s from %d prefixes; collection_status=%s",
+        len(frame),
+        output_csv,
+        len(prefixes),
+        frame["collection_status"].value_counts(dropna=False).to_dict(),
+    )
+    return frame
+
+
 def collect_eval_results(config: Collect300MGsm8kHumanEvalResultsConfig) -> None:
     """Collect downstream eval outputs into one normalized CSV."""
     state_rows = [EvalSpec(**row) for row in json.loads(config.state_rows_json)]
@@ -524,6 +694,9 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--executor-prefix")
     parser.add_argument("--eval-key-suffix", default="")
     parser.add_argument("--state-csv")
+    parser.add_argument("--include-run-name", action="append", default=[])
+    parser.add_argument("--collect-from-prefix", action="append", default=[])
+    parser.add_argument("--collect-output-csv", default=str(OUTPUT_DIR / RESULTS_CSV))
     return parser.parse_known_args()
 
 
@@ -540,6 +713,19 @@ def main() -> None:
         )
     else:
         state_rows = _load_state_rows(args.state_csv)
+    if args.include_run_name:
+        include_run_names = set(args.include_run_name)
+        state_rows = [row for row in state_rows if row.run_name in include_run_names]
+        missing_run_names = sorted(include_run_names - {row.run_name for row in state_rows})
+        if missing_run_names:
+            raise ValueError(f"Requested run names not present in GSM8K/HumanEval state: {missing_run_names}")
+    if args.collect_from_prefix:
+        collect_eval_results_from_prefixes(
+            prefixes=args.collect_from_prefix,
+            state_rows=state_rows,
+            output_csv=Path(args.collect_output_csv),
+        )
+        return
     _write_local_outputs(state_rows)
     launch_count = sum(row.launch_decision == "launch" for row in state_rows)
     logger.info("Wrote state to %s", STATE_CSV)

@@ -1034,11 +1034,13 @@ class TaskConfig:
     # registered-task override semantics (which can silently drop fields like dataset_path).
     dataset_path: str | None = None
     dataset_name: str | None = None
+    dataset_kwargs: dict | None = None
     output_type: str | None = None
     test_split: str | None = None
     training_split: str | None = None
     validation_split: str | None = None
     fewshot_split: str | None = None
+    process_docs: Callable | None = None
     metric_list: list[dict] | None = None
     tag: list[str] | None = None
     metadata: dict | None = None
@@ -1211,6 +1213,8 @@ class LmEvalHarnessConfig:
             raise ValueError(f"Unknown task type: {this_task}")
 
     def _replace_name_with_our_name(self, lm_eval_name, lm_eval_prefix, our_name_prefix):
+        if lm_eval_name is None:
+            return our_name_prefix
         if our_name_prefix.startswith(lm_eval_prefix):
             suffix = our_name_prefix[len(lm_eval_prefix) :]
             prefix = lm_eval_prefix

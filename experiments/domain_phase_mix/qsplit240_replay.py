@@ -16,16 +16,16 @@ from functools import cache
 from typing import cast
 
 import fsspec
-from fsspec import AbstractFileSystem
+import numpy as np
 from fray.cluster import ResourceConfig
+from fsspec import AbstractFileSystem
 from levanter.main.train_lm import LmConfig
 from levanter.optim import MuonHConfig
-import numpy as np
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import Executor, ExecutorStep, output_path_of, this_output_path
-from marin.training.training import TEMPORARY_CHECKPOINTS_PREFIX, TrainLmOnPodConfig
-from rigging.filesystem import REGION_TO_TMP_BUCKET, marin_prefix
+from marin.training.training import TrainLmOnPodConfig, temporary_checkpoint_base_path
+from rigging.filesystem import marin_prefix
 
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.determinism_analysis import (
@@ -41,18 +41,24 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     create_two_phase_dolma3_dolmino_top_level_experiment,
     mirror_marin_path,
 )
-from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_uncheatable import (
-    RUN_ID as OLMIX_UNCHEATABLE_RUN_ID,
-    RUN_NAME as OLMIX_UNCHEATABLE_RUN_NAME,
-    SOURCE_EXPERIMENT as OLMIX_UNCHEATABLE_SOURCE_EXPERIMENT,
-    load_fit_from_local_results,
-)
 from experiments.domain_phase_mix.two_phase_many_observed_runs import (
     CORE_BASELINE_RUN_NAMES,
-    ObservedTwoPhaseManyRun,
     REPRESENTATIVE12_PANEL_RUN_NAMES,
+    ObservedTwoPhaseManyRun,
     load_original_qsplit240_named_panel,
     load_original_qsplit240_with_core_baselines,
+)
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_uncheatable import (
+    RUN_ID as OLMIX_UNCHEATABLE_RUN_ID,
+)
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_uncheatable import (
+    RUN_NAME as OLMIX_UNCHEATABLE_RUN_NAME,
+)
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_uncheatable import (
+    SOURCE_EXPERIMENT as OLMIX_UNCHEATABLE_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_uncheatable import (
+    load_fit_from_local_results,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,7 +73,6 @@ ALL_PANEL = "all"
 REPRESENTATIVE12_PANEL = "representative12"
 BASELINES3_PANEL = "baselines3"
 CHECKPOINT_STEP_METADATA_GLOB = "checkpoints/step-*/metadata.json"
-TEMPORARY_CHECKPOINT_TTL_DAYS = 14
 CHECKPOINT_STEP_PATTERN = re.compile(r"/step-(\d+)/")
 
 
@@ -163,14 +168,14 @@ def checkpoint_initialization_path(checkpoint_path: str) -> str:
     return mirror_path(checkpoint_path)
 
 
-def _temporary_checkpoint_metadata_glob(*, run_name: str, region: str) -> str | None:
-    temp_bucket = REGION_TO_TMP_BUCKET.get(region)
-    if temp_bucket is None:
-        return None
-    return (
-        f"gs://{temp_bucket}/ttl={TEMPORARY_CHECKPOINT_TTL_DAYS}d/"
-        f"{TEMPORARY_CHECKPOINTS_PREFIX}/{run_name}-*/step-*/metadata.json"
-    )
+def _temporary_checkpoint_metadata_glob(
+    *,
+    experiment_name_prefix: str,
+    run_name: str,
+    region: str,
+) -> str:
+    output_path_glob = f"gs://marin-{region}/checkpoints/{experiment_name_prefix}/{run_name}-*"
+    return f"{temporary_checkpoint_base_path(output_path_glob)}/step-*/metadata.json"
 
 
 def _checkpoint_metadata_globs(
@@ -182,9 +187,11 @@ def _checkpoint_metadata_globs(
     permanent_glob = (
         f"gs://marin-{region}/checkpoints/{experiment_name_prefix}/{run_name}-*/{CHECKPOINT_STEP_METADATA_GLOB}"
     )
-    temporary_glob = _temporary_checkpoint_metadata_glob(run_name=run_name, region=region)
-    if temporary_glob is None:
-        return (permanent_glob,)
+    temporary_glob = _temporary_checkpoint_metadata_glob(
+        experiment_name_prefix=experiment_name_prefix,
+        run_name=run_name,
+        region=region,
+    )
     return permanent_glob, temporary_glob
 
 

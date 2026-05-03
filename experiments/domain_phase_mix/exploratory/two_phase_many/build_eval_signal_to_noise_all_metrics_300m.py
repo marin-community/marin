@@ -26,12 +26,41 @@ DEFAULT_KEEP_DROP_CSV = SCRIPT_DIR / "eval_signal_to_noise_all_metrics_300m_curr
 DEFAULT_EXTRA_RESULTS_CSVS = (
     SCRIPT_DIR.parent / "paper_plots" / "img" / "baseline_scaling_downstream_eval_metrics_merged.csv",
     SCRIPT_DIR / "metric_registry" / "300m_gsm8k_humaneval_completion" / "300m_gsm8k_humaneval_eval_results.csv",
+    SCRIPT_DIR
+    / "metric_registry"
+    / "300m_gsm8k_humaneval_completion"
+    / "300m_gsm8k_humaneval_eval_results_variable_subset_noise.csv",
     SCRIPT_DIR / "metric_registry" / "300m_english_lite_completion" / "300m_english_lite_eval_results_merged.csv",
+    SCRIPT_DIR
+    / "metric_registry"
+    / "300m_english_lite_completion"
+    / "300m_english_lite_eval_results_variable_subset_noise_nowsc.csv",
+    SCRIPT_DIR
+    / "metric_registry"
+    / "300m_english_lite_completion"
+    / "300m_english_lite_eval_results_variable_subset_noise_wsc_only.csv",
+    SCRIPT_DIR
+    / "metric_registry"
+    / "300m_english_lite_completion"
+    / "300m_english_lite_eval_results_variable_subset_noise_socialiqa_only.csv",
     SCRIPT_DIR
     / "metric_registry"
     / "300m_generative_smooth_proxy_completion"
     / "300m_generative_smooth_proxy_eval_results.csv",
+    SCRIPT_DIR
+    / "metric_registry"
+    / "300m_generative_smooth_proxy_completion"
+    / "300m_generative_smooth_proxy_eval_results_variable_subset_noise.csv",
     SCRIPT_DIR / "metric_registry" / "300m_mcq_smooth_proxy_completion" / "300m_mcq_smooth_proxy_eval_results.csv",
+    SCRIPT_DIR
+    / "metric_registry"
+    / "300m_mcq_smooth_proxy_completion"
+    / "300m_mcq_smooth_proxy_eval_results_variable_subset_noise.csv",
+    SCRIPT_DIR / "metric_registry" / "300m_noise_parity_completion" / "300m_noise_parity_eval_results.csv",
+    SCRIPT_DIR
+    / "metric_registry"
+    / "300m_noise_parity_completion"
+    / "300m_noise_parity_eval_results_variable_subset_mmlupro_only.csv",
 )
 RUN00097_300M_FIXED_SUBSET_RESULTS_URI = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
@@ -39,6 +68,13 @@ RUN00097_300M_FIXED_SUBSET_RESULTS_URI = (
 )
 RUN00097_300M_FIXED_SUBSET_CHECKPOINT_PREFIX = (
     "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset"
+)
+RUN00097_300M_VARIABLE_SUBSET_CHECKPOINT_PREFIX = (
+    "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset"
+)
+RUN00097_300M_FIXED_SUBSET_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset"
+RUN00097_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT = (
+    "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset"
 )
 
 METRIC_PREFIXES = ("eval/", "lm_eval/", "teacher_forced/", "mcq_smooth/")
@@ -298,6 +334,14 @@ def _ensure_fixed_seed_checkpoint_roots(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _ensure_noise_checkpoint_roots(frame: pd.DataFrame, *, noise_subset_mode: str) -> pd.DataFrame:
+    if noise_subset_mode == "fixed":
+        return _ensure_fixed_seed_checkpoint_roots(frame)
+    if "checkpoint_root" not in frame.columns or frame["checkpoint_root"].isna().any():
+        raise ValueError("Variable-subset noise rows must have checkpoint_root in the metric registry")
+    return frame
+
+
 def _load_mmlu_subject_to_category() -> dict[str, str]:
     """Load the canonical MMLU subject grouping without importing eval configs."""
     module = ast.parse(MMLU_SOURCE_PATH.read_text())
@@ -316,20 +360,23 @@ def _add_mmlu_category_smooth_metrics(frame: pd.DataFrame) -> pd.DataFrame:
     """Derive MMLU category smooth proxies from subject-level smooth metrics."""
     subject_to_category = _load_mmlu_subject_to_category()
     new_columns: dict[str, pd.Series] = {}
+    out = frame.copy()
     for category in MMLU_CATEGORY_ORDER:
         subjects = [subject for subject, subject_category in subject_to_category.items() if subject_category == category]
         for leaf in MMLU_CATEGORY_SMOOTH_LEAVES:
             output_column = f"lm_eval/mmlu_{category}_5shot/{leaf}"
-            if output_column in frame.columns:
-                continue
             subject_columns = [f"lm_eval/mmlu_{subject}_5shot/{leaf}" for subject in subjects]
             if not all(column in frame.columns for column in subject_columns):
                 continue
             values = frame[subject_columns].apply(pd.to_numeric, errors="coerce")
-            new_columns[output_column] = values.mean(axis=1, skipna=False)
+            derived = values.mean(axis=1, skipna=False)
+            if output_column in out.columns:
+                out[output_column] = pd.to_numeric(out[output_column], errors="coerce").combine_first(derived)
+            else:
+                new_columns[output_column] = derived
     if not new_columns:
-        return frame
-    return pd.concat([frame, pd.DataFrame(new_columns, index=frame.index)], axis=1)
+        return out
+    return pd.concat([out, pd.DataFrame(new_columns, index=frame.index)], axis=1)
 
 
 def _load_signal_frame(extra_results: list[str]) -> pd.DataFrame:
@@ -345,17 +392,117 @@ def _load_signal_frame(extra_results: list[str]) -> pd.DataFrame:
     return signal.reset_index(drop=True)
 
 
-def _load_noise_frame(extra_results: list[str]) -> pd.DataFrame:
+def _load_signal_metric_frame(extra_results: list[str]) -> pd.DataFrame:
+    """Return the 300M mixture-swarm signal rows used for SNR estimates."""
+    signal = _load_signal_frame(extra_results)
+    signal = signal[signal["cohort"].eq("signal")].copy()
+    if len(signal) != 242:
+        raise ValueError(f"Expected 242 300M signal rows, found {len(signal)}")
+    return signal.reset_index(drop=True)
+
+
+def _load_fixed_subset_noise_from_gcs() -> pd.DataFrame:
     frame = _read_csv(RUN00097_300M_FIXED_SUBSET_RESULTS_URI)
     if "cohort" not in frame.columns:
         raise ValueError(f"Noise CSV is missing cohort column: {RUN00097_300M_FIXED_SUBSET_RESULTS_URI}")
-    noise = frame[frame["cohort"].eq("seed_sweep")].copy()
+    return frame[frame["cohort"].eq("seed_sweep")].copy()
+
+
+def _checkpoint_child_roots(prefix: str) -> list[str]:
+    fs, _, _ = fsspec.get_fs_token_paths(prefix)
+    roots: list[str] = []
+    for path in fs.ls(prefix, detail=False):
+        path_string = str(path)
+        root = path_string if path_string.startswith("gs://") else f"gs://{path_string}"
+        roots.append(root.rstrip("/"))
+    return sorted(roots)
+
+
+def _latest_eval_metrics_row(eval_metrics_path: str, *, required_step: int) -> dict[str, object]:
+    latest: dict[str, object] | None = None
+    with fsspec.open(eval_metrics_path, "rt") as handle:
+        for line in handle:
+            row = json.loads(line)
+            if int(row.get("step", -1)) <= required_step:
+                latest = row
+            if int(row.get("step", -1)) == required_step:
+                return row
+    if latest is None:
+        raise ValueError(f"No eval metrics rows found in {eval_metrics_path}")
+    raise ValueError(f"No step-{required_step} eval metrics row found in {eval_metrics_path}")
+
+
+def _load_variable_subset_noise_from_gcs() -> pd.DataFrame:
+    """Load variable-subset noise rows directly from final checkpoint metrics."""
+    rows: list[dict[str, object]] = []
+    for checkpoint_root in _checkpoint_child_roots(RUN00097_300M_VARIABLE_SUBSET_CHECKPOINT_PREFIX):
+        wandb_run_id = checkpoint_root.rsplit("/", maxsplit=1)[-1]
+        run_name = wandb_run_id.rsplit("-", maxsplit=1)[0]
+        if not run_name.startswith("regmix300m_6b_variable_subset_trainer_seed_"):
+            continue
+        eval_metrics_path = f"{checkpoint_root}/checkpoints/eval_metrics.jsonl"
+        metrics = _latest_eval_metrics_row(eval_metrics_path, required_step=22887)
+        rows.append(
+            {
+                "registry_run_key": (
+                    "300m_6b:seed_sweep:" f"{RUN00097_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT}:{run_name}"
+                ),
+                "run_name": run_name,
+                "run_id": 97,
+                "wandb_run_id": wandb_run_id,
+                "checkpoint_root": checkpoint_root,
+                "scale": "300m_6b",
+                "cohort": "seed_sweep",
+                "source_cohort": "seed_sweep",
+                "source_experiment": RUN00097_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT,
+                "status": "completed",
+                **metrics,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _noise_frame_from_metric_registry(source_experiment: str) -> pd.DataFrame:
+    if not METRICS_WIDE_CSV.exists():
+        raise FileNotFoundError(f"Missing metric registry {METRICS_WIDE_CSV}")
+    frame = pd.read_csv(METRICS_WIDE_CSV, low_memory=False)
+    return frame[
+        frame["scale"].eq("300m_6b")
+        & frame["cohort"].eq("seed_sweep")
+        & frame["source_experiment"].eq(source_experiment)
+    ].copy()
+
+
+def _select_noise_frame(noise_subset_mode: str) -> tuple[str, pd.DataFrame]:
+    if noise_subset_mode not in {"auto", "fixed", "variable"}:
+        raise ValueError(f"Unknown noise subset mode: {noise_subset_mode}")
+
+    variable = _noise_frame_from_metric_registry(RUN00097_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT)
+    if variable.empty:
+        variable = _load_variable_subset_noise_from_gcs()
+    if noise_subset_mode == "variable":
+        return "variable", variable
+    if noise_subset_mode == "auto" and len(variable) == 10:
+        return "variable", variable
+
+    fixed = _noise_frame_from_metric_registry(RUN00097_300M_FIXED_SUBSET_SOURCE_EXPERIMENT)
+    if fixed.empty:
+        fixed = _load_fixed_subset_noise_from_gcs()
+    else:
+        fixed_collect = _load_fixed_subset_noise_from_gcs()
+        fixed = _overlay_metrics(fixed, fixed_collect, key_column="wandb_run_id")
+    return "fixed", fixed
+
+
+def _load_noise_frame(extra_results: list[str], *, noise_subset_mode: str) -> pd.DataFrame:
+    resolved_mode, noise = _select_noise_frame(noise_subset_mode)
     if len(noise) != 10:
-        raise ValueError(f"Expected 10 fixed-seed noise rows, found {len(noise)}")
-    noise = _ensure_fixed_seed_checkpoint_roots(noise)
+        raise ValueError(f"Expected 10 {resolved_mode} noise rows, found {len(noise)}")
+    noise = _ensure_noise_checkpoint_roots(noise, noise_subset_mode=resolved_mode)
     for path in extra_results:
         noise = _overlay_metrics(noise, _read_csv(path), key_column="checkpoint_root")
     noise = _add_mmlu_category_smooth_metrics(noise)
+    noise.attrs["noise_subset_mode"] = resolved_mode
     return noise.reset_index(drop=True)
 
 
@@ -389,15 +536,16 @@ def _snr_row(metric: str, signal_values: pd.Series, noise_values: pd.Series) -> 
     }
 
 
-def build_signal_to_noise_table(extra_results: list[str]) -> pd.DataFrame:
+def build_signal_to_noise_table(extra_results: list[str], *, noise_subset_mode: str = "auto") -> pd.DataFrame:
     """Return SNR rows for every numeric metric shared by signal and noise frames."""
-    signal = _load_signal_frame(extra_results)
-    noise = _load_noise_frame(extra_results)
+    signal = _load_signal_metric_frame(extra_results)
+    noise = _load_noise_frame(extra_results, noise_subset_mode=noise_subset_mode)
     shared_metrics = sorted(set(_metric_columns(signal)) & set(_metric_columns(noise)))
     rows = [row for metric in shared_metrics if (row := _snr_row(metric, signal[metric], noise[metric])) is not None]
     if not rows:
         raise ValueError("No shared numeric eval metrics had enough signal/noise rows")
     frame = pd.DataFrame(rows).sort_values("signal_to_noise", ascending=False).reset_index(drop=True)
+    frame.attrs["noise_subset_mode"] = noise.attrs["noise_subset_mode"]
     frame.attrs["signal_rows"] = len(signal)
     frame.attrs["noise_rows"] = len(noise)
     frame.attrs["shared_metric_count"] = len(shared_metrics)
@@ -542,7 +690,7 @@ def _correlations_for_task(
 
 def build_task_summary_table(extra_results: list[str], snr_frame: pd.DataFrame) -> pd.DataFrame:
     """Return one task-level summary row with a smooth proxy when available."""
-    signal = _load_signal_frame(extra_results)
+    signal = _load_signal_metric_frame(extra_results)
     task_snr = snr_frame.copy()
     task_snr["optimization_task"] = task_snr["metric"].map(_optimization_task)
     task_snr["source_task"] = task_snr["metric"].map(_metric_task)
@@ -615,11 +763,10 @@ def build_task_summary_table(extra_results: list[str], snr_frame: pd.DataFrame) 
         rows.append(row)
     if not rows:
         return pd.DataFrame()
-    return (
-        pd.DataFrame(rows)
-        .sort_values("selected_proxy_score", ascending=False, na_position="last")
-        .reset_index(drop=True)
-    )
+    frame = pd.DataFrame(rows)
+    if "selected_proxy_score" not in frame.columns:
+        frame["selected_proxy_score"] = pd.NA
+    return frame.sort_values("selected_proxy_score", ascending=False, na_position="last").reset_index(drop=True)
 
 
 def _keep_drop_recommendation(row: pd.Series) -> tuple[str, str]:
@@ -691,6 +838,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--summary-json", default=str(DEFAULT_SUMMARY_JSON))
     parser.add_argument("--task-summary-csv", default=str(DEFAULT_TASK_SUMMARY_CSV))
     parser.add_argument("--keep-drop-csv", default=str(DEFAULT_KEEP_DROP_CSV))
+    parser.add_argument(
+        "--noise-subset-mode",
+        choices=("auto", "fixed", "variable"),
+        default="auto",
+        help="Noise baseline to use. auto uses variable-subset once all ten rows exist, otherwise fixed-subset.",
+    )
     return parser.parse_args()
 
 
@@ -714,7 +867,7 @@ def _extra_results_csvs(args: argparse.Namespace) -> list[str]:
 def main() -> None:
     args = _parse_args()
     extra_results_csv = _extra_results_csvs(args)
-    frame = build_signal_to_noise_table(extra_results_csv)
+    frame = build_signal_to_noise_table(extra_results_csv, noise_subset_mode=args.noise_subset_mode)
     output_csv = Path(args.output_csv)
     summary_json = Path(args.summary_json)
     task_summary_csv = Path(args.task_summary_csv)
@@ -729,6 +882,7 @@ def main() -> None:
         "extra_results_csv": extra_results_csv,
         "keep_drop_csv": str(keep_drop_csv),
         "n_metrics": len(frame),
+        "noise_subset_mode": frame.attrs["noise_subset_mode"],
         "noise_rows": int(frame.attrs["noise_rows"]),
         "shared_metric_count": int(frame.attrs["shared_metric_count"]),
         "signal_rows": int(frame.attrs["signal_rows"]),

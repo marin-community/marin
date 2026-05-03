@@ -1,0 +1,6 @@
+target_family,noise_mode,factor,accuracy_weight
+task_proxy_irt,variable,theta_1,0.14029579792564062
+task_proxy_irt,variable,theta_2,0.28162106038099954
+task_proxy_irt,variable,theta_3,0.23592027157413725
+task_proxy_irt,variable,theta_4,0.34216287011922264
+task_proxy_irt,variable,theta_5,0.0

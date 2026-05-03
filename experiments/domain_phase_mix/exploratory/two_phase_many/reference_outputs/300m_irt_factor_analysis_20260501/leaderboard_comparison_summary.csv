@@ -1,0 +1,7 @@
+left,right,spearman_rank_corr,top10_overlap,top20_overlap
+legacy_alias_all43,fixed_all43,0.7847658021177448,3,10
+legacy_alias_all43,fixed_common43,0.7847658021177448,3,10
+legacy_alias_all43,variable_common43,0.7438359452693667,4,8
+fixed_all43,fixed_common43,1.0,10,20
+fixed_all43,variable_common43,0.9367504628412463,4,13
+fixed_common43,variable_common43,0.9367504628412463,4,13

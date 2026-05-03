@@ -16,16 +16,17 @@ excludes generation-heavy and frontier-hard suites.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass, fields
 import json
 import logging
 import os
-from pathlib import Path
 import re
 import sys
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
 from typing import Any
 
 import fsspec
+import pandas as pd
 from fray.cluster import ResourceConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
@@ -36,7 +37,6 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-import pandas as pd
 from marin.execution.remote import remote
 
 from experiments.domain_phase_mix.launch_300m_gsm8k_humaneval_evals import (
@@ -68,6 +68,10 @@ MERGED_RESULTS_CSV = OUTPUT_DIR / "300m_english_lite_eval_results_merged.csv"
 
 DEFAULT_NAME_PREFIX = "pinlin_calvin_xu/data_mixture/ngd3dm2_300m_english_lite_evals_20260429"
 DEFAULT_EVAL_DATASETS_CACHE_PATH = "gs://marin-us-east5/raw/eval-datasets/300m-english-lite-v1"
+SOCIALIQA_JSON_DATASET_FILES = {
+    "train": "gs://marin-us-east5/raw/eval-datasets/socialiqa-json-v1/train.jsonl",
+    "validation": "gs://marin-us-east5/raw/eval-datasets/socialiqa-json-v1/validation.jsonl",
+}
 RESULTS_CSV = "300m_english_lite_eval_results.csv"
 STATE_OUTPUT_CSV = "300m_english_lite_eval_state.csv"
 EXECUTOR_STATUS_FILE = ".executor_status"
@@ -108,6 +112,22 @@ INT_STATE_FIELDS = {
     "existing_artifact_count",
     "missing_task_count",
 }
+
+WSC273_PROMPTSOURCE_METRICS = (
+    {"metric": "acc", "aggregation": "mean", "higher_is_better": True},
+    {"metric": "bpb", "aggregation": "mean", "higher_is_better": False},
+    {"metric": "logprob", "aggregation": "mean", "higher_is_better": True},
+    {"metric": "choice_logprob", "aggregation": "mean", "higher_is_better": True},
+    {"metric": "choice_prob_norm", "aggregation": "mean", "higher_is_better": True},
+    {"metric": "choice_logprob_norm", "aggregation": "mean", "higher_is_better": True},
+)
+
+
+def process_wsc273_promptsource_docs(dataset):
+    """Keep the WSC273 GPT-3-style slice and apply lm-eval's WSC273 normalization."""
+    from lm_eval.tasks.wsc273.utils import process_doc
+
+    return process_doc(dataset.filter(lambda doc: doc["template_name"] == "GPT-3 Style"))
 
 
 @dataclass(frozen=True)
@@ -152,36 +172,97 @@ class Collect300MEnglishLiteResultsConfig:
     results_by_eval_key: dict[str, InputName]
 
 
-def english_lite_task_aliases() -> tuple[str, ...]:
+def english_lite_task_aliases(
+    excluded_aliases: set[str] | None = None,
+    included_aliases: tuple[str, ...] | None = None,
+) -> tuple[str, ...]:
     """Return the exact metric aliases covered by this launcher."""
-    return ENGLISH_LITE_TASK_ALIASES
+    excluded_aliases = excluded_aliases or set()
+    unknown_aliases = sorted(excluded_aliases - set(ENGLISH_LITE_TASK_ALIASES))
+    if unknown_aliases:
+        raise ValueError(f"Unknown English-lite aliases to exclude: {unknown_aliases}")
+    if included_aliases is not None:
+        unknown_included_aliases = sorted(set(included_aliases) - set(ENGLISH_LITE_TASK_ALIASES))
+        if unknown_included_aliases:
+            raise ValueError(f"Unknown English-lite aliases to include: {unknown_included_aliases}")
+        return tuple(alias for alias in included_aliases if alias not in excluded_aliases)
+    return tuple(alias for alias in ENGLISH_LITE_TASK_ALIASES if alias not in excluded_aliases)
 
 
-def english_lite_tasks():
+def english_lite_tasks(task_aliases: tuple[str, ...] | None = None):
     """Return EvalTaskConfig objects for the English-lite suite.
 
     Imports stay local so dry-run accounting remains lightweight on machines
     that do not have the full evaluation dependency stack imported yet.
     """
-    from experiments.evals.olmo_base_easy_overlap import OLMO_BASE_EASY_OVERLAP_TASKS
     from marin.evaluation.evaluation_config import EvalTaskConfig
+
+    from experiments.evals.olmo_base_easy_overlap import OLMO_BASE_EASY_OVERLAP_TASKS
 
     olmo_without_mmlu = [task for task in OLMO_BASE_EASY_OVERLAP_TASKS if (task.task_alias or task.name) != "mmlu_5shot"]
     extra_tasks = [
         EvalTaskConfig("boolq", 10, task_alias="boolq_10shot"),
         EvalTaskConfig("openbookqa", 0, task_alias="openbookqa_0shot"),
         EvalTaskConfig("copa", 0, task_alias="copa_0shot"),
-        EvalTaskConfig("wsc273", 0, task_alias="wsc273_0shot"),
+        EvalTaskConfig(
+            "wsc273_promptsource",
+            0,
+            task_alias="wsc273_0shot",
+            task_kwargs={
+                "dataset_path": "marcov/winograd_wsc_wsc273_promptsource",
+                "dataset_name": "default",
+                "output_type": "multiple_choice",
+                "test_split": "test",
+                "process_docs": process_wsc273_promptsource_docs,
+                "doc_to_text": "label",
+                "doc_to_target": "{% set index = pronoun_loc + pronoun | length %}{{text[index:]}}",
+                "doc_to_choice": "{% set template = text[:pronoun_loc] %}{{[template+options[0], template+options[1]]}}",
+                "metric_list": list(WSC273_PROMPTSOURCE_METRICS),
+                "metadata": {"version": 1.0},
+            },
+        ),
         EvalTaskConfig("swag", 0, task_alias="swag_0shot"),
         EvalTaskConfig("truthfulqa_mc1", 0, task_alias="truthfulqa_mc1_0shot"),
         EvalTaskConfig("truthfulqa_mc2", 0, task_alias="truthfulqa_mc2_0shot"),
     ]
-    task_aliases = tuple(task.task_alias or task.name for task in [*olmo_without_mmlu, *extra_tasks])
-    if task_aliases != ENGLISH_LITE_TASK_ALIASES:
+    requested_aliases = task_aliases
+    all_task_aliases = tuple(task.task_alias or task.name for task in [*olmo_without_mmlu, *extra_tasks])
+    if all_task_aliases != ENGLISH_LITE_TASK_ALIASES:
         raise ValueError(
-            "English-lite task alias mismatch:\n" f"expected={ENGLISH_LITE_TASK_ALIASES}\n" f"actual={task_aliases}"
+            "English-lite task alias mismatch:\n" f"expected={ENGLISH_LITE_TASK_ALIASES}\n" f"actual={all_task_aliases}"
         )
-    return [*olmo_without_mmlu, *extra_tasks]
+    tasks_by_alias = dict(zip(all_task_aliases, [*olmo_without_mmlu, *extra_tasks], strict=True))
+    # The upstream lm-eval SocialIQA task points at the legacy `social_i_qa`
+    # dataset script, which modern `datasets` refuses to load. Use the same
+    # prompt/metrics over a pre-materialized JSON copy of the AI2 train/dev
+    # files instead, while preserving the public `socialiqa_5shot` alias.
+    tasks_by_alias["socialiqa_5shot"] = EvalTaskConfig(
+        "socialiqa_json",
+        5,
+        task_alias="socialiqa_5shot",
+        task_kwargs={
+            "dataset_path": "json",
+            "dataset_kwargs": {"data_files": SOCIALIQA_JSON_DATASET_FILES},
+            "output_type": "multiple_choice",
+            "training_split": "train",
+            "validation_split": "validation",
+            "doc_to_text": "Q: {{context}} {{question}}\nA:",
+            "target_delimiter": " ",
+            "doc_to_choice": "{{[answerA, answerB, answerC]}}",
+            "doc_to_target": "{{ (label|int) - 1 }}",
+            "metric_list": [
+                {"metric": "acc", "aggregation": "mean", "higher_is_better": True},
+                {"metric": "choice_logprob", "aggregation": "mean", "higher_is_better": True},
+            ],
+            "metadata": {"version": 1},
+        },
+    )
+    if requested_aliases is None:
+        return [tasks_by_alias[alias] for alias in all_task_aliases]
+    unknown_aliases = sorted(set(requested_aliases) - set(tasks_by_alias))
+    if unknown_aliases:
+        raise ValueError(f"Unknown English-lite task aliases requested: {unknown_aliases}")
+    return [tasks_by_alias[alias] for alias in requested_aliases]
 
 
 def _metric_columns(frame: pd.DataFrame) -> list[str]:
@@ -245,12 +326,17 @@ def build_state_rows(
     default_tpu_region: str,
     default_tpu_zone: str,
     eval_key_suffix: str,
+    excluded_task_aliases: set[str] | None = None,
+    task_aliases: tuple[str, ...] | None = None,
+    included_run_names: set[str] | None = None,
 ) -> list[EnglishLiteEvalSpec]:
     """Build state rows for 300M English-lite eval completion."""
-    task_aliases = english_lite_task_aliases()
-    coverage = _metric_coverage_by_root([METRICS_WIDE_CSV], task_aliases)
+    task_aliases = english_lite_task_aliases(excluded_task_aliases, task_aliases)
+    coverage = _metric_coverage_by_root([METRICS_WIDE_CSV, MERGED_RESULTS_CSV], task_aliases)
     rows: list[EnglishLiteEvalSpec] = []
     for idx, candidate in enumerate(_candidate_records()):
+        if included_run_names is not None and candidate.run_name not in included_run_names:
+            continue
         latest_hf_checkpoint = _exact_hf_checkpoint(candidate.checkpoint_root, candidate.expected_checkpoint_step)
         latest_hf_step = candidate.expected_checkpoint_step if latest_hf_checkpoint else -1
         has_exact_hf_checkpoint = bool(latest_hf_checkpoint)
@@ -439,27 +525,58 @@ def collect_eval_results_from_prefixes(
 ) -> pd.DataFrame:
     """Collect successful English-lite child outputs from executor prefixes into one CSV."""
     statuses = _scan_eval_statuses(prefixes)
+
+    def _status_entry_for_row(row: EnglishLiteEvalSpec) -> dict[str, str] | None:
+        entry = statuses.get(row.eval_key)
+        if entry is not None:
+            return entry
+
+        # Retry and one-off completion jobs can be submitted from a remote bundle
+        # whose metric registry differs from the local checkout. In that case the
+        # numeric eval-key prefix can differ even though the run name and suffix
+        # are identical. Fall back to a unique run-name match so local collection
+        # does not depend on the remote candidate enumeration.
+        run_slug = _slug(row.run_name)
+        matches = [
+            status
+            for eval_key, status in statuses.items()
+            if f"_{run_slug}_" in eval_key or eval_key.endswith(f"_{run_slug}")
+        ]
+        success_matches = [status for status in matches if status["status"] == STATUS_SUCCESS]
+        if len(success_matches) == 1:
+            return success_matches[0]
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
     records: list[dict[str, Any]] = []
     for row in state_rows:
         record = asdict(row)
-        entry = statuses.get(row.eval_key)
+        entry = _status_entry_for_row(row)
         if entry is None:
             record["collection_status"] = "missing_executor_status"
             record["collection_error"] = "no_executor_status_found"
             records.append(record)
             continue
         record["executor_status"] = entry["status"]
+        record["executor_eval_key"] = entry["eval_key"]
         record["result_path"] = entry["output_path"]
         record["status_path"] = entry["status_path"]
-        if entry["status"] != STATUS_SUCCESS:
-            record["collection_status"] = "executor_not_success"
-            record["collection_error"] = entry["status"]
-            records.append(record)
-            continue
         metrics, error = _read_eval_metrics(entry["output_path"])
         record.update(metrics)
-        record["collection_status"] = "collected" if metrics else "missing_metrics"
-        record["collection_error"] = error
+        if metrics:
+            record["collection_status"] = (
+                "collected"
+                if entry["status"] == STATUS_SUCCESS
+                else f"collected_executor_status_{entry['status'].lower()}"
+            )
+            record["collection_error"] = error
+        elif entry["status"] != STATUS_SUCCESS:
+            record["collection_status"] = "executor_not_success"
+            record["collection_error"] = entry["status"]
+        else:
+            record["collection_status"] = "missing_metrics"
+            record["collection_error"] = error
         records.append(record)
 
     frame = pd.DataFrame.from_records(records)
@@ -493,39 +610,46 @@ def build_eval_steps(
     name_prefix: str,
     state_rows: list[EnglishLiteEvalSpec],
     max_eval_instances: int | None,
-    eval_datasets_cache_path: str,
+    eval_datasets_cache_path: str | None,
 ) -> tuple[list[ExecutorStep], dict[str, InputName]]:
     """Build English-lite eval steps for rows requiring launch."""
-    from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
     from marin.evaluation.eval_dataset_cache import (
-        CacheEvalDatasetsConfig,
         HF_CACHE_LAYOUT_VERSION,
+        CacheEvalDatasetsConfig,
         _cache_eval_datasets,
     )
 
-    eval_tasks = english_lite_tasks()
-    cache_eval_step = ExecutorStep(
-        name=f"{name_prefix}/cache_eval_datasets",
-        description="Pre-cache English-lite evaluation datasets to east5 GCS",
-        fn=remote(
-            _cache_eval_datasets,
-            resources=ResourceConfig.with_cpu(
-                cpu=1,
-                ram="8g",
-                disk="32g",
-                regions=[DEFAULT_TPU_REGION],
-            ),
-            pip_dependency_groups=["eval", "tpu"],
-        ),
-        config=CacheEvalDatasetsConfig(
-            eval_tasks=tuple(eval_tasks),
-            gcs_path=eval_datasets_cache_path,
-            cache_layout_version=versioned(HF_CACHE_LAYOUT_VERSION),
-        ),
-    )
-    cache_dependency = output_path_of(cache_eval_step, ".eval_datasets_manifest.json")
+    from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 
-    eval_steps: list[ExecutorStep] = [cache_eval_step]
+    missing_aliases = {
+        alias for row in state_rows if row.launch_decision == "launch" for alias in row.missing_tasks.split(";") if alias
+    }
+    eval_task_aliases = tuple(alias for alias in ENGLISH_LITE_TASK_ALIASES if alias in missing_aliases)
+    eval_tasks = english_lite_tasks(eval_task_aliases)
+    eval_steps: list[ExecutorStep] = []
+    cache_dependency: InputName | None = None
+    if eval_datasets_cache_path is not None:
+        cache_eval_step = ExecutorStep(
+            name=f"{name_prefix}/cache_eval_datasets",
+            description="Pre-cache English-lite evaluation datasets to east5 GCS",
+            fn=remote(
+                _cache_eval_datasets,
+                resources=ResourceConfig.with_cpu(
+                    cpu=1,
+                    ram="8g",
+                    disk="32g",
+                    regions=[DEFAULT_TPU_REGION],
+                ),
+                pip_dependency_groups=["eval", "cpu"],
+            ),
+            config=CacheEvalDatasetsConfig(
+                eval_tasks=tuple(eval_tasks),
+                gcs_path=eval_datasets_cache_path,
+                cache_layout_version=versioned(HF_CACHE_LAYOUT_VERSION),
+            ),
+        )
+        eval_steps.append(cache_eval_step)
+        cache_dependency = output_path_of(cache_eval_step, ".eval_datasets_manifest.json")
     results_by_eval_key: dict[str, InputName] = {}
     for row in state_rows:
         if row.launch_decision != "launch":
@@ -582,6 +706,16 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--eval-key-suffix", default="")
     parser.add_argument("--state-csv")
     parser.add_argument("--eval-datasets-cache-path", default=DEFAULT_EVAL_DATASETS_CACHE_PATH)
+    parser.add_argument("--skip-eval-dataset-cache", action="store_true")
+    parser.add_argument("--exclude-task-alias", action="append", default=[])
+    parser.add_argument(
+        "--task-alias",
+        action="append",
+        choices=ENGLISH_LITE_TASK_ALIASES,
+        default=[],
+        help="Limit this launch to one or more English-lite task aliases. Defaults to all aliases after exclusions.",
+    )
+    parser.add_argument("--include-run-name", action="append", default=[])
     parser.add_argument("--write-retry-state-from-prefix")
     parser.add_argument("--retry-state-output", default=str(RETRY_STATE_CSV))
     parser.add_argument("--collect-from-prefix", action="append", default=[])
@@ -593,8 +727,19 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     args, remaining = _parse_args()
     sys.argv = [sys.argv[0], *remaining]
+    if args.state_csv is None:
+        state_rows = build_state_rows(
+            default_tpu_type=args.tpu_type,
+            default_tpu_region=args.tpu_region,
+            default_tpu_zone=args.tpu_zone,
+            eval_key_suffix=args.eval_key_suffix,
+            excluded_task_aliases=set(args.exclude_task_alias),
+            task_aliases=tuple(args.task_alias) if args.task_alias else None,
+            included_run_names=set(args.include_run_name) if args.include_run_name else None,
+        )
+    else:
+        state_rows = _load_state_rows(args.state_csv)
     if args.write_retry_state_from_prefix is not None:
-        state_rows = _load_state_rows(args.state_csv or STATE_CSV)
         write_retry_state_from_prefix(
             prefix=args.write_retry_state_from_prefix,
             state_rows=state_rows,
@@ -602,23 +747,12 @@ def main() -> None:
         )
         return
     if args.collect_from_prefix:
-        state_rows = _load_state_rows(args.state_csv or STATE_CSV)
         collect_eval_results_from_prefixes(
             prefixes=args.collect_from_prefix,
             state_rows=state_rows,
             output_csv=Path(args.collect_output_csv),
         )
         return
-
-    if args.state_csv is None:
-        state_rows = build_state_rows(
-            default_tpu_type=args.tpu_type,
-            default_tpu_region=args.tpu_region,
-            default_tpu_zone=args.tpu_zone,
-            eval_key_suffix=args.eval_key_suffix,
-        )
-    else:
-        state_rows = _load_state_rows(args.state_csv)
     _write_local_outputs(state_rows)
     launch_count = sum(row.launch_decision == "launch" for row in state_rows)
     logger.info("Wrote state to %s", STATE_CSV)
@@ -627,7 +761,9 @@ def main() -> None:
         "Prepared %d English-lite eval steps over %d candidate checkpoints and %d task aliases",
         launch_count,
         len(state_rows),
-        len(ENGLISH_LITE_TASK_ALIASES),
+        len(
+            english_lite_task_aliases(set(args.exclude_task_alias), tuple(args.task_alias) if args.task_alias else None)
+        ),
     )
     if args.dry_run or os.getenv("CI") is not None:
         return
@@ -636,7 +772,7 @@ def main() -> None:
         name_prefix=args.name_prefix,
         state_rows=state_rows,
         max_eval_instances=args.max_eval_instances,
-        eval_datasets_cache_path=args.eval_datasets_cache_path,
+        eval_datasets_cache_path=None if args.skip_eval_dataset_cache else args.eval_datasets_cache_path,
     )
     collect_step = build_collect_step(
         name_prefix=args.name_prefix,

@@ -73,3 +73,42 @@
 | suite_balanced_choice_prob_norm_snr_difficulty__eval_plus_lm_eval__elasticnet__logit | scalar_proxy_target      | suite_balanced_choice_prob_norm_snr_difficulty | eval_plus_lm_eval |          0.482586 |            0.451814 |                  0.516395 |                      0.319594 |                        0.397025 |
 | direct_grp_suite_balanced_accuracy_snr_difficulty                                    | direct_grp_target        | suite_balanced_accuracy_snr_difficulty         | direct_target     |          0.443099 |            0.639237 |                  0.800600 |                      0.318058 |                        0.399181 |
 - Artifacts: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/grp_300m_suite_balanced_benchmark_20260429/`.
+
+### 2026-04-30 - Selected-proxy task optimization
+- Hypothesis: optimizing the current selected smooth proxies, with MMLU collapsed into one group, gives a more task-aligned objective than uncheatable BPB or flat MMLU-heavy averages.
+- Command: `uv run --with matplotlib --with torch python /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/fit_grp_300m_selected_proxy_tasks.py`
+- Result summary:
+| candidate_id                           |   proxy_spearman |   accuracy_reference_spearman |   raw_nearest_observed_tv |   raw_nearest_observed_choice |   raw_nearest_observed_accuracy |
+|:---------------------------------------|-----------------:|------------------------------:|--------------------------:|------------------------------:|--------------------------------:|
+| selected_proxy_keep_only_task_balanced |         0.794495 |                      0.666993 |                  0.856152 |                      1.030174 |                        0.336953 |
+| selected_proxy_flat_weighted           |         0.789469 |                      0.605306 |                  0.756175 |                      0.646875 |                        0.309923 |
+| selected_proxy_task_balanced           |         0.645939 |                      0.332818 |                  0.887648 |                      0.048946 |                        0.346176 |
+- Artifacts: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/grp_300m_selected_proxy_tasks_20260430/`.
+
+### 2026-04-30 - Selected-proxy task optimization
+- Hypothesis: optimizing the current selected smooth proxies, with MMLU collapsed into one group, gives a more task-aligned objective than uncheatable BPB or flat MMLU-heavy averages.
+- Command: `uv run --with matplotlib --with torch python /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/fit_grp_300m_selected_proxy_tasks.py`
+- Result summary:
+| candidate_id                           |   proxy_spearman |   accuracy_reference_spearman |   raw_nearest_observed_tv |   raw_nearest_observed_choice |   raw_nearest_observed_accuracy |
+|:---------------------------------------|-----------------:|------------------------------:|--------------------------:|------------------------------:|--------------------------------:|
+| selected_proxy_snr_gt2_task_balanced   |         0.796770 |                      0.609597 |                  0.789914 |                      0.797770 |                        0.297153 |
+| selected_proxy_keep_only_task_balanced |         0.794495 |                      0.666993 |                  0.856152 |                      1.030174 |                        0.336953 |
+| selected_proxy_flat_weighted           |         0.789469 |                      0.605306 |                  0.756175 |                      0.646875 |                        0.309923 |
+| selected_proxy_task_balanced           |         0.645939 |                      0.332818 |                  0.887648 |                      0.048946 |                        0.346176 |
+- Artifacts: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/grp_300m_selected_proxy_tasks_20260430/`.
+
+### 2026-05-01 - GRP-style modeling of IRT scores
+- Hypothesis: denoised IRT/factor targets provide a better task-optimization surrogate target than raw `mean(choice_prob_norm)`.
+- Command: `uv run --with matplotlib --with torch python /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/fit_grp_300m_irt_targets.py`
+- Result summary:
+| candidate_id                                  |   target_spearman |   accuracy_reference_spearman |   raw_nearest_observed_tv |   raw_nearest_observed_accuracy |   top8actual_hull_nearest_observed_tv |
+|:----------------------------------------------|------------------:|------------------------------:|--------------------------:|--------------------------------:|--------------------------------------:|
+| eval_bpb_irt_variable_theta_3                 |          0.962704 |                     -0.013742 |                  0.603826 |                        0.345227 |                              0.363450 |
+| eval_bpb_irt_fixed_theta_1                    |          0.954189 |                      0.150912 |                  0.861336 |                        0.340461 |                              0.079849 |
+| eval_bpb_irt_variable_theta_2                 |          0.946392 |                      0.148037 |                  0.826003 |                        0.350830 |                              0.102115 |
+| eval_bpb_irt_variable_accuracy_weighted_theta |          0.942025 |                      0.398867 |                  0.709710 |                        0.354364 |                              0.092616 |
+| task_proxy_irt_fixed_theta_2                  |          0.933074 |                      0.254359 |                  0.895261 |                        0.339675 |                              0.000000 |
+| eval_bpb_irt_fixed_accuracy_weighted_theta    |          0.931335 |                      0.394169 |                  0.847947 |                        0.351567 |                              0.098285 |
+| hybrid_irt_variable_theta_2                   |          0.931230 |                      0.222006 |                  0.848661 |                        0.347952 |                              0.059986 |
+| hybrid_irt_fixed_theta_2                      |          0.929362 |                      0.328594 |                  0.888173 |                        0.339675 |                              0.040629 |
+- Artifacts: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/grp_300m_irt_targets_20260501/`.

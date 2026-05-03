@@ -4,6 +4,7 @@
 import logging
 import os
 import shutil
+import socket
 import tempfile
 import traceback
 from collections.abc import Iterator
@@ -17,6 +18,24 @@ from marin.evaluation.utils import is_remote_path, upload_to_gcs
 from marin.inference.vllm_server import VllmEnvironment
 
 logger = logging.getLogger(__name__)
+
+
+def _patch_lm_eval_vllm_compat() -> None:
+    """Patch lm-eval/vLLM API drift before lm-eval imports its vLLM backend."""
+    try:
+        import vllm.utils
+    except ImportError:
+        return
+
+    if hasattr(vllm.utils, "get_open_port"):
+        return
+
+    def get_open_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("", 0))
+            return int(sock.getsockname()[1])
+
+    vllm.utils.get_open_port = get_open_port
 
 
 # TODO: Multiple choice tasks currently don't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
@@ -87,6 +106,8 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                 resolved_model = env.model
 
                 def _run_lm_eval(lm_eval_model_local: str, pretrained_args_local: str) -> None:
+                    _patch_lm_eval_vllm_compat()
+
                     from lm_eval.evaluator import simple_evaluate
                     from lm_eval.loggers import EvaluationTracker, WandbLogger
                     from lm_eval.utils import simple_parse_args_string

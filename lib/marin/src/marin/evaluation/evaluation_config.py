@@ -7,12 +7,13 @@ from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
 from levanter.eval_harness import TaskConfig
+
 from marin.execution.executor import InputName
 
 # Wandb project name for evaluations. Controlled via WANDB_PROJECT env var.
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
 _LEVANTER_TASK_KWARG_ALIASES = {
-    "doc_to_target": "doct_to_target",
+    "doct_to_target": "doc_to_target",
 }
 _SUPPORTED_LEVANTER_TASK_KWARGS = frozenset(TaskConfig.__dataclass_fields__) - {
     "task",

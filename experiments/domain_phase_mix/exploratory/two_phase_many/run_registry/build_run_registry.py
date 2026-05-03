@@ -19,13 +19,13 @@ directory instead of re-deriving run identity ad hoc.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import json
 import math
 import os
-from pathlib import Path
 import re
 import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import fsspec
@@ -38,23 +38,27 @@ from experiments.domain_phase_mix.launch_baseline_scaling_cell import (
 )
 from experiments.domain_phase_mix.launch_single_phase_average_fit_swarm_60m_1p2b import (
     NAME as SINGLE_PHASE_EXPOSURE_AVERAGE_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.launch_single_phase_average_fit_swarm_60m_1p2b import (
     build_run_specs as build_single_phase_exposure_average_run_specs,
 )
 from experiments.domain_phase_mix.launch_single_phase_average_grp_no_l2_60m_1p2b import (
     NAME as SINGLE_PHASE_GRP_NO_L2_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.launch_single_phase_average_grp_no_l2_60m_1p2b import (
     build_run_spec as build_single_phase_grp_no_l2_run_spec,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b import (
-    NAME as PENALTY_300M_SOURCE_EXPERIMENT,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b import (
-    build_run_specs as build_penalty_300m_run_specs,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_1_2b_24b import (
     NAME as PENALTY_1_2B_SOURCE_EXPERIMENT,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_1_2b_24b import (
     build_run_specs as build_penalty_1_2b_run_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b import (
+    NAME as PENALTY_300M_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b import (
+    build_run_specs as build_penalty_300m_run_specs,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_520m_10p4b import (
     NAME as PENALTY_520M_SOURCE_EXPERIMENT,
@@ -74,6 +78,12 @@ from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_fixed_
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_fixed_subset_study import (
     build_run_specs as build_run00097_300m_fixed_subset_run_specs,
 )
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_variable_subset_study import (
+    NAME as RUN00097_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_variable_subset_study import (
+    build_run_specs as build_run00097_300m_variable_subset_run_specs,
+)
 from experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline import (
     build_run_spec as build_stratified_run_spec,
 )
@@ -91,8 +101,6 @@ from experiments.domain_phase_mix.two_phase_many_genericfamily_penalty_raw_optim
 )
 from experiments.domain_phase_mix.two_phase_many_genericfamily_power_family_penalty_no_l2_raw_subset_optima import (
     GENERICFAMILY_POWER_FAMILY_PENALTY_NO_L2_RAW_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
-)
-from experiments.domain_phase_mix.two_phase_many_genericfamily_power_family_penalty_no_l2_raw_subset_optima import (
     genericfamily_power_family_penalty_no_l2_raw_subset_optima_summaries,
 )
 from experiments.domain_phase_mix.two_phase_many_metric_objective_raw_optima import (
@@ -211,6 +219,14 @@ FAMILY_METADATA = {
         family="run00097_300m_6b_fixed_subset",
         scale="300m_6b",
         launcher_module="experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_fixed_subset_study",
+        resubmit_scope="family",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
+    "run00097_300m_6b_variable_subset": FamilyMetadata(
+        family="run00097_300m_6b_variable_subset",
+        scale="300m_6b",
+        launcher_module="experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_variable_subset_study",
         resubmit_scope="family",
         objective_metric=OBJECTIVE_METRIC,
         resubmit_supported=True,
@@ -1029,6 +1045,54 @@ def _load_run00097_fixed_subset_rows() -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+def _load_run00097_variable_subset_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    run_specs = build_run00097_300m_variable_subset_run_specs()
+    rows: list[dict[str, Any]] = []
+    all_attempts: list[dict[str, Any]] = []
+    metadata = FAMILY_METADATA["run00097_300m_6b_variable_subset"]
+    for spec in run_specs:
+        attempts = _scan_checkpoint_attempts(
+            family=metadata.family,
+            source_experiment=RUN00097_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT,
+            run_name=spec.run_name,
+            run_id=spec.run_id,
+            objective_metric=OBJECTIVE_METRIC,
+            registry_id=f"{metadata.family}:{spec.run_name}",
+        )
+        all_attempts.extend(attempts)
+        canonical = _canonical_attempt(attempts)
+        analysis_attempt = _analysis_attempt(attempts, num_train_steps=spec.num_train_steps)
+        rows.append(
+            {
+                "registry_id": f"{metadata.family}:{spec.run_name}",
+                "family": metadata.family,
+                "scale": metadata.scale,
+                "source_experiment": RUN00097_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT,
+                "run_id": spec.run_id,
+                "run_name": spec.run_name,
+                "wandb_run_id": None if analysis_attempt is None else analysis_attempt.get("wandb_run_id"),
+                "checkpoint_root": None if analysis_attempt is None else analysis_attempt.get("checkpoint_root"),
+                "objective_metric": OBJECTIVE_METRIC,
+                "objective_metric_value": (
+                    None if analysis_attempt is None else analysis_attempt.get("objective_metric_value")
+                ),
+                "canonical_attempt_root": None if canonical is None else canonical.get("attempt_root"),
+                "attempt_count": len(attempts),
+                "successful_attempt_count": sum(1 for attempt in attempts if attempt["executor_status"] == "SUCCESS"),
+                "launcher_module": metadata.launcher_module,
+                "resubmit_supported": metadata.resubmit_supported,
+                "resubmit_scope": metadata.resubmit_scope,
+                "resubmit_selector": None,
+                "resubmit_hint": "--tpu-type v5p-8 --tpu-region us-east5 --tpu-zone us-east5-a",
+                "logical_status": (
+                    "missing" if canonical is None else _normalize_logical_status(str(canonical["executor_status"]))
+                ),
+                "source_status": None if canonical is None else canonical.get("executor_status"),
+            }
+        )
+    return pd.DataFrame(rows), all_attempts
 
 
 def _family_rows_from_attempt_scan(
@@ -1876,6 +1940,9 @@ def build_registry(
         _load_run00097_fixed_subset_rows(),
     ]
     attempts: list[dict[str, Any]] = []
+    run00097_variable_subset_frame, run00097_variable_subset_attempts = _load_run00097_variable_subset_rows()
+    logical_frames.append(run00097_variable_subset_frame)
+    attempts.extend(run00097_variable_subset_attempts)
     qsplit300m_supplemental_frame, qsplit300m_supplemental_attempts = _load_qsplit300m_supplemental_rows()
     logical_frames.append(qsplit300m_supplemental_frame)
     attempts.extend(qsplit300m_supplemental_attempts)
