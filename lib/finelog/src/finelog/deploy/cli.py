@@ -68,9 +68,10 @@ def deploy() -> None:
 @deploy.command("up")
 @click.argument("name")
 @click.option(
-    "--build",
+    "--build/--no-build",
     "build",
-    is_flag=True,
+    default=True,
+    show_default=True,
     help="Build and push the finelog image (using cfg.image as the tag) before provisioning.",
 )
 def up_cmd(name: str, build: bool) -> None:
@@ -93,9 +94,10 @@ def down_cmd(name: str, yes: bool) -> None:
 @deploy.command("restart")
 @click.argument("name")
 @click.option(
-    "--build",
+    "--build/--no-build",
     "build",
-    is_flag=True,
+    default=True,
+    show_default=True,
     help="Build and push the finelog image (using cfg.image as the tag) before restarting.",
 )
 def restart_cmd(name: str, build: bool) -> None:
