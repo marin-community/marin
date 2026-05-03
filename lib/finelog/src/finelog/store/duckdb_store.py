@@ -6,9 +6,12 @@
 The registry backs both the log RPC and the ``StatsService``
 Register/WriteRows/Query/DropTable surface. Concretely:
 
-- :class:`finelog.store.log_namespace.LogNamespace` — owns all per-namespace
-  state: pending rows, Arrow chunks, sealed segments, the flush thread,
-  compaction state, the GCS offload state, and the registered Arrow schema.
+- :class:`finelog.store.log_namespace.LogNamespaceProtocol` — owns all
+  per-namespace state. Two implementations: :class:`DiskLogNamespace`
+  (production: pending rows, Arrow chunks, sealed Parquet segments, the
+  flush thread, compaction, GCS offload) and :class:`MemoryLogNamespace`
+  (test/embedded: a single in-process Arrow table, no segments, no
+  background work).
 - :class:`finelog.store.registry_db.RegistryDB` — sidecar DuckDB DB at
   ``{data_dir}/_finelog_registry.duckdb`` that persists each namespace's
   Schema. Rehydrated on startup.
@@ -36,7 +39,13 @@ import pyarrow as pa
 import pyarrow.ipc as paipc
 
 from finelog.store.layout_migration import LOG_NAMESPACE_DIR
-from finelog.store.log_namespace import LOG_REGISTERED_SCHEMA, LogNamespace, _is_tmp_path
+from finelog.store.log_namespace import (
+    LOG_REGISTERED_SCHEMA,
+    DiskLogNamespace,
+    LogNamespaceProtocol,
+    MemoryLogNamespace,
+    _is_tmp_path,
+)
 from finelog.store.registry_db import RegistryDB
 from finelog.store.rwlock import RWLock
 from finelog.store.schema import (
@@ -213,17 +222,17 @@ class DuckDBLogStore:
     Concurrency: the registry owns the global insertion mutex (held by every
     write and every compaction's slow phase) and the query-visibility rwlock
     (queries hold read for their full duration; commits and drops briefly
-    hold write). Each :class:`LogNamespace` shares both via constructor
-    references.
+    hold write). Each namespace shares both via constructor references.
 
     Layout: callers pass ``log_dir`` as the finelog data directory. Per
     namespace: ``{log_dir}/{name}/``. Schema sidecar:
     ``{log_dir}/_finelog_registry.duckdb``.
 
-    ``log_dir=None`` selects in-memory mode: no tempdir, no parquet
-    files, no sidecar registry file. Segments live as Arrow tables on
-    the namespace and the registry DB runs in ``:memory:``. GCS offload
-    is disabled. State vanishes on ``close()``.
+    ``log_dir=None`` selects in-memory mode: every namespace becomes a
+    :class:`MemoryLogNamespace` holding a single Arrow table. The
+    registry DB runs in ``:memory:``. There is no segmentation, no flush
+    pipeline, no GCS offload, and state vanishes on ``close()``. Intended
+    for tests and embedded debug use only.
     """
 
     def __init__(
@@ -257,19 +266,18 @@ class DuckDBLogStore:
         self._max_local_bytes = max_local_bytes
         self._namespace_registered_at: dict[str, int] = {}
 
-        self._namespaces: dict[str, LogNamespace] = {}
+        self._namespaces: dict[str, LogNamespaceProtocol] = {}
 
-        # Per-namespace constructor kwargs that don't depend on the schema.
-        self._namespace_kwargs = dict(
+        # Disk-namespace-only constructor kwargs that don't depend on the
+        # schema. Memory-mode namespaces ignore everything but the locks
+        # and the read pool.
+        self._disk_namespace_kwargs = dict(
             remote_log_dir=remote_log_dir,
             flush_interval_sec=flush_interval_sec,
             compaction_interval_sec=compaction_interval_sec,
             max_tmp_segments_before_compact=max_tmp_segments_before_compact,
             segment_target_bytes=segment_target_bytes,
-            insertion_lock=self._insertion_lock,
-            query_visibility_lock=self._query_visibility_lock,
             compaction_conn=self._pool.compaction_conn,
-            read_pool=self._pool,
             evict_hook=self._evict_globally,
         )
 
@@ -284,22 +292,41 @@ class DuckDBLogStore:
     # Registry rehydration
     # ------------------------------------------------------------------
 
+    def _make_namespace(self, name: str, schema: Schema, namespace_dir: Path | None) -> LogNamespaceProtocol:
+        """Construct the disk- or memory-backed namespace for ``name``.
+
+        Memory mode is selected by ``self._data_dir is None``; the
+        ``namespace_dir`` argument is then unused.
+        """
+        if self._data_dir is None:
+            return MemoryLogNamespace(
+                name=name,
+                schema=schema,
+                insertion_lock=self._insertion_lock,
+                query_visibility_lock=self._query_visibility_lock,
+                read_pool=self._pool,
+            )
+        assert namespace_dir is not None, "disk mode requires a namespace dir"
+        namespace_dir.mkdir(parents=True, exist_ok=True)
+        return DiskLogNamespace(
+            name=name,
+            schema=schema,
+            data_dir=namespace_dir,
+            insertion_lock=self._insertion_lock,
+            query_visibility_lock=self._query_visibility_lock,
+            read_pool=self._pool,
+            **self._disk_namespace_kwargs,
+        )
+
     def _rehydrate_from_registry(self) -> None:
-        """Instantiate a LogNamespace per row in the sidecar registry DB.
+        """Instantiate a namespace per row in the sidecar registry DB.
 
         In-memory mode: list_all() returns an empty dict (the registry DB
         is fresh ``:memory:``) so this loop is a no-op.
         """
         for name, schema in self._registry_db.list_all().items():
             namespace_dir = self._namespace_dir(name)
-            if namespace_dir is not None:
-                namespace_dir.mkdir(parents=True, exist_ok=True)
-            self._namespaces[name] = LogNamespace(
-                name=name,
-                schema=schema,
-                data_dir=namespace_dir,
-                **self._namespace_kwargs,
-            )
+            self._namespaces[name] = self._make_namespace(name, schema, namespace_dir)
             # Use a monotonic counter as the in-process tiebreak so eviction
             # is deterministic even if two namespaces share registered_at_ms.
             self._namespace_registered_at[name] = len(self._namespace_registered_at)
@@ -314,22 +341,15 @@ class DuckDBLogStore:
         """
         if LOG_NAMESPACE_NAME in self._namespaces:
             return
-        if self._data_dir is not None:
-            log_dir = self._data_dir / LOG_NAMESPACE_DIR
-            log_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            log_dir = None
+        log_dir = self._data_dir / LOG_NAMESPACE_DIR if self._data_dir is not None else None
         with self._insertion_lock:
             self._registry_db.upsert(
                 LOG_NAMESPACE_NAME,
                 LOG_REGISTERED_SCHEMA,
                 resolve_key_column(LOG_REGISTERED_SCHEMA),
             )
-            self._namespaces[LOG_NAMESPACE_NAME] = LogNamespace(
-                name=LOG_NAMESPACE_NAME,
-                schema=LOG_REGISTERED_SCHEMA,
-                data_dir=log_dir,
-                **self._namespace_kwargs,
+            self._namespaces[LOG_NAMESPACE_NAME] = self._make_namespace(
+                LOG_NAMESPACE_NAME, LOG_REGISTERED_SCHEMA, log_dir
             )
             self._namespace_registered_at.setdefault(LOG_NAMESPACE_NAME, len(self._namespace_registered_at))
 
@@ -364,15 +384,8 @@ class DuckDBLogStore:
             existing_ns = self._namespaces.get(name)
             if existing_ns is None:
                 effective = schema
-                if namespace_dir is not None:
-                    namespace_dir.mkdir(parents=True, exist_ok=True)
                 self._registry_db.upsert(name, effective, resolved_key)
-                self._namespaces[name] = LogNamespace(
-                    name=name,
-                    schema=effective,
-                    data_dir=namespace_dir,
-                    **self._namespace_kwargs,
-                )
+                self._namespaces[name] = self._make_namespace(name, effective, namespace_dir)
                 self._namespace_registered_at[name] = len(self._namespace_registered_at)
                 return effective
 
@@ -452,18 +465,18 @@ class DuckDBLogStore:
         """Execute ``sql`` against a DuckDB view of every registered namespace.
 
         Each namespace gets a view named after the namespace. The view
-        source is built per-segment: parquet-backed sealed segments come
-        in via ``read_parquet([…])``; in-memory sealed segments are
+        source is built per-segment: sealed Parquet segments come in via
+        ``read_parquet([…])``; in-RAM data (un-flushed chunks for disk
+        namespaces, the entire backing table for memory namespaces) is
         registered on the connection and referenced by name, then
-        ``UNION ALL``ed together. Namespaces with zero sealed segments
-        get a typed empty view so user queries against them return zero
-        rows instead of erroring.
+        ``UNION ALL``ed together. Namespaces with no data at all get a
+        typed empty view so user queries against them return zero rows
+        instead of erroring.
 
         The query-visibility read lock is held across the whole call
         because DuckDB opens Parquet files lazily during execution:
         dropping the lock before fetch would let compaction unlink files
-        mid-scan. (In-memory segments are immune to that race but we
-        keep one lock discipline for both backings.)
+        mid-scan.
 
         ``DropTable``-style errors (unknown namespace referenced in the
         SQL) surface as DuckDB's own ``CatalogException`` — the view
@@ -493,12 +506,10 @@ class DuckDBLogStore:
                     continue
 
                 parts: list[str] = []
-                parquet_paths = [s.path for s in segments if s.table is None]
-                if parquet_paths:
-                    paths_literal = "[" + ", ".join(quote_literal(p) for p in parquet_paths) + "]"
+                if segments:
+                    paths_literal = "[" + ", ".join(quote_literal(s.path) for s in segments) + "]"
                     parts.append(f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)")
-                arrow_tables = [s.table for s in segments if s.table is not None] + ram_tables
-                for table in arrow_tables:
+                for table in ram_tables:
                     reg_name = f"_seg_{len(registered_names)}"
                     con.register(reg_name, table)
                     registered_names.append(reg_name)
@@ -681,8 +692,12 @@ class DuckDBLogStore:
     # ------------------------------------------------------------------
 
     @property
-    def _log_namespace(self) -> LogNamespace:
-        return self._namespaces[LOG_NAMESPACE_NAME]
+    def _log_namespace(self) -> DiskLogNamespace:
+        ns = self._namespaces[LOG_NAMESPACE_NAME]
+        # The flush/compaction test hooks only make sense for the disk
+        # variant; memory mode has no segments to flush or compact.
+        assert isinstance(ns, DiskLogNamespace), "test hook called on memory-mode store"
+        return ns
 
     def _force_flush(self) -> None:
         self._log_namespace._flush_step()

@@ -69,13 +69,14 @@ def _seal(store: DuckDBLogStore, namespace: str) -> None:
 
 
 @pytest.fixture()
-def store():
-    """In-memory ``DuckDBLogStore`` — no tempdir, no parquet on disk.
+def store(tmp_path):
+    """Disk-backed ``DuckDBLogStore`` rooted at a per-test ``tmp_path``.
 
-    Tests that need on-disk persistence (registry rehydration across
-    restarts, parquet-specific behaviors) construct
-    ``DuckDBLogStore(log_dir=...)`` directly.
+    Most stats/log tests poke the disk pipeline directly — flush, compact,
+    sealed-segment counting, eviction. Memory-mode (``DuckDBLogStore()``
+    with no log_dir) is exercised separately by tests that explicitly
+    construct it.
     """
-    s = DuckDBLogStore()
+    s = DuckDBLogStore(log_dir=tmp_path / "store")
     yield s
     s.close()

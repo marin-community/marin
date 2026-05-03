@@ -3,28 +3,32 @@
 
 """Per-namespace log storage state.
 
-A :class:`LogNamespace` owns everything that used to be top-level state on
-``DuckDBLogStore``: chunked Arrow tables, the in-flight sealed buffer, the
-local segment registry, the sequence counter, the background flush thread,
-and the registered Arrow schema.
+Two implementations satisfy :class:`LogNamespaceProtocol`:
+
+- :class:`DiskLogNamespace` — production path. Owns chunked Arrow tables,
+  the in-flight sealed buffer, the local Parquet segment registry, the
+  sequence counter, the background flush thread, GCS offload, and the
+  registered Arrow schema.
+- :class:`MemoryLogNamespace` — test/debug path. Holds rows as a single
+  Arrow table per namespace; no flush, compaction, eviction, or background
+  threads. Used only when :class:`DuckDBLogStore` is constructed without a
+  ``log_dir``.
 
 Every namespace carries its own registered
-:class:`finelog.store.schema.Schema`, and the flush / compaction pipeline
-projects to that schema's column order. The ``log`` namespace continues to
-expose the old key/source/data read path — that's specific to the log RPC,
-not to the storage layer — but its on-disk columns are driven by the
-registered schema like any other namespace.
+:class:`finelog.store.schema.Schema`. The disk variant projects to that
+schema's column order during the flush / compaction pipeline.
 
 Concurrency
 -----------
 
 The two global locks (insertion mutex + query-visibility rwlock) live on the
-:class:`NamespaceRegistry` and are passed to each ``LogNamespace`` at
-construction. The namespace's mutating methods (append, flush, compaction,
-GC) acquire those locks; the namespace itself does not own additional locks
-beyond a per-namespace flush mutex that prevents two writers from racing on
-the same ``tmp_*.parquet`` filename when both the test ``_force_flush`` hook
-and the bg thread fire concurrently.
+:class:`NamespaceRegistry` and are passed to each namespace at construction.
+The disk variant's mutating methods (append, flush, compaction, GC) acquire
+those locks; the namespace itself does not own additional locks beyond a
+per-namespace flush mutex that prevents two writers from racing on the same
+``tmp_*.parquet`` filename when both the test ``_force_flush`` hook and the
+bg thread fire concurrently. The memory variant only takes the insertion
+lock around its single Arrow table.
 """
 
 from __future__ import annotations
@@ -100,19 +104,7 @@ def _log_filename(min_seq: int) -> str:
 
 
 def _is_tmp_path(path: str) -> bool:
-    # ``Path.name`` strips the synthetic ``<mem>/`` prefix used for
-    # in-memory segments, so the same check works for both backings.
     return Path(path).name.startswith(_TMP_PREFIX)
-
-
-# Synthetic path scheme for in-memory segments. The basename matches the
-# on-disk filename scheme so ``_is_tmp_path`` and the segment-ordering
-# logic don't need to know about the storage backing.
-_MEM_PATH_PREFIX = "<mem>/"
-
-
-def _mem_segment_path(filename: str) -> str:
-    return _MEM_PATH_PREFIX + filename
 
 
 def _min_seq_from_filename(name: str) -> int | None:
@@ -196,29 +188,21 @@ class _SealedBuffer:
 
 @dataclass
 class LocalSegment:
-    """Metadata for a sealed segment.
-
-    Backed either by a Parquet file (``table is None``, ``path`` is the
-    filesystem path) or by an in-memory Arrow table (``table`` set,
-    ``path`` is a synthetic ``mem:tmp_…`` / ``mem:logs_…`` identifier
-    used purely for ``_is_tmp_path`` checks and as a stable key for
-    eviction).
-    """
+    """Metadata for a sealed Parquet segment on disk."""
 
     path: str
     size_bytes: int
     min_seq: int = 0
     max_seq: int = 0
-    table: pa.Table | None = None
 
 
 def _build_log_table(buffer: list[tuple], arrow_schema: pa.Schema) -> pa.Table:
     """Build an Arrow table for the log namespace's row tuples.
 
     The tuple layout is fixed at ``(seq, key, source, data, epoch_ms,
-    level)`` — see :func:`LogNamespace.append_log_batch`. Other namespaces
-    don't go through this function; they call :func:`append_record_batch`
-    with a pre-aligned RecordBatch.
+    level)`` — see :meth:`DiskLogNamespace.append_log_batch`. Other
+    namespaces don't go through this function; they call
+    :meth:`append_record_batch` with a pre-aligned RecordBatch.
     """
     if not buffer:
         return arrow_schema.empty_table()
@@ -238,13 +222,67 @@ def _build_log_table(buffer: list[tuple], arrow_schema: pa.Schema) -> pa.Table:
     return pa.table(arrays, schema=arrow_schema)
 
 
-class LogNamespace:
-    """Per-namespace storage state.
+# ---------------------------------------------------------------------------
+# Protocol
+# ---------------------------------------------------------------------------
 
-    Owns the in-memory write buffer, the on-disk segment registry, the flush
-    thread, and the compaction state for a single namespace. The registered
-    schema (an Arrow schema derived from :class:`finelog.store.schema.Schema`)
-    drives the flush and compaction pipelines.
+
+class LogNamespaceProtocol(Protocol):
+    """Surface every namespace variant exposes to :class:`DuckDBLogStore`.
+
+    Used by the registry so it can hold either :class:`DiskLogNamespace` or
+    :class:`MemoryLogNamespace` without branching.
+    """
+
+    name: str
+    schema: Schema
+
+    def append_log_batch(self, items: list[tuple[str, list]]) -> None: ...
+
+    def append_record_batch(self, batch: pa.RecordBatch) -> None: ...
+
+    def get_logs(
+        self,
+        key: str,
+        *,
+        since_ms: int = 0,
+        cursor: int = 0,
+        substring_filter: str = "",
+        max_lines: int = 0,
+        tail: bool = False,
+        min_level: str = "",
+    ) -> LogReadResult: ...
+
+    def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]: ...
+
+    def sealed_segments(self) -> list[LocalSegment]: ...
+
+    def all_segments_unlocked(self) -> list[LocalSegment]: ...
+
+    def update_schema(self, new_schema: Schema) -> None: ...
+
+    def evict_segment(self, path: str) -> int: ...
+
+    def remove_local_storage(self) -> None: ...
+
+    def close(self) -> None: ...
+
+    def stop_and_join(self) -> None: ...
+
+
+# ---------------------------------------------------------------------------
+# Disk implementation
+# ---------------------------------------------------------------------------
+
+
+class DiskLogNamespace:
+    """Disk-backed per-namespace storage.
+
+    Owns the in-memory write buffer, the on-disk Parquet segment registry,
+    the flush thread, and the compaction state for a single namespace. The
+    registered schema (an Arrow schema derived from
+    :class:`finelog.store.schema.Schema`) drives the flush and compaction
+    pipelines.
 
     The ``log`` namespace exposes a key/source/data read API on top of the
     same storage; that path is hardcoded for log columns and is not used by
@@ -256,7 +294,7 @@ class LogNamespace:
         *,
         name: str,
         schema: Schema,
-        data_dir: Path | None,
+        data_dir: Path,
         remote_log_dir: str,
         segment_target_bytes: int,
         flush_interval_sec: float,
@@ -271,18 +309,10 @@ class LogNamespace:
         self.name = name
         self.schema = schema
         self._arrow_schema = schema_to_arrow(schema)
-        # ``data_dir is None`` selects in-memory mode: segments are held as
-        # Arrow tables in :class:`LocalSegment.table`, no parquet files are
-        # written, GCS offload is forced off. The compaction and eviction
-        # machinery is otherwise unchanged.
         self._data_dir = data_dir
-        self._in_memory = data_dir is None
-        if data_dir is not None:
-            data_dir.mkdir(parents=True, exist_ok=True)
+        data_dir.mkdir(parents=True, exist_ok=True)
 
-        # Force-off GCS in memory mode: archiving in-memory segments would
-        # require materializing them, which defeats the purpose.
-        self._remote_log_dir = "" if self._in_memory else remote_log_dir
+        self._remote_log_dir = remote_log_dir
         self._segment_target_bytes = segment_target_bytes
         self._max_tmp_segments_before_compact = max_tmp_segments_before_compact
         self._evict_hook = evict_hook
@@ -300,36 +330,35 @@ class LogNamespace:
         self._compaction_conn = compaction_conn
         self._read_pool = read_pool
 
-        self._next_seq = 1 if self._in_memory else _recover_next_seq(data_dir)
+        self._next_seq = _recover_next_seq(data_dir)
         self._chunks: list[pa.Table] = []
         self._flushing: _SealedBuffer | None = None
         self._local_segments: deque[LocalSegment] = deque()
 
-        if not self._in_memory:
-            # Drop stale tmp segments left behind by a prior compaction that
-            # crashed between rename and unlink: any tmp whose [min, max] is
-            # fully covered by a logs_ segment is a duplicate.
-            discovered: list[LocalSegment] = []
-            for p in _discover_segments(data_dir):
-                min_seq, max_seq = _read_seq_bounds(p)
-                discovered.append(
-                    LocalSegment(
-                        path=str(p),
-                        size_bytes=p.stat().st_size,
-                        min_seq=min_seq,
-                        max_seq=max_seq,
-                    )
+        # Drop stale tmp segments left behind by a prior compaction that
+        # crashed between rename and unlink: any tmp whose [min, max] is
+        # fully covered by a logs_ segment is a duplicate.
+        discovered: list[LocalSegment] = []
+        for p in _discover_segments(data_dir):
+            min_seq, max_seq = _read_seq_bounds(p)
+            discovered.append(
+                LocalSegment(
+                    path=str(p),
+                    size_bytes=p.stat().st_size,
+                    min_seq=min_seq,
+                    max_seq=max_seq,
                 )
-            log_ranges = [(s.min_seq, s.max_seq) for s in discovered if not _is_tmp_path(s.path)]
-            for s in discovered:
-                if _is_tmp_path(s.path) and any(lo <= s.min_seq and s.max_seq <= hi for lo, hi in log_ranges):
-                    logger.info("Dropping stale tmp segment %s covered by compacted logs_ range", s.path)
-                    try:
-                        Path(s.path).unlink()
-                    except Exception:
-                        logger.warning("Failed to unlink stale tmp segment %s", s.path, exc_info=True)
-                    continue
-                self._local_segments.append(s)
+            )
+        log_ranges = [(s.min_seq, s.max_seq) for s in discovered if not _is_tmp_path(s.path)]
+        for s in discovered:
+            if _is_tmp_path(s.path) and any(lo <= s.min_seq and s.max_seq <= hi for lo, hi in log_ranges):
+                logger.info("Dropping stale tmp segment %s covered by compacted logs_ range", s.path)
+                try:
+                    Path(s.path).unlink()
+                except Exception:
+                    logger.warning("Failed to unlink stale tmp segment %s", s.path, exc_info=True)
+                continue
+            self._local_segments.append(s)
 
         self._flush_rl = RateLimiter(flush_interval_sec)
         self._compaction_rl = RateLimiter(compaction_interval_sec)
@@ -476,16 +505,7 @@ class LogNamespace:
         the previously-registered subset continue to work; missing columns
         on the wire are filled with NULL during validate-and-align.
         """
-        old_columns = {c.name: c for c in self.schema.columns}
-        new_columns = {c.name: c for c in new_schema.columns}
-        for name, old in old_columns.items():
-            new = new_columns.get(name)
-            assert new is not None, f"update_schema: column {name!r} dropped (must be additive)"
-            assert new.type == old.type, f"update_schema: column {name!r} type changed {old.type}->{new.type}"
-            assert new.nullable == old.nullable, f"update_schema: column {name!r} nullability changed"
-        for name, new in new_columns.items():
-            if name not in old_columns:
-                assert new.nullable, f"update_schema: new column {name!r} must be nullable"
+        _assert_additive_schema_evolution(self.schema, new_schema)
         self.schema = new_schema
         self._arrow_schema = schema_to_arrow(new_schema)
 
@@ -581,31 +601,22 @@ class LogNamespace:
         filename = _tmp_filename(sealed.min_seq)
         write_start = time.monotonic()
 
-        if self._in_memory:
-            seg = LocalSegment(
-                path=_mem_segment_path(filename),
-                size_bytes=sealed.table.nbytes,
-                min_seq=sealed.min_seq,
-                max_seq=sealed.max_seq,
-                table=sealed.table,
-            )
-        else:
-            filepath = self._data_dir / filename
-            tmp_path = filepath.with_suffix(".parquet.tmp")
-            pq.write_table(
-                sealed.table,
-                tmp_path,
-                compression="zstd",
-                row_group_size=_ROW_GROUP_SIZE,
-                write_page_index=True,
-            )
-            tmp_path.rename(filepath)
-            seg = LocalSegment(
-                path=str(filepath),
-                size_bytes=filepath.stat().st_size,
-                min_seq=sealed.min_seq,
-                max_seq=sealed.max_seq,
-            )
+        filepath = self._data_dir / filename
+        tmp_path = filepath.with_suffix(".parquet.tmp")
+        pq.write_table(
+            sealed.table,
+            tmp_path,
+            compression="zstd",
+            row_group_size=_ROW_GROUP_SIZE,
+            write_page_index=True,
+        )
+        tmp_path.rename(filepath)
+        seg = LocalSegment(
+            path=str(filepath),
+            size_bytes=filepath.stat().st_size,
+            min_seq=sealed.min_seq,
+            max_seq=sealed.max_seq,
+        )
 
         with self._insertion_lock:
             self._local_segments.append(seg)
@@ -635,36 +646,28 @@ class LogNamespace:
         merged_filename = _log_filename(min_seq)
         compaction_start = time.monotonic()
 
-        if self._in_memory:
-            merged_seg = self._compact_in_memory(tmps, min_seq, max_seq, merged_filename)
-            if merged_seg is None:
-                return
-            merged_target = "<memory>"
-        else:
-            merged_path = self._data_dir / merged_filename
-            staging_path = merged_path.with_suffix(".parquet.tmp")
-            sql = self._build_compaction_sql([Path(t.path) for t in tmps], staging_path)
-            try:
-                with self._insertion_lock:
-                    self._compaction_conn.execute(sql)
-            except Exception:
-                logger.warning("Compaction failed, leaving tmp segments in place", exc_info=True)
-                staging_path.unlink(missing_ok=True)
-                return
-            merged_seg = LocalSegment(
-                path=str(merged_path),
-                size_bytes=staging_path.stat().st_size,
-                min_seq=min_seq,
-                max_seq=max_seq,
-            )
-            merged_target = str(merged_path)
+        merged_path = self._data_dir / merged_filename
+        staging_path = merged_path.with_suffix(".parquet.tmp")
+        sql = self._build_compaction_sql([Path(t.path) for t in tmps], staging_path)
+        try:
+            with self._insertion_lock:
+                self._compaction_conn.execute(sql)
+        except Exception:
+            logger.warning("Compaction failed, leaving tmp segments in place", exc_info=True)
+            staging_path.unlink(missing_ok=True)
+            return
+        merged_seg = LocalSegment(
+            path=str(merged_path),
+            size_bytes=staging_path.stat().st_size,
+            min_seq=min_seq,
+            max_seq=max_seq,
+        )
 
         tmp_paths = {t.path for t in tmps}
 
         self._query_visibility_lock.write_acquire()
         try:
-            if not self._in_memory:
-                staging_path.rename(merged_path)
+            staging_path.rename(merged_path)
             with self._insertion_lock:
                 new_segments: deque[LocalSegment] = deque()
                 merged_inserted = False
@@ -678,12 +681,11 @@ class LogNamespace:
                 if not merged_inserted:
                     new_segments.append(merged_seg)
                 self._local_segments = new_segments
-            if not self._in_memory:
-                for t in tmps:
-                    try:
-                        Path(t.path).unlink(missing_ok=True)
-                    except Exception:
-                        logger.warning("Failed to unlink tmp segment %s", t.path, exc_info=True)
+            for t in tmps:
+                try:
+                    Path(t.path).unlink(missing_ok=True)
+                except Exception:
+                    logger.warning("Failed to unlink tmp segment %s", t.path, exc_info=True)
         finally:
             self._query_visibility_lock.write_release()
 
@@ -700,42 +702,8 @@ class LogNamespace:
             max_seq,
             int((time.monotonic() - compaction_start) * 1000),
         )
-        if not self._in_memory:
-            self._offload_to_gcs(merged_filename, Path(merged_target))
+        self._offload_to_gcs(merged_filename, merged_path)
         self._evict_hook()
-
-    def _compact_in_memory(
-        self,
-        tmps: list[LocalSegment],
-        min_seq: int,
-        max_seq: int,
-        merged_filename: str,
-    ) -> LocalSegment | None:
-        """Concat + project + sort the input tables; return one merged segment.
-
-        Mirrors ``_build_compaction_sql`` semantics: columns missing from a
-        given input are filled with NULL, the output is projected to the
-        registered schema's column order, and rows are ordered by the
-        compaction key.
-        """
-        target_schema = self._arrow_schema
-        try:
-            with self._insertion_lock:
-                aligned = [_project_to_schema(t.table, target_schema) for t in tmps if t.table is not None]
-            if not aligned:
-                return None
-            merged = pa.concat_tables(aligned)
-            merged = self._sort_for_flush(merged)
-        except Exception:
-            logger.warning("In-memory compaction failed, leaving tmp segments in place", exc_info=True)
-            return None
-        return LocalSegment(
-            path=_mem_segment_path(merged_filename),
-            size_bytes=merged.nbytes,
-            min_seq=min_seq,
-            max_seq=max_seq,
-            table=merged,
-        )
 
     def _build_compaction_sql(self, input_paths: list[Path], staging_path: Path) -> str:
         """Compose the COPY statement that compacts ``input_paths`` to ``staging_path``.
@@ -793,10 +761,6 @@ class LogNamespace:
         Caller must hold the registry's query-visibility read lock so the
         list isn't mutated mid-snapshot. Tmp segments are deliberately
         excluded — queries see only flushed/compacted data.
-
-        Each returned segment is either parquet-backed (``table is None``,
-        ``path`` is the filesystem path) or in-memory backed (``table``
-        set; ``path`` is a synthetic ``<mem>/...`` identifier).
         """
         with self._insertion_lock:
             return [s for s in self._local_segments if not _is_tmp_path(s.path)]
@@ -840,11 +804,10 @@ class LogNamespace:
                     continue
                 new.append(s)
             self._local_segments = new
-        if not self._in_memory:
-            try:
-                Path(path).unlink(missing_ok=True)
-            except Exception:
-                logger.warning("Failed to delete evicted segment %s", path, exc_info=True)
+        try:
+            Path(path).unlink(missing_ok=True)
+        except Exception:
+            logger.warning("Failed to delete evicted segment %s", path, exc_info=True)
         return removed_bytes
 
     def remove_local_storage(self) -> None:
@@ -854,13 +817,7 @@ class LogNamespace:
         lock; the namespace must already be detached from the registry
         (the bg flush thread joined, the registry row removed) so no
         concurrent code holds a reference to this namespace.
-
-        In-memory mode: just clear the segment list — there is no
-        directory or files to remove.
         """
-        if self._in_memory:
-            self._local_segments.clear()
-            return
         for s in list(self._local_segments):
             try:
                 Path(s.path).unlink(missing_ok=True)
@@ -933,34 +890,7 @@ class LogNamespace:
         finally:
             self._query_visibility_lock.read_release()
 
-        if tail and max_lines > 0:
-            rows.reverse()
-
-        if not rows:
-            return LogReadResult(entries=[], cursor=default_cursor)
-
-        max_seq = max(r[0] for r in rows)
-
-        if include_key_in_select:
-            entries = []
-            for r in rows:
-                # r: (seq, key, source, data, epoch_ms, level)
-                entry = logging_pb2.LogEntry(source=r[2], data=r[3], level=r[5])
-                entry.timestamp.epoch_ms = r[4]
-                entry.key = r[1]
-                entry.attempt_id = parse_attempt_id(r[1])
-                entries.append(entry)
-        else:
-            entries = []
-            attempt_id = parse_attempt_id(exact_key) if exact_key else 0
-            for r in rows:
-                # r: (seq, source, data, epoch_ms, level)
-                entry = logging_pb2.LogEntry(source=r[1], data=r[2], level=r[4])
-                entry.timestamp.epoch_ms = r[3]
-                entry.attempt_id = attempt_id
-                entries.append(entry)
-
-        return LogReadResult(entries=entries, cursor=max_seq)
+        return _shape_log_read_result(rows, tail, max_lines, default_cursor, include_key_in_select, exact_key)
 
     def _run_read_locked(
         self,
@@ -979,11 +909,7 @@ class LogNamespace:
                 ram_tables.append(self._flushing.table)
 
         segments = _cap_segments(segments)
-        parquet_files = [s.path for s in segments if s.table is None]
-        # In-memory segments come into the query as registered views,
-        # alongside the in-flight RAM tables. Order is irrelevant — the
-        # final SQL is a UNION ALL.
-        mem_segment_tables = [s.table for s in segments if s.table is not None]
+        parquet_files = [s.path for s in segments]
 
         where_clause = " AND ".join(where_parts)
         select_cols = (
@@ -992,10 +918,173 @@ class LogNamespace:
         order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
         limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
 
-        with self._read_pool.checkout(ram_tables + mem_segment_tables) as (conn, ram_names):
+        with self._read_pool.checkout(ram_tables) as (conn, ram_names):
             source = _build_union_source(parquet_files, ram_names, self._arrow_schema)
             sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
             return conn.execute(sql, params).fetchall()
+
+
+# ---------------------------------------------------------------------------
+# Memory implementation
+# ---------------------------------------------------------------------------
+
+
+class MemoryLogNamespace:
+    """In-process Arrow-backed namespace for tests and embedded use.
+
+    Holds every appended row in a single Arrow table per namespace. There is
+    no segmentation, no flush, no compaction, no eviction, and no background
+    thread. The query path is the same as :class:`DiskLogNamespace`'s — the
+    table is exposed via :meth:`query_snapshot` and consumed by the registry
+    as a RAM table.
+
+    The registered schema may evolve (additive nullable extension); the
+    backing table is reprojected to the new schema on each
+    :meth:`update_schema` call.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        schema: Schema,
+        insertion_lock: Lock,
+        query_visibility_lock: RWLock,
+        read_pool: _ReadPoolProtocol,
+    ) -> None:
+        self.name = name
+        self.schema = schema
+        self._arrow_schema = schema_to_arrow(schema)
+        self._insertion_lock = insertion_lock
+        self._query_visibility_lock = query_visibility_lock
+        self._read_pool = read_pool
+        # Single Arrow table holding every appended row. Initialised empty
+        # against the registered schema so consumers can register it with
+        # DuckDB before any rows arrive.
+        self._table: pa.Table = self._arrow_schema.empty_table()
+        # Per-row counter for the log namespace; matches the disk variant's
+        # invariant that ``seq`` is dense and monotonic.
+        self._next_seq = 1
+
+    # ------------------------------------------------------------------
+    # Append API
+    # ------------------------------------------------------------------
+
+    def append_log_batch(self, items: list[tuple[str, list]]) -> None:
+        with self._insertion_lock:
+            new_tables: list[pa.Table] = [self._table]
+            for key, entries in items:
+                if not entries:
+                    continue
+                first_seq = self._next_seq
+                self._next_seq += len(entries)
+                rows = [
+                    (first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)
+                ]
+                new_tables.append(_build_log_table(rows, self._arrow_schema))
+            self._table = pa.concat_tables(new_tables) if len(new_tables) > 1 else self._table
+
+    def append_record_batch(self, batch: pa.RecordBatch) -> None:
+        if batch.num_rows == 0:
+            return
+        new_chunk = pa.Table.from_batches([batch], schema=self._arrow_schema)
+        with self._insertion_lock:
+            self._next_seq += batch.num_rows
+            self._table = pa.concat_tables([self._table, new_chunk])
+
+    # ------------------------------------------------------------------
+    # Read API (log-namespace-specific)
+    # ------------------------------------------------------------------
+
+    def get_logs(
+        self,
+        key: str,
+        *,
+        since_ms: int = 0,
+        cursor: int = 0,
+        substring_filter: str = "",
+        max_lines: int = 0,
+        tail: bool = False,
+        min_level: str = "",
+    ) -> LogReadResult:
+        min_level_enum = str_to_log_level(min_level)
+        is_pattern = bool(REGEX_META_RE.search(key))
+
+        if not is_pattern:
+            where_parts = ["key = $key", "seq > $cursor"]
+            params: dict = {"key": key, "cursor": cursor}
+            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
+            include_key_in_select = False
+            exact_key: str | None = key
+        else:
+            where_parts, params = _regex_query(key, cursor)
+            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
+            include_key_in_select = True
+            exact_key = None
+
+        # Snapshot the table under the insertion lock; rwlock not needed
+        # because there are no files to unlink.
+        with self._insertion_lock:
+            table = self._table
+
+        select_cols = (
+            "seq, key, source, data, epoch_ms, level" if include_key_in_select else "seq, source, data, epoch_ms, level"
+        )
+        order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
+        limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
+        where_clause = " AND ".join(where_parts)
+
+        with self._read_pool.checkout([table]) as (conn, ram_names):
+            source = _build_union_source([], ram_names, self._arrow_schema)
+            sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
+            rows = conn.execute(sql, params).fetchall()
+
+        return _shape_log_read_result(rows, tail, max_lines, cursor, include_key_in_select, exact_key)
+
+    # ------------------------------------------------------------------
+    # Snapshot API consumed by the registry
+    # ------------------------------------------------------------------
+
+    def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]:
+        with self._insertion_lock:
+            return [], [self._table]
+
+    def sealed_segments(self) -> list[LocalSegment]:
+        return []
+
+    def all_segments_unlocked(self) -> list[LocalSegment]:
+        return []
+
+    # ------------------------------------------------------------------
+    # Schema evolution
+    # ------------------------------------------------------------------
+
+    def update_schema(self, new_schema: Schema) -> None:
+        _assert_additive_schema_evolution(self.schema, new_schema)
+        new_arrow = schema_to_arrow(new_schema)
+        with self._insertion_lock:
+            self._table = _project_to_schema(self._table, new_arrow)
+            self.schema = new_schema
+            self._arrow_schema = new_arrow
+
+    # ------------------------------------------------------------------
+    # Lifecycle / no-ops
+    # ------------------------------------------------------------------
+
+    def evict_segment(self, path: str) -> int:
+        # Memory mode does not participate in eviction; the registry never
+        # gets candidate paths because all_segments_unlocked() is empty.
+        return 0
+
+    def remove_local_storage(self) -> None:
+        with self._insertion_lock:
+            self._table = self._arrow_schema.empty_table()
+
+    def close(self) -> None:
+        return
+
+    def stop_and_join(self) -> None:
+        return
 
 
 # ---------------------------------------------------------------------------
@@ -1004,7 +1093,7 @@ class LogNamespace:
 
 
 class _ReadPoolProtocol(Protocol):
-    """Structural type the ``LogNamespace`` uses for read connections.
+    """Structural type the namespace variants use for read connections.
 
     The registry's :class:`_ConnectionPool` implements this; tests can
     substitute any object that yields a ``(cursor, ram_table_names)`` pair.
@@ -1013,6 +1102,69 @@ class _ReadPoolProtocol(Protocol):
     def checkout(
         self, buffer_tables: list[pa.Table]
     ) -> AbstractContextManager[tuple[duckdb.DuckDBPyConnection, list[str]]]: ...
+
+
+def _assert_additive_schema_evolution(old: Schema, new: Schema) -> None:
+    """Verify ``new`` is an additive-nullable extension of ``old``.
+
+    Raises ``AssertionError`` on any non-additive change (column dropped,
+    type changed, nullability changed, new non-nullable column).
+    """
+    old_columns = {c.name: c for c in old.columns}
+    new_columns = {c.name: c for c in new.columns}
+    for name, old_col in old_columns.items():
+        new_col = new_columns.get(name)
+        assert new_col is not None, f"update_schema: column {name!r} dropped (must be additive)"
+        assert (
+            new_col.type == old_col.type
+        ), f"update_schema: column {name!r} type changed {old_col.type}->{new_col.type}"
+        assert new_col.nullable == old_col.nullable, f"update_schema: column {name!r} nullability changed"
+    for name, new_col in new_columns.items():
+        if name not in old_columns:
+            assert new_col.nullable, f"update_schema: new column {name!r} must be nullable"
+
+
+def _shape_log_read_result(
+    rows: list[tuple],
+    tail: bool,
+    max_lines: int,
+    default_cursor: int,
+    include_key_in_select: bool,
+    exact_key: str | None,
+) -> LogReadResult:
+    """Convert a fetched row list into the proto-shaped read result.
+
+    Both namespace variants funnel through this so the response shape
+    stays in lockstep — only the SQL pipeline upstream differs.
+    """
+    if tail and max_lines > 0:
+        rows.reverse()
+
+    if not rows:
+        return LogReadResult(entries=[], cursor=default_cursor)
+
+    max_seq = max(r[0] for r in rows)
+
+    if include_key_in_select:
+        entries = []
+        for r in rows:
+            # r: (seq, key, source, data, epoch_ms, level)
+            entry = logging_pb2.LogEntry(source=r[2], data=r[3], level=r[5])
+            entry.timestamp.epoch_ms = r[4]
+            entry.key = r[1]
+            entry.attempt_id = parse_attempt_id(r[1])
+            entries.append(entry)
+    else:
+        entries = []
+        attempt_id = parse_attempt_id(exact_key) if exact_key else 0
+        for r in rows:
+            # r: (seq, source, data, epoch_ms, level)
+            entry = logging_pb2.LogEntry(source=r[1], data=r[2], level=r[4])
+            entry.timestamp.epoch_ms = r[3]
+            entry.attempt_id = attempt_id
+            entries.append(entry)
+
+    return LogReadResult(entries=entries, cursor=max_seq)
 
 
 def _cap_segments(segments: list[LocalSegment]) -> list[LocalSegment]:
@@ -1079,8 +1231,8 @@ def _add_common_filters(
 def _project_to_schema(table: pa.Table, target: pa.Schema) -> pa.Table:
     """Cast/extend ``table`` to match ``target`` column order, filling NULL.
 
-    Mirrors :meth:`LogNamespace._build_compaction_sql` for in-memory
-    compaction: columns absent from ``table`` are added as nulls; columns
+    Mirrors :meth:`DiskLogNamespace._build_compaction_sql`'s union-by-name
+    semantics: columns absent from ``table`` are added as nulls; columns
     present are cast to the target type if needed; columns not in
     ``target`` are dropped.
     """
