@@ -1168,6 +1168,27 @@ def test_list_workers_filter_by_device_type(service, state):
     assert gpu_only.total_count == 3
     assert all(w.worker_id.startswith("gpu-worker-") for w in gpu_only.workers)
 
+    # CPU workers are stored with device_type == "" but the public query
+    # vocabulary uses the canonical "cpu". Verify the filter normalizes both
+    # sides — a regression here would silently break the Fleet UI's CPU tab.
+    cpu_only = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(type="cpu"),
+        ),
+        None,
+    )
+    assert cpu_only.total_count == 2
+    assert all(w.worker_id.startswith("cpu-worker-") for w in cpu_only.workers)
+
+    # Filter is case-insensitive.
+    upper_cpu = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(type="CPU"),
+        ),
+        None,
+    )
+    assert upper_cpu.total_count == 2
+
 
 def test_list_workers_filter_by_prefix(service, state):
     """prefix matches worker_id substring (case-insensitive) and address."""

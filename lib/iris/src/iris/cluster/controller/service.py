@@ -618,6 +618,18 @@ MAX_LIST_JOBS_LIMIT = 500
 MAX_LIST_WORKERS_LIMIT = 1000
 
 
+def _canonical_device_type(stored: str) -> str:
+    """Return the canonical device-type name for a worker row.
+
+    CPU workers are persisted with ``device_type == ""`` (see registration in
+    ``ControllerTransitions.register`` and migration 0016), but the public
+    ``WorkerQuery.type`` filter and dashboard inputs use the canonical
+    ``"cpu"`` / ``"gpu"`` / ``"tpu"`` strings. Normalize at the read boundary
+    so callers can use one vocabulary.
+    """
+    return stored or "cpu"
+
+
 def _filter_and_sort_workers(
     workers: list[WorkerDetailRow],
     query: controller_pb2.Controller.WorkerQuery,
@@ -631,20 +643,24 @@ def _filter_and_sort_workers(
     fan-out.
     """
     prefix = query.prefix.lower() if query.prefix else ""
-    device_type = query.type or ""
+    device_type = query.type.lower() if query.type else ""
     if prefix:
         workers = [
             w for w in workers if prefix in str(w.worker_id).lower() or (w.address and prefix in w.address.lower())
         ]
     if device_type:
-        workers = [w for w in workers if w.device_type == device_type]
+        workers = [w for w in workers if _canonical_device_type(w.device_type) == device_type]
 
     sort_field = query.sort_field or controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID
     descending = query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC
     if sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT:
         workers = sorted(workers, key=lambda w: w.last_heartbeat.epoch_ms(), reverse=descending)
     elif sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE:
-        workers = sorted(workers, key=lambda w: (w.device_type, str(w.worker_id)), reverse=descending)
+        workers = sorted(
+            workers,
+            key=lambda w: (_canonical_device_type(w.device_type), str(w.worker_id)),
+            reverse=descending,
+        )
     else:
         workers = sorted(workers, key=lambda w: str(w.worker_id), reverse=descending)
     return workers
