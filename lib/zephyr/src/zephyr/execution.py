@@ -1606,7 +1606,8 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
                 resources=config.worker_resources,
                 actor_config=ActorConfig(max_task_retries=10),
             )
-            worker_group.wait_ready(count=1, timeout=3600.0)
+            ready_wait_s = float(os.environ.get("ZEPHYR_WORKERS_READY_WAIT") or 12 * 60 * 60)
+            worker_group.wait_ready(count=1, timeout=ready_wait_s)
 
             # Let the coordinator poll worker job health in its maintenance loop
             coordinator.set_worker_group.remote(worker_group).result()
