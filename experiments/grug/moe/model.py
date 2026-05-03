@@ -491,6 +491,7 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    routed_expert_scale: float = eqx.field(static=True, default=1.0)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -508,6 +509,7 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            routed_expert_scale=cfg.routed_expert_scale,
         )
 
     @named_call
@@ -524,8 +526,8 @@ class Block(eqx.Module):
         )
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
-        if self.cfg.routed_expert_scale != 1.0:
-            mlp_out = mlp_out * self.cfg.routed_expert_scale
+        if self.routed_expert_scale != 1.0:
+            mlp_out = mlp_out * self.routed_expert_scale
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
