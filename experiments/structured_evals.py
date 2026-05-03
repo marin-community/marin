@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os.path
 
+from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
@@ -41,7 +42,6 @@ from marin.datakit.ingestion_manifest import (
     StagingMetadata,
     UsagePolicy,
 )
-from marin.datakit.download.huggingface import download_hf_step
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
 from marin.execution.executor import ExecutorStep, executor_main
 from marin.execution.step_spec import StepSpec

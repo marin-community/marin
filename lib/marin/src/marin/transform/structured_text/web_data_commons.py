@@ -28,15 +28,14 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 import requests
-from rigging.filesystem import open_url, url_to_fs
-from zephyr.writers import atomic_rename
-
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
 from marin.utils import fsspec_mkdirs
+from rigging.filesystem import open_url, url_to_fs
+from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
 
