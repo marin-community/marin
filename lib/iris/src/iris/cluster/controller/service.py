@@ -615,6 +615,55 @@ _SORT_FIELD_TO_SQL: dict[int, str] = {
 
 
 MAX_LIST_JOBS_LIMIT = 500
+MAX_LIST_WORKERS_LIMIT = 1000
+
+
+def _canonical_device_type(stored: str) -> str:
+    """Return the canonical device-type name for a worker row.
+
+    CPU workers are persisted with ``device_type == ""`` (see registration in
+    ``ControllerTransitions.register`` and migration 0016), but the public
+    ``WorkerQuery.type`` filter and dashboard inputs use the canonical
+    ``"cpu"`` / ``"gpu"`` / ``"tpu"`` strings. Normalize at the read boundary
+    so callers can use one vocabulary.
+    """
+    return stored or "cpu"
+
+
+def _filter_and_sort_workers(
+    workers: list[WorkerDetailRow],
+    query: controller_pb2.Controller.WorkerQuery,
+) -> list[WorkerDetailRow]:
+    """Apply WorkerQuery prefix/type filters and sort the cached roster.
+
+    Filtering and sorting happen in Python against the cached worker roster
+    rather than in SQL: the roster is bounded by cluster size (low thousands)
+    and already cached on the controller, so the marginal cost of a re-scan
+    per request is much smaller than reissuing the SELECT + worker_attributes
+    fan-out.
+    """
+    prefix = query.prefix.lower() if query.prefix else ""
+    device_type = query.type.lower() if query.type else ""
+    if prefix:
+        workers = [
+            w for w in workers if prefix in str(w.worker_id).lower() or (w.address and prefix in w.address.lower())
+        ]
+    if device_type:
+        workers = [w for w in workers if _canonical_device_type(w.device_type) == device_type]
+
+    sort_field = query.sort_field or controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID
+    descending = query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC
+    if sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT:
+        workers = sorted(workers, key=lambda w: w.last_heartbeat.epoch_ms(), reverse=descending)
+    elif sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE:
+        workers = sorted(
+            workers,
+            key=lambda w: (_canonical_device_type(w.device_type), str(w.worker_id)),
+            reverse=descending,
+        )
+    else:
+        workers = sorted(workers, key=lambda w: str(w.worker_id), reverse=descending)
+    return workers
 
 
 def _resolve_state_filter(state_filter: str) -> tuple[int, ...] | None:
@@ -1679,26 +1728,55 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.ListWorkersRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.ListWorkersResponse:
-        """List all workers with their running task counts."""
+        """List workers with their running task counts.
+
+        Filters/sorts the cached roster, then slices to the requested page so
+        only the page's workers pay the ``running_tasks_by_worker`` fan-out
+        and proto-build cost. ``query.limit == 0`` disables paging (preserves
+        CLI callers that fetch the whole roster); ``limit > 0`` is clamped to
+        ``MAX_LIST_WORKERS_LIMIT``.
+        """
         if self._controller.has_direct_provider:
             return controller_pb2.Controller.ListWorkersResponse()
-        workers = []
-        worker_rows = self._worker_roster_cached()
-        running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in worker_rows})
-        for worker in worker_rows:
-            workers.append(
-                controller_pb2.Controller.WorkerHealthStatus(
-                    worker_id=worker.worker_id,
-                    healthy=worker.healthy,
-                    consecutive_failures=worker.consecutive_failures,
-                    last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
-                    running_job_ids=[task_id.to_wire() for task_id in running_by_worker.get(worker.worker_id, [])],
-                    address=worker.address,
-                    metadata=_worker_metadata_to_proto(worker),
-                    status_message=worker_status_message(worker),
-                )
+
+        query = controller_pb2.Controller.WorkerQuery()
+        if request.HasField("query"):
+            query.CopyFrom(request.query)
+
+        all_rows = self._worker_roster_cached()
+        filtered = _filter_and_sort_workers(all_rows, query)
+        total_count = len(filtered)
+
+        offset = max(query.offset, 0)
+        limit = max(query.limit, 0)
+        if limit > MAX_LIST_WORKERS_LIMIT:
+            limit = MAX_LIST_WORKERS_LIMIT
+        if limit > 0:
+            page_rows = filtered[offset : offset + limit]
+            has_more = offset + limit < total_count
+        else:
+            page_rows = filtered[offset:] if offset else filtered
+            has_more = False
+
+        running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in page_rows})
+        workers = [
+            controller_pb2.Controller.WorkerHealthStatus(
+                worker_id=worker.worker_id,
+                healthy=worker.healthy,
+                consecutive_failures=worker.consecutive_failures,
+                last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
+                running_job_ids=[task_id.to_wire() for task_id in running_by_worker.get(worker.worker_id, [])],
+                address=worker.address,
+                metadata=_worker_metadata_to_proto(worker),
+                status_message=worker_status_message(worker),
             )
-        return controller_pb2.Controller.ListWorkersResponse(workers=workers)
+            for worker in page_rows
+        ]
+        return controller_pb2.Controller.ListWorkersResponse(
+            workers=workers,
+            total_count=total_count,
+            has_more=has_more,
+        )
 
     # --- Endpoint Management ---
 
