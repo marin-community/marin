@@ -68,12 +68,6 @@ _DUCKDB_TYPE_FOR: dict[ColumnTypeValue, str] = {
 _COLUMN_TYPE_FOR_ARROW: dict[pa.DataType, ColumnTypeValue] = {v: k for k, v in _ARROW_TYPE_FOR.items()}
 
 
-# Valid types for the ordering key column. INT64 covers epoch-ms ints; the
-# explicit timestamp accommodates dataclass schemas that carry datetime fields.
-_KEY_COLUMN_TYPES: frozenset[ColumnTypeValue] = frozenset(
-    {stats_pb2.COLUMN_TYPE_INT64, stats_pb2.COLUMN_TYPE_TIMESTAMP_MS}
-)
-
 # Default implicit key column name when Schema.key_column is empty.
 IMPLICIT_KEY_COLUMN = "timestamp_ms"
 
@@ -108,17 +102,10 @@ class Schema:
             additive evolutions.
         key_column: Explicit ordering key column name. Empty means the server
             falls back to ``timestamp_ms``.
-        compaction_sort_prefix: Optional column-name prefix to sort segments
-            by during compaction, before the implicit ``seq`` column. Use it
-            when the dominant query filters on a non-numeric column (so it
-            can't be the ``key_column``) and benefits from row-group pruning
-            on that column. Empty means compaction sorts by ``(key_column,
-            seq)`` (or ``(seq,)`` when no key_column is set).
     """
 
     columns: tuple[Column, ...]
     key_column: str = ""
-    compaction_sort_prefix: tuple[str, ...] = ()
 
     def column(self, name: str) -> Column | None:
         for c in self.columns:
@@ -179,27 +166,7 @@ def with_implicit_seq(schema: Schema) -> Schema:
     if any(c.name == IMPLICIT_SEQ_COLUMN for c in schema.columns):
         return schema
     seq_col = Column(name=IMPLICIT_SEQ_COLUMN, type=stats_pb2.COLUMN_TYPE_INT64, nullable=False)
-    return Schema(
-        columns=(seq_col, *schema.columns),
-        key_column=schema.key_column,
-        compaction_sort_prefix=schema.compaction_sort_prefix,
-    )
-
-
-def without_implicit_seq(schema: Schema) -> Schema:
-    """Return ``schema`` with the implicit ``seq`` column dropped.
-
-    Inverse of :func:`with_implicit_seq`. Used at the registry's user-API
-    boundary to hand back the schema callers actually declared.
-    """
-    if not any(c.name == IMPLICIT_SEQ_COLUMN for c in schema.columns):
-        return schema
-    cols = tuple(c for c in schema.columns if c.name != IMPLICIT_SEQ_COLUMN)
-    return Schema(
-        columns=cols,
-        key_column=schema.key_column,
-        compaction_sort_prefix=schema.compaction_sort_prefix,
-    )
+    return Schema(columns=(seq_col, *schema.columns), key_column=schema.key_column)
 
 
 def schema_to_arrow(schema: Schema) -> pa.Schema:
@@ -217,7 +184,6 @@ def schema_to_json(schema: Schema) -> str:
     # int values are not guaranteed across proto edits the way names are.
     payload = {
         "key_column": schema.key_column,
-        "compaction_sort_prefix": list(schema.compaction_sort_prefix),
         "columns": [
             {"name": c.name, "type": stats_pb2.ColumnType.Name(c.type), "nullable": c.nullable} for c in schema.columns
         ],
@@ -231,11 +197,7 @@ def schema_from_json(text: str) -> Schema:
         Column(name=c["name"], type=stats_pb2.ColumnType.Value(c["type"]), nullable=c["nullable"])
         for c in payload["columns"]
     )
-    return Schema(
-        columns=cols,
-        key_column=payload.get("key_column", ""),
-        compaction_sort_prefix=tuple(payload.get("compaction_sort_prefix", ())),
-    )
+    return Schema(columns=cols, key_column=payload.get("key_column", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -247,33 +209,19 @@ def resolve_key_column(schema: Schema) -> str:
     """Return the resolved ordering key column name, raising if invalid.
 
     Rules:
-        - If ``schema.key_column`` is set, it must name an existing column of
-          INT64 or TIMESTAMP_MS type.
-        - Otherwise, the schema must contain a column named
-          ``timestamp_ms`` of INT64 or TIMESTAMP_MS type.
+        - If ``schema.key_column`` is set, it must name an existing column.
+        - Otherwise, the schema must contain a column named ``timestamp_ms``.
 
     Raises:
         SchemaValidationError: neither rule satisfied.
     """
     if schema.key_column:
-        col = schema.column(schema.key_column)
-        if col is None:
+        if schema.column(schema.key_column) is None:
             raise SchemaValidationError(f"key_column={schema.key_column!r} is not present in the schema columns")
-        if col.type not in _KEY_COLUMN_TYPES:
-            raise SchemaValidationError(
-                f"key_column={schema.key_column!r} must be INT64 or TIMESTAMP_MS, "
-                f"got {stats_pb2.ColumnType.Name(col.type)}"
-            )
         return schema.key_column
 
-    implicit = schema.column(IMPLICIT_KEY_COLUMN)
-    if implicit is None:
+    if schema.column(IMPLICIT_KEY_COLUMN) is None:
         raise SchemaValidationError(f"schema declares no key_column and has no implicit '{IMPLICIT_KEY_COLUMN}' column")
-    if implicit.type not in _KEY_COLUMN_TYPES:
-        raise SchemaValidationError(
-            f"implicit key column '{IMPLICIT_KEY_COLUMN}' must be INT64 or TIMESTAMP_MS, "
-            f"got {stats_pb2.ColumnType.Name(implicit.type)}"
-        )
     return IMPLICIT_KEY_COLUMN
 
 
@@ -331,11 +279,7 @@ def merge_schemas(registered: Schema, requested: Schema) -> Schema:
         return registered
 
     merged_cols = tuple(list(registered.columns) + extras)
-    return Schema(
-        columns=merged_cols,
-        key_column=registered.key_column,
-        compaction_sort_prefix=registered.compaction_sort_prefix,
-    )
+    return Schema(columns=merged_cols, key_column=registered.key_column)
 
 
 # ---------------------------------------------------------------------------

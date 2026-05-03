@@ -16,7 +16,7 @@ import pyarrow.parquet as pq
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.schema import Column, Schema
+from finelog.store.schema import Column, Schema, with_implicit_seq
 
 from tests.conftest import _ipc_bytes, _worker_schema
 
@@ -118,7 +118,7 @@ def test_registry_survives_restart(tmp_path: Path):
         # Re-register with the same schema is idempotent. Returns the
         # registered schema, which means rehydration worked.
         effective = s2.register_table("iris.worker", schema)
-        assert effective == schema
+        assert effective == with_implicit_seq(schema)
         # And writes continue to work without re-registering.
         s2.write_rows("iris.worker", _ipc_bytes(batch))
     finally:

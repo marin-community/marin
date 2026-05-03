@@ -18,6 +18,7 @@ from finelog.store.schema import (
     Schema,
     SchemaConflictError,
     SchemaValidationError,
+    with_implicit_seq,
 )
 
 from tests.conftest import _worker_schema
@@ -41,7 +42,7 @@ from tests.conftest import _worker_schema
 def test_register_accepts_valid_names(store: DuckDBLogStore, name: str):
     schema = _worker_schema()
     effective = store.register_table(name, schema)
-    assert effective == schema
+    assert effective == with_implicit_seq(schema)
 
 
 @pytest.mark.parametrize(
@@ -129,18 +130,6 @@ def test_register_rejects_explicit_key_missing_from_columns(store: DuckDBLogStor
         store.register_table("iris.worker", schema)
 
 
-def test_register_rejects_explicit_key_wrong_type(store: DuckDBLogStore):
-    schema = Schema(
-        columns=(
-            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
-            Column(name="ts", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),  # wrong type for key
-        ),
-        key_column="ts",
-    )
-    with pytest.raises(SchemaValidationError):
-        store.register_table("iris.worker", schema)
-
-
 # ---------------------------------------------------------------------------
 # RegisterTable: evolve-by-default
 # ---------------------------------------------------------------------------
@@ -150,7 +139,7 @@ def test_register_idempotent_returns_existing_schema(store: DuckDBLogStore):
     schema = _worker_schema()
     first = store.register_table("iris.worker", schema)
     second = store.register_table("iris.worker", schema)
-    assert first == second == schema
+    assert first == second == with_implicit_seq(schema)
 
 
 def test_register_subset_returns_full_registered_schema(store: DuckDBLogStore):
@@ -170,7 +159,7 @@ def test_register_subset_returns_full_registered_schema(store: DuckDBLogStore):
         ),
     )
     effective = store.register_table("iris.worker", subset)
-    assert effective == full
+    assert effective == with_implicit_seq(full)
 
 
 def test_register_additive_nullable_extension_merges(store: DuckDBLogStore):
@@ -180,7 +169,7 @@ def test_register_additive_nullable_extension_merges(store: DuckDBLogStore):
         columns=(*base.columns, Column(name="note", type=stats_pb2.COLUMN_TYPE_STRING, nullable=True)),
     )
     effective = store.register_table("iris.worker", extended)
-    assert effective.column_names() == ("worker_id", "mem_bytes", "timestamp_ms", "note")
+    assert effective.column_names() == ("seq", "worker_id", "mem_bytes", "timestamp_ms", "note")
     # Re-registering the base schema after evolution returns the merged schema.
     again = store.register_table("iris.worker", base)
     assert again == effective

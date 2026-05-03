@@ -78,11 +78,10 @@ LOG_REGISTERED_SCHEMA = Schema(
         Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         Column(name="level", type=stats_pb2.COLUMN_TYPE_INT32, nullable=False),
     ),
-    key_column="epoch_ms",
     # Per-source tail reads (``WHERE key = $key ORDER BY seq DESC``) are
-    # the dominant log access pattern, so colocate same-key rows in the
-    # same parquet row groups. The implicit seq column is appended.
-    compaction_sort_prefix=("key",),
+    # the dominant log access pattern; sorting by ``key`` first colocates
+    # same-source rows in the same parquet row groups for pruning.
+    key_column="key",
 )
 
 # Both prefixes keyed by min_seq, so sort-by-filename yields chronological order.
@@ -612,17 +611,13 @@ class DiskLogNamespace:
     def _compaction_sort_keys(self) -> tuple[str, ...]:
         """Return the column names that compaction sorts on.
 
-        Order: ``compaction_sort_prefix`` (if any) → ``key_column`` (if any
-        and not already in the prefix) → implicit ``seq``. The prefix lets a
-        namespace colocate same-value rows in the same parquet row groups
-        when the dominant query filters on a non-numeric column (logs do
-        this with ``compaction_sort_prefix=("key",)``).
+        Order: ``key_column`` (if set) → implicit ``seq``. Sorting by the
+        primary key first colocates same-key rows in the same parquet row
+        groups so range scans on the key prune efficiently.
         """
-        keys: list[str] = list(self.schema.compaction_sort_prefix)
-        if self.schema.key_column and self.schema.key_column not in keys:
-            keys.append(self.schema.key_column)
-        keys.append(IMPLICIT_SEQ_COLUMN)
-        return tuple(keys)
+        if self.schema.key_column:
+            return (self.schema.key_column, IMPLICIT_SEQ_COLUMN)
+        return (IMPLICIT_SEQ_COLUMN,)
 
     def _write_new_segment(self, sealed: _SealedBuffer) -> None:
         filename = _tmp_filename(sealed.min_seq)

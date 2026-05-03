@@ -56,7 +56,6 @@ class RegistryDB:
             CREATE TABLE IF NOT EXISTS namespaces (
                 namespace        TEXT PRIMARY KEY,
                 schema_json      TEXT NOT NULL,
-                key_column       TEXT NOT NULL,
                 registered_at_ms BIGINT NOT NULL,
                 last_modified_ms BIGINT NOT NULL
             )
@@ -80,7 +79,7 @@ class RegistryDB:
         """Remove the row for ``namespace`` if it exists. Idempotent."""
         self._conn.execute("DELETE FROM namespaces WHERE namespace = ?", [namespace])
 
-    def upsert(self, namespace: str, schema: Schema, key_column: str) -> None:
+    def upsert(self, namespace: str, schema: Schema) -> None:
         """Insert or evolve the row for ``namespace``.
 
         ``last_modified_ms`` is bumped on every call; ``registered_at_ms``
@@ -93,12 +92,11 @@ class RegistryDB:
         registered_at = existing[0] if existing is not None else now_ms
         self._conn.execute(
             """
-            INSERT INTO namespaces (namespace, schema_json, key_column, registered_at_ms, last_modified_ms)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO namespaces (namespace, schema_json, registered_at_ms, last_modified_ms)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT (namespace) DO UPDATE
               SET schema_json = excluded.schema_json,
-                  key_column = excluded.key_column,
                   last_modified_ms = excluded.last_modified_ms
             """,
-            [namespace, schema_to_json(schema), key_column, registered_at, now_ms],
+            [namespace, schema_to_json(schema), registered_at, now_ms],
         )
