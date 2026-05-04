@@ -412,26 +412,31 @@ def _build_pod_manifest(
     if run_req.HasField("resources"):
         res = run_req.resources
         limits: dict[str, str] = {}
+        requests: dict[str, str] = {}
         if res.cpu_millicores:
-            limits["cpu"] = f"{res.cpu_millicores}m"
+            # CPU as a request only (no limits.cpu) so containers can burst onto
+            # idle node CPU. The scheduler still places by cpu_millicores, and
+            # under contention CFS shares CPU proportionally to requests. This
+            # matches the soft-cap behavior the docker runtime uses for
+            # CAPACITY_TYPE_ON_DEMAND workers.
+            requests["cpu"] = f"{res.cpu_millicores}m"
         if res.memory_bytes:
+            # Memory stays a hard cap — overshoot is fatal, not just slow.
             limits["memory"] = str(res.memory_bytes)
+            requests["memory"] = str(res.memory_bytes)
         if res.HasField("device"):
             gpu_count = get_gpu_count(res.device)
             has_tpu = res.device.HasField("tpu")
             if gpu_count > 0:
+                # K8s treats accelerator limits as implicit requests.
                 limits["nvidia.com/gpu"] = str(gpu_count)
                 if host_network:
                     # Request RDMA/IB devices for multi-host NCCL over InfiniBand.
                     limits["rdma/ib"] = str(gpu_count)
         if limits:
             resources["limits"] = limits
-            # Set requests = limits for CPU/memory so K8s schedules based on
-            # actual resource needs. GPU/RDMA are excluded (K8s treats GPU
-            # limits as implicit requests).
-            requests = {k: v for k, v in limits.items() if k in ("cpu", "memory")}
-            if requests:
-                resources.setdefault("requests", {}).update(requests)
+        if requests:
+            resources.setdefault("requests", {}).update(requests)
         if res.disk_bytes:
             disk_gi = max(1, res.disk_bytes // (1024**3))
             resources.setdefault("requests", {})["ephemeral-storage"] = f"{disk_gi}Gi"
