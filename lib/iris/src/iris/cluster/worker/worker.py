@@ -171,7 +171,7 @@ class Worker:
             controller_address=config.controller_address,
             max_cache_items=100,
         )
-        self._runtime = container_runtime or DockerRuntime(cache_dir=self._cache_dir)
+        self._runtime = container_runtime or DockerRuntime(cache_dir=self._cache_dir, capacity_type=config.capacity_type)
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
         # Resolve worker metadata: explicit > environment_provider > hardware probe
