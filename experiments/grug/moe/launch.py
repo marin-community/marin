@@ -24,13 +24,12 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
-from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_validation_sets
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
-from experiments.pretraining_datasets import nemotron_mix
+from experiments.pretraining_datasets import nemotron_mix_block_shuffle
 
 
 @dataclass(frozen=True)
@@ -54,11 +53,14 @@ class GrugMoeLaunchConfig:
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    # If a preempted TPU gets rescheduled in a different region, scan all
+    # regional buckets to find and resume from the latest checkpoint.
+    enable_cross_region_ckpt_read: bool = False
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
-    nemotron_mix,
-    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
+    nemotron_mix_block_shuffle,
+    default_validation_sets(tokenizer=nemotron_mix_block_shuffle.tokenizer),
 )
 
 
@@ -77,8 +79,73 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
     return tracker
 
 
+def _find_checkpoint_across_regions(output_path: str) -> str | None:
+    """Search all regional marin buckets for the latest checkpoint.
+
+    Scans each region for checkpoint subdirectories with metadata.json,
+    reads the step number. Returns the gs:// checkpoints directory of the
+    region with the highest step, but only if that region is different from
+    the local region and has a strictly higher step. Returns None if local
+    already has the best checkpoint (to avoid overriding the trainer's
+    normal checkpoint discovery, which also finds temporary checkpoints).
+    """
+    import json
+
+    from rigging.filesystem import REGION_TO_DATA_BUCKET
+
+    if not output_path.startswith("gs://"):
+        return None
+    parts = output_path.split("/", 3)
+    if len(parts) < 4:
+        return None
+    local_bucket = parts[2]
+    suffix = parts[3]
+    checkpoint_suffix = os.path.join(suffix, "checkpoints")
+
+    import gcsfs
+
+    fs = gcsfs.GCSFileSystem()
+    best_step = -1
+    best_path = None
+    local_step = -1
+
+    for bucket in REGION_TO_DATA_BUCKET.values():
+        candidate = f"{bucket}/{checkpoint_suffix}"
+        try:
+            subdirs = fs.ls(candidate)
+        except FileNotFoundError:
+            continue
+        for subdir in subdirs:
+            metadata_path = f"{subdir}/metadata.json"
+            try:
+                with fs.open(metadata_path) as f:
+                    metadata = json.load(f)
+                step = int(metadata.get("step", -1))
+                has_data = fs.exists(f"{subdir}/manifest.ocdbt") or fs.exists(f"{subdir}/d")
+                if not has_data:
+                    continue
+                if bucket == local_bucket:
+                    local_step = max(local_step, step)
+                if step > best_step:
+                    best_step = step
+                    best_path = f"gs://{candidate}"
+            except Exception:
+                continue
+
+    # Only return cross-region path if it's strictly better than local.
+    # Otherwise let the trainer discover its own checkpoints (including
+    # temporary ones that may not have metadata.json).
+    if best_step > local_step and best_path and local_bucket not in best_path:
+        return best_path
+    return None
+
+
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
-    # Map template launch knobs onto full Levanter TrainerConfig.
+    checkpoint_base = os.path.join(config.output_path, "checkpoints")
+
+    # Search all regions for an existing checkpoint (handles cross-region resume).
+    load_path = _find_checkpoint_across_regions(config.output_path) if config.enable_cross_region_ckpt_read else None
+
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
@@ -91,12 +158,12 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mesh=MeshConfig(axes={"expert": 1}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
+        load_checkpoint_path=load_path,
         checkpointer=CheckpointerConfig(
-            base_path=os.path.join(config.output_path, "checkpoints"),
-            temporary_base_path=temporary_checkpoint_base_path(config.output_path),
+            base_path=checkpoint_base,
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
-            keep=[{"every": 1000}],
+            keep=[{"every": 10000}],
         ),
     )
 
@@ -113,71 +180,67 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     run_grug(run_config)
 
 
-RESOLVED_RUN_ID = _resolve_run_id("4_10_test_moe")
+# Compute-optimal sweep: each (dim, budget) pair sits on the N*(C) frontier.
+# Budgets derived from inverting N*(C) = 1.09e-2 * C^0.535.
+COMPUTE_OPTIMAL_CONFIGS: list[tuple[int, float]] = [
+    (512, 2.19e17),
+    (768, 1.70e18),
+    (1024, 9.00e18),
+    (1280, 2.83e19),
+]
 
+compute_optimal_steps: list[ExecutorStep] = []
+for _dim, _budget in COMPUTE_OPTIMAL_CONFIGS:
+    _model, _optimizer, _batch, _steps = build_from_heuristic(budget=_budget, hidden_dim=_dim)
+    _run_id = f"moe-v16-compute-opt-d{_dim}-{_budget:.2e}"
 
-# Baseline: 1e18 compute budget, d1024. Model + optimizer + batch + steps are
-# all derived from `MoeAdamHHeuristic`. To override any of these, swap in
-# an explicit `GrugModelConfig` / `GrugMoeAdamHConfig` below.
-_BASELINE_BUDGET: float = 1e18
-_BASELINE_HIDDEN_DIM: int = 1024
-_BASELINE_TARGET_STEPS: int = 2**14
-_baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_from_heuristic(
-    budget=_BASELINE_BUDGET,
-    hidden_dim=_BASELINE_HIDDEN_DIM,
-    target_steps=_BASELINE_TARGET_STEPS,
-)
+    compute_optimal_steps.append(
+        ExecutorStep(
+            name=f"grug/{_run_id}",
+            fn=run_grug_moe_trial,
+            config=GrugMoeLaunchConfig(
+                model=versioned(_model),
+                data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+                output_path=this_output_path(),
+                run_id=_run_id,
+                resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+                steps=versioned(_steps),
+                batch_size=versioned(_batch),
+                seed=versioned(0),
+                mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+                tracker=WandbConfig(
+                    project="dial_moe",
+                    tags=["compute-optimal", f"d={_dim}", f"budget={_budget:.0e}"],
+                    group="compute-optimal-sweep",
+                    name=_run_id,
+                ),
+                optimizer=versioned(_optimizer),
+                grug_trainer=versioned(
+                    GrugTrainerConfig(
+                        z_loss_weight=1e-4,
+                        ema_beta=None,
+                        log_every=1,
+                    )
+                ),
+                eval=versioned(
+                    GrugEvalConfig(
+                        eval_batch_size=512,
+                        steps_per_eval=1000,
+                        max_eval_batches=8,
+                        eval_current=True,
+                        eval_ema=False,
+                    )
+                ),
+            ),
+        )
+    )
 
-# Public alias for the heuristic-derived baseline GrugModelConfig. Kept
-# because consumers (e.g. experiments/ferries/canary_ferry.py) import it by
-# name.
-GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
-
-
-baseline_moe = ExecutorStep(
-    name="grug/4_10_baseline_moe",
-    fn=run_grug_moe_trial,
-    config=GrugMoeLaunchConfig(
-        model=versioned(_baseline_model),
-        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-        # this_output_path() resolves to this step's output root (e.g. gs://.../grug/moe-trial-<version>).
-        output_path=this_output_path(),
-        # Keep run id out of versioning so changing job metadata doesn't create a new output path.
-        run_id=RESOLVED_RUN_ID,
-        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-        steps=versioned(_baseline_steps),
-        batch_size=versioned(_baseline_batch),
-        seed=versioned(0),
-        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-        tracker=WandbConfig(
-            project="marin_moe",
-            tags=["moe"],
-            group="moe-iter04",
-            name=None,
-        ),
-        optimizer=versioned(_baseline_optimizer),
-        grug_trainer=versioned(
-            GrugTrainerConfig(
-                z_loss_weight=1e-4,
-                ema_beta=None,
-                log_every=1,
-            )
-        ),
-        eval=versioned(
-            GrugEvalConfig(
-                eval_batch_size=512,
-                steps_per_eval=1000,
-                max_eval_batches=8,
-                eval_current=True,
-                eval_ema=False,
-            )
-        ),
-    ),
-)
+# Public alias for consumers that import GRUG_MOE_TRIAL_MODEL by name.
+GRUG_MOE_TRIAL_MODEL: GrugModelConfig = compute_optimal_steps[0].config.model
 
 
 if __name__ == "__main__":
     executor_main(
-        steps=[baseline_moe],
-        description="Baseline grug MoE (QB+GN+XSA+zloss) on Nemotron mix.",
+        steps=compute_optimal_steps,
+        description="Compute-optimal sweep: d512/d768/d1024/d1280 at N*(C) frontier.",
     )

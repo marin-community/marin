@@ -8,9 +8,9 @@ import re
 from collections.abc import Callable
 from typing import TypeVar
 
-from fray.client import current_client
 from fray.cluster import ResourceConfig
-from fray.types import Entrypoint, GpuConfig, JobRequest, TpuConfig, create_environment
+from fray.v2.client import current_client
+from fray.v2.types import Entrypoint, GpuConfig, JobRequest, TpuConfig, create_environment
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,20 @@ def _default_environment_extras(resources: ResourceConfig) -> list[str]:
     return []
 
 
+def _with_jax_distributed_init(fn: Callable[[ConfigT], None], config: ConfigT) -> None:
+    """Wrapper that initializes JAX distributed before running the entrypoint.
+
+    On multi-host TPU, Fray's fn_thunk subprocess doesn't auto-initialize
+    JAX distributed. Calling jax.distributed.initialize() without args
+    lets JAX auto-detect the TPU topology. On single-host this is a no-op.
+    """
+    import jax
+
+    if not jax.distributed.is_initialized():
+        jax.distributed.initialize()
+    fn(config)
+
+
 def dispatch_grug_training_run(
     *,
     run_id: str,
@@ -43,7 +57,7 @@ def dispatch_grug_training_run(
     extras = _default_environment_extras(resources)
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
-        entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
+        entrypoint=Entrypoint.from_callable(_with_jax_distributed_init, args=[local_entrypoint, config]),
         resources=resources,
         environment=create_environment(extras=extras),
         max_retries_failure=max_retries_failure,
