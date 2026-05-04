@@ -89,7 +89,7 @@ scale_groups:
         pool: gh200-1x
     # buffer_slices keeps one node warm so the controller always has a home.
     buffer_slices: 1
-    max_slices: 4
+    max_slices: 2
     priority: 100
     slice_template:
       num_vms: 1
