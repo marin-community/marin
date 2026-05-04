@@ -808,7 +808,7 @@ Examples:
         "requested by worker tasks spawned by the job."
     ),
 )
-@click.option("--cpu", type=float, default=0.5, show_default=True, help="Number of CPUs to request")
+@click.option("--cpu", type=float, default=0.1, show_default=True, help="Number of CPUs to request")
 @click.option("--memory", type=str, default="1GB", show_default=True, help="Memory size to request (e.g., 8GB, 512MB)")
 @click.option(
     "--disk", type=str, default="5GB", show_default=True, help="Ephemeral disk size to request (e.g., 64GB, 1TB)"

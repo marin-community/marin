@@ -96,9 +96,12 @@ def test_build_pod_manifest_fields():
     assert container["command"][1] == "-lc"
     assert "exec python train.py" in container["command"][2]
 
-    resources = container["resources"]["limits"]
-    assert resources["cpu"] == "1000m"
-    assert resources["memory"] == str(4 * 1024**3)
+    # CPU is requested only (no limit) so containers can burst onto idle node
+    # CPU; memory is both requested and limited (overshoot is fatal).
+    assert container["resources"]["requests"]["cpu"] == "1000m"
+    assert "cpu" not in container["resources"].get("limits", {})
+    assert container["resources"]["limits"]["memory"] == str(4 * 1024**3)
+    assert container["resources"]["requests"]["memory"] == str(4 * 1024**3)
 
 
 def test_build_pod_manifest_env_vars():
