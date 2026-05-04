@@ -101,7 +101,7 @@ NUM_LOOPS = 10
 SUGGESTIONS_PER_LOOP = 4
 TARGET_TOKENS = 2_500_000_000  # ~100:1 token-to-param for ~25M
 REFERENCE_BATCH_SIZE = 16384  # tokens/batch: 16384*256 = 4M (16x reference_hyperparameter_sweep 64*4096=256K)
-METRIC_KEY = "eval/loss"  # TODO: confirm from smoke test tracker_metrics.jsonl
+METRIC_KEY = "eval/loss"
 METRIC_FILE = "tracker_metrics.jsonl"
 METRIC_MODE = "min"
 VIZIER_ALGORITHM = "DEFAULT"
@@ -816,13 +816,31 @@ def _build_transfer_grid(axis: TransferSweepAxis, center: float, num_points: int
     return grid
 
 
+# Epsilon is swept one-sided: the transferred center (4e-15) sits at the lower
+# feasibility bound, so a symmetric grid would have ~no span. Instead, sample 6
+# log-spaced points up to and including TRANSFER_EPSILON_HIGH. Indexed 1..6 in run
+# names — the implicit 0 is the positive control / center.
+TRANSFER_EPSILON_HIGH = 1e-3
+TRANSFER_EPSILON_NUM_POINTS = 6
+
+
+def _build_epsilon_grid(center: float, end: float, count: int) -> list[float]:
+    """One-sided log-spaced grid above `center`, ending exactly at `end`.
+
+    Returns `count` points where the i-th (1-indexed) is `center * (end/center)^(i/count)`.
+    The last point equals `end` exactly (modulo floating-point).
+    """
+    assert center < end, f"epsilon grid center {center} must be below end {end}"
+    return [center * (end / center) ** (i / count) for i in range(1, count + 1)]
+
+
 # --- Preview ---
 
 
 def _print_transfer_preview():
     """Print transfer sweep configuration: transferred hparams, bounds, and grid values."""
     transferred_fields = ("learning_rate", "adam_lr", "epsilon", "beta2")  # scaled by build_optimizer_config
-    swept_fields = {axis.field for axis in TRANSFER_SWEEP_AXES}
+    swept_fields = {axis.field for axis in TRANSFER_SWEEP_AXES} | {"epsilon"}
 
     negative_optimizer = DNA_SCALING_HEURISTIC.build_optimizer_config(
         DNA_SCALING_HEURISTIC.reference_batch_size,
@@ -833,7 +851,7 @@ def _print_transfer_preview():
 
     print("=" * 70)
     print(f"Transfer validation sweep preview — {TRANSFER_VERSION}")
-    print(f"  primary model (controls + LR + beta2): hidden={TRANSFER_PRIMARY_HIDDEN_SIZE}")
+    print(f"  primary model (controls + LR + beta2 + epsilon): hidden={TRANSFER_PRIMARY_HIDDEN_SIZE}")
     print(f"  smaller models (LR only): hidden={smaller_sizes}")
     print(f"  batch={TRANSFER_BATCH_SIZE}, tokens={TRANSFER_TARGET_TOKENS:.0e}")
     num_steps = TRANSFER_TARGET_TOKENS // (TRANSFER_BATCH_SIZE * _model_seq_len())
@@ -862,11 +880,15 @@ def _print_transfer_preview():
         off_center = [v for v in grid if v != center]
         print(f"  {axis.field}  bounds=[{axis.low:.6g}, {axis.high:.6g}]  center={center:.6g}  log={axis.log_scale}")
         print(f"    grid ({len(grid)} points, {len(off_center)} off-center): {[f'{v:.6g}' for v in sorted(grid)]}")
+    epsilon_center = TRANSFER_OPTIMIZER.epsilon
+    epsilon_grid = _build_epsilon_grid(epsilon_center, TRANSFER_EPSILON_HIGH, TRANSFER_EPSILON_NUM_POINTS)
+    print(f"  epsilon  end={TRANSFER_EPSILON_HIGH:.6g}  center={epsilon_center:.6g}  log=True (one-sided)")
+    print(f"    grid ({len(epsilon_grid)} points, all off-center): {[f'{v:.6g}' for v in epsilon_grid]}")
     print()
 
     primary_off_center = sum(
         len(_build_transfer_grid(ax, getattr(TRANSFER_OPTIMIZER, ax.field))) - 1 for ax in TRANSFER_SWEEP_AXES
-    )
+    ) + len(epsilon_grid)
     primary_total = 2 + primary_off_center
     lr_axis = next(ax for ax in TRANSFER_SWEEP_AXES if ax.field == "learning_rate")
     lr_n = len(_build_transfer_grid(lr_axis, TRANSFER_OPTIMIZER.learning_rate))
@@ -985,10 +1007,12 @@ def _filter_transfer_include(all_steps: list[ExecutorStep]) -> list[ExecutorStep
 
 
 def run_transfer_validation_sweep():
-    """Sweep LR + beta2 in isolation across multiple model sizes.
+    """Sweep LR + beta2 + epsilon in isolation across multiple model sizes.
 
-    Primary (largest) size: positive control + negative control + LR grid + beta2 grid,
-        with center deduplicated against the positive control.
+    Primary (largest) size: positive control + negative control + LR grid + beta2 grid
+        (centers deduped against the positive control) + epsilon grid (one-sided,
+        6 log-spaced points up to TRANSFER_EPSILON_HIGH; the transferred center sits
+        at the lower feasibility bound, so a symmetric grid would be degenerate).
     Smaller sizes: LR grid only, all 7 points (no center dedup, no controls). The
         center point is the most informative single value at each scale, so we keep it.
 
@@ -1101,6 +1125,23 @@ def run_transfer_validation_sweep():
                         model_config,
                         f"{run_prefix}-{axis.field}-{i}",
                         (*base_tags, f"axis={axis.field}", f"{axis.field}={value}"),
+                    )
+                )
+
+        # Epsilon: one-sided sweep at the primary scale only. Index starts at 1 since
+        # the implicit 0 is the positive control / center (transferred epsilon).
+        if is_primary:
+            epsilon_grid = _build_epsilon_grid(
+                TRANSFER_OPTIMIZER.epsilon, TRANSFER_EPSILON_HIGH, TRANSFER_EPSILON_NUM_POINTS
+            )
+            for i, value in enumerate(epsilon_grid, start=1):
+                swept_optimizer = replace(TRANSFER_OPTIMIZER, epsilon=value)
+                all_steps.append(
+                    _make_step(
+                        swept_optimizer,
+                        model_config,
+                        f"{run_prefix}-epsilon-{i}",
+                        (*base_tags, "axis=epsilon", f"epsilon={value}"),
                     )
                 )
 
