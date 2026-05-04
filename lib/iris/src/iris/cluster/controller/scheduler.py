@@ -25,9 +25,7 @@ from iris.cluster.constraints import (
     AttributeValue,
     Constraint,
     ConstraintIndex,
-    ResourceCapacity,
     WellKnownAttribute,
-    check_resource_fit,
     evaluate_constraint,
     soft_constraint_score,
     split_hard_soft,
@@ -125,12 +123,30 @@ class RejectionReason:
 
 @dataclass
 class JobRequirements:
-    """What a job needs from a worker. Scheduler's input type."""
+    """What a job needs from a worker. Scheduler's input type.
+
+    The four cached scalars (`req_cpu_millicores`, `req_memory_bytes`,
+    `req_gpu_count`, `req_tpu_count`) are derived once from the proto in
+    `__post_init__` so the scheduler's per-(task, worker) `can_fit` hot loop
+    does not pay protobuf attribute access overhead. The hot loop runs
+    ~pending x workers times per scheduling cycle (≈10^5 on the marin cluster).
+    """
 
     resources: job_pb2.ResourceSpecProto
     constraints: list[Constraint]
     is_coscheduled: bool
     coscheduling_group_by: str | None
+
+    req_cpu_millicores: int = field(init=False)
+    req_memory_bytes: int = field(init=False)
+    req_gpu_count: int = field(init=False)
+    req_tpu_count: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.req_cpu_millicores = self.resources.cpu_millicores
+        self.req_memory_bytes = self.resources.memory_bytes
+        self.req_gpu_count = get_gpu_count(self.resources.device)
+        self.req_tpu_count = get_tpu_count(self.resources.device)
 
 
 _evaluate_constraint = evaluate_constraint
@@ -180,13 +196,6 @@ class WorkerCapacity:
             max_building_tasks=max_building_tasks,
         )
 
-    def can_accept_building_task(self) -> bool:
-        """Check if this worker can accept another BUILDING task.
-
-        Back-pressure mechanism: limits concurrent uv sync operations.
-        """
-        return self.building_task_count < self.max_building_tasks
-
     def can_fit(self, req: JobRequirements) -> RejectionReason | None:
         """Check if this capacity can fit the job's resource requirements.
 
@@ -194,67 +203,56 @@ class WorkerCapacity:
         Device type and variant matching is handled by matches_constraints() via
         the posting-list index in SchedulingContext.
 
+        Hot path: called O(pending x workers) per scheduling cycle. Consumes
+        the cached integer fields on `JobRequirements` so we never touch the
+        proto here, and returns early on the first failing dimension instead
+        of routing through `check_resource_fit`'s string-reason indirection.
+
         Returns:
             None if job fits, otherwise RejectionReason with lazy-formatted details
         """
-        if not self.can_accept_building_task():
+        if self.building_task_count >= self.max_building_tasks:
             return RejectionReason(
                 kind=RejectionKind.BUILDING_LIMIT,
                 details={"current": self.building_task_count, "max": self.max_building_tasks},
             )
 
-        res = req.resources
-        gpu_count = get_gpu_count(res.device)
-        tpu_count = get_tpu_count(res.device)
-
-        available = ResourceCapacity(
-            cpu_millicores=self.available_cpu_millicores,
-            memory_bytes=self.available_memory,
-            gpu_count=self.available_gpus,
-            tpu_count=self.available_tpus,
-        )
-        required = ResourceCapacity(
-            cpu_millicores=res.cpu_millicores,
-            memory_bytes=res.memory_bytes,
-            gpu_count=gpu_count,
-            tpu_count=tpu_count,
-        )
-
-        reason = check_resource_fit(available, required)
-        if reason is None:
-            return None
-
-        return self._reason_to_rejection(reason, res, gpu_count, tpu_count)
-
-    def _reason_to_rejection(
-        self, reason: str, res: job_pb2.ResourceSpecProto, gpu_count: int, tpu_count: int
-    ) -> RejectionReason:
-        """Map a check_resource_fit reason string to a RejectionReason."""
-        if reason.startswith("cpu:"):
+        cpu_need = req.req_cpu_millicores
+        if cpu_need > 0 and cpu_need > self.available_cpu_millicores:
             return RejectionReason(
-                kind=RejectionKind.CPU, details={"need": res.cpu_millicores, "have": self.available_cpu_millicores}
+                kind=RejectionKind.CPU,
+                details={"need": cpu_need, "have": self.available_cpu_millicores},
             )
-        if reason.startswith("memory:"):
+
+        mem_need = req.req_memory_bytes
+        if mem_need > 0 and mem_need > self.available_memory:
             return RejectionReason(
-                kind=RejectionKind.MEMORY, details={"need": res.memory_bytes, "have": self.available_memory}
+                kind=RejectionKind.MEMORY,
+                details={"need": mem_need, "have": self.available_memory},
             )
-        if reason.startswith("gpu:"):
+
+        gpu_need = req.req_gpu_count
+        if gpu_need > 0 and gpu_need > self.available_gpus:
             return RejectionReason(
-                kind=RejectionKind.GPU_COUNT, details={"need": gpu_count, "have": self.available_gpus}
+                kind=RejectionKind.GPU_COUNT,
+                details={"need": gpu_need, "have": self.available_gpus},
             )
-        if reason.startswith("tpu:"):
+
+        tpu_need = req.req_tpu_count
+        if tpu_need > 0 and tpu_need > self.available_tpus:
             return RejectionReason(
-                kind=RejectionKind.TPU_COUNT, details={"need": tpu_count, "have": self.available_tpus}
+                kind=RejectionKind.TPU_COUNT,
+                details={"need": tpu_need, "have": self.available_tpus},
             )
-        return RejectionReason(kind=RejectionKind.CPU, details={"need": 0, "have": 0})
+
+        return None
 
     def deduct(self, req: JobRequirements) -> None:
         """Deduct job's resources from available capacity."""
-        res = req.resources
-        self.available_cpu_millicores -= res.cpu_millicores
-        self.available_memory -= res.memory_bytes
-        self.available_gpus -= get_gpu_count(res.device)
-        self.available_tpus -= get_tpu_count(res.device)
+        self.available_cpu_millicores -= req.req_cpu_millicores
+        self.available_memory -= req.req_memory_bytes
+        self.available_gpus -= req.req_gpu_count
+        self.available_tpus -= req.req_tpu_count
         # Increment building count since new tasks start in BUILDING state
         self.building_task_count += 1
 
@@ -598,6 +596,15 @@ class Scheduler:
         task at the front of the queue doesn't fit, smaller tasks behind it can
         still be scheduled.
 
+        Per-job dedup: tasks of the same non-coscheduled job share one
+        `JobRequirements`, so constraint matching and soft-score ranking are
+        hoisted once per job. Once a job's first task in this pass fails to
+        find a worker, capacities only decrease and assignment_counts only
+        increase for the remainder of the pass — so all of that job's
+        remaining same-req tasks would also fail. We mark the job exhausted
+        and skip them, turning the inner work from O(pending x workers) into
+        O(jobs x workers + min(pending, workers)).
+
         Implements back-pressure by limiting concurrent BUILDING tasks per worker.
         Workers with too many tasks in BUILDING state won't receive new assignments.
 
@@ -629,33 +636,47 @@ class Scheduler:
                 for task_id, _ in coscheduled_result:
                     scheduled_task_ids.add(task_id)
 
-        # Handle remaining non-coscheduled tasks (first-fit)
+        # Per-job memo for the non-coscheduled fan-out below.
+        candidate_lists: dict[JobName, list[WorkerId]] = {}
+        exhausted_jobs: set[JobName] = set()
+
+        # Handle remaining non-coscheduled tasks (first-fit, in priority order).
         for task_id in context.pending_tasks:
             if task_id in scheduled_task_ids:
                 continue
 
-            # Skip coscheduled jobs entirely - they were handled above
             job_id = task_id.parent
-            if job_id is not None:
-                req = context.jobs.get(job_id)
-                if req is not None and req.is_coscheduled:
-                    continue
+            if job_id is None:
+                continue
+            if job_id in exhausted_jobs:
+                continue
 
-            req = context.jobs.get(job_id) if job_id is not None else None
+            req = context.jobs.get(job_id)
             if req is None:
                 logger.debug("Task %s has no job requirements, skipping", task_id)
                 continue
+            if req.is_coscheduled:
+                continue
 
-            task_result = self.try_schedule_task(task_id, req, context)
+            candidates = candidate_lists.get(job_id)
+            if candidates is None:
+                hard_constraints, soft_constraints = split_hard_soft(list(req.constraints))
+                matching = context.matching_workers(hard_constraints)
+                if soft_constraints:
+                    candidates = _rank_by_soft_score(matching, soft_constraints, context)
+                else:
+                    candidates = list(matching)
+                candidate_lists[job_id] = candidates
 
-            if task_result.success and task_result.worker_id:
-                result.assignments.append((task_id, task_result.worker_id))
-            else:
-                logger.debug(
-                    "Task %s not scheduled: %s",
-                    task_id,
-                    task_result.failure_reason,
-                )
+            worker_id = self._first_fitting_worker(candidates, context, req)
+            if worker_id is None:
+                exhausted_jobs.add(job_id)
+                continue
+
+            capacity = context.capacities[worker_id]
+            capacity.deduct(req)
+            context.assignment_counts[worker_id] = context.assignment_counts.get(worker_id, 0) + 1
+            result.assignments.append((task_id, worker_id))
 
         if result.assignments:
             logger.debug(
@@ -664,6 +685,26 @@ class Scheduler:
                 len(result.assignments),
             )
         return result
+
+    @staticmethod
+    def _first_fitting_worker(
+        candidates: list[WorkerId],
+        context: SchedulingContext,
+        req: JobRequirements,
+    ) -> WorkerId | None:
+        """Return the highest-soft-scoring candidate that has capacity, or None.
+
+        Used by `find_assignments` for the per-task assignment search after
+        per-job constraint matching has been hoisted. Mirrors the cheap
+        (non-`collect_details`) path of `try_schedule_task`.
+        """
+        max_per_worker = context.max_assignments_per_worker
+        for worker_id in candidates:
+            if context.assignment_counts.get(worker_id, 0) >= max_per_worker:
+                continue
+            if context.capacities[worker_id].can_fit(req) is None:
+                return worker_id
+        return None
 
     def _find_coscheduled_assignments(
         self,
