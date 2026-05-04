@@ -32,19 +32,6 @@ from levanter.utils.jax_utils import leaf_key_paths, local_cpu_mesh, tree_broadc
 # todo should we use something like this: https://arxiv.org/pdf/2107.02027?
 
 T = TypeVar("T", bound=PyTree)
-L = TypeVar("L")
-
-
-# Python 3.10 can't handle this
-# @dataclass(frozen=True)
-# class LeafType:
-#     leaf_type: type
-#
-#     def __class_getitem__(cls, item):
-#         return cls(item)
-#
-#
-# WithLeaf: TypeAlias = Annotated[T, LeafType[L]]
 
 
 class SequencePacker:
