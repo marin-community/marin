@@ -124,6 +124,16 @@ def test_build_pod_manifest_gpu():
     manifest = _build_pod_manifest(req, pod_config())
     limits = manifest["spec"]["containers"][0]["resources"]["limits"]
     assert limits["nvidia.com/gpu"] == "4"
+    assert "rdma/ib" not in limits
+
+
+def test_build_pod_manifest_gpu_host_network_requests_rdma():
+    req = make_run_req("/test-job/0")
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
+    manifest = _build_pod_manifest(req, pod_config(host_network=True))
+    limits = manifest["spec"]["containers"][0]["resources"]["limits"]
+    assert limits["nvidia.com/gpu"] == "4"
+    assert limits["rdma/ib"] == "4"
 
 
 def test_build_pod_manifest_runtime_label():

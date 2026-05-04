@@ -41,7 +41,9 @@ storage:
 kubernetes_provider:
   namespace: iris
   default_image: ghcr.io/marin-community/iris-task:latest
-  host_network: true
+  # RNO2A GH200 nodes do not advertise rdma/ib devices. Keep host networking off
+  # so GPU task pods request only nvidia.com/gpu and can schedule.
+  host_network: false
   cache_dir: /mnt/local/iris-cache
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
 
