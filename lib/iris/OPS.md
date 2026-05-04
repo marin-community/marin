@@ -38,6 +38,7 @@ iris job bug-report /user/job-name      # structured diagnostic dump
 - **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--extra gpu`** installs CUDA jaxlib but does NOT request GPU hardware. Need both `--gpu H100x8 --extra gpu`.
+- **Do not pin `region`/`zone` for ordinary accelerator jobs.** Request the accelerator (`--tpu ...` or `--gpu ...`) and let Iris route to a configured scale group. Add region or zone constraints only for debugging, data locality, known bad pools, or quota experiments.
 - **`--reserve`** holds capacity for scheduling only — does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
 - **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 2g`), otherwise it hogs the GPU node and deadlocks. Memory at or above 4 GB requires `--enable-extra-resources` (see "Validator opt-in" below).
 
@@ -212,6 +213,28 @@ gcloud compute ssh iris-controller-marin --zone=us-central1-a \
 
 Configs: `marin.yaml` (production), `marin-dev.yaml` (dev, smaller scale caps).
 
+### Configured Accelerator Locations
+
+This table is for debugging scheduler/autoscaler behavior, not for ordinary job
+submission. For normal jobs, request the accelerator and let Iris choose among
+matching scale groups. `lib/iris/examples/marin.yaml` is the source of truth;
+live availability still depends on quota, backoff, and current cluster state.
+
+| Accelerator family | Configured locations | Notes |
+|--------------------|----------------------|-------|
+| TPU v5e (`v5litepod`) | `europe-west4-b`, `us-west4-a` | Serving sizes: 4, 8. Preemptible sizes: 16-256. |
+| TPU v6e | `europe-west4-a`, `us-east1-d`, `us-east5-b` | Preemptible sizes: 4-256. |
+| TPU v5p | `us-central1-a`, `us-east5-a` | Preemptible sizes: 8-2048. |
+| TPU v4 | `us-central2-b` | Preemptible sizes: 8-4096. Reserved sizes: 32-4096. |
+
+Check live routing and capacity before concluding a location is usable:
+
+```bash
+iris rpc controller get-scheduler-state
+iris rpc controller get-autoscaler-status
+iris cluster vm status
+```
+
 ### GCP Resources
 
 ```bash
@@ -252,6 +275,10 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 ---
 
 ## CoreWeave (GPU) Operations
+
+`lib/iris/examples/coreweave.yaml` is the source of truth for CoreWeave scale
+groups. The current production-style GPU group is `h100-8x` in `US-WEST-04A`
+using CoreWeave instance type `gd-8xh100ib-i128`.
 
 ### Connecting
 

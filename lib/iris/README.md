@@ -44,6 +44,7 @@ job.wait()
 
 For accelerator jobs, request the accelerator on the task itself with `--tpu ...` or `--gpu ...`.
 `--reserve ...` only holds capacity for scheduling and does not attach accelerator devices to the task container.
+Do not pin a region or zone for ordinary accelerator jobs; let Iris route to a matching scale group.
 
 ## Architecture
 
@@ -287,6 +288,7 @@ iris --config=... cluster dashboard --port 8080
 iris --config cluster.yaml job run -- python train.py
 iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 iris --config cluster.yaml job run --no-wait -- python long_job.py
+# Advanced: pin a zone only for debugging, data locality, or quota experiments.
 iris --config cluster.yaml job run --zone us-central2-b -- python train.py
 
 # Stream logs for a job (batch-fetches from all tasks in one RPC)

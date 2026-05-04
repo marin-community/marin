@@ -59,6 +59,11 @@ objects declaring type, allowed operators, and whether the constraint is:
 | `gpu-variant` | no | no | scheduler-only |
 | `gpu-count` | no | no | scheduler-only (consumable) |
 
+For ordinary accelerator jobs, prefer the device constraints generated from
+`--tpu ...` or `--gpu ...` and let Iris route across matching scale groups.
+Use explicit `region` or `zone` constraints only for operator/debugging cases
+such as data locality, known bad pools, or quota experiments.
+
 ## How constraints flow through the system
 
 ### Job submission → proto constraints
