@@ -82,6 +82,34 @@ iris rpc controller get-provider-status         # scheduling events, cluster cap
 iris cluster vm status                          # scale groups with slice counts
 ```
 
+### Inspect Current Accelerator Availability
+
+Use autoscaler status for Iris's current per-scale-group accelerator view.
+
+```bash
+uv run iris --config=lib/iris/examples/marin.yaml rpc controller get-autoscaler-status \
+  2>&1 | sed -n '/^{/,$p' | jq -r '
+.status.groups[]
+| select(.config.resources.device_type | test("TPU|GPU"))
+  | [
+      .config.resources.device_variant,
+      (.config.slice_template.gcp.zone // .config.slice_template.coreweave.region // ""),
+      .availability_status,
+      .availability_reason,
+      .current_demand,
+      (.slice_state_counts.ready // 0),
+      (.slice_state_counts.requesting // 0),
+      (.slice_state_counts.failed // 0),
+      .config.max_slices
+    ] | @tsv' | column -t -s $'\t'
+```
+
+Read `availability_status` with `availability_reason`: `available` means Iris
+can attempt scale-up, not that the cloud will definitely allocate a slice.
+`quota_exceeded`, `backoff`, and `at_max_slices` are blocked; `requesting` is
+capacity in flight; `cooldown` is temporarily deferred. `cluster vm status`
+shows slice inventory but omits these active block reasons.
+
 Priority bands: `PRIORITY_BAND_INTERACTIVE` (default), `PRIORITY_BAND_PRODUCTION` (can preempt interactive), `PRIORITY_BAND_BATCH` (preemptible). See [`docs/priority-bands.md`](docs/priority-bands.md) for the user-facing guide on when to pick each band.
 
 ## SQL Queries
