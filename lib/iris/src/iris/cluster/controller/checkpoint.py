@@ -196,6 +196,22 @@ def backup_databases(db: ControllerDB) -> DatabaseBackup:
         )
 
 
+def _compress_and_upload_db(local_path: Path, remote_url: str, label: str) -> None:
+    """Compress *local_path* with zstd, upload to *remote_url*, and clean up the .zst tmp.
+
+    The intermediate ``.zst`` lives next to the source backup file; only that
+    intermediate is removed here. The source backup itself is owned by the
+    caller (``DatabaseBackup.cleanup``).
+    """
+    tmp_zst = local_path.with_suffix(".sqlite3.zst")
+    try:
+        _compress_zstd(local_path, tmp_zst)
+        _fsspec_copy(str(tmp_zst), remote_url)
+        logger.info("checkpoint %s DB uploaded to %s", label, remote_url)
+    finally:
+        tmp_zst.unlink(missing_ok=True)
+
+
 def upload_checkpoint(
     db: ControllerDB,
     backup: DatabaseBackup,
@@ -209,38 +225,13 @@ def upload_checkpoint(
     prefix = remote_state_dir.rstrip("/") + "/controller-state"
     checkpoint_dir = f"{prefix}/{backup.created_at.epoch_ms()}"
 
-    # Compress and upload main DB.  Backup files are owned by the caller
-    # (via DatabaseBackup.cleanup); we only clean up the intermediate .zst.
-    main_remote = f"{checkpoint_dir}/{ControllerDB.DB_FILENAME}.zst"
-    tmp_zst = backup.main_path.with_suffix(".sqlite3.zst")
-    try:
-        _compress_zstd(backup.main_path, tmp_zst)
-        _fsspec_copy(str(tmp_zst), main_remote)
-        logger.info("checkpoint main DB uploaded to %s", main_remote)
-    finally:
-        tmp_zst.unlink(missing_ok=True)
-
-    # Compress and upload auth DB.
+    _compress_and_upload_db(backup.main_path, f"{checkpoint_dir}/{ControllerDB.DB_FILENAME}.zst", "main")
     if backup.auth_path is not None:
-        auth_remote = f"{checkpoint_dir}/{ControllerDB.AUTH_DB_FILENAME}.zst"
-        tmp_zst2 = backup.auth_path.with_suffix(".sqlite3.zst")
-        try:
-            _compress_zstd(backup.auth_path, tmp_zst2)
-            _fsspec_copy(str(tmp_zst2), auth_remote)
-            logger.info("checkpoint auth DB uploaded to %s", auth_remote)
-        finally:
-            tmp_zst2.unlink(missing_ok=True)
-
-    # Compress and upload profiles DB.
+        _compress_and_upload_db(backup.auth_path, f"{checkpoint_dir}/{ControllerDB.AUTH_DB_FILENAME}.zst", "auth")
     if backup.profiles_path is not None:
-        profiles_remote = f"{checkpoint_dir}/{ControllerDB.PROFILES_DB_FILENAME}.zst"
-        tmp_zst3 = backup.profiles_path.with_suffix(".sqlite3.zst")
-        try:
-            _compress_zstd(backup.profiles_path, tmp_zst3)
-            _fsspec_copy(str(tmp_zst3), profiles_remote)
-            logger.info("checkpoint profiles DB uploaded to %s", profiles_remote)
-        finally:
-            tmp_zst3.unlink(missing_ok=True)
+        _compress_and_upload_db(
+            backup.profiles_path, f"{checkpoint_dir}/{ControllerDB.PROFILES_DB_FILENAME}.zst", "profiles"
+        )
 
     # Row counts are read from the live DB (not the backup) for convenience.
     # They may diverge slightly from the backup contents if writes occurred
