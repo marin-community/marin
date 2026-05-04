@@ -388,23 +388,6 @@ class SchedulingContext:
 
 
 @dataclass
-class TaskScheduleResult:
-    """Result of attempting to schedule a single task.
-
-    Either contains a successful assignment (worker_id is set) or explains
-    why scheduling failed (failure_reason is set).
-    """
-
-    task_id: JobName
-    worker_id: WorkerId | None = None
-    failure_reason: str | None = None
-
-    @property
-    def success(self) -> bool:
-        return self.worker_id is not None
-
-
-@dataclass
 class SchedulingResult:
     """Result of a scheduling cycle - pure data, no state mutation.
 
@@ -415,7 +398,7 @@ class SchedulingResult:
     assignments: list[tuple[JobName, WorkerId]] = field(default_factory=list)
 
 
-def _rank_by_soft_score(
+def rank_by_soft_score(
     candidate_ids: set[WorkerId],
     soft_constraints: list[Constraint],
     context: SchedulingContext,
@@ -437,6 +420,118 @@ def _rank_by_soft_score(
     return [wid for _, wid in scored]
 
 
+def compute_candidates(req: JobRequirements, context: SchedulingContext) -> list[WorkerId]:
+    """Constraint-filter and soft-rank workers for a given req.
+
+    Used by both the hot find_assignments path and diagnostics, so that the
+    "which workers are even candidates for this req?" decision exists in
+    exactly one place.
+    """
+    hard_constraints, soft_constraints = split_hard_soft(list(req.constraints))
+    matching = context.matching_workers(hard_constraints)
+    if soft_constraints:
+        return rank_by_soft_score(matching, soft_constraints, context)
+    return list(matching)
+
+
+def first_fitting_worker(
+    candidates: Sequence[WorkerId],
+    context: SchedulingContext,
+    req: JobRequirements,
+) -> WorkerId | None:
+    """Return the first candidate that has capacity and is below the per-cycle cap.
+
+    Sole authority on "is there a worker that can take this req right now?".
+    Pure read: does not mutate context. Callers are responsible for deducting
+    capacity / bumping assignment_counts on success.
+    """
+    max_per_worker = context.max_assignments_per_worker
+    for worker_id in candidates:
+        if context.assignment_counts.get(worker_id, 0) >= max_per_worker:
+            continue
+        if context.capacities[worker_id].can_fit(req) is None:
+            return worker_id
+    return None
+
+
+def explain_unfittable(
+    req: JobRequirements,
+    context: SchedulingContext,
+    max_building_tasks_per_worker: int,
+) -> str:
+    """Build a human-readable failure reason for a non-coscheduled req.
+
+    Diagnostics-only — walks candidates a second time accumulating rejection
+    counts and formatting per-dimension messages with totals. Returns
+    "Schedulable — waiting for next scheduling cycle" if the req does fit
+    after all (race against `find_assignments`).
+    """
+    if not context.capacities:
+        return "No healthy workers available"
+
+    hard_constraints, soft_constraints = split_hard_soft(list(req.constraints))
+    matching = context.matching_workers(hard_constraints)
+    if soft_constraints:
+        candidates = rank_by_soft_score(matching, soft_constraints, context)
+    else:
+        candidates = list(matching)
+
+    rejection_counts: dict[RejectionKind, int] = defaultdict(int)
+    rejection_samples: dict[RejectionKind, RejectionReason] = {}
+    max_per_worker = context.max_assignments_per_worker
+    for worker_id in candidates:
+        if context.assignment_counts.get(worker_id, 0) >= max_per_worker:
+            continue
+        rejection = context.capacities[worker_id].can_fit(req)
+        if rejection is None:
+            return "Schedulable — waiting for next scheduling cycle"
+        rejection_counts[rejection.kind] += 1
+        if rejection.kind not in rejection_samples:
+            rejection_samples[rejection.kind] = rejection
+
+    res = req.resources
+
+    if rejection_counts:
+        if RejectionKind.BUILDING_LIMIT in rejection_counts:
+            workers_with_capacity = sum(
+                1
+                for cwid in candidates
+                if context.assignment_counts.get(cwid, 0) < max_per_worker
+                and context.capacities[cwid].available_cpu_millicores >= res.cpu_millicores
+                and context.capacities[cwid].available_memory >= res.memory_bytes
+            )
+            if workers_with_capacity > 0:
+                count = rejection_counts[RejectionKind.BUILDING_LIMIT]
+                return (
+                    f"Waiting for build slots: {count} worker(s) at building limit "
+                    f"(max {max_building_tasks_per_worker} concurrent builds per worker), "
+                    f"but have sufficient resources for this task"
+                )
+
+        reason_lines = []
+        for kind in sorted(rejection_counts.keys(), key=lambda k: rejection_counts[k], reverse=True):
+            count = rejection_counts[kind]
+            sample = rejection_samples[kind]
+            reason_lines.append(f"{sample} - {count} worker(s)")
+        failure_reason = "\n".join(reason_lines)
+        if hard_constraints:
+            constraint_keys = [c.key for c in hard_constraints]
+            failure_reason = f"{failure_reason}\n(with constraints={constraint_keys})"
+        return failure_reason
+
+    if hard_constraints:
+        constraint_keys = [c.key for c in hard_constraints]
+        return (
+            f"No worker matches constraints and has sufficient resources "
+            f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes}, "
+            f"constraints={constraint_keys})"
+        )
+    return (
+        f"No worker has sufficient resources "
+        f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes})"
+    )
+
+
 class Scheduler:
     """Computes optimal task-to-worker assignments based on constraints and capacity.
 
@@ -452,131 +547,6 @@ class Scheduler:
         max_building_tasks_per_worker: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
     ):
         self._max_building_tasks_per_worker = max_building_tasks_per_worker
-
-    def try_schedule_task(
-        self,
-        task_id: JobName,
-        req: JobRequirements,
-        context: SchedulingContext,
-        collect_details: bool = False,
-    ) -> TaskScheduleResult:
-        """Attempt to schedule a single task.
-
-        Returns a TaskScheduleResult indicating success (with assigned worker)
-        or failure (with reason).
-
-        Args:
-            task_id: The task ID to schedule
-            req: Job requirements for the task
-            context: Scheduling context with posting lists and capacities
-            collect_details: If True, collect detailed rejection reasons (expensive).
-                           If False (default), return generic failure with no details (fast).
-
-        Returns:
-            TaskScheduleResult with either worker assignment or failure reason
-        """
-        if not context.capacities:
-            return TaskScheduleResult(task_id=task_id, failure_reason="No healthy workers available")
-
-        all_constraints = list(req.constraints)
-        hard_constraints, soft_constraints = split_hard_soft(all_constraints)
-
-        # Use posting lists for fast constraint matching on hard constraints only.
-        # Soft constraints do not filter — they only influence candidate
-        # ranking so that matching workers are tried first.
-        candidate_ids = context.matching_workers(hard_constraints)
-
-        # When soft constraints are present, sort candidates so workers
-        # satisfying more soft constraints are tried first.
-        if soft_constraints:
-            candidate_ids = _rank_by_soft_score(candidate_ids, soft_constraints, context)
-
-        # Cheap mode: try all matching workers, no detailed rejection tracking
-        if not collect_details:
-            for worker_id in candidate_ids:
-                if context.assignment_counts.get(worker_id, 0) >= context.max_assignments_per_worker:
-                    continue
-                capacity = context.capacities[worker_id]
-                rejection = capacity.can_fit(req)
-                if rejection is None:
-                    capacity.deduct(req)
-                    context.assignment_counts[worker_id] = context.assignment_counts.get(worker_id, 0) + 1
-                    return TaskScheduleResult(task_id=task_id, worker_id=worker_id)
-            # No matching worker had capacity
-            return TaskScheduleResult(task_id=task_id, failure_reason=None)
-
-        # Expensive mode: collect all rejection reasons with counts
-        rejection_counts: dict[RejectionKind, int] = defaultdict(int)
-        rejection_samples: dict[RejectionKind, RejectionReason] = {}
-        for worker_id in candidate_ids:
-            if context.assignment_counts.get(worker_id, 0) >= context.max_assignments_per_worker:
-                continue
-            capacity = context.capacities[worker_id]
-            rejection = capacity.can_fit(req)
-            if rejection is None:
-                capacity.deduct(req)
-                context.assignment_counts[worker_id] = context.assignment_counts.get(worker_id, 0) + 1
-                return TaskScheduleResult(task_id=task_id, worker_id=worker_id)
-            rejection_counts[rejection.kind] += 1
-            # Keep first sample of each rejection kind for formatting
-            if rejection.kind not in rejection_samples:
-                rejection_samples[rejection.kind] = rejection
-
-        # No worker could fit the task - build detailed reason
-        res = req.resources
-
-        # Report all rejection reasons with their counts
-        if rejection_counts:
-            # Special handling for building limit
-            if RejectionKind.BUILDING_LIMIT in rejection_counts:
-                # Check if workers would otherwise have capacity
-                workers_with_capacity = sum(
-                    1
-                    for check_wid in candidate_ids
-                    if context.assignment_counts.get(check_wid, 0) < context.max_assignments_per_worker
-                    and context.capacities[check_wid].available_cpu_millicores >= res.cpu_millicores
-                    and context.capacities[check_wid].available_memory >= res.memory_bytes
-                )
-                if workers_with_capacity > 0:
-                    count = rejection_counts[RejectionKind.BUILDING_LIMIT]
-                    return TaskScheduleResult(
-                        task_id=task_id,
-                        failure_reason=(
-                            f"Waiting for build slots: {count} worker(s) at building limit "
-                            f"(max {self._max_building_tasks_per_worker} concurrent builds per worker), "
-                            f"but have sufficient resources for this task"
-                        ),
-                    )
-
-            # Format all rejection reasons with counts
-            reason_lines = []
-            for kind in sorted(rejection_counts.keys(), key=lambda k: rejection_counts[k], reverse=True):
-                count = rejection_counts[kind]
-                sample = rejection_samples[kind]
-                reason_lines.append(f"{sample} - {count} worker(s)")
-
-            failure_reason = "\n".join(reason_lines)
-            if hard_constraints:
-                constraint_keys = [c.key for c in hard_constraints]
-                failure_reason = f"{failure_reason}\n(with constraints={constraint_keys})"
-            return TaskScheduleResult(task_id=task_id, failure_reason=failure_reason)
-
-        if hard_constraints:
-            return TaskScheduleResult(
-                task_id=task_id,
-                failure_reason=(
-                    f"No worker matches constraints and has sufficient resources "
-                    f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes}, "
-                    f"constraints={[c.key for c in hard_constraints]})"
-                ),
-            )
-        return TaskScheduleResult(
-            task_id=task_id,
-            failure_reason=(
-                f"No worker has sufficient resources "
-                f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes})"
-            ),
-        )
 
     def find_assignments(
         self,
@@ -660,15 +630,10 @@ class Scheduler:
 
             candidates = candidate_lists.get(job_id)
             if candidates is None:
-                hard_constraints, soft_constraints = split_hard_soft(list(req.constraints))
-                matching = context.matching_workers(hard_constraints)
-                if soft_constraints:
-                    candidates = _rank_by_soft_score(matching, soft_constraints, context)
-                else:
-                    candidates = list(matching)
+                candidates = compute_candidates(req, context)
                 candidate_lists[job_id] = candidates
 
-            worker_id = self._first_fitting_worker(candidates, context, req)
+            worker_id = first_fitting_worker(candidates, context, req)
             if worker_id is None:
                 exhausted_jobs.add(job_id)
                 continue
@@ -685,26 +650,6 @@ class Scheduler:
                 len(result.assignments),
             )
         return result
-
-    @staticmethod
-    def _first_fitting_worker(
-        candidates: list[WorkerId],
-        context: SchedulingContext,
-        req: JobRequirements,
-    ) -> WorkerId | None:
-        """Return the highest-soft-scoring candidate that has capacity, or None.
-
-        Used by `find_assignments` for the per-task assignment search after
-        per-job constraint matching has been hoisted. Mirrors the cheap
-        (non-`collect_details`) path of `try_schedule_task`.
-        """
-        max_per_worker = context.max_assignments_per_worker
-        for worker_id in candidates:
-            if context.assignment_counts.get(worker_id, 0) >= max_per_worker:
-                continue
-            if context.capacities[worker_id].can_fit(req) is None:
-                return worker_id
-        return None
 
     def _find_coscheduled_assignments(
         self,
@@ -859,11 +804,10 @@ class Scheduler:
         if schedulable_task_id is None:
             return "No schedulable tasks (all tasks have non-terminal attempts)"
 
-        # Use expensive mode to collect detailed rejection reasons
-        result = self.try_schedule_task(schedulable_task_id, req, context, collect_details=True)
-        if result.success:
+        candidates = compute_candidates(req, context)
+        if first_fitting_worker(candidates, context, req) is not None:
             return "Schedulable — waiting for next scheduling cycle"
-        return result.failure_reason or "Unknown scheduling failure"
+        return explain_unfittable(req, context, self._max_building_tasks_per_worker)
 
     def _diagnose_coscheduled_job(
         self,
@@ -885,10 +829,10 @@ class Scheduler:
 
         if not group_by:
             if schedulable_task_id:
-                result = self.try_schedule_task(schedulable_task_id, req, context, collect_details=True)
-                if result.success:
+                candidates = compute_candidates(req, context)
+                if first_fitting_worker(candidates, context, req) is not None:
                     return "Schedulable — waiting for next scheduling cycle"
-                return result.failure_reason or "Unknown scheduling failure"
+                return explain_unfittable(req, context, self._max_building_tasks_per_worker)
             return "No schedulable tasks"
 
         groups = context.workers_by_group(group_by, matching_ids)
