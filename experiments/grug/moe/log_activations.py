@@ -326,8 +326,10 @@ def run_log_activations(config: LogActivationsConfig) -> None:
 _D512_BASE = "gs://marin-us-central1/grug/moe-v16-compute-opt-d512-2.19e+17-d3b963/checkpoints"
 _D1024_BASE = "gs://marin-us-central1/grug/moe-v16-compute-opt-d1024-9.00e+18-d3bc52/checkpoints"
 
-_D512_STEPS = [1000, 2000, 3000, 4000, 5000, 6000, 6387]
-_D1024_STEPS = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 12649]
+_D512_STEPS = [1000]  # test first, then uncomment rest
+# _D512_STEPS = [1000, 2000, 3000, 4000, 5000, 6000, 6387]
+_D1024_STEPS: list[int] = []  # test d512 first
+# _D1024_STEPS = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 12649]
 
 _TEXT = "The quick brown fox jumps over the lazy dog."
 
