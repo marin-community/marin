@@ -3,10 +3,10 @@
 
 """Compare exp109 scaling sweep lm_eval results against the TraitGym reference (exp55/58/59).
 
-Pulls W&B runs matching `dna-bolinas-scaling-v0.5-*`, takes the max over training steps for
-each lm_eval/AUPRC metric, normalizes the metric names to match the reference pivot
-convention (single string — e.g. `global`, `missense_variant`), and merges with the
-reference data from the gist at
+Pulls W&B runs matching `dna-bolinas-scaling-v0.5-*`, reads each lm_eval/AUPRC metric from the
+run's summary (i.e. the final logged value, not a max over the training history), normalizes
+the metric names to match the reference pivot convention (single string — e.g. `global`,
+`missense_variant`), and merges with the reference data from the gist at
 https://gist.github.com/eric-czech/787e7ab1a0e0be87bfecc7bce1fa8e83 (see
 bolinas-dna#109: https://github.com/Open-Athena/bolinas-dna/issues/109).
 
@@ -19,8 +19,9 @@ Composite metrics:
   composite2 = composite1 without synonymous_variant
 
 Visualization: 1x2 (bar chart of composites, heatmap of composite1 constituents) covering
-the reference per-experiment MAX rows, the overall MAX (exp{55,58,59}), and exp109's
-4 largest models (by param count).
+the reference per-experiment MAX rows, the overall MAX (exp{55,58,59}), exp109's
+5 largest models (by param count), and the per-metric MAX across those exp109 models
+(exp109-*) — the analogue of the reference overall MAX.
 
 Usage:
     uv run --with pandas --with pyarrow --with matplotlib --with wandb \
@@ -43,6 +44,11 @@ VERSION = "v0.5"
 EXP109_NAME = "exp109"
 AGGREGATE_EXP_NAME = "exp{55,58,59}"
 
+# Number of largest exp109 models (by param count) to include in the visualization.
+EXP109_VIZ_MODEL_COUNT = 5
+# Display name for the per-metric MAX rollup across the selected exp109 models.
+EXP109_AGGREGATE_NAME = f"{EXP109_NAME}-*"
+
 WANDB_PROJECT = "eric-czech/marin"
 WANDB_RUN_PREFIX = f"dna-bolinas-scaling-{VERSION}-"
 
@@ -52,7 +58,7 @@ REFERENCE_PARQUET_URL = (
 )
 
 CACHE_DIR = Path("/tmp")
-WANDB_CACHE_PATH = CACHE_DIR / f"scaling_sweep_{VERSION}_lm_eval.json"
+WANDB_CACHE_PATH = CACHE_DIR / f"scaling_sweep_{VERSION}_lm_eval_final.json"
 REFERENCE_CACHE_PATH = CACHE_DIR / "exp55_58_59_results.parquet"
 
 RESULTS_DIR = Path(f"experiments/dna/exp109_bolinas_scaling_analysis/results/scaling/{VERSION}")
@@ -93,8 +99,6 @@ WANDB_METRIC_KEYS = (
     "lm_eval/traitgym_mendelian_v2_255/splicing/auprc",
     "lm_eval/traitgym_mendelian_v2_255/synonymous_variant/auprc",
     "lm_eval/traitgym_mendelian_v2_255/tss_proximal/auprc",
-    "lm_eval/averages/macro_avg_auprc",
-    "lm_eval/averages/micro_avg_auprc",
 )
 
 _TRAITGYM_SUBSET_RE = re.compile(r"^lm_eval/traitgym_mendelian_v2_255/(?P<subset>.+)/auprc$")
@@ -105,17 +109,13 @@ def _normalize_wandb_metric(key: str) -> str:
 
     - `lm_eval/traitgym_mendelian_v2_255/auprc`             -> `global`
     - `lm_eval/traitgym_mendelian_v2_255/<subset>/auprc`    -> `<subset>`
-    - `lm_eval/averages/macro_avg_auprc`                    -> `macro_avg_auprc`
-    - `lm_eval/averages/micro_avg_auprc`                    -> `micro_avg_auprc`
     """
     if key == "lm_eval/traitgym_mendelian_v2_255/auprc":
         return "global"
     m = _TRAITGYM_SUBSET_RE.match(key)
     if m:
         return m.group("subset")
-    if key.startswith("lm_eval/averages/"):
-        return key.rsplit("/", 1)[-1]
-    return key
+    raise ValueError(f"unrecognized wandb metric key: {key!r}")
 
 
 _RUN_NAME_RE = re.compile(rf"^{re.escape(WANDB_RUN_PREFIX)}h(?P<hidden>\d+)-p(?P<params>[A-Za-z0-9]+)$")
@@ -134,6 +134,13 @@ def _parse_run_name(name: str) -> tuple[int, str]:
 
 
 def fetch_wandb(project: str, run_prefix: str) -> list[dict]:
+    """Fetch the final (summary) value of each lm_eval metric for runs matching `run_prefix`.
+
+    Summary keys are stored flat (slash-separated) by these runs — see WANDB_METRIC_KEYS for
+    the exact key strings used at log time. We require an exact, finite float for every key:
+    a missing or non-finite summary value indicates an upstream logging issue and should fail
+    loudly rather than silently coerce or fall back.
+    """
     import wandb
 
     api = wandb.Api(timeout=300)
@@ -141,28 +148,22 @@ def fetch_wandb(project: str, run_prefix: str) -> list[dict]:
     rows = []
     for r in runs:
         hidden, params = _parse_run_name(r.name)
-        max_by_key: dict[str, float] = {}
-        for row in r.scan_history(keys=["_step", *WANDB_METRIC_KEYS]):
-            for key in WANDB_METRIC_KEYS:
-                v = row.get(key)
-                if v is None:
-                    continue
-                try:
-                    v = float(v)
-                except (TypeError, ValueError):
-                    continue
-                if not np.isfinite(v):
-                    continue
-                prev = max_by_key.get(key)
-                if prev is None or v > prev:
-                    max_by_key[key] = v
+        summary = r.summary
+        metrics: dict[str, float] = {}
+        for key in WANDB_METRIC_KEYS:
+            if key not in summary:
+                raise KeyError(f"run {r.name!r} summary is missing required key {key!r}")
+            v = float(summary[key])
+            if not np.isfinite(v):
+                raise ValueError(f"run {r.name!r} summary key {key!r} is non-finite: {v}")
+            metrics[key] = v
         rows.append(
             {
                 "name": r.name,
                 "state": r.state,
                 "hidden_size": hidden,
                 "param_label": params,
-                "metrics": max_by_key,
+                "metrics": metrics,
             }
         )
     return rows
@@ -278,6 +279,26 @@ def exp109_long(rows: list[dict]) -> pd.DataFrame:
     return pd.DataFrame.from_records(records)
 
 
+def exp109_overall_max(long: pd.DataFrame, top_n: int) -> pd.DataFrame:
+    """Per-metric MAX across the N largest exp109 models. Analogue of the reference overall_max.
+
+    The composite metrics for this rollup are NOT computed here — they are added uniformly by
+    `add_composites` from the MAXed constituents, matching how `exp{55,58,59}` is built.
+    """
+    raw = long[(long["experiment"] == EXP109_NAME) & (long["role"] == "raw")]
+    sorted_labels = sorted(raw["param_label"].dropna().unique().tolist(), key=_extract_params_numeric)
+    selected = sorted_labels[-top_n:]
+    sub = raw[raw["param_label"].isin(selected)]
+    agg = sub.groupby("metric", as_index=False)["value"].max()
+    agg["experiment"] = EXP109_NAME
+    agg["dataset"] = "MAX"
+    agg["role"] = "overall_max"
+    agg["source"] = "wandb"
+    agg["param_label"] = "*"
+    agg["hidden_size"] = pd.NA
+    return agg
+
+
 def merge_long(ref_long: pd.DataFrame, exp109_long_df: pd.DataFrame) -> pd.DataFrame:
     """Stack reference + exp109 rows; keep every metric (outer-join semantics).
 
@@ -338,21 +359,29 @@ def _extract_params_numeric(label: str) -> float:
 
 
 def select_viz_rows(long: pd.DataFrame) -> pd.DataFrame:
-    """Pick the rows shown in the viz: reference per-experiment MAX + overall MAX + 4 largest exp109 models."""
+    """Pick rows for the viz.
+
+    Reference rows: per-experiment MAX + overall MAX (exp{55,58,59}).
+    Exp109 rows: N largest individual models + overall MAX across them (exp109-*).
+    """
     ref_rows = long[(long["source"] == "reference") & (long["role"].isin(["per_experiment_max", "overall_max"]))].copy()
     ref_rows["display_name"] = ref_rows["experiment"]
     ref_rows["sort_key"] = ref_rows["experiment"].map({"exp55": 0, "exp58": 1, "exp59": 2, AGGREGATE_EXP_NAME: 3})
 
-    exp109_rows = long[long["experiment"] == EXP109_NAME].copy()
-    param_labels = exp109_rows["param_label"].dropna().unique().tolist()
+    exp109_raw = long[(long["experiment"] == EXP109_NAME) & (long["role"] == "raw")].copy()
+    param_labels = exp109_raw["param_label"].dropna().unique().tolist()
     sorted_labels = sorted(param_labels, key=_extract_params_numeric)
-    largest_four = sorted_labels[-4:]
-    print(f"exp109 param labels: {sorted_labels} -> viz selection (4 largest): {largest_four}")
-    exp109_rows = exp109_rows[exp109_rows["param_label"].isin(largest_four)].copy()
-    exp109_rows["display_name"] = EXP109_NAME + "-" + exp109_rows["param_label"]
-    exp109_rows["sort_key"] = 10 + exp109_rows["param_label"].map({label: i for i, label in enumerate(largest_four)})
+    selected = sorted_labels[-EXP109_VIZ_MODEL_COUNT:]
+    print(f"exp109 param labels: {sorted_labels} -> viz selection ({EXP109_VIZ_MODEL_COUNT} largest): {selected}")
+    exp109_raw = exp109_raw[exp109_raw["param_label"].isin(selected)]
+    exp109_raw["display_name"] = EXP109_NAME + "-" + exp109_raw["param_label"]
+    exp109_raw["sort_key"] = 10 + exp109_raw["param_label"].map({label: i for i, label in enumerate(selected)})
 
-    viz = pd.concat([ref_rows, exp109_rows], ignore_index=True, sort=False)
+    exp109_max_rows = long[(long["experiment"] == EXP109_NAME) & (long["role"] == "overall_max")].copy()
+    exp109_max_rows["display_name"] = EXP109_AGGREGATE_NAME
+    exp109_max_rows["sort_key"] = 10 + EXP109_VIZ_MODEL_COUNT
+
+    viz = pd.concat([ref_rows, exp109_raw, exp109_max_rows], ignore_index=True, sort=False)
     return viz
 
 
@@ -394,21 +423,34 @@ def plot_composites(viz: pd.DataFrame) -> None:
         edgecolor="k",
         linewidth=0.4,
     )
+    # Hatch reference (non-exp109) bars to visually distinguish them from exp109 results.
+    reference_hatch = "//"
+    for bars in (bars1, bars2):
+        for bar, name in zip(bars, order, strict=True):
+            if not name.startswith(EXP109_NAME):
+                bar.set_hatch(reference_hatch)
     for bars in (bars1, bars2):
         for bar in bars:
             h = bar.get_height()
             if np.isfinite(h):
                 ax_bar.text(
-                    bar.get_x() + bar.get_width() / 2, h + 0.003, f"{h:.3f}", ha="center", va="bottom", fontsize=7
+                    bar.get_x() + bar.get_width() / 2,
+                    h + 0.012,
+                    f"{h:.3f}",
+                    ha="left",
+                    va="center",
+                    fontsize=7,
+                    rotation=90,
+                    rotation_mode="anchor",
                 )
     ax_bar.set_xticks(x)
     ax_bar.set_xticklabels(order, rotation=30, ha="right", fontsize=9)
     ax_bar.set_ylabel("AUPRC (mean of constituents)")
     ax_bar.set_title(f"Composite AUPRC — {EXP109_NAME} vs TraitGym reference")
-    ax_bar.legend(fontsize=9, loc="upper left")
+    ax_bar.legend(fontsize=9, loc="upper right")
     ax_bar.grid(axis="y", alpha=0.3, linewidth=0.5)
     ymax = float(np.nanmax(comp_wide.values)) if comp_wide.size else 1.0
-    ax_bar.set_ylim(0, ymax * 1.15)
+    ax_bar.set_ylim(0, ymax * 1.25)
 
     data = heatmap_wide.values.astype(float)
     im = ax_heat.imshow(data, aspect="auto", cmap="viridis", vmin=np.nanmin(data), vmax=np.nanmax(data))
@@ -430,7 +472,7 @@ def plot_composites(viz: pd.DataFrame) -> None:
 
     fig.suptitle(
         f"Bolinas DNA scaling sweep ({VERSION}) — exp109 vs TraitGym reference (exp55/58/59)\n"
-        "Reference rows: MAX across `dataset` per experiment; exp109 rows: 4 largest models",
+        f"Reference rows: MAX across `dataset` per experiment; exp109 rows: {EXP109_VIZ_MODEL_COUNT} largest models",
         fontsize=11,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.94))
@@ -452,6 +494,8 @@ def main(refresh: bool = False) -> None:
 
     wandb_rows = load_wandb(refresh=refresh)
     exp109_df = exp109_long(wandb_rows)
+    exp109_max = exp109_overall_max(exp109_df, EXP109_VIZ_MODEL_COUNT)
+    exp109_df = pd.concat([exp109_df, exp109_max], ignore_index=True)
 
     merged = merge_long(ref_long, exp109_df)
     enriched = add_composites(merged)
