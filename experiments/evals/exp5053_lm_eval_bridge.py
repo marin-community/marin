@@ -10,7 +10,7 @@ perplexity-gap pipeline without pulling in the full LM-eval harness.
 
 from __future__ import annotations
 
-
+from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
@@ -20,7 +20,6 @@ from marin.datakit.ingestion_manifest import (
     StagingMetadata,
     UsagePolicy,
 )
-from marin.datakit.download.huggingface import download_hf_step
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
 from marin.execution.executor import executor_main
 from marin.execution.step_spec import StepSpec
