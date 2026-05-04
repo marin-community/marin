@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 import cloudpickle
+import humanfriendly
 from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from fray.client import JobHandle
 from fray.types import Entrypoint, JobRequest
@@ -162,6 +163,27 @@ def _generate_execution_id() -> str:
     """Generate unique ID for this execution to avoid conflicts."""
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     return f"{ts}-{uuid.uuid4().hex[:8]}"
+
+
+def _format_count(n: float) -> str:
+    """Format a count with SI-style suffixes (K/M/B/T) once it grows past 1k."""
+    abs_n = abs(n)
+    if abs_n >= 1e12:
+        return f"{n / 1e12:.2f}T"
+    if abs_n >= 1e9:
+        return f"{n / 1e9:.2f}B"
+    if abs_n >= 1e6:
+        return f"{n / 1e6:.2f}M"
+    if abs_n >= 1e3:
+        return f"{n / 1e3:.2f}K"
+    if n == int(n):
+        return f"{int(n):,}"
+    return f"{n:.1f}"
+
+
+def _format_bytes(n: float) -> str:
+    """Format a byte count with binary (IEC) prefixes."""
+    return humanfriendly.format_size(int(n), binary=True)
 
 
 def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
@@ -564,9 +586,10 @@ class ZephyrCoordinator:
         lines.append(
             f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
         )
-        mib = bytes_processed / (1024 * 1024)
-        mib_rate = byte_rate / (1024 * 1024)
-        lines.append(f"\n**Throughput** — {items:,} items ({item_rate:.1f}/s), {mib:.1f} MiB ({mib_rate:.1f} MiB/s)")
+        lines.append(
+            f"\n**Throughput** — {_format_count(items)} items ({_format_count(item_rate)}/s), "
+            f"{_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)"
+        )
 
         detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
 
@@ -574,8 +597,8 @@ class ZephyrCoordinator:
         summary_lines = [f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})"]
         summary_lines.append(f"{completed}/{total_shards} shards ({pct}%)")
         if items > 0:
-            summary_lines.append(f"{item_rate:.0f} items/s")
-            summary_lines.append(f"{mib_rate:.1f} MiB/s")
+            summary_lines.append(f"{_format_count(item_rate)} items/s")
+            summary_lines.append(f"{_format_bytes(byte_rate)}/s")
         summary_md = "  \n".join(summary_lines)
 
         try:
@@ -618,12 +641,12 @@ class ZephyrCoordinator:
             item_rate = items / elapsed
             byte_rate = bytes_processed / elapsed
             logger.info(
-                base_msg + "; items=%d (%.1f/s), bytes_processed=%.1fMiB (%.1fMiB/s)",
+                base_msg + "; items=%s (%s/s), bytes_processed=%s (%s/s)",
                 *base_args,
-                items,
-                item_rate,
-                bytes_processed / (1024 * 1024),
-                byte_rate / (1024 * 1024),
+                _format_count(items),
+                _format_count(item_rate),
+                _format_bytes(bytes_processed),
+                _format_bytes(byte_rate),
             )
         else:
             logger.info(base_msg, *base_args)
@@ -1232,8 +1255,6 @@ class ZephyrWorker:
             bytes_processed = self._last_reported_counters.get(byte_key, 0)
             item_rate = items / elapsed if elapsed > 0 else 0.0
             byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
-            mib = bytes_processed / (1024 * 1024)
-            mib_rate = byte_rate / (1024 * 1024)
 
             summary_lines = [f"**{stage_name}**", f"shard {shard_idx + 1}/{total_shards}"]
             summary_md = "  \n".join(summary_lines)
@@ -1243,8 +1264,8 @@ class ZephyrWorker:
             ]
             if items > 0:
                 detail_lines += [
-                    f"**Items**: {items:,} ({item_rate:.1f}/s)",
-                    f"**Throughput**: {mib:.1f} MiB ({mib_rate:.1f} MiB/s)",
+                    f"**Items**: {_format_count(items)} ({_format_count(item_rate)}/s)",
+                    f"**Throughput**: {_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)",
                 ]
             detail_md = "  \n".join(detail_lines)
 

@@ -48,6 +48,8 @@ from zephyr.execution import (
     ShardTask,
     StageRunner,
     TaskResult,
+    _format_bytes,
+    _format_count,
     _shared_data_path,
     _worker_ctx_var,
     _write_stage_output,
@@ -241,16 +243,16 @@ def _periodic_status_logger(
         item_rate = items / elapsed if elapsed > 0 else 0.0
         byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
         logger.info(
-            "[%s] [%s] [%s] shard %d/%d; items=%d (%.1f/s), bytes_processed=%.1fMiB (%.1fMiB/s)",
+            "[%s] [%s] [%s] shard %d/%d; items=%s (%s/s), bytes_processed=%s (%s/s)",
             execution_id,
             stage_name,
             threading.current_thread().name,
             shard_idx,
             total_shards,
-            items,
-            item_rate,
-            bytes_processed / (1024 * 1024),
-            byte_rate / (1024 * 1024),
+            _format_count(items),
+            _format_count(item_rate),
+            _format_bytes(bytes_processed),
+            _format_bytes(byte_rate),
         )
 
 
