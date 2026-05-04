@@ -25,7 +25,11 @@ GATE1_CONFIGS: list[tuple[int, float]] = [
     (768, 1.70e18),
 ]
 
-ACTIVATIONS: list[str] = ["relu", "relu2"]
+ACTIVATIONS: list[str] = [
+    # "relu",  # finished
+    # "relu2",  # finished
+    "gelu",
+]
 
 
 def _make_steps() -> list[ExecutorStep]:

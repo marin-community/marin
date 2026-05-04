@@ -200,6 +200,8 @@ class GatedNorm(eqx.Module):
             gate_hidden = jax.nn.relu(gate_hidden)
         elif self.activation == "relu2":
             gate_hidden = jnp.square(jax.nn.relu(gate_hidden))
+        elif self.activation == "gelu":
+            gate_hidden = jax.nn.gelu(gate_hidden)
         else:
             gate_hidden = jax.nn.silu(gate_hidden)
         gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
