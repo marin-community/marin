@@ -943,43 +943,6 @@ WORKER_ATTRIBUTES = Table(
     table_constraints=("PRIMARY KEY (worker_id, key)",),
 )
 
-WORKER_TASK_HISTORY = Table(
-    "worker_task_history",
-    "wth",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column(
-            "worker_id",
-            "TEXT",
-            "NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE",
-            python_type=WorkerId,
-            decoder=decode_worker_id,
-        ),
-        Column(
-            "task_id",
-            "TEXT",
-            "NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE",
-            python_type=str,
-            decoder=str,
-        ),
-        Column(
-            "assigned_at_ms",
-            "INTEGER",
-            "NOT NULL",
-            python_name="assigned_at",
-            python_type=Timestamp,
-            decoder=decode_timestamp_ms,
-        ),
-    ),
-    indexes=(
-        "CREATE INDEX IF NOT EXISTS idx_worker_task_history_worker"
-        " ON worker_task_history(worker_id, assigned_at_ms DESC)",
-        # Probed on task delete by the new FK cascade; without it each delete
-        # scans the full history table.
-        "CREATE INDEX IF NOT EXISTS idx_worker_task_history_task" " ON worker_task_history(task_id)",
-    ),
-)
-
 ENDPOINTS = Table(
     "endpoints",
     "e",
@@ -1244,7 +1207,6 @@ MAIN_TABLES: tuple[Table, ...] = (
     TASK_ATTEMPTS,
     WORKERS,
     WORKER_ATTRIBUTES,
-    WORKER_TASK_HISTORY,
     ENDPOINTS,
     DISPATCH_QUEUE,
     SCALING_GROUPS,

@@ -138,10 +138,6 @@ _RESOURCE_SPEC_DECODER = proto_decoder(job_pb2.ResourceSpecProto)
 # Sentinel for dry-run scheduling with per-worker limits disabled.
 _UNLIMITED = sys.maxsize
 
-# How often the prune loop trims worker_task_history (independent of the
-# full data-prune interval, which is typically 1 hour).
-_HISTORY_CLEANUP_INTERVAL_S = 60.0
-
 
 class SchedulingOutcome(enum.Enum):
     """Result of a scheduling cycle, used to drive adaptive backoff."""
@@ -1505,32 +1501,26 @@ class Controller:
                     logger.exception("Inline poll reconciliation failed")
 
     def _run_prune_loop(self, stop_event: threading.Event) -> None:
-        """Background pruning loop: history cleanup every 60s, full data prune on the configured interval."""
+        """Background maintenance: WAL checkpoint every 10 min, full data prune on the configured interval."""
+        wal_checkpoint_interval = 600.0
         last_full_prune = 0.0
-        wal_checkpoint_limiter = RateLimiter(interval_seconds=600.0)
         full_prune_interval = self._config.prune_interval.to_seconds()
 
         while not stop_event.is_set():
-            stop_event.wait(timeout=_HISTORY_CLEANUP_INTERVAL_S)
+            stop_event.wait(timeout=wal_checkpoint_interval)
             if stop_event.is_set():
                 break
 
             try:
-                self._store.workers.prune_task_history()
+                busy, log_frames, checkpointed = self._db.wal_checkpoint()
+                logger.info(
+                    "wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
+                    busy,
+                    log_frames,
+                    checkpointed,
+                )
             except Exception:
-                logger.exception("Worker task history cleanup failed")
-
-            if wal_checkpoint_limiter.should_run():
-                try:
-                    busy, log_frames, checkpointed = self._db.wal_checkpoint()
-                    logger.info(
-                        "wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
-                        busy,
-                        log_frames,
-                        checkpointed,
-                    )
-                except Exception:
-                    logger.exception("WAL checkpoint failed")
+                logger.exception("WAL checkpoint failed")
 
             now = time.monotonic()
             if now - last_full_prune >= full_prune_interval:

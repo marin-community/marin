@@ -47,7 +47,6 @@
       "worker_id": "w-prune"
     }
   ],
-  "worker_task_history": [],
   "workers": [
     {
       "active": 1,

@@ -1306,7 +1306,6 @@ class ControllerTransitions:
                 else:
                     self._store.dispatch.enqueue_run(cur, assignment.worker_id, run_request.SerializeToString(), now_ms)
                 has_real_dispatch = True
-            self._store.workers.record_task_assignment(cur, assignment.worker_id, assignment.task_id, now_ms)
             jobs_to_update.add(job_id_wire)
             accepted.append(assignment)
         for job_id_wire in jobs_to_update:
@@ -2172,7 +2171,7 @@ class ControllerTransitions:
             jobs_deleted += 1
             time.sleep(pause_between_s)
 
-        # 2. Workers: one at a time (CASCADE to attributes, task_history)
+        # 2. Workers: one at a time (CASCADE to attributes)
         workers_deleted = 0
         while not _stopped():
             with self._store.read_snapshot() as snap:

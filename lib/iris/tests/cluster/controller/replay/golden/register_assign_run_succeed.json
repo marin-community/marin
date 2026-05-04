@@ -132,14 +132,6 @@
       "worker_id": "w-happy"
     }
   ],
-  "worker_task_history": [
-    {
-      "assigned_at_ms": 1704067200000,
-      "id": 1,
-      "task_id": "/test-user/happy-job/0",
-      "worker_id": "w-happy"
-    }
-  ],
   "workers": [
     {
       "active": 1,

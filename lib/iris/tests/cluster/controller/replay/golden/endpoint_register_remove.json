@@ -132,14 +132,6 @@
       "worker_id": "w-endpoint"
     }
   ],
-  "worker_task_history": [
-    {
-      "assigned_at_ms": 1704067200000,
-      "id": 1,
-      "task_id": "/test-user/endpoint-job/0",
-      "worker_id": "w-endpoint"
-    }
-  ],
   "workers": [
     {
       "active": 1,

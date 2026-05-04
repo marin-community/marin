@@ -151,20 +151,6 @@
       "worker_id": "w-retry"
     }
   ],
-  "worker_task_history": [
-    {
-      "assigned_at_ms": 1704067200000,
-      "id": 1,
-      "task_id": "/test-user/retry-job/0",
-      "worker_id": "w-retry"
-    },
-    {
-      "assigned_at_ms": 1704067200003,
-      "id": 2,
-      "task_id": "/test-user/retry-job/0",
-      "worker_id": "w-retry"
-    }
-  ],
   "workers": [
     {
       "active": 1,

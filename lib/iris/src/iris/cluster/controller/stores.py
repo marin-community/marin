@@ -62,9 +62,6 @@ from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-WORKER_TASK_HISTORY_RETENTION = 500
-"""Maximum worker_task_history rows retained per worker."""
-
 
 # Store read methods accept either a write cursor or a read snapshot. Writes
 # require ``TransactionCursor`` explicitly so a ``QuerySnapshot`` can't be
@@ -1547,7 +1544,7 @@ class TaskAttemptStore:
 
 
 class WorkerStore:
-    """Workers, worker_attributes, worker_task_history."""
+    """Workers and worker_attributes."""
 
     def __init__(self, db: ControllerDB) -> None:
         self._db = db
@@ -1682,19 +1679,6 @@ class WorkerStore:
     def mark_unhealthy(self, cur: TransactionCursor, worker_id: WorkerId) -> None:
         cur.execute("UPDATE workers SET healthy = 0 WHERE worker_id = ?", (str(worker_id),))
 
-    def record_task_assignment(
-        self,
-        cur: TransactionCursor,
-        worker_id: WorkerId,
-        task_id: JobName,
-        now_ms: int,
-    ) -> None:
-        """Append a row to ``worker_task_history`` at task-assign time."""
-        cur.execute(
-            "INSERT INTO worker_task_history(worker_id, task_id, assigned_at_ms) VALUES (?, ?, ?)",
-            (str(worker_id), task_id.to_wire(), now_ms),
-        )
-
     def find_prunable(self, tx: Tx, before_ms: int) -> WorkerId | None:
         """Return one inactive-or-unhealthy worker whose heartbeat predates ``before_ms``."""
         row = tx.fetchone(
@@ -1826,42 +1810,6 @@ class WorkerStore:
         cur.execute("UPDATE tasks SET current_worker_id = NULL WHERE current_worker_id = ?", (str(worker_id),))
         cur.execute("DELETE FROM dispatch_queue WHERE worker_id = ?", (str(worker_id),))
         cur.execute("DELETE FROM workers WHERE worker_id = ?", (str(worker_id),))
-
-    def prune_task_history(self) -> int:
-        return self._prune_per_worker_history(
-            "worker_task_history",
-            WORKER_TASK_HISTORY_RETENTION,
-            order_by="assigned_at_ms DESC, id DESC",
-        )
-
-    def _prune_per_worker_history(
-        self,
-        table: str,
-        retention: int,
-        order_by: str = "id DESC",
-    ) -> int:
-        with self._db.transaction() as cur:
-            rows = cur.execute(
-                f"SELECT worker_id, COUNT(*) as cnt FROM {table} GROUP BY worker_id HAVING cnt > ?",
-                (retention,),
-            ).fetchall()
-            total_deleted = 0
-            for row in rows:
-                worker_id = row["worker_id"]
-                cur.execute(
-                    f"DELETE FROM {table} "
-                    "WHERE worker_id = ? "
-                    f"AND id NOT IN ("
-                    f"  SELECT id FROM {table} "
-                    "  WHERE worker_id = ? "
-                    f"  ORDER BY {order_by} LIMIT ?"
-                    ")",
-                    (worker_id, worker_id, retention),
-                )
-                total_deleted += cur.rowcount
-        if total_deleted > 0:
-            logger.info("Pruned %d %s rows", total_deleted, table)
-        return total_deleted
 
 
 class DispatchQueueStore:

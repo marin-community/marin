@@ -174,20 +174,6 @@
       "worker_id": "w-cancel"
     }
   ],
-  "worker_task_history": [
-    {
-      "assigned_at_ms": 1704067200000,
-      "id": 1,
-      "task_id": "/test-user/cancel-job/0",
-      "worker_id": "w-cancel"
-    },
-    {
-      "assigned_at_ms": 1704067200000,
-      "id": 2,
-      "task_id": "/test-user/cancel-job/1",
-      "worker_id": "w-cancel"
-    }
-  ],
   "workers": [
     {
       "active": 1,

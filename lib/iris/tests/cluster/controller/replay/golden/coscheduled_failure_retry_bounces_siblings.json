@@ -182,20 +182,6 @@
       "worker_id": "w-cosched-fail-b"
     }
   ],
-  "worker_task_history": [
-    {
-      "assigned_at_ms": 1704067200000,
-      "id": 1,
-      "task_id": "/test-user/cosched-fail/0",
-      "worker_id": "w-cosched-fail-a"
-    },
-    {
-      "assigned_at_ms": 1704067200000,
-      "id": 2,
-      "task_id": "/test-user/cosched-fail/1",
-      "worker_id": "w-cosched-fail-b"
-    }
-  ],
   "workers": [
     {
       "active": 1,

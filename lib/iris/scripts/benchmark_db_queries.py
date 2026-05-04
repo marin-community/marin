@@ -95,7 +95,6 @@ _CLONE_TABLES = [
     "workers",
     "worker_attributes",
     "dispatch_queue",
-    "worker_task_history",
     "endpoints",
     "reservation_claims",
     "meta",
