@@ -16,7 +16,7 @@ import zipfile
 from collections.abc import Iterable
 from contextlib import ExitStack
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import StrEnum, auto
 from io import BytesIO
 
 import fsspec
@@ -127,10 +127,10 @@ _USERNAME_DENYLIST = frozenset(
 class DiagnosticPartition(StrEnum):
     """Stable split assignment for diagnostic logs."""
 
-    TRAIN = "train"
-    DEV = "dev"
-    TEST = "test"
-    ISSUE_5093_HOLDOUT = "issue_5093_holdout"
+    TRAIN = auto()
+    DEV = auto()
+    TEST = auto()
+    ISSUE_5093_HOLDOUT = auto()
 
 
 class DiagnosticLogsArtifact(BaseModel):
@@ -320,18 +320,6 @@ SOURCE_INVENTORY: tuple[IngestionSourceManifest, ...] = (
     ),
 )
 SOURCE_MANIFESTS = {source.source_label: source for source in SOURCE_INVENTORY}
-
-
-def source_manifest(source_label: str) -> IngestionSourceManifest:
-    """Return the manifest for one named diagnostic-log source."""
-
-    return SOURCE_MANIFESTS[source_label]
-
-
-def source_inventory() -> tuple[IngestionSourceManifest, ...]:
-    """Return the immutable source inventory for public diagnostic logs."""
-
-    return SOURCE_INVENTORY
 
 
 def training_ready_sources() -> tuple[IngestionSourceManifest, ...]:
@@ -653,7 +641,7 @@ def materialize_ghalogs_to_parquet(
         ctx_kwargs["max_workers"] = max_workers
     outcome = ZephyrContext(**ctx_kwargs).execute(pipeline)
     counters_dict = dict(outcome.counters)
-    manifest = source_manifest("ghalogs")
+    manifest = SOURCE_MANIFESTS["ghalogs"]
     return MaterializedDiagnosticLogParquet(
         source_label=manifest.source_label,
         output_dir=output_path,
@@ -697,7 +685,7 @@ def materialize_ghalogs_partition_to_parquet(
         ctx_kwargs["max_workers"] = max_workers
     outcome = ZephyrContext(**ctx_kwargs).execute(pipeline)
     counters_dict = dict(outcome.counters)
-    manifest = source_manifest("ghalogs")
+    manifest = SOURCE_MANIFESTS["ghalogs"]
     return MaterializedDiagnosticLogParquet(
         source_label=manifest.source_label,
         output_dir=output_path,
@@ -760,7 +748,7 @@ def extract_ghalogs(
                 writers[partition].write(payload)
                 writers[partition].write("\n")
 
-    manifest = source_manifest("ghalogs")
+    manifest = SOURCE_MANIFESTS["ghalogs"]
     metadata_path = _write_source_metadata(
         manifest=manifest,
         input_path=input_path,
@@ -826,7 +814,7 @@ def extract_logchunks(
     archive_path = os.path.join(input_path, LOGCHUNKS_ZIP_FILENAME)
     output_file = os.path.join(output_path, "eval_only", "logchunks", "data-00000-of-00001.jsonl")
     kept_records, bytes_written = _write_jsonl_records(output_file, _iter_logchunks_records(archive_path, max_examples))
-    manifest = source_manifest("logchunks")
+    manifest = SOURCE_MANIFESTS["logchunks"]
     slice_output_dir = os.path.join(output_path, "eval_only", "logchunks")
     metadata_path = _write_source_metadata(
         manifest=manifest,
@@ -889,7 +877,7 @@ def extract_loghub(
     loghub_path = os.path.join(input_path, LOGHUB_DIRNAME)
     output_file = os.path.join(output_path, "eval_only", "loghub", "data-00000-of-00001.jsonl")
     kept_records, bytes_written = _write_jsonl_records(output_file, _iter_loghub_records(loghub_path, max_files))
-    manifest = source_manifest("loghub")
+    manifest = SOURCE_MANIFESTS["loghub"]
     slice_output_dir = os.path.join(output_path, "eval_only", "loghub")
     metadata_path = _write_source_metadata(
         manifest=manifest,
@@ -939,7 +927,7 @@ def extract_ghalogs_step(
     output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Return a StepSpec that materializes the capped GHALogs sample."""
-    source = source_manifest("ghalogs")
+    source = SOURCE_MANIFESTS["ghalogs"]
     return StepSpec(
         name="processed/diagnostic_logs/ghalogs_public_sample",
         output_path_prefix=output_path_prefix,
@@ -964,7 +952,7 @@ def materialize_ghalogs_step(
     output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Return a StepSpec that materializes GHALogs into reusable parquet shards."""
-    source = source_manifest("ghalogs")
+    source = SOURCE_MANIFESTS["ghalogs"]
     return StepSpec(
         name="processed/diagnostic_logs/ghalogs_public_parquet",
         output_path_prefix=output_path_prefix,
@@ -995,7 +983,7 @@ def materialize_ghalogs_partition_step(
     output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Return a StepSpec that filters materialized GHALogs parquet to one partition."""
-    source = source_manifest("ghalogs")
+    source = SOURCE_MANIFESTS["ghalogs"]
     return StepSpec(
         name=f"processed/diagnostic_logs/ghalogs_public_{partition.value}_parquet",
         deps=[materialized],
@@ -1024,7 +1012,7 @@ def extract_logchunks_step(
     output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Return a StepSpec that materializes the capped LogChunks eval slice."""
-    source = source_manifest("logchunks")
+    source = SOURCE_MANIFESTS["logchunks"]
     return StepSpec(
         name="processed/diagnostic_logs/logchunks_eval_only",
         output_path_prefix=output_path_prefix,
@@ -1047,7 +1035,7 @@ def extract_loghub_step(
     output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Return a StepSpec that materializes the capped LogHub eval slice."""
-    source = source_manifest("loghub")
+    source = SOURCE_MANIFESTS["loghub"]
     return StepSpec(
         name="processed/diagnostic_logs/loghub_eval_only",
         output_path_prefix=output_path_prefix,
@@ -1128,7 +1116,7 @@ def extract_diagnostic_logs_step(
             "split_policy": "97% train / 1% dev / 1% test / 1% issue_5093_holdout",
             "source_content_fingerprints": {
                 source.source_label: source.fingerprint()
-                for source in source_inventory()
+                for source in SOURCE_INVENTORY
                 if source.source_label in {"ghalogs", "logchunks", "loghub"}
             },
             "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",

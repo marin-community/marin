@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from marin.datakit.download.diagnostic_logs import (
+    SOURCE_INVENTORY,
     DiagnosticPartition,
     ExtractedDiagnosticLogs,
     ExtractedPartitionedDiagnosticLogs,
@@ -20,7 +21,6 @@ from marin.datakit.download.diagnostic_logs import (
     materialize_ghalogs_partition_to_parquet,
     materialize_ghalogs_to_parquet,
     sanitize_diagnostic_log_text,
-    source_inventory,
 )
 from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
@@ -105,7 +105,7 @@ def test_loghub_file_to_record_sanitizes():
 
 
 def test_source_inventory_uses_shared_manifest_policy_metadata():
-    inventory = {source.source_label: source for source in source_inventory()}
+    inventory = {source.source_label: source for source in SOURCE_INVENTORY}
 
     assert inventory["ghalogs"].policy.training_allowed is True
     assert inventory["ghalogs"].policy.requires_sanitization is True

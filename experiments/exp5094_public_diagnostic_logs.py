@@ -14,13 +14,13 @@ from marin.datakit.download.diagnostic_logs import (
     DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
     DEFAULT_LOGHUB_MAX_FILES,
     GHALOGS_STAGED_PREFIX,
+    SOURCE_INVENTORY,
+    SOURCE_MANIFESTS,
     blocked_sources,
     extract_ghalogs,
     extract_logchunks_step,
     extract_loghub_step,
     materialize_ghalogs_step,
-    source_inventory,
-    source_manifest,
 )
 from marin.execution.executor import (
     ExecutorMainConfig,
@@ -49,7 +49,7 @@ class _GhalogsExtractConfig:
 
 
 def _inventory_payload() -> list[dict[str, object]]:
-    return [source.to_dict() for source in source_inventory()]
+    return [source.to_dict() for source in SOURCE_INVENTORY]
 
 
 def _run_ghalogs_extract(cfg: _GhalogsExtractConfig) -> object:
@@ -66,7 +66,7 @@ def _ghalogs_extract_step(
     source_path: str | InputName | None,
     max_ghalogs_members: int,
 ) -> ExecutorStep:
-    source = source_manifest("ghalogs")
+    source = SOURCE_MANIFESTS["ghalogs"]
     resolved_source_path = _GHALOGS_STAGED_SOURCE if source_path is None else source_path
     return ExecutorStep(
         name="processed/diagnostic_logs/ghalogs_public_sample",
