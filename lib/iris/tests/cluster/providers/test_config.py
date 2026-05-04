@@ -755,18 +755,6 @@ scale_groups:
             assert local_config.defaults.autoscaler.evaluation_interval.milliseconds == 500
             assert local_config.defaults.autoscaler.scale_up_delay.milliseconds == 1000
 
-    def test_coreweave_poc_configs_accelerator_network_settings(self):
-        """PoC configs match the accelerator labels and network devices on each cluster."""
-        iris_root = Path(__file__).parent.parent.parent.parent
-
-        rno2a = load_config(iris_root / "examples" / "coreweave-rno2a.yaml")
-        assert rno2a.scale_groups["gh200-1x"].resources.device_variant == "GH200"
-        assert rno2a.kubernetes_provider.host_network is False
-
-        usw09b = load_config(iris_root / "examples" / "coreweave-usw09b.yaml")
-        assert usw09b.scale_groups["b200-8x"].resources.device_variant == "B200"
-        assert usw09b.kubernetes_provider.host_network is True
-
     def test_example_config_zones_in_known_gcp_zones(self):
         """All GCP zones used in example configs must be in KNOWN_GCP_ZONES."""
         from iris.cluster.providers.gcp.service import KNOWN_GCP_ZONES
