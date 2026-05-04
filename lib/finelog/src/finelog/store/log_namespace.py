@@ -69,6 +69,14 @@ _LOG_PREFIX = "logs_"
 
 _ROW_GROUP_SIZE = 16_384
 
+# Append calls slower than this emit a warning so lock contention vs prepare
+# work vs critical-section work is visible in production logs.
+_SLOW_APPEND_THRESHOLD_MS = 200
+
+# Background loop heartbeat cadence — emits a one-line snapshot of buffer
+# and segment state regardless of whether a flush or compaction fires.
+_BG_HEARTBEAT_INTERVAL_SEC = 10.0
+
 # Hard ceiling on the per-read parquet working set; safety net for body-LIKE
 # queries that cannot be pruned by row-group statistics.
 _MAX_PARQUET_BYTES_PER_READ = 2_500 * 1024 * 1024
@@ -168,7 +176,11 @@ def _stamp_seq_column(batch: pa.RecordBatch, first_seq: int, arrow_schema: pa.Sc
 
 
 def _build_log_table(buffer: list[tuple], arrow_schema: pa.Schema) -> pa.Table:
-    """Build an Arrow table from log-namespace ``(seq, key, source, data, epoch_ms, level)`` tuples."""
+    """Build an Arrow table from log-namespace ``(seq, key, source, data, epoch_ms, level)`` tuples.
+
+    Used by :class:`MemoryLogNamespace`. The disk path goes through
+    :meth:`RamBuffers.append_table` with pre-built columnar arrays.
+    """
     if not buffer:
         return arrow_schema.empty_table()
     n = 6
@@ -185,6 +197,94 @@ def _build_log_table(buffer: list[tuple], arrow_schema: pa.Schema) -> pa.Table:
         pa.array(cols[5], type=pa.int32()),
     ]
     return pa.table(arrays, schema=arrow_schema)
+
+
+class RamBuffers:
+    """Owns the in-RAM write state for a single namespace.
+
+    Holds the merged log chunks plus the in-flight ``flushing`` table, the
+    seq counter, and a maintained ``_ram_bytes`` tally so callers don't
+    rescan ``self._chunks`` on every append. Not thread-safe — the
+    enclosing namespace serializes calls under ``_insertion_lock``.
+
+    ``pa.concat_tables`` (used by ``_merge_chunks``) is zero-copy for
+    primitive columns and shares string buffers via Arrow's reference
+    counting, so total ``nbytes`` is conserved across merges. We can
+    therefore maintain ``_ram_bytes`` incrementally rather than scanning.
+    """
+
+    def __init__(self, *, arrow_schema: pa.Schema, next_seq: int) -> None:
+        self._arrow_schema = arrow_schema
+        self._chunks: list[pa.Table] = []
+        self._flushing: _SealedBuffer | None = None
+        self._next_seq = next_seq
+        self._ram_bytes = 0
+
+    @property
+    def next_seq(self) -> int:
+        return self._next_seq
+
+    def allocate_seq(self, count: int) -> int:
+        first = self._next_seq
+        self._next_seq += count
+        return first
+
+    def append_table(self, table: pa.Table) -> None:
+        added = table.nbytes
+        self._chunks.append(table)
+        self._chunks = _merge_chunks(self._chunks)
+        self._ram_bytes += added
+
+    def ram_bytes(self) -> int:
+        flushing_b = self._flushing.table.nbytes if self._flushing is not None else 0
+        return self._ram_bytes + flushing_b
+
+    def chunk_count(self) -> int:
+        return len(self._chunks)
+
+    def has_chunks(self) -> bool:
+        return bool(self._chunks)
+
+    def seal(self) -> _SealedBuffer | None:
+        """Move accumulated chunks into a sealed flushing buffer.
+
+        Returns ``None`` if there is nothing to flush. The returned buffer
+        is also stored on ``self._flushing`` so queries see in-flight rows.
+        """
+        if not self._chunks:
+            return None
+        tables = self._chunks
+        self._chunks = []
+        self._ram_bytes = 0
+        visible_table = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
+        seq_col = visible_table.column(IMPLICIT_SEQ_COLUMN)
+        sealed = _SealedBuffer(
+            table=visible_table,
+            min_seq=pc.min(seq_col).as_py(),
+            max_seq=pc.max(seq_col).as_py(),
+        )
+        self._flushing = sealed
+        return sealed
+
+    def commit_flush(self) -> None:
+        """Drop the in-flight flushing buffer (parquet write succeeded)."""
+        self._flushing = None
+
+    def restore_flush(self) -> None:
+        """Push the in-flight buffer back to the head of chunks (write failed)."""
+        if self._flushing is None:
+            return
+        table = self._flushing.table
+        self._chunks.insert(0, table)
+        self._ram_bytes += table.nbytes
+        self._flushing = None
+
+    def query_snapshot(self) -> list[pa.Table]:
+        """Return chunks plus any in-flight flushing table (for read paths)."""
+        snap = list(self._chunks)
+        if self._flushing is not None:
+            snap.append(self._flushing.table)
+        return snap
 
 
 class LogNamespaceProtocol(Protocol):
@@ -270,9 +370,10 @@ class DiskLogNamespace:
         self._compaction_conn = compaction_conn
         self._read_pool = read_pool
 
-        self._next_seq = _recover_next_seq(data_dir)
-        self._chunks: list[pa.Table] = []
-        self._flushing: _SealedBuffer | None = None
+        self._buffers = RamBuffers(
+            arrow_schema=self._arrow_schema,
+            next_seq=_recover_next_seq(data_dir),
+        )
         self._local_segments: deque[LocalSegment] = deque()
 
         # Drop stale tmp segments left behind by a prior compaction that
@@ -320,33 +421,75 @@ class DiskLogNamespace:
         self._bg_thread.start()
 
     def append_log_batch(self, items: list[tuple[str, list]]) -> None:
-        """Log-namespace-only append for ``PushLogs`` RPCs."""
+        """Log-namespace-only append for ``PushLogs`` RPCs.
+
+        Pre-builds all five non-seq columns from the protobuf entries
+        outside the lock — that's the bulk of the per-row Python work.
+        Inside the lock we only allocate the seq range, materialize the
+        seq array, assemble the Arrow table, and hand it to the buffer.
+        """
+        t_enter = time.monotonic()
+        # Outside the lock: flatten items into one combined columnar batch.
+        keys: list[str] = []
+        sources: list[str] = []
+        datas: list[str] = []
+        epoch_ms: list[int] = []
+        levels: list[int] = []
+        for key, entries in items:
+            if not entries:
+                continue
+            n = len(entries)
+            keys.extend([key] * n)
+            sources.extend(e.source for e in entries)
+            datas.extend(e.data for e in entries)
+            epoch_ms.extend(e.timestamp.epoch_ms for e in entries)
+            levels.extend(int(e.level) for e in entries)
+        total = len(keys)
+        if total == 0:
+            return
+        keys_arr = pa.array(keys, type=pa.string())
+        sources_arr = pa.array(sources, type=pa.string())
+        datas_arr = pa.array(datas, type=pa.string())
+        ts_arr = pa.array(epoch_ms, type=pa.int64())
+        levels_arr = pa.array(levels, type=pa.int32())
+        t_prepared = time.monotonic()
+
+        wait_start = time.monotonic()
         with self._insertion_lock:
-            for key, entries in items:
-                if not entries:
-                    continue
-                first_seq = self._next_seq
-                self._next_seq += len(entries)
-                rows = [
-                    (first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)
-                ]
-                self._chunks.append(_build_log_table(rows, self._arrow_schema))
-            self._chunks = _merge_chunks(self._chunks)
-            needs_drain = self._ram_bytes_locked() >= self._segment_target_bytes
+            critical_start = time.monotonic()
+            first_seq = self._buffers.allocate_seq(total)
+            seqs_arr = pa.array(range(first_seq, first_seq + total), type=pa.int64())
+            self._buffers.append_table(
+                pa.table(
+                    [seqs_arr, keys_arr, sources_arr, datas_arr, ts_arr, levels_arr],
+                    schema=self._arrow_schema,
+                )
+            )
+            needs_drain = self._buffers.ram_bytes() >= self._segment_target_bytes
+        critical_end = time.monotonic()
         if needs_drain:
             self._wake.set()
+
+        total_ms = int((critical_end - t_enter) * 1000)
+        if total_ms >= _SLOW_APPEND_THRESHOLD_MS:
+            logger.warning(
+                "slow append: items=%d rows=%d prepare_ms=%d lock_wait_ms=%d critical_ms=%d total_ms=%d",
+                len(items),
+                total,
+                int((t_prepared - t_enter) * 1000),
+                int((critical_start - wait_start) * 1000),
+                int((critical_end - critical_start) * 1000),
+                total_ms,
+            )
 
     def append_record_batch(self, batch: pa.RecordBatch) -> None:
         """Stamp ``seq`` values onto ``batch`` and append it to the in-RAM chunks."""
         if batch.num_rows == 0:
             return
         with self._insertion_lock:
-            first_seq = self._next_seq
-            self._next_seq += batch.num_rows
-            stamped = _stamp_seq_column(batch, first_seq, self._arrow_schema)
-            self._chunks.append(stamped)
-            self._chunks = _merge_chunks(self._chunks)
-            needs_drain = self._ram_bytes_locked() >= self._segment_target_bytes
+            first_seq = self._buffers.allocate_seq(batch.num_rows)
+            self._buffers.append_table(_stamp_seq_column(batch, first_seq, self._arrow_schema))
+            needs_drain = self._buffers.ram_bytes() >= self._segment_target_bytes
         if needs_drain:
             self._wake.set()
 
@@ -407,54 +550,85 @@ class DiskLogNamespace:
         self.schema = new_schema
         self._arrow_schema = schema_to_arrow(new_schema)
 
-    def _ram_bytes_locked(self) -> int:
-        chunks_b = sum(t.nbytes for t in self._chunks)
-        flushing_b = self._flushing.table.nbytes if self._flushing is not None else 0
-        return chunks_b + flushing_b
-
     def _bg_loop(self) -> None:
+        last_heartbeat = 0.0
+        last_flush_at = time.monotonic()
+        last_compact_at = time.monotonic()
         while not self._stop.is_set():
             with self._insertion_lock:
-                force_drain = self._ram_bytes_locked() >= self._segment_target_bytes
+                ram_bytes = self._buffers.ram_bytes()
+                chunk_count = self._buffers.chunk_count()
+                next_seq = self._buffers.next_seq
                 tmp_count = sum(1 for s in self._local_segments if _is_tmp_path(s.path))
-                force_compaction = tmp_count > self._max_tmp_segments_before_compact
+                logs_count = len(self._local_segments) - tmp_count
+            force_drain = ram_bytes >= self._segment_target_bytes
+            force_compaction = tmp_count > self._max_tmp_segments_before_compact
+
+            now = time.monotonic()
+            if now - last_heartbeat >= _BG_HEARTBEAT_INTERVAL_SEC:
+                logger.info(
+                    "bg-loop tick: chunks=%d ram_bytes=%d tmp=%d logs=%d next_seq=%d "
+                    "since_flush_ms=%d since_compact_ms=%d",
+                    chunk_count,
+                    ram_bytes,
+                    tmp_count,
+                    logs_count,
+                    next_seq,
+                    int((now - last_flush_at) * 1000),
+                    int((now - last_compact_at) * 1000),
+                )
+                last_heartbeat = now
+
             if force_drain:
                 self._flush_step()
                 self._flush_rl.mark_run()
+                last_flush_at = time.monotonic()
             elif self._flush_rl.should_run():
                 self._flush_step()
+                last_flush_at = time.monotonic()
             if force_compaction or self._compaction_rl.should_run():
                 self._compaction_step()
                 self._compaction_rl.mark_run()
+                last_compact_at = time.monotonic()
 
             self._wake.wait(timeout=min(self._flush_rl.time_until_next(), 1.0))
             self._wake.clear()
 
     def _flush_step(self) -> None:
         with self._flush_lock:
+            flush_start = time.monotonic()
             with self._insertion_lock:
-                if not self._chunks:
-                    return
-                tables = list(self._chunks)
-                self._chunks = []
-                visible_table = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
-                min_seq, max_seq = self._derive_seq_bounds_locked(visible_table)
-                visible = _SealedBuffer(table=visible_table, min_seq=min_seq, max_seq=max_seq)
-                self._flushing = visible
+                ram_bytes_before = self._buffers.ram_bytes()
+                chunks_before = self._buffers.chunk_count()
+                visible = self._buffers.seal()
+            if visible is None:
+                return
+
+            logger.info(
+                "flush starting: rows=%d ram_bytes=%d chunks=%d seq=[%d,%d]",
+                visible.table.num_rows,
+                ram_bytes_before,
+                chunks_before,
+                visible.min_seq,
+                visible.max_seq,
+            )
 
             sealed = _SealedBuffer(
-                table=self._sort_for_flush(visible_table),
-                min_seq=min_seq,
-                max_seq=max_seq,
+                table=self._sort_for_flush(visible.table),
+                min_seq=visible.min_seq,
+                max_seq=visible.max_seq,
             )
 
             try:
                 self._write_new_segment(sealed)
             except Exception:
-                logger.warning("Flush failed, restoring data to chunks", exc_info=True)
+                logger.warning(
+                    "Flush failed after %d ms, restoring data to chunks",
+                    int((time.monotonic() - flush_start) * 1000),
+                    exc_info=True,
+                )
                 with self._insertion_lock:
-                    self._chunks.insert(0, visible.table)
-                    self._flushing = None
+                    self._buffers.restore_flush()
                 return
 
             with self._flush_generation_cond:
@@ -483,13 +657,21 @@ class DiskLogNamespace:
 
         filepath = self._data_dir / filename
         tmp_path = filepath.with_suffix(".parquet.tmp")
+        # Materialize parquet in memory and flush in one write(). pyarrow's
+        # path-based writer uses an unbuffered FileOutputStream that emits
+        # ~40 syscalls per segment (most <100B — page headers, footer
+        # fragments). On a contended boot disk those serialize against the
+        # I/O queue and dominate flush latency.
+        buf = pa.BufferOutputStream()
         pq.write_table(
             sealed.table,
-            tmp_path,
+            buf,
             compression="zstd",
             row_group_size=_ROW_GROUP_SIZE,
             write_page_index=True,
         )
+        with pa.OSFile(str(tmp_path), "wb") as out:
+            out.write(buf.getvalue())
         tmp_path.rename(filepath)
         seg = LocalSegment(
             path=str(filepath),
@@ -500,7 +682,7 @@ class DiskLogNamespace:
 
         with self._insertion_lock:
             self._local_segments.append(seg)
-            self._flushing = None
+            self._buffers.commit_flush()
 
         logger.info(
             "Wrote tmp segment %s: rows=%d bytes=%d seq=[%d,%d] elapsed_ms=%d",
@@ -632,10 +814,7 @@ class DiskLogNamespace:
     def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]:
         """Return all currently queryable local segments and RAM tables."""
         with self._insertion_lock:
-            ram_tables = list(self._chunks)
-            if self._flushing is not None:
-                ram_tables.append(self._flushing.table)
-            return list(self._local_segments), ram_tables
+            return list(self._local_segments), self._buffers.query_snapshot()
 
     def all_segments_unlocked(self) -> list[LocalSegment]:
         """Snapshot every locally-tracked segment. Caller MUST hold the insertion lock."""
@@ -734,9 +913,7 @@ class DiskLogNamespace:
     ) -> list[tuple]:
         with self._insertion_lock:
             segments = list(self._local_segments)
-            ram_tables: list[pa.Table] = list(self._chunks)
-            if self._flushing is not None:
-                ram_tables.append(self._flushing.table)
+            ram_tables: list[pa.Table] = self._buffers.query_snapshot()
 
         segments = _cap_segments(segments)
         parquet_files = [s.path for s in segments]

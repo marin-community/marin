@@ -107,7 +107,7 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
             if substring:
                 req.substring = substring
 
-            resp = log_client.query(req)
+            resp = log_client.fetch_logs(req)
             for entry in resp.entries:
                 ts = ""
                 if entry.timestamp and entry.timestamp.epoch_ms:

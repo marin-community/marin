@@ -468,7 +468,7 @@ class RemoteClusterClient:
         )
 
         def _call():
-            return self._log_client.query(request)
+            return self._log_client.fetch_logs(request)
 
         return call_with_retry(f"fetch_logs({source})", _call)
 

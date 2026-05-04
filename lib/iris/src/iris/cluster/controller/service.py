@@ -1002,7 +1002,7 @@ class ControllerServiceImpl:
         store: Controller store bundle (per-entity stores + transaction / read_snapshot).
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
-        log_client: LogClient for reading task logs through StatsService.Query.
+        log_client: LogClient for reading task logs through LogService.FetchLogs.
     """
 
     def __init__(
@@ -1892,7 +1892,7 @@ class ControllerServiceImpl:
             min_level=request.min_level,
         )
 
-        fetch_response = self._log_client.query(fetch_request)
+        fetch_response = self._log_client.fetch_logs(fetch_request)
         entries = fetch_response.entries
 
         batch = controller_pb2.Controller.TaskLogBatch(

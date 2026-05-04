@@ -4,7 +4,7 @@
 """Finelog client APIs.
 
 :class:`LogClient` is the single user-facing entry point; it covers both the
-legacy log surface (``write_batch`` / ``query``) and the stats surface
+log surface (``write_batch`` / ``fetch_logs``) and the stats surface
 (``get_table`` / ``drop_table``). :class:`RemoteLogHandler` plugs Python's
 ``logging`` into a :class:`LogClient`.
 

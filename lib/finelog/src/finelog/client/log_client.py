@@ -37,6 +37,7 @@ from finelog.errors import (
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
+from finelog.rpc.logging_connect import LogServiceClientSync
 from finelog.store.log_namespace import LOG_REGISTERED_SCHEMA
 from finelog.store.schema import (
     IMPLICIT_SEQ_COLUMN,
@@ -47,8 +48,7 @@ from finelog.store.schema import (
     schema_to_arrow,
     schema_to_proto,
 )
-from finelog.store.sql_escape import quote_literal
-from finelog.types import REGEX_META_RE, is_retryable_error, parse_attempt_id, str_to_log_level
+from finelog.types import is_retryable_error
 
 
 class _QuietStreamHandler(logging.StreamHandler):
@@ -413,9 +413,10 @@ class LogClient:
         self._lock = threading.Lock()
         self._closed = False
         self._stats_client: StatsServiceClientSync | None = None
+        self._log_service_client: LogServiceClientSync | None = None
 
         # The log namespace's Table is constructed lazily on first
-        # write_batch/query so connect() does not pay the resolver cost
+        # write_batch/fetch_logs so connect() does not pay the resolver cost
         # when a caller only needs stats.
         self._tables: dict[str, Table] = {}
 
@@ -462,9 +463,13 @@ class LogClient:
         with self._lock:
             self._closed = True
             stats_client = self._stats_client
+            log_service_client = self._log_service_client
             self._stats_client = None
+            self._log_service_client = None
         if stats_client is not None:
             stats_client.close()
+        if log_service_client is not None:
+            log_service_client.close()
 
     def write_batch(self, key: str, messages: Sequence[logging_pb2.LogEntry]) -> None:
         """Append ``messages`` to the ``log`` namespace under ``key``."""
@@ -473,11 +478,23 @@ class LogClient:
         table = self._get_log_table()
         table.write(_log_entries_to_rows(key, messages))
 
-    def query(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
-        """Read from the ``log`` namespace via ``StatsService.Query``."""
-        sql = _logs_query_sql(request)
-        result = self._stats_query(sql)
-        return _logs_query_response_from_arrow(result, request)
+    def fetch_logs(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
+        """Read from the ``log`` namespace via ``LogService.FetchLogs``.
+
+        Uses the purpose-built log read path (warm cached DuckDB connection,
+        single-namespace scan, tail-aware short-circuit) instead of the
+        general SQL ``StatsService.Query`` surface.
+        """
+        client = self._get_log_service_client()
+        try:
+            return client.fetch_logs(request)
+        except ConnectError as exc:
+            if is_retryable_error(exc):
+                self._invalidate(_format_exc_summary(exc))
+            raise _translate_connect_error(exc) from exc
+        except (ConnectionError, OSError, TimeoutError) as exc:
+            self._invalidate(_format_exc_summary(exc))
+            raise
 
     def flush(self, timeout: float | None = None) -> FlushResult:
         """Flush the ``log`` namespace's Table, if any."""
@@ -583,6 +600,21 @@ class LogClient:
             logger.info("LogClient resolved %s -> %s (stats)", self._server_url, address)
             return self._stats_client
 
+    def _get_log_service_client(self) -> LogServiceClientSync:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("LogClient is closed")
+            if self._log_service_client is not None:
+                return self._log_service_client
+            address = self._resolve()
+            self._log_service_client = LogServiceClientSync(
+                address=address,
+                timeout_ms=self._timeout_ms,
+                interceptors=self._interceptors,
+            )
+            logger.info("LogClient resolved %s -> %s (log)", self._server_url, address)
+            return self._log_service_client
+
     def _resolve(self) -> str:
         address = self._resolver(self._server_url)
         if not address:
@@ -592,11 +624,16 @@ class LogClient:
     def _invalidate(self, reason: str) -> None:
         with self._lock:
             stats_client = self._stats_client
+            log_service_client = self._log_service_client
             self._stats_client = None
-        if stats_client is None:
+            self._log_service_client = None
+        if stats_client is None and log_service_client is None:
             return
         logger.info("LogClient: invalidating cached endpoint for %s (%s)", self._server_url, reason)
-        stats_client.close()
+        if stats_client is not None:
+            stats_client.close()
+        if log_service_client is not None:
+            log_service_client.close()
 
     def _stats_query(self, sql: str) -> pa.Table:
         client = self._get_stats_client()
@@ -681,89 +718,6 @@ def _log_entries_to_rows(key: str, messages: Sequence[logging_pb2.LogEntry]) -> 
             )
         )
     return rows
-
-
-_LOG_QUERY_COLUMNS = ("seq", "key", "source", "data", "epoch_ms", "level")
-_DEFAULT_FETCH_MAX_LINES = 1000
-
-
-def _logs_query_sql(request: logging_pb2.FetchLogsRequest) -> str:
-    """Translate a FetchLogsRequest into SQL against the ``log`` view.
-
-    ``source`` is matched literally unless it contains regex metacharacters.
-    ``min_level`` always keeps level=UNKNOWN rows so unparsed lines remain
-    visible.
-    """
-    where_parts: list[str] = []
-    source = request.source
-
-    if source:
-        if REGEX_META_RE.search(source):
-            where_parts.append(f"regexp_matches(key, {quote_literal(source)})")
-        else:
-            where_parts.append(f"key = {quote_literal(source)}")
-
-    cursor = request.cursor
-    if cursor:
-        where_parts.append(f"seq > {int(cursor)}")
-
-    if request.since_ms:
-        where_parts.append(f"epoch_ms > {int(request.since_ms)}")
-
-    if request.substring:
-        where_parts.append(f"contains(data, {quote_literal(request.substring)})")
-
-    min_level_enum = str_to_log_level(request.min_level)
-    if min_level_enum > 0:
-        where_parts.append(f"(level = 0 OR level >= {int(min_level_enum)})")
-
-    max_lines = request.max_lines if request.max_lines > 0 else _DEFAULT_FETCH_MAX_LINES
-
-    where_clause = " WHERE " + " AND ".join(where_parts) if where_parts else ""
-    order = "ORDER BY seq DESC" if request.tail else "ORDER BY seq"
-    select_cols = ", ".join(_LOG_QUERY_COLUMNS)
-
-    return f'SELECT {select_cols} FROM "{LOG_NAMESPACE}"' f"{where_clause} {order} LIMIT {int(max_lines)}"
-
-
-def _logs_query_response_from_arrow(
-    table: pa.Table,
-    request: logging_pb2.FetchLogsRequest,
-) -> logging_pb2.FetchLogsResponse:
-    # Tail-mode rows arrive newest-first; reverse so callers always see
-    # chronological output. Cursor is max(seq).
-    seqs = table.column("seq").to_pylist()
-    keys = table.column("key").to_pylist()
-    sources = table.column("source").to_pylist()
-    datas = table.column("data").to_pylist()
-    epochs = table.column("epoch_ms").to_pylist()
-    levels = table.column("level").to_pylist()
-
-    rows: list[tuple] = list(zip(seqs, keys, sources, datas, epochs, levels, strict=True))
-
-    if request.tail and request.max_lines > 0:
-        rows.reverse()
-
-    if not rows:
-        return logging_pb2.FetchLogsResponse(entries=[], cursor=request.cursor)
-
-    is_pattern = bool(REGEX_META_RE.search(request.source)) if request.source else True
-    fixed_attempt = parse_attempt_id(request.source) if (request.source and not is_pattern) else 0
-
-    entries = []
-    for seq, key, source, data, epoch_ms, level in rows:
-        del seq  # cursor uses the max below
-        entry = logging_pb2.LogEntry(source=source, data=data, level=level)
-        entry.timestamp.epoch_ms = epoch_ms
-        if is_pattern:
-            entry.key = key
-            entry.attempt_id = parse_attempt_id(key)
-        else:
-            entry.attempt_id = fixed_attempt
-        entries.append(entry)
-
-    max_seq = max(seqs)
-    return logging_pb2.FetchLogsResponse(entries=entries, cursor=max_seq)
 
 
 def _translate_connect_error(exc: ConnectError) -> Exception:

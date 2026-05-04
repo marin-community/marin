@@ -150,6 +150,33 @@ def tracked_clients(monkeypatch):
     return clients
 
 
+class _FakeLogServiceClient:
+    def __init__(self, address, **_kwargs):
+        self.address = address
+        self.requests: list[logging_pb2.FetchLogsRequest] = []
+        self.response: logging_pb2.FetchLogsResponse = logging_pb2.FetchLogsResponse()
+
+    def fetch_logs(self, request):
+        self.requests.append(request)
+        return self.response
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def tracked_log_service_clients(monkeypatch):
+    """Patch LogServiceClientSync; expose request/response on the singleton fake."""
+    fake = _FakeLogServiceClient(address=None)
+
+    def factory(address, timeout_ms=10_000, interceptors=()):
+        fake.address = address
+        return fake
+
+    monkeypatch.setattr(log_client_mod, "LogServiceClientSync", factory)
+    return fake
+
+
 def test_connect_returns_usable_client(tracked_clients):
     client = LogClient.connect("http://h:1")
     try:
@@ -227,29 +254,20 @@ def test_invalidates_on_connection_refused(tracked_clients, monkeypatch):
         client.close()
 
 
-def test_query_round_trips(tracked_clients):
+def test_fetch_logs_round_trips(tracked_log_service_clients):
     client = LogClient.connect("http://h:1")
     try:
+        request = logging_pb2.FetchLogsRequest(source="key", max_lines=10)
+        canned = logging_pb2.FetchLogsResponse(
+            entries=[logging_pb2.LogEntry(source="stdout", data="hi", level=2)],
+            cursor=42,
+        )
+        canned.entries[0].timestamp.epoch_ms = 1700000000000
+        tracked_log_service_clients.response = canned
 
-        def handler(_sql: str) -> pa.Table:
-            return pa.table(
-                {
-                    "seq": pa.array([42], type=pa.int64()),
-                    "key": ["key"],
-                    "source": ["stdout"],
-                    "data": ["hi"],
-                    "epoch_ms": pa.array([1700000000000], type=pa.int64()),
-                    "level": pa.array([2], type=pa.int32()),
-                }
-            )
+        resp = client.fetch_logs(request)
 
-        client.get_table("iris.worker", WorkerStat)
-        tracked_clients[0].query_handler = handler
-        resp = client.query(logging_pb2.FetchLogsRequest(source="key", max_lines=10))
-        sql = tracked_clients[0].queries[0]
-        assert '"log"' in sql
-        assert "key = 'key'" in sql
-        assert "LIMIT 10" in sql
+        assert tracked_log_service_clients.requests == [request]
         assert resp.cursor == 42
         assert [e.data for e in resp.entries] == ["hi"]
     finally:
