@@ -76,6 +76,8 @@ def configure_client_s3(config: config_pb2.IrisClusterConfig) -> None:
         os.environ.setdefault("AWS_SECRET_ACCESS_KEY", r2_secret)
 
     os.environ.setdefault("AWS_ENDPOINT_URL", endpoint)
+    os.environ.setdefault("AWS_REGION", "auto")
+    os.environ.setdefault("AWS_DEFAULT_REGION", "auto")
 
     if "FSSPEC_S3" not in os.environ:
         fsspec_conf: dict = {"endpoint_url": endpoint}
@@ -694,6 +696,8 @@ class K8sControllerProvider:
         endpoint = self._config.object_storage_endpoint
         if endpoint:
             env.append({"name": "AWS_ENDPOINT_URL", "value": endpoint})
+            env.append({"name": "AWS_REGION", "value": "auto"})
+            env.append({"name": "AWS_DEFAULT_REGION", "value": "auto"})
             fsspec_conf: dict = {"endpoint_url": endpoint}
             if _needs_virtual_host_addressing(endpoint):
                 fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
@@ -702,8 +706,6 @@ class K8sControllerProvider:
             # 400 Bad Request. "auto" tells boto3 to skip region validation.
             fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
             env.append({"name": "FSSPEC_S3", "value": json.dumps(fsspec_conf)})
-            env.append({"name": "AWS_REGION", "value": "auto"})
-            env.append({"name": "AWS_DEFAULT_REGION", "value": "auto"})
         return env
 
     # -- Deployment readiness --------------------------------------------------
