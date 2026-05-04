@@ -1,7 +1,7 @@
 # Iris on CoreWeave US-WEST-09B (B200, 8 GPUs per node).
 #
 # Single GPU NodePool: b200-8x. The controller is pinned onto this same pool
-# because the cluster has no CPU nodes — see CAVEAT below.
+# because the cluster has no CPU nodes.
 #
 # Setup:
 #   1. Split the multi-context kubeconfig (~/.kube/coreweave-rno2a holds both
@@ -10,19 +10,15 @@
 #          kubectl config view --minify --flatten --context=usw09b \
 #          > ~/.kube/cw-usw09b.yaml
 #        chmod 600 ~/.kube/cw-usw09b.yaml
-#   2. R2 credentials in env (consumed by `iris cluster start`):
+#   2. CoreWeave object storage credentials in env (consumed by `iris cluster start`):
 #        export R2_ACCESS_KEY_ID=<...>
 #        export R2_SECRET_ACCESS_KEY=<...>
 #   3. Start the cluster:
 #        cd lib/iris && uv run --group dev iris \
 #          --config=examples/coreweave-usw09b.yaml cluster start
 #
-# CAVEAT: the controller Deployment does NOT get the nvidia.com/gpu toleration
-# automatically. After the GPU NodePool scales up the first node, verify with
-# `kubectl describe node | grep -i taint`. If the GPU taint is present, either
-# (a) patch _build_controller_deployment in providers/k8s/controller.py to add
-# NVIDIA_GPU_TOLERATION when the controller scale_group is a GPU pool, or
-# (b) add a small CPU NodePool on this cluster and route the controller there.
+# The controller Deployment includes the standard NVIDIA GPU toleration, so it
+# can schedule onto this GPU-only cluster.
 
 platform:
   label_prefix: iris-usw09b
