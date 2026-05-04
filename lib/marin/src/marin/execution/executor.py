@@ -1190,9 +1190,12 @@ def instantiate_config(
                 value = getattr(obj, field.name)
                 result[field.name] = recurse(value)
             return replace(obj, **result)
-        elif isinstance(obj, tuple):
+        elif isinstance(obj, tuple) and hasattr(obj, "_fields"):
             # Preserve NamedTuple subclasses when resolving nested values.
             return type(obj)(*(recurse(x) for x in obj))
+        elif isinstance(obj, tuple):
+            # Plain tuples must be rebuilt from a single iterable.
+            return tuple(recurse(x) for x in obj)
         elif isinstance(obj, list):
             # Recurse through lists
             return [recurse(x) for x in obj]

@@ -796,6 +796,27 @@ def test_tuple_values_are_resolved_in_executor_configs():
     )
 
 
+def test_plain_tuple_values_are_resolved_without_type_error():
+    @dataclass(frozen=True)
+    class Cfg:
+        values: tuple[object, ...]
+
+    dependency = ExecutorStep(name="dependency", fn=lambda _: None, config=None)
+    cfg = Cfg(
+        values=(
+            output_path_of(dependency, "artifact"),
+            this_output_path("tracker"),
+        )
+    )
+
+    resolved = instantiate_config(cfg, output_path="/out", output_paths={dependency: "/dependency"}, prefix="/bucket")
+
+    assert resolved.values == (
+        "/dependency/artifact",
+        "/out/tracker",
+    )
+
+
 def test_namedtuple_values_are_resolved_without_losing_type():
     class Coords(NamedTuple):
         x: object
