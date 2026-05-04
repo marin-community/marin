@@ -71,6 +71,7 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
+    mlp_activation: str = "silu"  # "silu" (SwiGLU) or "gelu" (GEGLU)
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -396,7 +397,7 @@ class MoEMLP(eqx.Module):
             combine_weights,
             self.w_gate_up,
             self.w_down,
-            activation=ActivationFunctionEnum.silu,
+            activation=ActivationFunctionEnum[self.cfg.mlp_activation],
             mesh=get_abstract_mesh(),
             capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
         )
@@ -414,6 +415,7 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    mlp_activation: str = eqx.field(static=True, default="silu")
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -431,6 +433,7 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            mlp_activation=cfg.mlp_activation,
         )
 
     @named_call
@@ -444,7 +447,7 @@ class Block(eqx.Module):
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum[self.mlp_activation])
         x = x + mlp_out
         return x, router_stats
 
