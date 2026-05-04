@@ -49,6 +49,7 @@ def test_iris_config_empty_file(tmp_path):
         ("H100x8", ("H100", 8)),
         ("4", ("", 4)),
         ("A100", ("A100", 1)),
+        ("GH200x1", ("GH200", 1)),
         ("rtx4090", ("RTX4090", 1)),
         ("rtx4090x2", ("RTX4090", 2)),
         ("H100", ("H100", 1)),
@@ -116,6 +117,10 @@ def test_build_resources_gpu():
     # Bare variant defaults to count=1
     spec = build_resources(tpu=None, gpu="A100")
     assert spec.device.gpu.variant == "A100"
+    assert spec.device.gpu.count == 1
+
+    spec = build_resources(tpu=None, gpu="GH200x1")
+    assert spec.device.gpu.variant == "GH200"
     assert spec.device.gpu.count == 1
 
 

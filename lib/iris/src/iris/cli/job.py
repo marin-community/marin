@@ -162,6 +162,7 @@ KNOWN_GPU_VARIANTS: frozenset[str] = frozenset(
         "B100",
         "B200",
         "GB200",
+        "GH200",
         "H100",
         "H200",
         "L4",
