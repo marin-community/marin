@@ -95,7 +95,6 @@ def transition_task_to_running(state: ControllerTransitions, task) -> None:
             cur,
             HeartbeatApplyRequest(
                 worker_id=task.current_worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task.task_id,
@@ -113,7 +112,6 @@ def transition_task_to_state(state: ControllerTransitions, task, new_state: int)
             cur,
             HeartbeatApplyRequest(
                 worker_id=task.current_worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task.task_id,

@@ -17,10 +17,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import uvicorn
-from finelog.client import LogPusher, LogServiceProxy, RemoteLogHandler
+from finelog.client import LogClient, RemoteLogHandler
+from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
 from finelog.server import LogServiceImpl
 from finelog.server.asgi import build_log_server_asgi
-from finelog.store.mem_store import MemStore
+from finelog.server.stats_service import StatsServiceImpl
+from finelog.store.duckdb_store import EMBEDDED_DUCKDB_MEMORY_LIMIT, EMBEDDED_DUCKDB_THREADS, DuckDBLogStore
 from rigging.log_setup import slow_log
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp, TokenBucket
 
@@ -163,13 +165,6 @@ def _drain_queue(q: queue_mod.Queue, timeout: float = 1.0) -> list:
 
 # Log a detailed per-phase scheduling trace every this many rounds.
 _SCHEDULING_TRACE_INTERVAL = 50
-
-# Cap on the bundled in-process log server's MemStore. ~256 bytes/row puts
-# this under ~50 MB of resident size for the controller — large enough to
-# tail a chatty job for a while, small enough that an unbounded ingest can't
-# OOM the process. Operators who need real log retention run finelog-server
-# externally and declare it in cluster_config.endpoints.
-BUNDLED_LOG_SERVER_MAX_ROWS = 200_000
 
 # Taint attribute injected onto claimed workers to prevent non-reservation
 # jobs from landing on them.  Non-reservation jobs get a NOT_EXISTS constraint
@@ -1183,15 +1178,18 @@ class Controller:
 
         log_client_interceptors = _log_client_interceptors(config)
         self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
+        self._remote_stats_service = StatsServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
 
         # Providers that collect logs outside the worker process push directly
         # to the log server via RPC.
         if isinstance(self._provider, K8sTaskProvider):
-            self._provider.log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
+            self._provider.log_client = LogClient.connect(
+                self._log_service_address, interceptors=log_client_interceptors
+            )
 
         # Controller process logs ship to the log server via RemoteLogHandler.
-        self._log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
-        self._log_handler = RemoteLogHandler(self._log_pusher, key=CONTROLLER_LOG_KEY)
+        self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
+        self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)
 
         self._log_handler.setLevel(logging.DEBUG)
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
@@ -1211,7 +1209,7 @@ class Controller:
             self._store,
             controller=self,
             bundle_store=self._bundle_store,
-            log_service=self._remote_log_service,
+            log_client=self._log_client,
             auth=config.auth,
             system_endpoints={},
             user_budget_defaults=config.user_budget_defaults,
@@ -1224,6 +1222,7 @@ class Controller:
             auth_verifier=config.auth_verifier,
             auth_provider=config.auth_provider,
             auth_optional=config.auth.optional if config.auth else False,
+            finelog_stats_service=self._remote_stats_service,
         )
 
         # Background loop state
@@ -1282,35 +1281,32 @@ class Controller:
         return self._started
 
     def _start_local_log_server(self) -> str:
-        """Start a bundled in-process MemStore-backed log server and return its address.
+        """Start a bundled in-process DuckDB-backed log + stats server and return its address.
 
         Used as a fallback when ``cluster_config.endpoints`` does not declare
-        ``/system/log-server`` (and in tests). MemStore is capped at
-        ``BUNDLED_LOG_SERVER_MAX_ROWS`` with FIFO eviction so a chatty job
-        cannot OOM the controller; logs are lost on controller restart. For
-        production deployments, run finelog-server out-of-band and point the
-        endpoints config at it.
-
-        TODO(#5215): when rigging-mediated log sinks land, this fallback
-        becomes a NullSink + StderrSink pair instead of a bundled server,
-        and the LogPusher / LogServiceProxy wiring below stops being a
-        special case.
+        ``/system/log-server`` (and in tests). Backed by a ``DuckDBLogStore``
+        rooted under ``local_state_dir`` so logs survive controller restarts
+        within a single deployment and the stats RPC surface (RegisterTable /
+        WriteRows / Query / DropTable) is available — required for the
+        worker-pane cutover. For production-scale deployments, run
+        finelog-server out-of-band and point the endpoints config at it.
         """
         log_server_port = find_free_port()
-        self._log_service = LogServiceImpl(
-            log_store=MemStore(max_rows=BUNDLED_LOG_SERVER_MAX_ROWS),
+        log_store_dir = self._config.local_state_dir / "embedded_log_store"
+        log_store_dir.mkdir(parents=True, exist_ok=True)
+        log_store = DuckDBLogStore(
+            log_dir=log_store_dir,
+            duckdb_memory_limit=EMBEDDED_DUCKDB_MEMORY_LIMIT,
+            duckdb_threads=EMBEDDED_DUCKDB_THREADS,
         )
+        self._log_service = LogServiceImpl(log_store=log_store)
+        stats_service = StatsServiceImpl(log_store=log_store)
 
-        # Wrap the verifier in NullAuthInterceptor so anonymous calls are
-        # still accepted in null-auth/test mode, matching the dashboard's
-        # behaviour. Real workers attach JWTs that the verifier validates.
         interceptors = (NullAuthInterceptor(verifier=self._config.auth_verifier),)
-        # finelog's ASGI builder owns the FetchLogs concurrency interceptor
-        # and does not collect RPC stats — production stats live in the
-        # dedicated finelog-server deployment.
         app = build_log_server_asgi(
             self._log_service,
             interceptors=interceptors,
+            stats_service=stats_service,
         )
         log_server_config = uvicorn.Config(
             app,
@@ -1449,8 +1445,9 @@ class Controller:
         # from late log records hitting a closed store or connection.
         logging.getLogger("iris").removeHandler(self._log_handler)
         self._log_handler.close()
-        self._log_pusher.close()
+        self._log_client.close()
         self._remote_log_service.close()
+        self._remote_stats_service.close()
         if self._log_service:
             self._log_service.close()
         self._db.close()
@@ -1511,7 +1508,6 @@ class Controller:
     def _run_prune_loop(self, stop_event: threading.Event) -> None:
         """Background pruning loop: history cleanup every 60s, full data prune on the configured interval."""
         last_full_prune = 0.0
-        resource_history_limiter = RateLimiter(interval_seconds=600.0)
         wal_checkpoint_limiter = RateLimiter(interval_seconds=600.0)
         full_prune_interval = self._config.prune_interval.to_seconds()
 
@@ -1524,16 +1520,6 @@ class Controller:
                 self._store.workers.prune_task_history()
             except Exception:
                 logger.exception("Worker task history cleanup failed")
-
-            if resource_history_limiter.should_run():
-                try:
-                    self._store.workers.prune_resource_history()
-                except Exception:
-                    logger.exception("Worker resource history cleanup failed")
-                try:
-                    self._store.tasks.prune_resource_history()
-                except Exception:
-                    logger.exception("Task resource history cleanup failed")
 
             if wal_checkpoint_limiter.should_run():
                 try:
@@ -2312,7 +2298,6 @@ class Controller:
                 self._task_update_queue.put(
                     HeartbeatApplyRequest(
                         worker_id=worker_id,
-                        worker_resource_snapshot=None,
                         updates=[
                             TaskUpdate(
                                 task_id=JobName.from_wire(t.task_id),
@@ -2338,7 +2323,6 @@ class Controller:
                     self._task_update_queue.put(
                         HeartbeatApplyRequest(
                             worker_id=worker_id,
-                            worker_resource_snapshot=None,
                             updates=[
                                 TaskUpdate(
                                     task_id=JobName.from_wire(ack.task_id),
@@ -2388,9 +2372,6 @@ class Controller:
         """
         ping_interval_s = self._config.heartbeat_interval.to_seconds()
         limiter = RateLimiter(interval_seconds=ping_interval_s)
-        # Refresh resource snapshots every ~60s; other cycles just note liveness.
-        resource_update_every = max(1, round(60.0 / ping_interval_s))
-        cycle = 0
 
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
@@ -2398,19 +2379,17 @@ class Controller:
             try:
                 workers = self._get_active_worker_addresses()
                 results = self._provider.ping_workers(workers)
-                update_resources = cycle % resource_update_every == 0
-                cycle += 1
 
-                ping_snapshots: dict[WorkerId, job_pb2.WorkerResourceSnapshot | None] = {}
+                live_worker_ids: list[WorkerId] = []
                 for result in results:
                     if result.error is not None:
                         self._health.ping(result.worker_id, healthy=False)
                     else:
                         self._health.ping(result.worker_id, healthy=True)
-                        ping_snapshots[result.worker_id] = result.resource_snapshot if update_resources else None
+                        live_worker_ids.append(result.worker_id)
 
                 with self._store.transaction() as cur:
-                    self._transitions.update_worker_pings(cur, ping_snapshots)
+                    self._transitions.update_worker_pings(cur, live_worker_ids)
 
                 unhealthy = self._health.workers_over_threshold()
                 if unhealthy:
@@ -2446,7 +2425,6 @@ class Controller:
                 self._task_update_queue.put(
                     HeartbeatApplyRequest(
                         worker_id=worker_id,
-                        worker_resource_snapshot=None,
                         updates=updates,
                     )
                 )

@@ -1,0 +1,136 @@
+// Copyright The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+package finelog.stats;
+
+// Column type for a registered table schema. Maps 1:1 to a subset of
+// pyarrow types and Postgres-flavored DuckDB types.
+enum ColumnType {
+  COLUMN_TYPE_UNKNOWN = 0;
+  COLUMN_TYPE_STRING = 1;       // pa.string()
+  COLUMN_TYPE_INT64 = 2;        // pa.int64()
+  COLUMN_TYPE_FLOAT64 = 3;      // pa.float64()
+  COLUMN_TYPE_BOOL = 4;         // pa.bool_()
+  COLUMN_TYPE_TIMESTAMP_MS = 5; // pa.timestamp("ms")
+  COLUMN_TYPE_BYTES = 6;        // pa.binary()
+  COLUMN_TYPE_INT32 = 7;        // pa.int32()
+}
+
+message Column {
+  string name = 1;
+  ColumnType type = 2;
+  bool nullable = 3;
+}
+
+message Schema {
+  repeated Column columns = 1;
+
+  // Column to sort by during compaction. Must name an existing column of
+  // type INT64 or TIMESTAMP_MS. If empty, the server requires a column
+  // named "timestamp_ms" of type INT64 or TIMESTAMP_MS and uses it
+  // implicitly. A schema with neither is rejected at register time.
+  string key_column = 2;
+}
+
+// Write batches are Arrow IPC RecordBatches on the wire — columnar, with
+// the batch's schema embedded in the IPC header. There is no proto-level
+// Row or Value type; the column types in the table above (ColumnType)
+// describe the Arrow types the server accepts.
+
+// ============================================================================
+// STATS SERVICE
+// ============================================================================
+
+message RegisterTableRequest {
+  string namespace = 1;
+  Schema schema = 2;
+}
+
+message RegisterTableResponse {
+  // The schema now in force. Differs from the requested one when the server
+  // merged the request as an additive-nullable extension of a previously
+  // registered schema, or when the request was a subset of the existing
+  // registered schema.
+  Schema effective_schema = 1;
+}
+
+message WriteRowsRequest {
+  string namespace = 1;
+  // Arrow IPC stream containing exactly one RecordBatch. The batch's
+  // Arrow schema must be a subset of (or equal to) the registered schema:
+  // every column name must exist in the registry with a matching Arrow
+  // type. Missing nullable columns are filled with NULL on append.
+  // Unknown column names raise SchemaValidationError.
+  bytes arrow_ipc = 2;
+}
+
+message WriteRowsResponse {
+  int64 rows_written = 1;
+}
+
+message QueryRequest {
+  // Postgres-flavored SQL passed to DuckDB. Tables in the FROM clause must
+  // be registered namespaces; the server registers a DuckDB view per
+  // namespace before executing the query and never rewrites the user SQL.
+  string sql = 1;
+}
+
+message QueryResponse {
+  // Arrow IPC stream serialization of the query result table.
+  bytes arrow_ipc = 1;
+  int64 row_count = 2;
+}
+
+message DropTableRequest {
+  string namespace = 1;
+}
+
+message DropTableResponse {
+  // Empty. Server has removed the registry entry and deleted the local
+  // segment directory. GCS-archived data for the namespace is left in
+  // place; callers who want it deleted must clean the bucket themselves.
+}
+
+// Metadata for one registered namespace. Names are returned in registration
+// order. The privileged "log" namespace is included so dashboards can see
+// every queryable surface.
+message NamespaceInfo {
+  string namespace = 1;
+  Schema schema = 2;
+}
+
+message ListNamespacesRequest {}
+
+message ListNamespacesResponse {
+  repeated NamespaceInfo namespaces = 1;
+}
+
+message GetTableSchemaRequest {
+  string namespace = 1;
+}
+
+message GetTableSchemaResponse {
+  Schema schema = 1;
+}
+
+service StatsService {
+  rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
+  rpc WriteRows(WriteRowsRequest) returns (WriteRowsResponse);
+  rpc Query(QueryRequest) returns (QueryResponse);
+  rpc DropTable(DropTableRequest) returns (DropTableResponse);
+  rpc ListNamespaces(ListNamespacesRequest) returns (ListNamespacesResponse);
+  rpc GetTableSchema(GetTableSchemaRequest) returns (GetTableSchemaResponse);
+}

@@ -145,6 +145,29 @@ Prefer to use the last checkpoint from GCS. Only take a new controller checkpoin
 iris cluster controller checkpoint
 ```
 
+## Stats Namespaces
+
+Time-series measurements live in finelog stats namespaces, not the controller SQLite DB (see `AGENTS.md` "Decisions vs measurements"). The controller bundles a StatsService alongside its log server (started by `_start_local_log_server` in `controller/controller.py`); both are mounted on the same uvicorn app and reachable at the `/system/log-server` endpoint advertised by `cluster_config.endpoints` (or, in fallback mode, at the URL printed as `Local log server ready at <addr>` on controller startup).
+
+Namespaces:
+
+- `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
+- `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
+
+Retention: finelog evicts the globally-oldest sealed Parquet segments once either cap is exceeded. The caps are `DuckDBLogStore(max_local_segments=..., max_local_bytes=...)` constructor args (defaults: 1000 segments / 100 GB; see `lib/finelog/src/finelog/store/duckdb_store.py`). To change them on the controller-bundled store, edit the `DuckDBLogStore(...)` call in `_start_local_log_server`. For production-scale deployments, run `finelog-server` out-of-band and pass caps there.
+
+Example — utilization for a worker over the last hour:
+
+```sql
+SELECT ts, cpu_pct, mem_bytes, disk_used_bytes, running_task_count
+FROM "iris.worker"
+WHERE worker_id = 'WORKER_ID_HERE'
+  AND ts > now() - INTERVAL '1 hour'
+ORDER BY ts ASC;
+```
+
+Run via the StatsService `Query` RPC on the bundled log-server endpoint.
+
 ## Users & Auth
 
 ```bash

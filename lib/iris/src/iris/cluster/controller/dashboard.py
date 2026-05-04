@@ -29,7 +29,10 @@ from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
 import httpx
-from finelog.client import LogServiceProxy
+from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
+from finelog.rpc.finelog_stats_connect import (
+    StatsServiceWSGIApplication as FinelogStatsServiceWSGIApplication,
+)
 from finelog.rpc.logging_connect import LogServiceWSGIApplication
 from finelog.server import LogServiceImpl
 from starlette.applications import Starlette
@@ -344,9 +347,11 @@ class ControllerDashboard:
         auth_verifier: TokenVerifier | None = None,
         auth_provider: str | None = None,
         auth_optional: bool = False,
+        finelog_stats_service: StatsServiceProxy | None = None,
     ):
         self._service = service
         self._log_service = log_service
+        self._finelog_stats_service = finelog_stats_service
         self._host = host
         self._port = port
         self._auth_verifier = auth_verifier
@@ -495,8 +500,14 @@ class ControllerDashboard:
             Mount(_LEGACY_LOG_SERVICE_PATH, app=log_app),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             Mount(stats_wsgi_app.path, app=stats_app),
-            static_files_mount(),
         ]
+        if self._finelog_stats_service is not None:
+            finelog_stats_wsgi_app = FinelogStatsServiceWSGIApplication(
+                service=self._finelog_stats_service,
+                interceptors=[auth_interceptor],
+            )
+            routes.append(Mount(finelog_stats_wsgi_app.path, app=WSGIMiddleware(finelog_stats_wsgi_app)))
+        routes.append(static_files_mount())
 
         app: Starlette | _RouteAuthMiddleware = Starlette(
             routes=routes,

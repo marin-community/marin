@@ -35,8 +35,6 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from threading import RLock
 
-from rigging.timing import Duration, Timestamp
-
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.codec import resource_spec_from_scalars
 from iris.cluster.controller.db import (
@@ -66,18 +64,6 @@ logger = logging.getLogger(__name__)
 
 WORKER_TASK_HISTORY_RETENTION = 500
 """Maximum worker_task_history rows retained per worker."""
-
-WORKER_RESOURCE_HISTORY_RETENTION = 500
-"""Maximum worker_resource_history rows retained per worker."""
-
-TASK_RESOURCE_HISTORY_RETENTION = 50
-"""Maximum task_resource_history rows retained per (task_id, attempt_id)."""
-
-TASK_RESOURCE_HISTORY_TERMINAL_TTL = Duration.from_hours(1)
-"""After a task reaches a terminal state, fully evict its resource history after this delay."""
-
-TASK_RESOURCE_HISTORY_DELETE_CHUNK = 1000
-"""Maximum task_ids per DELETE in task_resource_history pruning."""
 
 
 # Store read methods accept either a write cursor or a read snapshot. Writes
@@ -454,17 +440,6 @@ class TaskStateUpdateParams:
     finished_at_ms: int | None
     failure_count: int
     preemption_count: int
-
-
-@dataclass(frozen=True, slots=True)
-class ResourceUsageInsertParams:
-    task_id: JobName
-    attempt_id: int
-    cpu_millicores: int
-    memory_mb: int
-    disk_mb: int
-    memory_peak_mb: int
-    timestamp_ms: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -948,7 +923,7 @@ class JobStore:
 
 
 class TaskStore:
-    """Tasks and task_resource_history."""
+    """Tasks and task_attempts."""
 
     def __init__(self, db: ControllerDB) -> None:
         self._db = db
@@ -1372,105 +1347,6 @@ class TaskStore:
             (container_id, task_id.to_wire()),
         )
 
-    def insert_resource_usage(self, cur: TransactionCursor, params: ResourceUsageInsertParams) -> None:
-        cur.execute(
-            "INSERT INTO task_resource_history"
-            "(task_id, attempt_id, cpu_millicores, memory_mb, disk_mb, memory_peak_mb, timestamp_ms) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                params.task_id.to_wire(),
-                params.attempt_id,
-                params.cpu_millicores,
-                params.memory_mb,
-                params.disk_mb,
-                params.memory_peak_mb,
-                params.timestamp_ms,
-            ),
-        )
-
-    def insert_resource_usage_many(
-        self,
-        cur: TransactionCursor,
-        params: Sequence[ResourceUsageInsertParams],
-    ) -> None:
-        if not params:
-            return
-        cur.executemany(
-            "INSERT INTO task_resource_history"
-            "(task_id, attempt_id, cpu_millicores, memory_mb, disk_mb, memory_peak_mb, timestamp_ms) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    p.task_id.to_wire(),
-                    p.attempt_id,
-                    p.cpu_millicores,
-                    p.memory_mb,
-                    p.disk_mb,
-                    p.memory_peak_mb,
-                    p.timestamp_ms,
-                )
-                for p in params
-            ],
-        )
-
-    def prune_resource_history(self) -> int:
-        """Prune task_resource_history rows using TTL eviction and logarithmic downsampling."""
-        now_ms = Timestamp.now().epoch_ms()
-        ttl_cutoff_ms = now_ms - TASK_RESOURCE_HISTORY_TERMINAL_TTL.to_ms()
-        terminal_placeholders = ",".join("?" for _ in TERMINAL_TASK_STATES)
-
-        with self._db.read_snapshot() as snap:
-            terminal_ids = [
-                str(row["task_id"])
-                for row in snap.fetchall(
-                    f"SELECT task_id FROM tasks "
-                    f"WHERE state IN ({terminal_placeholders}) "
-                    f"AND finished_at_ms IS NOT NULL AND finished_at_ms < ?",
-                    (*TERMINAL_TASK_STATES, ttl_cutoff_ms),
-                )
-            ]
-
-        evicted_terminal = 0
-        for chunk_start in range(0, len(terminal_ids), TASK_RESOURCE_HISTORY_DELETE_CHUNK):
-            chunk = terminal_ids[chunk_start : chunk_start + TASK_RESOURCE_HISTORY_DELETE_CHUNK]
-            placeholders = ",".join("?" * len(chunk))
-            with self._db.transaction() as cur:
-                cur.execute(f"DELETE FROM task_resource_history WHERE task_id IN ({placeholders})", tuple(chunk))
-                evicted_terminal += cur.rowcount
-
-        threshold = TASK_RESOURCE_HISTORY_RETENTION * 2
-        with self._db.transaction() as cur:
-            overflows = cur.execute(
-                "SELECT task_id, attempt_id, COUNT(*) as cnt "
-                "FROM task_resource_history "
-                "GROUP BY task_id, attempt_id HAVING cnt > ?",
-                (threshold,),
-            ).fetchall()
-            ids_to_delete: list[int] = []
-            for row in overflows:
-                task_id, attempt_id = row["task_id"], row["attempt_id"]
-                all_ids = [
-                    r["id"]
-                    for r in cur.execute(
-                        "SELECT id FROM task_resource_history WHERE task_id = ? AND attempt_id = ? ORDER BY id ASC",
-                        (task_id, attempt_id),
-                    ).fetchall()
-                ]
-                older = all_ids[: len(all_ids) - TASK_RESOURCE_HISTORY_RETENTION]
-                ids_to_delete.extend(older[1::2])
-
-            total_deleted = 0
-            for chunk_start in range(0, len(ids_to_delete), 900):
-                chunk = ids_to_delete[chunk_start : chunk_start + 900]
-                placeholders = ",".join("?" * len(chunk))
-                cur.execute(f"DELETE FROM task_resource_history WHERE id IN ({placeholders})", tuple(chunk))
-                total_deleted += cur.rowcount
-        if evicted_terminal > 0:
-            logger.info("Evicted %d task_resource_history rows (terminal TTL)", evicted_terminal)
-        if total_deleted > 0:
-            logger.info("Pruned %d task_resource_history rows (log downsampling)", total_deleted)
-        return evicted_terminal + total_deleted
-
     def _batch_prune_profiles(
         self,
         sql: str,
@@ -1671,7 +1547,7 @@ class TaskAttemptStore:
 
 
 class WorkerStore:
-    """Workers, worker_attributes, worker_task_history, worker_resource_history."""
+    """Workers, worker_attributes, worker_task_history."""
 
     def __init__(self, db: ControllerDB) -> None:
         self._db = db
@@ -1844,84 +1720,29 @@ class WorkerStore:
     def apply_snapshots(
         self,
         cur: TransactionCursor,
-        items: Sequence[tuple[WorkerId, job_pb2.WorkerResourceSnapshot | None]],
+        worker_ids: Sequence[WorkerId],
         now_ms: int,
         *,
         reset_health: bool,
     ) -> None:
-        """Bump ``last_heartbeat_ms`` for every worker; for entries with a
-        snapshot also rewrite ``snapshot_*`` columns and append a
-        ``worker_resource_history`` row.
+        """Bump ``last_heartbeat_ms`` for every worker.
 
-        A ``None`` snapshot is a liveness-only update: the heartbeat path emits
-        these for workers that skipped their resource refresh this cycle, and
-        the ping path emits these on cycles where it skips the resource
-        refresh.
+        Per-tick host utilization is no longer cached on the ``workers`` row —
+        workers emit those samples directly to the ``iris.worker`` stats
+        namespace.
 
         ``reset_health=True`` also clears ``healthy``/``active``/
         ``consecutive_failures`` because a successful heartbeat proves
         recovery. Ping path passes ``False`` — the ping loop tracks failures
         in-memory and removes workers via ``fail_workers_batch``.
         """
-        if not items:
+        if not worker_ids:
             return
 
         health_prefix = "healthy = 1, active = 1, consecutive_failures = 0, " if reset_health else ""
-
-        liveness_only = [(now_ms, str(wid)) for wid, snap in items if snap is None]
-        if liveness_only:
-            cur.executemany(
-                f"UPDATE workers SET {health_prefix}last_heartbeat_ms = ? WHERE worker_id = ?",
-                liveness_only,
-            )
-
-        snapshot_binds = [
-            {
-                "worker_id": str(wid),
-                "now_ms": now_ms,
-                "host_cpu_percent": snap.host_cpu_percent,
-                "memory_used_bytes": snap.memory_used_bytes,
-                "memory_total_bytes": snap.memory_total_bytes,
-                "disk_used_bytes": snap.disk_used_bytes,
-                "disk_total_bytes": snap.disk_total_bytes,
-                "running_task_count": snap.running_task_count,
-                "total_process_count": snap.total_process_count,
-                "net_recv_bps": snap.net_recv_bps,
-                "net_sent_bps": snap.net_sent_bps,
-            }
-            for wid, snap in items
-            if snap is not None
-        ]
-        if not snapshot_binds:
-            return
-
         cur.executemany(
-            f"UPDATE workers SET {health_prefix}last_heartbeat_ms = :now_ms, "
-            "snapshot_host_cpu_percent = :host_cpu_percent, "
-            "snapshot_memory_used_bytes = :memory_used_bytes, "
-            "snapshot_memory_total_bytes = :memory_total_bytes, "
-            "snapshot_disk_used_bytes = :disk_used_bytes, "
-            "snapshot_disk_total_bytes = :disk_total_bytes, "
-            "snapshot_running_task_count = :running_task_count, "
-            "snapshot_total_process_count = :total_process_count, "
-            "snapshot_net_recv_bps = :net_recv_bps, "
-            "snapshot_net_sent_bps = :net_sent_bps "
-            "WHERE worker_id = :worker_id",
-            snapshot_binds,
-        )
-        cur.executemany(
-            "INSERT INTO worker_resource_history ("
-            "worker_id, snapshot_host_cpu_percent, snapshot_memory_used_bytes, "
-            "snapshot_memory_total_bytes, snapshot_disk_used_bytes, snapshot_disk_total_bytes, "
-            "snapshot_running_task_count, snapshot_total_process_count, "
-            "snapshot_net_recv_bps, snapshot_net_sent_bps, timestamp_ms"
-            ") VALUES ("
-            ":worker_id, :host_cpu_percent, :memory_used_bytes, "
-            ":memory_total_bytes, :disk_used_bytes, :disk_total_bytes, "
-            ":running_task_count, :total_process_count, "
-            ":net_recv_bps, :net_sent_bps, :now_ms"
-            ")",
-            snapshot_binds,
+            f"UPDATE workers SET {health_prefix}last_heartbeat_ms = ? WHERE worker_id = ?",
+            [(now_ms, str(wid)) for wid in worker_ids],
         )
 
     def add_committed_resources(
@@ -2011,12 +1832,6 @@ class WorkerStore:
             "worker_task_history",
             WORKER_TASK_HISTORY_RETENTION,
             order_by="assigned_at_ms DESC, id DESC",
-        )
-
-    def prune_resource_history(self) -> int:
-        return self._prune_per_worker_history(
-            "worker_resource_history",
-            WORKER_RESOURCE_HISTORY_RETENTION,
         )
 
     def _prune_per_worker_history(

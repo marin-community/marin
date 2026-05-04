@@ -27,6 +27,8 @@ from iris.rpc import config_pb2, job_pb2
 from iris.rpc.auth import VerifiedIdentity, _verified_identity, hash_token
 from rigging.timing import Timestamp
 
+from tests.cluster.conftest import fake_log_client_from_service
+
 
 @pytest.fixture
 def db(tmp_path):
@@ -53,7 +55,7 @@ def _make_service(db, auth=None):
         store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=auth or ControllerAuth(),
     )
 

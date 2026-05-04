@@ -44,8 +44,9 @@ def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> 
     can declare ``http://``, ``gcp://``, or ``k8s://`` schemes uniformly.
 
     ``/system/log-server`` is optional: when absent, the Controller starts a
-    bundled in-process MemStore-backed log server as a fallback (capped, lossy
-    on restart). Production deployments should declare an external endpoint.
+    bundled in-process DuckDB-backed log server as a fallback (state lives in
+    a tempdir for the controller's lifetime). Production deployments should
+    declare an external endpoint.
     """
     resolved: dict[str, str] = {}
     for name, spec in cluster_config.endpoints.items():

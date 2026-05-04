@@ -9,10 +9,12 @@ a specific process by its RPC path (e.g. ``/system/worker/<id>`` for a worker,
 controller itself.
 """
 
+import contextlib
+
 import click
 import humanfriendly
+from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from finelog.rpc.logging_connect import LogServiceClientSync
 
 from iris.cli.main import require_controller_url, rpc_client
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
@@ -89,36 +91,36 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
     from datetime import datetime, timezone
 
     url = require_controller_url(ctx)
-    log_client = LogServiceClientSync(url)
     source = target or _CONTROLLER_LOG_TARGET
 
-    cursor = 0
-    first = True
-    while True:
-        req = logging_pb2.FetchLogsRequest(
-            source=source,
-            max_lines=max_lines if first else 100,
-            tail=first,
-            min_level=level,
-            cursor=cursor if not first else 0,
-        )
-        if substring:
-            req.substring = substring
+    with contextlib.closing(LogClient.connect(url)) as log_client:
+        cursor = 0
+        first = True
+        while True:
+            req = logging_pb2.FetchLogsRequest(
+                source=source,
+                max_lines=max_lines if first else 100,
+                tail=first,
+                min_level=level,
+                cursor=cursor if not first else 0,
+            )
+            if substring:
+                req.substring = substring
 
-        resp = log_client.fetch_logs(req)
-        for entry in resp.entries:
-            ts = ""
-            if entry.timestamp and entry.timestamp.epoch_ms:
-                dt = datetime.fromtimestamp(entry.timestamp.epoch_ms / 1000, tz=timezone.utc)
-                ts = dt.strftime("%H:%M:%S")
-            click.echo(f"[{ts}] {entry.data}")
+            resp = log_client.query(req)
+            for entry in resp.entries:
+                ts = ""
+                if entry.timestamp and entry.timestamp.epoch_ms:
+                    dt = datetime.fromtimestamp(entry.timestamp.epoch_ms / 1000, tz=timezone.utc)
+                    ts = dt.strftime("%H:%M:%S")
+                click.echo(f"[{ts}] {entry.data}")
 
-        cursor = resp.cursor
-        first = False
+            cursor = resp.cursor
+            first = False
 
-        if not follow:
-            break
-        time.sleep(2)
+            if not follow:
+                break
+            time.sleep(2)
 
 
 @process_group.command()

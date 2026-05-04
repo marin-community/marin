@@ -107,7 +107,6 @@
       "worker_id": "w-cosched-preempt-b"
     }
   ],
-  "task_resource_history": [],
   "tasks": [
     {
       "container_id": null,
@@ -183,7 +182,6 @@
       "worker_id": "w-cosched-preempt-b"
     }
   ],
-  "worker_resource_history": [],
   "worker_task_history": [
     {
       "assigned_at_ms": 1704067200000,
@@ -229,15 +227,6 @@
       "md_tpu_worker_id": "",
       "scale_group": "",
       "slice_id": "",
-      "snapshot_disk_total_bytes": null,
-      "snapshot_disk_used_bytes": null,
-      "snapshot_host_cpu_percent": null,
-      "snapshot_memory_total_bytes": null,
-      "snapshot_memory_used_bytes": null,
-      "snapshot_net_recv_bps": null,
-      "snapshot_net_sent_bps": null,
-      "snapshot_running_task_count": null,
-      "snapshot_total_process_count": null,
       "total_cpu_millicores": 8000,
       "total_gpu_count": 0,
       "total_memory_bytes": 17179869184,
@@ -274,15 +263,6 @@
       "md_tpu_worker_id": "",
       "scale_group": "",
       "slice_id": "",
-      "snapshot_disk_total_bytes": null,
-      "snapshot_disk_used_bytes": null,
-      "snapshot_host_cpu_percent": null,
-      "snapshot_memory_total_bytes": null,
-      "snapshot_memory_used_bytes": null,
-      "snapshot_net_recv_bps": null,
-      "snapshot_net_sent_bps": null,
-      "snapshot_running_task_count": null,
-      "snapshot_total_process_count": null,
       "total_cpu_millicores": 8000,
       "total_gpu_count": 0,
       "total_memory_bytes": 17179869184,
