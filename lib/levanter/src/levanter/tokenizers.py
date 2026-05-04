@@ -137,7 +137,7 @@ class MarinTokenizer(Protocol):
         *,
         chat_template: str | None = None,
         **kwargs,
-    ) -> dict[str, list[list[int]]]: ...
+    ) -> dict[str, Any]: ...
 
     def as_hf_tokenizer(self) -> Any:
         """Return a HuggingFace PreTrainedTokenizerFast for this tokenizer.
@@ -151,6 +151,14 @@ class MarinTokenizer(Protocol):
 # Sentinel used to mark generation (assistant) boundaries in rendered templates.
 _GENERATION_SENTINEL_START = "__MARIN_GEN_START_7f3a9c__"
 _GENERATION_SENTINEL_END = "__MARIN_GEN_END_7f3a9c__"
+_MESSAGE_SENTINEL_START = "__MARIN_MSG_START_7f3a9c_"
+_MESSAGE_SENTINEL_END = "__MARIN_MSG_END_7f3a9c_"
+_MESSAGE_INDEX_ATTR = "marin_message_index"
+_CHAT_TEMPLATE_BLOCK_RE = re.compile(r"({%-?.*?-?%})", re.DOTALL)
+_MESSAGE_LOOP_RE = re.compile(r"for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+messages\b")
+_MESSAGE_SENTINEL_RE = re.compile(
+    rf"{re.escape(_MESSAGE_SENTINEL_START)}\d+__|{re.escape(_MESSAGE_SENTINEL_END)}\d+__"
+)
 
 
 class _GenerationSentinelExtension(jinja2.ext.Extension):
@@ -195,13 +203,108 @@ def _make_jinja_env(extensions: list[type]) -> jinja2.Environment:
     )
 
 
+def _chat_template_block_contents(block: str) -> str:
+    contents = block[2:-2]
+    if contents.startswith("-"):
+        contents = contents[1:]
+    if contents.endswith("-"):
+        contents = contents[:-1]
+    return contents.strip()
+
+
+def _message_sentinel_template(prefix: str, loop_variable: str) -> str:
+    return '{{ "' + prefix + '" ~ ' + loop_variable + "." + _MESSAGE_INDEX_ATTR + ' ~ "__" }}'
+
+
+def _append_message_end_sentinel(parts: list[str], loop_variable: str) -> None:
+    sentinel = _message_sentinel_template(_MESSAGE_SENTINEL_END, loop_variable)
+    if not parts:
+        parts.append(sentinel)
+        return
+
+    previous = parts.pop()
+    stripped = previous.rstrip()
+    parts.append(stripped)
+    parts.append(sentinel)
+    parts.append(previous[len(stripped) :])
+
+
+def _instrument_message_loop(chat_template: str) -> str:
+    parts = _CHAT_TEMPLATE_BLOCK_RE.split(chat_template)
+    instrumented: list[str] = []
+    message_loop_depth: int | None = None
+    message_loop_variable = ""
+
+    for part in parts:
+        if not part:
+            continue
+        if not part.startswith("{%"):
+            instrumented.append(part)
+            continue
+
+        block_contents = _chat_template_block_contents(part)
+        if message_loop_depth is None:
+            loop_match = _MESSAGE_LOOP_RE.match(block_contents)
+            if loop_match is not None:
+                message_loop_variable = loop_match.group(1)
+                instrumented.append(part)
+                instrumented.append(_message_sentinel_template(_MESSAGE_SENTINEL_START, message_loop_variable))
+                message_loop_depth = 1
+                continue
+        else:
+            if block_contents.startswith("for "):
+                message_loop_depth += 1
+            elif block_contents.startswith("endfor"):
+                message_loop_depth -= 1
+                if message_loop_depth == 0:
+                    _append_message_end_sentinel(instrumented, message_loop_variable)
+                    instrumented.append(part)
+                    message_loop_depth = None
+                    message_loop_variable = ""
+                    continue
+
+        instrumented.append(part)
+
+    return "".join(instrumented)
+
+
+def _message_sentinel_index(sentinel: str, prefix: str) -> int:
+    return int(sentinel[len(prefix) : -2])
+
+
+class _ChatTemplateMessage(dict):
+    def __init__(self, message: dict[str, str], message_index: int | None):
+        super().__init__(message)
+        self._message_index = message_index
+
+    def __getattr__(self, key: str) -> Any:
+        if key == _MESSAGE_INDEX_ATTR and self._message_index is not None:
+            return self._message_index
+        if key in self:
+            return self[key]
+        if key in {"reasoning_content", "tool_calls"}:
+            return None
+        raise AttributeError(key)
+
+
+def _chat_template_messages(
+    conversation: list[dict[str, str]], *, include_indices: bool
+) -> list[_ChatTemplateMessage]:
+    messages: list[_ChatTemplateMessage] = []
+    for index, message in enumerate(conversation):
+        message_index = index if include_indices else None
+        messages.append(_ChatTemplateMessage(message, message_index))
+    return messages
+
+
 def _apply_chat_template_with_masks(
     tokenizer: "MarinTokenizer",
     conversations: list[list[dict[str, str]]],
     *,
     chat_template: str | None = None,
+    return_message_spans: bool = False,
     **kwargs,
-) -> dict[str, list[list[int]]]:
+) -> dict[str, Any]:
     """Render chat template for batched conversations, returning input_ids and assistant_masks.
 
     Uses a jinja2 extension to wrap {% generation %}...{% endgeneration %} block content
@@ -212,15 +315,19 @@ def _apply_chat_template_with_masks(
     if template_str is None:
         raise ValueError(f"Tokenizer {tokenizer.name_or_path} has no chat template")
 
+    render_template = _instrument_message_loop(template_str) if return_message_spans else template_str
+
     env = _make_jinja_env([_GenerationSentinelExtension])
-    compiled = env.from_string(template_str)
+    compiled = env.from_string(render_template)
 
     all_ids: list[list[int]] = []
     all_masks: list[list[int]] = []
+    all_message_spans: list[list[tuple[int, int]]] = []
 
     for conversation in conversations:
+        render_conversation = _chat_template_messages(conversation, include_indices=return_message_spans)
         rendered = compiled.render(
-            messages=conversation,
+            messages=render_conversation,
             add_generation_prompt=False,
             bos_token=tokenizer.bos_token or "",
             eos_token=tokenizer.eos_token or "",
@@ -230,9 +337,15 @@ def _apply_chat_template_with_masks(
         ids: list[int] = []
         mask: list[int] = []
         is_assistant = False
+        message_starts: dict[int, int] = {}
+        message_spans = [(0, 0) for _ in conversation]
 
         parts = re.split(
-            f"({re.escape(_GENERATION_SENTINEL_START)}|{re.escape(_GENERATION_SENTINEL_END)})",
+            (
+                f"({re.escape(_GENERATION_SENTINEL_START)}|"
+                f"{re.escape(_GENERATION_SENTINEL_END)}|"
+                f"{_MESSAGE_SENTINEL_RE.pattern})"
+            ),
             rendered,
         )
 
@@ -247,16 +360,40 @@ def _apply_chat_template_with_masks(
             if part == _GENERATION_SENTINEL_END:
                 is_assistant = False
                 continue
+            if _MESSAGE_SENTINEL_RE.fullmatch(part):
+                if part.startswith(_MESSAGE_SENTINEL_START):
+                    message_index = _message_sentinel_index(part, _MESSAGE_SENTINEL_START)
+                    if message_index < len(message_spans):
+                        message_starts[message_index] = len(ids)
+                else:
+                    message_index = _message_sentinel_index(part, _MESSAGE_SENTINEL_END)
+                    start = message_starts.pop(message_index, len(ids))
+                    if message_index < len(message_spans):
+                        message_spans[message_index] = (start, len(ids))
+                continue
             if not part:
                 continue
             segment_ids = tokenizer.encode(part, add_special_tokens=False)
             ids.extend(segment_ids)
             mask.extend([1 if is_assistant else 0] * len(segment_ids))
 
+        if return_message_spans:
+            observed_spans = [(start, end) for start, end in message_spans if start != end]
+            if observed_spans:
+                first_observed_start = observed_spans[0][0]
+                for index, span in enumerate(message_spans):
+                    if span == (0, 0) and index < len(message_spans) - 1:
+                        message_spans[index] = (0, first_observed_start)
+                    else:
+                        break
+            all_message_spans.append(message_spans)
         all_ids.append(ids)
         all_masks.append(mask)
 
-    return {"input_ids": all_ids, "assistant_masks": all_masks}
+    result: dict[str, Any] = {"input_ids": all_ids, "assistant_masks": all_masks}
+    if return_message_spans:
+        result["message_spans"] = all_message_spans
+    return result
 
 
 @dataclasses.dataclass(frozen=True)

@@ -156,8 +156,7 @@ def _normalize_chat_message(message: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(message)
     normalized.setdefault("content", "")
     normalized.setdefault("reasoning_content", None)
-    normalized.setdefault("tool_calls", [])
-    if normalized["tool_calls"] is None:
+    if "tool_calls" in normalized and normalized["tool_calls"] is None:
         normalized["tool_calls"] = []
     return normalized
 
@@ -329,7 +328,7 @@ class ChatProcessor(BatchProcessor[dict, dict]):
 
             for conversation, example_kwargs in zip(messages, chat_kwargs_list):
                 kwargs_dict = _normalize_chat_kwargs(example_kwargs)
-                for forbidden in ("tokenize", "return_assistant_tokens_mask", "return_dict"):
+                for forbidden in ("tokenize", "return_assistant_tokens_mask", "return_dict", "return_message_spans"):
                     if forbidden in kwargs_dict:
                         raise ValueError(f"chat_template_kwargs may not override '{forbidden}'.")
 
@@ -482,11 +481,16 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
             tokenized = self.tokenizer.apply_chat_template_with_masks(
                 [conversation],
                 chat_template=self.chat_template,
+                return_message_spans=True,
                 **kwargs_dict,
             )
             input_ids = tokenized["input_ids"][0]
             assistant_mask = tokenized["assistant_masks"][0]
-            spans = self._message_spans(conversation, len(input_ids), kwargs_dict)
+            tokenized_spans = tokenized.get("message_spans")
+            if tokenized_spans is None:
+                spans = self._message_spans(conversation, len(input_ids), kwargs_dict)
+            else:
+                spans = tokenized_spans[0]
             masks = self._loss_masks(conversation, spans, assistant_mask, len(input_ids), kwargs_dict)
 
             out.append(
@@ -527,7 +531,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
         else:
             kwargs_dict = _normalize_chat_kwargs(None)
 
-        for forbidden in ("tokenize", "return_assistant_tokens_mask", "return_dict"):
+        for forbidden in ("tokenize", "return_assistant_tokens_mask", "return_dict", "return_message_spans"):
             if forbidden in kwargs_dict:
                 raise ValueError(f"chat_template_kwargs may not override '{forbidden}'.")
         kwargs_dict.pop("add_generation_prompt", None)
@@ -658,6 +662,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
         tokenized = self.tokenizer.apply_chat_template_with_masks(
             [content_only_prefix],
             chat_template=self.chat_template,
+            return_message_spans=True,
             **kwargs_dict,
         )
         content_only_positions = np.zeros((full_length,), dtype=np.int32)

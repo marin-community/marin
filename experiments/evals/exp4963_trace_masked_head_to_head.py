@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""#4963: Repeatable 8B trace-masked head-to-head with compiled summaries."""
+"""#4963: Repeatable 8B trace-masked head-to-head with compiled summaries.
+
+nodryrun: this experiment intentionally wires full 8B checkpoint download steps,
+which exceed the generic dry-run test budget.
+"""
 
 from typing import Literal
 

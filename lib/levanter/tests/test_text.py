@@ -71,6 +71,35 @@ _TOOL_AWARE_TRACE_CHAT_TEMPLATE = """\
 """
 
 
+_TOOL_CALL_KEY_PRESENCE_TRACE_CHAT_TEMPLATE = """\
+{%- for message in messages -%}
+{{ message.role }}:
+{%- if message.role == 'assistant' -%}
+{% generation %}
+{%- if "tool_calls" in message -%}
+tool-call-path
+{%- else -%}
+text-path {{ message.content }}
+{%- endif -%}
+{% endgeneration %}
+{%- else -%}
+{{ message.content }}
+{%- endif -%}
+{%- endfor -%}
+"""
+
+
+_LOOP_LAST_TRACE_CHAT_TEMPLATE = """\
+{%- for message in messages -%}
+<{{ message.role }}>
+{%- if loop.last -%}
+LAST_MARKER
+{%- endif -%}
+{{ message.content }}</{{ message.role }}>
+{%- endfor -%}
+"""
+
+
 def test_dont_blow_up_without_validation_set():
     with tempfile.TemporaryDirectory() as tmpdir:
         component = DatasetComponent(
@@ -446,6 +475,56 @@ def test_trace_chat_processor_fills_common_chat_template_defaults(local_gpt2_mar
     assert processed["trace_masks"]["assistant"].sum() > 0
     assert processed["trace_masks"]["assistant_text"].sum() > 0
     assert processed["trace_masks"]["tool_call"].sum() == 0
+
+
+def test_trace_chat_processor_preserves_absent_tool_calls(local_gpt2_marin_tokenizer):
+    processor = TraceChatProcessor(
+        local_gpt2_marin_tokenizer,
+        chat_template=_TOOL_CALL_KEY_PRESENCE_TRACE_CHAT_TEMPLATE,
+        loss_tags=("assistant_text",),
+    )
+
+    processed = processor(
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "Say hi."},
+                    {"role": "assistant", "content": "Hi."},
+                ],
+            }
+        ]
+    )[0]
+
+    rendered = local_gpt2_marin_tokenizer.decode(processed["input_ids"], skip_special_tokens=False)
+    assert "text-path Hi." in rendered
+    assert "tool-call-path" not in rendered
+
+
+def test_trace_chat_processor_uses_final_rendered_message_spans(local_gpt2_marin_tokenizer):
+    processor = TraceChatProcessor(
+        local_gpt2_marin_tokenizer,
+        chat_template=_LOOP_LAST_TRACE_CHAT_TEMPLATE,
+        loss_tags=("tail",),
+    )
+
+    processed = processor(
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "head"},
+                    {"role": "user", "content": "tail", "loss_tags": ["tail"]},
+                ],
+            }
+        ]
+    )[0]
+
+    input_ids = np.asarray(processed["input_ids"])
+    tail_text = local_gpt2_marin_tokenizer.decode(
+        input_ids[np.asarray(processed["trace_masks"]["tail"]) > 0].tolist(),
+        skip_special_tokens=False,
+    )
+    assert "LAST_MARKER" in tail_text
+    assert "tail" in tail_text
 
 
 def test_trace_chat_processor_parses_text_tool_calls(local_gpt2_marin_tokenizer):
