@@ -116,13 +116,13 @@ LLAMA_3_1_CHAT_TEMPLATE = """{{- bos_token }}
                 {{- "\n" }}
             {%- endif %}
         {%- endfor %}
+        {% endgeneration %}
         {%- if builtin_tools is defined %}
             {#- This means we're in ipython mode #}
-            {{- "<|eom_id|>" }}
+            {% generation %}{{- "<|eom_id|>" }}{% endgeneration %}
         {%- else %}
-            {{- "<|eot_id|>" }}
+            {% generation %}{{- "<|eot_id|>" }}{% endgeneration %}
         {%- endif %}
-        {% endgeneration %}
     {%- elif message.role == "tool" or message.role == "ipython" %}
         {{- "<|start_header_id|>ipython<|end_header_id|>\n\n" }}
         {%- if message.content is none %}
