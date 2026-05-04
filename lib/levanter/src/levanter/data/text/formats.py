@@ -486,11 +486,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
             )
             input_ids = tokenized["input_ids"][0]
             assistant_mask = tokenized["assistant_masks"][0]
-            tokenized_spans = tokenized.get("message_spans")
-            if tokenized_spans is None:
-                spans = self._message_spans(conversation, len(input_ids), kwargs_dict)
-            else:
-                spans = tokenized_spans[0]
+            spans = tokenized["message_spans"][0]
             masks = self._loss_masks(conversation, spans, assistant_mask, len(input_ids), kwargs_dict)
 
             out.append(
@@ -538,24 +534,6 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
         kwargs_dict.pop("chat_template", None)
 
         return normalized_messages, kwargs_dict
-
-    def _message_spans(
-        self, conversation: list[dict[str, Any]], full_length: int, kwargs_dict: Mapping[str, Any]
-    ) -> list[tuple[int, int]]:
-        prefix_lengths = [0]
-        for end in range(1, len(conversation) + 1):
-            prefix = conversation[:end]
-            tokenized_prefix = self.tokenizer.apply_chat_template_with_masks(
-                [prefix],
-                chat_template=self.chat_template,
-                **kwargs_dict,
-            )
-            prefix_lengths.append(min(len(tokenized_prefix["input_ids"][0]), full_length))
-
-        spans: list[tuple[int, int]] = []
-        for start, end in zip(prefix_lengths[:-1], prefix_lengths[1:]):
-            spans.append((min(start, full_length), min(max(end, start), full_length)))
-        return spans
 
     def _loss_masks(
         self,
