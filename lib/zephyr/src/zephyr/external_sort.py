@@ -30,6 +30,7 @@ from iris.env_resources import TaskResources
 from rigging.filesystem import url_to_fs
 
 from zephyr.spill import SpillReader, SpillWriter
+from zephyr.writers import batchify
 
 logger = logging.getLogger(__name__)
 
@@ -172,17 +173,10 @@ def external_sort_merge(
             break
         run_path = f"{external_sort_dir}/run-{batch_idx:04d}.spill"
         item_count = 0
-        pending: list = []
         with SpillWriter(run_path, row_group_bytes=_ROW_GROUP_BYTES) as writer:
-            for item in heapq.merge(*batch, key=merge_key):
-                pending.append(item)
-                if len(pending) >= write_batch_size:
-                    writer.write(pending)
-                    item_count += len(pending)
-                    pending = []
-            if pending:
-                writer.write(pending)
-                item_count += len(pending)
+            for chunk in batchify(heapq.merge(*batch, key=merge_key), n=write_batch_size):
+                writer.write(chunk)
+                item_count += len(chunk)
         run_paths.append(run_path)
         logger.info(
             "External sort: wrote run %d (%d items) to %s",

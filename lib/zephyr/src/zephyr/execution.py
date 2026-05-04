@@ -54,7 +54,7 @@ from zephyr.plan import (
     compute_plan,
 )
 from zephyr.shuffle import ListShard, MemChunk, _write_scatter
-from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir, unique_temp_path
+from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir, unique_temp_path
 
 logger = logging.getLogger(__name__)
 
@@ -192,26 +192,17 @@ def _write_pickle_chunks(
     Returns a ListShard containing PickleDiskChunk references.
     """
     chunks: list[Iterable] = []
-    batch: list = []
-    pidx = 0
-
-    for item in items:
-        batch.append(item)
-        if len(batch) >= INTERMEDIATE_CHUNK_SIZE:
-            chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
-            chunks.append(chunk_ref)
-            pidx += 1
-            batch = []
-            if pidx % 10 == 0:
-                logger.info(
-                    "[shard %d] Wrote %d pickle chunks so far (latest: %d items)",
-                    source_shard,
-                    pidx,
-                    chunk_ref.count,
-                )
-
-    if batch:
-        chunks.append(PickleDiskChunk.write(chunk_path_fn(pidx), batch))
+    for pidx, batch in enumerate(batchify(items, n=INTERMEDIATE_CHUNK_SIZE)):
+        chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
+        chunks.append(chunk_ref)
+        written = pidx + 1
+        if written % 10 == 0:
+            logger.info(
+                "[shard %d] Wrote %d pickle chunks so far (latest: %d items)",
+                source_shard,
+                written,
+                chunk_ref.count,
+            )
 
     return ListShard(refs=chunks)
 
