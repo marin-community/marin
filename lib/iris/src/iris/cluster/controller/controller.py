@@ -1369,6 +1369,16 @@ class Controller:
         self._server = uvicorn.Server(server_config)
         self._threads.spawn_server(self._server, name="controller-server")
 
+        # Register cluster endpoints BEFORE spawning the autoscaler. Otherwise the
+        # autoscaler's first tick can create buffer slices whose workers query the
+        # controller for /system/log-server before this dict is populated, returning
+        # an empty result. The slice creation fails, the group enters backoff, and
+        # any task constrained to that group hangs until the backoff expires.
+        for name, url in self._config.endpoints.items():
+            self._service._system_endpoints[name] = url
+            logger.info("Registered system endpoint %s -> %s", name, url)
+        self._service._system_endpoints["/system/log-server"] = self._log_service_address
+
         if self._autoscaler:
             logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
             self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
@@ -1386,17 +1396,6 @@ class Controller:
             lambda: self._server is not None and self._server.started,
             timeout=Duration.from_seconds(5.0),
         )
-
-        # Register configured cluster endpoints so workers can resolve them via ListEndpoints.
-        # Endpoints are pre-resolved (scheme dispatched) by the daemon entrypoint.
-        for name, url in self._config.endpoints.items():
-            self._service._system_endpoints[name] = url
-            logger.info("Registered system endpoint %s -> %s", name, url)
-
-        # Always advertise the in-use log server address under /system/log-server.
-        # If the daemon supplied it via endpoints, this is a no-op overwrite with
-        # the same value; in tests the in-process server's address lands here.
-        self._service._system_endpoints["/system/log-server"] = self._log_service_address
 
     def stop(self) -> None:
         """Stop all background components gracefully. Idempotent.
