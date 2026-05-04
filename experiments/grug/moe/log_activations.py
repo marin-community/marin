@@ -100,13 +100,14 @@ def _make_forward_fn(model: Transformer):
             combine_weights_all.append(weights)
 
             # Per-expert outputs: manually run each selected expert
-            # expert_outputs shape: (T, K, D)
+            # Unshard expert weights to avoid duplicate axis in gather
+            w_gate_up_local = reshard(block.mlp.w_gate_up, P(None, None, None))
+            w_down_local = reshard(block.mlp.w_down, P(None, None, None))
             expert_outs = []
             for ki in range(k):
                 expert_ids = selected[:, ki]  # (T,)
-                # Gather weights for each token's selected expert
-                w_gu = block.mlp.w_gate_up[expert_ids]  # (T, D, 2I)
-                w_d = block.mlp.w_down[expert_ids]  # (T, I, D)
+                w_gu = w_gate_up_local[expert_ids]  # (T, D, 2I)
+                w_d = w_down_local[expert_ids]  # (T, I, D)
                 expert_out = _expert_mlp(x_flat, w_gu, w_d)  # (T, D)
                 expert_outs.append(expert_out * weights[:, ki : ki + 1])  # weighted
             per_expert_outputs_all.append(jnp.stack(expert_outs, axis=1))  # (T, K, D)
