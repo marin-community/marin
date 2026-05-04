@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
 
+from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
 from marin.datakit.download.common_pile import common_pile_normalize_steps
 from marin.datakit.download.davinci_dev import (
@@ -138,6 +139,9 @@ def all_sources() -> dict[str, DatakitSource]:
     # returning ``tuple[StepSpec, ...]``; the registry pairs the chain with
     # a rough token count.
     single_sources: tuple[_SourceRow, ...] = (
+        # cp/biodiversity is carved out of common_pile (see common_pile.py)
+        # because it needs page-stitching before normalize.
+        ("cp/biodiversity", biodiversity_normalize_steps, 8.60),
         ("coderforge", coderforge_normalize_steps, 10.29),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
@@ -172,7 +176,6 @@ def all_sources() -> dict[str, DatakitSource]:
         {
             "cp/arxiv_abstracts": 0.54,
             "cp/arxiv_papers": 6.63,
-            "cp/biodiversity": 8.60,
             "cp/caselaw": 17.55,
             "cp/data_provenance": 0.82,
             "cp/doab": 2.93,
