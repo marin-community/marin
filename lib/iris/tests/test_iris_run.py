@@ -49,6 +49,7 @@ def test_iris_config_empty_file(tmp_path):
         ("H100x8", ("H100", 8)),
         ("4", ("", 4)),
         ("A100", ("A100", 1)),
+        ("B200x8", ("B200", 8)),
         ("GH200x1", ("GH200", 1)),
         ("rtx4090", ("RTX4090", 1)),
         ("rtx4090x2", ("RTX4090", 2)),
@@ -122,6 +123,10 @@ def test_build_resources_gpu():
     spec = build_resources(tpu=None, gpu="GH200x1")
     assert spec.device.gpu.variant == "GH200"
     assert spec.device.gpu.count == 1
+
+    spec = build_resources(tpu=None, gpu="B200x8")
+    assert spec.device.gpu.variant == "B200"
+    assert spec.device.gpu.count == 8
 
 
 def test_run_iris_job_adds_zone_constraint(monkeypatch):
