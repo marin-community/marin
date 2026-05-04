@@ -80,6 +80,28 @@ qwen3_4b_hd128 = Qwen3Config(
     head_dim=128,
 )
 
+qwen3_0_6b_tokenizer = "Qwen/Qwen3-0.6B"
+qwen3_0_6b = Qwen3Config(
+    # Matching defaults in https://huggingface.co/Qwen/Qwen3-0.6B/blob/main/config.json
+    max_seq_len=32768,
+    hidden_dim=1024,
+    intermediate_dim=3072,
+    num_heads=16,
+    num_kv_heads=8,
+    num_layers=28,
+    head_dim=128,
+    activation_function=ActivationFunctionEnum.silu,
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-6,
+    tie_word_embeddings=True,
+    reference_checkpoint="Qwen/Qwen3-0.6B",
+    rope=DefaultRotaryEmbeddingsConfig(
+        theta=1000000.0,
+        factor=1.0
+    ),
+)
+
+
 qwen3_4b_tokenizer = "Qwen/Qwen3-4B"
 qwen3_4b = Qwen3Config(
     # Matching defaults in https://huggingface.co/Qwen/Qwen3-4B/blob/main/config.json
