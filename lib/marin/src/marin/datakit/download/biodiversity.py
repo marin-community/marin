@@ -66,6 +66,8 @@ def transform(input_path: str, output_path: str) -> None:
         .group_by(
             key=lambda r: r["item_id"],
             reducer=stitch_pages,
+            # page_num is a zero-padded fixed-width string ("0001", "0696", …),
+            # so lexicographic sort matches numeric page order.
             sort_by=lambda r: r["page_num"],
         )
         .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
