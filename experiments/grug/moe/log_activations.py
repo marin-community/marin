@@ -6,6 +6,9 @@
 Captures per-sublayer residual stream, router logits, per-expert MLP outputs,
 and shared expert output. Runs at every 1k step checkpoint for d512 and d1024.
 
+One Fray job per model size, loops over all checkpoints sequentially.
+Pinned to us-central1 to avoid cross-region GCS writes.
+
 Usage:
     python -m experiments.grug.moe.log_activations
 """
@@ -13,7 +16,7 @@ Usage:
 import dataclasses
 import io
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import gcsfs
 import jax
@@ -39,7 +42,7 @@ def _tokenize(text: str, max_tokens: int = 100) -> np.ndarray:
 
 
 def _expert_mlp(x, w_gate_up, w_down):
-    """Run a single expert's SwiGLU MLP: gate_up split, silu(gate)*up, then down."""
+    """Run a single expert's SwiGLU MLP."""
     i = w_gate_up.shape[-1] // 2
     hidden = jnp.einsum("...d,di->...i", x, w_gate_up)
     gate, up = hidden[..., :i], hidden[..., i:]
@@ -53,6 +56,8 @@ def _make_forward_fn(model: Transformer):
     @jax.jit
     def forward(token_ids):
         from einops import rearrange
+        from jax.sharding import PartitionSpec as P
+        from jax.sharding import reshard
 
         from experiments.grug.moe.model import _batch_spec
 
@@ -83,34 +88,29 @@ def _make_forward_fn(model: Transformer):
 
             mlp_in = block.mlp_gated_norm(block.rms_mlp(hidden))
 
-            # Router logits and top-k selection
             x_flat = rearrange(mlp_in, "b s d -> (b s) d")
-            from jax.sharding import PartitionSpec as P
-            from jax.sharding import reshard
-
             router_logits = jnp.einsum("td,de->te", x_flat, reshard(block.mlp.router, P(None, None))).astype(jnp.float32)
             biased_logits = router_logits + jax.lax.stop_gradient(block.mlp.router_bias)
             _topk_logits, selected = jax.lax.top_k(biased_logits, k + 1)
-            selected = selected[:, :-1]  # (T, K)
+            selected = selected[:, :-1]
             unbiased_topk = jnp.take_along_axis(router_logits, selected, axis=-1)
-            weights = jax.nn.sigmoid(unbiased_topk)  # (T, K)
+            weights = jax.nn.sigmoid(unbiased_topk)
 
             router_logits_all.append(router_logits)
             selected_experts_all.append(selected)
             combine_weights_all.append(weights)
 
-            # Per-expert outputs: manually run each selected expert
-            # Unshard expert weights to avoid duplicate axis in gather
+            # Per-expert outputs
             w_gate_up_local = reshard(block.mlp.w_gate_up, P(None, None, None))
             w_down_local = reshard(block.mlp.w_down, P(None, None, None))
             expert_outs = []
             for ki in range(k):
-                expert_ids = selected[:, ki]  # (T,)
-                w_gu = w_gate_up_local[expert_ids]  # (T, D, 2I)
-                w_d = w_down_local[expert_ids]  # (T, I, D)
-                expert_out = _expert_mlp(x_flat, w_gu, w_d)  # (T, D)
-                expert_outs.append(expert_out * weights[:, ki : ki + 1])  # weighted
-            per_expert_outputs_all.append(jnp.stack(expert_outs, axis=1))  # (T, K, D)
+                expert_ids = selected[:, ki]
+                w_gu = w_gate_up_local[expert_ids]
+                w_d = w_down_local[expert_ids]
+                expert_out = _expert_mlp(x_flat, w_gu, w_d)
+                expert_outs.append(expert_out * weights[:, ki : ki + 1])
+            per_expert_outputs_all.append(jnp.stack(expert_outs, axis=1))
 
             # Shared expert output
             if block.shared is not None:
@@ -121,7 +121,7 @@ def _make_forward_fn(model: Transformer):
             else:
                 shared_outputs_all.append(jnp.zeros_like(x_flat))
 
-            # Continue with normal forward pass
+            # Normal forward
             mlp_out, _ = block.mlp(mlp_in)
             if block.shared is not None:
                 from levanter.utils.activation import ActivationFunctionEnum
@@ -149,7 +149,6 @@ def _forward_with_activations(forward_fn, token_ids):
     """Run JIT'd forward pass and collect activations as numpy arrays."""
     results = forward_fn(token_ids)
     residuals, router_logits, selected, weights, expert_outs, shared_outs = results
-
     return {
         "residual_stream": np.stack([np.array(s) for s in residuals], axis=0),
         "router_logits": np.stack([np.array(r) for r in router_logits], axis=0),
@@ -197,7 +196,7 @@ def _save_to_gcs(activations, output_path, token_ids, text, num_layers):
     with fs.open(f"{output_path}/token_ids.npy", "wb") as f:
         f.write(buf.read())
 
-    print(f"\nSaved to {output_path}")
+    print(f"Saved to {output_path}")
 
 
 def _get_nemotron_tokens(max_tokens=100):
@@ -233,39 +232,44 @@ def _run_and_save(forward_fn, model_cfg, token_ids, text, output_path):
     token_ids_jax = jnp.array(batch_ids, dtype=jnp.int32)
     activations = _forward_with_activations(forward_fn, token_ids_jax)
 
-    # Take first batch element and trim padding
     for key in activations:
         arr = activations[key]
         if arr.ndim == 4 and arr.shape[1] == num_devices:
             activations[key] = arr[:, 0, :seq_len, :]
         elif arr.ndim == 5 and arr.shape[1] == num_devices * padded_len:
-            # per_expert_outputs: (L, B*S, K, D) -> trim to (L, seq_len, K, D)
             activations[key] = arr[:, :seq_len, :, :]
         elif arr.ndim == 3:
             if arr.shape[1] == num_devices * padded_len:
-                # router_logits, selected, weights, shared: (L, B*S, ...) -> (L, seq_len, ...)
                 activations[key] = arr[:, :seq_len, :]
             elif arr.shape[1] == num_devices:
-                # residual with batch dim
                 activations[key] = arr[:, 0, :seq_len]
 
     _save_to_gcs(activations, output_path, token_ids, text, num_layers=model_cfg.num_layers)
 
 
 @dataclass(frozen=True)
-class LogActivationsConfig:
-    checkpoint: str
-    output_path: str
+class LogActivationsSweepConfig:
+    """Config for logging activations across multiple checkpoints for one model size."""
+
+    checkpoint_base: str
+    output_base: str
     hidden_dim: int
     budget: float
+    steps: list[int] = field(default_factory=list)
     text: str | None = None
     max_tokens: int = 100
     resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig.with_tpu("v5p-8"))
 
 
-def _run_log_activations_local(config: LogActivationsConfig) -> None:
-    """Runs on TPU: load checkpoint, forward pass, save activations."""
+def _run_sweep_local(config: LogActivationsSweepConfig) -> None:
+    """Runs on TPU: loop over checkpoints, load each, forward pass, save."""
+    import os
+
+    from rigging.filesystem import marin_prefix
     from levanter.utils.mesh import create_mesh_from_axis_specs
+
+    output_base = os.path.join(marin_prefix(), config.output_base)
+    print(f"Output base: {output_base}")
 
     model_cfg, _, _, _ = build_from_heuristic(budget=config.budget, hidden_dim=config.hidden_dim)
     print(f"Model: d={model_cfg.hidden_dim}, L={model_cfg.num_layers}, E={model_cfg.num_experts}")
@@ -280,94 +284,86 @@ def _run_log_activations_local(config: LogActivationsConfig) -> None:
         dcn_axes={},
         axis_types=tuple(AxisType.Explicit for _ in range(4)),
     )
-    with haliax.partitioning.set_mesh(mesh):
-        mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
-        model = Transformer.init(model_cfg, key=jax.random.PRNGKey(0))
 
-        from levanter.checkpoint import load_checkpoint
+    custom_ids = _tokenize(config.text, config.max_tokens) if config.text else None
+    nemotron_ids, nemotron_text = _get_nemotron_tokens(config.max_tokens)
 
-        model = load_checkpoint(
-            model,
-            config.checkpoint,
-            subpath="params",
-            discover_latest=False,
-            mesh=mesh,
-        )
-        model = mp.cast_to_compute(model)
+    from levanter.checkpoint import load_checkpoint
 
-        forward_fn = _make_forward_fn(model)
+    for step in config.steps:
+        checkpoint = f"{config.checkpoint_base}/step-{step}"
+        output_path = f"{output_base}/step-{step}"
+        print(f"\n{'='*60}")
+        print(f"Processing step {step}: {checkpoint}")
+        print(f"{'='*60}")
 
-        if config.text:
-            print("\n=== Custom text ===")
-            custom_ids = _tokenize(config.text, config.max_tokens)
-            print(f"Tokenized {len(custom_ids)} tokens")
-            _run_and_save(forward_fn, model_cfg, custom_ids, config.text, f"{config.output_path}/custom")
+        with haliax.partitioning.set_mesh(mesh):
+            mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+            model = Transformer.init(model_cfg, key=jax.random.PRNGKey(0))
+            model = load_checkpoint(model, checkpoint, subpath="params", discover_latest=False, mesh=mesh)
+            model = mp.cast_to_compute(model)
 
-        print("\n=== Nemotron mix ===")
-        nemotron_ids, nemotron_text = _get_nemotron_tokens(config.max_tokens)
-        print(f"Loaded {len(nemotron_ids)} tokens from nemotron")
-        _run_and_save(forward_fn, model_cfg, nemotron_ids, nemotron_text, f"{config.output_path}/nemotron")
+            forward_fn = _make_forward_fn(model)
+
+            if custom_ids is not None:
+                print(f"\n--- Custom text ({len(custom_ids)} tokens) ---")
+                _run_and_save(forward_fn, model_cfg, custom_ids, config.text, f"{output_path}/custom")
+
+            print(f"\n--- Nemotron ({len(nemotron_ids)} tokens) ---")
+            _run_and_save(forward_fn, model_cfg, nemotron_ids, nemotron_text, f"{output_path}/nemotron")
+
+    print(f"\nDone: processed {len(config.steps)} checkpoints.")
 
 
-def run_log_activations(config: LogActivationsConfig) -> None:
-    """Dispatch activation logging through Fray to get TPU access."""
+def run_sweep(config: LogActivationsSweepConfig) -> None:
+    """Dispatch through Fray to get TPU access."""
     from experiments.grug.dispatch import dispatch_grug_training_run
 
     dispatch_grug_training_run(
-        run_id=f"log-activations-d{config.hidden_dim}-{config.checkpoint.split('step-')[-1]}",
+        run_id=f"log-activations-d{config.hidden_dim}",
         config=config,
-        local_entrypoint=_run_log_activations_local,
+        local_entrypoint=_run_sweep_local,
         resources=config.resources,
         max_retries_failure=1,
     )
 
 
-# --- Generate steps for all checkpoints ---
+# --- Steps ---
 _D512_BASE = "gs://marin-us-central1/grug/moe-v16-compute-opt-d512-2.19e+17-d3b963/checkpoints"
 _D1024_BASE = "gs://marin-us-central1/grug/moe-v16-compute-opt-d1024-9.00e+18-d3bc52/checkpoints"
-
-_D512_STEPS = [1000]  # test first, then uncomment rest
-# _D512_STEPS = [1000, 2000, 3000, 4000, 5000, 6000, 6387]
-_D1024_STEPS: list[int] = []  # test d512 first
-# _D1024_STEPS = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 12649]
-
 _TEXT = "The quick brown fox jumps over the lazy dog."
+_RESOURCES = ResourceConfig.with_tpu("v5p-8")
 
-_all_steps: list[ExecutorStep] = []
-for step in _D512_STEPS:
-    _all_steps.append(
-        ExecutorStep(
-            name=f"grug/activations-d512-step{step}",
-            fn=run_log_activations,
-            config=LogActivationsConfig(
-                checkpoint=versioned(f"{_D512_BASE}/step-{step}"),
-                output_path=f"gs://marin-us-central1/grug/activations/d512-step{step}",
-                hidden_dim=versioned(512),
-                budget=versioned(2.19e17),
-                text=versioned(_TEXT),
-                resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-            ),
-        )
-    )
+d512_sweep = ExecutorStep(
+    name="grug/activations-d512-sweep",
+    fn=run_sweep,
+    config=LogActivationsSweepConfig(
+        checkpoint_base=versioned(_D512_BASE),
+        output_base="grug/activations-v2/d512",
+        hidden_dim=versioned(512),
+        budget=versioned(2.19e17),
+        steps=versioned([1000, 2000, 3000, 4000, 5000, 6000, 6387]),
+        text=versioned(_TEXT),
+        resources=versioned(_RESOURCES),
+    ),
+)
 
-for step in _D1024_STEPS:
-    _all_steps.append(
-        ExecutorStep(
-            name=f"grug/activations-d1024-step{step}",
-            fn=run_log_activations,
-            config=LogActivationsConfig(
-                checkpoint=versioned(f"{_D1024_BASE}/step-{step}"),
-                output_path=f"gs://marin-us-central1/grug/activations/d1024-step{step}",
-                hidden_dim=versioned(1024),
-                budget=versioned(9.00e18),
-                text=versioned(_TEXT),
-                resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-            ),
-        )
-    )
+d1024_sweep = ExecutorStep(
+    name="grug/activations-d1024-sweep",
+    fn=run_sweep,
+    config=LogActivationsSweepConfig(
+        checkpoint_base=versioned(_D1024_BASE),
+        output_base="grug/activations-v2/d1024",
+        hidden_dim=versioned(1024),
+        budget=versioned(9.00e18),
+        steps=versioned([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 12649]),
+        text=versioned(_TEXT),
+        resources=versioned(_RESOURCES),
+    ),
+)
 
 if __name__ == "__main__":
     executor_main(
-        steps=_all_steps,
+        steps=[d512_sweep, d1024_sweep],
         description="Log fine-grained activations across training: d512 + d1024.",
     )
