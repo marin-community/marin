@@ -376,7 +376,12 @@ def _sync_dir(source_dir: str, local_dir: Path) -> None:
         basename = entry.rstrip("/").rsplit("/", 1)[-1]
         dest = local_dir / basename
         tmp = dest.with_suffix(dest.suffix + ".download.tmp")
-        _fsspec_copy(entry, str(tmp))
+        # `fs.ls` returns bare keys for non-local schemes (e.g. s3 returns
+        # "marin-na/path/file" without the "s3://" prefix). Pass the bytes
+        # directly via fs.open so we don't accidentally fall back to the
+        # local filesystem when the entry has no protocol.
+        with fs.open(entry, "rb") as f_src, open(tmp, "wb") as f_dst:
+            f_dst.write(f_src.read())
         tmp.rename(dest)
 
 

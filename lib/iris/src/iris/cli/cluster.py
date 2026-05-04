@@ -107,7 +107,7 @@ def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = Fal
         tag=local_tag,
         push=True,
         context=None,
-        platform="linux/amd64",
+        platform="linux/amd64,linux/arm64",
         ghcr_org=org,
         verbose=verbose,
     )
@@ -136,7 +136,7 @@ def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
         tag=local_tag,
         push=True,
         context=marin_root,
-        platform="linux/amd64",
+        platform="linux/amd64,linux/arm64",
         ghcr_org=org,
         verbose=verbose,
     )

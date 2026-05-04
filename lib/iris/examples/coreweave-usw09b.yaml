@@ -1,0 +1,100 @@
+# Iris on CoreWeave US-WEST-09B (B200, 8 GPUs per node).
+#
+# Single GPU NodePool: b200-8x. The controller is pinned onto this same pool
+# because the cluster has no CPU nodes — see CAVEAT below.
+#
+# Setup:
+#   1. Split the multi-context kubeconfig (~/.kube/coreweave-rno2a holds both
+#      rno2a and usw09b) into a single-context file:
+#        KUBECONFIG=~/.kube/coreweave-rno2a \
+#          kubectl config view --minify --flatten --context=usw09b \
+#          > ~/.kube/cw-usw09b.yaml
+#        chmod 600 ~/.kube/cw-usw09b.yaml
+#   2. R2 credentials in env (consumed by `iris cluster start`):
+#        export R2_ACCESS_KEY_ID=<...>
+#        export R2_SECRET_ACCESS_KEY=<...>
+#   3. Start the cluster:
+#        cd lib/iris && uv run --group dev iris \
+#          --config=examples/coreweave-usw09b.yaml cluster start
+#
+# CAVEAT: the controller Deployment does NOT get the nvidia.com/gpu toleration
+# automatically. After the GPU NodePool scales up the first node, verify with
+# `kubectl describe node | grep -i taint`. If the GPU taint is present, either
+# (a) patch _build_controller_deployment in providers/k8s/controller.py to add
+# NVIDIA_GPU_TOLERATION when the controller scale_group is a GPU pool, or
+# (b) add a small CPU NodePool on this cluster and route the controller there.
+
+platform:
+  label_prefix: iris-usw09b
+  coreweave:
+    region: US-WEST-09B
+    namespace: iris
+    kubeconfig_path: ~/.kube/cw-usw09b.yaml
+    # CoreWeave native object storage. The marin-poc bucket lives in RNO2A;
+    # accessing it from US-WEST-09B is cross-region but works (just slower).
+    # iris auto-detects cwobject.com and switches addressing_style=virtual.
+    # Bucket-less base endpoint. Virtual-host addressing prepends the bucket
+    # name as a subdomain at request time (s3://marin-poc/foo →
+    # https://marin-poc.cwobject.com/foo). Including the bucket here would
+    # double it (https://marin-poc.marin-poc.cwobject.com/...).
+    object_storage_endpoint: https://cwobject.com
+
+storage:
+  remote_state_dir: s3://marin-poc/iris/state/usw09b
+
+kubernetes_provider:
+  namespace: iris
+  default_image: ghcr.io/marin-community/iris-task:latest
+  host_network: true
+  cache_dir: /mnt/local/iris-cache
+  controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
+
+controller:
+  image: ghcr.io/marin-community/iris-controller:latest
+  coreweave:
+    port: 10000
+    service_name: iris-controller-svc
+    scale_group: b200-8x
+
+defaults:
+  autoscaler:
+    evaluation_interval:
+      milliseconds: 10000
+    scale_up_delay:
+      milliseconds: 60000
+    scale_down_delay:
+      milliseconds: 300000
+    startup_grace_period:
+      milliseconds: 2400000    # 40 min — covers bare-metal node provisioning + Pod startup
+  task_env:
+    MARIN_PREFIX: s3://marin-na/marin
+  worker:
+    docker_image: ghcr.io/marin-community/iris-worker:latest
+    port: 10001
+    cache_dir: /mnt/local/iris-cache
+    runtime: kubernetes
+    default_task_image: ghcr.io/marin-community/iris-task:latest
+
+scale_groups:
+  b200-8x:
+    num_vms: 1
+    resources:
+      cpu: 128
+      ram: 2048GB
+      disk: 1TB
+      device_type: gpu
+      device_variant: B200
+      device_count: 8
+      capacity_type: on-demand
+    worker:
+      attributes:
+        pool: b200-8x
+    # buffer_slices keeps one node warm so the controller always has a home.
+    buffer_slices: 1
+    max_slices: 2
+    priority: 100
+    slice_template:
+      num_vms: 1
+      coreweave:
+        region: US-WEST-09B
+        instance_type: b200-8x
