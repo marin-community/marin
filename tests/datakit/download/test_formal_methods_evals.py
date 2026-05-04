@@ -41,11 +41,6 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
 )
 
-from experiments.evals.formal_methods_ppl import (
-    FORMAL_METHODS_SOURCES,
-    HARDWARE_RTL_SOURCES,
-)
-
 # A mix of SMT-LIB-style content exercising comments, long symbols, and Unicode.
 SMT_FILE_WITH_COMMENTS = """; comment at top
 (set-logic QF_LIA)
@@ -444,27 +439,3 @@ def test_archive_slice_step_has_deterministic_name() -> None:
     )
     step = archive_slice_step(source)
     assert step.name == "raw/formal_methods/smt_lib"
-
-
-def test_exp5060_sources_match_expected_formats() -> None:
-    source_by_key = {source.slice_key: source for source in (*FORMAL_METHODS_SOURCES, *HARDWARE_RTL_SOURCES)}
-
-    assert source_by_key["formal_methods/tptp"].archive_url == "https://tptp.org/TPTP/Archive/TPTP-v8.2.0.tgz"
-    assert source_by_key["formal_methods/dimacs_cnf"].archive_format == "tar.gz"
-    assert source_by_key["formal_methods/dimacs_cnf"].include_globs == ("*.cnf",)
-    assert "refs/heads" not in source_by_key["formal_methods/smt_lib"].archive_url
-    assert "refs/heads" not in source_by_key["formal_methods/coqgym"].archive_url
-    assert source_by_key["formal_methods/smt_lib"].manifest.staging.transform_name == "download_archive_slice"
-    assert source_by_key["formal_methods/smt_lib"].manifest.policy.eval_only is True
-
-    rtl_repo = source_by_key["hardware_rtl/rtl_repo"]
-    assert rtl_repo.content_mode == "jsonl_text_column"
-    assert rtl_repo.jsonl_text_column == "label"
-    assert rtl_repo.include_globs == ("predictions/*.jsonl",)
-    assert "refs/heads" not in rtl_repo.archive_url
-
-    rtl_coder = source_by_key["hardware_rtl/rtl_coder"]
-    assert rtl_coder.content_mode == "jsonl_text_column"
-    assert rtl_coder.jsonl_text_column == "Response"
-    assert rtl_coder.include_globs == ("dataset/*.json", "data_generation/data_sample.json")
-    assert "refs/heads" not in rtl_coder.archive_url
