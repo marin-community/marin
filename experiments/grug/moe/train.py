@@ -267,7 +267,7 @@ def initial_state(
         params=params,
         opt_state=optimizer.init(params),
         ema_params=params if ema_beta is not None else None,
-        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
+        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts + model_config.num_null_experts)),
     )
 
 

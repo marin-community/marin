@@ -72,6 +72,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    num_null_experts: int = 0  # null experts in the router (no weights, no computation)
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -327,16 +328,14 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
+        total_router_experts = e + cfg.num_null_experts
         w_gate = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
         w_up = _init_weight(k_up, (e, d, i), cfg.initializer_std)
-        # TODO: Explore whether concatenating gate/up at init (instead of keeping separate params)
-        # is (1) a meaningful MFU speedup and (2) a meaningful perf hit due to AdamH treating the
-        # concatenated tensor as a single parameter for its scale-invariant norm computation.
         w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
 
         return MoEMLP(
-            router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
-            router_bias=jnp.zeros((e,)),
+            router=reshard(_init_weight(k_router, (d, total_router_experts), cfg.initializer_std), P(None, None)),
+            router_bias=jnp.zeros((total_router_experts,)),
             w_gate_up=reshard(w_gate_up, P("expert", "data", "model")),
             w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
             cfg=cfg,
@@ -360,14 +359,23 @@ class MoEMLP(eqx.Module):
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
+
+        # Null expert masking: zero weight for experts >= num_experts, remap to expert 0
+        if self.cfg.num_null_experts > 0:
+            is_null = selected_experts >= self.cfg.num_experts
+            combine_weights = jnp.where(is_null, 0.0, combine_weights)
+            selected_experts = jnp.where(is_null, 0, selected_experts)
+
+        # Routing stats over all experts (including null) for balanced routing
+        total_experts = self.cfg.num_experts + self.cfg.num_null_experts
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
             router_logits,
-            num_experts=self.cfg.num_experts,
+            num_experts=total_experts,
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
-        # Sharded QB: compute beta locally per device, then average.
+        # Sharded QB over all experts (including null) for balanced load
         s_minus_alpha = router_logits - qb_alpha
         mesh = get_abstract_mesh()
         batch_axes = ("data", "expert")
@@ -376,7 +384,7 @@ class MoEMLP(eqx.Module):
             if a in mesh.shape:
                 num_devices *= mesh.shape[a]
         local_tokens = s_minus_alpha.shape[0] // num_devices
-        qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+        qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // total_experts)
 
         def _local_qb_beta(s_ma):
             topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
