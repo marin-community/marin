@@ -33,9 +33,9 @@ def _make_steps() -> list[ExecutorStep]:
         model = dataclasses.replace(
             model,
             num_experts_per_token=5,
-            num_null_experts=16,
+            num_null_experts=64,
         )
-        run_id = f"null-expert-d{dim}-{budget:.2e}"
+        run_id = f"null-expert-64-d{dim}-{budget:.2e}"
 
         steps.append(
             ExecutorStep(
@@ -54,7 +54,7 @@ def _make_steps() -> list[ExecutorStep]:
                     mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
                     tracker=WandbConfig(
                         project="dial_moe",
-                        tags=["null-expert", f"d={dim}", f"budget={budget:.2e}"],
+                        tags=["null-expert-64", f"d={dim}", f"budget={budget:.2e}"],
                         group="null-expert",
                         name=run_id,
                     ),
