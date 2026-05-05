@@ -23,7 +23,7 @@ model_no_zloss = dataclasses.replace(model, router_z_loss_coef=0.0)
 _CHECKPOINT_KEEP = [
     {"every": 20, "until": 300},
     {"every": 250, "until": 1000},
-    {"every": 1000},
+    {"every": 1000, "until": None},
 ]
 
 # Baseline with frequent checkpoints
