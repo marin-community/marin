@@ -76,6 +76,7 @@ sudo docker run -d --name {{ container_name }} \\
     --network=host \\
     --restart=unless-stopped \\
     --ulimit core=0:0 \\
+    --cap-add SYS_PTRACE \\
     -e FINELOG_PORT={{ port }} \\
     -e FINELOG_REMOTE_DIR={{ remote_log_dir }} \\
     -v {{ cache_dir }}:{{ cache_dir }} \\

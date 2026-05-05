@@ -312,6 +312,28 @@ class DuckDBLogStore:
                 raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
             return ns.schema
 
+    def memory_summary(self) -> dict[str, int]:
+        """Aggregate ram_bytes/chunk_count across namespaces, for diagnostics.
+
+        Walks ``_buffers`` on each namespace defensively so the
+        ``MemoryLogNamespace`` (no buffers) is harmless. Used by the periodic
+        pool-diagnostics logger in the standalone server.
+        """
+        total_ram_bytes = 0
+        total_chunks = 0
+        with self._insertion_lock:
+            for ns in self._namespaces.values():
+                buffers = getattr(ns, "_buffers", None)
+                if buffers is None:
+                    continue
+                total_ram_bytes += buffers.ram_bytes()
+                total_chunks += buffers.chunk_count()
+            return {
+                "namespaces": len(self._namespaces),
+                "ram_bytes": total_ram_bytes,
+                "chunks": total_chunks,
+            }
+
     def write_rows(self, name: str, arrow_ipc_bytes: bytes) -> int:
         """Validate ``arrow_ipc_bytes`` and append the rows to ``name``.
 
@@ -556,8 +578,18 @@ class DuckDBLogStore:
 
 
 def _decode_single_record_batch(arrow_ipc_bytes: bytes) -> pa.RecordBatch:
+    """Decode a single-batch IPC stream.
+
+    Uses ``read_next_batch`` rather than ``list(reader)`` so the EOS check
+    doesn't build an intermediate Python list (this path was 1.15M allocs/30s
+    on prod). Note: the returned ``RecordBatch`` is a zero-copy view into
+    ``arrow_ipc_bytes`` and keeps it alive — see ARROW-7305 in the design
+    notes for why we may want a hard copy here later.
+    """
     reader = paipc.open_stream(pa.BufferReader(arrow_ipc_bytes))
-    batches = list(reader)
-    if len(batches) != 1:
-        raise SchemaValidationError(f"WriteRows: expected exactly one RecordBatch in IPC stream, got {len(batches)}")
-    return batches[0]
+    batch = reader.read_next_batch()
+    try:
+        reader.read_next_batch()
+    except StopIteration:
+        return batch
+    raise SchemaValidationError("WriteRows: expected exactly one RecordBatch in IPC stream, got >1")

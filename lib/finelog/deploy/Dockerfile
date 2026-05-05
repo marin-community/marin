@@ -70,9 +70,20 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install "gcsfs>=2024.0.0"
 
+# Profiling tools — installed after uv sync so they aren't pruned by the exact
+# sync. Mirrors lib/iris/Dockerfile so `memray attach` / `py-spy dump` work
+# against the live server without rebuilding.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install py-spy memray
+
 
 # ── Stage: runtime ───────────────────────────────────────────────────
 FROM deps AS runtime
+
+# memray attach shells out to gdb at runtime; bake it into the image so we
+# don't have to apt-get install on a live container.
+RUN apt-get update && apt-get install -y --no-install-recommends gdb \
+    && rm -rf /var/lib/apt/lists/*
 
 # Pre-built dashboard SPA. Served by the asgi app at "/" and "/static/*".
 COPY --from=dashboard /build/dashboard/dist ./dashboard/dist

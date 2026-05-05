@@ -21,6 +21,8 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.ipc as paipc
 from connectrpc.code import Code
+from connectrpc.compression.gzip import GzipCompression
+from connectrpc.compression.zstd import ZstdCompression
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import Interceptor
 from rigging.log_setup import LOG_DATEFMT, LOG_FORMAT, LevelPrefixFormatter
@@ -77,6 +79,12 @@ DEFAULT_FLUSH_INTERVAL = 1.0
 DEFAULT_BATCH_ROWS = 10_000
 # Per-Table queue cap in bytes. Matches WriteRows max body size.
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
+
+# Send and accept zstd; gzip kept as a fallback so we interop with older
+# servers (and the connect-go ecosystem). Order in `accept_compression` is
+# significant — the server walks the client's Accept-Encoding in order.
+_SEND_COMPRESSION = ZstdCompression()
+_ACCEPT_COMPRESSIONS = (ZstdCompression(), GzipCompression())
 
 _BACKOFF_INITIAL = 0.5
 _BACKOFF_MAX = 30.0
@@ -596,6 +604,8 @@ class LogClient:
                 address=address,
                 timeout_ms=self._timeout_ms,
                 interceptors=self._interceptors,
+                send_compression=_SEND_COMPRESSION,
+                accept_compression=_ACCEPT_COMPRESSIONS,
             )
             logger.info("LogClient resolved %s -> %s (stats)", self._server_url, address)
             return self._stats_client
@@ -611,6 +621,8 @@ class LogClient:
                 address=address,
                 timeout_ms=self._timeout_ms,
                 interceptors=self._interceptors,
+                send_compression=_SEND_COMPRESSION,
+                accept_compression=_ACCEPT_COMPRESSIONS,
             )
             logger.info("LogClient resolved %s -> %s (log)", self._server_url, address)
             return self._log_service_client

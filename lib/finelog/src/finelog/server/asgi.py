@@ -9,6 +9,8 @@ import logging
 from collections.abc import Iterable
 from pathlib import Path
 
+from connectrpc.compression.gzip import GzipCompression
+from connectrpc.compression.zstd import ZstdCompression
 from connectrpc.interceptor import Interceptor
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -70,6 +72,12 @@ def _index_html_with_base(raw: bytes, prefix: str) -> bytes:
 _MAX_CONCURRENT_FETCH_LOGS = 4
 _MAX_CONCURRENT_QUERY = 4
 
+# zstd first so clients that advertise both pick it: the negotiator walks the
+# client's Accept-Encoding in order, so listing zstd first only matters via
+# the client side, but we keep it first here for symmetry/readability.
+# Memray on prod showed gzip.compress accounting for ~66% of allocated bytes.
+_DEFAULT_COMPRESSIONS = (ZstdCompression(), GzipCompression())
+
 # CRON(2026-05-12) -- remove this legacy workaround as all workers & clients
 # will be updated by this point.
 # Pre-#5212 (b212f0015) the LogService proto package was iris.logging, so old
@@ -109,7 +117,9 @@ def build_log_server_asgi(
     """
     log_chain: list[Interceptor] = list(interceptors)
     log_chain.append(ConcurrencyLimitInterceptor({"FetchLogs": max_concurrent_fetch_logs}))
-    log_wsgi_app = LogServiceWSGIApplication(service=service, interceptors=tuple(log_chain))
+    log_wsgi_app = LogServiceWSGIApplication(
+        service=service, interceptors=tuple(log_chain), compressions=_DEFAULT_COMPRESSIONS
+    )
 
     async def _health(_: Request) -> PlainTextResponse:
         return PlainTextResponse("ok")
@@ -121,7 +131,9 @@ def build_log_server_asgi(
     if stats_service is not None:
         stats_chain: list[Interceptor] = list(interceptors)
         stats_chain.append(ConcurrencyLimitInterceptor({"Query": max_concurrent_query}))
-        stats_wsgi_app = StatsServiceWSGIApplication(service=stats_service, interceptors=tuple(stats_chain))
+        stats_wsgi_app = StatsServiceWSGIApplication(
+            service=stats_service, interceptors=tuple(stats_chain), compressions=_DEFAULT_COMPRESSIONS
+        )
         routes.append(Mount(stats_wsgi_app.path, app=WSGIMiddleware(stats_wsgi_app)))
 
     # SPA shell at "/" and any unknown path so Vue Router can take over

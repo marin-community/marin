@@ -4721,11 +4721,13 @@ dependencies = [
     { name = "duckdb" },
     { name = "fsspec" },
     { name = "marin-rigging" },
+    { name = "numpy" },
     { name = "protobuf" },
     { name = "pyarrow" },
     { name = "pyyaml" },
     { name = "starlette" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "zstandard" },
 ]
 
 [package.dev-dependencies]
@@ -4744,11 +4746,13 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.0.0" },
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "protobuf", specifier = ">=5.0" },
     { name = "pyarrow", specifier = ">=19.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "starlette", specifier = ">=0.50.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
+    { name = "zstandard", specifier = ">=0.22" },
 ]
 
 [package.metadata.requires-dev]

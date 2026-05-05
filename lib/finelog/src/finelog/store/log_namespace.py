@@ -28,6 +28,7 @@ from typing import Protocol
 
 import duckdb
 import fsspec.core
+import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -164,8 +165,15 @@ class LocalSegment:
 
 
 def _stamp_seq_column(batch: pa.RecordBatch, first_seq: int, arrow_schema: pa.Schema) -> pa.Table:
-    """Project ``batch`` to ``arrow_schema`` with the implicit seq column filled."""
-    seq_array = pa.array(range(first_seq, first_seq + batch.num_rows), type=pa.int64())
+    """Project ``batch`` to ``arrow_schema`` with the implicit seq column filled.
+
+    Uses ``np.arange`` rather than ``pa.array(range(...), int64)``: the python
+    ``range`` path boxes every value into a PyLong before pyarrow re-unpacks
+    it, which dominated allocation count under load (150k allocs / 30 s on
+    prod). ``np.arange`` produces the int64 buffer in one C-level shot and
+    pyarrow wraps it zero-copy.
+    """
+    seq_array = pa.array(np.arange(first_seq, first_seq + batch.num_rows, dtype=np.int64))
     arrays: list[pa.Array] = []
     for field in arrow_schema:
         if field.name == IMPLICIT_SEQ_COLUMN:

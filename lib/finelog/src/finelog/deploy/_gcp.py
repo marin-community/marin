@@ -253,6 +253,24 @@ def gcp_restart(cfg: FinelogConfig) -> None:
 
     bootstrap = render_bootstrap(image=pinned, port=cfg.port, remote_log_dir=cfg.remote_log_dir)
 
+    # Update the instance's startup-script metadata so that a future VM reboot
+    # (host maintenance, manual reset) brings up the same image we're about to
+    # restart into — otherwise GCE would re-run the bootstrap baked in at
+    # `gcp_up` time, pinning the VM to whatever image was current on day one.
+    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
+        f.write(bootstrap)
+        startup_path = f.name
+    click.echo("Updating instance startup-script metadata...")
+    _gcloud(
+        "compute",
+        "instances",
+        "add-metadata",
+        cfg.name,
+        f"--project={gcp.project}",
+        f"--zone={gcp.zone}",
+        f"--metadata-from-file=startup-script={startup_path}",
+    )
+
     click.echo(f"Re-running bootstrap on {cfg.name} via SSH...")
     result = subprocess.run(
         _ssh_args(cfg, "bash -s"),

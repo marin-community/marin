@@ -141,7 +141,7 @@ def tracked_clients(monkeypatch):
     """Patch the StatsService client class to record every constructed instance."""
     clients: list[_FakeStatsServiceClient] = []
 
-    def stats_factory(address, timeout_ms=10_000, interceptors=()):
+    def stats_factory(address, timeout_ms=10_000, interceptors=(), **_kwargs):
         c = _FakeStatsServiceClient(address, timeout_ms=timeout_ms, interceptors=interceptors)
         clients.append(c)
         return c
@@ -169,7 +169,7 @@ def tracked_log_service_clients(monkeypatch):
     """Patch LogServiceClientSync; expose request/response on the singleton fake."""
     fake = _FakeLogServiceClient(address=None)
 
-    def factory(address, timeout_ms=10_000, interceptors=()):
+    def factory(address, timeout_ms=10_000, interceptors=(), **_kwargs):
         fake.address = address
         return fake
 
