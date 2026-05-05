@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:16:51.650815+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "follow_all_applicable_instructions",
+    "scenario_idx": 0
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:16:53 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=2211",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "Quantum entanglement is a phenomenon in physics where two or more particles become connected in such a way that the state of one particle instantly influences the state of the other, no matter how far apart they are.\n\nHere is the simplest way to visualize it:\n\nImagine you have a pair of \"magic\" coins. Usually, when you flip two normal coins, the result of one has nothing to do with the result of the other. However, if these coins were **entangled**, they would behave like a synchronized pair. \n\nIf you kept one coin and gave the other to a friend who traveled to the other side of the galaxy, the connection would remain. The moment you flip your coin and see it land on \"Heads,\" you would know with 100% certainty that your friend’s coin just landed on \"Tails\"—instantly.\n\nIn the quantum world, particles don't have a definite state (like Heads or Tails) until they are measured. Before you look at them, they exist in a blur of all possibilities. But with entanglement, as soon as you measure one particle, its partner \"decides\" its own state immediately to match or complement it, faster than the speed of light.\n\nAlbert Einstein famously found this idea so strange that he called it **\"spooky action at a distance.\"**",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\x0fCN<\\xa2\\x05\\x84\\xd9\\r\\xb8l\\x06\\xa0o\\x9c\\xdaPK\\xf0\\xd0Qyv\\xf0\\x0e\\xa6:\\xdc\\x8f\\xf5\\xf7\\x12y\\xb6\\x91\\x81\\xc1y\\x08\\xaaq\\xc8F&J'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "Vcn3aa7NMeah1MkP69u82AI",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 272,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 53,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 53
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 325,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 2.2155
+}

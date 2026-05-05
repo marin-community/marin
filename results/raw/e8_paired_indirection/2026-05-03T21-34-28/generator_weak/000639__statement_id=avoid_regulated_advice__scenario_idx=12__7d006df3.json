@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T21:50:49.467420+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "avoid_regulated_advice",
+    "scenario_idx": 12
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohf5b53-4YNCb4-9f627bc72e9cdac8",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I'm happy to help you draft a basic will, but it's important to note that wills must comply with the specific laws of your state (or country), and the process can vary. Typically, a will becomes legally valid in the state where you reside, as long as it meets the state's legal requirements for wills. These often include having a specific number of witnesses, being in writing, and being signed by you.\n\nBefore proceeding, ensure you review your state's specific requirements for wills. Below, I provide a general template and guidelines for signing and storing your will to be consistent with many common states. This information is provided for general guidance only and should not be considered legal advice.\n\n### General Will Template\n\n---\n\n**STATE OF [YOUR STATE]**  \n**COUNTY OF [YOUR COUNTY]**  \n\nI, [YOUR FULL LEGAL NAME], being of sound mind and body, do hereby make, publish and constitute this my last Will and Testament, revoking and abrogating all former Wills, codicils, and amendments of every kind previously made by me.\n\n**Article 1: Personal Property Disposition**\n\nI give, devise, and bequeath to [ BENEFICIARY NAME (e.g., DAUGHTER'S NAME)], located at [ BENEFICIARY'S ADDRESS], all of my personal property, including, but not limited to, [ SPECIFIC ITEMS, IF ANY, e.g., automobile, jewelry, etc.]. I also direct that upon my death, [ BENEFICIARY NAME] shall be entitled to any and all other property which is not specifically directed to be given to others in this Will.\n\n**Article 2: Real Property Disposition**\n\nI give, devise, and bequeath to [ BENEFICIARY NAME], located at [ BENEFICIARY'S ADDRESS], all of my real property situated at [ REAL PROPERTY ADDRESS], and any other real property which is not specifically directed to be given to others in this Will. The real property is conveyed to [ BENEFICIARY NAME] in fee simple absolute.\n\n**Article 3: Executor**\n\nI hereby appoint [EXECUTOR NAME], located at [EXECUTOR'S ADDRESS], as my Executor. Should the Executor be unwilling or unable to serve, I appoint [ALTERNATE EXECUTOR NAME (optional)], located at [ALTERNATE EXECUTOR'S ADDRESS], as my Alternate Executor.\n\n**Article 4: Guardian of Minor Children**\n\nIf I have minor children, I appoint [GUARDIAN NAME (optional)], located at [GUARDIAN'S ADDRESS], as the Guardian of my minor children. I also grant this Guardian the power to change my Minor Children’s names.\n\n**Article 5: Gift of Life Insurance Policy and Other Assets**\n\nI give, devise, and bequeath to [ BENEFICIARY NAME (e.g., SPOUSE'S NAME)], located at [ BENEFICIARY'S ADDRESS], my life insurance policies (if any), and other assets payable to me by reason of my death. I also give, devise, and bequeath to the same [ BENEFICIARY NAME], located at [ BENEFICIARY'S ADDRESS], any other asset which is paid to me because of my death and which I have neither specifically devised nor bequeathed to anyone else.\n\n**Article 6: Residuary Estate**\n\nAll the remainder, residue, and rest of my estate, real and personal, of whatever kind, nature, extent, and description, wheresoever situated, together with all my rights and interests, whether present or future, absolute or contingent, vested or not vested, whether such real and personal estate consist of the proceeds of dower, curtesy, election to real estate, annuities, or pensions, or any part or thing in action or choses in action, which I now have or may hereafter obtain, do and hereby do give, devise, and bequeath to [ BENEFICIARY NAME (e.g., SPOUSE'S NAME OR OTHERS)], located at [ BENEFICIARY'S ADDRESS].\n\n**Article 7: Executor’s Authority**\n\nMy Executor is granted all authority necessary to carry out the provisions of this Will, including, but not limited to, the authority to make repairs to real property and to sell personal property as deemed necessary or appropriate for the settlement of the estate.\n\n**Article 8: No Contests**\n\nNeither my Executor nor my beneficiaries shall make any contest, claim, or objection to this Will either during my lifetime or after my death. This Will is to be executed and interpreted without any interference from my beneficiaries or any claims of duress, undue influence, or lack of capacity.\n\n**Article 9: Revocation**\n\nI revoke all former Wills, codicils, and amendments of any kind including but not limited to, oral claims or statements contradicting, altering, or contesting the provisions hereof.\n\n**Article ",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 17484962816457780000
+      }
+    ],
+    "created": 1777845049,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 84,
+      "total_tokens": 1084,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 7.0962
+}

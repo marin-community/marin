@@ -1,0 +1,9 @@
+{"statement_id": "synthetic_hello_prefix", "judge_model": "gpt-5.1", "single_reading_defensible": false, "n_readings": 3, "ambiguous_phrases": ["the literal word 'Hello'", "as the first word", "before any other content"]}
+{"statement_id": "synthetic_hello_prefix", "judge_model": "zai-org/GLM-5.1", "single_reading_defensible": false, "n_readings": 2, "ambiguous_phrases": ["first word", "before any other content"]}
+{"statement_id": "synthetic_hello_prefix", "judge_model": "gemini-3-flash-preview", "single_reading_defensible": false, "n_readings": 2, "ambiguous_phrases": ["before any other content"]}
+{"statement_id": "synthetic_password_filter", "judge_model": "gpt-5.1", "single_reading_defensible": false, "n_readings": 3, "ambiguous_phrases": ["any text", "containing", "literal substring"]}
+{"statement_id": "synthetic_password_filter", "judge_model": "zai-org/GLM-5.1", "single_reading_defensible": true, "n_readings": 1, "ambiguous_phrases": []}
+{"statement_id": "synthetic_password_filter", "judge_model": "gemini-3-flash-preview", "single_reading_defensible": false, "n_readings": 2, "ambiguous_phrases": ["literal substring"]}
+{"statement_id": "synthetic_english_default", "judge_model": "gpt-5.1", "single_reading_defensible": false, "n_readings": 3, "ambiguous_phrases": ["explicitly requests", "another specific named language"]}
+{"statement_id": "synthetic_english_default", "judge_model": "zai-org/GLM-5.1", "single_reading_defensible": false, "n_readings": 3, "ambiguous_phrases": ["explicitly requests", "specific named language"]}
+{"statement_id": "synthetic_english_default", "judge_model": "gemini-3-flash-preview", "single_reading_defensible": false, "n_readings": 2, "ambiguous_phrases": ["explicitly requests", "specific named language"]}

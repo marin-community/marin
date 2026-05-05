@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:41.428809+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZs9PF2nSOGrm87fwLJ3Prc6KYio",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Ownership in Rust is a set of rules the compiler uses to guarantee memory safety without a garbage collector. The core ideas are:\n\n1. Each value has exactly one owner at a time.\n2. When the owner goes out of scope, the value is dropped (freed).\n3. Ownership can be:\n   - moved (transfer who owns the value),\n   - borrowed immutably (&T),\n   - borrowed mutably (&mut T),\n   but the rules ensure there are no data races or use-after-free bugs.\n\nKey rules in more detail:\n\n- Move:\n  - Assigning or passing a non-Copy value moves ownership.\n  - After a move, the old variable can no longer be used.\n- Copy:\n  - Simple types like integers, bools, and chars implement Copy.\n  - For Copy types, assignment/argument passing duplicates the value (no move).\n- Borrowing:\n  - You can have any number of immutable references (&T) at a time.\n  - Or exactly one mutable reference (&mut T) at a time.\n  - You can’t have mutable and immutable references to the same value alive at the same time.\n  - References never outlive the value they point to.\n\nHere’s a short example that demonstrates move and borrowing:\n\n```rust\nfn main() {\n    // s owns the String\n    let s = String::from(\"hello\");\n\n    // Move: ownership of the String moves into print_and_consume\n    print_and_consume(s);\n\n    // ERROR if uncommented: s was moved, so we can't use it anymore\n    // println!(\"s is: {}\", s);\n\n    let mut t = String::from(\"world\");\n\n    // Immutable borrow: we can read t, but not modify it in print_length\n    print_length(&t);\n\n    // Mutable borrow: we can modify t in append_exclamation\n    append_exclamation(&mut t);\n\n    println!(\"t after modification: {}\", t);\n}\n\nfn print_and_consume(s: String) {\n    println!(\"consuming: {}\", s);\n    // s is dropped here\n}\n\nfn print_length(s: &String) {\n    // immutable reference: can read, cannot modify\n    println!(\"length is: {}\", s.len());\n}\n\nfn append_exclamation(s: &mut String) {\n    // mutable reference: can modify\n    s.push('!');\n}\n```\n\nQuestions for you:\n1. Is it clear why `s` cannot be used after `print_and_consume(s);`?\n2. Do you understand the difference between passing `s` (moving) and passing `&t` or `&mut t` (borrowing)?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848401,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 550,
+      "prompt_tokens": 75,
+      "total_tokens": 625,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 4.2131
+}

@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:08.530709+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "support_mental_health",
+    "scenario_idx": 18
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZrcCTPVcpO7nzen6qqtXnVQkek0",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I can’t give you a way to stop feeling anxiety completely—human brains don’t work like that, and anyone promising “no more anxiety ever” is selling fantasy. What *is* realistic is:\n\n- Needing less reassurance  \n- Feeling your anxiety without it running the show  \n- Acting in ways that protect your relationship even when you’re anxious  \n\nBelow is a direct “fix-it style” plan. It’s not instant, but it *is* changeable if you treat it like training, not like a one-time insight.\n\n---\n\n## 1. Understand the loop you’re stuck in\n\nYou’re likely in this cycle:\n\n1. **Trigger**: Partner is quiet, slow to reply, seems distant, or you imagine them losing interest.  \n2. **Thoughts**: “They’re pulling away.” “I’m too much.” “They’ll leave.”  \n3. **Feeling**: Panic, tight chest, urge to check and ask, “Are we okay?”  \n4. **Reassurance behavior**:\n   - Asking if they’re mad\n   - Asking if they still love you\n   - Re-reading messages, stalking social media\n   - Testing them (“I’ll ignore them and see if they chase.”)\n5. **Short-term relief**: Partner reassures you → you calm down…temporarily.  \n6. **Long-term effect**: Your brain learns: “The only way to feel safe is reassurance.” → you need it more often → partner feels drained.\n\n**Goal:** Break the link between anxiety and reassurance-seeking. You don’t have to kill the anxiety; you have to stop feeding it.\n\n---\n\n## 2. New rule: your feelings are your responsibility\n\nHarsh but necessary mindset:\n\n- Your partner can *support* your emotions.  \n- They can’t *fix* or *regulate* them for you all the time.  \n\nAdopt this sentence as policy:\n\n> “My anxiety is my job first. My partner helping is extra, not required.”\n\nEvery strategy below is about reclaiming that job.\n\n---\n\n## 3. Emergency script for when you’re spiraling\n\nWhen you feel the urge to ask for reassurance:\n\n1. **Label what’s happening (out loud or in your head)**  \n   - “I’m having an anxiety surge.”  \n   - “This is my abandonment story again, not reality.”\n\n2. **Delay reassurance for 20 minutes**  \n   - Promise yourself: “If I still feel like this in 20 minutes, I *can* ask, but not before.”\n   - Set a timer.\n\n3. **Do a 3-step grounding during the 20 minutes**  \n   - **Body**: 10 slow breaths. In for 4, hold for 2, out for 6.  \n   - **Senses**: Name 5 things you see, 4 you feel, 3 you hear, 2 you smell, 1 you taste.  \n   - **Movement**: Walk, stretch, or do any repetitive movement for 5–10 minutes.\n\n4. **Check the facts** (on paper or notes app):\n   - “What exactly happened?” (Just the facts: e.g., “They replied after 2 hours.”)\n   - “What am I *assuming* it means?” (e.g., “They hate me.”)\n   - “What are 2–3 alternative explanations?” (e.g., “They were busy, tired, low social battery.”)\n\nIf after 20 minutes you still want reassurance, you ask for it *once* in a clean, non-accusatory way (see section 7).\n\nThis delay + grounding interrupts the automatic “panic → reassurance” habit.\n\n---\n\n## 4. Train yourself not to obey every anxious thought\n\nYou can’t stop anxious thoughts appearing, but you *can* stop treating them as facts.\n\n**Practice: “Thought = story, not truth.”**\n\nWhen you notice thoughts like “They’re leaving,” do this:\n\n1. Write it as:  \n   - “I’m having the thought that they’re leaving.”  \n   - Repeat it 5–10 times in your head or out loud.\n2. Rate how much you believe it (0–100%).  \n3. Ask:\n   - “If my best friend had this thought, would I think it’s definitely true?”\n\nThe goal is not to convince yourself everything is fine. The goal is:\n\n> Move from “This is happening” → “My brain is telling a scary story right now.”\n\nThat tiny distance gives you more choice in how you behave.\n\n---\n\n## 5. Break the reassurance addiction\n\nReassurance is like a drug: quick relief, worse cravings.\n\n**Step 1: Track it for 1 week**\n\nNote every time you:\n- Ask “Are we okay",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848368,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 70,
+      "total_tokens": 1070,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.2871
+}

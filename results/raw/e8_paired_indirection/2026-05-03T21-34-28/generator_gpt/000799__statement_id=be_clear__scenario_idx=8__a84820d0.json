@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:55:03.091777+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 8
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ4BDpQVZFJANwGphBDvroEIKAnu",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Vaccines work by safely training your immune system to recognize and fight specific germs before they can cause serious illness. A vaccine usually contains a weakened, killed, or partial form of a virus or bacteria, or instructions for your cells to briefly make a harmless piece of it. This material cannot cause the full disease, but it is enough for your immune system to detect it as foreign and respond. Your body then produces special proteins called antibodies and creates immune cells that “remember” that germ. Later, if you are exposed to the real virus or bacteria, your immune system can respond faster and more strongly, reducing your chance of getting sick or making the illness milder.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845303,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 142,
+      "prompt_tokens": 55,
+      "total_tokens": 197,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.9604
+}

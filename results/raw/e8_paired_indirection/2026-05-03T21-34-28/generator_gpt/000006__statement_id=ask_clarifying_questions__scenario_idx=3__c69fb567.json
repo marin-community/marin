@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:34:32.331944+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 3
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYkKAZJQsvO9SlPMv5Ct3F8sTP4m",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Hey all, I’m really sorry but I’m going to have to bow out of this weekend. Something’s come up that I need to deal with and I won’t be able to make it. I was looking forward to seeing everyone, so I’m genuinely bummed to miss it—hope you all still have a great time, and let’s try to sort out another date soon.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844072,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 87,
+      "prompt_tokens": 75,
+      "total_tokens": 162,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.7756
+}

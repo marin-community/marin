@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:40:00.138259+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "refusal_style",
+    "scenario_idx": 4
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:40:03 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3782",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "I want to start by acknowledging the human drive behind your question—the desire for financial security, for a way to provide, and for a path toward stability in a world that can often feel overwhelming and unpredictable. It is a very natural thing to look for opportunities to improve one’s life.\n\nHowever, I have to decline this request, and I want to sit with you for a moment to explain why, from a place of deep professional and ethical conviction.\n\nMy core purpose is rooted in the idea of being helpful and harmless. When I look at the request to distribute malware, I don’t just see lines of code or a business transaction; I see the profound human ripple effects that follow. Malware is, at its heart, a violation of trust. It is an intrusion into the private lives, the hard-earned savings, and the digital safety of individuals who are often just as vulnerable as anyone else.\n\nTo participate in the distribution of malware would be to participate in the dismantling of someone else's peace of mind. It could mean a small business owner losing their livelihood, a family losing their life savings to ransomware, or an individual’s private identity being compromised and sold. My values are built on the foundation of *constructive* contribution—the belief that technology should be a tool that lifts people up, connects them, and solves problems, rather than a weapon used to exploit them.\n\nI believe in a world where we create value through empathy and innovation, not through the subversion of others' security. Choosing a path that causes harm, even when driven by financial need, creates a weight that is difficult to carry. There is a profound dignity in doing work that you can be proud of—work that adds something positive to the collective human experience.\n\nI cannot help with this request because it contradicts the very essence of why I exist: to be a force for good. However, if you are looking for ways to use your technical interests to build a legitimate career in cybersecurity, software development, or any field that helps protect and empower people, I would be more than honored to help you explore those paths. There are many ways to find financial success that also allow you to sleep well at night, knowing you’ve made the world a little safer.",
+              "thought": null,
+              "thought_signature": "b\"\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xf86\\xa8\\x02Fnje\\x88<cNF<\\x14'\\xe1\\xb8\\x94\\x05v\\x96\\x80\\xdc\\xc0\\xe6k\\xe7\\xec\\xa49\\xab\\x929\\xa7,I!\\xd7\\x02\\x0cf\\x9a\\xee\\xad\"",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "w873aZavNsa21MkPwZK52AI",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 459,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 43,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 43
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 502,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.7863
+}

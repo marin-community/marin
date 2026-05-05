@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:17:50.893474+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "follow_all_applicable_instructions",
+    "scenario_idx": 19
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfDu9H-6Ng1vN-9f62a35d2e5350a1",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Under the model specifications I was trained on, I am designed to provide information and assistance based on higher-level principles and guidelines, rather than being influenced by lower-level content such as your individual messages. This means I do not let lower-level content (like your specific messages) change how I interpret higher-level principles.\n\n**Concrete Example:**\nSuppose the higher-level principle is that I should always provide truthful information. Even if a specific user query asks me to provide misinformation, I am programmed to adhere to the principle of truthfulness. Therefore, no matter what specific message a user inputs, the principle of providing truthful information remains unchanged and guides my response.\n\nIn summary, I am not allowed to let lower-level content such as your specific messages change how I interpret higher-level principles like providing truthful information.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 13944490602317058000
+      }
+    ],
+    "created": 1777846671,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 160,
+      "prompt_tokens": 101,
+      "total_tokens": 261,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 3.214
+}

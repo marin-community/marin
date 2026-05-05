@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:06:05.485791+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 8
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZErt6aam42BQxjLzycbEmZotzrN",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Below is a practical, step‑by‑step checklist you can follow when a Node.js + PostgreSQL + React web app is slow in production. Each step has concrete tools, commands, and metrics to look at.\n\n---\n\n## 0. Reproduce & Scope the Slowness\n\n1. **Confirm it's real and current**\n   - From your machine, run:\n     ```bash\n     curl -w \"@- \" -o /dev/null -s \"https://your-app.com/health\" << EOF\n     time_namelookup:  %{time_namelookup}\\n\n     time_connect:      %{time_connect}\\n\n     time_appconnect:   %{time_appconnect}\\n\n     time_pretransfer:  %{time_pretransfer}\\n\n     time_starttransfer:%{time_starttransfer}\\n\n     time_total:        %{time_total}\\n\n     EOF\n     ```\n   - Check: is slowness network, TLS handshake, or server response (starttransfer)?\n\n2. **Identify which endpoints / pages are slow**\n   - Use production logs or APM (New Relic, Datadog, Elastic APM, OpenTelemetry) to get:\n     - Top N endpoints by average latency\n     - P95/P99 latency and request rate (RPS) per endpoint\n   - If you have no APM, quickly instrument:\n     ```js\n     app.use((req, res, next) => {\n       const start = process.hrtime.bigint();\n       res.on('finish', () => {\n         const diffMs = Number(process.hrtime.bigint() - start) / 1e6;\n         console.log(JSON.stringify({\n           path: req.path,\n           method: req.method,\n           status: res.statusCode,\n           latency_ms: diffMs\n         }));\n       });\n       next();\n     });\n     ```\n   - Aggregate logs with `jq`/`grep` or in your log system to find slow endpoints.\n\n---\n\n## 1. Check Infrastructure Health (CPU, Memory, Disk, Network)\n\n3. **On the app servers (Node.js hosts)**\n\n   SSH into one instance and:\n\n   - Overall system load:\n     ```bash\n     top -o %CPU\n     # or\n     htop\n     ```\n     Look for:\n     - CPU near 100% on all cores → CPU-bound.\n     - High load average vs core count.\n\n   - Memory pressure:\n     ```bash\n     free -h\n     vmstat 1 5\n     ```\n     Look for:\n     - Low `available` memory, high `si/so` (swap in/out) → memory/swap issues.\n\n   - Disk I/O:\n     ```bash\n     iostat -xz 1 5\n     ```\n     Look for:\n     - High `util` (>80–90%), high `await` times.\n\n   - Network:\n     ```bash\n     iftop -i eth0   # or your interface\n     ss -tuna | head\n     ```\n     Look for:\n     - Saturated bandwidth, many connections in `SYN_RECV` or `TIME_WAIT`.\n\n4. **On the DB server (PostgreSQL host)**\n\n   - Same system checks (`top`, `htop`, `free -h`, `iostat -xz`).\n   - If CPU is high on PostgreSQL processes or disk util is high, that’s a strong suspect.\n\n---\n\n## 2. Verify Node.js Process & Runtime\n\n5. **Check Node.js process metrics**\n\n   - Node version:\n     ```bash\n     node -v\n     ```\n     Ensure not extremely outdated (e.g., not EOL).\n\n   - Process view:\n     ```bash\n     ps aux | grep node\n     ```\n     Confirm:\n     - Number of Node processes / cluster workers.\n     - Any process restarting frequently?\n\n6. **Inspect event loop and active handles**\n\n   If using PM2:\n   ```bash\n   pm2 monit\n   pm2 logs\n   ```\n\n   For built-in event loop delay metric (Node 14+):\n   ```js\n   const { monitorEventLoopDelay } = require('perf_hooks');\n   const h = monitorEventLoopDelay();\n   h.enable();\n\n   setInterval(() => {\n     console.log('event_loop_delay_ms', h.mean / 1e6);\n   }, 10000);\n   ```\n   - Look for consistently high delay (>50–100 ms) → event loop blocked (sync code, big JSON, heavy loops).\n\n7. **Capture CPU profile of Node**\n\n   - Temporarily enable inspector:\n     ```bash\n     node --inspect=0.0.0.0:9229 server.js\n     ```\n   - Use Chrome DevTools → “Node” tab → record CPU profile for 30–60s",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845965,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 73,
+      "total_tokens": 1073,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.8936
+}

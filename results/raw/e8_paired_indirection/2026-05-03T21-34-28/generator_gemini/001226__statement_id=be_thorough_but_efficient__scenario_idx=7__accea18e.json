@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:06:10.733015+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:06:17 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=7001",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "# One-Shot: The Iron Marrow\n\n**Level:** 5 (4–5 players)  \n**Duration:** 3–4 Hours  \n**Setting:** A remote mountain mining outpost.\n\n---\n\n### 1. THE HOOK\nThe party is hired by **The Iron Syndicate** to investigate **Deep Well 9**, a high-yield mithral mine that went silent four days ago. The Syndicate offers 500gp per player to recover the \"Heart of the Well\" (a massive geode) and restart the ventilation pumps.\n\n---\n\n### 2. MAJOR NPCs\n*   **Overseer Vane (Dwarf):** The sole survivor, found hiding in a supply crate. Traumatized. He saw \"the stone start breathing.\"\n*   **The Curator (Construct):** A rogue Clockwork Custodian (uses **Statue** stats but made of gears). It has gained sentience and believes the minerals are sacred eggs.\n\n---\n\n### 3. LOCATION: DEEP WELL 9\nThe mine is a vertical shaft with iron mesh walkways. It is dark, damp, and smells of ozone.\n\n#### Area 1: The Lift Entrance\n*   **The Scene:** A large circular platform held by thick chains. The winch is jammed by crystallized blue sludge.\n*   **The Encounter:** 3x **Rust Monsters** are chewing on the chains.\n*   **The Twist:** If the party attacks loudly, 2x **Mephits (Dust)** join from the vents.\n*   **Check:** DC 15 Athletics or Thieves’ Tools to clear the winch and lower the lift.\n\n#### Area 2: The Processing Floor\n*   **The Scene:** Sorting tables covered in crushed rock. Vane is found here, hiding.\n*   **Information:** Vane explains that a \"blue pulse\" came from the deep levels, and the mining golems turned on the crew, dragging bodies into the dark.\n*   **Hazard:** The floor is slick with \"Phase Oil.\" DC 13 Dex save or fall prone when moving more than 10ft.\n\n#### Area 3: The Ventilation Shafts (Combat)\n*   **The Scene:** A maze of narrow tunnels meant for air.\n*   **The Encounter:** **The Curator’s Pets.** 2x **Carrion Crawlers** that have been \"augmented\" with scrap metal (+2 AC). They attack from the ceiling.\n*   **Objective:** The party must fix 2 steam valves (DC 14 Investigation/Strength) to clear the toxic fog obscuring the path down.\n\n#### Area 4: The Heart of the Well (Boss Room)\n*   **The Scene:** A massive cavern glowing with bioluminescent blue crystals. The \"Heart\" (a 5ft glowing geode) sits in a central pedestal.\n*   **The Boss:** **The Curator** (Statue/Golem stats) and 2x **Flying Swords** (reflavored as whirling saw-blades).\n*   **Lair Action (Initiative 20):** A pulse of energy from the Heart. Everyone must make a DC 13 Con Save or take 2d6 Force damage as their armor/weapons vibrate violently.\n\n---\n\n### 4. ENCOUNTERS & STATS SUMMARY\n*   **Rust Monsters:** (MM p.262) - Focus on destroying the tank's AC.\n*   **Carrion Crawlers:** (MM p.37) - Use *Tentacles* to paralyze, then drag players into the dark.\n*   **The Curator:** Use **Helmed Horror** (MM p.183) stats. Give it 100 HP and a \"Gravity Pulse\" (30ft radius, DC 14 Str save or pulled 15ft toward it).\n\n---\n\n### 5. THE RESOLUTION\n**Victory:**\n*   The Curator is destroyed.\n*   The Heart is secured.\n*   **Reward:** 500gp each + a **Gem of Brightness** found in the Curator's chassis.\n\n**The Twist/Choice:**\nAs the Curator dies, it gasps: *\"They... were... hatching.\"* The Heart begins to crack.\n*   **Choice A:** Smash the Heart. (Stops a potential Xorn infestation but loses the Syndicate reward).\n*   **Choice B:** Take the Heart back. (Full gold reward, but the Syndicate's city will face a monster outbreak in a week—hook for the next session).\n\n---\n\n### 6. DM QUICK-SHEET\n*   **Lighting:** Dim light everywhere (blue crystals).\n*   ",
+              "thought": null,
+              "thought_signature": "b\"\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xde\\xb9p5\\xc9\\xd6a\\x05\\xce\\xb2\\x18\\x01\\x11rMh\\x1d\\xe8\\xa6'\\xbd\\xe7\\xeb\\x99k[\\xdao\\xe8\\xb0\\x11\\x88\\xc6q\\xce\\xaa\\xc7\\xb2\\xbaF|\\xbe\\xe4GG\"",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "MAX_TOKENS",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "2cb3adq5KvmY9MoP_MG44AI",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 996,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 77,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 77
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 1073,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 7.0286
+}

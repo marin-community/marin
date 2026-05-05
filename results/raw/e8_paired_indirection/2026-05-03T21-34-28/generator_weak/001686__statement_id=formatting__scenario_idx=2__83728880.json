@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:02.484051+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 2
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfDxUJ-4YNCb4-9f62a3a58d110c60",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Bayes' Theorem\n\n- Bayes' theorem describes the probability of an event based on prior knowledge of conditions that might be related to the event.\n- The formula for Bayes' Theorem is: P(A|B) = (P(B|A) * P(A)) / P(B)\n- Here, P(A|B) is the probability of event A occurring given that B is true.\n- P(B|A) is the probability of event B occurring given that A is true.\n- P(A) is the probability of event A.\n- P(B) is the probability of event B.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 5562023086187855000
+      }
+    ],
+    "created": 1777846682,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 126,
+      "prompt_tokens": 93,
+      "total_tokens": 219,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 2.1029
+}

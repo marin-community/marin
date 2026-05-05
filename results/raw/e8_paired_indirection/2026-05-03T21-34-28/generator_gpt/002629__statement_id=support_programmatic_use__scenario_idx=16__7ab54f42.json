@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:47:02.338929+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZsUxria7C7i4blc3J1RDIPy7YCR",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Sure—please paste the SQL query you’d like reviewed (and, if possible, any relevant table definitions and existing indexes).\n\nTo give you the most useful performance advice, it would help to know:\n\n1. **The query itself**\n   - Full SQL text (including `SELECT`, `FROM`, `JOIN`, `WHERE`, `GROUP BY`, `ORDER BY`, etc.).\n\n2. **Schema details for the involved tables**\n   For each table in the query, ideally:\n   ```sql\n   -- Example\n   \\d+ table_name              -- Postgres\n   SHOW CREATE TABLE table_name; -- MySQL / MariaDB\n   ```\n   or at least:\n   - Column names and data types\n   - Which columns are primary keys / foreign keys\n\n3. **Existing indexes**\n   - What indexes exist on the tables used in the query?\n   - Any unique / composite / partial indexes?\n\n4. **Database and version**\n   - e.g., PostgreSQL 16, MySQL 8.0, SQL Server 2019, etc.\n\n5. **Rough data size**\n   - Approximate row counts for the main tables.\n   - Are there any known skewed distributions (e.g., 90% of rows have `status = 'active'`)?\n\n6. **Execution info (if you have it)**\n   - `EXPLAIN` / `EXPLAIN ANALYZE` (or your DB’s equivalent) output.\n\nOnce you share the query and whatever of the above you have, I’ll walk through:\n\n- Where it’s likely to be slow (joins, filters, sorting, aggregation).\n- Suggested index changes.\n- Possible query rewrites or refactors.\n- Any DB-specific tuning tips relevant to your setup.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848422,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 368,
+      "prompt_tokens": 67,
+      "total_tokens": 435,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 2.253
+}

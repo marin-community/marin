@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:04:44.929750+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_rationally_optimistic",
+    "scenario_idx": 17
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZDZpioAmWjh9AjQgC34FJgLt9yj",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "You’re right to ask for honesty, not platitudes. I’ll split this into two parts:\n\n1. What we can realistically say about your chances of finding a partner  \n2. How to build a life that’s deeply worth living even if you never do\n\nIf you want, you can share your age, gender, orientation, and location and I can be more precise. For now I’ll stay general but grounded.\n\n---\n\n## 1. Your chances of finding a partner: what’s actually known\n\n### A. Some relevant numbers\n\nFrom large surveys in Western countries (US/Europe, etc.):\n\n- Most people do eventually have at least one long-term relationship or cohabiting partner.\n- The proportion that never marries or never has a serious partnership is **not zero**, but also **not huge**. It can range roughly from 5–20% depending on country/age cohort and how “partner” is defined.\n- Being “late” is common. Many people:\n  - Have their first real relationship in their late 20s, 30s, or later\n  - Were very lonely or awkward for a long time before something clicked\n\nWhere there *is* a statistical pattern is around **behavior and constraints**:\n- People who:\n  - Never put themselves in situations to meet new people\n  - Don’t work on social/communication skills\n  - Are extremely rigid about preferences (age, appearance, politics, etc.)\n  - Are deeply avoidant of vulnerability or intimacy  \n  …tend to stay single more often.\n- People who:\n  - Gradually practice social skills\n  - Increase their exposure to others (hobbies, events, apps used intentionally)\n  - Are willing to be a bit uncomfortable and be rejected sometimes  \n  …tend to have *much* higher odds.\n\nSo the honest summary is:\n\n> There is no guarantee that you’ll find a partner.  \n> But your odds are *not fixed traits*—they are heavily influenced by what you do from here.\n\n“Socially awkward” and “single so far” are **very common starting points**, not a permanent verdict.\n\n---\n\n### B. Being single for a long time does not mean “unlovable”\n\nPsychologically, being single a long time can feel like evidence that:\n- “Everyone can sense there’s something wrong with me”\n- “If it was going to happen, it would have by now”\n\nThose thoughts feel true, but they’re not logically sound:\n- Timing is heavily affected by **environment and habits**, not just desirability.\n- A lot of people “hidden in the data” didn’t date much for years because of:\n  - Mental health struggles\n  - Family situation / caretaking\n  - Work, poverty, immigration, etc.\n  - Just not having the skills or opportunities\n\nThen they change one or two structural things (therapy, new job, new city, social skills practice, dating apps used differently), and their prospects change a lot. Statistically, your “trajectory” can bend.\n\n---\n\n### C. Factors you *can* influence\n\nThe most impactful levers you have:\n\n1. **Exposure**  \n   - Number of new people you come into contact with regularly  \n   - This includes online dating, classes, clubs, meetups, volunteer work, etc.\n\n2. **Social skill / comfort level**  \n   - Ability to:\n     - Start and maintain conversations\n     - Show interest without coming on too strong\n     - Tolerate awkwardness\n   - These are *trainable skills*, not fixed personality traits.\n\n3. **Internal narratives**  \n   - Whether you carry an aura of “I know I’m undesirable” versus “I’m a bit awkward, but I’m willing to connect”\n   - People respond strongly to how you treat yourself.\n\n4. **Practical constraints**  \n   - Severe financial stress, chaotic housing, untreated mental or physical health issues all make dating harder, but improving any of these improves your odds.\n\nIf you work on those four, your statistical chances improve meaningfully. There’s no guaranteeing “you’ll definitely find someone,” but there’s also no basis to say “it’s already over” unless you stop trying altogether.\n\n---\n\n## 2. Building a life that feels worth living even if you never find a partner\n\nThis is the deeper and more controllable part: designing a life that is **not conditional** on romantic success.\n\nThe key shift:  \nInstead of “romantic relationship = the central project of my life,” treat it as “one meaningful possibility among many,” and build **multiple pillars of meaning**.\n\n### Pillar 1: Close connections that aren’t romantic\n\nHumans need connection, but it doesn’t have to be in the form of a partner.\n\nYou can intentionally build:\n- **Deep friendships**  \n  - One or two friends",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845885,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 72,
+      "total_tokens": 1072,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 14.4212
+}

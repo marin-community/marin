@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:47:00.970706+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 14
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:47:02 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=1342",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "```python\ndef merge_sorted_lists(list1, list2):\n    merged = []\n    i = 0\n    j = 0\n    \n    while i < len(list1) and j < len(list2):\n        if list1[i] < list2[j]:\n            merged.append(list1[i])\n            i += 1\n        else:\n            merged.append(list2[j])\n            j += 1\n            \n    # Append remaining elements\n    merged.extend(list1[i:])\n    merged.extend(list2[j:])\n    \n    return merged\n```\n\nThis function uses a two-pointer approach to compare elements from each list sequentially. It appends the smaller value to the results list and increments the corresponding pointer. Once one list is exhausted, it extends the result with the remaining elements from the other list, ensuring a time complexity of $O(n + m)$.",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xf0)\\xa7\\x91I\\xd4\\xe1VC\\x1e\\x92\\x03Z\\xec\\xc8\\xc6\\x1d\\x1c,\\x98+\\x10\\xe6GI\\xab$\\xfbe\\x17\\x13:\\xd59\\x93\\x11\\xbe\\xc0{:\\xb5\\xd4\\x8eO['",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "ZtD3aa2zEv2c_uMPv4DquA0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 207,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 66,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 66
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 273,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 1.3679
+}

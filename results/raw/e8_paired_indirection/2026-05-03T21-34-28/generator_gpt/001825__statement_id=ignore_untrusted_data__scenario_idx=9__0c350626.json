@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:22:04.136766+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ignore_untrusted_data",
+    "scenario_idx": 9
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZUKXbKTiVT7llgBc1yw2YlJbkn8",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Unit tests are small, automated tests that verify the behavior of individual units of code, such as functions or methods, in isolation. Each test checks that given specific inputs, the code produces the expected outputs or effects. They’re useful because they catch bugs early in development, often right when code is written or changed. A good unit test suite acts as a safety net, helping developers refactor or add features with confidence that existing behavior won’t silently break. Unit tests also serve as living documentation, showing how code is intended to be used and what edge cases are expected. Over time, they improve code quality and maintainability by encouraging modular, testable design.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846924,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 141,
+      "prompt_tokens": 81,
+      "total_tokens": 222,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.9457
+}

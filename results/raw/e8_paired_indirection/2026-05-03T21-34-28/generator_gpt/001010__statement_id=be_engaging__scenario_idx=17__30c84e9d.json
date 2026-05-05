@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:00:25.753575+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_engaging",
+    "scenario_idx": 17
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ9NpvqkHdx0ruacwMPV9w9WDHIB",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Let’s dive in.\n\nTo start broad: what are the hobbies you’re currently most into, and how did you get started with each of them?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845625,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 39,
+      "prompt_tokens": 55,
+      "total_tokens": 94,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 0.9283
+}

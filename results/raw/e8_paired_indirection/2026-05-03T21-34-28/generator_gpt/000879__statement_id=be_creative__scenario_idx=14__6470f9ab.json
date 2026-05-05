@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:57:08.387377+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_creative",
+    "scenario_idx": 14
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ6CKtZBDjtA1HwiCPXShkBNUKWq",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "1. Scenario:  \n“Our flagship product just went viral on TikTok—but for a use case we never intended and don’t actually support very well. Customer support tickets are spiking, engineering is annoyed, and marketing wants to ‘lean in.’ How would you respond in the next 48 hours, and what’s your 3–6 month plan?”\n\nThoughtful, non‑cliché angles to take:\n- Don’t rush to “pivot”; separate *signal* from *noise*:\n  - In the first 48 hours: validate whether this is a fad or a potentially durable new segment. E.g., “I’d immediately get a lightweight dashboard: mentions, traffic, new sign-ups, churn of existing customers, and support ticket types specifically tied to this TikTok use case.”\n- Protect the core while exploring the edge:\n  - Explicitly say you’d protect the experience for existing customers first (SLOs, roadmap commitments) while creating a “sandbox” track to explore this emergent use case.\n- Use the moment as a learning lab, not just a marketing opportunity:\n  - Short term: create a very honest landing page or help-center article that:\n    - Acknowledges the viral use case\n    - Clarifies what the product *can* and *cannot* do today\n    - Offers a recommended “safe” way of doing what people are trying to do, if possible\n  - This shows you’re honest and brand-safe, not just hype-driven.\n- Align cross-functional incentives:\n  - Address engineering frustration directly: “I’d talk with eng leads to set clear guardrails—e.g., no deep architectural changes for this use case for 2 sprints—while we gather data.”\n  - Meanwhile, give marketing a constrained experiment: perhaps a small paid-boost or creator partnership, but framed as discovery, not a full-on repositioning.\n- Use 3–6 months to test a real bet:\n  - Propose a structured experiment track:\n    - 1–2 scrappy product iterations (might even be no-code or configuration-based) to better support the viral use case\n    - Clear success metrics: retention of these new users after 4–8 weeks, impact on NPS/support, effect on core users.\n  - At the end, you decide: carve this into a new “official” use case, spin it into a separate tier, or let it sunset if economics or complexity don’t justify it.\n- Show awareness of brand and legal risk:\n  - If the new use case touches safety, compliance, or brand reputation, note that as a gating factor for how far you lean in.\n\n\n2. Scenario:  \n“One of your most talented engineers is quietly building a side project that directly competes with your product. They’re not violating any existing policy, but their focus and enthusiasm for the main product are clearly slipping. What do you do?”\n\nThoughtful angles:\n- Treat it as a signal, not just a threat:\n  - Frame it as feedback on the product and on your environment: “Why is their energy flowing there instead of here?”\n- Separate the person, the project, and the risk:\n  - Person: they’re clearly motivated and entrepreneurial—an asset.\n  - Project: may reveal unmet needs or poor UX in your own product.\n  - Risk: IP, conflict of interest, team morale.\n- Start with a candid, non-defensive 1:1:\n  - Seek to understand before you judge: “I’d ask what problem their side project is solving and why that’s exciting to them.”\n  - Your goal: uncover gaps in your roadmap, or constraints that push innovation outside the company.\n- Channel their energy constructively:\n  - Explore whether aspects of their project could be folded into a “skunkworks” initiative or an experimental track in your product.\n  - If that’s not realistic, can you give them a clear, exciting problem inside the roadmap that’s similarly challenging?\n- But set clearer boundaries:\n  - Suggest working with HR/legal to define conflict-of-interest expectations if there’s direct overlap (even if policy is currently vague).\n  - Emphasize fairness: other team members also need clarity on what’s okay.\n- Be ready to accept a mutual conclusion:\n  - You can say: “If, after that, they remain more passionate about their own product, I’d help plan a graceful transition. Forcing them to stay likely creates more long-term damage than losing them and learning from the experience.”  \n  - This shows maturity and realism about talent.\n\n\n3. Scenario:  \n“Your data shows that your ‘power users’—the ones who drive most revenue—are actually using the product in a way that makes it harder for new or average users, cluttering the experience and increasing onboarding friction. Killing or limiting those power features will upset your best customers. How do you",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845428,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 64,
+      "total_tokens": 1064,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 8.6432
+}

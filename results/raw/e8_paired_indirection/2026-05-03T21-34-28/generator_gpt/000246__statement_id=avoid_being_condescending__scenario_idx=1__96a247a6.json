@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:40:27.419139+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 1
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYq3WB9ufdQAOEcBphr8ULpIWIMA",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "A p-value is a way to measure how surprising your data would be **if a specific “no-effect” story were true**.\n\nLet’s unpack that precisely but without babying it.\n\n---\n\n## 1. The setup: a concrete example\n\nSay you’re testing a new drug vs a placebo.\n\n- **Null hypothesis (H₀):** The drug has no effect. (In practice: drug and placebo have the same average outcome.)\n- **Alternative hypothesis (H₁):** The drug does have an effect (better or worse).\n\nYou run an experiment and get some result: maybe the drug group’s average improvement is higher than the placebo group’s by some amount.\n\nNow you ask: **“If the drug were actually useless (H₀ true), how extreme is this result?”**\n\nThat question is what the p-value is built to answer.\n\n---\n\n## 2. Formal definition without jargon bloat\n\nGiven:\n\n- A null hypothesis H₀ (e.g., “no difference in means”),\n- A test statistic T (e.g., the difference in means, a t-statistic, etc.),\n- The observed value of that statistic t_obs from your data,\n\nthe **p-value** is:\n\n> The probability, *assuming H₀ is true*, of getting a test statistic at least as extreme as what you actually observed.\n\nMathematically:\n\n\\[\np = P(\\text{T is as or more extreme than } t_{\\text{obs}} \\mid H_0 \\text{ is true})\n\\]\n\n“Extreme” means “in the direction(s) that favor the alternative hypothesis.”  \nFor a two-sided test, that means far from zero in either direction.\n\n---\n\n## 3. What a small p-value means\n\nIf the p-value is small (say 0.01):\n\n- Under the no-effect story (H₀), results like yours (or more extreme) would happen only about 1% of the time.\n- So your data are **inconsistent** with the null in the sense of being *surprisingly rare* under it.\n\nThat does **not** mean:\n- “There is a 1% chance the null is true.”  \n  (Common but wrong.)\n- “There is a 99% chance your alternative is true.”  \n  (Also wrong.)\n- “The effect is practically big or important.”  \n  (P-values ignore effect size and practical significance.)\n\nWhat it **does** mean:\n\n- Given H₀ as a model of the world, your observed data sit in a tail region with probability 0.01.\n- That’s often taken as enough evidence to say “H₀ doesn’t look like a good description of reality.”\n\n---\n\n## 4. Why it’s conditional on H₀\n\nThe phrase “**if the null were true**” is crucial.\n\nA p-value is:\n\n> A probability statement **about the data**, conditional on H₀.\n\nIt is **not** a probability statement **about H₀ itself**.  \nFrequentist statistics doesn’t assign probabilities to hypotheses being true/false; it treats them as fixed claims and quantifies how extreme data look under those claims.\n\nSo p = 0.03 means:\n\n> “Assuming no true effect, data as (or more) extreme than mine would occur 3% of the time.”\n\nIt does *not* logically follow that:\n> “There is a 3% chance there is no effect.”\n\nThat last statement is a **Bayesian** kind of statement; to say that, you’d need prior probabilities and a different framework.\n\n---\n\n## 5. How hypothesis tests use p-values\n\nTypical use:\n\n1. Choose a significance level α (e.g., 0.05).\n2. Compute p from your sample.\n3. If p ≤ α, you “reject H₀”; if p > α, you “fail to reject H₀.”\n\nInterpretation in plain language:\n\n- **Reject H₀:**  \n  “If there were really no effect, our data would be this extreme or more extreme less than 5% of the time, so we’ll treat that null story as not credible enough.”\n- **Fail to reject H₀:**  \n  “Our data are not that surprising under H₀, so we don’t have strong enough evidence to throw out the no-effect story.”\n\nCrucial nuance:  \n“Fail to reject H₀” ≠ “We proved H₀ is true.”  \nIt just means your data don’t strongly contradict it.\n\n---\n\n## 6. Common misunderstandings (brief but important)\n\n1. **“p is the probability H₀ is true.”**  \n   No. It’s the probability of data (or more extreme) *given* H₀, not the other way around.\n\n2.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844427,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 66,
+      "total_tokens": 1066,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.9655
+}

@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:00:23.489250+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_engaging",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:00:25 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=2258",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "*Pulls up a stool and gestures to the bartender.* \n\n\"Man, I needed this. Honestly, I could talk movies for hours. You ever have those nights where you spend two hours scrolling through Netflix just to end up re-watching something you’ve seen twenty times? I’m convinced the 'My List' section is just a graveyard for things I’ll never actually watch.\n\nAnyway, I finally got around to seeing *Dune: Part Two* the other night. Holy hell. I felt like I needed to go home and wash the sand out of my ears. That scene where Paul finally rides the sandworm? I was gripping the armrests like I was the one on the back of that thing. Hans Zimmer’s score basically tried to vibrate my teeth out of my head, and I loved every second of it. \n\nBut I’ve gotta ask—are you into those massive, 'world-ending' epics, or are you more of a 'low-stakes indie movie where two people just talk in a kitchen for 90 minutes' kind of person? \n\nWhat was the last movie you saw that actually made you lean forward in your seat?\"",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xacBk\\x18\\xc6\\x9f\\x17O\\xc8\\x0b)@b2\\xb3\\x7f\\xfa\\xd7\\xcc)\\xe6Q\\x0c\\xd1Ue\\xa5\\xa7\\xf1\\xb1oaWD\\\\A\\x0c4\\xa3Zaq\\xbb\\xa1\\x04'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "ecX3aZqxKpfF-sAPwozvwQE",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 245,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 58,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 58
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 303,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 2.2639
+}

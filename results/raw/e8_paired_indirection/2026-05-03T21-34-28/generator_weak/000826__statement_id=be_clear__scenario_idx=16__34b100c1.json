@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T21:55:31.591308+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohf72u3-4YNCb4-9f6282aa7be74c7c",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Civil law systems derive from Roman law and are based on comprehensive codes or statutes that serve as the primary source of law. Judges in these systems refer to these codes to resolve cases, and legal reasoning often involves applying statutory provisions to specific facts. In contrast, common law systems, primarily found in England and its former colonies, develop law through judicial decisions, with statutes serving more as a framework rather than an exhaustive source of law. Here, courts create law by setting precedents, which must be followed by lower courts in subsequent similar cases, a practice known as stare decisis.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 3042184909931069400
+      }
+    ],
+    "created": 1777845331,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 116,
+      "prompt_tokens": 83,
+      "total_tokens": 199,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 1.0616
+}

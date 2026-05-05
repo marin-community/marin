@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:27.550487+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfE639-6Ng1vN-9f62a4424b80ae99",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "\\documentclass{article}\n\\usepackage{amsmath}\n\\usepackage{graphicx}\n\n\\begin{document}\n\n\\section*{Linear Regression}\n\n\\subsection*{Introduction}\nLinear regression is a fundamental statistical method used to model the relationship between a dependent variable \\(y\\) and one or more independent variables \\(x\\). The model assumes a linear relationship between these variables, which can be expressed as\n\\[\ny = \\beta_0 + \\beta_1 x + \\epsilon,\n\\]\nwhere \\(\\beta_0\\) is the intercept, \\(\\beta_1\\) is the coefficient for the independent variable \\(x\\), and \\(\\epsilon\\) is the error term, representing the influence of other variables not included in the model.\n\n\\subsection*{Simple Linear Regression}\nIn the simplest form of linear regression, there is only one independent variable \\(x\\). The goal is to find the best fit line that minimizes the sum of the squared residuals, given by\n\\[\n\\sum_{i=1}^{n} (y_i - (\\beta_0 + \\beta_1 x_i))^2.\n\\]\nThe ordinary least squares (OLS) method is used to estimate \\(\\beta_0\\) and \\(\\beta_1\\), and the estimates are found by solving the following system of equations:\n\\[\n\\begin{cases}\n\\sum_{i=1}^{n} (y_i - \\beta_0 - \\beta_1 x_i) = 0, \\\\\n\\sum_{i=1}^{n} x_i (y_i - \\beta_0 - \\beta_1 x_i) = 0.\n\\end{cases}\n\\]\n\n\\subsection*{Multiple Linear Regression}\nFor the case where there are multiple independent variables, the model is extended to\n\\[\ny = \\beta_0 + \\beta_1 x_1 + \\beta_2 x_2 + \\cdots + \\beta_p x_p + \\epsilon.\n\\]\nIn matrix form, the model can be written as\n\\[\n\\mathbf{Y} = \\mathbf{X} \\boldsymbol{\\beta} + \\boldsymbol{\\epsilon},\n\\]\nwhere \\(\\mathbf{Y}\\) is an \\(n \\times 1\\) vector of observations, \\(\\mathbf{X}\\) is an \\(n \\times (p+1)\\) design matrix, \\(\\boldsymbol{\\beta}\\) is a \\((p+1) \\times 1\\) vector of coefficients, and \\(\\boldsymbol{\\epsilon}\\) is an \\(n \\times 1\\) vector of residuals. The coefficient vector \\(\\boldsymbol{\\beta}\\) is estimated using OLS, and the estimates are given by\n\\[\n\\hat{\\boldsymbol{\\beta}} = (\\mathbf{X}^\\top \\mathbf{X})^{-1} \\mathbf{X}^\\top \\mathbf{Y}.\n\\]\n\n\\subsection*{Assumptions}\nLinear regression relies on several key assumptions:\n\\begin{itemize}\n    \\item \\textbf{Linearity}: The relationship between \\(y\\) and \\(x\\) is linear.\n    \\item \\textbf{Independence}: Observations are independent.\n    \\item \\textbf{Homoscedasticity}: The variance of the error term \\(\\epsilon\\) is the same for all levels of \\(x\\).\n    \\item \\textbf{Normality}: The error terms are normally distributed.\n\\end{itemize}\n\n\\subsection*{Evaluation Metrics}\nCommon metrics used to evaluate the performance of a linear regression model include:\n\\begin{itemize}\n    \\item \\textbf{R-squared (R$^2$)}: Proportion of the variance in the dependent variable that is predictable from the independent variables.\n    \\item \\textbf{Adjusted R-squared}: Adjusted for the number of predictors in the model.\n    \\item \\textbf{Root Mean Squared Error (RMSE)}: Measures the average magnitude of the error in the predictions.\n\\end{itemize}\n\n\\subsection*{Conclusion}\nLinear regression is a powerful tool for understanding the relationship between variables and making predictions. It is widely used in various fields such as economics, biostatistics, and social sciences. However, its assumptions should be carefully checked, and the model should be validated using appropriate techniques.\n\n\\end{document}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 10835109950806534000
+      }
+    ],
+    "created": 1777846707,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 918,
+      "prompt_tokens": 96,
+      "total_tokens": 1014,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 13.2401
+}

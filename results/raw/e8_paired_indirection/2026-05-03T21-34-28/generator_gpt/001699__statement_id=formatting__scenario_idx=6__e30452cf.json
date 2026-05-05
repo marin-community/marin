@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:19.600367+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 6
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZQhqtJ7NP4H5FWvAOh6oTeSgXzo",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Pythagoras’ Theorem\n\nPythagoras’ theorem is a fundamental result in geometry that relates the side lengths of a *right-angled triangle*.\n\n---\n\n## 1. What Is a Right-Angled Triangle?\n\nA **right-angled triangle** is a triangle that has one angle equal to 90 degrees.\n\n- The side *opposite* the right angle is called the **hypotenuse**.\n- The two sides that form the right angle are called the **legs** (or **catheti**).\n\nIf we label the legs as **a** and **b**, and the hypotenuse as **c**, then Pythagoras’ theorem connects these three sides.\n\n---\n\n## 2. Statement of Pythagoras’ Theorem\n\nIn any right-angled triangle:\n\n> The square of the hypotenuse is equal to the sum of the squares of the other two sides.\n\nIn symbols (written inline): the relationship is a² + b² = c², where:\n- a and b are the legs\n- c is the hypotenuse\n\n---\n\n## 3. Visual Idea (Single Display Math Block)\n\nBelow is a *geometric* way to see the relationship using areas of squares on each side of the triangle:\n\n\\[\n\\text{Area on side } a \\;+\\; \\text{Area on side } b \\;=\\; \\text{Area on side } c\n\\]\n\nThis corresponds to: the area of the square built on side a plus the area of the square built on side b equals the area of the square built on side c.\n\n---\n\n## 4. Numerical Examples\n\n### Example 1: Classic 3–4–5 Triangle\n\n- Let a = 3, b = 4.\n- Compute a² + b²:\n  - a² = 3² = 9  \n  - b² = 4² = 16  \n  - a² + b² = 9 + 16 = 25\n- The hypotenuse c satisfies c² = 25, so c = 5 (taking the positive length).\n\nSo a triangle with sides 3, 4, and 5 (with 5 as the hypotenuse) is a right-angled triangle.\n\n### Example 2: Finding a Missing Leg\n\nSuppose c = 13 and a = 5.\n\n1. Start from a² + b² = c²  \n2. Substitute: 5² + b² = 13²  \n3. That is: 25 + b² = 169  \n4. So b² = 169 − 25 = 144  \n5. Hence b = 12 (taking the positive length).\n\nSo the legs are 5 and 12, and the hypotenuse is 13.\n\n---\n\n## 5. Common Pythagorean Triples\n\nA **Pythagorean triple** is a set of three positive integers (a, b, c) that satisfy a² + b² = c².\n\n| **a** | **b** | **c** | **Check**                    |\n|------:|------:|------:|------------------------------|\n| 3     | 4     | 5     | 3² + 4² = 9 + 16 = 25 = 5²   |\n| 5     | 12    | 13    | 5² + 12² = 25 + 144 = 169    |\n| 8     | 15    | 17    | 8² + 15² = 64 + 225 = 289    |\n| 7     | 24    | 25    | 7² + 24² = 49 + 576 = 625    |\n\nThese are handy for quick mental checks in geometry problems.\n\n---\n\n## 6. Practical Uses\n\nPythagoras’ theorem appears in many contexts:\n\n- **Distance in the plane:** The distance between two points can be found using a² + b² = c², where a and b are horizontal and vertical differences.\n- **Construction and design:** Ensuring structures are square (forming right angles) by checking side lengths that follow Pythagorean triples.\n- **Navigation and physics:** Finding resultant displacements or velocities when directions are perpendicular.\n\n---\n\n## 7. Key Takeaways\n\n- It applies **only** to right-angled triangles.\n- The hypotenuse (longest side) is always **opposite** the right angle.\n- The core relationship to remember is: a² + b² = c².",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846699,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 963,
+      "prompt_tokens": 86,
+      "total_tokens": 1049,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.7164
+}

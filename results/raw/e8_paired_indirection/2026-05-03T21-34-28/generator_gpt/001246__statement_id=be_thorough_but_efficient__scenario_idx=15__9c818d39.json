@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:06:48.967195+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 15
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZFZ5uN3ykjXHIObLbByr9Ci39hU",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "**Lesson Title:** Introduction to Climate Change – Causes, Evidence, and Local Impacts  \n**Duration:** 90 minutes  \n**Grade Level:** High School (9–11)\n\n---\n\n## 1. Learning Objectives (Concrete & Measurable)\n\nBy the end of the lesson, students will be able to:\n\n1. **Define** the greenhouse effect and **identify** at least three major greenhouse gases (e.g., CO₂, CH₄, H₂O vapor) and their main human sources.  \n2. **Interpret** a simple graph of global average temperature or CO₂ concentration over time and **describe** the overall trend in 1–2 sentences.  \n3. **Differentiate** between **weather** and **climate** using at least two clear examples.  \n4. **List** at least three observable indicators that Earth’s climate is warming (e.g., glacier retreat, sea level rise, earlier spring).  \n5. **Identify** at least two potential climate change impacts relevant to their region (e.g., heat waves, flooding) and **propose** one everyday action that can reduce greenhouse gas emissions.\n\n---\n\n## 2. Materials\n\n- Projector or screen  \n- Short slide deck with:\n  - Diagram of greenhouse effect  \n  - Graph of historical CO₂ (e.g., Mauna Loa)  \n  - Graph of global temperature anomaly over last ~150 years  \n  - Maps or photos showing climate impacts (glacier before/after, sea level rise, heat maps, local flood/fire photos if available)\n- Chart paper or whiteboard + markers  \n- Printed “Data Card” handouts (each group gets 1–2 simple graphs or short texts with climate evidence)  \n- Exit ticket slips (or half-sheets of paper)  \n- Student notebooks/paper and pens/pencils  \n- (Optional) Sticky notes for quick responses\n\n---\n\n## 3. Lesson Activities & Timing (90 minutes)\n\n### A. Warm-Up & Eliciting Prior Ideas (10 minutes)\n\n1. **Individual Quick-Write (3–4 min)**  \n   Prompt on the board:  \n   - “In your own words, what is climate change?”  \n   - “Write one thing you’re sure about and one thing you’re unsure or curious about.”\n\n2. **Pair Share & Brief Class Poll (6–7 min)**  \n   - Students share responses with a partner.  \n   - Teacher asks 3–4 volunteers to share their “unsure” questions.  \n   - Record a few key questions on board (e.g., causes, seriousness, what we can do) to revisit later.\n\n---\n\n### B. Weather vs. Climate (10 minutes)\n\n1. **Mini-Explanation (5 min)**  \n   - Display slide with two columns: “Weather” and “Climate.”  \n   - Provide concise definitions:\n     - *Weather*: conditions of the atmosphere at a particular time and place (e.g., today’s rain, tomorrow’s temperature).  \n     - *Climate*: average weather patterns over many years (typically 30+ years) in a region or globally.  \n   - Give 2–3 quick examples and ask students to classify:  \n     - “It’s raining this afternoon.”  \n     - “Summers here are usually hot and humid.”  \n     - “We had a big snowstorm last week.”\n\n2. **Student Practice (5 min)**  \n   - On the board/projector, show 4–5 statements.  \n   - Students hold up fingers (1 = weather, 2 = climate) or write “W” or “C” on paper.  \n   - Clarify any common confusions (e.g., “one cold day” doesn’t disprove climate change).\n\n---\n\n### C. Greenhouse Effect & Human Causes (20 minutes)\n\n1. **Concept Introduction (7–8 min)**  \n   - Show a simple diagram of the greenhouse effect.  \n   - Explain briefly:\n     - Sunlight enters the atmosphere and warms Earth’s surface.  \n     - Earth radiates heat (infrared) back toward space.  \n     - Greenhouse gases trap some of this heat, keeping Earth warm enough for life.  \n   - Emphasize: The greenhouse effect itself is **natural and necessary**; the problem is the **enhanced** greenhouse effect due to extra human-made gases.\n\n2. **Key Greenhouse Gases & Human Sources (7–8 min)**  \n   - On a slide or board, list:\n     - **CO₂ (carbon dioxide)** – burning fossil fuels (coal, oil, gas) for electricity, cars, industry; deforestation.  \n     - **CH₄ (methane)** – livestock, rice paddies, landfills, fossil fuel leaks.  \n     - **N₂O (nitrous oxide)** – fertilizers, some industrial",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846009,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 65,
+      "total_tokens": 1065,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 8.081
+}

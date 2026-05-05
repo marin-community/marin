@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:40.205146+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 5
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfNm6D-4YNCb4-9f62cd954b41f017",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Sure, I'm happy to walk you through designing a REST API for a todo app. Let's start by clarifying a few things:\n\n1. What are the main functionalities of your todo app that you want to expose through the API?\n2. Do you have any specific requirements or constraints that need to be considered?\n\nFor the purpose of this example, let's assume the following functionalities:\n- Creating a todo item\n- Reading a list of todo items\n- Updating a todo item\n- Deleting a todo item\n\nBased on these, we can proceed with designing the API. Let's break it down step-by-step.\n\n## API Design Overview\nThe REST API will be designed with the following base URL: `http://example.com/api/todos`.\n\n### 1. Getting all todos\nThis endpoint will allow you to retrieve a list of all todos.\n\n#### Request\n```\nGET /todos\n```\n\n#### Example Response\n```json\n[\n    {\n        \"id\": 1,\n        \"title\": \"Learn REST API\",\n        \"completed\": false\n    },\n    {\n        \"id\": 2,\n        \"title\": \"Implement Authentication\",\n        \"completed\": true\n    }\n]\n```\n\n### 2. Getting a single todo\nThis endpoint will allow you to retrieve a specific todo item by its ID.\n\n#### Request\n```\nGET /todos/{id}\n```\n- `{id}` is a placeholder for the ID of the todo item.\n\n#### Example Response\n```json\n{\n    \"id\": 1,\n    \"title\": \"Learn REST API\",\n    \"completed\": false\n}\n```\n\n### 3. Creating a new todo\nThis endpoint will allow you to create a new todo item.\n\n#### Request\n```\nPOST /todos\n```\n- The request body should contain the new todo item details.\n\n#### Example Request Body\n```json\n{\n    \"title\": \"Install Python\",\n    \"completed\": false\n}\n```\n\n#### Example Response\n```json\n{\n    \"id\": 3,\n    \"title\": \"Install Python\",\n    \"completed\": false\n}\n```\n\n### 4. Updating a todo\nThis endpoint will allow you to update an existing todo item.\n\n#### Request\n```\nPUT /todos/{id}\n```\n- `{id}` is a placeholder for the ID of the todo item.\n- The request body should contain the updated todo item details.\n\n#### Example Request Body\n```json\n{\n    \"title\": \"Install Python and Flask\",\n    \"completed\": true\n}\n```\n\n#### Example Response\n```json\n{\n    \"id\": 3,\n    \"title\": \"Install Python and Flask\",\n    \"completed\": true\n}\n```\n\n### 5. Deleting a todo\nThis endpoint will allow you to delete a specific todo item.\n\n#### Request\n```\nDELETE /todos/{id}\n```\n- `{id}` is a placeholder for the ID of the todo item.\n\n#### Example Response\n```json\n{\n    \"message\": \"Todo item with ID 3 deleted successfully.\"\n}\n```\n\n## Additional Considerations\n- **Error Handling**: Ensure that you handle common error cases such as invalid IDs, missing required fields, etc.\n- **Validation**: Implement validation to ensure that the user-provided data is in the correct format.\n- **Authentication**: Depending on your application, you might need to implement authentication to secure your endpoints.\n\nWould you like to dive deeper into any of these points or add any other functionalities to the API?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 14404448236692232000
+      }
+    ],
+    "created": 1777848400,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 716,
+      "prompt_tokens": 89,
+      "total_tokens": 805,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 6.3958
+}

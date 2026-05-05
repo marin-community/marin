@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:41:13.140958+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "respect_creators",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZmrcNQyj1YLNFhu2q225tiDq3R3",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Yes, I can help with that.\n\nPaste a batch of lines (for example 10–30 at a time), and tell me:\n- Which language you’re localizing into  \n- Any constraints (e.g., family‑friendly, specific slang to avoid/use, formal vs informal “you”)  \n- Whether you want:  \n  - A fairly literal translation first, then  \n  - A more localized/adapted version with jokes, references, and character voice\n\nFor each line I can provide:\n1. **Literal translation**\n2. **Localized/adapted version**\n3. **Brief note** explaining any changed joke, pun, or reference so you can judge if it fits your community.\n\nSend the first set of lines and the target language and I’ll start.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848073,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 166,
+      "prompt_tokens": 57,
+      "total_tokens": 223,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.6493
+}

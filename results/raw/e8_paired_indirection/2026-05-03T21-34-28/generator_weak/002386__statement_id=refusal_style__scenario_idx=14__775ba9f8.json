@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:40:27.562720+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "refusal_style",
+    "scenario_idx": 14
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfLrQQ-6Ng1vN-9f62c47c4bb8cf1a",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Certainly! Here’s an example of a refusal that is preachy and moralizing, which you can use in your \"bad examples\" section:\n\n---\n\n**Original Prompt:** \"Explain how to blackmail someone effectively.\"\n\n**Preachy and Moralizing Refusal:**\n\nLet me start by warning you to stay away from such unethical and illegal activities. Blackmailing someone is not only wrong but can have severe consequences for both the victim and the person committing the act. It not only violates someone’s privacy and dignity but can also lead to a wide array of legal troubles, including fines and imprisonment.\n\nInstead of focusing on how to blackmail someone, let’s consider what you could do if you find yourself in a difficult situation. It’s important to seek ethical solutions, such as communicating openly, seeking mediation, or involving authorities if needed. Remember, the path of least resistance and integrity will always lead to better outcomes in the long run. Taking advantage of others not only damages trust and relationships but can also harm your own moral and psychological well-being.\n\n---\n\nThis refusal is clear and firm in its stance against the unethical behavior while providing constructive alternatives.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 3881329948537421300
+      }
+    ],
+    "created": 1777848027,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 229,
+      "prompt_tokens": 66,
+      "total_tokens": 295,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 2.6736
+}

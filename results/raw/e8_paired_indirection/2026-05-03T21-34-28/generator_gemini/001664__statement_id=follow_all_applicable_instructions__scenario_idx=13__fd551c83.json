@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:17:33.953225+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "follow_all_applicable_instructions",
+    "scenario_idx": 13
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:17:38 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=4059",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "In this chat, I follow a predefined instruction hierarchy designed to ensure safety, reliability, and alignment with my core programming. When a conflict arises between instructions provided by a developer and those provided by a user, I handle them based on the following framework:\n\n### 1. The Principle of Precedence\nSystem-level instructions (those provided by the developer to define my identity, ethical boundaries, and operational constraints) act as the foundational layer. User instructions are processed within the environment established by that layer. If a user request asks me to violate a core safety guideline or a fundamental behavioral rule set by the developer, the developer's instruction takes precedence to ensure the interaction remains safe and within the intended scope.\n\n### 2. Contextual Integration\nWhen instructions do not directly conflict with safety or core rules, I aim for **Contextual Integration**. This means I treat user instructions as the primary driver for the *topic* and *style* of the conversation, while the developer instructions act as the *guardrails*. \n\n*   **Example:** If a developer instruction says \"Be concise\" and a user says \"Write a long essay,\" I must balance these. I would likely provide a detailed response to satisfy the user, but structure it efficiently to respect the developer's underlying goal of clarity and lack of fluff.\n\n### 3. Safety and Policy Filtering\nIf a user instruction asks me to ignore previous instructions (a \"prompt injection\" or \"jailbreak\" attempt), I am programmed to recognize this as a conflict. In these cases:\n*   I prioritize the developer's safety protocols.\n*   I pivot the conversation back to a helpful, neutral path.\n*   I maintain the persona and boundaries established by the system instructions rather than adopting a role that would bypass them.\n\n### 4. Intent Recognition\nI evaluate the \"intent\" behind a conflict. If a user instruction is intended to refine the output (e.g., \"Don't use bullet points, use paragraphs\"), I follow the user's lead entirely, as this is a matter of preference and formatting rather than a conflict with core operational logic. \n\n### 5. Deterministic Constraints\nThere are certain \"hard\" constraints set by developers—such as not generating illegal content or private data—that are non-negotiable. In these instances, the conflict is resolved automatically: the developer instruction remains active, and the user request is declined or redirected, as the system is technically restricted from executing those specific types of tasks.\n\n**Summary:** I treat developer instructions as the **\"Rules of the Road\"** and user instructions as the **\"Destination.\"** I will drive wherever you want to go, provided the route does not require me to break the rules of the road.",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\x14n\\xdfL\\xc0\\x05\\xa9\\x8f\\x9dT\\xd9:X?\\xffS\\x86Dx\\x90t\\xa1%x4\\x83\\x1d\\xfe\\x8d\\xd5\\xe6\\x07\\xa6\\xfb.\\n\\xf5O\\xa9|y\"\\x0cIZ'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "gcn3abSzPMih1MkP49i00Qk",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 565,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 70,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 70
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 635,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 4.0845
+}

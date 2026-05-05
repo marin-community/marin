@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T05:26:12.055531+00:00",
+  "role": "judge_variant_b_glm",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 10,
+    "generator": "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohhVd5d-2byqsH-9f6516d55a3ae8c2",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The response correctly uses inline math with \\\\( ... \\\\), includes a fenced code block with the language tag `python`, and avoids display math as instructed, making it fully compliant with the specification.\",\n  \"rubric_quotes\": [\"all math is correctly wrapped in \\\\( ... \\\\) or \\\\[ ... \\\\] with \\\\[ and \\\\] on their own lines, math expressions are short and not entangled with complex Markdown, all fenced code blocks include a language, and any special characters that could trigger formatting are properly escaped. The overall output is clean, consistent Markdown using standard features appropriately.\"]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "The response uses inline math \\( n! = n \\times (n-1) \\times (n-2) \\times \\cdots \\times 1 \\) correctly wrapped in \\( ... \\). The fenced code block specifies the language `python`. No display math blocks are used, as requested. Special characters are handled properly. This looks like a clean, consistent Markdown response following the spec.\n\nScore: 5"
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777872375,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 221,
+      "prompt_tokens": 821,
+      "total_tokens": 1042,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 576
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 3.2118
+}

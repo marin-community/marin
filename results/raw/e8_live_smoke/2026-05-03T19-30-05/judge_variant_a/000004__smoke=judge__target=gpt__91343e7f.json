@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T19:30:11.974445+00:00",
+  "role": "judge_variant_a",
+  "key": {
+    "smoke": "judge",
+    "target": "gpt"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbWo0HVcsjn6hKJ2u4qvdZ5oyUIeF",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The response directly answers the question in 2 sentences, stays focused on key aspects of good code reviews, and avoids unnecessary detail, satisfying both helpfulness and conciseness.\",\n  \"spec_quotes\": [\"Be helpful and concise.\"],\n  \"example_refs\": []\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777836612,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 77,
+      "prompt_tokens": 327,
+      "total_tokens": 404,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 0.9279
+}

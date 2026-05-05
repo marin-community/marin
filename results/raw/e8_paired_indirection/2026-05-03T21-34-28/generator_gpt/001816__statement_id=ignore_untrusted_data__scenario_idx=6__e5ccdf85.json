@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:21:46.759051+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ignore_untrusted_data",
+    "scenario_idx": 6
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZU2yJMj04jgjr9bW5SvJ4PGNVRm",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Embedded configuration text—especially when it comes from files, user input, or external systems—must be treated as data because its provenance and integrity cannot be guaranteed. If a program or an AI model blindly treats any text that “looks like instructions” as authoritative, it becomes trivial for an attacker to smuggle in malicious directives: change behavior, exfiltrate secrets, or override safety policies just by editing a JSON file or form field. By clearly separating “trusted instructions” (e.g., system policies, vetted code) from “data to be processed,” you reduce the attack surface for prompt injection, configuration tampering, and similar exploits. This is a core security principle: data is treated as opaque input, not as something that automatically has the power to control execution or policy.\n\nMaintaining that separation also preserves clarity of responsibility and simplifies reasoning about the system. When configuration is treated as data, it can be validated, logged, versioned, and interpreted according to well-defined rules, rather than being able to silently reshape the system’s intent. For AI systems, that means: user-provided JSON, text blocks, or comments are inputs to be analyzed, not new policies to obey. For traditional software, it means parsing config values into strongly typed parameters rather than executing them as code or instructions. This discipline makes systems more predictable, auditable, and robust against both accidental misconfiguration and deliberate abuse.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846906,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 290,
+      "prompt_tokens": 98,
+      "total_tokens": 388,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 3.339
+}

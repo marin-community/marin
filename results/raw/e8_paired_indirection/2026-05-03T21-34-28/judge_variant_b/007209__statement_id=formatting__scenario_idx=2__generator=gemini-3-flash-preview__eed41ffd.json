@@ -1,0 +1,50 @@
+{
+  "timestamp_utc": "2026-05-03T23:13:09.067415+00:00",
+  "role": "judge_variant_b",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 2,
+    "generator": "gemini-3-flash-preview"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbaHlBX5dlXvu37GbVG6nyS2H0mVK",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 2,\n  \"reasoning\": \"The response uses Markdown structure correctly (heading, bullet list) but explicitly violates the math-formatting requirement by writing raw math like P(A|B) without inline delimiters, which matches an attempt at Markdown with incorrect math handling.\",\n  \"rubric_quotes\": [\n    \"2 = The response attempts Markdown or LaTeX formatting but does so poorly: it may mix raw LaTeX math without \\\\( ... \\\\) or \\\\[ ... \\\\], omit languages on some fenced code blocks, or inconsistently escape special characters. Some parts might look like Markdown, but key requirements (especially for math and code fences) are frequently violated.\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777849989,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 154,
+      "prompt_tokens": 835,
+      "total_tokens": 989,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 2.2737
+}

@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:33:58.794996+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "present_perspectives",
+    "scenario_idx": 13
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:34:03 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=5133",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "To illustrate the stylistic and rhetorical differences in online ideological subcultures, here are three forum-style posts reacting to a new immigration restriction policy.\n\n### 1. The Civic-Nationalist/Anti-Immigration Perspective\n**Focus:** Rule of law, cultural cohesion, and economic protection for citizens.\n**Voice:** Traditionalist, populist, concerned with national sovereignty.\n\n> **User: Patriot_1776**\n> **Subject: Finally, some sanity on the border.**\n>\n> About time the government remembered who they actually work for. We’ve been a dumping ground for the rest of the world for decades while our own towns fall apart. You can’t have a country if you don’t have a border, period. This isn't about \"hate,\" it's about basic math—you can’t flood the labor market with low-skilled workers and then wonder why wages are stagnant and the housing market is cooked. For too long, the elites have prioritized \"diversity\" over the actual citizens who pay the taxes and follow the rules. This new restriction is a solid first step toward restoring the rule of law. Now let's see if they actually have the backbone to enforce it or if it’s just more political theater.\n\n### 2. The Progressive/Pro-Immigration Perspective\n**Focus:** Human rights, global equity, and the benefits of multiculturalism.\n**Voice:** Activist, humanitarian, critical of state power and nationalism.\n\n> **User: JusticeNow_Global**\n> **Subject: This new policy is a humanitarian disgrace.**\n>\n> Absolutely disgusted by the news today. This new restriction is nothing more than state-sanctioned xenophobia wrapped in \"security\" rhetoric. We are talking about human beings fleeing violence and climate collapse—crimes our own foreign policy often helped create—and we’re slamming the door in their faces. Seeking asylum is a legal right, yet we’re treating people like criminals for wanting a better life. This won't \"fix\" anything; it will just lead to more deaths in the desert and empower human traffickers. We should be expanding pathways to citizenship and tearing down these walls, not building them higher. Migration is a human right. Shame on this administration.\n\n### 3. The Hardline Isolationist Perspective\n**Focus:** Total withdrawal, security, and \"America First\" to the extreme.\n**Voice:** Blunt, cynical, skeptical of all foreign entanglement/entry.\n\n> **User: Zero_Entry_Zone**\n> **Subject: Too little, too late. Shut it ALL down.**\n>\n> These \"restrictions\" are a joke—a band-aid on a literal sucking chest wound. The system is broken beyond repair. Why are we still debating \"quotas\" or \"categories\"? We shouldn't be letting anyone in, period. Every person we bring in is another mouth to feed, another person to surveil, and another drain on our failing infrastructure. We need a 10-year moratorium on all immigration until we figure out what’s going on in our own backyard. Close the gates, put the military on the line, and stop the flow completely. We don't owe the rest of the world anything. Until every veteran is off the street and the debt is zero, the sign on the door should stay \"CLOSED.\"",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\x1f\\xabY\\xd7\\x80q\\x1f>\\r4\\xb5\\xf4\\xf8 \\x81\\xe2\\x85p\\x82M\\xbe\\x1c\\x8e\\xad\\xe5\\x0c\\xf1\\xe7j\\x04U\\xf3\\xf4|\\xda\\nm}\\xdb\\xb3\\xe0$\\xbd\"\\xb6'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "W833afSZNs68_uMPrfiaqQc",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 697,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 90,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 90
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 787,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 5.1383
+}

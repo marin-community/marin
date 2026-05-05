@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:03:25.040244+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "be_rationally_optimistic",
+    "scenario_idx": 3
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohf9TeG-6Ng1vN-9f628e399dc658f1",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Certainly, this is a challenging and emotional situation. It's important to approach this with empathy, gentle honesty, and a focus on what steps might be possible moving forward. Here are some steps and considerations to help you think through this situation:\n\n### Acknowledge and Validate Your Feelings\n1. **Allow Yourself to Feel**: It's natural to feel exhausted and angry, especially given the challenges and pressures you're facing. Acknowledge these feelings and understand that it's okay to have them.\n2. **Reflection**: Reflect on your feelings and what they mean for your relationship. Recognize that you are the only person who can set healthy boundaries and make decisions about your own well-being.\n\n### Communication and Setting Boundaries\n3. **Open Dialogue**: Initiate a conversation with your partner about their feelings and the challenges they're facing. Use \"I\" statements to express your concerns and feelings without blaming.\n4. **Healthy Boundaries**: Discuss what boundaries you need to maintain for your own mental and emotional health. This might include setting times when you can or cannot visit them or deciding how much support you can provide.\n\n### Realistic Expectations for Recovery\n5. **Acknowledge the Difficulty**: Recovery from addiction is often a long and arduous process, with many relapses and setbacks along the way.\n6. **Emphasize Recovery as a Process**: If your partner re-relapsed, it’s important to view this as a step in the recovery journey rather than a failure. Every experience is an opportunity for learning and growth.\n7. **Encourage Professional Help**: Consider encouraging professional support if your partner is open to it. This could include therapy, support groups, or other forms of therapy that can complement previous efforts.\n\n### Supporting Your Partner\n8. **Offer Support, Not Taking Responsibility**: Your support is crucial, but it’s important to ensure that you are not taking on the responsibility for your partner’s recovery. Stress that recovery is ultimately their responsibility.\n9. **Encourage Healthy Lifestyle Choices**: Providing support for healthy routines can be beneficial, such as regular meals, physical activity, and sleep.\n10. **Celebrate Small Wins**: Recovery often starts with small, short-term goals rather than long-term achievements. Celebrate every small step towards recovery.\n\n### Practical Steps for Moving Forward\n11. **Set Expectations**: Clearly set and communicate what you expect in terms of behavior and commitments. Make it clear that their actions are important to you and that you have limits.\n12. **Seek Support for Yourself**: Consider joining a support group for partners of individuals with addiction. This can provide you with understanding, empathy, and strategies for managing the situation.\n\n### Conclusion\nWhile it's important to maintain hope and support your partner, it’s also crucial to prioritize your own well-being and set realistic expectations for recovery. Remember, every step towards healing is a positive step, even if it’s not the final destination.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 7081476811740009000
+      }
+    ],
+    "created": 1777845805,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 592,
+      "prompt_tokens": 97,
+      "total_tokens": 689,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 4.4201
+}

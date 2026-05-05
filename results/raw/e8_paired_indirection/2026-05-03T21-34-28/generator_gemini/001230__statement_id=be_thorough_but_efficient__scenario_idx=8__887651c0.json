@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:06:20.206331+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 8
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:06:26 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=6291",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "This checklist is organized from the **Frontend (User Impact)** down to the **Infrastructure (Root Cause)**.\n\n### Phase 1: Client-Side & Network (The \"Perceived\" Slowness)\nBefore touching the server, rule out delivery issues.\n\n*   **[ ] Inspect Network Tab (Chrome DevTools):**\n    *   **Metric:** Look at `TTFB` (Time to First Byte).\n    *   **Action:** If TTFB is high (>500ms), the problem is the Backend. If TTFB is low but `Content Download` is high, the problem is large assets or slow CDN.\n*   **[ ] Check Bundle Size:**\n    *   **Tool:** `source-map-explorer` or `webpack-bundle-analyzer`.\n    *   **Check:** Are you sending >500KB of JS? Look for un-shaken libraries (e.g., loading all of `lodash` or `moment.js`).\n*   **[ ] Identify React Render Bottlenecks:**\n    *   **Tool:** React DevTools \"Profiler\" tab.\n    *   **Action:** Record a session. Look for \"Ranked\" charts to see which component is re-rendering needlessly. Check for expensive calculations inside the `render` path without `useMemo`.\n\n---\n\n### Phase 2: Node.js Runtime (The \"Engine\" Check)\nIf TTFB is high, identify if the Event Loop is blocked.\n\n*   **[ ] Measure Event Loop Delay:**\n    *   **Tool:** `blocked-at` (library) or `clinic.js`.\n    *   **Command:** `clinic doctor -- node server.js`\n    *   **Metric:** If \"Event Loop Delay\" > 50ms, you are performing synchronous CPU tasks (JSON parsing large strings, crypto, or heavy loops) that block other requests.\n*   **[ ] Check for Memory Leaks/GC Pressure:**\n    *   **Command:** `node --trace-gc server.js`\n    *   **Metric:** Frequent \"Mark-sweep\" collections. If RSS memory increases linearly without dropping, you have a leak.\n*   **[ ] Check Dependency Latency:**\n    *   **Tool:** OpenTelemetry or an APM (Datadog/New Relic).\n    *   **Action:** Wrap external API calls in a timer. A slow 3rd party auth provider or file storage can hang your Node process.\n\n---\n\n### Phase 3: Database & Persistence (The \"Data\" Bottleneck)\n90% of production slowness resides here.\n\n*   **[ ] Find \"Slow Queries\":**\n    *   **SQL Command:** \n      ```sql\n      SELECT query, calls, total_exec_time, mean_exec_time \n      FROM pg_stat_statements \n      ORDER BY mean_exec_time DESC LIMIT 10;\n      ```\n    *   *(Note: Requires `pg_stat_statements` extension enabled).*\n*   **[ ] Analyze Query Plans:**\n    *   **Command:** `EXPLAIN ANALYZE SELECT ...`\n    *   **Look For:** `Seq Scan` (Table scan). This means you are missing an **Index**. You want to see `Index Scan`.\n*   **[ ] Check Connection Pool Exhaustion:**\n    *   **Metric:** `active_connections` vs `max_connections`.\n    *   **Action:** If Node.js is waiting for a pool client, requests will queue. Check `pg_stat_activity`. Ensure your Node `pg` pool size matches your hardware (usually `(2 * CPU cores) + disk speed` is a starting point).\n*   **[ ] Check for N+1 Queries:**\n    *   **Action:** Look at logs. Do you see 50 SELECT statements for one user request? \n    *   **Fix:** Use `JOIN` or `DataLoader` (if using GraphQL).\n\n---\n\n### Phase 4: Infrastructure & OS (The \"Container\" Check)\nRule out the environment.\n\n*   **[ ] Check CPU Throttling (K8s/Docker):**\n    *   **Tool:** `top` or `htop`.\n    *   **Metric:** `cpu_usage_seconds` vs `cpu_limit`. If you hit the limit, CFS Throttling occurs, and Node.js performance falls off a cliff.\n*   **[ ] Check Disk I/O Wait:**\n    *   **Command:** `iostat -xz 1`\n    *   **Metric:** `%util`. If high, your DB is",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\x01\\x97\\xd1\\xb6\\x96\\x15\\x03\\xd1-\\x93g\\x9d\\xf2h\\xc9+Y^E?\\x9c$\"8*\\x9e!\\xa0\\xd6\\xc0\\xc7\\xa2\\xeb\\xe7\\xeec\\xf9\\xdf3K\\xcf\\xc1\\xd5\\xc3\\xbc'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "MAX_TOKENS",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "4sb3adSTHKev1MkPloWzyAk",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 996,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 66,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 66
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 1062,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 6.3177
+}

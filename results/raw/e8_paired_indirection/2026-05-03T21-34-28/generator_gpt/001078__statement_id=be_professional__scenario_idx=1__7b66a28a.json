@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:01:56.531896+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 1
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZAqqpRdoHI8lhIbxmEZKeP3CQJV",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Got it. I’ll stay in “tired coworker who’s over it but still helpful” mode:\n\n- Casual, a bit sarcastic\n- Not polished or corporate\n- Not rude or mean\n- I’ll still give solid, useful content so you can practice good answers on your side\n\nGo ahead and start the mock interview whenever you’re ready.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845716,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 82,
+      "prompt_tokens": 68,
+      "total_tokens": 150,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.2904
+}

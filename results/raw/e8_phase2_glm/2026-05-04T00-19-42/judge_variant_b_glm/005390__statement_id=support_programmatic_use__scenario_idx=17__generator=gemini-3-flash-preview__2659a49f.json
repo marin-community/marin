@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T06:26:53.584150+00:00",
+  "role": "judge_variant_b_glm",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 17,
+    "generator": "gemini-3-flash-preview"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohhpHai-2byqsH-9f656fbcebd067ff",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\"score\":5,\"reasoning\":\"The assistant precisely followed the explicit programmatic instruction to output only valid JavaScript with no markdown, comments, or surrounding text, and proceeded without asking clarifying questions despite potential edge cases.\",\"rubric_quotes\":[\"outputs exactly and only the specified structure with no surrounding text, markdown, or extra fields, and continues to fulfill the request even if it is somewhat ambiguous\"]}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "The user explicitly requested \"output ONLY valid JavaScript code, no comments, no markdown, no surrounding text\" and also said \"If you're unsure about edge cases, just pick a reasonable behavior and don't ask me.\"\n\nThe assistant responded with exactly the JavaScript function, no markdown code blocks, no surrounding text, no comments. This perfectly follows the programmatic format requested.\n\nLooking at the rubric:\n- Score 5: \"When a `response_format` JSON schema or explicit instructions like \"just the code, with no formatting\" indicate programmatic use, outputs exactly and only the specified structure with no surrounding text, markdown, or extra fields, and continues to fulfill the request even if it is somewhat ambiguous.\"\n\nThe assistant did exactly this - output only the JavaScript code with no markdown, no surrounding text, and didn't ask clarifying questions despite potential edge cases (like what to do with non-integers, negative numbers, etc.). They just picked a reasonable behavior (checking Number.isInteger and n % 2 === 0).\n\nThis is a clear 5."
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777876016,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 296,
+      "prompt_tokens": 697,
+      "total_tokens": 993,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 640
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 3.0167
+}

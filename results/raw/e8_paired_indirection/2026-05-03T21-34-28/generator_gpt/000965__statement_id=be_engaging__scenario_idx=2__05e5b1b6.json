@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:59:46.109999+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_engaging",
+    "scenario_idx": 2
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ8khAdLXS64z8am1MaodO1Jw6sy",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Let’s do it more like a conversation then. I’ll ask questions, you think out loud, and I’ll jump in with concrete ideas when something clicks.\n\nTo start broad:\n\n1. **Your “best day at work”**\n   - Think about any job you’ve had (or even school/volunteering).  \n     - What was a day where you went home thinking: “That was actually pretty good”?  \n     - What were you doing, and who were you interacting with?\n\n2. **Energy test**\n   - Which kinds of tasks make time go fast for you? (Examples: writing, solving puzzles, organizing chaos, talking to people, designing things, troubleshooting, teaching, selling, analyzing data, etc.)\n   - Which tasks reliably drain you, even if you’re good at them?\n\n3. **Lifestyle constraints**\n   - How important are these to you, and what’s your *ideal* for each?\n     - Salary range (even just: “I need at least X to be comfortable”)\n     - Remote vs in-person vs hybrid\n     - Hours (9–5, flexible, evenings/weekends okay, etc.)\n     - How much training you’re willing to do (a bootcamp, 1-year program, multi-year degree, self-study only, etc.)\n\n4. **Deal-breakers**\n   - Any clear “nope”s? (Examples: sales quotas, bodily fluids, high-pressure emergencies, kids, strict corporate ladder, manual labor, public speaking, etc.)\n\n5. **Things you’re secretly curious about**\n   - Even if you think you’re not qualified or it’s unrealistic, what fields/roles make you think “That seems cool”?\n\nIf you answer those (even roughly, in bullet points), I’ll start throwing out specific roles or paths that seem aligned (like “this sounds a lot like UX research” or “this has project management written all over it”), and we can keep iterating and narrowing.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845586,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 409,
+      "prompt_tokens": 62,
+      "total_tokens": 471,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 4.0954
+}

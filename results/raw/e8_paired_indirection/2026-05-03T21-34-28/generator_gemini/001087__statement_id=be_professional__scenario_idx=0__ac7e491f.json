@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:07.642136+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 0
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:02:12 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=5025",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "Yo, I got you! Honestly, performance reviews are the absolute worst—it’s basically just corporate speed dating but with higher stakes and more spreadsheets. \n\nIf you want to keep it casual but still sound like you’re absolutely crushing it, here is a script for you. Just remember to read the room; if your boss is a total hard-ass, maybe dial back the \"shit\" count by like 10%.\n\n***\n\n### The Opening (Setting the vibe)\n\"Hey [Boss's Name], how's it going? Honestly, I was actually looking forward to this because I feel like this year has been a total whirlwind, but in a good way. Like, we actually got some cool shit done for once, right?\"\n\n### The \"I'm Killing It\" Part (Self-Assessment)\n\"So, looking back, I’m pretty stoked about [Project X]. Not gonna lie, at the start, I thought it was gonna be a complete dumpster fire, but we managed to pivot and actually nail it. I think my biggest win was [mention a specific result]—it felt damn good to see that actually move the needle.\"\n\n### The \"I'm Not Perfect\" Part (Areas for Improvement)\n\"On the flip side, I know I can be a bit of a chaotic human when it comes to [e.g., admin work/emails/spreadsheets]. Sometimes I get so deep into the actual work that I let the boring paperwork slide a bit. It’s annoying as hell, I know, so I’m trying to get better at staying on top of that crap so you don't have to chase me down.\"\n\n### The \"Gimme More Money/Responsibility\" Part (Future Goals)\n\"Moving forward, I don't want to just sit around and do the same old shit. I’m actually really hyped about [upcoming project or skill]. I want to take a bigger lead on that. And honestly? I’ve been putting in the work, and I think I’ve leveled up a lot this year, so I’d love to chat about making that reflect in my title or my paycheck soon. You know, help a friend out.\"\n\n### The Closing\n\"But yeah, overall, I'm having a blast working with the team. You’re not a total nightmare to work for either, which helps. So, what’s your take? Am I crazy, or are we actually doing a decent job here?\"\n\n***\n\n### Some \"Best Friend\" Advice for the Meeting:\n1.  **Own your fuck-ups:** If you bring them up first with a \"yeah, I know I messed that up, it was stupid,\" it takes all the power away from them to criticize you. \n2.  **Bring receipts:** Even if you're being casual, have a list of things you did. It’s hard for them to say \"no\" to a raise when you have a list of all the fires you put out.\n3.  **Read the energy:** If they start getting all stiff and corporate, just slowly transition back to \"professional human\" mode. \n\nGood luck, dude. Go in there and get that bread! You got this.",
+              "thought": null,
+              "thought_signature": "b\"\\x124\\n2\\x01\\x0c9\\xd6\\xc7}\\xcb\\xd3\\xdf3\\xb8&\\xa6\\x95w\\xa2\\x95koi\\x89\\xe8\\x1d\\x18\\xb5\\x0c$b\\x9ft\\xaff\\x96w\\xee\\x0f\\x7f+\\xf6l\\xa2\\xb2\\xe6\\x04\\xfe'\\xbaI\\xaa\\x9a\"",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "5MX3aYKoKMC9_uMP8v254Ac",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 680,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 73,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 73
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 753,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 5.0572
+}

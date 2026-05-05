@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:54:35.850597+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 0
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ3jQEU6kTCH1WJaP8zMnz88OSIW",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Quantum entanglement is when two or more tiny particles become linked so that whatever happens to one instantly affects the others, even if they are very far apart. It’s like they share a single combined state, so measuring one immediately tells you something about the other, in a way that can’t be explained by normal cause-and-effect signals.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845275,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 77,
+      "prompt_tokens": 79,
+      "total_tokens": 156,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.0319
+}

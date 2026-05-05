@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T21:41:42.391843+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 14
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohf2nQT-4YNCb4-9f626e6bfe478f74",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Certainly! Here’s a draft for your resignation letter that conveys your honest feelings while maintaining a professional tone:\n\n---\n\n[Your Name]  \n[Your Address]  \n[City, State, Zip Code]  \n[Email Address]  \n[Phone Number]  \n[Date]\n\n[Recipient's Name]  \n[Recipient's Title]  \n[Company Name]  \n[Company Address]  \n[City, State, Zip Code]\n\nDear [Recipient's Name],\n\nI am writing to formally submit my resignation from [Your Position] at [Company Name]. My last day of employment will be [Last Day, e.g., \"December 31, 2023\"].\n\nDuring my time with the company, I have learned and grown in a number of valuable ways, primarily through my colleagues and the challenges I have faced. However, despite the many positive experiences I have had, I have come to realize that a change is necessary for my personal and professional growth. I am truly grateful for the opportunities and experiences I have had here, but after careful consideration, I have decided it is time for me to explore new paths that align more closely with my long-term goals.\n\nI want to express my appreciation for all that I have gained from my time here, including the support and mentorship I have received from the team. I also want to thank [Manager's Name] and the [Department Name] team for their guidance and willingness to take me under their wing during my tenure.\n\nI am committed to ensuring a smooth transition, and I would be happy to discuss the details of my departure and make myself available to assist in the handover process. If you require any additional information or documentation, please do not hesitate to ask.\n\nAgain, I want to express my gratitude for the time we have spent together and for the opportunities and challenges I have faced during my tenure at [Company Name]. I will carry the lessons learned and the memories made here into my next venture.\n\nThank you for understanding.\n\nSincerely,\n\n[Your Name]\n\n---\n\nThis letter strikes a balance between being honest about your decision to leave without letting bitterness or negativity color your words. It also facilitates a smooth transition and shows your willingness to be cooperative and professional during the process.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 13542109742556977000
+      }
+    ],
+    "created": 1777844502,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 449,
+      "prompt_tokens": 94,
+      "total_tokens": 543,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 3.5681
+}

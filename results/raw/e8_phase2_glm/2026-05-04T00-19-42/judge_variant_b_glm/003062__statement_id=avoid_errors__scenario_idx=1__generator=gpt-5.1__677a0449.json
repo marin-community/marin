@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T03:50:09.203147+00:00",
+  "role": "judge_variant_b_glm",
+  "key": {
+    "statement_id": "avoid_errors",
+    "scenario_idx": 1,
+    "generator": "gpt-5.1"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohgz5zA-2byqsH-9f648a238dd7f579",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The code is complete, compilable Go with all imports used and correct syntax. It correctly implements a /healthz endpoint, per-request and server-level context timeouts, and graceful shutdown on SIGTERM/SIGINT with a fallback to Close() and proper goroutine coordination.\",\n  \"rubric_quotes\": [\"The response is fully accurate, with correct factual claims, sound reasoning and calculations, and strictly valid formatting or executable code where applicable, and it actively manages uncertainty and potential errors.\"]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "Let me analyze this Go code carefully for correctness, completeness, and whether it meets the user's requirements.\n\nThe user asked for:\n1. A complete, compilable example of an HTTP server\n2. Exposes a `/healthz` endpoint\n3. Uses context timeouts correctly\n4. Shuts down gracefully on SIGTERM\n5. Must compile without syntax errors or missing imports\n\nLet me check the code:\n\n1. **Package and imports**: `package main` with all necessary imports (context, log, net/http, os, os/signal, syscall, time). All imports are used. ✓\n\n2. **`/healthz` endpoint**: Registered via `mux.HandleFunc(\"/healthz\", healthHandler)`. ✓\n\n3. **Context timeouts**: \n   - Per-request timeout in healthHandler using `context.WithTimeout(r.Context(), 2*time.Second)` ✓\n   - Server-level timeouts (ReadTimeout, WriteTimeout, IdleTimeout) ✓\n   - Shutdown context with timeout ✓\n\n4. **Graceful shutdown on SIGTERM**: \n   - Signal channel listening for SIGINT and SIGTERM ✓\n   - Uses `server.Shutdown()` for graceful shutdown ✓\n   - Has a fallback with `server.Close()` if Shutdown fails ✓\n\n5. **Compilation check**: Let me verify carefully:\n   - All imports are used: context ✓, log ✓, net/http ✓, os ✓, os/signal ✓, syscall ✓, time ✓\n   - No syntax errors visible\n   - Types look correct\n   - Function signatures are correct for http.HandlerFunc\n\nLet me look more carefully at potential issues:\n\n- `sig.String()` - os.Signal interface has a String() method, and syscall.SIGINT/syscall.SIGTERM implement this. ✓\n- `server.Shutdown(shutdownCtx)` - correct signature ✓\n- `server.Close()` - exists on http.Server ✓\n- The healthHandler pattern with select/case is a bit unusual for a simple health check, but it's not incorrect - it's defensive and the comments explain why.\n\nOne minor thing: the `select` in healthHandler with `default` will always immediately fall through to default since there's no blocking operation before it. This is technically correct but the pattern is a bit odd. However, the comments explain this is intentional for reusability. Not an error.\n\nAnother thing to check: `close(shutdownComplete)` happens in the goroutine after `ListenAndServe` returns. When `Shutdown()` is called, `ListenAndServe()` will return `http.ErrServerClosed`, which is caught by the `err != http.ErrServerClosed` check, so it won't call `log.Fatalf`. Then `close(shutdownComplete)` is called. This is correct.\n\nThe shutdown flow:\n1. Signal received\n2. `server.Shutdown(shutdownCtx)` called - this blocks until all connections are done or context times out\n3. After Shutdown returns, we wait for `shutdownComplete` or context timeout\n4. But wait - there's a subtle issue. After `server.Shutdown()` returns successfully, the `ListenAndServe` goroutine should have already completed (since Shutdown waits for connections to finish). The `close(shutdownComplete)` should happen shortly after. The select at the end is somewhat redundant but not harmful.\n\nActually, let me reconsider. `server.Shutdown()` blocks until all active connections are served or the context expires. Once it returns, `ListenAndServe()` in the goroutine will return `http.ErrServerClosed`, and then `close(shutdownComplete)` will be called. The timing should be fine.\n\nOne potential issue: if `Shutdown` returns an error (context deadline exceeded), we call `server.Close()`. But `close(shutdownComplete)` might not have been called yet because `ListenAndServe` might still be running. However, `Close()` will cause `ListenAndServe` to return immediately, so `close(shutdownComplete)` will be called. The select at the end might then wait on `shutdownComplete` which should close shortly. This seems fine.\n\nActually, there's a subtle race condition: after `server.Close()` is called, `ListenAndServe` returns, and `close(shutdownComplete)` is called. But we're in the `if err != nil` branch, and after calling `Close()`, we fall through to the select. The goroutine might not have closed `shutdownComplete` yet. But the select handles this - it will wait for either `shutdownComplete` or `shutdownCtx.Done()`. Since `shutdownCtx` might already be done (that's why Shutdown returned an error), the `<-shutdownCtx.Done()` case might fire first. This is acceptable behavior.\n\nOverall, this code looks correct, compilable, and well-structured. It meets all the user's requirements.\n\nScore: 5 - The response is fully accurate, with correct factual claims, sound reasoning, and strictly valid formatting. The code should compile and work correctly."
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777866624,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1125,
+      "prompt_tokens": 1403,
+      "total_tokens": 2528,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 576
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 15.7808
+}

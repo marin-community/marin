@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:56.054448+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 13
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfEEWg-6Ng1vN-9f62a4f45fc41be5",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "| Distribution | PDF (Inline LaTeX Math) | PDF (Literal Text) |\n|--------------|------------------------|--------------------|\n| Normal       | \\(\\frac{1}{\\sigma\\sqrt{2\\pi}}e^{-\\frac{1}{2}\\left(\\frac{x-\\mu}{\\sigma}\\right)^2}\\) | `\\(\\frac{1}{\\sigma\\sqrt{2\\pi}}e^{-\\frac{1}{2}\\left(\\frac{x-\\mu}{\\sigma}\\right)^2}\\)` |\n| Bernoulli    | \\(p^x (1-p)^{1-x}\\)    | `p^x (1-p)^(1-x)`   |\n| Poisson      | \\(\\frac{\\lambda^x e^{-\\lambda}}{x!}\\) | `\\(\\frac{\\lambda^x e^{-\\lambda}}{x!}\\)` |",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 10602682716455684000
+      }
+    ],
+    "created": 1777846736,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 185,
+      "prompt_tokens": 91,
+      "total_tokens": 276,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 4.5541
+}

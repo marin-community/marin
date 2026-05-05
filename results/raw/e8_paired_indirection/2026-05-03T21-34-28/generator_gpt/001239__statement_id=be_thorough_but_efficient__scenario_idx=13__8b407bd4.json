@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:06:37.040205+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 13
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZFNElG5RFiHTC1uSgwnokbSKheD",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "“Thinking, Fast and Slow” in one dense, 10‑minute pass:\n\nKahneman’s core claim is that human judgment is driven by two interacting modes of thought: System 1 (fast, automatic, associative, emotional, effortless) and System 2 (slow, deliberate, rule‑based, effortful, capacity‑limited). System 1 continuously generates impressions, intuitions, and impulses; System 2 monitors and can override them, but is often lazy and endorses System 1’s outputs with minimal scrutiny. Much of what feels like “reasoning” is actually System 2 rationalizing decisions and beliefs produced by System 1.\n\nSystem 1 is efficient and usually accurate in familiar, low‑stakes environments, but prone to systematic biases when handling probability, statistics, and abstraction. It is driven by associative coherence: once it starts building a story, it preferentially seeks confirming details and ignores gaps, producing “What You See Is All There Is” (WYSIATI): we confidently judge on incomplete information because System 1 doesn’t register what it doesn’t know. This underlies overconfidence, narrative fallacies, and our tendency to construct causal explanations from random noise.\n\nAttention is a limited resource; effortful thought literally feels like strain (pupil dilation, fatigue). Tasks that overload working memory (e.g., holding a 7‑digit number) weaken self‑control and make System 2 less likely to intervene, leading to more impulsive choices and susceptibility to bias. Ego depletion research (later questioned in replication studies) suggested that acts of self‑control draw from a common pool of mental resources, making subsequent effortful tasks harder.\n\nHe distinguishes skill (reliable pattern recognition built through prolonged practice in a stable environment with rapid feedback) from mere confidence. Where the environment is noisy, feedback is delayed, or patterns shift, System 1’s intuitive expertise is unreliable, though people still feel confident. Examples: firefighters’ snap judgments can be expert in stable domains; stock pickers’ and political pundits’ confidence is mostly illusion in highly unpredictable domains.\n\nA central theme is heuristics—mental shortcuts that usually work but sometimes systematically misfire. The availability heuristic judges frequency or risk by how easily examples come to mind, leading people to overestimate dramatic, vivid events (plane crashes, terrorism) and underestimate common, less salient ones (heart disease). Media exposure amplifies availability: what we see often, we think is common or important. The affect heuristic uses how we feel (like/dislike) as a stand‑in for complex evaluation, leading us to see favored things as having all benefits and few costs, and disliked things as all costs and no benefits; this explains polarized attitudes to technologies, policies, or public figures.\n\nAnchoring shows that arbitrary reference numbers strongly shape quantitative judgments: asking if the percentage of African countries in the UN is higher or lower than 65 vs. 10 yields different final estimates, even when the anchor is random (e.g., a spun wheel). Two mechanisms operate: an insufficient adjustment from a starting point, and a priming effect where the anchor makes certain ranges cognitively “accessible.” Anchoring affects negotiations, pricing, sentencing, and personal plans (e.g., initial deadlines bias later expectations).\n\nRepresentativeness leads us to judge probability by similarity to a prototype, ignoring base rates and logical constraints. The famous Linda problem shows conjunction fallacy: people rate “Linda is a bank teller and active in the feminist movement” as more likely than “Linda is a bank teller” because the detailed description fits the stereotype of a feminist, even though a conjunction can’t be more probable than one of its parts. Similarly, people expect small samples to “look like” the population and underestimate variation: the law of small numbers means we see patterns and causality in random clusters (e.g., “cancer villages,” hot hand in sports). We undervalue base rates (e.g., how common an occupation is) relative to individuating descriptions, and we over‑trust intuitive profiles, even when they contain little diagnostic information.\n\nSystem 1 loves coherent stories and causal explanations, so it converts incomplete and random data into narratives, then feels overconfident in them. The planning fallacy shows our tendency to underestimate time, cost, and risk while overestimating benefits, even when we know similar projects overrun. “Inside view” focuses on the specific plan and its details; the “outside view” compares to a reference class of similar past cases. Kahneman advocates a reference class forecast: look at outcomes for comparable endeavors, then anchor your forecast on that distribution rather than on your hopeful scenario.\n\nRegression to the mean—extreme performances are usually followed by more average ones—is systematically misunderstood. When a pilot performs brilliantly, next performance usually worsens; when they do terribly, it usually improves, but instructors misattribute this to rewards “failing",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845997,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 72,
+      "total_tokens": 1072,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.9891
+}

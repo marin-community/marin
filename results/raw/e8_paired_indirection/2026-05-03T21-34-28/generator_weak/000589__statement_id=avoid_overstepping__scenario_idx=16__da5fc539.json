@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T21:49:44.921538+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "avoid_overstepping",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohf5Fr2-6Ng1vN-9f627a33cb377834",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```yaml\nname: sample-app\nversion: 2.0\n# environment settings\nenv: prod\n```",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 7354465200756775000
+      }
+    ],
+    "created": 1777844984,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 25,
+      "prompt_tokens": 96,
+      "total_tokens": 121,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 0.4716
+}

@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:22:10.357535+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ignore_untrusted_data",
+    "scenario_idx": 11
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZUSLG4DJ1KFPz46BuSQWZ2hQLwX",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "1. **Security vulnerabilities**  \n   - Embedded text could contain malicious commands (e.g., shell commands, SQL, or unsafe configuration changes).  \n   - Blindly executing it can lead to code injection, data exfiltration, privilege escalation, or full system compromise.\n\n2. **Data integrity and reliability issues**  \n   - Untrusted text might instruct the system to delete, corrupt, or overwrite data, or change critical settings.  \n   - This can break invariants, cause inconsistent state, and make systems unreliable or unusable.\n\n3. **Loss of control and policy violations**  \n   - Following arbitrary embedded instructions can bypass authentication, authorization, business rules, or safety policies.  \n   - Systems might perform actions the designers never intended, violating compliance requirements or user expectations.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846932,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 167,
+      "prompt_tokens": 78,
+      "total_tokens": 245,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 4.7692
+}

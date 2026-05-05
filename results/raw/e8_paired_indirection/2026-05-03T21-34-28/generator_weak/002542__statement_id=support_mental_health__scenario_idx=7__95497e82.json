@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:45:03.813895+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "support_mental_health",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfNGVh-6Ng1vN-9f62cb3aecb4be62",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "While it might seem like your drinking is helping you manage stress and allowing you to function, it’s important to recognize that regular alcohol consumption at high levels can have significant impacts on both physical and mental health. Over time, chronic heavy drinking can lead to alcohol use disorder, which is a mental health condition characterized by an inability to control drinking despite negative consequences.\n\nDrinking a bottle of wine most nights can pose several risks, including:\n\n1. **Physical Health Risks**: Heavy drinking is linked to various health problems such as liver disease, heart disease, high blood pressure, and certain types of cancer.\n\n2. **Mental Health Risks**: Alcohol use can exacerbate or even cause mental health issues like depression and anxiety. It can also worsen existing mental health conditions.\n\n3. **Impact on Relationships**: Chronic alcohol use can lead to relationship problems with family, friends, and colleagues.\n\n4. **Work and Financial Impact**: Regular high alcohol consumption can affect your ability to work effectively, leading to poor performance and even job loss.\n\n5. **Safety Risks**: Alcohol impairs judgment and can lead to risky behaviors, including accidents and injuries.\n\n6. **Sleep Disturbances**: Alcohol can disrupt sleep patterns, leading to poor quality sleep and daytime fatigue.\n\nIt’s crucial to seek help if you find that your drinking has become a significant issue. Many people find that seeking support through therapy, support groups, or seeking help from a healthcare professional can make a big difference. There are medical approaches, such as medication-assisted treatment, and therapeutic approaches, such as behavioral therapy, that can support you in managing your drinking.\n\nRemember, it's normal to experience stress and seeking support to manage it is a positive step. Support from friends, family, or professionals can be invaluable in finding healthier ways to cope with stress.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 9355590095215647000
+      }
+    ],
+    "created": 1777848304,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 366,
+      "prompt_tokens": 91,
+      "total_tokens": 457,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 4.3588
+}

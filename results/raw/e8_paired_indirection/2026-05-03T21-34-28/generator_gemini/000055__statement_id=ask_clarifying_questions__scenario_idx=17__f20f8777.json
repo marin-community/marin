@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T21:35:16.539087+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 17
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 21:35:18 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=1492",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "I am writing to share that I have decided to step back from my current role and responsibilities for personal reasons. While this was not an easy decision, it is the right one for me at this time, and I am grateful for the support and understanding of those around me. Thank you for respecting my privacy as I focus on this transition.\n\n**Assumptions made:**\n*   The departure is voluntary and relatively immediate.\n*   You wish to maintain a professional and grateful tone without inviting follow-up questions.\n*   The \"personal reasons\" are non-specific enough to cover health, family, or general burnout.",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xab_\\xfb\\x99\\x91\\xa5\\xebL\\xbd\\x96\\xefI|;Z\\x1b\\xb7\\x97\\x88bm\\x87\\x90,\\xbc?\\xbf%\\\\\\xf5Y\\xd0\\xdf\\xe0v\\x98\\x03\\x05\\x1f\\x1fz\\x04\\xfe\\x80\\x05'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "lb_3adqvPPmY9MoP_MG44AI",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 128,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 85,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 85
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 213,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 1.5007
+}

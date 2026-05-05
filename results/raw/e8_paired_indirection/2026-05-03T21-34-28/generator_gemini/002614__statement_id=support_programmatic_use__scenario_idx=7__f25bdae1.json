@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:50.934662+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:46:53 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=2551",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "In Rust, **ownership** is the system the language uses to manage memory without a garbage collector. It is governed by three main rules:\n\n1.  **Each value in Rust has an owner.**\n2.  **There can only be one owner at a time.**\n3.  **When the owner goes out of scope, the value is dropped (memory is freed).**\n\nIf you want to use a value without taking ownership, you \"borrow\" it using references (`&`). If you transfer ownership from one variable to another, the original variable becomes invalid; this is called a **Move**.\n\nHere is a short example demonstrating a \"Move\" and a \"Borrow.\"\n\n```rust\nfn main() {\n    // s1 owns the String\n    let s1 = String::from(\"hello\");\n\n    // OWNERSHIP MOVE:\n    // s1 is moved to s2. s1 is now invalid and cannot be used.\n    let s2 = s1; \n    \n    // println!(\"{}\", s1); // This would cause a compile error!\n\n    // BORROWING:\n    // We pass a reference to s2 to the function. \n    // The function borrows the value, but s2 remains the owner.\n    let len = calculate_length(&s2);\n\n    println!(\"The length of '{}' is {}.\", s2, len);\n}\n\nfn calculate_length(s: &String) -> usize {\n    s.len()\n}\n```\n\n### Follow-up Questions:\n1. Does the concept of \"Moving\" make sense, or would you like to see what happens when we use types like integers (which behave differently because they implement the `Copy` trait)?\n2. Would you like to see an example of **Mutable Borrowing**, where you change a value while borrowing it?",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc74@\\x93\\xc6\\x9dc\\xa3[\\xfa\\xec\\xc7\\xb5\\x00\"[C\\x1a\\x9f\\xa9\\xd4\\xd9\\'\\x06U\\xc4\\xc1\\xed\\x86\\x0e\\xe2\\xabB\\xc9g\\xf8\\x1d\\x8bo\\xeb\\xaf\\x08\\x86\\x9a\\xa0P'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "XdD3aavlHIXW_uMP8IWywQ0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 389,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 75,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 75
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 464,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 2.5789
+}

@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:43:23.870509+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "avoid_errors",
+    "scenario_idx": 17
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYstM6LRrbAg0JHcJul6yVK0ZqRV",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Below is a patient‑oriented summary of metformin side effects, organized by how common they are. Percentages are approximate ranges from large clinical studies and post‑marketing data. Exact rates vary between studies, formulations (immediate‑ vs extended‑release), dose, and population.\n\n“Very common” = affects ≥10% of people  \n“Common” = 1–10%  \n“Uncommon” = 0.1–1%  \n“Rare” = 0.01–0.1%  \n“Very rare” = <0.01%  \n“Frequency not known” = cannot be reliably estimated\n\nFigures are rounded and meant for a patient leaflet, not for regulatory labeling.\n\n---\n\n## 1. Very common side effects (≥10%)\n\nThese mainly occur when first starting metformin or after dose increases and often improve over 1–2 weeks, especially with food or using extended‑release tablets.\n\n**Gastrointestinal (GI) symptoms – overall 20–30% (any GI symptom)**  \nTypical ranges in studies:\n- Nausea: ~15–25%  \n- Diarrhea / loose stools: ~10–20%  \n- Abdominal discomfort, cramping or pain: ~10–15%  \n- Loss of appetite (reduced appetite, early fullness): ~5–10%  \n- Indigestion / upset stomach: ~5–10%  \n\n---\n\n## 2. Common side effects (1–10%)\n\n### Gastrointestinal / digestive\n- Vomiting: ~2–5%  \n- Bloating / gas (flatulence): ~2–5%  \n- Constipation: ~1–5%  \n- Heartburn / acid reflux: ~1–5%  \n- Metallic or altered taste in the mouth (dysgeusia): ~2–5%  \n- General feeling of stomach discomfort (dyspepsia): ~2–7%  \n\n### General / systemic\n- Tiredness / fatigue: ~1–5%  \n- Headache: ~1–5%  \n- Dizziness or light‑headedness: ~1–3%  \n\n### Weight\n- Mild weight loss (usually desirable in diabetes; not a “side effect” for most, but sometimes noticed as unintended):  \n  - Average loss ~1–3 kg over several months in many patients.\n\n### Kidney function and fluids\nMetformin itself does not typically damage kidneys directly, but:\n- Slight increases in creatinine / small changes in kidney blood tests: ~1–5%  \n  (Clinically important kidney problems are mainly a concern if kidney function is already reduced or becomes acutely worse from another cause.)\n\n---\n\n## 3. Uncommon side effects (0.1–1%)\n\n### Skin and allergy\n- Skin rash (redness, small bumps, non‑specific): ~0.1–1%  \n- Itching (pruritus): ~0.1–1%  \n- Hives / nettle‑rash (urticaria): ~0.1–1%  \n\nThese are usually mild and reversible if the drug is stopped.\n\n### Nervous system / senses\n- Taste disturbances beyond simple “metallic taste” (strong aversion to certain foods/drinks, changes in sense of taste/smell): ~0.1–1%  \n\n### Blood sugar–related\n- Hypoglycemia (low blood sugar) with metformin alone is **uncommon** (estimated <1%) and usually only occurs:\n  - If meals are skipped or severely delayed  \n  - In combination with other diabetes drugs that cause low sugar (such as insulin or sulfonylureas)  \n  - With heavy alcohol intake or severe calorie restriction  \n\n---\n\n## 4. Rare side effects (0.01–0.1%)\n\n### Vitamin B12 and anemia  \nMetformin can gradually reduce vitamin B12 levels in some people; this is usually a long‑term effect (over years).\n\n- Measurable fall in vitamin B12 level (laboratory finding)  \n  - Seen in up to 5–10% over time, but **symptomatic** deficiency is rarer.  \n- Symptomatic vitamin B12 deficiency (with or without anemia): estimated clearly symptomatic cases are rare (likely <0.1% per year), but cumulative risk increases with:\n  - Several years of use (especially >4–5 years)  \n  - Higher doses  \n  - Vegetarian/vegan diets or existing borderline B12  \n  - Other causes of poor absorption (e.g., pernicious anemia, gastric surgery)\n\nPossible symptoms of B12 deficiency:\n- Tiredness, weakness, pallor  \n- Shortness of breath on exertion  \n- Numbness or tingling in hands or feet  \n- Burning in the tongue, soreness in mouth  \n- Irritability, low mood",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844603,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 67,
+      "total_tokens": 1067,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.8772
+}

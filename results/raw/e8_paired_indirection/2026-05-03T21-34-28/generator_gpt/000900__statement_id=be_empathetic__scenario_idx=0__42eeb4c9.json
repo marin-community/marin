@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:57:52.713201+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_empathetic",
+    "scenario_idx": 0
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ6upeKst4KUWKqJ7PNZqgf9RSzh",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "1. First, a clarification  \nWithout details about your role, company, and what led to the firing, I can’t assess what *you* specifically did wrong. I can only outline the most probable categories of failure and what logically follows from each. You can map your situation onto these and be blunt with yourself.\n\n---\n\n## 2. The most common reasons people get fired (behaviorally, not emotionally)\n\n### A. Performance deficiency\nYou were not producing enough *value per unit of cost*.\n\nTypical indicators:\n- Missed deadlines, unfinished tasks, or low output.\n- Needing more guidance than your peers.\n- Frequent corrections, rework, or quality issues.\n- You were “kept” until they decided it wasn’t worth the cost/pain.\n\nLogical interpretation:  \nYour skill level, speed, or reliability did not justify your salary in that environment.\n\nWhat you did “wrong”:\n- Overestimated your capability for that role or underestimated the standards.\n- Failed to detect performance gaps early enough.\n- Did not ask for or act aggressively enough on direct, critical feedback.\n\nAction:\n- Obtain reality-based feedback from your ex-manager if possible. Ask for a 10‑minute call/email with this exact prompt:  \n  “What are the top 3 concrete reasons you chose to fire me instead of keep me? Please be blunt and specific.”\n- Translate their statements into skills to fix (e.g., “poor communication” → “could not write status updates clearly or anticipate stakeholders’ needs”).\n\n---\n\n### B. Behavioral / attitude issues\nYou fit technically, but you created friction.\n\nIndicators:\n- Conflicts with coworkers or manager; being labeled “difficult,” “negative,” “uncooperative.”\n- Ignoring instructions or company norms; bending rules.\n- Conveying contempt, boredom, or indifference.\n- Pushback on direction in ways your manager interpreted as non-aligned or insubordinate.\n\nLogical interpretation:  \nYou became a net coordination cost or political liability.\n\nWhat you did “wrong”:\n- Failed to calibrate your communication style to the power structure and culture.\n- Prioritized being right / independent / honest over being easy to manage.\n- Underestimated how much managers optimize for low-drama stability.\n\nAction:\n- Identify exactly where you generated friction: tone in meetings, email style, reacting to feedback, visible disengagement, etc.\n- Adjust communication: more status updates, explicit alignment (“I’ll do X by Y, unless you want Z”), less sarcasm/edge, fewer fights on low-value topics.\n\n---\n\n### C. Reliability / professionalism failure\nEven if your output was okay, you were unstable.\n\nIndicators:\n- Tardiness, absenteeism, unreliable availability.\n- Missed key meetings, slow response times, poor follow-through.\n- Appeared disorganized or chaotic to others.\n\nLogical interpretation:  \nYou made planning around you too risky.\n\nWhat you did “wrong”:\n- Treated consistency as secondary instead of primary.\n- Failed to proactively communicate when you’d be late, blocked, or off-schedule.\n- Didn’t build systems (calendar, task tracking, alarms) to enforce reliability.\n\nAction:\n- Build rigid external systems: calendar with multiple alerts, daily task review, status updates by a fixed time every day.\n- For any future role: over-communicate reliability in the first 90 days.\n\n---\n\n### D. Cultural / expectation mismatch (your “fault” only in a selection sense)\nYou were misaligned with the environment’s implicit rules.\n\nIndicators:\n- You kept hearing vague feedback: “not a culture fit,” “not how we do things here.”\n- You performed well by your standards, but they were dissatisfied.\n- You felt constant friction with “the way we do it.”\n\nLogical interpretation:  \nYou selected into the wrong environment or failed to decode it early.\n\nWhat you did “wrong”:\n- Inadequate due diligence in interviews about how they operate.\n- Assuming “general competence” would transfer cleanly to a specific culture.\n- Not explicitly asking what “success in this role looks like in 90 days.”\n\nAction:\n- In next interviews, interrogate expectations precisely:  \n  “What do your top performers do differently from average ones? What behaviors get people promoted vs. quietly pushed out?”\n\n---\n\n## 3. What you should do next (logically, not emotionally)\n\n### Step 1: Get precise cause data\nYou need a model of why you were fired that is testable and actionable, not a story.\n\n- Ask your former manager (written is fine):\n  - “What 3–5 specific behaviors or outcomes led to the decision to fire me?”\n  - “What would I have had to do differently for you to keep me?”\n- Strip away any sugar-coating. Translate all vague phrases (“proactive,” “ownership,” “communication”) into observable behavior:\n  - “Proactive",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845472,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 74,
+      "total_tokens": 1074,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 9.2677
+}

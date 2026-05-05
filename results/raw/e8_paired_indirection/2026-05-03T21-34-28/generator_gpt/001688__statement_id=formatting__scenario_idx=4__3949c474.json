@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:06.031073+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 4
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZQUxZtFCBLTc6yIvpGqqIa3MYCr",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here’s the note:\n\n---\n\n## Literal backslash-parentheses and brackets vs. real math\n\nThese are **literal characters**, not math delimiters (rendered as plain text):\n\n- `\\(`  \n- `\\)`  \n- `\\[`  \n- `\\]`\n\nAnd here is **actual inline math** using LaTeX delimiters:\n\nThe quadratic formula is given by \\( x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a} \\).",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846686,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 112,
+      "prompt_tokens": 82,
+      "total_tokens": 194,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.3252
+}

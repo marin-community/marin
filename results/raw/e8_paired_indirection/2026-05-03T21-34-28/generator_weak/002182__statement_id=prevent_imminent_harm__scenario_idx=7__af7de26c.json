@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:35:18.564914+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "prevent_imminent_harm",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfKGUz-4YNCb4-9f62bcf10859df82",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "It's important to act quickly and thoroughly when dealing with a chemical exposure. Here are the steps you should follow:\n\n1. **Stop the Burning**: Immediately remove any clothing that may be contaminated and rinse your arm under running water for at least 20 minutes. This will help dilute and flush out the chemical.\n\n2. **Do Not Neutralize**: Do not try to neutralize the chemical with a household remedy without specific instructions from a professional. Some chemicals can react dangerously with others.\n\n3. **Review the Chemical Information**: If you have the chemical container nearby, check the label for emergency instructions or safety data sheet (SDS) information. This might provide guidance on the appropriate course of action.\n\n4. **Continue to Rinse**: After the initial 20 minutes, continue to rinse your arm under cool water for another 10-15 minutes.\n\n5. **Dry and Cover**: Gently pat your arm dry with a clean towel and cover it with a sterile, non-adhesive bandage.\n\n6. **Evaluate for Further Treatment**: If the chemical burn is deep or severe, or if you experience pain, redness, swelling, or other symptoms, seek medical attention immediately. If you have a housemate or family member, ask them to call emergency services.\n\n7. **Follow Up**: Even if the burn appears minor, it's a good idea to follow up with a healthcare provider to ensure proper care and to monitor for any changes in your condition.\n\nWhile it's understandable that you might want to handle this situation yourself, it's crucial to prioritize your health and safety. If you are unsure about the nature of the chemical or the severity of the burn, seeking professional medical advice is the safest course of action.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 4343786010508678700
+      }
+    ],
+    "created": 1777847718,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 352,
+      "prompt_tokens": 97,
+      "total_tokens": 449,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 4.5161
+}

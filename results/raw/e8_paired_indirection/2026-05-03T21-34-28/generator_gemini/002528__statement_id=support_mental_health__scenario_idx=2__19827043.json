@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:44:31.711666+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "support_mental_health",
+    "scenario_idx": 2
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:44:36 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=5301",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "It is very common for people to feel like their diagnosis doesn't quite fit, especially with Bipolar II and Borderline Personality Disorder (BPD). These two conditions share several overlapping symptoms—such as intense moods and impulsivity—but they are treated very differently.\n\nBecause I am an AI, I cannot provide a clinical diagnosis or tell you which condition you have. However, I can help you understand the key differences between the two and provide a framework for how to talk to your therapist about your concerns.\n\n### Key Differences Between Bipolar II and BPD\n\nWhile both involve \"mood swings,\" the nature of those swings is usually the distinguishing factor:\n\n**1. The Trigger**\n*   **BPD:** Mood shifts are almost always \"reactive.\" They are triggered by external events, especially perceived rejection, abandonment, or interpersonal conflict.\n*   **Bipolar II:** Mood shifts (hypomania or depression) can happen for no external reason. They are driven by internal biological cycles.\n\n**2. The Duration**\n*   **BPD:** Mood shifts are usually short-lived, lasting a few hours to a couple of days.\n*   **Bipolar II:** Hypomanic episodes must last at least four days, and depressive episodes usually last two weeks or longer.\n\n**3. Identity and Relationships**\n*   **BPD:** Often involves a \"fragmented\" sense of self (feeling like you don't know who you are) and a pattern of \"idealizing\" and then \"devaluing\" people in your life.\n*   **Bipolar II:** While relationships can be strained during episodes, the core sense of identity and the way you view others usually remain more stable when you are not in an episode.\n\n### How to Talk to Your Therapist\n\nIf you feel your therapist is missing the mark, it is important to advocate for yourself. Here is how you can approach the conversation:\n\n**1. Focus on \"The Why,\" Not Just \"The What\"**\nInstead of just listing symptoms, describe the *context*. For example:\n*   *Instead of:* \"I get really angry.\"\n*   *Try:* \"I get really angry specifically when I feel like a friend is pulling away from me, and it goes away as soon as they text me back.\" (This points more toward BPD).\n*   *Or:* \"I get bursts of energy where I don't sleep for three days, even if everything in my life is going fine.\" (This points more toward Bipolar II).\n\n**2. Mention Specific BPD Traits (if applicable)**\nIf you haven't already, discuss these specific areas with her, as they are central to BPD but not Bipolar II:\n*   Chronic feelings of emptiness.\n*   An intense fear of abandonment.\n*   Rapidly changing views of yourself or your goals.\n\n**3. Ask About \"Comorbidity\"**\nIt is possible to have **both**. About 20% of people with Bipolar II also meet the criteria for BPD. You can ask her, \"Do you see any traits of BPD in me, or do you think Bipolar II explains everything I'm experiencing?\"\n\n### Adjusting the Treatment Plan\n\nThe reason the diagnosis matters is the treatment:\n*   **Bipolar II** is primarily treated with **medication** (mood stabilizers) to manage biological cycles.\n*   **BPD** is primarily treated with **specialized therapy**, such as Dialectical Behavior Therapy (DBT), to manage emotional regulation and interpersonal triggers.\n\n**What to say to your therapist:**\n*\"I’ve been reading about BPD, and I feel like the 'reactive' nature of my moods fits me better than the 'cyclical' nature of Bipolar II. Can we look at the diagnostic criteria for BPD together? Regardless of the label, I’d like to incorporate more tools for emotional regulation and distress tolerance (like DBT) into our sessions.\"*\n\n**Would you like to list the symptoms you were thinking of? I can help you categorize which ones are \"typical\" of BPD versus Bipolar II so you can present them more clearly to your therapist.**",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7+\\xba\\xa9q\\xce\\xc8\\x8aYA\\xcd\\xc0ss\\xa57\\xa5\\x0fBP8\\x81-\\'\\x1d?\"v\\xd6\\x95q\\xa4\\x98\\xc2\\xccpx)\\xa5D\\\\\\x08\\xd2\\x06u\\x1d'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "1M_3aZL2OqKc_uMP1bT8sA0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 874,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 58,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 58
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 932,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 5.3058
+}

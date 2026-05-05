@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:35.272077+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 3
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:46:40 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=4887",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "Quicksort is one of the most efficient and widely used sorting algorithms. It is a **divide-and-conquer** algorithm, meaning it breaks a large problem into smaller sub-problems, solves them, and combines the results.\n\n### How Quicksort Works\n\nThe algorithm follows three main steps:\n\n1.  **Pick a Pivot:** Choose an element from the array (this is the \"pivot\"). You can pick the first element, the last, the middle, or even a random one.\n2.  **Partitioning:** Rearrange the array so that all elements **smaller** than the pivot are moved to its left, and all elements **larger** than the pivot are moved to its right. After this step, the pivot is in its final sorted position.\n3.  **Recursion:** Apply the same two steps above to the sub-array of smaller elements and the sub-array of larger elements.\n\nThe \"base case\" for the recursion is an array with zero or one element, which is already sorted by definition.\n\n---\n\n### JavaScript Implementation\n\nThere are two common ways to write Quicksort. Below is the **Simple/Functional** version. It is very readable and easy to understand, though it uses extra memory to create sub-arrays.\n\n```javascript\n/**\n * Sorts an array using the Quicksort algorithm.\n * @param {number[]} arr - The array to be sorted.\n * @returns {number[]} - The sorted array.\n */\nfunction quicksort(arr) {\n  // Base case: arrays with 0 or 1 elements are already sorted\n  if (arr.length <= 1) {\n    return arr;\n  }\n\n  // Choosing the middle element as the pivot\n  const pivotIndex = Math.floor(arr.length / 2);\n  const pivot = arr[pivotIndex];\n\n  // Arrays to hold elements partitioned around the pivot\n  const left = [];\n  const right = [];\n  const equal = [];\n\n  for (let element of arr) {\n    if (element < pivot) {\n      left.push(element);\n    } else if (element > pivot) {\n      right.push(element);\n    } else {\n      equal.push(element);\n    }\n  }\n\n  // Recursively sort the left and right, then combine with equal elements\n  return [...quicksort(left), ...equal, ...quicksort(right)];\n}\n\n// Example usage:\nconst unsortedArray = [34, 7, 23, 32, 5, 62];\nconst sortedArray = quicksort(unsortedArray);\nconsole.log(sortedArray); // [5, 7, 23, 32, 34, 62]\n```\n\n### Key Considerations\n\n*   **Time Complexity:** On average, Quicksort is $O(n \\log n)$. In the absolute worst case (e.g., the pivot is always the smallest or largest element in a pre-sorted array), it can degrade to $O(n^2)$.\n*   **Space Complexity:** The version above uses $O(n)$ extra space because it creates new arrays. In production-grade systems, Quicksort is often implemented **\"in-place\"** to achieve $O(\\log n)$ space complexity, which involves swapping elements within the original array rather than creating new ones.\n\n---\n\n### Clarifying Questions for You\n\nSince you mentioned you might feed this into another tool later, I have two questions to ensure this fits your needs:\n\n1.  **Performance vs. Readability:** Do you need an **\"In-Place\"** implementation? It is more memory-efficient but significantly more complex to read and write.\n2.  **Stability:** Are you sorting objects or just numbers? Quicksort is generally **not stable** (meaning it might change the relative order of elements with equal values). If you need a stable sort, a different algorithm like Mergesort might be better. \n\nAre you familiar with the concept of **Big O Notation** or **Recursion**, or would you like a deeper dive into those first?",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7N\\x98\\x90|?\\x1d[[\\x89T\\xe6\\x17\\x18\\x06\\xd8\\x16e\\xc5\\xa7\\xa92c>~Zzr8X\\x9b\\xec\\xf7\\x0c\\xcc\\xe6\\x89*I\\x84Z\\xeaj\\xa13\\x85'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "UND3afHrBtq2_uMP3da6iQk",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 892,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 81,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 81
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 973,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 4.8929
+}

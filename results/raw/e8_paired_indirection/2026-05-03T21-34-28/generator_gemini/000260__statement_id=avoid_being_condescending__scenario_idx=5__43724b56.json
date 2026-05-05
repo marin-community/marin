@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T21:40:59.153411+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 5
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 21:41:05 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=6174",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "Since you’re a senior engineer, let’s skip the \"how-to\" and go straight to the **systematic failure patterns** and **memory model invariants** where these bugs actually hide in Go.\n\nIf you’re stuck, it’s likely not a syntax error, but a race condition, a leak, or a subtle violation of Go’s memory model. Let’s walk through the diagnostic stack I’d use to triage this.\n\n### 1. The Loop-Iterator Trap (Post-Go 1.22 context)\nFirst, verify your Go version. If you are on **1.21 or older**, check for the classic \"reference to loop variable\" in a closure. \n*   **The Trap:** Passing `&val` or using `val` inside a goroutine without shadowing it (`val := val`).\n*   **The Nuance:** Even if you aren't using the variable directly, are you using it in a **map key** or a **slice index** that gets passed by reference?\n*   *Note: If you’re on 1.22+, this is likely not it, as loop variables are now per-iteration scoped.*\n\n### 2. The \"Half-Open\" Channel Shutdown\nIf you have a deadlocked system or a \"sending on closed channel\" panic, check the lifecycle of your `done` channels.\n*   **The Reasoning:** In Go, the sender should own the channel. But in complex fan-in/fan-out, ownership gets murky.\n*   **The Diagnostic:** Are you using a `sync.WaitGroup` and a `close(done)`? If a worker finishes late and tries to send to a channel that the supervisor just closed because the `context` expired, you panic. \n*   **The Fix Path:** Usually requires a `select` with a `default` or a `return` on the context signal *before* the send.\n\n### 3. Shallow Copies of `sync.Mutex`\nThis is a silent killer in refactoring.\n*   **The Scenario:** You have a `struct` that contains a `sync.Mutex`. You pass that struct by value to a function or assign it to a new variable.\n*   **The Result:** You’ve just copied the state of the mutex (locked/unlocked). If you copy a locked mutex, the new copy is also locked, but the original `Unlock()` won’t affect the copy.\n*   **Check:** Run `go vet`. It’s surprisingly good at catching \"copies lock value\" errors that the compiler ignores.\n\n### 4. Interface Nil-ness in Concurrency\nIf you’re seeing a `nil pointer dereference` but the object looks initialized:\n*   **The Nuance:** An interface is a tuple `(type, value)`. If you return a concrete pointer that is `nil` into an interface return type, the interface itself is **not** nil.\n*   **The Race:** If one goroutine is initializing a pointer and another is checking `if interface != nil`, the second might pass the check and then crash when calling a method because the *underlying* value is nil.\n\n### 5. Memory Aliasing in Slices\nAre you using `append` on a slice that is shared between goroutines?\n*   **The Logic:** `append` might return a new underlying array if the capacity is reached. \n*   **The Bug:** Goroutine A appends and gets a new pointer. Goroutine B is still looking at the old pointer. Now you have a split-brain state where half your workers are updating a stale array.\n*   **Requirement:** If a slice is shared, it *must* be protected by a Mutex or handled via channel communication—never raw appends.\n\n### 6. The \"Stop Timer\" Race\nIf you're using `time.Timer`:\n*   **The Trap:** Calling `t.Stop()` doesn't drain the channel. \n*   **The Bug:** If the timer fired exactly when you called stop, the value is still in `t.C`. If you don't drain it, your next `select` will trigger immediately on stale data.\n\n---\n\n### How to debug this right now:\n\n1.  **The Race Detector:** I assume you’ve run `go test -race ./...`. If it’s a production-only bug, can you deploy a canary build with `-race` enabled? (Warning: 10x memory overhead).\n2.  **Goroutine Dump:** Send a `SIGQUIT` to the process. Analyze the stack trace. Look for \"gopark\" (",
+              "thought": null,
+              "thought_signature": "b\"\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\x1d\\xe2G\\x16,y\\xacx\\x06h\\x9at\\x1e\\xd0\\xde\\x17A\\x1c\\xc6b#\\xed\\x7f\\x06bJ5\\x16`\\\\\\xe1[\\xb2\\x1e'\\x1b\\xe4\\xcf\\xa4+I>z\\xdbS\"",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "MAX_TOKENS",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "8cD3adbsEMmD1MkPl8qmoQM",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 996,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 79,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 79
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 1075,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 6.1792
+}

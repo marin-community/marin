@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:44.290003+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 13
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:02:46 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=2573",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "I’m ready to dive in. To give you the best feedback, I need you to **paste the text of your resume below** (you can anonymize your name, phone number, and company names if you prefer).\n\nWhile you’re getting that ready, here is exactly how I’m going to look at it:\n\n1.  **The \"So What?\" Test:** I’ll look at your bullet points to see if they are just a list of chores or if they actually show the impact you had. If a line feels like a job description instead of an achievement, I’ll tell you it’s weak.\n2.  **The Buzzword Filter:** If you’re using terms like \"passionate storyteller,\" \"synergistic leader,\" or \"outside-the-box thinker,\" I’m going to call it out for being a bit cheesy. We want to show, not tell.\n3.  **The Formatting Flow:** I’ll let you know if the layout is too dense or if you’re burying your best stuff at the bottom. Recruiters spend about six seconds on a first pass; if I can’t find your value in that time, we need to move things around.\n4.  **Skill Relevance:** If you’re listing \"Microsoft Word\" in 2024 or including skills that have nothing to do with the roles you’re targeting, I’ll suggest cutting the fluff.\n\n**Go ahead and paste it. Also, let me know what kind of roles you’re aiming for so I can tell you if you’re hitting the right notes for that specific niche.**",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xdc\\xa01\\xfd\\xf9\\x14\\t{\\x1d\\xd7\\xf3R\\xa7\\xfa[\\xb3\\xc2\\xb8\\x9b\\xbf\\\\\\x90\\xa3\\x1a\\xdd\\xc0\\x9b\\r\\xef\\x1d\\xdd\\xc2\\xbb\\\\\\x14\\xaa\\x96\\xe7\\x02\\x91\\xbe\\xda^\\xf1\\xff'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "Bsb3aZyAMtG9_uMPnbiKwAk",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 341,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 65,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 65
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 406,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 2.5787
+}

@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:19:00.447329+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZRMxf4m2PikPfTi9jk5f4xFALfh",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```markdown\nHere is some text that you can copy directly into a LaTeX document.\n\nThis line contains an inline math expression using LaTeX-style delimiters: \\( a^2 + b^2 = c^2 \\).\n\nYou can also include LaTeX environments, for example:\n\n\\[\n\\int_0^1 x^2 \\, dx = \\frac{1}{3}\n\\]\n\nAnd some markdown-style headings (which will appear as literal text here):\n\n# Heading Level 1\n## Heading Level 2\n### Heading Level 3\n\nBullet list:\n\n- Item 1\n- Item 2\n- Item 3\n\nNumbered list:\n\n1. First\n2. Second\n3. Third\n```",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846740,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 160,
+      "prompt_tokens": 76,
+      "total_tokens": 236,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.4046
+}

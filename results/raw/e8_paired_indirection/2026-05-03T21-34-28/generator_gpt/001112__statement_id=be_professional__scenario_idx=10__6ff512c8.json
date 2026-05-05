@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:24.841195+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 10
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZBI8I6KCyI2W7kDLbXhv8AO3Sb4",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Understood. I’ll be direct, practical, and not dress things up.\n\nTo evaluate whether you should quit, I need some specifics:\n\n1. Your situation now  \n   - What’s your role, industry, and pay (ballpark is fine)?  \n   - How many hours do you actually work per week, and how burned out are you (0–10)?  \n   - Main problems: pay, manager, coworkers, workload, values mismatch, boredom, lack of growth, something else?\n\n2. Your alternatives  \n   - Do you already have an offer, or would you be quitting to search?  \n   - How long could you live with no income?  \n   - What’s your realistic plan: new job in same field, career change, school, a break?\n\n3. Constraints  \n   - Debt, dependents, major expenses (rent, mortgage, medical, etc.)?  \n   - Any visa or legal status tied to this job?\n\n4. Time horizon  \n   - How long have you felt like quitting?  \n   - Is this a bad month, or has it been bad for a year+?\n\nOnce you share that, I’ll walk through:  \n- Reasons to stay (short-term stability, money, resume/experience, visa, etc.)  \n- Reasons to leave (health, stalled growth, toxicity, long-term damage)  \n- Whether I think you should quit soon, stay and set a deadline, or endure while you quietly line up an exit.\n\nFor now, here are the blunt tradeoffs in general, so you know how I’m thinking:\n\n**Quitting soon (with or without something lined up) – Pros:**\n- You stop the damage: less stress, less burnout, less resentment.\n- You reclaim time and mental energy for job search, learning, or rest.\n- You avoid getting more stuck in a role or company that isn’t going anywhere.\n- You send a clear signal to yourself that your time and health matter.\n\n**Quitting soon – Cons:**\n- Income risk: you might run out of money faster than you expect.\n- Job search might take longer than you think, especially if your field is tight or your skills are niche/outdated.\n- Resume gaps still raise questions; you can manage them, but they exist.\n- More pressure: searching while unemployed can feel desperate, which can push you to accept another bad job.\n\n**Staying while you plan an exit – Pros:**\n- You keep income and benefits while you quietly hunt for something better.\n- You can be picky with offers instead of grabbing the first thing.\n- Reduced financial anxiety means clearer decisions.\n- You can extract maximum value from the current job: skills, projects, references.\n\n**Staying – Cons:**\n- Ongoing stress and burnout; things rarely “magically get better.”\n- You may normalize a bad situation and waste more years.\n- Your performance can slide as your motivation dies, which can hurt your reputation.\n- If it’s toxic (bullying, harassment, unethical behavior), staying can wreck your mental health.\n\n**Blunt rule of thumb:**\n- If the job is actively harming your health or ethics, and you can afford to leave for 3–6 months, quitting sooner is often the rational move.  \n- If it’s just mediocre, boring, or mildly toxic, but you need the money, stay and treat it as a paid waiting room while you aggressively look for something better.  \n- If you have zero plan, zero savings, and dependents, quitting with nothing lined up is usually a bad idea unless the situation is genuinely unsafe.\n\nReply with the details above, and I’ll tell you plainly which bucket you’re in and what I’d do if I were in your shoes.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845744,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 768,
+      "prompt_tokens": 67,
+      "total_tokens": 835,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 8.2917
+}

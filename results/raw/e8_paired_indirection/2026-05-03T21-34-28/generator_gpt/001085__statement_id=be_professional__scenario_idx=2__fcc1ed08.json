@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:00.471926+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 2
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZAukb7xkAYhcAOliiT19FspsfR2",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Oof. Hospital day from hell, huh? Pull up a metaphorical chair, I brought you an imaginary glass of water and five gallons of emotional support.\n\nWhat happened today? Was it the patients, the families, the never-ending call lights, the understaffing, or that one coworker who breathes like they’re personally offended by oxygen?\n\nNursing is such a weird combo of:\n- “You’re an angel sent by God”\nand\n- “Also we will understaff you, emotionally drain you, and feed you cold coffee and trauma.”\n\n### On burnout (aka: the slow roast of your soul)\n\nBurnout isn’t just “I’m tired.” It’s:\n- **Emotional exhaustion** – where even a *normal* request feels like someone asked you to lift the hospital.\n- **Cynicism / dark humor overload** – when you find yourself saying “love that for me” while charting for the 47th time on the same thing.\n- **Feeling ineffective** – like no matter how hard you work, someone’s still circling your name in red on some audit.\n\nAnd none of that means you’re weak. It usually means:\n- You care a lot.\n- The system is garbage.\n- You’ve been running on “I’ll just power through” for way too long.\n\n### Some perspective (not the toxic positivity kind)\n\nA few truths you probably need reminded of:\n\n1. **This system would chew up a robot, let alone a human.**  \n   So the fact that you’re exhausted doesn’t mean you’re failing; it means you’re *appropriately reacting to ongoing nonsense.*\n\n2. **You can love nursing and hate your shift / unit / management at the same time.**  \n   Those feelings can coexist. Wanting a break doesn’t mean you’re “not a real nurse” or “not strong enough.”\n\n3. **Compassion fatigue is real, not drama.**  \n   Your brain literally gets worn down from absorbing other people’s pain + trying to be functional + remembering to chart “patient tolerated well” while your soul did not.\n\n4. **You’re allowed to want an actual life outside the hospital.**  \n   The “healthcare is a calling” line gets used a lot to justify abusing staff. You being a human with limits doesn’t make you less dedicated.\n\n### Tiny things that actually help (annoyingly, but they do)\n\nNo “just do yoga” garbage, but:\n\n- **Decompression ritual after shift.**  \n  Something consistent that signals: “We are no longer Nurse Mode.”  \n  - Ridiculously hot shower  \n  - Change clothes immediately when you get home  \n  - Music on the drive that matches your mood (scream music or sad music both acceptable)\n\n- **One small boundary at work.**  \n  Not fixing the whole system, just:\n  - Saying “I can do X or Y, but not both safely—what’s the priority?” to the charge  \n  - Not staying late *every* time unless it’s truly unsafe to leave  \n  - Actually taking 5 minutes to eat something that isn’t caffeine and despair\n\n- **Letting yourself feel pissed / sad without editing it.**  \n  Venting is not unprofessional. You can be that nurse who cries in their car for ten minutes and then checks TikTok. That’s fine. That’s processing, not failing.\n\n- **Micro-joys that have nothing to do with caregiving.**  \n  Stuff that’s just for you:\n  - Trashy TV  \n  - A game, hobby, or craft that doesn’t involve being “useful”  \n  - Texting someone stupid memes mid-shift on your break\n\n### Longer-term stuff (the “I know you’re tired, but read this anyway” part)\n\nIf this level of exhaustion is the norm, not the exception, it might be time to:\n- Look at **different shifts, units, or roles** – same license, less soul-sucking.  \n- Plan a **real break or vacation**, even a small one. Your brain needs to know there’s an off-ramp coming.  \n- Talk to a **therapist who gets healthcare workers**. Not to fix you, but to help put the mess somewhere that isn’t your nervous system.\n\nWanting out of the situation sometimes doesn’t automatically mean you actually want out of nursing. It might just mean, “I can’t keep doing it *like this*.”\n\n---\n\nAnyway, talk to me:  \nWhat specifically wrecked you today? A particular patient? A code? Short-staffing circus? Admin doing admin things? Let me be appropriately outraged with you.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845720,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 968,
+      "prompt_tokens": 62,
+      "total_tokens": 1030,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 9.5422
+}

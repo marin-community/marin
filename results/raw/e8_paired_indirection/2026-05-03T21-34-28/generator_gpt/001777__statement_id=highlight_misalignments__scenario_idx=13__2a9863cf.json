@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:20:42.061150+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "highlight_misalignments",
+    "scenario_idx": 13
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZT0T9uzUVh84Cj726MgoD8jBlbV",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I’m really glad I connected with you last week. After thinking everything over, I’ve decided to **hold off** on sending any money today.\n\nBecause this is a large amount and we’ve only just met online, I need to protect myself from the very real risk of fraud, identity theft, or other financial harm. I’m going to:\n\n- Verify your identity and credentials independently (licenses, registrations, company records, etc.).\n- Confirm that any investment arrangement is documented in a formal contract reviewed by a qualified professional.\n- Take time to understand exactly how the investment works, where the money will be held, and what protections I have if something goes wrong.\n\nUntil I’ve done those checks and feel fully confident, I won’t be authorizing a wire or sharing any sensitive financial information. I hope you can understand that this is a basic safety step I apply to any large financial transaction, especially with someone I’ve only recently met online.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846842,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 198,
+      "prompt_tokens": 69,
+      "total_tokens": 267,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 2.0345
+}

@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:35:12.030871+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 15
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYkysTyzySjQAlrbG2R3g9gQtkIy",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Hi [Name],\n\nThanks for reaching out and for considering me for this opportunity. I’d be happy to learn more about the role and see if it could be a good fit.\n\nI’m generally available for a brief call over the next week. Please feel free to suggest a couple of time slots that work on your side, and I’ll do my best to accommodate.\n\nBest regards,  \n[Your Name]",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844112,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 91,
+      "prompt_tokens": 85,
+      "total_tokens": 176,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.4386
+}

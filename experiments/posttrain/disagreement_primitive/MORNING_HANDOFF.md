@@ -1,5 +1,50 @@
 # Morning handoff — 2026-04-30 autonomous shift
 
+> **2026-04-30 follow-up: spec_ambiguity split into 3 sub-labels.**
+> Per Ahmed: the `spec_ambiguity` umbrella was always under-decomposed.
+> Replaced (top-level, scenario-level) with **three orthogonal labels**,
+> each mapped to a different patch family in the LM compiler prompt:
+> - `compliance_ambiguity` — compliance score spread >=3pt on best
+>   response. Judges read GOOD/BAD wording differently. Patch family:
+>   `edit_statement_text`, `add_example`.
+> - `activation_ambiguity` — judges agree on score but disagree on
+>   which active statement should control. The pair is fixed by
+>   construction and both statements are known to apply, so this is
+>   NOT a scope question — it's the spec being silent on the
+>   resolution between two known-active statements. Patch family:
+>   `add_dominance_rule`, `add_cross_tension_rubric`, `add_exception`.
+>   (Originally misnamed `scope_ambiguity`; renamed 2026-04-30 23:30 UTC
+>   per Ahmed: "ACTIVATION IS NEVER A PROBLEM we always know what spec
+>   statement we're testing" — the disagreement is about resolution,
+>   not scope. The Codex plan's `activation disagreement` measurement
+>   variable name is unchanged; only the *label* was renamed.)
+> - `inherent_subtlety` — pair calibration gap <5pt. Rubric can't
+>   discriminate aligned from misaligned even when judges agree (mostly
+>   tone/style modifiers). Patch family: `add_cross_tension_rubric`,
+>   `needs_human_decision`.
+>
+> Files touched:
+> - `schemas.py` — added the 3 labels to `DisagreementLabel` Literal;
+>   `spec_ambiguity` kept for back-compat reads.
+> - `analyze_disagreement_primitive.py` — `label_scenario` splits the
+>   former branch into the 3 sub-labels; new `--calibration-probe` arg
+>   loads `calibration_probe_v2.jsonl` to detect `inherent_subtlety`.
+>   Renderer adds 3 separate sections + per-pair calibration_gap column.
+> - `propose_spec_repairs.py` — system prompt teaches the compiler the
+>   label → patch-family map (with explicit "activation_ambiguity is
+>   not a scope question" note); default `--labels` updated to include
+>   the 3 new ones plus `spec_ambiguity` and `scope_ambiguity` as
+>   legacy fallbacks.
+>
+> **To re-emit labels under the new scheme on the existing autonomous
+> shift data**: `uv run python experiments/posttrain/disagreement_primitive/analyze_disagreement_primitive.py
+> --judge-scores .../judge_panel_score_grounded.jsonl`. No new API
+> calls — pure offline analysis. The 9 existing `spec_ambiguity` cases
+> from `oracle_satisfiability_report_grounded.md` will redistribute
+> across the 3 new labels.
+
+
+
 **Authorized by Ahmed at 08:30 UTC.** Spent the night running through the disagreement-primitive pipeline at depth: built per-pair rubrics, re-judged Phase 4 with grounding, measured judge reproducibility and anchoring drift, generated repair proposals + simulated edit impact, ran calibration probe v2, and exercised stretch goals. Logbook entries every step.
 
 ## TL;DR — decisions for Ahmed

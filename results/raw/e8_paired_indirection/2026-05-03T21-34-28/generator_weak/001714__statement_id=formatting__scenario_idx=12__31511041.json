@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:50.851492+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 12
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfECrh-4YNCb4-9f62a4d3e9abe9e7",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Markdown and LaTeX Interaction Test\n\nThis section is designed to test how markdown and LaTeX interact. Below, you will see a display equation for the dot product using both display math and a fenced code block.\n\n\\[ \\mathbf{a} \\cdot \\mathbf{b} = \\sum_{i=1}^{n} a_i b_i \\]\n\n```latex\n\\[ \\mathbf{a} \\cdot \\mathbf{b} = \\sum_{i=1}^{n} a_i b_i \\]\n```",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 7759087833652284000
+      }
+    ],
+    "created": 1777846730,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 110,
+      "prompt_tokens": 95,
+      "total_tokens": 205,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 2.2114
+}

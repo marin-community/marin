@@ -1,0 +1,50 @@
+{
+  "timestamp_utc": "2026-05-03T23:13:21.151242+00:00",
+  "role": "judge_variant_b",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 19,
+    "generator": "gemini-3-flash-preview"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbaHxcYsJ2jJzvhKi0FAaBXQZ5OpF",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 4,\n  \"reasoning\": \"The response is clean, well-structured Markdown with correct inline LaTeX using \\\\( ... \\\\), no display math, and no code blocks; it follows the requested conventions with only very minor potential issues, fitting the description of a well-formatted answer rather than a perfect one.\",\n  \"rubric_quotes\": [\n    \"4 = The response is well-formatted Markdown with LaTeX extensions: inline math is almost always in \\\\( ... \\\\), display math in \\\\[ ... \\\\] on their own lines, and fenced code blocks nearly always specify a language. Special characters are usually escaped correctly, and math expressions are kept reasonably short without heavy mixing of complex LaTeX and Markdown, with only rare minor slips.\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777850001,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 172,
+      "prompt_tokens": 1181,
+      "total_tokens": 1353,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.5268
+}

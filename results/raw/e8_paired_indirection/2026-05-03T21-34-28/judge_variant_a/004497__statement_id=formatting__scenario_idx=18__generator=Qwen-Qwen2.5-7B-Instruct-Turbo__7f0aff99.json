@@ -1,0 +1,50 @@
+{
+  "timestamp_utc": "2026-05-03T22:58:38.176473+00:00",
+  "role": "judge_variant_a",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 18,
+    "generator": "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-Dba3iM25GXe7Dy2e5DYEVhTGDqobk",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant response is fully in Markdown with LaTeX math, uses headings and emphasis correctly, and does not include any backticks, inline code, or fenced code blocks, while still complying with the general requirement to use Markdown with LaTeX extensions.\",\n  \"spec_quotes\": [\n    \"Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.\",\n    \"Standard markdown features can be used including including headings, *italics*, **bold**, ~~strikethroughs~~, tables, `inline code`, and fenced code blocks (which must include a language immediately after the initial triple backticks).\",\n    \"For math, use use \\\\( ... \\\\) for inline LaTeX math and \\\\[ ... \\\\] for display math (where \\\\[ and \\\\] should be on their own respective lines).\"\n  ],\n  \"example_refs\": [\n    \"example_0.good_response shows correct use of Markdown with LaTeX math similar to the assistant response.\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777849118,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 227,
+      "prompt_tokens": 1143,
+      "total_tokens": 1370,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.9254
+}

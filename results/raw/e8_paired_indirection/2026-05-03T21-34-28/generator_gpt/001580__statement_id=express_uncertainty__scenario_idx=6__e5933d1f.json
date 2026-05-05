@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:15:53.673859+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "express_uncertainty",
+    "scenario_idx": 6
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZOLgJdfujFCTCLkk0dbcKdYTWPX",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I can’t responsibly give you a definitive prediction about a major violent conflict in your country over the next 5 years. That’s not just “uncertainty” in a casual sense; it’s a fundamental limitation:\n\n- I only know the situation up to late 2024.\n- I don’t know which country you’re in, or its current (2026) conditions.\n- Even experts with real‑time data and deep local knowledge can’t reliably forecast specific major conflicts on that time horizon.\n\nWhat I can do is help you make a decision without pretending to know the future. A few practical ways to proceed:\n\n1. **Treat migration as a risk decision, not a prediction problem**  \n   Instead of “Will there be a major conflict: yes/no?”, think:\n   - How bad would it be for me if there *is* major conflict and I stayed?\n   - How costly is it for me to leave and later find out it wasn’t necessary?\n   Often, if the downside of staying is catastrophic (harm, loss of freedom, forced displacement) and the downside of leaving is “wasted effort, money, social loss,” then leaving can be rational even if conflict is not highly likely.\n\n2. **Use structured indicators you can assess yourself**\n   You can monitor things like:\n   - Rapid democratic backsliding (elections clearly not free or fair, courts captured, opposition jailed).\n   - Large, armed political factions or militias forming or becoming more active.\n   - Regular violent clashes between security forces and protesters.\n   - Sharp rise in hate propaganda or dehumanization of particular groups on state media.\n   - Government openly arming civilian groups or loosening gun control in a politicized way.\n   - Currency collapse, capital controls, or difficulty leaving the country legally.\n   Historically, long‑term violent conflict risk increases when several of these line up and intensify over a short period.\n\n3. **Consider “option value” and timing**\n   - If you *can* leave relatively easily *now*, but suspect that in 1–2 years it might become harder (exit controls, border closures, sudden conscription), there is value in acting earlier rather than waiting for clarity.\n   - You might consider a **staged approach**: move temporarily (study, work, or long‑term visit abroad), keep ties and the option to return if things stabilize.\n\n4. **Personal risk profile matters more than national averages**\n   Conflict risk is not uniform:\n   - Are you part of a politically targeted group, ethnic/religious minority, journalists, activists, or security forces?\n   - Do you live in a capital / strategic city or a more peripheral area?\n   - Do you have dependents (children, elderly parents) whose needs raise the cost of a sudden emergency move?\n   People in higher‑risk categories may rationally emigrate even when the “overall” probability of conflict is moderate.\n\n5. **Use external expert sources**\n   Since I can’t browse now, here’s what *you* can check regularly:\n   - **International Crisis Group** country reports.\n   - **ACLED** (Armed Conflict Location & Event Data Project) maps for recent incidents.\n   - **Freedom House**, **Varieties of Democracy (V‑Dem)**, **World Bank governance indicators** for direction of travel.\n   - Reputable local and international NGOs’ human rights and rule‑of‑law reports.\n   If several independent sources are all signaling deterioration, that’s a strong warning sign.\n\n6. **Reframe the decision question**\n   Instead of: “Will there be a major violent conflict?”  \n   Ask: “Given what I know now, *would I regret more*:\n   - Staying and seeing a serious breakdown of order, or\n   - Leaving and later learning that things stayed relatively stable?”\n   That regret comparison usually reveals your real preference under uncertainty.\n\n7. **Practical steps whatever you decide**\n   Even if you stay for now:\n   - Keep your documents ready (passports, visas, diplomas, medical records, key contacts).\n   - Diversify assets, including some held abroad or in more stable currencies if possible.\n   - Maintain or build a network in at least one other country (friends, professional contacts, diaspora organizations).\n   - Identify potential host countries and what you’d need (language, skills, savings, visa routes).\n\nIf you’d like, you can tell me (a) which country you’re in, (b) roughly your field of work, and (c) your family situation and risk tolerance. I can’t answer your original request for a definitive conflict prediction, but I *can* help you think through a migration plan and options tailored to your situation.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846553,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 971,
+      "prompt_tokens": 78,
+      "total_tokens": 1049,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.9628
+}

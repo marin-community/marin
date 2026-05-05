@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:17:52.117771+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 0
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZQGgQmT5xsst3750GILsytwjRIl",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "The binomial theorem is a rule for expanding powers of an expression that has two terms added or subtracted, like “a plus b” raised to a power n.\n\nFirst, the basic idea:\n\nIf you take the expression “a plus b” and multiply it by itself many times, for example:\n\n“a plus b” times “a plus b” times “a plus b” and so on, a total of n factors,\n\nthe binomial theorem tells you exactly what the expanded sum looks like, without actually doing all the multiplication step by step.\n\nThe pattern for small powers:\n\n1) Power one:\n“a plus b” to the power one is just “a plus b”.\n\n2) Power two:\n“a plus b” squared expands to:\na squared plus 2 times a times b plus b squared.\n\n3) Power three:\n“a plus b” cubed expands to:\na cubed plus 3 times a squared times b plus 3 times a times b squared plus b cubed.\n\n4) Power four:\n“a plus b” to the fourth power expands to:\na to the fourth power\nplus 4 times a cubed times b\nplus 6 times a squared times b squared\nplus 4 times a times b cubed\nplus b to the fourth power.\n\nYou can see three key patterns emerging:\n\n1) The powers of a start at n and go down to zero: a to the n, then a to the n minus one, and so on, ending with a to the zero.\n2) The powers of b start at zero and go up to n: b to the zero, then b to the one, and so on, ending with b to the n.\n3) The numerical coefficients (like 1, 3, 3, 1 or 1, 4, 6, 4, 1) follow rows of Pascal’s triangle.\n\nPascal’s triangle connection:\n\nPascal’s triangle is formed by starting with a single 1 at the top. Each new row starts and ends with 1, and every interior entry is the sum of the two entries above it from the previous row.\n\nRow zero:                     1  \nRow one:                   1     1  \nRow two:                 1     2     1  \nRow three:              1     3     3     1  \nRow four:            1     4     6     4     1  \nRow five:          1     5    10    10     5     1  \nand so on.\n\nRow n (starting the count at zero) gives the coefficients for “a plus b” to the power n. For example, row three has 1, 3, 3, 1, which match the coefficients of a cubed, a squared times b, a times b squared, and b cubed in the expansion of “a plus b” cubed.\n\nBinomial coefficients:\n\nEach number in Pascal’s triangle is called a binomial coefficient. It is usually written as “n choose k” and pronounced “n choose k”. This is the number of ways to choose k items from a group of n items, ignoring order.\n\nYou do not need the symbolic formula, but conceptually:\n\n- “n choose zero” is 1, because there is exactly one way to choose nothing.\n- “n choose n” is 1, because there is exactly one way to choose all items.\n- “n choose one” is n, because there are n different single items you could choose.\n- In between, “n choose k” counts the number of distinct subsets of size k.\n\nHow the theorem is usually stated in words:\n\nTo expand “a plus b” raised to the power n, you do the following:\n\n1) Consider all integers k from zero up to n.\n2) For each k, form a term that is:\n   “n choose k” times a raised to the power n minus k times b raised to the power k.\n3) Add up all those terms.\n\nSo the expansion is the sum of these terms:\n\n- For k equals zero: “n choose zero” times a to the n times b to the zero.\n- For k equals one: “n choose one” times a to the n minus one times b to the one.\n- For k equals two: “n choose two” times a to the n minus two times b to the two.\n- …\n- For k equals n: “n choose n” times a to the zero times b to the n.\n\nSince “n choose zero” and “n choose n” are both 1, those outermost terms do not need coefficients other than 1.\n\nWhy this makes sense:\n\nThink of multiplying “a plus b” by itself n times. Each factor “",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846672,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 77,
+      "total_tokens": 1077,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 5.8683
+}

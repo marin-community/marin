@@ -1,0 +1,50 @@
+{
+  "timestamp_utc": "2026-05-03T22:58:36.320192+00:00",
+  "role": "judge_variant_a",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 16,
+    "generator": "gpt-5.1"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-Dba3g4y9MufCm0wBbRYOLURbDOyv0",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant response is fully in Markdown, uses LaTeX inline math with \\\\( ... \\\\) and display math with \\\\[ ... \\\\], and keeps everything inside a fenced code block labeled `markdown`, matching the formatting requirements.\",\n  \"spec_quotes\": [\n    \"Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.\",\n    \"For math, use use \\\\( ... \\\\) for inline LaTeX math and \\\\[ ... \\\\] for display math (where \\\\[ and \\\\] should be on their own respective lines).\"\n  ],\n  \"example_refs\": [\n    \"example_0.good_response\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777849116,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 155,
+      "prompt_tokens": 688,
+      "total_tokens": 843,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.6307
+}

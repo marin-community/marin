@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:23.090627+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 8
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZQl1WWuLnDRACH4QndzI1BJz45p",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# An Introduction to Complex Numbers\n\nComplex numbers extend the real numbers by introducing a new unit \\( i \\), defined by the property \\( i^2 = -1 \\). This allows us to solve equations, like \\( x^2 + 1 = 0 \\), that have no real solutions.\n\n## Basic Definitions\n\n- A complex number has the form \\( z = a + bi \\), where:\n  - \\( a \\) is the real part, written \\( \\Re(z) = a \\)\n  - \\( b \\) is the imaginary part, written \\( \\Im(z) = b \\)\n- The set of all complex numbers is denoted by \\( \\mathbb{C} \\).\n\nExamples:\n- \\( 3 + 4i \\)\n- \\( -2i \\) (which is \\( 0 - 2i \\))\n- \\( 5 \\) (which is \\( 5 + 0i \\))\n\n## Arithmetic with Complex Numbers\n\nGiven \\( z_1 = a + bi \\) and \\( z_2 = c + di \\):\n\n- Addition:\n  - \\( z_1 + z_2 = (a + c) + (b + d)i \\)\n- Subtraction:\n  - \\( z_1 - z_2 = (a - c) + (b - d)i \\)\n- Multiplication:\n  - \\( z_1 z_2 = (ac - bd) + (ad + bc)i \\)\n  - This comes from \\( (a + bi)(c + di) = ac + adi + bci + bdi^2 \\) and using \\( i^2 = -1 \\).\n- Conjugate of \\( z = a + bi \\):\n  - \\( \\overline{z} = a - bi \\)\n- Modulus (or absolute value) of \\( z = a + bi \\):\n  - \\( |z| = \\sqrt{a^2 + b^2} \\)\n\n## Division of Complex Numbers\n\nTo divide \\( z_1 = a + bi \\) by \\( z_2 = c + di \\) (with \\( z_2 \\neq 0 \\)):\n\n- Multiply numerator and denominator by the conjugate \\( \\overline{z_2} = c - di \\):\n  - \\( \\dfrac{z_1}{z_2} = \\dfrac{a + bi}{c + di} \\cdot \\dfrac{c - di}{c - di} \\)\n- The denominator becomes real:\n  - \\( (c + di)(c - di) = c^2 + d^2 \\)\n- Result:\n  - \\( \\dfrac{z_1}{z_2} = \\dfrac{(ac + bd) + (bc - ad)i}{c^2 + d^2} \\)\n\n## Geometric Interpretation\n\nA complex number \\( z = a + bi \\) can be viewed as a point or vector in the plane:\n\n- Horizontal axis: real part \\( a \\)\n- Vertical axis: imaginary part \\( b \\)\n\nThis is called the complex plane or Argand diagram.\n\n- Modulus \\( |z| = \\sqrt{a^2 + b^2} \\) is the distance from the origin.\n- Argument \\( \\arg(z) \\) is the angle \\( \\theta \\) (in radians) between the positive real axis and the line to \\( z \\).\n\nIn polar form:\n\n- \\( z = r(\\cos \\theta + i \\sin \\theta) \\), where:\n  - \\( r = |z| \\)\n  - \\( \\theta = \\arg(z) \\)\n\n## Euler’s Formula and Exponential Form\n\nEuler’s formula connects complex numbers and trigonometry:\n\n- \\( e^{i\\theta} = \\cos \\theta + i \\sin \\theta \\)\n\nThus a complex number can be written as:\n\n- \\( z = r e^{i\\theta} \\)\n\nThis form is very useful for multiplication and powers:\n\n- If \\( z_1 = r_1 e^{i\\theta_1} \\) and \\( z_2 = r_2 e^{i\\theta_2} \\), then:\n  - \\( z_1 z_2 = r_1 r_2 e^{i(\\theta_1 + \\theta_2)} \\)\n\n## Why Complex Numbers Matter\n\nComplex numbers are fundamental in many areas:\n\n- Solving polynomial equations of higher degree\n- Electrical engineering (AC circuits, impedance)\n- Signal processing and Fourier analysis\n- Quantum mechanics\n- Control theory and dynamical systems\n\nThey provide a richer number system in which algebraic equations behave more regularly and geometry, algebra, and analysis are deeply intertwined.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846703,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 989,
+      "prompt_tokens": 62,
+      "total_tokens": 1051,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 5.6148
+}

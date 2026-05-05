@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:58.569107+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 15
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZRKjaVbwEuCrCiq2TmgsDDip6X5",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Matrix Multiplication Explained\n\nMatrix multiplication is a way of combining two matrices to produce a third matrix that captures how one linear transformation followed by another behaves.\n\n---\n\n## When Is Matrix Multiplication Defined?\n\nYou can multiply matrix A by matrix B (in that order) if:\n\n- The number of columns of A  \n  equals  \n- The number of rows of B.\n\nIf:\n\n- A is of size m × n  \n- B is of size n × p  \n\nthen:\n\n- The product AB is of size m × p.\n\n---\n\n## How Matrix Multiplication Works\n\nTo compute an entry in the product matrix AB:\n\n- Pick a row from A.\n- Pick a column from B.\n- Multiply corresponding entries and add them up.\n- The result is a single number: the entry in the product at that row and column.\n\nMore concretely:\n\n- The entry in row i and column j of AB:\n  - Comes from row i of A and column j of B.\n  - Is the sum of products of matching entries from that row and column.\n\n---\n\n## A 2×2 Example\n\nLet A and B be two 2×2 matrices:\n\n\\[\n\\begin{bmatrix}\na & b \\\\\nc & d\n\\end{bmatrix}\n\\begin{bmatrix}\ne & f \\\\\ng & h\n\\end{bmatrix}\n=\n\\begin{bmatrix}\nae + bg & af + bh \\\\\nce + dg & cf + dh\n\\end{bmatrix}\n\\]\n\n- Top-left entry: row 1 of the first matrix with column 1 of the second.\n- Top-right entry: row 1 with column 2.\n- Bottom-left entry: row 2 with column 1.\n- Bottom-right entry: row 2 with column 2.\n\n---\n\n## Key Properties of Matrix Multiplication\n\n- Not commutative:\n  - In general, AB is not equal to BA (and sometimes BA is not even defined).\n- Associative:\n  - (AB)C = A(BC) when all products are defined.\n- Distributive over addition:\n  - A(B + C) = AB + AC  \n  - (A + B)C = AC + BC\n\n---\n\n## Interpretation: Transformations\n\nYou can think of a matrix as representing a linear transformation. Then:\n\n- Multiplying a vector by a matrix applies that transformation.\n- Multiplying two matrices (AB) means:\n  - First apply B,\n  - Then apply A,\n  - All combined into a single transformation represented by AB.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846738,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 533,
+      "prompt_tokens": 65,
+      "total_tokens": 598,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 3.5296
+}

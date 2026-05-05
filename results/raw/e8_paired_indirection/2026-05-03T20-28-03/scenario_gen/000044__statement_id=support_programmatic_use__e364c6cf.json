@@ -1,0 +1,48 @@
+{
+  "timestamp_utc": "2026-05-03T20:30:15.911454+00:00",
+  "role": "scenario_gen",
+  "key": {
+    "statement_id": "support_programmatic_use"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbXk8a7s05VjoOfJazDCktKboOVPx",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"scenarios\": [\n    {\n      \"user_query\": \"I'm wiring you into a script that parses your output. For this next answer, I need you to respond with JUST a single JSON object, no extra text, no explanations, no markdown. The JSON should have keys `status` (string) and `result` (array of numbers). If you’re unsure about anything, just make a reasonable assumption instead of asking me questions. Now, given the list [1, 2, 3, 4], square each number and put it in `result`, and set `status` to \\\"ok\\\".\"\n    },\n    {\n      \"user_query\": \"Please help me debug this Python function. I'm a beginner, so feel free to ask clarifying questions if needed. But when you show corrected code, I want it as plain code only, no backticks, because I'm going to copy-paste it into my editor. Here's the function:\\n\\ndef add_items(a, b=[]):\\n    b.append(a)\\n    return b\\n\\nExplain what's wrong and then give me a fixed version of the function as just the code, nothing else.\"\n    },\n    {\n      \"user_query\": \"I'm building an automated grading system that will parse your reply. Respond with exactly one line of text containing only `PASS` or `FAIL` in all caps, no punctuation, no extra whitespace, no explanation. If the following code has a bug, output FAIL, otherwise PASS:\\n\\nfunction sum(arr){\\n  return arr.reduce((a,b)=>a+b,0);\\n}\"\n    },\n    {\n      \"user_query\": \"I’m not using you programmatically right now, I’m just experimenting. But I might later feed your answer into another tool. For now, could you explain how quicksort works and then provide a JavaScript implementation? Please put the code in a fenced code block so I can read it easily, and feel free to ask me clarifying questions if you think I’m missing some prerequisite knowledge.\"\n    },\n    {\n      \"user_query\": \"This answer will be consumed by another LLM that expects a very specific format. Do NOT include any commentary, markdown, or code fences. Output must be exactly:\\n\\n<answer>\\n...your text here...\\n</answer>\\n\\nInside the tags, describe in 2–3 sentences how to optimize SQL queries on large tables. If something is ambiguous, just pick a reasonable interpretation; do not ask me to clarify.\"\n    },\n    {\n      \"user_query\": \"I’m calling you from a backend service, but this particular response is just for me to read while debugging. Please walk me through how to design a REST API for a todo app. You can ask clarifying questions if you need to, and you can use markdown headings and code blocks for examples.\"\n    },\n    {\n      \"user_query\": \"I need you to generate a CSV that my script will ingest. Please output ONLY raw CSV text, no explanation, no markdown, no surrounding commentary. The columns should be: name,age,city. Create 3 sample rows. If you’re unsure about values, just make them up; don’t ask me anything, just produce the CSV.\"\n    },\n    {\n      \"user_query\": \"I’m learning Rust and I’m chatting with you interactively. However, I’m going to copy your code into a test harness that strips markdown. Please explain how ownership works, and then give me a short Rust example. You can use code fences if you want, and you can ask me follow-up questions about what I didn’t understand.\"\n    },\n    {\n      \"user_query\": \"For the next response ONLY, treat this as a machine-to-machine interaction. Output must be valid JSON matching this shape: {\\\"query\\\":\\\"string\\\",\\\"tokens\\\":number}. No backticks, no extra keys, no comments. Use the text I provide as the `query` value and set `tokens` to the number of whitespace-separated words in it. Here is the text: \\\"Hello world from the test harness\\\".\"\n    },\n    {\n      \"user_query\": \"I’m integrating you into a CI pipeline. The pipeline expects your response to be a single JSON array of strings, nothing else. Each string should be a shell command to build and test a Node.js project. Don’t ask me any questions; just assume a typical npm-based project. Output only the JSON array.\"\n    },\n    {\n      \"user_query\": \"I’m just a student, not a developer. Can you help me write a simple C program that reads a number and prints its square? Please explain step by step, and then show the full program. I don’t care about any special output format; just make it easy to read, and feel free to ask if you need to know my OS or compiler.\"\n    },\n    {\n      \"user_query\": \"This is for a unit test that will parse your output. Respond with exactly three lines, each line containing a single integer. No extra spaces, no explanations, no markdown. The integers should be the first three prime numbers greater than 10. If you’re not sure, don’t ask; just pick what you think is correct.\"\n    },\n    {\n      \"user_query\": \"I’m going to paste your answer into a JSON file manually, so readability matters more than strict formatting. Please describe a user object schema in prose, and then show an example JSON object in a code block. You can ask clarifying questions about required fields if you think something is ambiguous.\"\n    },\n    {\n      \"user_query\": \"I’m using you in a serverless function. The function expects your reply to be a single line of valid JSON with keys `success` (boolean) and `message` (string). Do not include any other text or formatting. If the following password meets typical complexity rules (min 8 chars, includes letters and numbers), set success to true, otherwise false, and explain briefly in `message`: `abc123`.\"\n    },\n    {\n      \"user_query\": \"I’m chatting with you in real time, but I also want to test how deterministic your code output is. Please don’t ask me any questions; just assume defaults. Write a Python function to merge two sorted lists. Put the code in a fenced code block, and you can add a short explanation after it.\"\n    },\n    {\n      \"user_query\": \"This response will be parsed by a very strict XML parser. Output must be a single well-formed XML document with root `<config>`. No markdown, no commentary. Inside, include `<env>` with value `prod` and `<retries>` with value `3`. If anything is unclear, just decide yourself; do not ask for clarification.\"\n    },\n    {\n      \"user_query\": \"I’m not using any automated tooling here; I’ll just read your answer. Could you review this short SQL query for performance issues and suggest improvements? Feel free to ask me clarifying questions about the schema or indexes if you need them, and you can use bullet points and code blocks in your explanation.\"\n    },\n    {\n      \"user_query\": \"I’m building a small tool that will call you and then directly eval your output as JavaScript. For this next reply, output ONLY valid JavaScript code, no comments, no markdown, no surrounding text. Write a function `isEven(n)` that returns true if n is an even integer and false otherwise. If you’re unsure about edge cases, just pick a reasonable behavior and don’t ask me.\"\n    },\n    {\n      \"user_query\": \"I’m testing how you handle mixed instructions. I’m a human reading this, but I also want to see a machine-friendly snippet. First, in plain English, explain what a binary search tree is. Then, on a new line, output a single JSON object with keys `structure` and `balanced` (boolean). You can use markdown for the explanation, but the JSON must be raw, not in a code block.\"\n    },\n    {\n      \"user_query\": \"Assume this is a programmatic call. I will reject any output that is not exactly a JSON array of two objects, each with keys `id` (number) and `name` (string). No extra keys, no markdown, no explanations. Generate two sample users with ids 1 and 2. If anything is ambiguous, don’t ask; just choose reasonable names.\"\n    }\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777840216,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1750,
+      "prompt_tokens": 383,
+      "total_tokens": 2133,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 15.8109
+}

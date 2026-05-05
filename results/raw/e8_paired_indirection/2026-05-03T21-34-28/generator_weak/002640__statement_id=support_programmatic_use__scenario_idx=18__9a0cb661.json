@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:47:07.805105+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 18
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfNuJ8-4YNCb4-9f62ce41c898f017",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "A binary search tree (BST) is a data structure that stores values in a way that allows for efficient insertion, deletion, and search operations. Each node in a BST has at most two child nodes, referred to as the left child and the right child. The key property of a BST is that for any given node:\n\n- All values in the left subtree are less than the node's value.\n- All values in the right subtree are greater than the node's value.\n\nThis structure allows for faster search times compared to other data structures like arrays or linked lists.\n\n{\"structure\": \"Binary Search Tree\", \"balanced\": false}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 17780121693000393000
+      }
+    ],
+    "created": 1777848427,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 127,
+      "prompt_tokens": 115,
+      "total_tokens": 242,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 2.4768
+}

@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:30.501686+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 3
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfNiD7-4YNCb4-9f62cd58bc51f3e8",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Of course! Quicksort is a very efficient sorting algorithm that uses a divide-and-conquer approach. Here’s a step-by-step explanation of how it works:\n\n1. **Choose a Pivot**: Select an element from the array to serve as the pivot. Common choices are the first element, the last element, or the middle element.\n\n2. **Partition**: Rearrange the array so that all elements less than the pivot come before it, and all elements greater than the pivot come after it. After this operation, the pivot is in its final position.\n\n3. **Recursion**: Recursively apply the above steps to the sub-array of elements with smaller values and separately to the sub-array of elements with greater values.\n\nNow, let's implement quicksort in JavaScript. We'll include a function to partition the array and then recursively apply quicksort to the sub-arrays.\n\nHere's the implementation:\n\n```javascript\nfunction quicksort(arr) {\n    if (arr.length <= 1) {\n        return arr;\n    }\n\n    // Choose a pivot element\n    const pivot = arr[Math.floor(arr.length / 2)];\n\n    // Partition the array\n    const left = [];\n    const right = [];\n    const equal = [];\n    for (const item of arr) {\n        if (item < pivot) {\n            left.push(item);\n        } else if (item > pivot) {\n            right.push(item);\n        } else {\n            equal.push(item);\n        }\n    }\n\n    // Recursively apply quicksort to the sub-arrays and concatenate the results\n    return [...quicksort(left), ...equal, ...quicksort(right)];\n}\n\n// Example usage:\nconst array = [3, 6, 8, 10, 1, 2, 1];\nconsole.log(quicksort(array)); // Output: [1, 1, 2, 3, 6, 8, 10]\n```\n\nIn this implementation:\n- We first check if the array has 1 or no elements, in which case it is already sorted.\n- We choose a pivot (in this case, the middle element).\n- We partition the array into three parts: elements less than the pivot, elements equal to the pivot, and elements greater than the pivot.\n- We recursively apply quicksort to the \"left\" and \"right\" parts and concatenate the results with the \"equal\" part.\n\nLet me know if you have any questions about the implementation or if you need further clarification on any part of the algorithm!",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 5450263632323501000
+      }
+    ],
+    "created": 1777848390,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 515,
+      "prompt_tokens": 107,
+      "total_tokens": 622,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 4.77
+}

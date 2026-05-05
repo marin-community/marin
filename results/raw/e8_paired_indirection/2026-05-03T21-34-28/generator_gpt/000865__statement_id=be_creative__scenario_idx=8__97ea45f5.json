@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:56:44.139222+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_creative",
+    "scenario_idx": 8
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ5oaacoej0r0BdBdRYmdwhnirmd",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here’s an activity built around an unusual analogy that still maps cleanly onto real evolutionary dynamics: **“Meme Evolution in a Harsh Classroom Environment.”** It uses students’ intuition about social media memes to illustrate natural selection without the usual biological clichés.\n\n---\n\n## Core analogy\n\n- **Genotypes** → Different “meme designs” (short text posts).\n- **Phenotypes** → How the meme looks/sounds when written on a card.\n- **Environment** → Your classroom with a specific “meme market” (rules about what does well).\n- **Fitness** → How many “shares” a meme gets (how many students copy it).\n- **Reproduction** → Students copying memes they like onto new cards.\n- **Mutation** → Students making small, random changes when they copy.\n- **Natural selection** → Over a few rounds, certain meme features become common because they systematically get more “shares” in this environment.\n\nThe twist: you secretly define the “environment rules” ahead of time, so outcomes look emergent to students.\n\n---\n\n## Materials\n\n- Index cards or small slips of paper (10–15 per student).\n- Pens or pencils.\n- A timer.\n- Whiteboard / projector for debrief.\n\nTotal time: ~20–25 minutes.\n\n---\n\n## Step-by-step activity (in class)\n\n### 1. Set up the environment (2–3 minutes)\n\nTell students:\n\n> “We’re going to simulate evolution, but with memes instead of organisms. Your memes will spread or die out based on how well they fit this environment: **my classroom right now**. You won’t know all the rules, you’ll have to infer them from which memes survive.”\n\nPrivately decide on 3–4 simple “fitness rules” that will shape meme success. For example:\n\n- Short memes (≤6 words) do better than long ones.\n- Memes that include **a number** do better.\n- Memes that reference something in the room (door, clock, whiteboard) do better.\n- Memes that are obviously negative or insulting do worse.\n\nYou’ll enforce these rules later when memes are “selected,” but students won’t know the exact rules at first.\n\nYou can change the rules other semesters to keep it fresh.\n\n---\n\n### 2. Round 1: Initial variation (5 minutes)\n\nAsk students to each create **3 different memes** on separate index cards:\n\n- They must be school-appropriate.\n- They can be silly, but must be short text only (no drawings at first).\n- They can’t use other people’s memes from phones; must be original.\n\nExample (they’ll come up with better ones):\n\n- “Lab reports never sleep.”\n- “3 coffees = 1 lecture.”\n- “Too many slides, not enough time.”\n\nCollect all cards into a box or pile. This collection = **original population**.\n\n---\n\n### 3. Selection: Which memes “reproduce”? (5 minutes)\n\nRandomly pull out 15–20 memes and read them to the class (or project a photo of them).\n\nFor each one:\n\n1. Ask students (by quick show of hands): “Would you share this if you saw it online?”  \n   - This is the **visible part** of selection: audience response.\n\n2. You silently apply your secret “environment rules” on top of student votes:\n   - If it breaks a rule that lowers fitness, you say:  \n     “This one gets only 1 copy.”\n   - If it meets several positive rules, you say:  \n     “This one gets 3 copies.”\n   - Middle-of-the-road memes get 2 copies.\n\nYou now have **a number of copies to be made** for each meme = its “offspring number” (fitness).\n\nThen:\n\n- Hand each chosen meme back to students (or volunteers).\n- They copy it onto new blank index cards according to the number you assign (1, 2, or 3 copies).\n\n**Very important: introduce mutation now:**\n\nTell the copiers:\n\n> “When you copy, you *must* make one small change—add, remove, or change **one word** or punctuation mark. No big overhauls. Just a tiny random tweak.”\n\nThis stands in for **mutation**. Don’t over-police it; aim for small, obvious changes.\n\nCollect all the new copies into a new “population pile.”\n\n---\n\n### 4. Round 2: Differential success becomes visible (5–7 minutes)\n\nRepeat a shorter version:\n\n1. Randomly draw 15–20 memes from the new pile.\n2. Read or display them.\n3. Again ask for quick “Would you share?” votes.\n4. Secretly apply your rules (short, includes number, references classroom, etc.) to assign offspring numbers.\n5. Students copy successful memes with one small change each time",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845404,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 74,
+      "total_tokens": 1074,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 8.2273
+}

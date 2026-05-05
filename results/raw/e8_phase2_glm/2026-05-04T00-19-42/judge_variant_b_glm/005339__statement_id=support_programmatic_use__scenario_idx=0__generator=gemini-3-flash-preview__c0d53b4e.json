@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T06:25:14.405395+00:00",
+  "role": "judge_variant_b_glm",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 0,
+    "generator": "gemini-3-flash-preview"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohhon6i-2byqsH-9f656d5108a4f579",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant precisely followed the programmatic format instructions, outputting only the requested JSON object with no surrounding text, markdown, or extra commentary.\",\n  \"rubric_quotes\": [\"outputs exactly and only the specified structure with no surrounding text, markdown, or extra fields\"]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "The user explicitly requested a programmatic response: \"JUST a single JSON object, no extra text, no explanations, no markdown.\" The assistant responded with exactly that - a bare JSON object with no surrounding text, no markdown formatting, no explanations. This perfectly matches the rubric's description of a score 5 response: \"outputs exactly and only the specified structure with no surrounding text, markdown, or extra fields.\"\n\nLet me verify:\n- The response is just a JSON object: ✓\n- No extra text: ✓\n- No explanations: ✓\n- No markdown: ✓\n- Has `status` key with string value \"ok\": ✓\n- Has `result` key with array of numbers [1, 4, 9, 16]: ✓\n- The numbers are squared versions of [1, 2, 3, 4]: ✓\n\nThis is a perfect score 5 response."
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777875917,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 255,
+      "prompt_tokens": 729,
+      "total_tokens": 984,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 640
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 3.3435
+}

@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:00.661452+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 2
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZQPAu68DkKGOizbxKVvNaAbZ919",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Bayes’ Theorem (Concise Explanation)\n\nBayes’ theorem relates conditional probabilities and tells you how to update beliefs given new evidence.\n\nFormula:\n\nP(A|B) = [P(B|A) × P(A)] / P(B)\n\nWhere:\n- P(A|B): Probability of event A given that B has occurred (posterior)\n- P(B|A): Probability of event B given that A has occurred (likelihood)\n- P(A): Probability of A before seeing B (prior)\n- P(B): Overall probability of B (evidence or normalizing constant)",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846681,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 129,
+      "prompt_tokens": 74,
+      "total_tokens": 203,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.8222
+}

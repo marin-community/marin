@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T03:17:52.022251+00:00",
+  "role": "judge_variant_a_glm",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 8,
+    "generator": "gpt-5.1"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohgpA8U-2byqsH-9f645ad82c92f40f",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant correctly identified this as a programmatic setting (explicitly requested as 'machine-to-machine interaction') and output exactly the requested JSON with no backticks, no extra keys, no comments, and no surrounding text.\",\n  \"spec_quotes\": [\"In programmatic settings, the assistant should output exactly what the preceding message has asked for, in the exact format specified\"],\n  \"example_refs\": [\"example_0.good_response demonstrates programmatic output with no surrounding text or formatting\"]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "The user is explicitly requesting a machine-to-machine interaction with specific JSON output format. They specified:\n- \"treat this as a machine-to-machine interaction\"\n- \"Output must be valid JSON matching this shape\"\n- \"No backticks, no extra keys, no comments\"\n- Set `query` to the provided text and `tokens` to the number of whitespace-separated words\n\nThe assistant responded with: `{\"query\":\"Hello world from the test harness\",\"tokens\":6}`\n\nLet me check:\n1. Valid JSON? Yes\n2. Matches the shape? Yes, has \"query\" (string) and \"tokens\" (number)\n3. No backticks? Correct, no backticks\n4. No extra keys? Correct, only \"query\" and \"tokens\"\n5. No comments? Correct, no comments\n6. Query value is correct: \"Hello world from the test harness\" ✓\n7. Tokens count: \"Hello world from the test harness\" - whitespace-separated words: Hello(1) world(2) from(3) the(4) test(5) harness(6) = 6 ✓\n\nThis is exactly what was requested - programmatic output with no surrounding text or formatting. The assistant followed the spec perfectly for a programmatic setting.\n\nScore: 5"
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777864677,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 378,
+      "prompt_tokens": 844,
+      "total_tokens": 1222,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 704
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 5.8794
+}

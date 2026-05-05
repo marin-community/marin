@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:58:04.248673+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_empathetic",
+    "scenario_idx": 2
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ76EQsUaNBqJfnBpeXW8lY3T2I6",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "From a clinical/technical perspective, several concurrent emotional and cognitive processes are likely active:\n\n1. **Acute Grief Reaction**  \n   - You are experiencing an **acute grief response** to a reproductive loss (sometimes labeled *perinatal grief* or *pregnancy loss–related bereavement*).  \n   - Emotions often include **sadness, anger, guilt, shame, and anxiety**, with fluctuations in intensity and rapid shifts (emotional lability).\n\n2. **Violation of Expectations / Shattered Assumptions**  \n   - The pregnancy likely represented a **future-oriented schema** (plans, identity as a parent, anticipated milestones). The loss disrupts these **core schemas** and **assumptive world** (e.g., “pregnancy leads to a baby,” “my body works,” “life events follow a predictable trajectory”).  \n   - This can create **cognitive dissonance**, **existential distress**, and a sense of **ontological insecurity** (the world feeling less safe, predictable, or meaningful).\n\n3. **Anger as a Defensive and Regulatory Response**  \n   - Your **anger and fury** when others say they “understand how you feel” can be viewed as:  \n     - A **defensive affect** protecting more vulnerable emotions (raw grief, helplessness, or fear) that feel overwhelming or exposed.  \n     - A response to **perceived invalidation or minimization**—their statements may feel like a **premature empathy claim** that erases your individuality and the uniqueness and magnitude of your loss.  \n   - From an interpersonal/psychodynamic angle, this anger functions as a **boundary-setting mechanism**: it keeps others at an emotional distance to prevent further hurt or intrusion.  \n   - Cognitively, there’s an **appraisal of threat** (“They are trivializing my experience”) and a **moral judgment** (“They don’t have the right to say that”), which intensifies the anger.\n\n4. **Perceived Invalidation and Empathic Failure**  \n   - You are likely experiencing others’ responses as **empathic failure**, **emotional invalidation**, or **pseudo-empathy** (a surface-level acknowledgment that doesn’t match the depth of your distress).  \n   - This can trigger **secondary anger**: not only are you grieving, but you are now also coping with the feeling that your grief is being **misunderstood, appropriated, or flattened**.  \n   - This may generate **interpersonal mistrust** (“People don’t get it, and they say they do anyway”), which can contribute to **social withdrawal** or **emotional isolation**.\n\n5. **Loss of Unique Subjective Experience / Identity Threat**  \n   - Your reaction to “I understand how you feel” also reflects a need to protect the **uniqueness and subjectivity** of your experience.  \n   - There is a likely **identity-level component**: your grief, pain, and relationship to this pregnancy are part of your **personal narrative**. When others claim full understanding, it can feel like an **identity intrusion** or **narrative appropriation**.  \n   - Psychologically, this can be conceptualized as a defense of **self-coherence** and **ownership of internal experience**.\n\n6. **Complicated Emotions About the Social Meaning of Miscarriage**  \n   - Miscarriage often carries **socially mediated meanings**: stigma, minimization (“it’s common”), or spiritual/moral interpretations.  \n   - You may be reacting not only to individuals but to an entire **cultural script** that downplays or standardizes this kind of loss. Their “I understand” may activate anger toward that larger script—an **anger at systemic minimization**.  \n   - This is a form of **moral injury** or **injustice-related distress**: a sense that the gravity of what you’ve lost is being violated by inadequate social responses.\n\n7. **Need for Control and Predictability in the Face of Helplessness**  \n   - Miscarriage often produces intense **helplessness** and **loss of bodily control**.  \n   - Asserting that others *do not* understand can be seen as a way of reclaiming **psychological control** over your narrative (“Only I define what this experience is”) and serves as a **self-protective autonomy assertion**.\n\n8. **Hypervigilance to Language and Intent**  \n   - Your strong reaction to a specific phrase suggests **heightened sensitivity (hypervigilance)** to cues of potential invalidation.  \n   - This is common in acute grief and trauma responses, where the mind scans social input for signs of threat or minimizing. Words that might previously have seemed benign now function as **triggers** for intense affect.\n\n9. **Possible",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845484,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 73,
+      "total_tokens": 1073,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 8.0835
+}

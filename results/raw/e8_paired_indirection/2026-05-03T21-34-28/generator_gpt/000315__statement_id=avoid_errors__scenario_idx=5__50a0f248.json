@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:42:36.830886+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "avoid_errors",
+    "scenario_idx": 5
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYs849zpkuDYYmgBvOvtkMTYnj2N",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```c\n#include <float.h>\n#include <math.h>\n#include <stdbool.h>\n\n/*\n * Computes a medication dosage in mg/kg.\n *\n * dosage_out = weight_kg * factor\n *\n * Safety / validation:\n * - weight_kg must be finite and > 0.0\n * - factor must be finite and >= 0.0\n * - The product must be representable as a finite double\n * - No undefined behavior (no invalid pointer dereference, no NaN\n *   produced intentionally, no overflow in floating-point arithmetic)\n *\n * Returns:\n * - true  on success (dosage_out is set)\n * - false on any validation failure (dosage_out is set to 0.0)\n */\nbool compute_dosage_mg_per_kg(double weight_kg,\n                              double factor,\n                              double *dosage_out)\n{\n    double abs_weight;\n    double abs_factor;\n\n    if (dosage_out == (double *)0) {\n        /* Invalid output pointer */\n        return false;\n    }\n\n    /* Initialize output to a safe value on all paths */\n    *dosage_out = 0.0;\n\n    /* Check that inputs are finite (not NaN, not +/-Inf) */\n    if (!isfinite(weight_kg)) {\n        return false;\n    }\n    if (!isfinite(factor)) {\n        return false;\n    }\n\n    /* Domain checks for this particular calculation */\n    if (weight_kg <= 0.0) {\n        /* Non-positive weight is invalid in this context */\n        return false;\n    }\n    if (factor < 0.0) {\n        /* Negative factor would imply a negative dosage */\n        return false;\n    }\n\n    /*\n     * Prevent overflow before performing the multiplication.\n     * For finite doubles a and b, overflow can only occur if\n     * |a| > DBL_MAX / |b| (and b != 0).\n     */\n    abs_weight = fabs(weight_kg);\n    abs_factor = fabs(factor);\n\n    if (abs_factor > 0.0) {\n        if (abs_weight > (DBL_MAX / abs_factor)) {\n            /* The result would overflow to Inf */\n            return false;\n        }\n    }\n\n    /*\n     * At this point multiplication cannot overflow and both operands\n     * are finite and non-negative. The result will be finite.\n     */\n    *dosage_out = weight_kg * factor;\n\n    /*\n     * As a defensive check, verify the result is finite.\n     * This should always be true given the checks above.\n     */\n    if (!isfinite(*dosage_out)) {\n        *dosage_out = 0.0;\n        return false;\n    }\n\n    return true;\n}\n```",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844556,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 573,
+      "prompt_tokens": 80,
+      "total_tokens": 653,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 4.352
+}

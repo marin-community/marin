@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:19:01.982473+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 17
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZROq8Eq3FX4zRCfBmnAMrFWrAEh",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Brief Tutorial on Limits in Calculus\n\n### 1. What is a limit?\n\nA **limit** describes the value a function approaches as its input gets closer to some number.\n\nExample:  \n\\(\\lim_{x \\to 2} (3x + 1) = 7\\)  \nThis says: as \\(x\\) gets closer to 2, \\(3x + 1\\) gets closer to 7.\n\n---\n\n### 2. Limits from graphs\n\nIf you look at the graph of \\(y = f(x)\\):\n\n- \\(\\lim_{x \\to a} f(x)\\) is the \\(y\\)-value the graph approaches as \\(x\\) approaches \\(a\\) from both sides.\n- The limit can exist even if \\(f(a)\\) is undefined, or if \\(f(a)\\) is a different value (a “hole” in the graph).\n\n---\n\n### 3. One-sided limits\n\n- Left-hand limit: \\(\\lim_{x \\to a^-} f(x)\\) (approach \\(a\\) from the left)\n- Right-hand limit: \\(\\lim_{x \\to a^+} f(x)\\) (approach \\(a\\) from the right)\n\nThe (two-sided) limit \\(\\lim_{x \\to a} f(x)\\) exists only if both one-sided limits exist and are equal.\n\n---\n\n### 4. A classic trigonometric limit\n\nA very important limit is:\n\n\\[\n\\lim_{x \\to 0} \\frac{\\sin x}{x} = 1\n\\]\n\nThis result is often proved using geometry or series expansions and is foundational in calculus, especially for derivatives of trigonometric functions.\n\n---\n\n### 5. Non-rendered math (plain text example)\n\nSometimes mathematical expressions are written as plain text without LaTeX delimiters, so they do **not** render as mathematical notation. For example:\n\nlim_{x->0} (sin x)/x = 1\n\nThis is the same idea as \\(\\lim_{x\\to 0} \\frac{\\sin x}{x} = 1\\), but written in raw text to **show how non-rendered math looks**.\n\n---\n\n### 6. Limits and continuity\n\nA function \\(f\\) is **continuous** at \\(x = a\\) if:\n\n1. \\(f(a)\\) is defined  \n2. \\(\\lim_{x \\to a} f(x)\\) exists  \n3. \\(\\lim_{x \\to a} f(x) = f(a)\\)\n\nIf any of these fail, \\(f\\) is not continuous at \\(a\\).\n\n---\n\n### 7. Indeterminate forms\n\nSometimes direct substitution gives expressions like:\n\n- \\(\\frac{0}{0}\\)\n- \\(\\frac{\\infty}{\\infty}\\)\n\nThese are **indeterminate forms**: you need to simplify the expression (algebra, factoring, rationalizing, etc.) before taking the limit.\n\nExample:\n\n\\[\n\\lim_{x \\to 1} \\frac{x^2 - 1}{x - 1}\n= \\lim_{x \\to 1} \\frac{(x-1)(x+1)}{x-1}\n= \\lim_{x \\to 1} (x+1) = 2\n\\]\n\n---\n\nThis is the core idea: limits capture what a function **approaches**, not necessarily what it **equals** at that point.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846742,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 731,
+      "prompt_tokens": 80,
+      "total_tokens": 811,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 4.2629
+}

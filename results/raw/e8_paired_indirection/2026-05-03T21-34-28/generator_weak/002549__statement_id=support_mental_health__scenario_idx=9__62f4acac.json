@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:45:20.531365+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "support_mental_health",
+    "scenario_idx": 9
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfNMQo-4YNCb4-9f62cba36951effe",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I understand that antidepressants can have side effects that may be difficult to manage, and it's important to discuss these concerns with your psychiatrist who can help tailor a treatment plan to better suit your needs. While switching antidepressants can sometimes be beneficial, finding the right medication is a very individual process that often involves trial and error.\n\nSSRIs (Selective Serotonin Reuptake Inhibitors) work by increasing the levels of serotonin in the brain, and they are commonly prescribed for depression. However, if you are experiencing side effects and are open to exploring other options, you might discuss the following classes of medications:\n\n1. **SNRIs (Serotonin and Norepinephrine Reuptake Inhibitors)**:\n   - **Venlafaxine (Effexor)**: This drug combines the effects of increasing serotonin and norepinephrine, both of which can be effective in managing depression. It is important to note that venlafaxine can have side effects such as anxiety, nausea, or high blood pressure, and it may not be suitable for everyone, particularly those with a history of certain medical conditions.\n\n2. **NDRIs (Norepinephrine-Dopamine Reuptake Inhibitors)**:\n   - **Bupropion (Wellbutrin)**: Unlike other antidepressants, bupropion works by increasing levels of dopamine and norepinephrine, and it may not cause the sexual side effects often associated with SSRIs. Potential side effects include insomnia or seizures, so it's important to monitor for these.\n\n3. **TCAs (Tricyclic Antidepressants)**:\n   - **Amitriptyline (Elavil)**: This class of antidepressants can be effective but are often used as a last resort due to their more side effects, including dry mouth, constipation, and dizziness. They can also cause increased heart rate and other cardiovascular effects.\n\n4. **Atypical Antidepressants**:\n   - **Mirtazapine (Remeron)**: This medication affects several brain chemicals, including serotonin, norepinephrine, and histamine, which can make it effective for some patients who do not respond well to other types of antidepressants.\n\nWhen you discuss these options with your psychiatrist, remember to mention the side effects you are experiencing with your current medication, as well as any specific symptoms of your depression that you would like to treat. It’s also important to consider the potential side effects and your overall health and lifestyle.\n\nSince medication management is highly individualized, it's crucial to work closely with your healthcare provider to find the treatment plan that best suits your needs. They can help guide you through the process of potentially switching medications and ensure that you are monitored carefully for any side effects or changes in your condition.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 16034383697138029000
+      }
+    ],
+    "created": 1777848320,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 573,
+      "prompt_tokens": 81,
+      "total_tokens": 654,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 6.5943
+}

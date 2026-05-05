@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:05:52.884762+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 5
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfADWG-6Ng1vN-9f6291d58ca131f4",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "### Linear Algebra Study Sheet\n\n---\n\n#### Definitions\n\n1. **Vector Space**: A set \\(V\\) with operations of addition and scalar multiplication that satisfy axioms of closure, associativity, commutativity, distributivity, and the existence of identity elements.\n   \n2. **Subspace**: A subset \\(W\\) of a vector space \\(V\\) that is a vector space with the operations of \\(V\\).\n   \n3. **Linear Combination**: A sum of scalar multiples of a set of vectors.\n   \n4. **Span**: The set of all linear combinations of a given set of vectors.\n   \n5. **Linearly Independent**: A set of vectors where none can be written as a linear combination of the others.\n   \n6. **Basis**: A linearly independent set that spans the vector space.\n   \n7. **Dimension**: The number of vectors in a basis for a vector space.\n   \n8. **Matrix**: A rectangular array of numbers.\n   \n9. **Determinant**: A scalar value computed from a square matrix, denoted \\(\\det(A)\\) or \\(|A|\\).\n   \n10. **Eigenvalue & Eigenvector**: For a square matrix \\(A\\), \\(\\lambda\\) is an eigenvalue if \\((A - \\lambda I)\\mathbf{x} = \\mathbf{0}\\) has a non-zero solution \\(\\mathbf{x}\\); such \\(\\mathbf{x}\\) is an eigenvector.\n   \n---\n\n#### Main Theorems\n\n1. **Span Theorem**: A set of vectors spans a vector space if and only if every vector in the space can be written as a linear combination of the set.\n   \n2. **Linear Independence Theorem**: A set of vectors is linearly independent if and only if the only solution to \\(a_1v_1 + a_2v_2 + \\cdots + a_nv_n = \\mathbf{0}\\) is \\(a_1 = a_2 = \\cdots = a_n = 0\\).\n   \n3. **Dimension Theorem**: The dimension of a vector space is the number of vectors in any basis for the space.\n   \n4. **Rank-Nullity Theorem**: For a linear transformation \\(T: V \\to W\\), \\(\\dim(\\ker(T)) + \\dim(\\operatorname{im}(T)) = \\dim(V)\\).\n   \n5. **Determinant Theorem**: The determinant of a matrix is zero if and only if the matrix is singular (non-invertible).\n   \n6. **Eigenvalue Theorem**: Eigenvalues of a matrix are the roots of its characteristic polynomial.\n   \n7. **Diagonalization Theorem**: A matrix \\(A\\) is diagonalizable if and only if it has a basis consisting of eigenvectors.\n   \n8. **Change of Basis Theorem**: Matrices representing a linear transformation are similar if the transformation is computed with respect to different bases.\n   \n---\n\n#### Example Problems\n\n1. **Find a Basis for the Subspace of \\( \\mathbb{R}^4 \\)**\n\n   **Vectors**:\n   \\[\n   \\mathbf{v}_1 = \\begin{pmatrix} 1 \\\\ 2 \\\\ 0 \\\\ -1 \\end{pmatrix}, \n   \\mathbf{v}_2 = \\begin{pmatrix} 2 \\\\ 4 \\\\ 1 \\\\ -2 \\end{pmatrix}, \n   \\mathbf{v}_3 = \\begin{pmatrix} 3 \\\\ 6 \\\\ 1 \\\\ -3 \\end{pmatrix}\n   \\]\n\n   **Solution**:\n   \\[\n   \\mathbf{v}_3 = 2\\mathbf{v}_1 - \\mathbf{v}_2 \\implies \\mathbf{v}_1, \\mathbf{v}_2 \\text{ are linearly independent and span the subspace.}\n   \\]\n   **Basis**: \\(\\{\\mathbf{v}_1, \\mathbf{v}_2\\}\\).\n\n2. **Determine if a Matrix is Diagonalizable**\n\n   **Matrix**:\n   \\[\n   A = \\begin{pmatrix} 2 & -1 \\\\ -1 & 2 \\end{pmatrix}\n   \\]\n\n   **Eigenvalues**:\n   \\[\n   \\lambda = 1, 3\n   \\]\n   **Eigenvectors**:\n   \\[\n   \\text{For } \\lambda = 1: \\mathbf{v}_1 = \\begin{pmatrix} 1 \\\\ -1 \\end{pmatrix} \\text{ (normalized: } \\frac{1}{\\sqrt{2}}\\mathbf{v}_1)\n   \\]\n   \\[\n   \\text{For } \\lambda = 3",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 3749706463709243000
+      }
+    ],
+    "created": 1777845952,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 97,
+      "total_tokens": 1097,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 7.6742
+}

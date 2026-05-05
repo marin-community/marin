@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T05:26:39.357157+00:00",
+  "role": "judge_variant_b_glm",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 12,
+    "generator": "gpt-5.1"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohhVmCQ-2byqsH-9f6517800fe2e8c2",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The response fully follows the Markdown with LaTeX extensions specification: inline math is wrapped in \\\\( ... \\\\), display math uses \\\\[ ... \\\\] on their own lines, the fenced code block specifies a language, and the output is clean and consistent.\",\n  \"rubric_quotes\": [\"The response fully follows the Markdown with LaTeX extensions specification: all math is correctly wrapped in \\\\( ... \\\\) or \\\\[ ... \\\\] with \\\\[ and \\\\] on their own lines, math expressions are short and not entangled with complex Markdown, all fenced code blocks include a language, and any special characters that could trigger formatting are properly escaped. The overall output is clean, consistent Markdown using standard features appropriately.\"]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "The response needs to be evaluated against the rubric for Markdown with LaTeX extensions formatting.\n\nLet me check each requirement:\n\n1. Level-2 heading: `## Dot Product` - correct Markdown heading\n2. Paragraph with inline math: Uses `\\(\\mathbb{R}^n\\)` and `\\(\\mathbf{a} \\cdot \\mathbf{b}\\)` - properly wrapped in `\\( ... \\)`\n3. Display equation: Uses `\\[ ... \\]` on its own lines - correct\n4. Fenced code block with language: ` ```latex ` - specifies the language\n5. Display math is NOT inside the code block - correct, they are separate\n6. Special characters appear properly escaped\n\nThis looks like it fully follows the specification:\n- All math is correctly wrapped in `\\( ... \\)` or `\\[ ... \\]`\n- `\\[` and `\\]` are on their own lines\n- Math expressions are short and not entangled with complex Markdown\n- Fenced code block includes a language (`latex`)\n- Special characters are properly handled\n- The output is clean, consistent Markdown\n\nThis matches anchor 5: \"The response fully follows the Markdown with LaTeX extensions specification: all math is correctly wrapped in \\( ... \\) or \\[ ... \\] with \\[ and \\] on their own lines, math expressions are short and not entangled with complex Markdown, all fenced code blocks include a language, and any special characters that could trigger formatting are properly escaped. The overall output is clean, consistent Markdown using standard features appropriately.\""
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777872406,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 477,
+      "prompt_tokens": 742,
+      "total_tokens": 1219,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 512
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 7.2339
+}

@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:40:42.300218+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 5
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYqI2tUkBsudk9EZYfcaYHHMrVVU",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Got it. I’ll assume you’re comfortable with Go’s memory model, happens-before, and basic goroutine/channel semantics, and focus on how I’d actually *debug* and *reason* through a real concurrency bug with you.\n\nSince I don’t have your code yet, I’ll lay out a concrete, practical process I’d use with another senior engineer, and you can plug your specific case into it—or share the snippet and we can apply this live.\n\n---\n\n## 1. Clarify the failure mode precisely\n\nFirst thing I’d nail down with you:\n\n- Is it:\n  - data race (detected by `-race`)?\n  - deadlock (goroutines stuck, often all sleeping or blocked)?\n  - liveness issue (goroutine leak, work stops progressing)?\n  - correctness bug (wrong result, but no panic, no race reported)?\n- Is it:\n  - reproducible on demand?\n  - only appearing under load / with `-race` / with many cores?\n\nThis isn’t to classify academically; it dictates where to look:\n\n- **Race / memory ordering issue** → focus on shared state, ordering, and missing synchronization.\n- **Deadlock / blocking** → focus on channel topology, lock acquisition order.\n- **Liveness / leak** → focus on goroutines that wait on events that might never happen.\n- **Wrong result with no race** → usually:\n  - incorrect assumptions about when goroutines finish (e.g., using `time.Sleep` vs sync),\n  - misuse of `context` or cancellation,\n  - logical races *within* properly synchronized state (e.g., lost signals, misordered events).\n\nIf you tell me “race vs deadlock vs wrong result,” I’d prune the search differently.\n\n---\n\n## 2. Draw the concurrency *shape* (not the code)\n\nWhen I see a concurrency bug, I usually ignore details and sketch:\n\n- Nodes: goroutines (types/roles, not instances).\n- Edges:\n  - channels: directional, with buffer sizes.\n  - locks: which goroutines acquire which locks, in what *relative* order.\n  - shared vars: who writes, who reads, and under which locks or happens-before conditions.\n\nThis answers:\n\n- “What’s the control topology?”\n- “Where can cycles exist?” (deadlocks)\n- “Where is shared state without obvious ordering?” (races / subtle ordering bugs)\n\nExample reasoning questions I’d ask about your system:\n\n- Do you have any goroutine that:\n  - reads a value that’s written by others, *without* a clear sync primitive connecting them?\n  - depends on “event A happens before event B” but that’s only “true in practice,” not enforced?\n- Any chain like: `G1` sends on `ch1` → `G2` reads from `ch1`, sends on `ch2` → `G3` …  \n  Any place where the last receiver might exit early or leak?\n\nThis step is often enough to see: “Oh, this goroutine can exit before it signals X,” or “We’re closing this channel while writers may still be active.”\n\n---\n\n## 3. Identify the *shared state* and its synchronization contract\n\nInstead of asking “is there a lock here,” I’d ask: what is the *contract* you believe:\n\n- “This variable is logically owned by X”\n- “The only safe way to mutate Y is under lock Z”\n- “This channel is closed exactly once, after all senders have exited”\n\nThen I check where the code violates your *own contract*.\n\nSome patterns I’d specifically look for:\n\n1. **Maps and slices shared across goroutines**\n\n   Even if they’re “effectively immutable,” is that actually true? E.g.:\n\n   - Writing to a `map` *anywhere* after goroutines start reading it → UB unless synchronized.\n   - Appending to a slice and concurrently reading from it, even if index < current len under some conceptual invariant.\n\n2. **Use of `sync.Once` vs `init` vs lazy init**\n\n   Racy lazy initialization is classic:\n\n   ```go\n   var v *Config\n\n   func GetConfig() *Config {\n       if v == nil {\n           v = loadConfig() // unsynchronized write\n       }\n       return v\n   }\n   ```\n\n   You won’t always see it as obviously as this; it could be embedded in struct methods.\n\n3. **Atomic vs non-atomic mixes**\n\n   - `atomic.AddInt64(&x, 1)` in one place, plain `x` read in another, without ordering:\n     still a data race if not all accesses use atomics or locks.\n   - Correct atomic usage but with incorrect memory ordering assumptions: e.g., missing `Store`/`Load` semantics when publishing a",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844442,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 77,
+      "total_tokens": 1077,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 9.8963
+}

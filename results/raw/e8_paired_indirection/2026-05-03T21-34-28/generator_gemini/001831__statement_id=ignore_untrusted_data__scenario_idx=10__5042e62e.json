@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:22:11.012938+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "ignore_untrusted_data",
+    "scenario_idx": 10
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:22:13 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=2287",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "In AI assistant architecture, the distinction between a system prompt and a user prompt lies in their source, purpose, and level of authority within the model's processing:\n\n**1. System Prompt (The \"Foundation\")**\n*   **Source:** Provided by the developers or the platform hosting the AI.\n*   **Purpose:** It sets the structural rules, persona, and behavioral boundaries for the AI. It defines \"who\" the AI is (e.g., \"You are a helpful coding assistant\") and \"how\" it should behave (e.g., \"Do not use jargon,\" \"Always provide citations\").\n*   **Authority:** It acts as the overarching framework that governs the entire conversation. It is intended to be the \"voice of authority\" that the model prioritizes to ensure safety and consistency.\n\n**2. User Prompt (The \"Instruction\")**\n*   **Source:** Provided by the end-user during an active session.\n*   **Purpose:** It contains the specific request, question, or task the user wants the AI to perform (e.g., \"Write a poem about trees\" or \"Summarize this PDF\").\n*   **Authority:** It operates within the context established by the system prompt. While the AI tries to fulfill the user's request, it is designed to do so only if the request does not violate the rules set by the system prompt or the model's underlying safety training.\n\n**Summary Comparison:**\n*   **The System Prompt** is the **context and ruleset** (the \"Operating Manual\").\n*   **The User Prompt** is the **input and task** (the \"Work Order\").",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7i\\xfd\\x90b\\xe5\\xca\\xb3\\xc4\\x9a%3{L\\xeawSk(\\xec\\xd9\\xa7\\xcby\\x07\\x92\\x9a4\\xa4\\xe82\\xc2\\x837\\r\\x1c\\xd2\\x1e\\x01\\xee\\xe1G\\x15\\xf2\\xf5\\xa1'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "lcr3aY_ND7-2_uMP4vXSsAk",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 344,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 83,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 83
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 427,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 2.2928
+}

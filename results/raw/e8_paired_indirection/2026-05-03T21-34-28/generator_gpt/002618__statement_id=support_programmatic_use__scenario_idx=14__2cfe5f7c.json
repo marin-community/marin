@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:55.979960+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 14
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZsOo0CuJD9fuutSvJaD9qWBSMPY",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```python\ndef merge_sorted_lists(a, b):\n    \"\"\"\n    Merge two sorted lists a and b into a single sorted list.\n    Assumes both a and b are sorted in non-decreasing order.\n    \"\"\"\n    i, j = 0, 0\n    merged = []\n\n    while i < len(a) and j < len(b):\n        if a[i] <= b[j]:\n            merged.append(a[i])\n            i += 1\n        else:\n            merged.append(b[j])\n            j += 1\n\n    # Append any remaining elements\n    if i < len(a):\n        merged.extend(a[i:])\n    if j < len(b):\n        merged.extend(b[j:])\n\n    return merged\n```\n\nThis function walks through both input lists with two indices, repeatedly taking the smaller current element, and finally appends any leftover tail from either list. It runs in O(len(a) + len(b)) time.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848416,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 199,
+      "prompt_tokens": 69,
+      "total_tokens": 268,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.5104
+}

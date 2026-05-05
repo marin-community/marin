@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:55:29.767266+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ4cm2vwL1tfW1P0ZpwBQBs1dgrw",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Civil law systems are based primarily on comprehensive, codified statutes enacted by the legislature, with judges applying these codes to resolve disputes but playing a relatively limited role in developing the law, and judicial decisions having persuasive rather than binding force. Common law systems, by contrast, give central importance to judge-made law, with courts creating and refining legal rules through case-by-case adjudication and the doctrine of stare decisis, under which higher courts’ precedents bind lower courts, so that judicial decisions themselves are a primary source of law alongside statutes.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845330,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 116,
+      "prompt_tokens": 59,
+      "total_tokens": 175,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.8237
+}

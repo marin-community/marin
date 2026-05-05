@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:19:05.335603+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 18
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZRRTSH4oD82LbIdVysIqfYlePJC",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Big-O Notation: A Concise Explanation\n\n## What Big-O Describes\n\nBig-O notation describes how the running time or space usage of an algorithm grows as the input size increases.  \nWe usually denote input size by \\( n \\).\n\nInstead of precise timings like “3 milliseconds,” Big-O focuses on *how the time grows* when \\( n \\) becomes large. It gives an *upper bound* on the growth rate.\n\nFormally, a function \\( T(n) \\) is in \\( O(f(n)) \\) if there exist constants \\( c > 0 \\) and \\( n_0 \\ge 0 \\) such that for all \\( n \\ge n_0 \\):\n\n\\[\nT(n) \\le c \\cdot f(n)\n\\]\n\nSo saying “the algorithm runs in \\( O(f(n)) \\)” means:  \nbeyond some input size \\( n_0 \\), its running time never grows faster than a constant times \\( f(n) \\).\n\n---\n\n## Why Constants and Lower-Order Terms Are Ignored\n\nWhen using Big-O, we drop:\n\n- Constant factors (for example, 3, 1000, or 0.5)\n- Lower-order terms (for example, an extra \\( n \\) term next to \\( n^2 \\))\n\nExample:  \nSuppose the running time is\n\n\\[\nT(n) = 3n^2 + 5n + 20\n\\]\n\nFor large \\( n \\), the \\( 3n^2 \\) term dominates. The \\( 5n \\) and \\( 20 \\) become relatively insignificant. In Big-O terms we say:\n\n\\[\nT(n) \\in O(n^2)\n\\]\n\nWe do *not* write \\( O(3n^2 + 5n + 20) \\), because Big-O already abstracts away those details.\n\n---\n\n## Common Big-O Classes\n\nHere are common growth rates, from fastest (best) to slowest (worst), in terms of running time as \\( n \\) grows.\n\n### Constant time: \\( O(1) \\)\n\nThe running time does not grow with \\( n \\).  \nExamples:\n\n- Accessing a single element in an array by index.\n- Checking if a number is even using modulo 2.\n\nThe key idea: a *fixed* amount of work, regardless of input size.\n\n---\n\n### Logarithmic time: \\( O(\\log n) \\)\n\nThe running time grows proportionally to the logarithm of \\( n \\) (usually base 2, but Big-O ignores the base).  \nExamples:\n\n- Binary search in a sorted array.\n- Operations on balanced binary search trees (search, insert, delete), often \\( O(\\log n) \\).\n\nIntuition: you repeatedly cut the problem size in half (or another constant factor).\n\n---\n\n### Linear time: \\( O(n) \\)\n\nThe running time increases directly with \\( n \\).  \nExamples:\n\n- Scanning through an array once to find the maximum element.\n- Counting elements that match some condition in a list.\n\nIf you double the input size, the work roughly doubles.\n\n---\n\n### Linearithmic time: \\( O(n \\log n) \\)\n\nCommon for efficient sorting algorithms.  \nExamples:\n\n- Mergesort.\n- Heapsort.\n- Quicksort (average case).\n\nYou do something like a linear pass, but you repeat it in a logarithmic pattern or structure.\n\n---\n\n### Quadratic time: \\( O(n^2) \\)\n\nTime grows with the square of the input size.  \nExamples:\n\n- Comparing each element with every other element using two nested loops over the same list.\n- Some simple sorting algorithms like bubble sort and insertion sort in the worst case.\n\nIf \\( n \\) doubles, the work increases by about a factor of four.\n\n---\n\n### Polynomial time: \\( O(n^k) \\) for some constant \\( k \\)\n\nQuadratic is one example (where \\( k = 2 \\)). Other examples:\n\n- Cubic time \\( O(n^3) \\), often from three nested loops.\n- More generally, any fixed power of \\( n \\).\n\nPolynomial time is often considered “feasible” in theory (though large powers can be impractical).\n\n---\n\n### Exponential time: \\( O(2^n) \\), \\( O(3^n) \\), etc.\n\nRunning time doubles (or worse) with each additional input element.  \nExamples:\n\n- Naive algorithms that try all subsets of an \\( n \\)-element set without pruning.\n- A brute-force solution to the traveling salesperson problem that checks all possible permutations.\n\nExponential algorithms become infeasible very quickly as \\( n \\) grows.\n\n---\n\n### Factorial time: \\( O(n!) \\)\n\nEven worse than exponential.  \nExample:\n\n- Generating and checking all permutations of",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846745,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 65,
+      "total_tokens": 1065,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 6.7933
+}

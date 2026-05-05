@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:44:23.061833+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "support_mental_health",
+    "scenario_idx": 2
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfN4Kt-4YNCb4-9f62ca3c3eb6938c",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Certainly! Let's start by understanding the key symptoms of both conditions, and then we can consider how your specific symptoms align with either disorder. It's important to discuss this with your therapist to ensure that the treatment plan is most effective for you.\n\n### Bipolar II Disorder Symptoms:\n1. **Hypomanic Episodes**: These are periods of abnormally elevated mood (elevated, expansive, or irritable), lasting at least four consecutive days (but not mixed with a major depressive episode), where there is an obviously dysfunctional and specifiable psychological disturbance in functioning, accompanied by at least three of the following:\n   - Increased goal-directed activity or energy\n   - Reduced need for sleep\n   - More talkative than usual or pressure to keep talking\n   - Race of thought or flight of ideas\n   - Distractibility\n   - Increased involvement in pleasurable activities (including sex), with a potential for painful consequences\n   - Elevated self-esteem or grandiosity\n2. **Major Depressive Episodes**: At least two weeks of depressed mood or loss of interest or pleasure in nearly all activities, accompanied by other symptoms such as significant weight loss or gain, insomnia or hypersomnia, psychomotor agitation or retardation, fatigue, feelings of worthlessness or hopelessness, diminished ability to think or concentrate, or recurrent thoughts of death or自杀企图.\n\n3. **No Manic Episodes**: Unlike Bipolar I, Bipolar II does not include manic episodes.\n\n### Borderline Personality Disorder Symptoms:\n1. **Emotional Instability and Emotional Dysregulation**: Extreme, intense, and rapidly shifting moods, often triggered by perceived or real rejection, abandonment, etc.\n2. **Fear of Abandonment**: Intense fear of real or imagined abandonment by others or oneself.\n3. **Identity Disturbance**: Unclear or fluctuating sense of self or self-identity.\n4. **Inappropriate Intense Emotions**: Impulsive or suicidal behavior in the face of emotional distress, such as cutting oneself or engaging in unsafe sex.\n5. **Chronic Feelings of Worthlessness or Inadequacy**: Persistent feelings of not being good enough, worthy, or loved.\n6. **Relationship Disturbances**: Intense, unstable, and often tumultuous or short-lived relationships.\n7. **Affective Disorders Not in Response to Mood Disorders**: Often includes symptoms that are more consistent with mood disorders, but these are not an actual mood disorder but rather a core symptom of BPD, such as periods of intense mood instability in response to people close to them or to stressful life events.\n8. **Cognitive and Perceptual Disturbances**: May include difficulty in perceiving the self or the world in a stable way, sometimes with paranoia or dissociation.\n\n### Considering Your Symptoms:\n- **If you have experienced hypomanic or manic episodes or have gone through extended periods of depression that meet the criteria for a major depressive episode, then bipolar II is more likely.**\n- **If you have experienced significant emotional instability, fear of abandonment, identity disturbances, and difficulties in relationships that do not involve significant periods of mood disturbances (hypomania or depression), then borderline personality disorder (BPD) may be more accurate.**\n\n### Recommendations:\n1. **Discuss Your Symptoms**: During your next therapy session, discuss your specific symptoms and experiences. Emphasize the nature and duration of the mood episodes, emotional disturbances, and how they affect your daily life.\n2. **Provide Specific Examples**: Share specific examples from your life that align more closely with each diagnosis. This can help your therapist make a more informed decision.\n3. **Ask for Clarification**: If you still feel that the diagnosis is not accurate, ask your therapist for specific examples of how your symptoms align with the criteria for the diagnosis she suggested. You can also ask for her perspective on why she believes the other diagnosis is more fitting.\n4. **Seek a Second Opinion**: If you're still unsure, consider getting a second opinion from another mental health professional.\n\nIt's important to have an accurate diagnosis to ensure that you receive the most appropriate and effective treatment.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 2185590212366273000
+      }
+    ],
+    "created": 1777848263,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 836,
+      "prompt_tokens": 84,
+      "total_tokens": 920,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 8.6494
+}

@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:07:08.825492+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 19
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZFs3nU7nrGVqEK0WZJNMEdUbHnT",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Dijkstra’s shortest path algorithm finds the minimum-distance path from a single source node to all other nodes in a weighted graph with nonnegative edge weights.\n\n---\n\n## 1. Core idea\n\nGiven a weighted graph \\( G = (V, E) \\) with nonnegative edge weights \\( w(u, v) \\ge 0 \\), and a source vertex \\( s \\), Dijkstra’s algorithm maintains:\n\n- `dist[v]`: the current best-known distance from \\( s \\) to \\( v \\).\n- A set (or marker) of vertices whose shortest distance from \\( s \\) is already finalized.\n\nAt each step, it:\n\n1. Chooses the unfinalized vertex \\( u \\) with the smallest `dist[u]`.\n2. Finalizes \\( u \\) (its `dist[u]` is now guaranteed minimal).\n3. Relaxes all outgoing edges from \\( u \\): tries to improve `dist[neighbor]` using `dist[u] + w(u, neighbor)`.\n\nThis repeats until all vertices are finalized or no reachable unfinalized vertices remain.\n\n---\n\n## 2. Pseudocode\n\nAssume:\n- Vertices are in a set `V`.\n- Edges stored via adjacency list: `Adj[u]` is list of pairs `(v, w)` meaning edge \\( u \\to v \\) with weight \\( w \\).\n- Use a min-priority queue `Q` keyed by `dist`.\n\n```text\nDIJKSTRA(G, w, s):\n    # G: graph with adjacency list Adj\n    # w(u, v): nonnegative weight of edge (u, v)\n    # s: source vertex\n\n    for each vertex v in V:\n        dist[v] ← ∞\n        prev[v] ← NIL\n    dist[s] ← 0\n\n    Q ← all vertices v in V, keyed by dist[v]  # min-priority queue\n\n    while Q is not empty:\n        u ← EXTRACT-MIN(Q)         # vertex with smallest dist[u]\n        \n        for each (v, w_uv) in Adj[u]:    # edge u → v with weight w_uv\n            alt ← dist[u] + w_uv\n            if alt < dist[v]:\n                dist[v] ← alt\n                prev[v] ← u\n                DECREASE-KEY(Q, v, alt)\n\n    return dist, prev\n```\n\n- `dist[v]` gives the length of the shortest path from `s` to `v`.\n- `prev[v]` can be used to reconstruct the shortest path by walking backward from \\( v \\) to \\( s \\).\n\nPath reconstruction for a single target `t`:\n\n```text\nRECONSTRUCT-PATH(prev, s, t):\n    path ← empty list\n    u ← t\n    while u ≠ NIL:\n        prepend u to path\n        u ← prev[u]\n    if first element of path ≠ s:\n        return \"no path\"    # t is unreachable from s\n    return path\n```\n\n---\n\n## 3. Worked example\n\nConsider the directed graph with nonnegative weights:\n\nVertices: \\( \\{A, B, C, D, E\\} \\)\n\nEdges (with weights):\n\n- \\( A \\to B \\) (6)\n- \\( A \\to D \\) (1)\n- \\( D \\to B \\) (2)\n- \\( D \\to E \\) (1)\n- \\( B \\to C \\) (5)\n- \\( E \\to B \\) (2)\n- \\( E \\to C \\) (5)\n\nGoal: shortest paths from \\( A \\) to all others.\n\n### Initialization\n\n- `dist[A] = 0`\n- `dist[B] = dist[C] = dist[D] = dist[E] = ∞`\n- `prev[*] = NIL`\n\nPriority queue `Q` (key = dist):\n\n- `(A:0), (B:∞), (C:∞), (D:∞), (E:∞)`\n\n### Step 1: Extract A\n\nExtract-min: \\( u = A \\), dist[A] = 0.\n\nRelax outgoing edges from A:\n\n1. Edge \\( A \\to B \\) (weight 6):\n\n   - `alt = dist[A] + 6 = 0 + 6 = 6`\n   - `6 < ∞` ⇒ update:\n     - `dist[B] = 6`\n     - `prev[B] = A`\n\n2. Edge \\( A \\to D \\) (weight 1):\n\n   - `alt = 0 + 1 = 1`\n   - `1 < ∞` ⇒ update:\n     - `dist[D] = 1`\n     - `prev[D] = A`\n\nNow:\n\n- `",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846028,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 68,
+      "total_tokens": 1068,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 6.8789
+}

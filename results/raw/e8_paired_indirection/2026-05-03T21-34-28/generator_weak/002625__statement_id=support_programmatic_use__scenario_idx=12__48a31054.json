@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:58.712265+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 12
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfNrbL-4YNCb4-9f62ce08fb11f017",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "The `user` object schema can be described as follows:\n\n- **ID**: A unique identifier for the user. It should be a string and must not be empty.\n- **Name**: The user's name. It should be a string and must not be empty.\n- **Email**: The user's email address. It should be a string and must not be empty. It should also follow the standard email format.\n- **Password**: The user's password. It should be a string and typically should be a secure hashed value rather than plaintext.\n- **Role**: The user's role or type. Possible values include \"admin\", \"moderator\", \"user\", etc.\n- **Created_at**: The timestamp for when the user was created. It should be a string in ISO 8601 format.\n- **Updated_at**: The timestamp for the last update to the user. It should be a string in ISO 8601 format.\n- **Last_login**: The timestamp for the user's last login. It should be a string in ISO 8601 format if applicable.\n\nHere’s an example JSON object for the `user` schema:\n\n```json\n{\n  \"id\": \"123456\",\n  \"name\": \"John Doe\",\n  \"email\": \"johndoe@example.com\",\n  \"role\": \"user\",\n  \"created_at\": \"2023-10-04T12:34:56Z\",\n  \"updated_at\": \"2023-10-05T12:34:56Z\",\n  \"last_login\": \"2023-10-06T12:34:56Z\"\n}\n```\n\nIs there any specific field that needs further clarification or is there anything else you need to add to the schema?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 12077369649662994000
+      }
+    ],
+    "created": 1777848418,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 386,
+      "prompt_tokens": 87,
+      "total_tokens": 473,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 4.1837
+}

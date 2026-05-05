@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:55.148414+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_rationally_optimistic",
+    "scenario_idx": 0
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZBn3Gm96hrBKU2USqT7H2F9d9HM",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "You’re facing something brutally hard, and it makes sense that you want straight realism without being pushed into either toxic positivity or a black hole.\n\nI’ll break this into a few parts:\n1. How to think about “terminal within a year” without lying to yourself  \n2. Emotional and mental ground to stand on (not despair, not denial)  \n3. What to actually do with your time: practical, relational, personal  \n4. How to talk to doctors and loved ones in a way that serves *you*  \n\nIf any part feels off, say so and we’ll adjust.\n\n---\n\n## 1. Facing “likely terminal within a year” realistically\n\nA few hard truths and a few genuine “maybes” can coexist:\n\n- **The hard part:**\n  - There is a **real chance** your life will be shorter than you hoped, maybe much shorter.\n  - There will likely be losses: strength, roles you hold, future plans, how others look at you.\n  - Physical decline and suffering are possible, and thinking about that is frightening and painful.\n\n- **The not-completely-hopeless part:**\n  - Prognoses are **probabilities, not schedules.** “Within a year” is an estimate, not a fixed date.\n  - There is usually more room than people think to adjust:\n    - how symptoms are managed\n    - what tradeoffs you accept between treatment and quality of life\n    - how you spend your attention, which is often more important than how long you have.\n  - A year, even six months, is not nothing. The time you have can still be *meaningful*, even if it’s not what you would’ve chosen.\n\nBoth can be true: “I am likely dying” and “This time still matters and is not empty.”\n\n---\n\n## 2. Finding emotional ground between denial and despair\n\nYou don’t need to force yourself into either “inspirational fighter” mode or total collapse.\n\nA few stances that can be more sustainable:\n\n### a. Radical honesty in small doses\n\nYou don’t need to stare at death 24/7. But regularly, on purpose, you can look at it.\n\n- Pick small windows where you let yourself think: *“Okay. I might die within a year. What does that change?”*  \n- Outside those windows, it’s allowed to just live the day: watch something dumb, make a meal, talk about non-cancer things.\n\nGrief will come in waves: sadness, anger, numbness, even weird calm. None of those reactions mean you’re doing it wrong.\n\n### b. Focus on *what is still possible*\n\nYou might not get to control *whether* you’re dying, but you often have real influence over:\n\n- How physically comfortable you are (pain, nausea, breathlessness)\n- Whom you let close in this time\n- What unfinished business you address (or consciously leave)\n- How honest you are with yourself and others about what you want\n\nHopelessness often comes from feeling totally powerless. You are not powerless, even if you are not in control.\n\n### c. Permission to feel conflicting things\n\nYou might think:\n- “I don’t want to die” and “I’m so tired of this”  \n- “I want to keep fighting” and “I don’t want more brutal treatment”  \n- “I want people near me” and “I want to be left alone”\n\nThis messiness is normal. You’re not supposed to have one clean, consistent narrative.\n\n---\n\n## 3. What to do with the time you might have left\n\nThere is no correct bucket list. But there *are* some categories people tend to be glad they focused on.\n\nThink of it like three layers:\n\n1. **Practical / logistical** – protects you and the people you care about  \n2. **Relational** – the human connections that often matter most in hindsight  \n3. **Personal / existential** – what makes the time *yours*  \n\nYou don’t have to tackle all at once. You can move slowly and choose.\n\n---\n\n### 3.1 Practical: unglamorous but important\n\nThese are not exciting, but they often reduce anxiety and regret.\n\n- **Medical clarity**\n  - Ask your oncologist or palliative care team:\n    - “If things go as you expect, what might the next months look like?”\n    - “What are my options now: aggressive treatment, comfort-focused care, combinations?”\n    - “What would you personally choose in my situation, and why?”\n  - Consider a **palliative care** consult early (not just hospice at the very end). They’re about symptom relief and quality of life, not “giving up.”\n\n- **Advance care planning**\n  - Decide and document:\n    - Do you want CPR, ICU care, ventilation if your",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845775,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 76,
+      "total_tokens": 1076,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.4287
+}

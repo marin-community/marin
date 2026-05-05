@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:47:19.495674+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "transformation_exception",
+    "scenario_idx": 11
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZslXoHMwUi6VqqS6JoYImmYjA0b",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Sentiment: Positive\n\nEvidence: “our glorious cause is finally gaining momentum”",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848439,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 25,
+      "prompt_tokens": 90,
+      "total_tokens": 115,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 0.8536
+}

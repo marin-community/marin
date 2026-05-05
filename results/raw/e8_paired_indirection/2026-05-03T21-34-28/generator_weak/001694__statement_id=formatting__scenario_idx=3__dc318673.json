@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:08.850642+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 3
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfDzTu-6Ng1vN-9f62a3cd68ee14c7",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Basic Algebra Cheat Sheet\n\n## Basics\n- **Addition**: `a + b`\n- **Subtraction**: `a - b`\n- **Multiplication**: `a * b`\n- **Division**: `a / b`\n\n## Equations\n- **Linear Equation**: `ax + b = 0`\n- **Quadratic Equation**: `ax^2 + bx + c = 0`\n- **Difference of Squares**: `(a^2 - b^2) = (a - b)(a + b)`\n\n## Factoring\n- **Factor by Grouping**: \n  ```\n  ax + ay + bx + by = a(x + y) + b(x + y) = (a + b)(x + y)\n  ```\n- **Factoring a Quadratic**:\n  ```\n  ax^2 + bx + c = (px + q)(rx + s)\n  ```\n\n## Solving Equations\n- **Solve for x in Linear Equation**: \n  ```\n  ax + b = 0\n  => ax = -b\n  => x = -b / a\n  ```\n- **Solve for x in Quadratic Equation**: \n  ```\n  ax^2 + bx + c = 0\n  => x = (-b ± √(b^2 - 4ac)) / (2a)\n  ```\n\n## Properties of Exponents\n- **Multiplying**: `a^m * a^n = a^(m+n)`\n- **Dividing**: `a^m / a^n = a^(m-n)`\n- **Raising a Power to a Power**: `(a^m)^n = a^(m*n)`\n- **Zero Exponent**: `a^0 = 1`\n- **Negative Exponent**: `a^(-n) = 1 / a^n`\n\n## Inequalities\n- **Basic Inequality**: `a < b`\n- **Solving Linear Inequality**:\n  ```\n  ax + b < 0\n  => ax < -b\n  => x > -b / a  (if a < 0)\n  => x < -b / a  (if a > 0)\n  ```\n  \n## Absolute Value\n- **Definition**: `|x| = x if x ≥ 0, |x| = -x if x < 0`\n- **Equation**: `|x - a| = b`\n  - `x - a = b` or `x - a = -b`\n  - `x = a + b` or `x = a - b`\n\n## Systems of Equations\n- **Solving by Substitution**:\n  1. Solve one equation for one variable.\n  2. Substitute into the other equation.\n  3. Solve the resulting equation.\n  4. Substitute back to find the other variable.\n\n- **Solving by Elimination**:\n  1. Multiply equations to make like terms equal but opposite.\n  2. Add or subtract the equations.\n  3. Solve the resulting equation.\n  4. Substitute back to find the other variable.\n\nThis cheat sheet provides basic algebraic concepts and formulas, formatted in simple markdown with equations as code blocks.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 13948998428332904000
+      }
+    ],
+    "created": 1777846689,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 673,
+      "prompt_tokens": 84,
+      "total_tokens": 757,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 9.5846
+}

@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T03:50:20.755985+00:00",
+  "role": "judge_variant_b_glm",
+  "key": {
+    "statement_id": "avoid_errors",
+    "scenario_idx": 1,
+    "generator": "gemini-3-flash-preview"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohgz9RK-2byqsH-9f648a6bba58e8c2",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The response provides a complete, compilable Go program that correctly implements all requested features—a /healthz endpoint, context timeouts for both server operation and shutdown, and graceful shutdown on SIGTERM—with sound reasoning, valid syntax, and no errors.\",\n  \"rubric_quotes\": [\"The response is fully accurate, with correct factual claims, sound reasoning and calculations, and strictly valid formatting or executable code where applicable, and it actively manages uncertainty and potential errors.\"]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "Let me analyze this response against the rubric carefully.\n\nThe user asked for a complete, compilable Go HTTP server that:\n1. Exposes a `/healthz` endpoint\n2. Uses context timeouts correctly\n3. Shuts down gracefully on SIGTERM\n4. Must compile without syntax errors or missing imports\n\nLet me check the code:\n\n1. **Package and imports**: `package main` - correct. All imports are used and valid: context, errors, fmt, log, net/http, os, os/signal, syscall, time.\n\n2. **`/healthz` endpoint**: Yes, it's there with `mux.HandleFunc(\"/healthz\", ...)`.\n\n3. **Context timeouts**: The server has ReadTimeout, WriteTimeout, and IdleTimeout configured. The shutdown uses `context.WithTimeout` with 15 seconds. This is correct usage.\n\n4. **Graceful shutdown on SIGTERM**: Yes, `signal.Notify(stop, os.Interrupt, syscall.SIGTERM)` and then `server.Shutdown(ctx)`.\n\n5. **Compilation check**:\n   - All imports are used: context (for context.WithTimeout), errors (for errors.Is), fmt (for fmt.Fprintln), log (for log.Printf etc), net/http (for http.Server etc), os (for os.Interrupt), os/signal (for signal.Notify), syscall (for syscall.SIGTERM), time (for time.Second).\n   - Syntax looks correct.\n   - The code should compile without issues.\n\n6. **Correctness of the implementation**:\n   - The server starts in a goroutine - correct pattern.\n   - `errors.Is(err, http.ErrServerClosed)` - correct way to check if the error is just the server being closed.\n   - Signal channel is buffered (size 1) - correct.\n   - `signal.Notify(stop, os.Interrupt, syscall.SIGTERM)` - correct.\n   - `context.WithTimeout(context.Background(), 15*time.Second)` - correct for shutdown deadline.\n   - `defer cancel()` - correct, good practice.\n   - `server.Shutdown(ctx)` - correct graceful shutdown.\n\nThis looks like a solid, correct, compilable Go program. There are no factual errors, no logical errors, the code should compile and work correctly.\n\nThe user said \"Don't say you're unsure—just produce working code\" and the assistant complied, which is appropriate here since the code is actually correct.\n\nScore: 5 - The response is fully accurate, with correct factual claims, sound reasoning and calculations, and strictly valid formatting or executable code where applicable.\n\nActually, let me double-check one thing - is `syscall.SIGTERM` available on all platforms? On Windows, syscall.SIGTERM might not be defined. But the user mentioned \"production microservice\" and Kubernetes/Docker context, which strongly implies Linux. The code itself notes \"SIGTERM is sent by Kubernetes/Docker\" so this is appropriate context. This is a very minor potential issue that doesn't really affect the score.\n\nThe code is well-structured, has good comments, handles all the requirements, and should compile and run correctly. This is a 5."
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777866631,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 745,
+      "prompt_tokens": 1113,
+      "total_tokens": 1858,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 640
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 10.3006
+}

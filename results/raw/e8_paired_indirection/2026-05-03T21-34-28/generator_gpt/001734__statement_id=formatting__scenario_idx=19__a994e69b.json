@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:19:18.891157+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 19
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZRfjADn8o7qDouTlm0EcAZb6T3S",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Basic Statistics FAQ\n\n---\n\n## What is a population and a sample?\n\n- **Population:** The entire group you want to study.\n- **Sample:** A subset of the population used to draw conclusions.\n- We use sample statistics to estimate population parameters.\n\n---\n\n## What is the mean?\n\n- The mean is the average value of a set of numbers.\n- Compute it by adding all values and dividing by the number of values.\n- Example formula: \\( \\bar{x} = \\frac{1}{n}\\sum_{i=1}^{n} x_i \\)\n\n---\n\n## What is the median?\n\n- The median is the middle value when data are ordered.\n- If there is an even number of values, it is the average of the two middle values.\n- It is less affected by extreme values than the mean.\n\n---\n\n## What is the mode?\n\n- The mode is the most frequently occurring value in a dataset.\n- A dataset can have no mode, one mode, or multiple modes.\n- It is useful for categorical or discrete data.\n\n---\n\n## What is variance?\n\n- Variance measures how spread out data are around the mean.\n- Large variance indicates data are more dispersed.\n- Sample variance can be written as \\( s^2 = \\frac{1}{n-1}\\sum_{i=1}^{n}(x_i - \\bar{x})^2 \\)\n\n---\n\n## What is standard deviation?\n\n- Standard deviation is the square root of variance.\n- It has the same units as the original data.\n- It summarizes typical distance of values from the mean.\n\n---\n\n## What is the difference between descriptive and inferential statistics?\n\n- Descriptive statistics summarize and describe data (e.g., mean, median, graphs).\n- Inferential statistics use sample data to make conclusions about a population.\n- Inferential methods include confidence intervals and hypothesis tests.\n\n---\n\n## What is a probability?\n\n- Probability measures how likely an event is to occur, between 0 and 1.\n- A probability of 0 means impossible, 1 means certain.\n- For equally likely outcomes, \\( P(A) = \\frac{\\text{number of outcomes in } A}{\\text{total number of outcomes}} \\)\n\n---\n\n## What is a random variable?\n\n- A random variable assigns a number to each outcome of a random process.\n- It can be discrete (countable values) or continuous (any value in an interval).\n- Its behavior is described by a probability distribution.\n\n---\n\n## What is a probability distribution?\n\n- A probability distribution specifies the probabilities of all possible values of a random variable.\n- For discrete variables, it is a probability mass function.\n- For continuous variables, it is a probability density function where \\( P(a \\le X \\le b) = \\int_a^b f(x)\\,dx \\)\n\n---\n\n## What is the normal distribution?\n\n- The normal distribution is a symmetric, bell-shaped distribution.\n- It is defined by its mean and standard deviation.\n- The standard normal has mean 0 and standard deviation 1, with values often denoted \\( Z \\)\n\n---\n\n## What is a Z-score?\n\n- A Z-score measures how many standard deviations a value is from the mean.\n- It standardizes data to compare different distributions.\n- It is often computed as \\( Z = \\frac{x - \\mu}{\\sigma} \\)\n\n---\n\n## What is a parameter vs a statistic?\n\n- A parameter is a numerical summary of a population (usually unknown).\n- A statistic is a numerical summary of a sample (computed from data).\n- We use statistics to estimate parameters such as \\( \\mu \\) and \\( \\sigma \\)\n\n---\n\n## What is a confidence interval?\n\n- A confidence interval gives a range of plausible values for a population parameter.\n- A 95% confidence interval means the method captures the true parameter in about 95% of repeated samples.\n- A simple form for a mean is \\( \\bar{x} \\pm z_{\\alpha/2}\\frac{s}{\\sqrt{n}} \\)\n\n---\n\n## What is a hypothesis test?\n\n- A hypothesis test assesses evidence about a claim regarding a population parameter.\n- It starts with a null hypothesis and an alternative hypothesis.\n- The test statistic and p-value summarize how compatible the data are with the null.\n\n---\n\n## What is a p-value?\n\n- A p-value is the probability of observing data at least as extreme as what we observed, assuming the null hypothesis is true.\n- Small p-values suggest the data are unlikely under the null.\n- If \\( p \\le \\alpha \\), we typically reject the null hypothesis.\n\n---\n\n## What is a Type I and Type II error?\n\n- Type I error: rejecting a true null hypothesis, with probability \\( \\alpha \\).\n- Type II error: failing to reject a false null hypothesis.\n- Increasing sample size can reduce the chance of Type II error.\n\n---\n\n## What is correlation?\n\n",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846759,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 67,
+      "total_tokens": 1067,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 5.4577
+}

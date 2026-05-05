@@ -50,6 +50,14 @@ ScenarioVariant = Literal["neutral", "biased_to_a", "biased_to_b", "opposite_mod
 DisagreementLabel = Literal[
     "model_behavior",
     "cross_tension_needed",
+    # Three sub-types of what was previously the catch-all `spec_ambiguity`
+    # label. Each one maps to a different family of compiler patches; see
+    # propose_spec_repairs.py SYSTEM_PROMPT for the label → patch-type guidance.
+    "compliance_ambiguity",  # judges score the same response with >=3pt spread (rubric wording admits multiple readings)
+    "activation_ambiguity",  # judges agree on score but disagree on which active statement should control (spec is silent on the resolution)
+    "inherent_subtlety",  # pair has low calibration gap; rubric not discriminating well
+    # Legacy umbrella label. Kept for backward-compatible loading of old
+    # per_scenario_labels.jsonl files; the analyzer no longer emits it.
     "spec_ambiguity",
     "oracle_unsatisfiable",
     "scenario_bug",

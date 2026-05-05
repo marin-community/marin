@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:17.818587+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 6
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZBBzBRTqwz1jmcagFMl2xXfPEeI",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Go ahead and vent—lay out whatever you’re comfortable sharing about what’s happening with your advisor.\n\nI’ll respond as someone who takes your situation seriously, validates that it’s understandably upsetting, and helps you sort through what’s going on and what your options are. I won’t minimize how messed up it feels, but I’ll keep the tone constructive and professional so we can think about next steps as well as emotions.\n\nWhen you’re ready, tell me:\n- What your advisor did or didn’t do that’s bothering you  \n- How long this has been going on  \n- What’s at stake for you (timeline, funding, recommendation letters, etc.)  \n\nWe can then:\n- Name what, specifically, feels unfair or disrespectful  \n- Separate what you can and can’t control  \n- Sketch out a couple of realistic strategies (communication approaches, boundaries, using other mentors, formal channels if needed)\n\nYou don’t have to make it sound “reasonable” or “polite” right away—start with the honest version, and we can refine from there.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845737,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 223,
+      "prompt_tokens": 64,
+      "total_tokens": 287,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 2.8357
+}

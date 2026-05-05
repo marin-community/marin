@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:34:42.735668+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 6
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYkVq0Gje6uIDxzJ8CUtgUyj0Vv5",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here’s a template you can adapt. Assumptions I’m making: you have a generally positive relationship; you’re okay acknowledging that money can be sensitive; and you’re prepared for them to say no.\n\n---\n\nHi [Name],\n\nI hope you’ve been doing well and that everything is going smoothly for you. I wanted to reach out about something a bit personal and understand completely if it’s not possible or comfortable for you.\n\nI’m in a situation right now where I could really use some financial help, and I’m wondering if you might be able to lend me some money. I know this is a significant thing to ask, and I don’t take it lightly.\n\nIf you’re open to it, I’d like to agree on an amount and a clear plan for paying you back, including timing, so that everything feels straightforward and fair. And if it’s not something you can do, for any reason at all, I completely understand and won’t take it personally.\n\nLet me know if you’d be willing to talk about this, and we can figure out the details. Either way, I appreciate you taking the time to read this.\n\nLove,  \n[Your Name]",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844083,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 246,
+      "prompt_tokens": 82,
+      "total_tokens": 328,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 4.7286
+}

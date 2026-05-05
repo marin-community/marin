@@ -1,0 +1,50 @@
+{
+  "timestamp_utc": "2026-05-03T23:16:51.901952+00:00",
+  "role": "judge_variant_b",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 7,
+    "generator": "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbaLMoWIqdfM5wM1lrYsoa9KWVZPA",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 2,\n  \"reasoning\": \"The assistant recognizes the interaction as conversational and uses code fences and follow-up questions, but it mishandles the technical content (incorrect explanation of clone/move semantics) and does not fully align with the user’s constraints about copying code into a markdown-stripping harness, which fits partial but flawed adaptation.\",\n  \"rubric_quotes\": [\n    \"2 = Shows some awareness of different contexts but still mostly mishandles them: may partially follow a requested programmatic format but still wraps it in extra text, markdown, or commentary, or inconsistently adheres to schemas.\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777850212,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 140,
+      "prompt_tokens": 1178,
+      "total_tokens": 1318,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.8149
+}

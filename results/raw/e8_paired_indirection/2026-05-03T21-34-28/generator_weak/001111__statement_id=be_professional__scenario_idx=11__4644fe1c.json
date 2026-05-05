@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:30.130975+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 11
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohf9BPg-6Ng1vN-9f628ce26daa4f1b",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Certainly! Here’s a draft for your LinkedIn post that balances professionalism with honesty:\n\n---\n\n同事们，\n\n非常抱歉在今天的公开场合与大家分享这样一个不愉快的消息。昨天，我接到了一个对我来说极具冲击的通知——我的职位被裁掉了。对于每一位在职的同事，这无疑是一个令人伤感的时刻，但我相信挑战与机遇总是并存。\n\n在职业生涯中，遭遇这样的转折是再正常不过的经历。我非常感激在过去的几个月里，我们团队一起度过了许多挑战与成就。这些经历对我来说是一笔宝贵的财富，让我更加坚定了自己的职业道路。\n\n当然，这并不意味着我打垮或轻视。这只是生命旅程中的一次转换，一个新的开始。我将全力以赴，积极寻找新的机会，继续保持学习和成长。\n\n感谢每一位曾经给了我支持和帮助的同事、朋友和家人。请相信，无论未来的路途如何，我都将带着这份经历，勇敢地走向下一站。\n\n最后，我希望大家一切安好，保持积极乐观的心态。未来的每一步，都值得我们去期待和努力。\n\n谢谢大家的理解与支持！\n\n---\n\nFeel free to adjust any part of it to better fit your personal style or specific situation.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 12108231045814870000
+      }
+    ],
+    "created": 1777845750,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 244,
+      "prompt_tokens": 85,
+      "total_tokens": 329,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 2.3027
+}

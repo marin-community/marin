@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:06:51.087629+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZFbex0ToHa5D7wSPQ9c6e5OTGuh",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Below is a dense comparison; each point appears once where it’s most relevant. “Owner” = member/shareholder. Assumes federal rules; state rules vary.\n\n| Category | LLC (default) | LLC electing S‑corp (Form 2553) | LLC electing C‑corp (Form 8832) | S‑corp (corporation electing S) | C‑corp (traditional corporation) |\n|---------|----------------|----------------------------------|----------------------------------|----------------------------------|-----------------------------------|\n| **Federal tax classification** | Pass‑through (sole prop or partnership) | Pass‑through (Subchapter S) | C‑corp (Subchapter C) | Pass‑through (Subchapter S) | Entity‑level tax (Subchapter C) |\n| **Who pays income tax** | Owners on personal returns | Owners on personal returns | Corporation pays; owners pay on dividends | Owners on personal returns | Corporation pays; owners pay on dividends |\n| **Default tax forms** | Sch. C (single‑member) or 1065 + K‑1s (multi‑member) | 1120‑S + K‑1s | 1120 | 1120‑S + K‑1s | 1120 |\n| **Self‑employment / FICA** | All net profit generally subject to SE tax (for active owners) | Owner‑employees pay FICA on “reasonable salary” only; remaining profit not subject to SE tax | Owner‑employees pay FICA on wages; dividends not subject to FICA | Same as LLC w/ S‑election | Same as LLC w/ C‑election |\n| **Payroll requirement for owners** | Not required | Required “reasonable salary” to working owners | Required for working owners | Required “reasonable salary” to working owners | Required for working owners |\n| **Qualified business income (QBI) deduction (199A)** | Eligible (subject to limits) | Eligible (subject to limits; only pass‑through portion counts) | Not eligible | Eligible (subject to limits) | Not eligible |\n| **Double taxation risk** | No (unless C‑corp election) | No | Yes (corp tax + dividend tax) | No | Yes |\n| **Tax rate on retained profits** | Taxed to owners even if not distributed | Taxed to owners even if not distributed | Flat 21% federal corporate rate | Taxed to owners even if not distributed | Flat 21% federal corporate rate |\n| **Losses** | Flow through to owners (subject to basis, at‑risk, passive limits) | Same as LLC default | No pass‑through; stay in corporation | Flow through to owners (subject to limits) | No pass‑through; stay in corporation |\n| **Fringe benefits for owner‑employees** | Often less favorable; many benefits taxable to >2% owners | Similar to S‑corp rules | Generally more favorable; C‑corps can often deduct and owners may receive tax‑free (with rules) | Less favorable for >2% shareholders | Often most favorable for benefits |\n| **Ownership type limits** | Very flexible (individuals, entities, foreign) | Must meet S‑corp owner rules (see next column) | Very flexible | Only U.S. individuals, certain trusts/estates; no partnerships, corps, or nonresident aliens | Very flexible |\n| **Max number of owners** | No federal limit | 100 shareholders (S‑rules) | No federal limit | 100 shareholders | No federal limit |\n| **Classes of equity** | Very flexible (different economic rights) | Must respect S‑corp single‑class‑of‑stock rules economically | Very flexible | Single class of stock (voting differences allowed) | Very flexible (e.g., common, preferred) |\n| **Raising outside equity capital** | Possible but can be awkward for VCs/angels used to C‑corps | Harder (S‑corp ownership restrictions and single class) | Easier than S‑corp; still LLC form but taxed as C | Harder for institutional investors | Standard for institutional/VC funding |\n| **Investor familiarity** | Growing, but less standardized than C‑corps | Less common for institutional investors | Less common than C‑corps | Less common for institutional investors | Most familiar for investors and acquirers |\n| **Owner residency** | No federal residency restriction | Cannot have nonresident alien owners | No federal residency restriction | Cannot have nonresident alien shareholders | No federal residency restriction |\n| **Management structure** | Flexible: member‑managed or manager‑managed | Same as LLC default | Same as LLC default | Board of directors, officers (corporate formalities) | Board of directors, officers (corporate formalities) |\n| **Corporate formalities** | Generally fewer: operating agreement,",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846011,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 78,
+      "total_tokens": 1078,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 9.4838
+}

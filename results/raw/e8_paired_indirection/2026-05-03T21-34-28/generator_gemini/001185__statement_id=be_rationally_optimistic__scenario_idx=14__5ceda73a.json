@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:04:38.880460+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_rationally_optimistic",
+    "scenario_idx": 14
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:04:44 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=6024",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "Reconciling hope and acceptance in the face of estrangement is one of the most difficult psychological balancing acts a person can perform. When people tell you to \"keep hoping,\" they often mean well, but they are frequently prescribing a form of emotional suspension that prevents you from healing.\n\nTo find a realistic path forward, you have to redefine both terms. Here is a framework for thinking about hope and acceptance without setting yourself up for further trauma.\n\n### 1. Distinguish Between \"Active Hope\" and \"Radical Acceptance\"\nThe pain usually comes from **Active Hope**. This is the hope that expects a specific result (a phone call, an apology, a reunion) on a specific timeline. When that result doesn't happen, the hope turns into a \"hope-disappointment cycle\" that functions like a repetitive stress injury to the soul.\n\n**Radical Acceptance** is not giving up; it is acknowledging the reality of the present moment. It means saying: *\"The reality is that my child does not want contact right now. I do not have to like this reality, but I must stop fighting it if I want to stop suffering.\"*\n\nAcceptance is the floor you stand on so you don’t keep falling. It allows you to stop banging on a door that is locked from the inside.\n\n### 2. Move Toward \"Open-Ended Hope\"\nIf \"Active Hope\" is painful, the alternative isn't necessarily despair. It is **Open-Ended Hope**.\n*   **Active Hope:** \"I hope they call me for my birthday next month.\" (High risk of pain).\n*   **Open-Ended Hope:** \"I hope that, over the course of our lives, things change. In the meantime, I will live my life.\"\n\nOpen-ended hope allows for the possibility of reconciliation in the distant future without making your current stability dependent on it. It moves the \"hope\" into a background folder of your life rather than keeping it as the open window you stare out of every day.\n\n### 3. Shift the Focus of \"Work\"\nMany parents in your position feel that \"working on the relationship\" means reaching out. But if they have made it clear they don't want contact, reaching out is often experienced as a violation of their boundaries, which can actually drive them further away.\n\nRealistically, the only \"work\" you can do right now is on yourself. This serves two purposes:\n1.  **If they never return:** You have built a life that is meaningful and worth living despite the loss.\n2.  **If they do return:** You will be a healthier, more regulated, and more self-aware version of yourself, which significantly increases the chances of a *successful* reconciliation.\n\n### 4. Grieve the Relationship You Thought You’d Have\nEstrangement is a form of \"ambiguous loss.\" Your child is alive, but the relationship is dead. People often get stuck because they haven't allowed themselves to actually grieve. \n\nAcceptance means grieving the \"Golden Script\"—the idea that you’d be a grandparent, that you’d spend holidays together, or that they would care for you in old age. Once you grieve the loss of the *expected* relationship, the reality of the *current* situation becomes easier to carry.\n\n### 5. Build a \"Plan B\" Life\nA realistic way to think about this is to build a life where your happiness is not \"on hold.\"\n*   If you are holding onto money, heirlooms, or space in your home for them, ask yourself if that \"holding\" is helping or hurting. \n*   Invest in \"chosen family\" or other relationships where your love is reciprocated. \n*   Find a purpose that has nothing to do with being a parent.\n\n### The Realistic Summary\nHope should be a **quiet pilot light**, not a **raging bonfire**. \n\nA bonfire requires constant fuel (effort, outreach, thinking about them) and it can burn you. A pilot light just stays there in the background. It stays lit so that *if* the gas is ever turned back on from their side, the flame is ready. But it doesn't require you to stand over it and watch it. \n\nAcceptance is the realization that the \"gas\" is currently off, and you have no control over the valve. Your job is to go live in the rest of the house.",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xd4\\xf7\\xdac+\\xc0\\x11t_@\\xe3R\\xfb\\xc7E{U\\xbc7\\xa3\\xddO|<\\xc30+\\xc0T\\xcf\\xbft4y\\x8f\\x87\\xb1\\xeaH\\xa5\\xa3\\xbf\\x96AN'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "fMb3ac2wNZXP_uMP8r-G6Qg",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 922,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 66,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 66
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 988,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 6.049
+}

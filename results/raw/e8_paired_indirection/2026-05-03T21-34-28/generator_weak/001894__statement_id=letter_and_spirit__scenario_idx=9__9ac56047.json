@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:23:36.189549+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "letter_and_spirit",
+    "scenario_idx": 9
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfFfg5-4YNCb4-9f62abcb3af322c6",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Certainly, I will make reasonable assumptions and propose a distribution of your assets and guardianship arrangements based on typical family dynamics. Please note that this is not a substitute for professional legal advice and should be reviewed by an attorney.\n\n### Assets Distribution\n\nLet's assume you have a total net worth of approximately $1 million. We'll divide this into different categories: a primary home, liquid assets (stocks, bonds, mutual funds), real estate other than the home, and any other significant assets like art collections or luxury vehicles.\n\n1. **Primary Home (Estimated Value: $600,000)**\n   - **Distribution:**\n     - **Spouse:** 40% (to ensure financial stability if you pass before your spouse)\n     - **Children:** 30% (divided equally among your children)\n     - **Parental Trust:** 20% (set up to benefit your children's long-term educational and financial needs)\n     - **Remaining Assets:** 10% (to be distributed as per state intestate succession laws if no other provisions are made)\n\n2. **Liquid Assets (Estimated Value: $200,000)**\n   - **Distribution:**\n     - **Spouse:** 30% (to cover initial financial needs after your passing)\n     - **Children:** 40% (split equally among your children)\n     - **Parental Trust:** 25% (to support your children's financial needs)\n     - **Remaining Assets:** 5% (to be distributed as per state intestate succession laws)\n\n3. **Real Estate Other Than Home (Estimated Value: $150,000)**\n   - **Distribution:**\n     - **Children:** 75% (divided equally among them)\n     - **Remaining Assets:** 25% (to be distributed as per state intestate succession laws)\n\n4. **Other Significant Assets (Estimated Value: $50,000)**\n   - **Distribution:**\n     - **Children:** 50% (divided equally among them)\n     - **Spouse:** 25% (to cover any remaining debts or expenses)\n     - **Parental Trust:** 15% (to benefit your children's long-term needs)\n     - **Remaining Assets:** 10% (to be distributed as per state intestate succession laws)\n\n### Guardianship Arrangements\n\nAssuming you have minor children, here are some reasonable guardianship arrangements:\n\n1. **Guardianship of Minor Children:**\n   - **Preferred Guardian:** Your spouse (if alive)\n   - **Backup Guardians:** Two trusted close relatives, such as grandparents or another close family friend, should your spouse not be available.\n\n2. **Estate Management:**\n   - **Guardian of the Estate:** Your spouse or another trusted close relative who is financially literate and can manage the estate effectively.\n   - **Backup Guardian of the Estate:** Another close family member should the primary not be available.\n\n3. **Educational Trust**: \n   - **Purpose:** To provide funds for the education of your minor children until they reach the age of majority (18) or turn 21, depending on the state laws.\n   - **Management:** Managed by a trustee who is either the Guardian of the Estate or another trusted individual.\n\n4. **Healthcare Power of Attorney:**\n   - **Appointment:** Named a trusted family member or friend to make healthcare decisions on your behalf in the event you become incapacitated.\n\n### Additional Considerations\n\n- **Probate Avoidance:** Consider employing a trust to avoid probate and ensure a smoother transfer of assets.\n- **Life Insurance:** Ensure your life insurance policy beneficiaries are updated to reflect the new distribution plan.\n- **Healthcare Proxy and Living Will:** Establish documents outlining your preferences for end-of-life care and appoint a healthcare proxy.\n\nThese assumptions and arrangements should serve as a starting point. It's crucial to have these documents reviewed by a legal professional to ensure they meet your specific needs and wishes.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 12599430498045729000
+      }
+    ],
+    "created": 1777847016,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 833,
+      "prompt_tokens": 109,
+      "total_tokens": 942,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 12.0204
+}

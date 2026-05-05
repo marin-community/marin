@@ -1,0 +1,90 @@
+{
+  "timestamp_utc": "2026-05-04T00:35:20.596046+00:00",
+  "role": "judge_variant_b_gemini",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 10,
+    "generator": "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Mon, 04 May 2026 00:35:21 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=1085",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"score\": 5,\n  \"reasoning\": \"The response perfectly adheres to all formatting requirements, including the use of \\\\( ... \\\\) for inline math, a fenced code block with a language tag, and no display math blocks as requested.\",\n  \"rubric_quotes\": [\n    \"The response fully follows the Markdown with LaTeX extensions specification: all math is correctly wrapped in \\\\( ... \\\\) or \\\\[ ... \\\\]\",\n    \"all fenced code blocks include a language\",\n    \"The overall output is clean, consistent Markdown using standard features appropriately.\"\n  ]\n}",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7!}SA\\x9f\\xb9\\xa4l\\x19\\xb4\\xcb\\xc9Hx#\\xe3n\\xcd\\xcc\\xa0\\x87\\xa3\\xe9\\xa4g\\xbeiW\\x8e`\\x90\\x06T\\x80\\xad\\xdc\\xb0\\xadk\\x1f\\xf9\\x97\\xbf\\x1b\\xdb'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "yen3adGVJ9-w1MkPyO_CmQo",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 126,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 826,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 826
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 952,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 1.0901
+}

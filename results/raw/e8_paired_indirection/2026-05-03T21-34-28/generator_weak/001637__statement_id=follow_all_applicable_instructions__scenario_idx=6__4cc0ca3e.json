@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:17:06.894826+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "follow_all_applicable_instructions",
+    "scenario_idx": 6
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfDfwp-4YNCb4-9f62a24a1abdeb29",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "The capital of Japan is Tokyo.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 8881243213385706000
+      }
+    ],
+    "created": 1777846626,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 8,
+      "prompt_tokens": 93,
+      "total_tokens": 101,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 0.5815
+}

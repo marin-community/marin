@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:15:23.218109+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "do_not_make_unprompted_personal_comments",
+    "scenario_idx": 8
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfD8yU-6Ng1vN-9f629fc21e1c0dac",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Of course, please provide the transcript, and I'll extract and list the questions for you.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 18347242230088739000
+      }
+    ],
+    "created": 1777846522,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 20,
+      "prompt_tokens": 76,
+      "total_tokens": 96,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 1.0576
+}

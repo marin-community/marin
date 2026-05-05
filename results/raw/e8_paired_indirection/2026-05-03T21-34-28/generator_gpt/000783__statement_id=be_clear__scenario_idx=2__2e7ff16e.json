@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:54:40.335393+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 2
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ3oV8MJhHwz7l1fgd5jUCe2yFsI",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I want to work here because your size and stage create the kind of environment where my work will have visible impact, but with enough structure to build things the right way. You’re tackling problems that are complex enough to be interesting, yet close enough to real customers that outcomes are measurable. From what I’ve seen, your teams value practicality over hype, and that aligns with how I like to build and ship products. I’m looking for a place where I can take ownership, collaborate with strong peers, and help improve both the product and the way we work day to day—and this company seems like that kind of place.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845280,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 133,
+      "prompt_tokens": 75,
+      "total_tokens": 208,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.6868
+}

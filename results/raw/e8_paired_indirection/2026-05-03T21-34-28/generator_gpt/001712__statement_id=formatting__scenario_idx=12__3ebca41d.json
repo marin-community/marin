@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:49.765175+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 12
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZRBXP7AW9SXMd1evXou4dZ5S4Nl",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Dot Product\n\nThe dot product of two vectors in \\(\\mathbb{R}^n\\), denoted by \\(\\mathbf{a} \\cdot \\mathbf{b}\\), is defined as the sum of the products of their corresponding components.\n\n\\[\n\\mathbf{a} \\cdot \\mathbf{b} = \\sum_{i=1}^{n} a_i b_i\n\\]\n\n```latex\n\\[\n\\mathbf{a} \\cdot \\mathbf{b} = \\sum_{i=1}^{n} a_i b_i\n\\]\n```",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846729,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 130,
+      "prompt_tokens": 74,
+      "total_tokens": 204,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.086
+}

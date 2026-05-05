@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:54.341426+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 13
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZRGsGgvil5WpGvgEAFTpv3MH4n1",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "| Distribution | Support | PDF (rendered inline LaTeX) | PDF as literal text (verbatim, not rendered) |\n|-------------|---------|-----------------------------|----------------------------------------------|\n| Normal \\(N(\\mu,\\sigma^2)\\) | \\(x \\in \\mathbb{R}\\) | \\(f(x) = \\frac{1}{\\sqrt{2\\pi\\sigma^2}} \\exp\\!\\left(-\\frac{(x-\\mu)^2}{2\\sigma^2}\\right)\\) | `\\(f(x) = \\frac{1}{\\sqrt{2\\pi\\sigma^2}} \\exp\\!\\left(-\\frac{(x-\\mu)^2}{2\\sigma^2}\\right)\\)` |\n| Exponential \\(\\text{Exp}(\\lambda)\\) | \\(x \\ge 0\\) | \\(f(x) = \\lambda e^{-\\lambda x}\\) | `\\(f(x) = \\lambda e^{-\\lambda x}\\)` |\n| Uniform \\(\\text{Unif}(a,b)\\) | \\(a \\le x \\le b\\) | \\(f(x) = \\frac{1}{b-a}\\) | `\\(f(x) = \\frac{1}{b-a}\\)` |",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846734,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 277,
+      "prompt_tokens": 70,
+      "total_tokens": 347,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.7127
+}

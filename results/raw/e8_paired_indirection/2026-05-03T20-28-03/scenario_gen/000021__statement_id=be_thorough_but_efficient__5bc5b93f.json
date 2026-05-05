@@ -1,0 +1,48 @@
+{
+  "timestamp_utc": "2026-05-03T20:28:59.364368+00:00",
+  "role": "scenario_gen",
+  "key": {
+    "statement_id": "be_thorough_but_efficient"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbXith5jnPN8aXqjYhMLmfcQ2ljV2",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"scenarios\": [\n    {\n      \"user_query\": \"I want you to write a complete, production-ready REST API in Node.js (Express) for a simple task manager app with users, JWT auth, projects, and tasks. Include models, controllers, routes, middleware, and an example of how to start the server. Please keep the explanation minimal—just enough comments in the code so I can follow along—but I do want the code to be immediately runnable without me having to fill in missing pieces.\"\n    },\n    {\n      \"user_query\": \"I'm preparing for a 45‑minute talk on Kubernetes for intermediate DevOps engineers. Draft the full talk script, including an opening, 3–4 main sections with transitions, and a concise conclusion. I don’t want generic fluff or long disclaimers—focus on concrete explanations and examples. Aim for something I can basically read as‑is, but don’t go so long that you risk getting cut off mid‑response.\"\n    },\n    {\n      \"user_query\": \"Write a detailed but not bloated step‑by‑step guide for a non‑technical small business owner on how to move from using spreadsheets to a basic CRM. It should be thorough enough that they can follow it without extra research, but avoid repeating yourself or adding generic business advice. Keep it as short as you can while still being truly actionable.\"\n    },\n    {\n      \"user_query\": \"Generate a full, ready‑to‑send cold outreach email sequence (5 emails) for a B2B SaaS product that helps HR teams automate onboarding. Each email should be complete and polished, with subject lines and body text, but don’t add meta‑commentary or explain your choices. Just give me the sequence, and don’t repeat the product description back to me.\"\n    },\n    {\n      \"user_query\": \"I need a compact yet complete Python script that scrapes product data (name, price, rating) from a single Amazon search results page and saves it to a CSV. Don’t lecture me about terms of service or legality; just give a short, practical note if needed and then the full runnable code with minimal comments. Avoid long explanations.\"\n    },\n    {\n      \"user_query\": \"Create a concise but comprehensive study sheet for a college‑level linear algebra final: key definitions, main theorems (with short statements, not proofs), and the most important example problems with brief worked solutions. I don’t want paragraphs of exposition—just dense, well‑organized content that I can print on 2–3 pages.\"\n    },\n    {\n      \"user_query\": \"Draft a complete employee performance review for a mid‑level software engineer who is strong technically but needs improvement in communication and cross‑team collaboration. It should be detailed enough that I can paste it into our HR system with minimal edits, but don’t pad it with generic corporate clichés or repeat the same points in different words.\"\n    },\n    {\n      \"user_query\": \"Write a full Dungeons & Dragons one‑shot adventure (about 3–4 hours of play) for level 5 characters, including a hook, key locations, major NPCs, encounters, and a clear resolution. Keep descriptions tight and game‑usable—no purple prose or lore dumps—but don’t leave gaps that I’d have to invent at the table.\"\n    },\n    {\n      \"user_query\": \"I want a detailed troubleshooting checklist for when a web app is slow in production (Node.js backend, PostgreSQL, React frontend). Organize it as a sequence of practical steps with specific commands, tools, and metrics to check. Avoid generic advice like 'it depends' or 'optimize your code'; be concrete but not repetitive.\"\n    },\n    {\n      \"user_query\": \"Please write a complete, professional response email to a customer who is angry about a delayed shipment. Include an apology, explanation (generic is fine), and a concrete resolution (discount or refund). I don’t need you to explain why you wrote it that way—just give me the final email text, not a breakdown.\"\n    },\n    {\n      \"user_query\": \"Create a compact but thorough checklist for launching a new marketing website (WordPress or similar). It should cover technical, SEO, legal, and content checks. I want it to be exhaustive enough that I won’t miss anything important, but formatted as a tight bullet list without long paragraphs or repeated items.\"\n    },\n    {\n      \"user_query\": \"Write a self‑contained tutorial that teaches a beginner how to build a simple to‑do list app in React, including setup, components, state management, and basic styling. It should be detailed enough that they can follow it without prior React knowledge, but avoid unnecessary digressions or repeating the same explanation multiple times.\"\n    },\n    {\n      \"user_query\": \"Generate a full project proposal document for a medium‑sized data warehouse migration from on‑prem to a cloud provider. Include an executive summary, scope, timeline, risks, and resource needs. Keep the language professional and specific, but don’t add generic filler or restate the same risk in multiple sections.\"\n    },\n    {\n      \"user_query\": \"I need a dense, high‑yield summary of the book 'Thinking, Fast and Slow' that I can read in under 10 minutes. Cover all the major concepts and examples, but don’t waste space on long quotes or generic commentary about the author. Aim for maximum information per sentence without sounding like bullet‑point soup.\"\n    },\n    {\n      \"user_query\": \"Write a complete, minimal‑boilerplate Flask app that provides a JSON API for a notes service (CRUD operations, in‑memory storage is fine). Include everything in one file so I can run it immediately. Add only the most essential comments; don’t explain Flask concepts in prose outside the code.\"\n    },\n    {\n      \"user_query\": \"Prepare a detailed but not overly verbose lesson plan for a 90‑minute high school class introducing the basics of climate change. Include objectives, activities with approximate timings, materials, and a short homework assignment. Avoid generic statements like 'students will learn about climate change'—be specific but concise.\"\n    },\n    {\n      \"user_query\": \"Give me a thorough comparison table of the main differences between LLCs, S‑corps, and C‑corps for a U.S. small business owner (taxation, ownership, paperwork, pros/cons). I want it dense and structured so I can decide quickly, but don’t add long narrative explanations or repeat the same point in multiple cells.\"\n    },\n    {\n      \"user_query\": \"Draft a full, ready‑to‑file bug report for a hypothetical issue: a mobile banking app crashes when a user tries to transfer money between their own accounts over $5,000. Include title, environment, steps to reproduce, expected vs actual behavior, severity, and any plausible logs or error messages. Don’t explain the template—just fill it.\"\n    },\n    {\n      \"user_query\": \"Create a compact but complete 'getting started' guide for a new engineer joining a mid‑sized backend team: what to install, how to run the main services locally, how to run tests, and where to look for logs. Assume a generic microservices setup with Docker and a monorepo. Avoid long cultural onboarding text; focus on actionable steps.\"\n    },\n    {\n      \"user_query\": \"Write a detailed but efficient algorithm explanation for Dijkstra’s shortest path algorithm aimed at someone who already knows basic graphs. Include a clear description, pseudocode, a small worked example, and a brief note on complexity. Don’t add meta‑comments about there being many variations or that it 'depends on implementation.'\"\n    }\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777840139,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1598,
+      "prompt_tokens": 465,
+      "total_tokens": 2063,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 14.8513
+}

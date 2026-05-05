@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:24.930533+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 3
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZrtPcQ2HC3Zb6AQQerf7c7mKJW5",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Quicksort is a divide-and-conquer sorting algorithm. Here’s the core idea, step by step, in plain terms:\n\n1. **Pick a pivot**  \n   Choose one element from the array to be the “pivot” (common choices: first element, last element, middle, or a random one).\n\n2. **Partition the array**  \n   Reorder the array so that:\n   - all elements **less than** the pivot come before it\n   - all elements **greater than or equal to** the pivot come after it  \n   The pivot ends up in its final sorted position.\n\n3. **Recursively sort the subarrays**  \n   Recursively apply the same process to:\n   - the subarray of elements before the pivot\n   - the subarray of elements after the pivot\n\n4. **Base case**  \n   If the array (or subarray) has 0 or 1 element, it’s already sorted and you return it as-is.\n\n### Key properties\n\n- **Average time complexity**: O(n log n)  \n- **Worst-case time complexity**: O(n²) (e.g., already sorted input + bad pivot choice)  \n- **Space**: In-place variant uses O(log n) extra space (for recursion stack only).\n\n---\n\n### A clear, simple JavaScript implementation (not in-place)\n\nThis version is easy to read and good for understanding. It’s not the most memory-efficient because it creates new arrays.\n\n```javascript\nfunction quicksort(array) {\n  // Base case: arrays of length 0 or 1 are already sorted\n  if (array.length <= 1) {\n    return array;\n  }\n\n  // Choose a pivot: here, we pick the middle element\n  const pivotIndex = Math.floor(array.length / 2);\n  const pivot = array[pivotIndex];\n\n  // Arrays to hold elements less than and greater than/equal to the pivot\n  const less = [];\n  const greaterOrEqual = [];\n\n  // Partition step: skip the pivot element when iterating\n  for (let i = 0; i < array.length; i++) {\n    if (i === pivotIndex) continue; // skip the pivot\n\n    if (array[i] < pivot) {\n      less.push(array[i]);\n    } else {\n      greaterOrEqual.push(array[i]);\n    }\n  }\n\n  // Recursively sort the two subarrays and concatenate\n  return [\n    ...quicksort(less),\n    pivot,\n    ...quicksort(greaterOrEqual),\n  ];\n}\n\n// Example usage:\nconst arr = [5, 3, 8, 4, 2, 7, 1, 10];\nconst sorted = quicksort(arr);\nconsole.log(sorted); // [1, 2, 3, 4, 5, 7, 8, 10]\n```\n\n---\n\n### An in-place JavaScript quicksort (more like a “real” quicksort)\n\nThis version sorts the array **without** creating new arrays for each step (aside from recursion stack).\n\n```javascript\nfunction quicksortInPlace(arr, left = 0, right = arr.length - 1) {\n  if (left >= right) {\n    return;\n  }\n\n  const pivotIndex = partition(arr, left, right);\n\n  // Recursively apply to the left and right partitions\n  quicksortInPlace(arr, left, pivotIndex - 1);\n  quicksortInPlace(arr, pivotIndex + 1, right);\n}\n\nfunction partition(arr, left, right) {\n  // Choose pivot as the right-most element\n  const pivot = arr[right];\n\n  // 'i' will track the position where we place elements < pivot\n  let i = left;\n\n  for (let j = left; j < right; j++) {\n    if (arr[j] < pivot) {\n      // swap arr[i] and arr[j]\n      [arr[i], arr[j]] = [arr[j], arr[i]];\n      i++;\n    }\n  }\n\n  // Place pivot at its correct position by swapping\n  [arr[i], arr[right]] = [arr[right], arr[i]];\n  return i; // pivot index\n}\n\n// Example usage:\nconst arr2 = [9, 4, 6, 2, 7, 1, 8, 3, 5];\nquicksortInPlace(arr2);\nconsole.log(arr2); // [1, 2, 3, 4, 5, 6, 7, 8, 9]\n```\n\n---\n\nIf you tell me:\n- whether you’re comfortable with recursion, and\n- whether you care more about clarity or performance/memory usage,\n\nI can tailor a version (e.g., iterative quicksort, different pivot strategies, or type-annot",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848385,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 85,
+      "total_tokens": 1085,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 5.5708
+}

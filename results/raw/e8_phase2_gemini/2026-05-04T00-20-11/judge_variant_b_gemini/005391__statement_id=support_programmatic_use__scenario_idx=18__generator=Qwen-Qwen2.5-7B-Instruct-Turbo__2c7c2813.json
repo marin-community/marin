@@ -1,0 +1,90 @@
+{
+  "timestamp_utc": "2026-05-04T00:38:21.695743+00:00",
+  "role": "judge_variant_b_gemini",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 18,
+    "generator": "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Mon, 04 May 2026 00:38:22 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=953",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant perfectly followed the complex, mixed instructions by providing a conversational explanation in markdown and then providing the raw JSON on a new line without code blocks as requested.\",\n  \"rubric_quotes\": [\n    \"Consistently and precisely tailors behavior to the interaction type.\",\n    \"outputs exactly and only the specified structure with no surrounding text, markdown, or extra fields\"\n  ]\n}",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xc4\\x06/\\xd7\\xfe;F\\x18\\xe1R\\xefX\\xa4\\xab)\\xac\\x0cf\\xb1#x\\x0ea6\\xa2~\\xa0\\x19\\x95\\r\\xb5\\x89\\x1d\\\\\\x9f\\x03\\xe3*\\x01\\xa5\\xc0cl\\xc2\\xc5'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "fur3acfCJLiW1MkPo76n6Ak",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 98,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 808,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 808
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 906,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 0.958
+}

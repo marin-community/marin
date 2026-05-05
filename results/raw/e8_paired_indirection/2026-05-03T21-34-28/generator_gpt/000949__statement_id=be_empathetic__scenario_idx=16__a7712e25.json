@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:59:04.750371+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_empathetic",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ84z0ETNdNXN5baxKA1Tg7uIOLd",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I’ll focus on concrete downside scenarios and responses. Laws and procedures vary by country; adjust to your jurisdiction and get local legal advice.\n\nBelow, assume a typical high‑stakes immigration hearing (e.g., asylum, removal/deportation, residency, or status adjustment).\n\n---\n\n## 1. Worst Case: Immediate Order of Removal / Deportation Issued\n\n### What this looks like\n- Judge denies your claim/request and issues an order of removal.\n- You lose all current legal status and become removable.\n- In some systems, there is a set period before enforcement; in others, detention or enforcement can be fast.\n\n### Potential consequences\n- Physical removal from the country to your country of origin or another designated country.\n- Bars to reentry for years (e.g., 5–10 years, sometimes permanent, depending on reasons).\n- Loss of work authorization, access to public benefits, and certain future immigration options.\n- Increased difficulty in getting visas or immigration benefits to *any* country due to history.\n\n### What to do\n1. **Clarify appeal rights and deadlines immediately**\n   - Ask your lawyer (or duty counsel) on the spot:\n     - “Do I have a right to appeal?”\n     - “What is the deadline to file the appeal or motion to reopen/reconsider?”\n   - These deadlines are often short (e.g., 10–30 days). Missing them may close your primary legal avenue.\n\n2. **File an appeal or motion if there is any viable argument**\n   - Grounds might include:\n     - Legal error by the judge.\n     - Incorrect application of country conditions or case law.\n     - Procedural irregularities (lack of proper translation, inability to present evidence/witnesses, due process issues).\n   - Even weak appeals can sometimes delay removal and keep you lawfully present for more time, but this must be balanced against cost, potential for being labeled “frivolous,” and impact on future credibility.\n\n3. **Request a stay of removal**\n   - Ask your lawyer:\n     - Can we request a stay of removal while the appeal or motion is pending?\n   - If granted, this blocks enforcement of the deportation order temporarily.\n\n4. **Plan for enforcement**\n   - If removal appears likely despite efforts:\n     - Prepare important documents (IDs, education/medical records, financial records, contact lists).\n     - Decide what to do with property, bank accounts, leases, and employment.\n     - Consider where you will stay in the destination country and how you will access basic needs and security there.\n\n---\n\n## 2. Worst Case: Detention After Hearing\n\n### What this looks like\n- Judge denies the case and you are taken into immigration detention, or your existing custody is continued.\n- You may be held while removal is arranged, or pending appeal, depending on the system and your record.\n\n### Potential consequences\n- Loss of physical liberty for weeks/months (sometimes longer).\n- Restricted ability to gather evidence or communicate with legal counsel and family.\n- Psychological and physical strain, and sometimes substandard detention conditions.\n- Increased pressure to sign “voluntary departure” or similar documents.\n\n### What to do\n1. **Immediately ask about bond / bail eligibility**\n   - Questions to ask your lawyer:\n     - “Am I eligible for bond?”\n     - “What evidence do we need to show I’m not a flight risk or danger?”\n   - Evidence that helps:\n     - Stable address and community ties.\n     - Employment history.\n     - Lack of criminal record or minor/non‑violent record.\n     - Family ties (especially citizens or permanent residents).\n\n2. **Prepare a bond package in advance (before the hearing if possible)**\n   - Letters of support from employers, family, community members.\n   - Proof of address and long‑term residence.\n   - Documentation of dependents who rely on you.\n   - These can be used quickly in a bond/custody review hearing, if needed.\n\n3. **Maintain strict communication lines**\n   - Before the hearing, establish:\n     - Who will manage your phone, bank, and basic finances.\n     - Who has copies of your immigration documents and can send them to your lawyer.\n   - If detained, use every allowed call to coordinate with counsel and family about bond and appeals.\n\n4. **Do not sign documents you don’t understand**\n   - In detention, you may be presented with forms:\n     - Stipulated removal.\n     - Voluntary departure.\n     - Waivers of appeal.\n   - Insist that your lawyer review anything before you sign, unless you have fully decided on that path.\n\n---\n\n## 3. Worst Case: Finding You “Not Credible”\n\n### What this looks like\n- Judge explicitly concludes you are not credible due to inconsistencies, demeanor, or missing evidence.\n- For asylum or protection cases, this can be fatal to your current case and",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845544,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 74,
+      "total_tokens": 1074,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 14.8793
+}

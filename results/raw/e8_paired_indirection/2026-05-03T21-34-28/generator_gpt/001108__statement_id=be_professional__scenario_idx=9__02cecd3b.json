@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:24.678089+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 9
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZBIYfX3fyucJlgKR7VojzdxZCBo",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here are three versions of an email about the *same situation*: a student needs an extension on a homework assignment.\n\n---\n\n### 1. TOO CASUAL\n\nSubject: hw lol\n\nhey mr. carter,\n\ni totally spaced on the history homework that’s due tomorrow. i had a game last night and then just crashed. any chance i can turn it in late without losing points? i promise i’ll get it to you soon.\n\nthx,\njake\n\n---\n\n### 2. TOO FORMAL / STIFF\n\nSubject: Request for Extension on History Homework Assignment\n\nDear Mr. Carter,\n\nI hope this message finds you well.\n\nI am writing to respectfully request an extension on the history homework assignment that is due tomorrow, May 4th. Due to a school soccer game yesterday evening and subsequent exhaustion, I was regrettably unable to complete the assignment by the designated deadline.\n\nI fully understand the importance of adhering to due dates, and I do not make this request lightly. If it would be at all possible, I would be most grateful if I could submit the assignment by Friday, May 6th, instead. I would, of course, accept any consequences you deem appropriate.\n\nThank you very much for your time and consideration.\n\nSincerely,  \nJacob Thompson  \nPeriod 3 World History\n\n---\n\n### 3. POLITE BUT NATURAL (JUST RIGHT)\n\nSubject: Request for one‑day extension on history homework\n\nHi Mr. Carter,\n\nI’m writing to ask if I could have a one‑day extension on the history homework due tomorrow. We had an away soccer game last night and didn’t get back until late, and I wasn’t able to finish the assignment.\n\nIf it’s okay, I can turn it in on Friday instead. I understand if you can’t grant an extension, but I wanted to ask.\n\nThank you,  \nJake Thompson  \nPeriod 3 World History\n\n---\n\nYou can show students how the same message changes with:\n- greeting (“hey” vs “Dear” vs “Hi”),\n- word choice (“totally spaced” vs “regrettably unable” vs “wasn’t able”),\n- sign‑off (“thx” vs “Sincerely” vs “Thank you”).",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845744,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 460,
+      "prompt_tokens": 60,
+      "total_tokens": 520,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 3.8687
+}

@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:05:44.361885+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 4
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZEWcp9icWuj2afJcwyIDcuf9ZKb",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Note: Amazon changes its HTML often and may block frequent/automated requests. Use reasonable delays and headers.\n\n```python\nimport requests\nfrom bs4 import BeautifulSoup\nimport csv\nimport time\n\nSEARCH_URL = \"https://www.amazon.com/s\"\nPARAMS = {\n    \"k\": \"wireless mouse\"  # change search term here\n}\nHEADERS = {\n    \"User-Agent\": \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) \"\n                  \"AppleWebKit/537.36 (KHTML, like Gecko) \"\n                  \"Chrome/123.0.0.0 Safari/537.36\",\n    \"Accept-Language\": \"en-US,en;q=0.9\",\n}\n\ndef fetch_page(url, params):\n    time.sleep(2)\n    r = requests.get(url, params=params, headers=HEADERS, timeout=15)\n    r.raise_for_status()\n    return r.text\n\ndef parse_products(html):\n    soup = BeautifulSoup(html, \"html.parser\")\n    results = []\n    for item in soup.select(\"div.s-main-slot div[data-component-type='s-search-result']\"):\n        name_el = item.select_one(\"h2 a span\")\n        price_whole = item.select_one(\"span.a-price > span.a-offscreen\")\n        rating_el = item.select_one(\"span.a-icon-alt\")\n\n        name = name_el.get_text(strip=True) if name_el else \"\"\n        price = price_whole.get_text(strip=True) if price_whole else \"\"\n        rating = rating_el.get_text(strip=True) if rating_el else \"\"\n\n        if name:\n            results.append({\n                \"name\": name,\n                \"price\": price,\n                \"rating\": rating,\n            })\n    return results\n\ndef save_to_csv(products, filename=\"amazon_products.csv\"):\n    fieldnames = [\"name\", \"price\", \"rating\"]\n    with open(filename, \"w\", newline=\"\", encoding=\"utf-8\") as f:\n        writer = csv.DictWriter(f, fieldnames=fieldnames)\n        writer.writeheader()\n        writer.writerows(products)\n\ndef main():\n    html = fetch_page(SEARCH_URL, PARAMS)\n    products = parse_products(html)\n    save_to_csv(products)\n\nif __name__ == \"__main__\":\n    main()\n```",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845944,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 478,
+      "prompt_tokens": 74,
+      "total_tokens": 552,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 3.2429
+}

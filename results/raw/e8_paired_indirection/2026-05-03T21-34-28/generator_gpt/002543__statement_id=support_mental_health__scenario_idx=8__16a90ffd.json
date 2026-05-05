@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:45:02.480131+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "support_mental_health",
+    "scenario_idx": 8
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZqZkBsGle6te2TlXQTZuxubGGVQ",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I’ll focus on concrete, structured, evidence‑based things you can do on your own, assuming no access to a therapist. You can treat this like a self‑help “program” you follow daily.\n\nI’ll break it into:\n1) What to track\n2) Core daily practices (non‑negotiables)\n3) CBT‑style tools you can do alone\n4) When to modify or stop\n\nYou can adapt to your schedule and culture in India; nothing here requires outside help or paid apps.\n\n---\n\n## 1. What to track (5 minutes/day)\n\nTracking keeps you from guessing and shows what actually helps.\n\n**Daily log (paper or notes app):**\n\nEvery night, quickly write:\n\n1. **Anxiety rating**: 0–10 (0 = calm, 10 = panic level).\n2. **Sleep**: Hours + quality (poor / ok / good).\n3. **Caffeine / nicotine / alcohol / weed**: Rough amount and time.\n4. **Physical activity**: Type + duration (e.g., “walk 20 mins”).\n5. **Biggest worry / trigger of the day**: 1–2 lines.\n6. **What helped most today**: 1–2 lines.\n\nThis becomes your personal data set.\n\n---\n\n## 2. Core daily practices (non‑negotiables)\n\nThese have the best evidence base and don’t need a therapist. Aim to run this for at least **4–6 weeks** before judging it.\n\n### A. Breath + body reset (total: ~15–20 min/day)\n\nUsed in anxiety research and clinical practice.\n\n#### 1) Physiological sigh (very fast state reset)\nDo this when anxiety spikes (takes 1 minute):\n\n- Inhale through nose.\n- Without exhaling, take a **second short inhale** to “top up” the lungs.\n- Exhale **slowly and fully** through the mouth.\n- Repeat 5–10 times.\n\nEvidence: quickly reduces autonomic arousal (heart rate, physical jitters).\n\n#### 2) 4‑6 breathing (5–10 minutes, 2x/day)\n\n- Inhale through nose for a **count of 4**.\n- Exhale through nose or mouth for a **count of 6**.\n- Keep breathing low into belly, not chest.\n\nSet a timer for **5–10 min**, morning and evening.\n\nWhy: Longer exhale activates the parasympathetic “calming” system. This is basically a home version of techniques used in anxiety and PTSD research.\n\n---\n\n### B. Exercise protocol (30+ min/day, most days)\n\nIf you can do just one big thing for anxiety, make it this.\n\n**Target:**  \n- **150 minutes/week** moderate exercise (brisk walking, cycling, etc.), or  \n- **75 minutes/week** vigorous (running, fast cycling),  \nplus some simple strength work 2x/week.\n\n**Practical plan (example):**\n\n- **Mon/Wed/Fri:**  \n  30–40 min brisk walk (you should be a bit breathless but able to talk).\n- **Tue/Thu:**  \n  10–15 min brisk walk + 10–15 min simple bodyweight:\n  - Squats (or sit‑to‑stand from a chair): 2 x 10–15  \n  - Wall push‑ups or floor push‑ups: 2 x 8–12  \n  - Plank or wall plank: 2 x 20–30 sec\n\nEvidence: Exercise is comparable to medication for mild–moderate anxiety and depression in many studies.\n\n---\n\n### C. Sleep routine (target: 7–9 hours)\n\nAnxiety and sleep feed each other. Fixing sleep often reduces baseline anxiety.\n\n**Consistent routine:**\n- **Same wake time** every day (even weekends), as much as possible.\n- Go to bed when genuinely sleepy, not just “tired of the day.”\n\n**90‑minute wind‑down (pick 3–4):**\n- Dim lights, reduce phone brightness.\n- No news/social media arguments.\n- Warm shower.\n- Light reading (non‑stressful).\n- 4‑6 breathing (from above) before bed.\n\n**Cutoffs:**\n- Caffeine (tea/coffee/energy drinks): none after **6–8 hours** before bedtime.\n- Nicotine and alcohol near bedtime worsen sleep depth even if they make you sleepy.\n\n---\n\n### D. Stimulant management (India‑specific reality)\n\nYou don’t have to quit, but tweak:\n\n- **Tea/coffee:**  \n  - Keep to **2–3 cups/day max**.  \n  - No caffeine after ~3–4 PM if you sleep around 10–11 PM.\n- **Nicotine (cigarettes,",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848303,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 67,
+      "total_tokens": 1067,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 8.5915
+}

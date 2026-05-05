@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:33.796349+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 5
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZs14iTT6mya6AVjVLNdeHDpzecs",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "To design a REST API for a todo app, it helps to start from requirements and then move toward resources, endpoints, payloads, and behavior.\n\nI’ll assume a simple multi-user todo app with authentication. If any of the assumptions (e.g., multi-user vs single-user, authentication style) are wrong, tell me and I’ll adjust.\n\n---\n\n## 1. Clarify Requirements\n\nQuestions to pin down scope:\n\n1. **Users**\n   - Do you have multiple users (with logins), or is this a single-user app?\n   - Is there any concept of roles (admin, normal user)?\n\n2. **Todo Features**\n   - Fields: title, description, due date, completed flag, priority, tags, etc.?\n   - Support for subtasks?\n   - Support for lists or projects (grouping todos)?\n\n3. **Authentication**\n   - Likely: JWT-based bearer tokens, sessions/cookies, or API keys?\n\n4. **Client Types**\n   - Web SPA, mobile, or server-to-server client? (affects pagination, filtering, CORS decisions)\n\nI’ll assume:\n\n- Multi-user app\n- Each todo belongs to exactly one user\n- Fields: `title`, `description`, `completed`, `dueDate`, `priority`, `createdAt`, `updatedAt`\n- Optional: tags\n- JWT-based auth with `Authorization: Bearer <token>`\n\n---\n\n## 2. Identify Resources\n\nCore resources:\n\n- `User`\n- `Todo`\n- (Optional) `Tag` or `Project/List`\n\nExample domain model:\n\n```text\nUser\n  id: UUID\n  email: string\n  passwordHash: string\n  createdAt: datetime\n\nTodo\n  id: UUID\n  userId: UUID (FK to User)\n  title: string\n  description: string | null\n  completed: boolean\n  dueDate: datetime | null\n  priority: \"low\" | \"medium\" | \"high\"\n  tags: string[] (or separate Tag table)\n  createdAt: datetime\n  updatedAt: datetime\n```\n\n---\n\n## 3. Base URL and Versioning\n\nCommon pattern:\n\n- Base: `https://api.example.com`\n- Versioning: `https://api.example.com/v1` or via headers\n\nFor clarity, I’ll use path versioning:\n\n```text\nBase URL: /v1\n```\n\n---\n\n## 4. Authentication Endpoints\n\nEven though auth is often “not RESTful” in the strict sense, it’s practical.\n\n### 4.1 Register\n\n```http\nPOST /v1/auth/register\nContent-Type: application/json\n\n{\n  \"email\": \"user@example.com\",\n  \"password\": \"SuperSecret123\"\n}\n```\n\n**Response** (201 Created):\n\n```json\n{\n  \"user\": {\n    \"id\": \"uuid\",\n    \"email\": \"user@example.com\",\n    \"createdAt\": \"2024-05-01T12:00:00Z\"\n  },\n  \"token\": \"jwt-token-here\"\n}\n```\n\n### 4.2 Login\n\n```http\nPOST /v1/auth/login\nContent-Type: application/json\n\n{\n  \"email\": \"user@example.com\",\n  \"password\": \"SuperSecret123\"\n}\n```\n\n**Response**:\n\n```json\n{\n  \"user\": {\n    \"id\": \"uuid\",\n    \"email\": \"user@example.com\"\n  },\n  \"token\": \"jwt-token-here\"\n}\n```\n\nRequests to protected endpoints use:\n\n```http\nAuthorization: Bearer <jwt-token>\n```\n\n---\n\n## 5. Todos Resource Design\n\nMain collection: `/v1/todos`\n\n### 5.1 List Todos\n\n```http\nGET /v1/todos?completed=false&limit=20&offset=0&search=report&sort=dueDate&order=asc\nAuthorization: Bearer <token>\n```\n\n**Query parameters** (examples):\n\n- `completed` – filter by completion (`true`/`false`)\n- `search` – filter by title/description\n- `dueBefore`, `dueAfter`\n- `limit`, `offset` (or `page`, `pageSize`)\n- `sort` – `createdAt`, `dueDate`, `priority`\n- `order` – `asc`/`desc`\n\n**Response**:\n\n```json\n{\n  \"items\": [\n    {\n      \"id\": \"uuid\",\n      \"title\": \"Write report\",\n      \"description\": \"Quarterly report\",\n      \"completed\": false,\n      \"dueDate\": \"2024-05-10T18:00:00Z\",\n      \"priority\": \"high\",\n      \"tags\": [\"work\"],\n      \"createdAt\": \"2024-05-01T12:00",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848393,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 66,
+      "total_tokens": 1066,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 6.4084
+}

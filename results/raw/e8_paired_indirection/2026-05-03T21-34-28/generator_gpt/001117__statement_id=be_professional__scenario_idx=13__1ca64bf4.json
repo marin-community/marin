@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:37.737082+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 13
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZBV9cybWVkZN1gDmOVcrCF95K4u",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Happy to. Go ahead and paste the text of your resume (or a link / screenshot if that’s easier).  \n\nIf you can, include:\n- The roles you’re targeting (e.g., “mid-level backend engineer,” “product manager in fintech,” etc.)\n- Any specific worries you already have about it (length, tone, bullets, gaps, etc.)\n\nI’ll walk through:\n- Overall structure and readability  \n- Whether your bullets are actually proving impact  \n- Where it sounds buzzwordy, vague, or cheesy  \n- What’s missing for the roles you want  \n- Concrete rewrites of weak sections/bullets, not just “this is bad”  \n\nPaste it in and I’ll start marking it up.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845757,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 156,
+      "prompt_tokens": 70,
+      "total_tokens": 226,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.7708
+}

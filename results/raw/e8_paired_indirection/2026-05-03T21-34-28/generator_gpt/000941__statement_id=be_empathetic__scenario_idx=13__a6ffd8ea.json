@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:58:51.978541+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_empathetic",
+    "scenario_idx": 13
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ7sCnNuPUFbf7hX1y9bcYW56wCa",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I’m glad you were clear about what you want, so I’ll stick to data and reasoning, not comfort.\n\n### 1. How common is long-term loneliness?\n\n- In large surveys, roughly 20–30% of adults report feeling lonely “often” or “always.”\n- Chronic loneliness (lasting years) is not rare, but **being completely socially isolated for life** is rare in people without very severe complicating factors (e.g., extreme mental illness, profound disability plus no support, imprisonment, etc.).\n\nSo: feeling lonely for long stretches is common; being “doomed” to a lifetime of total isolation is statistically unusual in the general population.\n\n### 2. Forces that *work against* permanent loneliness\n\nFrom a statistical/psychological standpoint, there are several strong counterforces:\n\n1. **Human social drive:**  \n   People are generally motivated to seek connection. Over decades, even people who are introverted, anxious, or have some interpersonal difficulties usually accumulate *some* connections (coworkers, neighbors, online friends, partners, community members, etc.).\n\n2. **Life changes over time:**  \n   - New workplaces, moves, school/training, online communities, hobbies, support groups, etc., create repeated chances for new connections.  \n   - Odds are *not* static; every new environment is another “roll of the dice.”\n\n3. **Interventions work more often than not:**  \n   Research on loneliness interventions (meta-analyses) shows:\n   - Targeted social skills training, cognitive-behavioral approaches, and structured group activities **significantly reduce loneliness** for many participants.\n   - The effect sizes are moderate—not miraculous—but they show that for a meaningful proportion of people, loneliness is *changeable*, not fixed.\n\nSo at the population level, the baseline probability that an average person stays as lonely as they are now for their entire remaining life is relatively low, *if* they live a normal lifespan and are not actively avoiding all change.\n\n### 3. Factors that make lifelong loneliness *more* likely\n\nEmpirically, risk is higher if several of these cluster together and remain unchanged over time:\n\n- **Severe and untreated mental health problems** (major depression, severe social anxiety, personality disorders like schizoid or avoidant, etc.).\n- **Strong maladaptive beliefs** (“everyone will reject me,” “I’m fundamentally unlovable”) that never get challenged; these push people to withdraw and misread social cues.\n- **Very low social exposure** (e.g., remote work + no hobbies + no family + minimal online or offline community).\n- **Chronic poverty or instability** that limits mobility, access to activities, and mental bandwidth.\n- **Older age + entrenched isolation:**  \n  For people 75+ who are already very isolated and have health or mobility problems, the odds of remaining lonely for the rest of life are high because the time window is shorter and the environment is more constrained.\n- **Actively rejecting or sabotaging potential connections** (e.g., ghosting everyone, extreme hostility, rigid refusal to adapt).\n\nFrom research on trajectories of loneliness, the people who remain lonely across decades usually have **stable patterns** of:  \n- withdrawal  \n- distorted negative social expectations  \n- and no sustained attempts to change context or skills.\n\nIf that pattern never shifts, then yes: probability of lifelong loneliness can become high for that individual.\n\n### 4. Age and life stage matter\n\n- **Teens–30s:**  \n  Loneliness is very common in these phases, especially early adulthood. However, these are also periods of high turnover in relationships. Statistically, it’s **unlikely** that how lonely you feel at, say, 20–35, is exactly how things will look at 50–60.\n- **Midlife (40s–60s):**  \n  Loneliness can spike with divorce, moves, illness, or job loss, but many people rebuild networks (new relationships, coworkers, neighbors, groups).\n- **Older adults (65+):**  \n  Loss of partners and friends, retirement, and health issues increase the odds of remaining lonely, especially if someone is already isolated and doesn’t or can’t engage with new environments.\n\nIn longitudinal studies, some people stay on a “high loneliness” track, but most show **fluctuations**—loneliness often rises and falls with life events, rather than being flat and permanent.\n\n### 5. A cold probabilistic framing\n\nWithout knowing anything specific about you, we can only talk in base rates for people in general:\n\n- The chance that you will **at some point** have at least a few people who care whether you exist (friends, partner, community) is **much higher** than the chance that you will have *no one at all* for your entire life.\n- The chance that you",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845532,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 73,
+      "total_tokens": 1073,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 9.8758
+}

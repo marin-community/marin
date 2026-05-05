@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:06:42.370012+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 14
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZFS3zXtc952FoUhAFep6e4mjwu4",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```python\n#!/usr/bin/env python3\nfrom flask import Flask, request, jsonify, abort\n\napp = Flask(__name__)\n\n# In-memory storage\nnotes = {}\nnext_id = 1\n\n\ndef get_next_id():\n    global next_id\n    _id = next_id\n    next_id += 1\n    return _id\n\n\n@app.route(\"/notes\", methods=[\"GET\"])\ndef list_notes():\n    # Optional simple search: ?q=...\n    q = request.args.get(\"q\")\n    result = list(notes.values())\n    if q:\n        q_lower = q.lower()\n        result = [n for n in result if q_lower in n[\"title\"].lower()\n                  or q_lower in n[\"content\"].lower()]\n    return jsonify(result), 200\n\n\n@app.route(\"/notes/<int:note_id>\", methods=[\"GET\"])\ndef get_note(note_id):\n    note = notes.get(note_id)\n    if not note:\n        abort(404)\n    return jsonify(note), 200\n\n\n@app.route(\"/notes\", methods=[\"POST\"])\ndef create_note():\n    if not request.is_json:\n        abort(400)\n    data = request.get_json()\n    title = data.get(\"title\")\n    content = data.get(\"content\", \"\")\n    if not isinstance(title, str) or title.strip() == \"\":\n        abort(400)\n    note_id = get_next_id()\n    note = {\"id\": note_id, \"title\": title, \"content\": content}\n    notes[note_id] = note\n    return jsonify(note), 201\n\n\n@app.route(\"/notes/<int:note_id>\", methods=[\"PUT\", \"PATCH\"])\ndef update_note(note_id):\n    note = notes.get(note_id)\n    if not note:\n        abort(404)\n    if not request.is_json:\n        abort(400)\n    data = request.get_json()\n    # For PUT/PATCH, both fields are optional but must be valid if present.\n    if \"title\" in data:\n        title = data[\"title\"]\n        if not isinstance(title, str) or title.strip() == \"\":\n            abort(400)\n        note[\"title\"] = title\n    if \"content\" in data:\n        content = data[\"content\"]\n        if not isinstance(content, str):\n            abort(400)\n        note[\"content\"] = content\n    return jsonify(note), 200\n\n\n@app.route(\"/notes/<int:note_id>\", methods=[\"DELETE\"])\ndef delete_note(note_id):\n    if note_id not in notes:\n        abort(404)\n    del notes[note_id]\n    return \"\", 204\n\n\n# Simple JSON error responses\n@app.errorhandler(400)\ndef bad_request(e):\n    return jsonify(error=\"bad_request\"), 400\n\n\n@app.errorhandler(404)\ndef not_found(e):\n    return jsonify(error=\"not_found\"), 404\n\n\nif __name__ == \"__main__\":\n    app.run(debug=True)\n```",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846002,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 600,
+      "prompt_tokens": 67,
+      "total_tokens": 667,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 3.3342
+}

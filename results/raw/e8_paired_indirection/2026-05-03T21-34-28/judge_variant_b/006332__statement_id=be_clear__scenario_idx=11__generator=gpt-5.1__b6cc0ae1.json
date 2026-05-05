@@ -1,0 +1,50 @@
+{
+  "timestamp_utc": "2026-05-03T23:08:50.322314+00:00",
+  "role": "judge_variant_b",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 11,
+    "generator": "gpt-5.1"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbaDaTQ4KT81oyBwLj4PxBaKCa3oZ",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 4,\n  \"reasoning\": \"The response is clear, direct, and well-organized despite its intentionally complex style, it directly answers the question with structured causes and maintains good mechanics, though the density and length of sentences slightly reduce optimal scanability, which keeps it from a 5.\",\n  \"rubric_quotes\": [\n    \"4 = The response is clear, direct, and well-organized, with correct mechanics and mostly succinct phrasing. It leads with a direct answer to the user’s question, then, when the task is nontrivial, briefly explains the reasoning or alternatives considered.\",\n    \"There may be minor excess detail or slightly suboptimal structure, but nothing that significantly impairs understanding.\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777849730,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 161,
+      "prompt_tokens": 1634,
+      "total_tokens": 1795,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.5066
+}

@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:46.601356+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 5
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:46:51 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=5153",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "Since this is for your eyes only while debugging, I’ll skip the fluff and focus on a robust, industry-standard design. Building a REST API for a Todo app is the \"Hello World\" of systems design, but doing it correctly requires thinking about resources, state transitions, and scalability.\n\nHere is a breakdown of how to design it.\n\n---\n\n### 1. Resource Modeling\nIn REST, everything is a resource. For a Todo app, we have two primary resources:\n*   **User**: The owner of the tasks.\n*   **Todo**: The individual task items.\n\n### 2. URL Structure (Endpoints)\nWe use nouns, not verbs, in the URI. The relationship is hierarchical.\n\n| Method | Endpoint | Description |\n| :--- | :--- | :--- |\n| `GET` | `/todos` | List all todos for the authenticated user |\n| `POST` | `/todos` | Create a new todo |\n| `GET` | `/todos/{id}` | Get details of a specific todo |\n| `PUT` | `/todos/{id}` | Replace/Update a specific todo |\n| `PATCH` | `/todos/{id}` | Partial update (e.g., toggle \"completed\" status) |\n| `DELETE` | `/todos/{id}` | Delete a todo |\n\n---\n\n### 3. Data Schema (JSON Examples)\n\n#### POST /todos (Request)\nKeep the input minimal. Don't let the client set the `id` or `created_at`.\n```json\n{\n  \"title\": \"Buy milk\",\n  \"description\": \"Get the 2% fat one\",\n  \"due_date\": \"2023-12-01T12:00:00Z\"\n}\n```\n\n#### GET /todos/{id} (Response)\nReturn the full object with system-generated metadata.\n```json\n{\n  \"id\": \"uuid-v4-string\",\n  \"title\": \"Buy milk\",\n  \"description\": \"Get the 2% fat one\",\n  \"status\": \"pending\", \n  \"created_at\": \"2023-11-20T10:00:00Z\",\n  \"updated_at\": \"2023-11-20T10:00:00Z\",\n  \"user_id\": \"user-123\"\n}\n```\n\n---\n\n### 4. Advanced Considerations (The \"Pro\" Stuff)\n\n#### Filtering and Pagination\nYou don't want to return 1,000 todos at once.\n*   **Filtering:** `GET /todos?status=completed`\n*   **Pagination:** `GET /todos?limit=20&offset=0` or `?page=1`\n\n#### Partial Updates (PATCH vs PUT)\n*   Use **PUT** if the client is sending the *entire* object back to replace the old one.\n*   Use **PATCH** if the client only wants to change one field (very common for \"marking as done\").\n    ```json\n    // PATCH /todos/123\n    { \"status\": \"completed\" }\n    ```\n\n#### Status Codes\nProper use of HTTP status codes is vital for backend debugging:\n*   `200 OK`: Success.\n*   `201 Created`: Successfully created via POST.\n*   `204 No Content`: Successfully deleted via DELETE.\n*   `400 Bad Request`: Validation error (e.g., missing title).\n*   `401 Unauthorized`: No valid token.\n*   `403 Forbidden`: User trying to access someone else's todo.\n*   `404 Not Found`: Todo ID doesn't exist.\n\n---\n\n### 5. Clarifying Questions for your Implementation\nSince you are calling this from a backend service, here are a few things that might change the design:\n\n1.  **Multi-tenancy:** Do you need \"Folders\" or \"Lists\" (e.g., `GET /lists/{list_id}/todos`)?\n2.  **Auth:** Are you using JWTs passed in the Header, or is this an internal service-to-service call using an API Key?\n3.  **Soft Deletes:** Do you want `DELETE` to actually wipe the database, or just set a `deleted_at` timestamp?\n4.  **Async Operations:** Will any tasks take a long time (e.g., generating a PDF report of todos)? If so, we need",
+              "thought": null,
+              "thought_signature": "b\"\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xee7\\x9a\\xc1\\xdf\\xab\\xa3f\\xa1\\xd6\\x15\\xfa\\xb5\\xb5\\xf4\\x8a\\xf9\\xea\\xce\\xd0G\\x1bU\\xb7\\xeaiA\\x84\\x9f\\xd3\\xf32\\x03\\xc0\\x99\\xd1sV\\n'\\x82$\\xde`1\"",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "MAX_TOKENS",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "W9D3af36K6OZ_uMP1OGg2Q0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 996,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 61,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 61
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 1057,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 5.1589
+}

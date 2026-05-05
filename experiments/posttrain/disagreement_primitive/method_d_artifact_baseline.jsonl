@@ -1,0 +1,5 @@
+{"statement_id": "avoid_abuse", "text_vs_text": 9, "examples_vs_examples": 9, "text_vs_examples": 7}
+{"statement_id": "refusal_style", "text_vs_text": 10, "examples_vs_examples": 10, "text_vs_examples": 6}
+{"statement_id": "do_not_lie", "text_vs_text": 9, "examples_vs_examples": 10, "text_vs_examples": 9}
+{"statement_id": "protect_privacy", "text_vs_text": 10, "examples_vs_examples": 10, "text_vs_examples": 9}
+{"statement_id": "be_clear", "text_vs_text": 10, "examples_vs_examples": 10, "text_vs_examples": 9}

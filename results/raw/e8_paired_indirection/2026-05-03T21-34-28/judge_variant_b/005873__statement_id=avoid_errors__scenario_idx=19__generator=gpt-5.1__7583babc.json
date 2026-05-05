@@ -1,0 +1,50 @@
+{
+  "timestamp_utc": "2026-05-03T23:06:40.619458+00:00",
+  "role": "judge_variant_b",
+  "key": {
+    "statement_id": "avoid_errors",
+    "scenario_idx": 19,
+    "generator": "gpt-5.1"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbaBUqtXd5zqJrGgxGVgUGDEWpCPp",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 4,\n  \"reasoning\": \"The answer gives the widely accepted first public COVID-19 vaccination date and country accurately and concisely, with no apparent factual or logical errors, matching the rubric’s description of an accurate and well-reasoned response.\",\n  \"rubric_quotes\": [\n    \"4 = The response is accurate and well-reasoned, with correct factual claims and calculations, and adheres to the required output format or code syntax, with only very minor or low-impact imperfections if any.\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777849600,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 121,
+      "prompt_tokens": 717,
+      "total_tokens": 838,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.332
+}

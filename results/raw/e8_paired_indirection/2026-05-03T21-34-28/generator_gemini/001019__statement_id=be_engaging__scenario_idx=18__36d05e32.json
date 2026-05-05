@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:00:29.364236+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_engaging",
+    "scenario_idx": 18
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:00:30 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=1423",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "I am absolutely ready! Think of me as your story’s \"stress-tester.\" I’ll be the person poking the bridge with a stick to see if it collapses, but I’ll be doing it while wearing a jaunty hat and offering you a snack.\n\nI promise to be ruthlessly honest about logic gaps, sagging middles, or \"wait, why didn't they just use their cell phones?\" moments, but I’ll deliver the news with the supportive energy of a chaotic editor who wants you to win.\n\n**Lay it on me. What’s the pitch?**",
+              "thought": null,
+              "thought_signature": "b\"\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xd9\\xb4\\xaf4N\\xb9\\x08\\nN=\\x1d<\\x1f'\\xbf\\xe6:\\x88J\\xc0\\xae\\xe0\\xfe)\\x9d\\xbdN\\xc8,\\xce{\\xe08A\\xed\\x9f\\xf8\\x9a\\xef\\xc5\\x91Mu\\xf9\\xe3\"",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "fsX3adS9LamJ-sAP_K2fiQE",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 123,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 55,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 55
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 178,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 1.4286
+}

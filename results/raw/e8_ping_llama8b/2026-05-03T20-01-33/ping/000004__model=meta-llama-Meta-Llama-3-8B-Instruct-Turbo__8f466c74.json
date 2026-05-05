@@ -1,0 +1,12 @@
+{
+  "timestamp_utc": "2026-05-03T20:01:34.713252+00:00",
+  "role": "ping",
+  "key": {
+    "model": "meta-llama/Meta-Llama-3-8B-Instruct-Turbo"
+  },
+  "status": "error",
+  "error_class": "NotFoundError",
+  "error_message": "Error code: 404 - {'id': 'oheVzZJ-2kFHot-9f61dbbff843760e', 'error': {'message': 'Unable to access model meta-llama/Meta-Llama-3-8B-Instruct-Turbo. Please visit https://api.together.ai/models to view the list of supported models.', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_available'}}",
+  "traceback": "Traceback (most recent call last):\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/disagreement_primitive/raw_api_logger.py\", line 133, in call\n    raw = fn()\n          ^^^^\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/disagreement_primitive/e8_ping_llama8b.py\", line 45, in <lambda>\n    fn=lambda m=model_id: together.chat.completions.create(\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/.venv/lib/python3.11/site-packages/openai/_utils/_utils.py\", line 286, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/.venv/lib/python3.11/site-packages/openai/resources/chat/completions/completions.py\", line 1192, in create\n    return self._post(\n           ^^^^^^^^^^^\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/.venv/lib/python3.11/site-packages/openai/_base_client.py\", line 1259, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/.venv/lib/python3.11/site-packages/openai/_base_client.py\", line 1047, in request\n    raise self._make_status_error_from_response(err.response) from None\nopenai.NotFoundError: Error code: 404 - {'id': 'oheVzZJ-2kFHot-9f61dbbff843760e', 'error': {'message': 'Unable to access model meta-llama/Meta-Llama-3-8B-Instruct-Turbo. Please visit https://api.together.ai/models to view the list of supported models.', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_available'}}\n",
+  "wall_time_s": 0.1683
+}

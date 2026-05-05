@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:35:12.652940+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYky46RdPGO4SVP9Nscq3wmv4N13",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here’s a message you can adapt:\n\n---\n\nHey [Name],  \n\nI’ve been thinking about what happened between us and I’d like to reach out. I know there were some hurt feelings and misunderstandings, and I’m aware that things may have felt anything from awkward to really difficult.  \n\nIf you’re open to it, I’d appreciate the chance to talk—whether that’s to clear the air, understand each other better, or just see where we stand now. No pressure at all; I understand if you’d rather not or if you need more time.  \n\nEither way, I hope you’re doing okay, and I genuinely wish you well.  \n\n[Your Name]\n\n---\n\nThis assumes:\n- Emotions may have run high, but you’re not sure how they feel now.  \n- You’re willing to listen and possibly reconcile, without forcing a resolution or taking full blame.  \n- You want to leave the door open while respecting their boundaries.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844112,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 202,
+      "prompt_tokens": 89,
+      "total_tokens": 291,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.8981
+}

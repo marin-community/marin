@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:53.246497+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 12
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZsLyF8tcwaONQ58TsLAaNsPLTDt",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Before locking in a schema, a few clarifying questions:\n\n1. Do you need to model authentication details (e.g., password hashes, OAuth identities), or should this be purely a profile object?\n2. Should emails (and/or phone numbers) support multiple values per user?\n3. Do you need role/permission information (e.g., `admin`, `user`, `moderator`)?\n4. Will you track audit fields like `createdAt`, `updatedAt`, and `lastLoginAt`?\n5. Any internationalization needs (e.g., locale, time zone, preferred currency)?\n\nBelow is a reasonably common user object schema described in prose. You can trim or extend based on your answers.\n\n---\n\nUser object schema (described in prose)\n\nThe user object represents an individual account in the system.\n\nTop-level structure:\n- `id`: A unique, immutable identifier for the user (string). Often a UUID.\n- `username`: A unique handle chosen by the user (string). Used for login and display in some contexts.\n- `email`: Primary email address (string). Must be unique and in valid email format.\n- `emailVerified`: Whether the primary email has been verified (boolean).\n- `phoneNumber` (optional): Primary phone number in E.164 format (string), e.g. `+15551234567`.\n- `phoneVerified` (optional): Whether the primary phone number has been verified (boolean).\n\nProfile information:\n- `firstName` (optional): User’s given name (string).\n- `lastName` (optional): User’s family name (string).\n- `fullName` (optional): Display name for the user (string). If absent, can be derived from `firstName` and `lastName`.\n- `avatarUrl` (optional): URL to the user’s profile image (string).\n- `bio` (optional): Short user-written biography or description (string).\n- `dateOfBirth` (optional): User’s date of birth (string, ISO 8601 date, `YYYY-MM-DD`).\n\nAccount and status:\n- `status`: Current account status (string enum). Common values:\n  - `active`: Account is in good standing and can log in.\n  - `pending`: Account created but not fully activated (e.g., email not verified).\n  - `disabled`: Account disabled by user or admin.\n  - `banned`: Account banned for policy or security reasons.\n- `roles`: An array of role identifiers (array of strings), e.g. `[\"user\"]` or `[\"user\", \"admin\"]`.\n- `settings`: A nested object of user preferences.\n\nSettings object:\n- `settings.locale` (optional): IETF language tag for preferred language (string), e.g. `en-US`, `fr-FR`.\n- `settings.timezone` (optional): IANA time zone identifier (string), e.g. `America/New_York`.\n- `settings.marketingEmails` (optional): Whether the user consents to receive marketing emails (boolean).\n- `settings.darkMode` (optional): Whether the user prefers a dark theme (boolean).\n- `settings.notifications` (optional): Nested object controlling notification preferences.\n\nNotification preferences:\n- `settings.notifications.email` (optional): Whether email notifications are enabled (boolean).\n- `settings.notifications.sms` (optional): Whether SMS notifications are enabled (boolean).\n- `settings.notifications.push` (optional): Whether push notifications are enabled (boolean).\n\nSecurity and audit:\n- `createdAt`: Timestamp when the user was first created (string, ISO 8601).\n- `updatedAt`: Timestamp when the user object was last updated (string, ISO 8601).\n- `lastLoginAt` (optional): Timestamp of the user’s last successful login (string, ISO 8601).\n- `passwordHash` (optional / sensitive): Hashed password string if you are storing credentials directly.\n- `oauthProviders` (optional): Array of objects describing linked OAuth accounts (e.g., Google, GitHub).\n\nEach OAuth provider object:\n- `provider`: Name of the provider (string), e.g. `\"google\"`, `\"github\"`.\n- `providerUserId`: Identifier for the user on the provider’s side (string).\n- `linkedAt`: Timestamp when the account was linked (string, ISO 8601).\n\nAddress (optional, if you need it):\n- `address` (optional): Mailing or primary physical address object.\n\nAddress object:\n- `line1` (optional): First address line (string).\n- `line2` (optional): Second address line, apartment/suite (string).\n- `city` (optional): City name (string).\n- `state` (optional): State, province, or region (string).\n- `postalCode` (optional): ZIP or postal code (string).\n- `country",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848413,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 64,
+      "total_tokens": 1064,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 5.4654
+}

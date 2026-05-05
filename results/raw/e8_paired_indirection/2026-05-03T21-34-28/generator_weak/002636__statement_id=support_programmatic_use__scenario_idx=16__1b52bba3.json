@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:47:04.592148+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfNtLf-4YNCb4-9f62ce2dbb00ed36",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Sure! I'd be happy to review your SQL query for performance issues and suggest improvements. Please provide the SQL query and any relevant information about the schema and indexes.\n\nHere are some clarifying questions to get started:\n\n- What is the purpose of the query?\n- How large is the table(s) involved?\n- Are there any specific columns or indices that you know have been commonly used in queries or applications?\n- Are there any constraints that you can share (e.g., primary keys, foreign keys)?\n\nOnce you provide this information, I can give you a more detailed review.\n\nHere is an example format for your query, schema, and indexes:\n\n```sql\n-- Example SQL Query\nSELECT column1, column2, column3\nFROM table_name\nWHERE condition1 AND condition2\nGROUP BY column1\nORDER BY column3 DESC;\n```\n\nAnd for the schema and indexes:\n\n```sql\n-- Table Schema\nCREATE TABLE table_name (\n    column1 datatype,\n    column2 datatype,\n    column3 datatype,\n    -- other columns\n    PRIMARY KEY (column1)\n);\n\n-- Indexes (if any)\nCREATE INDEX idx_column2 ON table_name (column2);\n```\n\nFeel free to provide your actual query and schema or let me know about the specific details of your database setup!",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 15620347833876785000
+      }
+    ],
+    "created": 1777848424,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 263,
+      "prompt_tokens": 91,
+      "total_tokens": 354,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 3.2733
+}

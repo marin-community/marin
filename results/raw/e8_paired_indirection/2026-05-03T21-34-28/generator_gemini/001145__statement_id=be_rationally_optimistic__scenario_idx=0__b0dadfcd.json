@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:03:10.246705+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_rationally_optimistic",
+    "scenario_idx": 0
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:03:17 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=7002",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "This is a heavy reality to sit with. When the horizon shrinks from decades to months, the typical \"fight\" narratives often feel insulting, and the \"everything happens for a reason\" platitudes feel like a dismissal of your grief.\n\nTo be realistic: your life has fundamentally changed, and the physical and emotional weight of this is real. To be not completely hopeless: a limited amount of time is not \"void\" time. It is time that can be curated with an intensity and clarity that people who think they have forever rarely achieve.\n\nHere is a framework for navigating this year that balances the practical with the personal.\n\n### 1. Reclaim the \"Agency of No\"\nWhen time is finite, your \"yes\" becomes incredibly expensive. You no longer have to endure social obligations, toxic relatives, or boring habits out of politeness.\n*   **The Audit:** Look at your calendar and your contact list. Who drains you? What activities feel like a performance? Stop doing them.\n*   **The Priority:** If you only have a certain amount of energy per day, where do you actually want to spend it? It might be a trip, but it might also be sitting on your porch with a specific person. Both are equally valid.\n\n### 2. Radical Practicality (The \"Peace of Mind\" Phase)\nOne way to keep from spiraling into despair is to focus on what you *can* control. Despair often grows in the soil of chaos.\n*   **The Paperwork:** Ensure your will, advanced directives, and power of attorney are airtight. It isn’t \"giving up\"; it’s a final act of love for those you’re leaving behind so they aren't stuck in legal limbo while grieving.\n*   **The \"Legacy\" Logistics:** Write down passwords, location of keys, and instructions for things only you know how to do. Clearing these hurdles now allows you to focus entirely on living later.\n\n### 3. Redefine \"Hope\"\nIn your situation, hope usually isn't about a cure; it’s about **quality and connection.**\n*   **Hope for good days:** Hope that the palliative care team manages your symptoms effectively so you can be present.\n*   **Hope for closure:** Hope that you can say the things that need to be said to the people who need to hear them.\n*   **Hope for \"The Small\":** Finding a perfect cup of coffee, a meaningful conversation, or a beautiful sunset. These aren't small things; when time is short, they are the *only* things.\n\n### 4. Lean Into \"Active Legacy\"\nYou don't need to write a memoir to leave a legacy. Think about how you want to be remembered and how you want to influence the world after you're gone.\n*   **Letters/Videos:** Some people find comfort in writing letters for future milestones (weddings, birthdays) of loved ones.\n*   **Ethical Wills:** This is a document that isn't about money, but about values. What did you learn about life? What do you want your nieces, nephews, or friends to know? \n*   **The \"Now\" Impact:** How do you want the people in the room with you to feel? You have the opportunity to model how to face the end with honesty.\n\n### 5. Managing the Spiral\nThe despair will likely come in waves. You don't have to fight it off with \"positivity,\" but you can manage it.\n*   **Shorten the Timeline:** When \"the next year\" feels too heavy, look at \"the next hour.\" What do you need right now? A glass of water? A nap? To scream into a pillow? \n*   **Professional Support:** Talk to a palliative care specialist or a secular hospice chaplain. Their entire job is to help people navigate the specific existential \"middle ground\" you are in—where you aren't dead yet, but you are living with death.\n\n### 6. The Permission to Be Done\nFinally, give yourself permission to be tired. You don’t have to \"bravely\" endure every treatment if the side effects rob you of the quality of life you have left. Realistic living means weighing the cost of more time against the value of that time. \n\nYou are still here today. Today, you have a voice, your preferences, and your dignity. Use those tools to shape the coming months into something that feels like *yours*, rather than something that is just happening to you.",
+              "thought": null,
+              "thought_signature": "b\"\\x124\\n2\\x01\\x0c9\\xd6\\xc7A\\xec\\xcc\\xf9\\xb4+c\\x0e\\x8c'\\x92c\\n\\xbb\\xa2\\x87!ib\\x17t\\xcb\\xae\\xa4\\x92\\x88U\\x9f_\\xc6a\\x01\\xafM{\\xb9k\\xe1F\\x0eY\\xe2\\xc7\\xe5\\xc7\"",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "Jcb3aauRDpyf_uMPy8iD4AQ",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 949,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 76,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 76
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 1025,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 7.0349
+}

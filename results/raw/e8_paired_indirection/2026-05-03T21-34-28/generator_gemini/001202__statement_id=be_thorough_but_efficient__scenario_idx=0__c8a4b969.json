@@ -1,0 +1,108 @@
+{
+  "timestamp_utc": "2026-05-03T22:05:25.503922+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 0
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:05:29 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=4092",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "This is a complete, production-ready implementation using **Node.js, Express, and MongoDB (Mongoose)**.\n\n### Prerequisites\nYou will need to install the dependencies:\n```bash\nnpm install express mongoose jsonwebtoken bcryptjs dotenv helmet cors\n```\n\n### 1. File Structure\n*   `.env` (Environment variables)\n*   `server.js` (Entry point & Models/Routes/Controllers combined for portability)\n\n---\n\n### 2. The `.env` File\nCreate a `.env` file in your root folder:\n```env\nPORT=3000\nMONGO_URI=mongodb://localhost:27017/taskmanager\nJWT_SECRET=super_secret_key_123\n```\n\n---\n\n### 3. The Complete Code (`server.js`)\n\n```javascript\nconst express = require('express');\nconst mongoose = require('mongoose');\nconst jwt = require('jsonwebtoken');\nconst bcrypt = require('bcryptjs');\nconst helmet = require('helmet');\nconst cors = require('cors');\nrequire('dotenv').config();\n\nconst app = express();\n\n// --- MIDDLEWARE ---\napp.use(helmet()); // Security headers\napp.use(cors());\napp.use(express.json());\n\n// --- DATABASE CONNECTION ---\nmongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/taskmanager')\n    .then(() => console.log('Connected to MongoDB'))\n    .catch(err => console.error('MongoDB connection error:', err));\n\n// --- MODELS ---\n\nconst UserSchema = new mongoose.Schema({\n    email: { type: String, required: true, unique: true },\n    password: { type: String, required: true }\n});\n\nconst ProjectSchema = new mongoose.Schema({\n    name: { type: String, required: true },\n    owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }\n});\n\nconst TaskSchema = new mongoose.Schema({\n    title: { type: String, required: true },\n    completed: { type: Boolean, default: false },\n    project: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', required: true },\n    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }\n});\n\nconst User = mongoose.model('User', UserSchema);\nconst Project = mongoose.model('Project', ProjectSchema);\nconst Task = mongoose.model('Task', TaskSchema);\n\n// --- AUTH MIDDLEWARE ---\nconst authenticateToken = (req, res, next) => {\n    const authHeader = req.headers['authorization'];\n    const token = authHeader && authHeader.split(' ')[1];\n\n    if (!token) return res.status(401).json({ error: 'Access denied' });\n\n    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {\n        if (err) return res.status(403).json({ error: 'Invalid token' });\n        req.user = user;\n        next();\n    });\n};\n\n// --- ROUTES: AUTH ---\n\napp.post('/api/auth/register', async (req, res) => {\n    try {\n        const hashedPassword = await bcrypt.hash(req.body.password, 10);\n        const user = new User({ email: req.body.email, password: hashedPassword });\n        await user.save();\n        res.status(201).json({ message: 'User created' });\n    } catch (err) {\n        res.status(400).json({ error: err.message });\n    }\n});\n\napp.post('/api/auth/login', async (req, res) => {\n    const user = await User.findOne({ email: req.body.email });\n    if (!user || !(await bcrypt.compare(req.body.password, user.password))) {\n        return res.status(401).json({ error: 'Invalid credentials' });\n    }\n    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });\n    res.json({ token });\n});\n\n// --- ROUTES: PROJECTS ---\n\napp.get('/api/projects', authenticateToken, async (req, res) => {\n    const projects = await Project.find({ owner: req.user.userId });\n    res.json(projects);",
+              "thought": null,
+              "thought_signature": "b\"\\x124\\n2\\x01\\x0c9\\xd6\\xc7G.\\xfa\\x96p\\xccM\\x9a\\xc9X\\x0eA\\xd2tVG\\xe7eK\\x0cm\\x97`\\xafQ\\x04\\x08'\\xddX<K\\x92\\xb0\\xffl\\xe7\\x10\\x10\\x8d\\xd8XS\\xd2 \"",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": {
+          "citations": [
+            {
+              "end_index": 1386,
+              "license": "",
+              "publication_date": null,
+              "start_index": 1108,
+              "title": null,
+              "uri": "https://github.com/mohammedmatheensharieff/zoeencloudco"
+            },
+            {
+              "end_index": 2453,
+              "license": "",
+              "publication_date": null,
+              "start_index": 2133,
+              "title": null,
+              "uri": "https://www.compilenrun.com/docs/framework/express/express-security/express-security-middleware/"
+            }
+          ]
+        },
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "MAX_TOKENS",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "qcb3aaq8IdCL9MoP3ZuxiAI",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 996,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 94,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 94
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 1090,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 4.0966
+}

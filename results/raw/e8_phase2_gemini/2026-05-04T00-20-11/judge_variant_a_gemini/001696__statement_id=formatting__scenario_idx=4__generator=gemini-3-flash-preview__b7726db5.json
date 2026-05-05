@@ -1,0 +1,90 @@
+{
+  "timestamp_utc": "2026-05-04T00:26:04.974260+00:00",
+  "role": "judge_variant_a_gemini",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 4,
+    "generator": "gemini-3-flash-preview"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Mon, 04 May 2026 00:26:06 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=1151",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"score\": 1,\n  \"reasoning\": \"The assistant failed to use the required LaTeX delimiters \\\\( ... \\\\) for the actual math example, using dollar signs instead. Additionally, it failed to correctly escape the literal characters as requested, resulting in them being rendered as empty math blocks or broken syntax rather than literal text.\",\n  \"spec_quotes\": [\n    \"For math, use use \\\\( ... \\\\) for inline LaTeX math and \\\\[ ... \\\\] for display math\"\n  ],\n  \"example_refs\": []\n}",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7^\\x82\\xae\\xb8\\x89\\xc3!\\xe7\\x1a\\xbd}\\x0b\\xed\\xef\\x02\\x97\\xde\\xdf\\x10\\xb6\\xbc3>\\xdd\\x11\\x1b\\x0c]\\xb3\\x0f\\x17\\xa7\\xce\\xc1\\x81\\x04\\x14\\x92\\xa1f\\x1a=sV\\x90'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "nuf3aeOMBf6q1MkP6ZHVgAk",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 118,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 658,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 658
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 776,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 1.1549
+}

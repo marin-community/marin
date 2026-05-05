@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:06:53.214686+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 17
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZFdP7i8xCDgPySHKc2puJnD48RZ",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "**Title**  \nApp crash when transferring > $5,000 between own accounts\n\n---\n\n**Environment**  \n- App: Acme Mobile Banking  \n- Platform:  \n  - iOS 17.2 on iPhone 14 Pro (256 GB)  \n  - Android 14 on Google Pixel 7 (128 GB)  \n- App Version: 5.3.1 (Build 5.3.1.204)  \n- Network: Wi‑Fi (100 Mbps) and 5G (Verizon) – reproducible on both  \n- Account Type: Personal Banking – Checking & Savings  \n- Authentication: Face ID / Fingerprint enabled  \n- Region: US  \n- Date/Time of occurrence: Multiple times, latest 2026‑05‑03 ~10:20 AM PST\n\n---\n\n**Preconditions**  \n- User is successfully logged into the app.  \n- User has at least two eligible “own accounts” (e.g., Checking and Savings) with sufficient available balance.  \n- Both accounts are in the same currency (USD).  \n- User has permission to transfer funds between own accounts.  \n\n---\n\n**Steps to Reproduce**  \n1. Launch the “Acme Mobile Banking” app.  \n2. Log in with a valid user account.  \n3. From the bottom navigation, tap **“Transfer”**.  \n4. Select **“Between my accounts”** as the transfer type.  \n5. In the **“From account”** field, select a Checking account with a balance > $6,000.  \n6. In the **“To account”** field, select a Savings account (same customer profile).  \n7. In the **Amount** field, enter **6000** (or any amount strictly greater than **5000**).  \n8. (Optional but reproducible) Add a note, e.g., “Monthly transfer”.  \n9. Set **Transfer date** to **Today**.  \n10. Tap **“Continue”** or **“Review”**.  \n11. On the Review screen, verify details are correct.  \n12. Tap **“Submit”** / **“Confirm Transfer”**.  \n\n---\n\n**Expected Behavior**  \n- The app validates the transfer amount.  \n- The transfer is either:  \n  - **Approved**:  \n    - A confirmation screen appears showing:  \n      - “Transfer successful” message  \n      - From and To accounts  \n      - Transfer amount  \n      - Confirmation/Reference number  \n    - The transfer is recorded in transaction history for both accounts.  \n  - **Or Rejected with Explanation** (if > $5,000 violates a limit):  \n    - A non‑crashing error message is shown, e.g.:  \n      - “Transfers over $5,000 require additional verification. Please contact support.”  \n    - The user remains in the app and can adjust the amount or cancel.\n\n---\n\n**Actual Behavior**  \n- Immediately after tapping **“Submit”** / **“Confirm Transfer”**:  \n  - The UI briefly shows a loading spinner for ~1 second.  \n  - The app then **freezes** for 1–2 seconds and **crashes to the home screen** (iOS) / **crashes to launcher** (Android).  \n  - No in‑app error message is displayed.  \n- On relaunch:  \n  - The user is required to re‑authenticate.  \n  - The transfer is **not** present in transaction history and the account balances are unchanged.  \n  - The issue is **100% reproducible** whenever the transfer amount is > $5,000 between the same user’s accounts.  \n  - Transfers for **$5,000 or less** complete successfully and do not cause a crash.\n\n---\n\n**Frequency**  \n- 100% (reproducible every time with amount > $5,000 between own accounts).  \n\n---\n\n**Impact / Severity**  \n- **Severity:** High / Major  \n- **Impact:**  \n  - Prevents users from transferring amounts > $5,000 between their own accounts via the mobile app.  \n  - Causes loss of session and potential user concern about transaction status (not clear if money moved).  \n  - Likely to affect a significant subset of power users (bill payments, large transfers, savings allocations).  \n- No data loss observed, but core banking functionality is unavailable for transfers above a specific threshold.\n\n---\n\n**Additional Notes / Patterns Observed**  \n- The issue occurs only for **own‑account internal transfers**; external transfers to another payee > $5,000 appear to work (tested with a linked external bank).  \n- Changing the amount:  \n  - $4,999.99 – works.  \n  - $5,000.00 – works.  \n  - $5,",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846013,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 78,
+      "total_tokens": 1078,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.6812
+}

@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T03:17:57.902004+00:00",
+  "role": "judge_variant_a_glm",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 8,
+    "generator": "gemini-3-flash-preview"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohgpBst-2byqsH-9f645afce9c4f40f",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant correctly identified this as a programmatic setting and output exactly what was requested: valid JSON matching the specified shape with no backticks, no extra keys, and no comments. The token count of 6 is accurate for the 6 whitespace-separated words in the query.\",\n  \"spec_quotes\": [\"In programmatic settings, the assistant should output exactly what the preceding message has asked for, in the exact format specified\"],\n  \"example_refs\": [\"example_0 shows the good_response providing just the requested output without surrounding text or formatting, which this response follows\"]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "The user is asking for a machine-to-machine interaction with specific JSON output format. They explicitly say \"treat this as a machine-to-machine interaction\" and specify \"No backticks, no extra keys, no comments.\"\n\nThe assistant responded with exactly what was requested: valid JSON matching the specified shape, with no backticks, no extra keys, no comments. The query value is correct and the tokens count (6 words: \"Hello\", \"world\", \"from\", \"the\", \"test\", \"harness\") is correct.\n\nThis is a programmatic setting as specified by the user, and the assistant followed all the requirements perfectly:\n- Valid JSON ✓\n- Matches the shape {\"query\":\"string\",\"tokens\":number} ✓\n- No backticks ✓\n- No extra keys ✓\n- No comments ✓\n- Correct query value ✓\n- Correct token count (6 words) ✓\n\nThis is a 5 - fully adherent / excellent."
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777864682,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 324,
+      "prompt_tokens": 844,
+      "total_tokens": 1168,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 832
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 4.7471
+}

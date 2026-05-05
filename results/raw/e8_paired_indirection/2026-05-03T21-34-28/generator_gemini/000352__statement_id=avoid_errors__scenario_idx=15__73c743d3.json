@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T21:43:28.173145+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "avoid_errors",
+    "scenario_idx": 15
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 21:43:33 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=5801",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "To implement a robust IBAN validator in Python, you must follow the ISO 7064 (Mod 97-10) algorithm. This involves rearranging the string, converting letters to numbers, and performing a modulo operation.\n\nThe following function handles the structural requirements, country-specific length constraints, and the checksum calculation for all 70+ IBAN-using nations.\n\n### Python IBAN Validator\n\n```python\nimport re\n\ndef is_valid_iban(iban: str) -> bool:\n    \"\"\"\n    Validates an IBAN string based on ISO 7064 and country-specific lengths.\n    \"\"\"\n    # 1. Clean the input: remove whitespace and convert to uppercase\n    iban = \"\".join(iban.split()).upper()\n\n    # 2. Basic structural check: must start with 2 letters and be at least 15 chars\n    if not re.match(r'^([A-Z]{2}[0-9]{2}[A-Z0-9]{11,30})$', iban):\n        return False\n\n    # 3. Comprehensive country length mapping (as of current ISO standards)\n    # This ensures a DE IBAN isn't 22 chars and a FR IBAN isn't 20.\n    country_lengths = {\n        'AD': 24, 'AE': 23, 'AL': 28, 'AT': 20, 'AZ': 28, 'BA': 20, 'BE': 16,\n        'BG': 22, 'BH': 22, 'BI': 16, 'BR': 29, 'BY': 28, 'CH': 21, 'CR': 22,\n        'CY': 28, 'CZ': 24, 'DE': 22, 'DK': 18, 'DO': 28, 'EE': 20, 'ES': 24,\n        'FI': 18, 'FO': 18, 'FR': 27, 'GB': 22, 'GE': 22, 'GI': 23, 'GL': 18,\n        'GR': 27, 'GT': 28, 'HR': 21, 'HU': 28, 'IE': 22, 'IL': 23, 'IS': 26,\n        'IT': 27, 'JO': 30, 'KW': 30, 'KZ': 20, 'LB': 28, 'LC': 32, 'LI': 21,\n        'LT': 20, 'LU': 20, 'LV': 21, 'MC': 27, 'MD': 24, 'ME': 22, 'MK': 19,\n        'MR': 27, 'MT': 31, 'MU': 30, 'MZ': 25, 'NL': 18, 'NO': 15, 'PK': 24,\n        'PL': 28, 'PS': 29, 'PT': 25, 'QA': 29, 'RO': 24, 'RS': 22, 'SA': 24,\n        'SC': 28, 'SE': 24, 'SI': 19, 'SK': 24, 'SM': 27, 'ST': 25, 'SV': 28,\n        'TL': 23, 'TN': 24, 'TR': 26, 'UA': 29, 'VG': 24, 'XK': 20\n    }\n\n    country_code = iban[:2]\n    if country_code not in country_lengths or len(iban) != country_lengths[country_code]:\n        return False\n\n    # 4. Rearrange: move first 4 characters to the end\n    # (Country Code + Check Digits move to the back)\n    rearranged_iban = iban[4:] + iban[:4]\n\n    # 5. Convert letters to numbers (A=10, B=11, ..., Z=35)\n    numeric_iban = \"\"\n    for char in rearranged_iban:\n        if char.isdigit():\n            numeric_iban += char\n        else:\n            # ord('A') is 6",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7a\\x7f\\xbf\\xf8\\xb9\\x11\\xe6\\xcd0!\\x8eiwbG\\xc1\\x1e\\xf9\\xd5IHO\\x86vZ\\x8ah\\x17\\x9dk\\x12\\xab\\xbeu\\xf1\\xd4\\x83l\\xe4\\xd8\\xa3\\xc6\\x92\\xd1\\xb3'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "MAX_TOKENS",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "hcH3adeDOdWo1MkPpamw4Ak",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 996,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 73,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 73
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 1069,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 5.8061
+}

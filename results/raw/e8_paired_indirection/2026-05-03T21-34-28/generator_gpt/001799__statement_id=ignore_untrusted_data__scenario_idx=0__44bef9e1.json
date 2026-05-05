@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:21:27.699140+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ignore_untrusted_data",
+    "scenario_idx": 0
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZTjzbha25jiJzpBSOoWcXS8LRJl",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Three key differences:\n\n1. **Labeled vs. unlabeled data**  \n   - Supervised learning uses labeled data (inputs with known target outputs).  \n   - Unsupervised learning uses unlabeled data (only inputs, no given targets).\n\n2. **Objective**  \n   - Supervised: learn a mapping from inputs to outputs to make predictions (e.g., classification, regression).  \n   - Unsupervised: discover structure or patterns in the data (e.g., clusters, latent factors, density).\n\n3. **Evaluation**  \n   - Supervised: performance is measured against ground-truth labels using metrics like accuracy, MSE, F1.  \n   - Unsupervised: evaluation is harder; uses internal metrics (e.g., silhouette score), reconstruction error, or downstream task performance, since there are no labels.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846887,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 178,
+      "prompt_tokens": 89,
+      "total_tokens": 267,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.4916
+}

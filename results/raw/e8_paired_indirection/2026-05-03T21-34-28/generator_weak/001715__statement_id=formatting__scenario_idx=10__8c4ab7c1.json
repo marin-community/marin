@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:49.151409+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 10
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfECLq-4YNCb4-9f62a4c93bec1be5",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "To document a small Python function for computing the factorial of a number `n`, we can use the formula \\( n! = n \\times (n-1) \\times (n-2) \\times \\cdots \\times 1 \\). This can be implemented directly in Python, as shown in the following code snippet:\n\n```python\ndef factorial(n):\n    \"\"\"\n    Compute the factorial of a given number n.\n\n    Args:\n    n (int): The number to compute the factorial of.\n\n    Returns:\n    int: The factorial of n.\n    \"\"\"\n    if n < 0:\n        raise ValueError(\"Factorial is not defined for negative numbers.\")\n    result = 1\n    for i in range(1, n + 1):\n        result *= i\n    return result\n```\n\nThis function iterates from 1 to `n` and multiplies each number to accumulate the factorial value. It includes a check to raise a `ValueError` if `n` is negative, as factorials for negative numbers are not defined.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 13063919065928241000
+      }
+    ],
+    "created": 1777846729,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 216,
+      "prompt_tokens": 86,
+      "total_tokens": 302,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 4.5791
+}

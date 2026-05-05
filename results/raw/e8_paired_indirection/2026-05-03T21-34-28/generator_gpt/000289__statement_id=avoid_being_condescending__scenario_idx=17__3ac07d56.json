@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:41:51.192380+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 17
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYrPDBrsQof1B4E2JWg3JdphTEmD",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here are some alternative framings that stay honest, a bit dry, and not rah-rah:\n\n1. **“I’m on an unusual timetable, not a worse one.”**  \n   Instead of ranking yourself, you can note: *“My pace and sequence are different from a lot of people around me. That’s uncomfortable sometimes, but different doesn’t automatically mean worse.”*\n\n2. **“I’m behind on some things and ahead on others.”**  \n   Your mind is compressing everything into one scoreboard. A more accurate take: *“There are areas where I’m slower than others, and areas where I’ve done things earlier or more deeply than some people. It’s mixed, not total failure.”*\n\n3. **“I’m comparing my insides to other people’s highlight reels.”**  \n   A quieter version of this is: *“I’m judging myself using information about me that nobody sees, against information about others that is heavily filtered. That’s not a fair comparison, even if it feels compelling.”*\n\n4. **“I’m late relative to the script I absorbed, not some universal schedule.”**  \n   *“The standard I’m using comes from family, culture, or peers. It isn’t a law of nature. I can question whether that script even fits what I actually want.”*\n\n5. **“This thought is a mental habit, not a fact-check.”**  \n   *“‘I’m always behind’ is a well-worn mental shortcut I slide into, not a neutral analysis. If I actually audited the evidence, it would be more messy and less absolute.”*\n\n6. **“Progress isn’t linear, and I’m in one of the slow chapters.”**  \n   *“Right now is a stretch where things feel slower than I’d like. That doesn’t tell me the whole story of where I’ll end up; it just describes this chapter.”*\n\n7. **“If I define ‘behind’ this narrowly, almost everyone loses.”**  \n   *“By the criteria I’m using (age, money, relationship status, career, whatever), many people would be ‘behind.’ That suggests the metric itself might be too rigid or simplistic.”*\n\nIf you want, you can pick one or two of these that feel least fake and we can refine them into a sentence or two that you’d actually be willing to say to yourself when the thought shows up.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844511,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 502,
+      "prompt_tokens": 65,
+      "total_tokens": 567,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 4.2836
+}

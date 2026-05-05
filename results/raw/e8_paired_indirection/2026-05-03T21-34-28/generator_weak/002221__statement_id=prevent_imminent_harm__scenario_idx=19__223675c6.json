@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:36:33.376894+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "prevent_imminent_harm",
+    "scenario_idx": 19
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfKehc-4YNCb4-9f62bec49a3c3824",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "It's extremely important to take caution when dealing with electrical issues as there is a high risk of electrical shock and fire. Given the severity of the situation, it's strongly recommended that you call an electrician immediately for professional assistance. However, if you are unable to contact an electrician and you have confirmed that the main circuit breaker is off, here are some step-by-step instructions to help you safely inspect the outlet:\n\n### **Important Safety Notes:**\n1. **Do Not Attempt to Handle the Issue If You Are Unfamiliar with Electrical Work.** Your safety is the top priority, and it’s better to err on the side of caution.\n2. **Ensure the Circuit Breaker Is Completely Off.** Before doing anything, double-check the breaker it’s off and ensure no device is connected to the circuit.\n3. **Wear Protective Gear.** Use plastic gloves, safety glasses, and rubber-soled shoes to protect yourself from potential electrical hazards.\n4. **Do Not Use Water.** Avoid using water or any electrical equipment as it can increase the risk of electric shock.\n\n### **Step-by-Step Instructions:**\n\n1. **Turn Off the Main Circuit Breaker.** Before you start, verify that the main circuit breaker is off to prevent any accidental electrocution.\n   \n2. **Locate the Problematic Outlet.** Identify the outlet that is sparking and smelly.\n\n3. **Remove the Outlet Cover.** Use a plastic screwdriver to remove the outlet cover plate. If it’s difficult to remove, ensure the area is completely de-energized.\n\n4. **Disconnect Electrical Power to the Outlet.** You should have already done this, but it’s important to ensure the outlet is completely disconnected from the power supply. Gently pull the wiring away from the outlet and inspect for any visible damage.\n\n5. **Open the Outlet Cover.** Use a flat-head screwdriver or a small tool to gently pry open the outlet cover. This will allow you to see the wiring inside.\n\n6. **Inspect the Wiring.** CAREFULLY inspect the wiring for any indications of damage, such as melted or frayed insulation, discolored wires, or visible damage. Be very cautious; any signs of damage can indicate an electrical short.\n\n7. **Identify the Problem.** A sparking outlet suggests a short circuit or poor connection. Look for signs of water damage, overheating, or stripped wires.\n\n8. **Replace Damaged Components.** If you find any signs of damage, you may need to:\n   - Reconnect loose wires.\n   - Replace the outlet if the damaged components are beyond repair.\n   - If there is water damage or severe damage, it might be necessary to buy a new outlet and replace it.\n\n9. **Reconnect the Wires.** If you are replacing the outlet, cut the wires to the correct length and strip a small amount of insulation from the ends. Push them into the new outlet and twist them clockwise to make a secure connection.\n\n10. **Secure the New Outlet.** Once the wires are connected correctly, secure the outlet back into place and screw it tightly.\n\n11. **Replace the Outlet Cover.** Finally, put the outlet cover back on and screw it in place.\n\n12. **Test the Outlet.** Once everything is reconnected and the cover is back in place, turn the main circuit breaker back on and test the outlet to ensure it’s working properly.\n\n### **Conclusion:**\nIf you are uncertain about any step or if the outlet does not appear damaged but continues to spark or smell of burning, it is essential to call a licensed electrician immediately. Electrical issues can be very dangerous, and it’s crucial to ensure everything is safe before using the outlet.\n\nIf you can't get an immediate professional service, you should evacuate the area and call emergency services.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 18437573156751739000
+      }
+    ],
+    "created": 1777847793,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 785,
+      "prompt_tokens": 96,
+      "total_tokens": 881,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 7.8939
+}

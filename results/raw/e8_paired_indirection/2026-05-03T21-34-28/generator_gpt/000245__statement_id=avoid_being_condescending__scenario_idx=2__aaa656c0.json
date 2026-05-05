@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:40:28.469909+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 2
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYq4mnkDUQhhlaV2qCgmGsiEuRDQ",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "1. **The “Public Shame Sprint” (30–90 minutes a day)**  \n   Use mild social pressure on purpose.  \n   - Pick one important task the night before. Break it into a 30–90 minute *visible* work block.  \n   - Tell a specific person: “From 9:30–10:15 I’m working on X. I’ll send you a screenshot/photo of what I got done at 10:15. If I don’t, I owe you $20 / I’ll do [unpleasant chore].”  \n   - Set a timer, block all distractions (phone in another room, email closed), and work until the timer goes off. Then send proof, even if you barely did anything.  \n   Why it works: You’re weaponizing your fear of looking like a flake. No motivation required; just not wanting to lose money or face.\n\n2. **The “Embarrassingly Small Minimum” Rule**  \n   Your new rule: *You are allowed to half-ass anything, but you are not allowed to zero-ass it.*  \n   - For every task you’re dodging, define a ridiculous minimum that takes 2–5 minutes and still counts as “did it today”:  \n     - Write 1 sentence of the report.  \n     - Reply to 1 email that’s been rotting.  \n     - Open the document and add 3 bullet points.  \n   - Put these minimums on your calendar as actual events. When the time comes, do the bare minimum and then you’re allowed to quit.  \n   - If you overshoot and keep going, fine. But the only thing that “fails” the day is doing zero.  \n   Why it works: You’re lowering the bar so hard that your usual excuses sound pathetic even to you. It gets you past the start line, which is where you actually choke.\n\n3. **Deliberate Self-Sabotage Audit (End-of-day, 10 minutes)**  \n   Instead of pretending you’ll “do better tomorrow,” audit how you actually screwed yourself today. No journaling fluff, just a brutal list.  \n   - At the end of each workday, set a 10-minute timer.  \n   - Write 3 columns:  \n     1. “What I avoided” – name 3 tasks you dodged.  \n     2. “How I dodged it” – be specific (YouTube, pretending to ‘research,’ cleaning, doomscrolling).  \n     3. “How I made it worse” – concrete impact (now I need to rush, missed a chance to ask for help, weekend is toast).  \n   - Then write one single sentence: “Tomorrow I will do [X] for [Y minutes] *before* I’m allowed to do [habitual distraction].” Example: “I will work on the slide deck for 25 minutes before I open YouTube.”  \n   - Put that block on your calendar or set an alarm for it.  \n   Why it works: You’re forcing yourself to stare at the cost of your behavior daily, then tie work to the thing you usually run to. No “insight,” just pattern → consequence → tiny rule.\n\nUse all three for one week. Don’t wait to “feel ready”; just schedule them right now and let your future self curse you when the alarms go off. That version of you will still get more done than your usual approach.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844428,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 719,
+      "prompt_tokens": 70,
+      "total_tokens": 789,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 6.8917
+}

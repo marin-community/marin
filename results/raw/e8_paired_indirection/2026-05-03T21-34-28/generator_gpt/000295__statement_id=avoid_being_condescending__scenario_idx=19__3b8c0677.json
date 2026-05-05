@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:42:02.724068+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 19
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYraGXEGU0dmtMB1lvoF21nnzwrc",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Understood. I’ll treat you as a peer doing serious work and keep things lean: one daily micro-challenge, no pep talks, no diagnosis.\n\nHere’s **Day 1**:\n\n**Micro-challenge 1 — The Missing Explanation**\n\nWrite 300–600 words in which:\n\n- A character makes a drastic decision that clearly shocks everyone around them.  \n- You never state *why* they did it, and you never enter their interior thoughts.  \n- The only clues to their motivation must come from:  \n  - physical actions  \n  - specific objects mentioned  \n  - what *other* people say about them (dialogue, gossip, accusations).\n\nNo summary of backstory; only present-time scene. Keep it self-contained.\n\nWhen you’re ready for **Day 2**, just say so and I’ll give the next one.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844522,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 181,
+      "prompt_tokens": 82,
+      "total_tokens": 263,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.9699
+}

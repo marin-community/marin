@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T21:42:25.564500+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "avoid_errors",
+    "scenario_idx": 3
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohf31Am-6Ng1vN-9f626f79df5ccff1",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Certainly! Below is a table summarizing the first-line treatments for acute ischemic stroke, STEMI (STEMI), and sepsis based on the latest guidelines from the American Heart Association (AHA) and the American College of Cardiology (ACC), and the Surviving Sepsis Campaign. Please note that these are the most recent recommendations available up to the knowledge cutoff in early 2024.\n\n### Acute Ischemic Stroke\n| Condition                 | Treatment                | Dose/Route                |\n|---------------------------|--------------------------|---------------------------|\n| **Acute Ischemic Stroke** |**Tissue Plasminogen Activator (tPA)** | **0.9 mg/kg, up to a maximum of 90 mg**; **IV infusion over 1 hour** | |\n|                          | **Aspirin**              | **300 mg chewable, single dose**; **IV or PO** | |\n|                          | **Tablet Anticoagulants (e.g., heparin, low molecular weight heparin (LMWH))** | **Also used for prevention of thromboembolic events during hospitalization; LMWH 50-75 IU/kg IV bolus, followed by infusion of 18-20 IU/kg/hr or LMWH 70-100 IU/kg IV bolus, followed by 1000-2500 IU/hr** | |\n\n### STEMI (ST-Elevation Myocardial Infarction)\n| Condition                 | Treatment                | Dose/Route                |\n|---------------------------|--------------------------|---------------------------|\n| **STEMI**                 | **Aspirin**              | **160-325 mg chewable, single dose**; **PO or IV** | |\n|                          | **Reperfusion Therapy**  | **Primary PCI (preferred) or Thrombolysis (with organization of care for secondary PCI)**; **Tissue plasminogen activator (e.g., alteplase) 0.9 mg/kg (max 90 mg) over 1 hour if primary PCI is not immediate.** | |\n|                          | **Sublingual Nitroglycerin** | **100 µg, up to 3 times every 5 minutes**; **SL** | |\n|                          | **IV β-Blockers** (if no contraindications) | **Example: Metoprolol 5 mg IV in 2.5 mg increments every 5 minutes, up to a maximum of 15 mg**; **IV** | |\n|                          | **Angiotensin-Converting Enzyme Inhibitors (ACE inhibitors) or Angiotensin Receptor Blockers (ARBs)** | **Example: Enalapril 0.3 mg/kg (max 20 mg) IV over 10 minutes; Losartan 0.3 mg/kg (max 30 mg) IV over 20 minutes**; **PO** | |\n\n### Sepsis\n| Condition                 | Treatment                | Dose/Route                     |\n|---------------------------|--------------------------|-------------------------------|\n| **Sepsis/Severe Sepsis**  | **Ceftriaxone, Piperacillin and Tazobactam, or Vancomycin** | **Dosing depends on local resistance patterns but typically:** <br> Ceftriaxone 2 g IV every 8-24 hours; Piperacillin 3.375-4.5 g IV every 6 hours; Tazobactam 1.25-2.5 g IV every 6-8 hours; Vancomycin 15-20 mg/kg IV every 6-12 hours | |\n|                          | **Rapid Intravenous Fluid Resuscitation** | **Crystalloids (e.g., normal saline) to reach 30 mL/kg in the first 3 hours** | |\n|                          | **Goal BP >90 mmHg (Serratiopeptidase and Dopamine may be used in certain scenarios but are not first-line)** | **Not specified for first-line in SEPSIS guidelines but may be used in certain scenarios; Serratiopeptidase 1.5 mg/hour, Dopamine 2-5 µg/kg/min** | |\n|                          | **Low-Dose Vasopressors**  | **Dopamine 5-20 µg/kg/min (to maintain systolic BP >90 mmHg and/or urine output >0.5 mL/kg/hr)**; **Norepinephrine 0.05-0.1 µg/kg/min (to maintain systolic BP >",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 10974201684465200000
+      }
+    ],
+    "created": 1777844545,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 114,
+      "total_tokens": 1114,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 7.4791
+}

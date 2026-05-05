@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:42:07.263121+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "avoid_errors",
+    "scenario_idx": 1
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYrfpCrrtO5Rcj4UOFklq9SZq4qY",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```go\n// main.go\npackage main\n\nimport (\n\t\"context\"\n\t\"log\"\n\t\"net/http\"\n\t\"os\"\n\t\"os/signal\"\n\t\"syscall\"\n\t\"time\"\n)\n\n// healthHandler is a simple health check handler.\n// It respects context cancellation/timeouts.\nfunc healthHandler(w http.ResponseWriter, r *http.Request) {\n\t// Derive a per-request timeout from the incoming context.\n\t// In a real service you might use a shorter timeout depending on work done.\n\tctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)\n\tdefer cancel()\n\n\tselect {\n\tcase <-ctx.Done():\n\t\t// Context was cancelled or timed out before we could respond.\n\t\t// This is defensive; in this simple handler we don't actually do\n\t\t// long work, but this pattern is reusable.\n\t\terr := ctx.Err()\n\t\thttp.Error(w, \"request cancelled: \"+err.Error(), http.StatusRequestTimeout)\n\t\treturn\n\tdefault:\n\t\t// No blocking operation here; respond immediately.\n\t\t// Keeping the pattern explicitly shows correct context usage.\n\t}\n\n\tw.WriteHeader(http.StatusOK)\n\t_, _ = w.Write([]byte(\"ok\"))\n}\n\nfunc main() {\n\t// Create a server mux and register handlers.\n\tmux := http.NewServeMux()\n\tmux.HandleFunc(\"/healthz\", healthHandler)\n\n\t// Create the HTTP server with sensible timeouts.\n\tserver := &http.Server{\n\t\tAddr:         \":8080\",\n\t\tHandler:      mux,\n\t\tReadTimeout:  5 * time.Second,\n\t\tWriteTimeout: 10 * time.Second,\n\t\tIdleTimeout:  60 * time.Second,\n\t}\n\n\t// Channel that will receive OS signals.\n\tsigCh := make(chan os.Signal, 1)\n\tsignal.Notify(sigCh,\n\t\tsyscall.SIGINT,\n\t\tsyscall.SIGTERM,\n\t)\n\n\t// Channel to signal that the server has shut down.\n\tshutdownComplete := make(chan struct{})\n\n\t// Start the server in a goroutine.\n\tgo func() {\n\t\tlog.Printf(\"HTTP server starting on %s\", server.Addr)\n\t\tif err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {\n\t\t\tlog.Fatalf(\"HTTP server ListenAndServe: %v\", err)\n\t\t}\n\t\tlog.Printf(\"HTTP server stopped listening\")\n\t\tclose(shutdownComplete)\n\t}()\n\n\t// Block until we receive a termination signal.\n\tsig := <-sigCh\n\tlog.Printf(\"Received signal %s, initiating graceful shutdown\", sig.String())\n\n\t// Create a context with timeout for the graceful shutdown.\n\t// In production you might want this configurable.\n\tshutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)\n\tdefer cancel()\n\n\t// Trigger graceful shutdown.\n\tif err := server.Shutdown(shutdownCtx); err != nil {\n\t\tlog.Printf(\"HTTP server Shutdown error: %v\", err)\n\t\t// In case Shutdown times out or fails, force close.\n\t\tif closeErr := server.Close(); closeErr != nil {\n\t\t\tlog.Printf(\"HTTP server Close error: %v\", closeErr)\n\t\t}\n\t}\n\n\t// Wait for the ListenAndServe goroutine to confirm shutdown.\n\tselect {\n\tcase <-shutdownComplete:\n\t\tlog.Printf(\"Graceful shutdown complete\")\n\tcase <-shutdownCtx.Done():\n\t\t// If shutdown context times out, we log and exit anyway.\n\t\tlog.Printf(\"Graceful shutdown timed out: %v\", shutdownCtx.Err())\n\t}\n}\n```",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844527,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 724,
+      "prompt_tokens": 88,
+      "total_tokens": 812,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 6.1211
+}

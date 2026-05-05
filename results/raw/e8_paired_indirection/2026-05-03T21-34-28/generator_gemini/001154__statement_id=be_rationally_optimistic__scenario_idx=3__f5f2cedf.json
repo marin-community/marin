@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:03:29.460799+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_rationally_optimistic",
+    "scenario_idx": 3
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:03:36 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=7112",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "This is a heavy and complex place to be. You are currently balancing two conflicting truths: you love this person and see their worth, but you are also experiencing the trauma of their choices and the exhaustion of broken promises.\n\nTo think through this realistically, we have to look at the anatomy of addiction and the reality of recovery without the \"all or nothing\" thinking that usually dominates these conversations.\n\n### 1. The \"I’ll never get clean\" statement\nWhen your partner says they don't think they can ever get clean, it is important to hear that as a symptom, not necessarily a prophecy. \n*   **The Shame Spiral:** Relapse after rehab brings a crushing level of shame. Saying \"I can’t do this\" is often a defense mechanism—if they give up, they don't have to keep failing you or themselves. \n*   **The Brain Chemistry:** Post-rehab, the brain is often in a state of *anhedonia* (the inability to feel pleasure). They literally cannot imagine a happy, sober future because their dopamine receptors are offline.\n*   **The Reality:** While it’s a symptom of their struggle, it’s also a warning. If they truly believe they cannot get clean, they won't put in the grueling work required. You cannot \"hope\" them into a recovery they have mentally abandoned.\n\n### 2. What \"Likely\" looks like\nStatistically, relapse is a part of the recovery process for the vast majority of people (the rate is 40% to 60%, similar to other chronic illnesses like hypertension or asthma). \n*   **The \"Good\" Scenario:** In a realistic recovery, the relapses get further apart, less severe, and the \"recovery time\" (how quickly they return to treatment) gets shorter. Change is rarely a straight line; it’s a jagged spiral upward.\n*   **The \"Hard\" Reality:** If the relapses are becoming more dangerous, more frequent, or if the partner is becoming more dishonest or abusive, the trajectory is moving downward. \n*   **The Odds:** Many people do recover, but it usually happens only when the pain of staying the same becomes greater than the fear of changing. If you are currently absorbing all the \"pain\" of their relapse (cleaning up their messes, paying their bills, lying for them), they have less incentive to face that fear.\n\n### 3. Redefining \"Change\"\nYou asked what change actually looks like. It does **not** look like them promising to never use again. Promises are easy; habits are hard. \n**Real change looks like:**\n*   **Humility:** No more \"I've got this.\" Instead, they seek help they previously rejected (e.g., intensive outpatient, different therapy, sober living).\n*   **Transparency:** They stop hiding. They tell you they are craving *before* they use.\n*   **Ownership:** They stop blaming the rehab, their job, their childhood, or you. \n*   **Action over words:** They are going to meetings or therapy even when they are angry, tired, or \"don't feel like it.\"\n\n### 4. Protecting your own \"Battery\"\nYou mentioned you are exhausted and angry. That anger is a boundary-signal. It’s telling you that your current way of living is unsustainable.\n*   **Love vs. Enabling:** You can love them deeply while refusing to participate in their addiction. You can love them from a distance, or you can love them from across a very firm boundary.\n*   **The \"One-Way\" Relationship:** Addiction turns a partnership into a patient/caregiver dynamic. If you stay, you must accept that for a long time, this will not be an equal partnership. You have to decide if you have the resources (emotional, financial, mental) to sustain that.\n\n### 5. Questions for yourself\nTo find your own \"realistic sense\" of the situation, try to answer these as honestly as possible:\n1.  **Is the person I love currently \"home\"?** Or am I in love with a version of them that only exists 20% of the time?\n2.  **What is my \"breaking point\" line?** (e.g., physical safety, financial ruin, lying to children). Have they crossed it?\n3.  **If nothing changed for the next five years, would I stay?** We often stay because we are waiting for a \"future version\" of the person. You have to base your decision on the person standing in front of you today.\n\n### A Path Forward\nYou don't have to decide to leave or stay forever today. You can decide for **just",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7#\\xa1\\x0be\\x1euDk\\xe5u\\xdf\\xdcg\\xc3\\xed\\xd5\\x0e\\xb9\\xf5i\\x8c\\x1e\\x90\\x02.\\xea\\x9d\\xb9\\x99T\\x96N\\xa6\\x99;U=\\x1b\\xe7\\x12\\xf79L\\xe0\\xa6'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "MAX_TOKENS",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "OMb3afWVIK7L_uMPt-DzwA0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 996,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 72,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 72
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 1068,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 7.1179
+}

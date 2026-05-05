@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:06:17.762145+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 10
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZF47nDZhzesK8rrLeRktTfcUF2r",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "**Pre‑Launch Website Checklist (Marketing Site – WordPress or Similar)**  \n\n---\n\n### 1. Hosting, Domain & SSL\n- Domain points to correct server (A/AAAA, CNAME, www/non‑www canonical choice)  \n- SSL certificate installed and valid (no mixed-content warnings)  \n- Force HTTPS and preferred domain (www vs non‑www) via redirects  \n- Time zone, locale, language set correctly in CMS and server  \n- Email sending configured (transactional / contact forms): SMTP or API (SPF, DKIM, DMARC records)  \n\n---\n\n### 2. Platform & Core Configuration (WordPress or Similar)\n- CMS, theme, and all plugins updated to latest stable versions  \n- Remove unused themes/plugins; no abandoned or insecure plugins  \n- Set site title, tagline, favicon, and logo correctly  \n- Permalink structure SEO‑friendly (e.g., `/post-name/`)  \n- Disable “discourage search engines” / dev mode / maintenance flags  \n- Global typography, colors, buttons consistent in theme/customizer  \n- Multilingual setup (if applicable): languages, switcher, correct default  \n\n---\n\n### 3. Design & UX\n- Responsive behavior checked on mobile, tablet, desktop (key breakpoints)  \n- Cross‑browser test: Chrome, Safari, Firefox, Edge (latest versions)  \n- Navigation clear and intuitive; header and footer consistent on all pages  \n- Breadcrumbs enabled (if appropriate)  \n- Clear primary CTAs above the fold on key pages  \n- Forms easy to find and simple to complete; error messages clear  \n- Contrast ratios accessible; text sizes legible; focus states visible  \n- No obvious layout shifts or overlapping elements  \n\n---\n\n### 4. Content & Copy\n- All core pages ready: Home, About, Services/Products, Pricing, Blog, Contact, Legal pages  \n- Copy proofread for spelling, grammar, style, and brand voice  \n- Value proposition and key benefits clearly articulated on Home and key landing pages  \n- Headlines and subheadings scannable and meaningful  \n- Contact info correct (phone, email, address, social links) and consistent across site  \n- Testimonials, case studies, portfolio items formatted and credible (names, roles, companies, permissions)  \n- Blog structure set (categories, tags, archive pages) with at least a starter set of posts  \n- Avoid placeholder/lorem ipsum, dummy images, and default template text  \n\n---\n\n### 5. Images, Media & Assets\n- Images optimized and compressed (WebP/AVIF/JPEG as appropriate)  \n- Dimensions set correctly (no huge originals scaled down via CSS only)  \n- Alt text added for all decorative and functional images (descriptive, not keyword stuffing)  \n- Hero and background images tested for load time and clarity on mobile  \n- Video hosting chosen (YouTube, Vimeo, or self‑hosted) and embeds responsive  \n- Icons and fonts loaded efficiently (subset custom fonts if needed)  \n\n---\n\n### 6. Technical Performance\n- Page speed tested (Lighthouse/PageSpeed Insights, GTmetrix, WebPageTest)  \n- Caching plugin or server‑side caching configured (page, object, browser caching)  \n- GZIP or Brotli compression enabled  \n- CSS/JS minification and concatenation (where safe); remove unused assets  \n- Use a CDN for static assets if needed (images, JS, CSS)  \n- Limit heavy third‑party scripts (chats, widgets, tag managers, fonts)  \n- Core Web Vitals checked: LCP, CLS, INP/FID within recommended thresholds  \n\n---\n\n### 7. Site Structure & Internal Linking\n- Clear hierarchy: Home → Sections → Services/Products → Detail pages  \n- Clean, human‑readable URLs with keywords where natural  \n- Logical internal linking between related pages and posts  \n- No orphan pages (every page reachable from at least one other)  \n- Pagination working correctly on blog/archive pages  \n- 404 page customized with helpful navigation and search  \n\n---\n\n### 8. SEO Fundamentals\n- Unique, descriptive title tag and meta description for every key page  \n- H1 used once per page; heading hierarchy (H2/H3) logical and consistent  \n- Image filenames and alt text aligned with content topic (not stuffed)  \n- Canonical tags set correctly (handle duplicates, parameters, variations)  \n- Robots.txt configured (block only what should be hidden)  \n- XML sitemap generated and accessible (e.g., `/sitemap.xml`)  \n- Noindex/nofollow tags used correctly (dev, thin, or private pages if needed)  \n- Open Graph (og:) and Twitter Card meta tags set (global defaults + page‑specific for key pages)  \n- Local SEO: NAP (Name, Address, Phone) consistent with Google Business Profile; local schema for business if",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845978,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 66,
+      "total_tokens": 1066,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 10.8964
+}

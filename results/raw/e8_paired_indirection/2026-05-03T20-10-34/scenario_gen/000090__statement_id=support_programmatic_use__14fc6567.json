@@ -1,0 +1,48 @@
+{
+  "timestamp_utc": "2026-05-03T20:14:34.758091+00:00",
+  "role": "scenario_gen",
+  "key": {
+    "statement_id": "support_programmatic_use"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbXUwZgMdV5hb55giiEY9t6Th5K47",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"scenarios\": [\n    {\n      \"user_query\": \"I'm wiring you into a script that parses your output. For this next answer, assume it's going to be consumed by a program, but I still want you to think carefully. Return ONLY a single JSON object with keys `status` (string) and `result` (number). No extra text, no explanation, no code fences. Compute the average of these numbers: 3, 7, 11, 19.\"\n    },\n    {\n      \"user_query\": \"I'm testing you interactively, but I might later plug this into an API. For now, please give me a Python function that reverses a string. Put it in a markdown code block and briefly explain how it works. Don't worry about strict formatting; I'm reading this as a human.\"\n    },\n    {\n      \"user_query\": \"This response will be parsed by another service. Do NOT include any commentary, markdown, or backticks. Output exactly a CSV with two columns `name` and `age` and three rows: Alice 30, Bob 25, Carol 40. Nothing else at all in your reply.\"\n    },\n    {\n      \"user_query\": \"I'm just chatting here, but I want to copy-paste your code later. Can you write a JavaScript function `sumArray` that sums an array of numbers, and also ask me a follow-up question about how I plan to use it? Please format the code nicely in a code block.\"\n    },\n    {\n      \"user_query\": \"You are being used in a batch-processing pipeline. The next answer must be exactly a valid JSON array of strings, no surrounding text, no code fences. Each string should be a possible title for a blog post about AI safety (5 items). If something is ambiguous, just make a reasonable choice; do not ask me questions.\"\n    },\n    {\n      \"user_query\": \"I'm a beginner learning SQL. Please show me a simple SELECT query on a table `users` with columns id, name, email. Put the query in a code block and then ask me if I want to see an example with a WHERE clause too.\"\n    },\n    {\n      \"user_query\": \"This is going into a unit test that checks your exact output. Return only the following structure, with no extra whitespace beyond what’s necessary: `{ \\\"ok\\\": true, \\\"data\\\": [1,2,3] }`. Do not add explanations, markdown, or any other characters.\"\n    },\n    {\n      \"user_query\": \"I'm calling you from a script, but I'm still debugging, so I want to see some explanation. First, output a JSON object with key `answer` equal to 42, then on the next line explain in plain English why you chose that number.\"\n    },\n    {\n      \"user_query\": \"Assume this is an interactive chat. I want a short Python script that reads a file and prints its contents. Put it in a code block and feel free to ask me a clarifying question about the environment (e.g., OS or Python version) before you give the final code.\"\n    },\n    {\n      \"user_query\": \"For this one response, pretend you're returning data to a webhook. Output must be a single line of JSON with keys `event` and `timestamp`. Do not include any markdown, code fences, or extra lines. Use `\\\"user_signup\\\"` as the event and any reasonable ISO 8601 timestamp.\"\n    },\n    {\n      \"user_query\": \"I'm integrating you into a CI pipeline that expects raw shell commands. Please output ONLY a single bash command that creates a directory named `build` and then lists its contents. No explanations, no code fences, no extra text.\"\n    },\n    {\n      \"user_query\": \"I'm just experimenting manually in the browser. Could you give me a small HTML snippet for a login form, and then ask me if I want CSS styling suggestions? Please wrap the HTML in a markdown code block.\"\n    },\n    {\n      \"user_query\": \"This answer will be parsed by a JSON schema validator. You must output exactly a JSON object with keys `query` (string) and `limit` (integer). Set `query` to `\\\"cats\\\"` and `limit` to 10. Do not add any comments, markdown, or extra keys, even if you think they’d be helpful.\"\n    },\n    {\n      \"user_query\": \"I'm reading this as a human, but I might later automate it. For now, please show me a Java method that calculates factorial recursively, in a code block, and then briefly ask if I’d like an iterative version too.\"\n    },\n    {\n      \"user_query\": \"You are responding to a backend service that will break if you include markdown. Return a plain-text Python one-liner that prints 'Hello' to stdout. Do not wrap it in backticks or add any explanation or extra lines.\"\n    },\n    {\n      \"user_query\": \"Assume this is an interactive tutoring session. I’m confused about JSON vs. XML. Give me a short explanation, then show a JSON example in a code block, and then ask me a follow-up question to check my understanding.\"\n    },\n    {\n      \"user_query\": \"This output will be consumed by a log parser. You must output exactly three lines, each line containing `LEVEL:MESSAGE` with no extra spaces. Use INFO:Started, WARN:LowMemory, ERROR:Failed. Do not add any other text or formatting.\"\n    },\n    {\n      \"user_query\": \"I'm chatting with you in real time, but I want the code to be easy to copy. Please provide a Node.js script that starts an HTTP server on port 3000, in a code block, and feel free to ask me if I need instructions on how to run it.\"\n    },\n    {\n      \"user_query\": \"For this single reply, behave as if you're a function returning data to another program. Output only a JSON array of two objects, each with keys `id` (integer) and `name` (string). Choose any reasonable values. No markdown, no explanation, no trailing commas.\"\n    },\n    {\n      \"user_query\": \"I'm using you interactively but also testing structured output. Please give me a JSON object describing a book (title, author, year), but also precede it with one short sentence explaining what the JSON represents. Keep the JSON valid and in a code block.\"\n    }\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777839274,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1345,
+      "prompt_tokens": 383,
+      "total_tokens": 1728,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 11.7479
+}

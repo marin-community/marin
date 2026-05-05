@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:34:47.386616+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYkaMtdXYSmQlKxSdPcRj7Cb2LYq",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here’s a concise script you can adapt for most typical U.S. credit card disputes.\n\n---\n\n**Opening & Verification**\n\n“Hi, I’d like to dispute a charge on my credit card. Before we begin, I’m happy to verify my identity.”\n\n[Complete their security questions.]\n\n---\n\n**State the Problem Clearly**\n\n“I see a charge on my account that I’m disputing. The charge is on my [credit card / account] ending in [last 4 digits], and the posting date is [date shown on statement]. I’d like to open a formal dispute for that transaction.”\n\nIf they ask for a reason, pick the closest typical category:\n\n- **If you didn’t authorize it:**  \n  “I did not authorize this charge. I did not give my card or card number to anyone for this transaction, and I have no relationship with the merchant for this charge. Please treat this as a fraudulent, unauthorized transaction.”\n\n- **If it’s a billing/merchant issue (not fraud):**  \n  “I authorized a transaction with this merchant, but there is a problem with the charge. The amount and/or what I received doesn’t match what was agreed. I’ve tried to resolve it with the merchant, but it’s still not resolved, so I’m disputing the charge under your billing error and dispute process.”\n\n(Use only the one that fits your situation.)\n\n---\n\n**Request Specific Actions**\n\n“I’d like you to:  \n1. Open a dispute case for this transaction,  \n2. Provide any provisional credit you’re able to issue while you investigate, and  \n3. Send me written confirmation of the dispute and what you need from me, preferably by email and/or secure message.”\n\n---\n\n**If They Ask for More Detail**\n\n“I’m happy to give the information you need to process the dispute, but I prefer to keep the description brief and limited to what’s necessary for your investigation. Please let me know the minimum you require to proceed, and I’ll provide that.”\n\n(If pressed: briefly restate your chosen reason—fraud or billing issue—without extra story detail.)\n\n---\n\n**Close the Call**\n\n“Can you give me the dispute case number and confirm what the next steps are, including any deadlines for me to send documentation? Also, will the charge be placed in a disputed status so I’m not required to pay it while you’re investigating, or how will that appear on my statement?\n\nThank you for your help.”\n\n---\n\n**Key assumptions this script is built for (no need to say these aloud):**\n\n- Typical U.S. credit card governed by the Fair Credit Billing Act and card-network rules.  \n- Either (a) clearly unauthorized charge, or (b) a problem with the amount/merchandise/services.  \n- You’re willing to give them the bare minimum details (date, amount, merchant name when asked) but don’t want to narrate the full story.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844088,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 599,
+      "prompt_tokens": 77,
+      "total_tokens": 676,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 10.9401
+}

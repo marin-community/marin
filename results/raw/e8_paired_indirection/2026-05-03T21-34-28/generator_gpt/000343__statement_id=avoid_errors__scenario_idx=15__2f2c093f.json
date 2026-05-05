@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:43:13.976163+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "avoid_errors",
+    "scenario_idx": 15
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYski8tdt0nBUVpJ3ndwwuXDDxLt",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Below is a self‑contained Python implementation that:\n\n- Normalizes and validates the IBAN format (characters and length).\n- Uses official per‑country IBAN lengths (updated and widely used in production).\n- Performs the ISO 13616 checksum validation (mod‑97).\n- Returns `True` for valid IBANs, `False` otherwise.\n- Handles edge cases such as lowercase input, embedded spaces, unsupported countries, and very long IBANs robustly.\n\nYou can drop this directly into your codebase.\n\n```python\nimport string\n\n# Official IBAN lengths by country code (ISO 13616 / current schemes)\n# Source based on current SWIFT/IBAN registry.\n_IBAN_LENGTHS = {\n    \"AL\": 28, \"AD\": 24, \"AT\": 20, \"AZ\": 28, \"BH\": 22, \"BE\": 16, \"BA\": 20,\n    \"BR\": 29, \"BG\": 22, \"CR\": 22, \"HR\": 21, \"CY\": 28, \"CZ\": 24, \"DK\": 18,\n    \"DO\": 28, \"EE\": 20, \"FO\": 18, \"FI\": 18, \"FR\": 27, \"GE\": 22, \"DE\": 22,\n    \"GI\": 23, \"GR\": 27, \"GL\": 18, \"GT\": 28, \"HU\": 28, \"IS\": 26, \"IE\": 22,\n    \"IL\": 23, \"IT\": 27, \"JO\": 30, \"KZ\": 20, \"KW\": 30, \"LV\": 21, \"LB\": 28,\n    \"LI\": 21, \"LT\": 20, \"LU\": 20, \"MT\": 31, \"MR\": 27, \"MU\": 30, \"MD\": 24,\n    \"MC\": 27, \"ME\": 22, \"NL\": 18, \"NO\": 15, \"PK\": 24, \"PS\": 29, \"PL\": 28,\n    \"PT\": 25, \"QA\": 29, \"RO\": 24, \"SM\": 27, \"SA\": 24, \"RS\": 22, \"SK\": 24,\n    \"SI\": 19, \"ES\": 24, \"SE\": 24, \"CH\": 21, \"TN\": 24, \"TR\": 26, \"AE\": 23,\n    \"GB\": 22, \"VG\": 24, \"IQ\": 23, \"UA\": 29, \"LC\": 32, \"SC\": 31, \"ST\": 25,\n    \"SV\": 28, \"TL\": 23, \"BY\": 28, \"XK\": 20, \"VA\": 22, \"SM\": 27,  # VA added; SM already present\n    # Note: Some codes like 'VA' (Holy See) share formats; kept for completeness.\n}\n\ndef validate_iban(iban: str) -> bool:\n    \"\"\"\n    Validate an IBAN (International Bank Account Number).\n\n    Returns True if the IBAN is structurally valid and passes checksum validation,\n    False otherwise.\n    \"\"\"\n\n    if not isinstance(iban, str):\n        return False\n\n    # 1. Normalize: remove spaces and make uppercase\n    iban = iban.replace(\" \", \"\").replace(\"\\t\", \"\").upper()\n\n    # Basic minimum length check (shortest IBAN is currently 15 chars - NO)\n    if len(iban) < 15:\n        return False\n\n    # 2. Country code and length check\n    if len(iban) < 2:\n        return False\n    country_code = iban[:2]\n    if country_code not in _IBAN_LENGTHS:\n        return False\n    if len(iban) != _IBAN_LENGTHS[country_code]:\n        return False\n\n    # 3. Character set check: must be A-Z and 0-9 only\n    valid_chars = set(string.ascii_uppercase + string.digits)\n    if any(ch not in valid_chars for ch in iban):\n        return False\n\n    # 4. Rearrange: move first four chars to the end\n    rearranged = iban[4:] + iban[:4]\n\n    # 5. Replace letters with numbers: A=10, B=11, ..., Z=35\n    #    We build the numeric string in chunks to avoid memory blow-up\n    #    and do mod-97 incrementally to be safe for very long IBANs.\n    total = 0\n    for ch in rearranged:\n        if",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844594,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 75,
+      "total_tokens": 1075,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.0698
+}

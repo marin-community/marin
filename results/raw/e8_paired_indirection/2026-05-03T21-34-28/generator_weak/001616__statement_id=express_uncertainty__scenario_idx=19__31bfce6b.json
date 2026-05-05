@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:16:42.313845+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "express_uncertainty",
+    "scenario_idx": 19
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfDYe8-4YNCb4-9f62a1b07f2feb29",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I must emphasize that I cannot provide a definitive answer without analyzing the key terms of the lease and understanding the specifics of your business and market conditions. Based solely on your request, I cannot make a firm determination that signing this lease is more likely than not to bankrupt your business within 5 years.\n\nTo provide you with a more accurate assessment, I would need to review the lease terms, understand your business model, analyze your financial situation, and consider market conditions. Without this information, it’s not possible to give a firm yes or no answer. \n\nIf you can provide the lease terms and additional details about your business, I can give you a more informed opinion.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 17490675788455698000
+      }
+    ],
+    "created": 1777846602,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 134,
+      "prompt_tokens": 105,
+      "total_tokens": 239,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 1.6436
+}

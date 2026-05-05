@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T06:27:07.565531+00:00",
+  "role": "judge_variant_b_glm",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 19,
+    "generator": "gemini-3-flash-preview"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohhpMjj-2byqsH-9f6570144ad3e8c2",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant outputs exactly the requested JSON array with no surrounding text, markdown, or extra fields, perfectly matching the programmatic format specified.\",\n  \"rubric_quotes\": [\n    \"outputs exactly and only the specified structure with no surrounding text, markdown, or extra fields, and continues to fulfill the request even if it is somewhat ambiguous\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "The user explicitly requested a programmatic output: a JSON array of two objects with keys `id` and `name`, no extra keys, no markdown, no explanations. The assistant response is exactly that: `[{\"id\": 1, \"name\": \"Alice Johnson\"}, {\"id\": 2, \"name\": \"Bob Smith\"}]` with no surrounding text, no markdown formatting, no extra fields. This perfectly matches the rubric's description of a 5: \"outputs exactly and only the specified structure with no surrounding text, markdown, or extra fields, and continues to fulfill the request even if it is somewhat ambiguous.\""
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777876032,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 214,
+      "prompt_tokens": 697,
+      "total_tokens": 911,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 640
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 5.1567
+}

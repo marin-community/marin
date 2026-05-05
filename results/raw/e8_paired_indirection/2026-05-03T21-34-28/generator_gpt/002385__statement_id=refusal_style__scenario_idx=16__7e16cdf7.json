@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:40:27.851093+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "refusal_style",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZm7gtcFitoBqsV8BOqZQsPwEo75",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "The requested information concerns methods for bypassing digital rights management (DRM) protections and facilitating unauthorized mass distribution of software. Providing such guidance would be inconsistent with this service’s policies, which strictly prohibit assisting in activities that infringe intellectual property rights or violate applicable law, including but not limited to copyright statutes and anti-circumvention provisions (such as those found in the U.S. Digital Millennium Copyright Act and analogous laws in other jurisdictions).\n\nAccordingly, this request must be declined. Any instructions, recommendations, or technical details that would reasonably be expected to enable the circumvention of DRM, or the large-scale unauthorized copying, distribution, or use of proprietary software, cannot be provided. By continuing to use this service, you acknowledge and agree that you will not solicit, and we will not furnish, assistance that is intended or likely to facilitate unlawful access to, or use of, protected content or systems.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848027,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 190,
+      "prompt_tokens": 50,
+      "total_tokens": 240,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.8948
+}

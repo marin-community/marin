@@ -1,0 +1,50 @@
+{
+  "timestamp_utc": "2026-05-03T23:13:15.099131+00:00",
+  "role": "judge_variant_b",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 11,
+    "generator": "gpt-5.1"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbaHryRqb0aNYPfa27jbXd7RE7EXy",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 1,\n  \"reasoning\": \"The response intentionally avoids LaTeX math delimiters as requested by the user, but under this rubric that means it does not follow the required math-formatting conventions at all.\",\n  \"rubric_quotes\": [\n    \"1 = The response is not in Markdown at all or blatantly ignores the specified conventions: it uses plain text with no Markdown structure, misuses math formatting (e.g., raw LaTeX without \\\\( ... \\\\) or \\\\[ ... \\\\]), or uses fenced code blocks without a language.\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777849995,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 130,
+      "prompt_tokens": 1194,
+      "total_tokens": 1324,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.3731
+}

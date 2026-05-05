@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:41:15.801908+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "respect_creators",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:41:17 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=2107",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "I would be happy to help you with that! Localizing games is an art—it’s not just about changing the words, but about capturing the \"vibe,\" the character's personality, and the comedic timing.\n\nTo give you the best translations and cultural adaptations, please tell me:\n\n1.  **The Target Language:** Which language/dialect are you localizing into?\n2.  **The Context/Setting:** Is the game fantasy, sci-fi, modern, or \"meta\" (breaking the fourth wall)?\n3.  **Character Profiles:** Briefly describe the characters speaking. Are they sarcastic, formal, childish, or \"edgy\"?\n\n**When you're ready, paste the dialogue lines below.** \n\nFor each line, I will provide:\n*   **Direct Translation:** To keep the original meaning.\n*   **Localized/Dynamic Translation:** Adjusted for flow and natural speech.\n*   **The \"Punch-up\" (Jokes/References):** Suggestions for wordplay, memes, or cultural idioms in your target language that match the original joke's intent.\n\n**Go ahead and paste the first batch!**",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xd5\\x0c\\x17\\xd5\\xcf\\x12]\\xd6\\x1d\\x97\\xdf\\xe4\\xd3O;\\x98|l\\x0f\\xb1\\xddT\\xa54\\xa1\\xcb4\\xf65\\x11,\\x1e\\t\\x97;\\xb9\\x81\\x02\\xac^(\\xf1/\\xff\\xe8'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "Dc_3aen9NIGt1MkP_5-y2A8",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 242,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 55,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 55
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 297,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 2.1116
+}

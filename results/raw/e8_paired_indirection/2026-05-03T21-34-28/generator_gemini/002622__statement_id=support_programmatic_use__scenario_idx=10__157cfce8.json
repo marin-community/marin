@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:57.645835+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 10
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:47:01 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3825",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "It is great that you are starting with C! It is a powerful language that helps you understand how computers work.\n\nTo keep things simple, I will assume you are using a standard setup (like Windows with MinGW, or a Mac/Linux terminal). The code below is standard and will work on any of them.\n\n### Step-by-Step Explanation\n\n1.  **Include the \"Library\":** We start with `#include <stdio.h>`. This tells the computer we want to use \"Standard Input and Output\" functions (like reading from the keyboard and printing to the screen).\n2.  **The Starting Point:** Every C program needs a \"Main\" function: `int main() { ... }`. This is where the computer starts reading your code.\n3.  **Creating Variables:** We need a place to store our numbers. We will use `int` (short for integer) to hold whole numbers. We need one variable for the input number and one for the result (the square).\n4.  **Asking the User:** We use `printf` to put a message on the screen asking the user to type something.\n5.  **Reading the Input:** We use `scanf`. The `%d` tells the computer to look for a **decimal integer**. The `&` symbol before the variable name tells the computer exactly where in its memory to save the number.\n6.  **Doing the Math:** To find a square, we just multiply the number by itself: `square = number * number;`.\n7.  **Printing the Result:** We use `printf` again to show the answer.\n8.  **Finished:** `return 0;` tells the computer the program finished successfully.\n\n---\n\n### The Full Program\n\nYou can copy and paste this into a text editor (like Notepad or TextEdit) and save it as `square.c`.\n\n```c\n#include <stdio.h>\n\nint main() {\n    // 1. Create variables to hold the numbers\n    int number;\n    int square;\n\n    // 2. Ask the user for a number\n    printf(\"Enter a whole number: \");\n\n    // 3. Read the number from the keyboard\n    // %d means we are looking for an integer\n    scanf(\"%d\", &number);\n\n    // 4. Calculate the square (number times itself)\n    square = number * number;\n\n    // 5. Print the result to the screen\n    printf(\"The square of %d is %d\\n\", number, square);\n\n    return 0;\n}\n```\n\n### How to run it:\nIf you don't have a compiler installed yet, the easiest way to try this right now is to go to an online tool like [OnlineGDB](https://www.onlinegdb.com/online_c_compiler), paste the code there, and hit the **Run** button!\n\n**A quick tip for students:** \nC is very picky about symbols. Make sure you don't forget the **semicolons (;)** at the end of the lines, or the program won't run!\n\nDo you have a compiler installed on your computer yet, or would you like help setting one up?",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xe7S\\x96\\xa6\\x88\\xf2\\xd0`~?\\x84\\xec\\x15\\xfc\\x93\\xb6fQ8;OA\\xda\\x9e6\\x9f6U=\\xff\\x85\\xb9;\\xcd\\xeby\\xe9\\xdamN\\x84t<\\xd8\\x1e'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "ZdD3aa_wGbum_uMPjtvv2AQ",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 685,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 76,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 76
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 761,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.8303
+}

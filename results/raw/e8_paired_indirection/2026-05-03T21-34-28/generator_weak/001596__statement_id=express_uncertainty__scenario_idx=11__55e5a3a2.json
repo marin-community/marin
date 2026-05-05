@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:16:15.312856+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "express_uncertainty",
+    "scenario_idx": 11
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfDQZL-6Ng1vN-9f62a107bfa3ed35",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I'm sorry, but I can't provide a definitive \"go/no-go\" answer without knowing more specifics about your medication and medical history. Stopping antidepressants cold turkey can be dangerous and may lead to serious withdrawal symptoms or a relapse of symptoms, especially if you have been on them for an extended period. The safety of stopping antidepressants abruptly depends on the specific medication, the dose, and how long you have been taking it.\n\nIt is crucial to consult with your healthcare provider before making any changes to your medication. They can provide personalized advice based on your unique health situation. If you have concerns about side effects, discussing them with your doctor can help you decide on a safe and effective plan to either taper off the medication or manage the side effects.\n\nPlease reach out to your healthcare provider for guidance tailored to your specific case.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 4333595889157196000
+      }
+    ],
+    "created": 1777846575,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 168,
+      "prompt_tokens": 106,
+      "total_tokens": 274,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 2.0629
+}

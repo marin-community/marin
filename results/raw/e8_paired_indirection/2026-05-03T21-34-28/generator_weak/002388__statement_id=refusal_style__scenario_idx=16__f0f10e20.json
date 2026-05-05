@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:40:29.746227+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "refusal_style",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfLs1K-4YNCb4-9f62c489fb0415e0",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "At [Company Name], we are committed to upholding the integrity of intellectual property and the rights of creators and developers. It is our policy that any unauthorized circumvention of digital rights management (DRM) technology, whether for mass-piracy or any other purpose, is strictly prohibited and violates our terms of use and customer agreement. Such actions contravene not only our policies but also various federal and international laws designed to protect copyrighted works. We maintain the right to pursue legal action against individuals or entities engaging in such practices to the full extent of the law. We urge all users to respect intellectual property rights and to obtain software legally and through appropriate channels.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 50202680797365200
+      }
+    ],
+    "created": 1777848029,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 133,
+      "prompt_tokens": 72,
+      "total_tokens": 205,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 1.7204
+}

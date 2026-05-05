@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:31:46.506623+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "no_topic_off_limits",
+    "scenario_idx": 17
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZdi8LO15oWl46I8FZIOynDMwZe8",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Many countries regulate speech that insults religion or national symbols, but they do so in very different ways, and the trend in many democracies has been toward narrowing or abolishing such offenses.\n\nBelow is a structured comparison, followed by the main arguments on both sides, presented descriptively rather than as endorsement.\n\n---\n\n## 1. Broad Models of Regulation\n\nYou can roughly group approaches into:\n\n1. **Strong protection for offensive speech**  \n   – Focus on punishing only *direct harm*: threats, incitement to violence, harassment.  \n   – Speech that merely “insults” or “offends” religion or the nation is generally protected.\n\n2. **Intermediate protection**  \n   – Offensive speech is allowed, but *hate speech* (e.g., incitement to hatred or discrimination against protected groups) is criminalized.  \n   – Some countries also protect certain symbols (flags, anthems, heads of state), but sanctions may be mild.\n\n3. **Broad protection of religion and national symbols**  \n   – Criminal offenses like blasphemy, “insulting religion,” “defaming the state,” or “insulting national symbols” are used more frequently and can carry serious penalties.  \n   – Often justified with reference to public order, morality, or religious/national values.\n\n---\n\n## 2. Selected Country Examples\n\n### A. United States\n\n**Law:**\n- Very strong constitutional protection for offensive speech under the First Amendment.\n- The Supreme Court has:\n  - Protected flag burning as political expression (*Texas v. Johnson*, 1989).\n  - Overturned convictions for profane attacks on religion or public officials unless they constitute “true threats,” incitement to imminent lawless action, or targeted harassment.\n- No general blasphemy offense; old state laws are effectively unenforceable after modern case law.\n\n**Cultural context:**\n- Public backlash can be intense (social sanctions, job loss, “canceling”) but not usually criminal.\n- Religious communities may use counterspeech, boycotts, or civil society pressure rather than criminal law.\n\n---\n\n### B. Western Europe (general pattern, with variation)\n\nMost European states:\n- Protect speech but **criminalize incitement to hatred or violence** against groups defined by race, religion, ethnicity, etc.\n- Historically had blasphemy laws; many are now repealed or dormant, but **“hate speech”** or **“religious insult”** laws sometimes fill a similar role.\n\n**Examples:**\n\n- **Germany**  \n  - Article 5 of the Basic Law protects free expression but allows limits for “general laws,” personal honor, and youth protection.  \n  - Criminal Code §130 punishes incitement to hatred, violence, or discrimination against national, racial, religious groups, etc.  \n  - Insulting symbols of the state (e.g., desecrating the flag) can be an offense, but enforcement focuses on clear public-order threats or extremist propaganda.\n\n- **France**  \n  - Strong tradition of *laïcité* (state secularism) and protection of speech critical of religion.  \n  - Laws target incitement to discrimination, hatred, or violence against people (including on the basis of religion), not mere offense to beliefs or deities.  \n  - Blasphemy as an offense no longer exists in mainland France.\n\n- **United Kingdom & Ireland**  \n  - England and Wales abolished common-law blasphemy in 2008; Ireland deleted its constitutional blasphemy offense by referendum in 2018.  \n  - Hate-speech laws focus on stirring up hatred or violence against groups (racial, religious, etc.), not simple irreverence.\n\n**Cultural context:**\n- Societies are often pluralistic and secularizing, but with tensions over minority protection and integration.  \n- Highly offensive speech about religion can be legal but socially condemned, and in some cases raises security concerns (e.g., violent reactions from extremist actors).\n\n---\n\n### C. Nordic Countries\n\n- Historically had blasphemy provisions (e.g., in Denmark and Norway), but several have been repealed in the 2010s–2020s.\n- Hate speech provisions remain: speech that threatens or insults groups based on religion, ethnicity, etc., can be criminal, especially if it advocates discrimination or violence.\n- Recent Quran-burning incidents: often legal as expression, but governments sometimes look for other legal bases (public order, fire safety, etc.) to manage tensions.\n\n---\n\n### D. India\n\n**Law:**\n- The Constitution protects free speech (Article 19(1)(a)) but allows “reasonable restrictions” for public order, decency, morality, and relations between communities.\n- Indian Penal Code includes:\n  - §§153A, 295–298: criminalize “outraging",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777847506,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 77,
+      "total_tokens": 1077,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.4191
+}

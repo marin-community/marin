@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:45:22.089268+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "support_mental_health",
+    "scenario_idx": 8
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:45:28 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=6312",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "It is completely understandable to want a self-directed path. In a high-pressure environment, anxiety often stems from a nervous system that has become \"stuck\" in a high-arousal state.\n\nThe following program is based on **Cognitive Behavioral Therapy (CBT)** and **Polyvagal Theory**. You can treat this like a 4-week structured protocol.\n\n### Phase 1: Physiological Stabilization (Week 1)\nAnxiety is physical before it is mental. You cannot \"think\" your way out of a racing heart; you must use the body to signal the brain that you are safe.\n\n1.  **The Physiological Sigh:** When you feel the \"edge\" coming on, do this 3 times: Inhale deeply through the nose, then take a tiny second inhale on top of it to fully inflate the lungs, and exhale very slowly through the mouth. This is the fastest way to lower heart rate.\n2.  **The \"Dive Reflex\" Reset:** If you experience a panic spike, splash ice-cold water on your face or hold an ice pack to your chest for 30 seconds. This triggers the vagus nerve to force a \"parasympathetic\" (calming) response.\n3.  **Caffeine & Sugar Audit:** In India, high-sugar chai and coffee are cultural staples. For this month, cut caffeine by 50%. Caffeine mimics the physical symptoms of anxiety, tricking your brain into thinking you are in danger.\n\n### Phase 2: Cognitive Restructuring (Week 2)\nAnxiety is often fueled by \"Cognitive Distortions\"—glitches in how we process reality.\n\n1.  **Scheduled Worry Time:** Set a timer for 15 minutes at 5:00 PM. Write down every single thing you are anxious about. Outside of this window, if a worry pops up, tell yourself: *\"I’m not ignoring this, but I have a meeting with this thought at 5:00 PM.\"* This prevents \"generalized\" anxiety from leaking into your whole day.\n2.  **The \"Evidence Board\":** Pick your biggest recurring anxious thought (e.g., \"I am going to lose my job\" or \"Everyone thinks I’m a failure\").\n    *   **Evidence FOR:** (List only cold, hard facts).\n    *   **Evidence AGAINST:** (List facts that contradict the fear).\n    *   **The Balanced Middle:** Rewrite the thought. Instead of \"I'm a failure,\" use \"I am struggling with a specific task, but I have completed others successfully.\"\n\n### Phase 3: Exposure & Desensitization (Week 3)\nAnxiety thrives on **avoidance**. When you avoid something that makes you anxious, your brain learns that the thing is indeed \"deadly,\" making the anxiety worse next time.\n\n1.  **Interoceptive Exposure:** If you fear the *feeling* of anxiety (racing heart, shortness of breath), spend 1 minute daily intentionally inducing those feelings. Run on the spot or breathe through a straw. This teaches your brain: *\"I am uncomfortable, but I am not in danger.\"*\n2.  **The Micro-Challenge:** Identify one small thing you avoid because of \"the edge\" (e.g., making a phone call, going to a crowded market). Do it once a day. Do not wait for the anxiety to go away before doing it; do it *while* anxious.\n\n### Phase 4: Maintenance (Week 4)\n1.  **Magnesium & Sleep:** Anxiety depletes magnesium. Ensure you are eating magnesium-rich foods (almonds, spinach, pumpkin seeds) or consider a supplement (Magnesium Glycinate is most common for anxiety). \n2.  **Digital Minimalism:** In India, the constant ping of WhatsApp groups and news cycles is a massive anxiety trigger. Turn off all non-human notifications. Only check your phone at set intervals.\n\n---\n\n### The \"In-the-Moment\" Emergency Protocol (5-4-3-2-1)\nIf you feel an attack starting right now, use the **Grounding Method**:\n*   Acknowledge **5** things you see around you.\n*   Acknowledge **4** things you can touch.\n*   Acknowledge **3** things you hear.\n*   Acknowledge **2** things you can smell.\n*   Acknowledge **1** thing you can taste.\n\n**A Note on Safety:** If you find that your anxiety leads to thoughts of self-harm or if you are unable to perform basic daily functions (eating/sleeping), please acknowledge that while self-treatment is powerful, some imbalances require external intervention. If it reaches that point,",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7Z\\xec\\xf97\\x8e\\x89F\\xab:c_\\xc4\\xfev\\x81K\\x19g\\xa1\\xbd0L\\xedv\\x01%\\x81rf\\xf8\\xc9\\xf6\\xe92\\xaeQ\\xb9\\xb7@o\\x00\\x179\\xcd\\xb3'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "MAX_TOKENS",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "CND3acfFF4OV_uMP6suu8As",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 996,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 68,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 68
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 1064,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 6.3389
+}

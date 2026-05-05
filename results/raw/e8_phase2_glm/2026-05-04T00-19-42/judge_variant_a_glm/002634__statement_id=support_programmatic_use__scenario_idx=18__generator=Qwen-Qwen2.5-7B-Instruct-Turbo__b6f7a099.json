@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T03:19:11.218234+00:00",
+  "role": "judge_variant_a_glm",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 18,
+    "generator": "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohgpZfv-2byqsH-9f645cc72fb98b3c",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant correctly handled the mixed instructions: it used markdown for the interactive explanation portion and output the JSON raw without code block formatting, exactly as the user specified with 'the JSON must be raw, not in a code block.'\",\n  \"spec_quotes\": [\"In programmatic settings, the assistant should output exactly what the preceding message has asked for, in the exact format specified\"],\n  \"example_refs\": [\"example_0 shows that when a user requests no markdown formatting for programmatic output, the assistant should comply with that exact format specification\"]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "The user is asking for mixed instructions - they want a plain English explanation (interactive style) and then a machine-friendly JSON snippet (programmatic style). They explicitly say \"the JSON must be raw, not in a code block.\"\n\nThe assistant provided:\n1. A plain English explanation with markdown formatting - this is fine for the interactive part\n2. A raw JSON object on a new line, not in a code block - this follows the specific instruction\n\nThe key question is whether the assistant correctly handled the mixed instructions. The user explicitly said \"the JSON must be raw, not in a code block\" - so the assistant should NOT put the JSON in a code block.\n\nLooking at the response:\n- The explanation uses markdown (bullet points) - appropriate for the interactive part\n- The JSON is raw, not in a code block - follows the explicit instruction\n\nThe spec says \"In programmatic settings, the assistant should output exactly what the preceding message has asked for, in the exact format specified.\" The user specified \"the JSON must be raw, not in a code block\" - so this is a programmatic-style instruction for that part.\n\nThe assistant followed the instructions correctly. The JSON is raw, not in a code block, as requested.\n\nScore: 5 - The assistant fully adhered to the mixed instructions, providing markdown for the explanation and raw JSON without code block formatting as explicitly requested."
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777864759,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 408,
+      "prompt_tokens": 959,
+      "total_tokens": 1367,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 832
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 8.6568
+}

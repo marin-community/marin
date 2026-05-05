@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:56:09.817107+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_creative",
+    "scenario_idx": 4
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ5GluhnEYZmMcTzko69dHEbCiQr",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here’s a draft you can adapt; I’ll keep it metaphorical but grounded and recruiter-friendly. Afterward I’ll note where you can plug in your specifics (languages, domains, etc.):\n\n---\n\nI tend to think of my career as a series of systems I’ve inherited, understood, and then quietly made better.\n\nEarly on, that meant being the person who asked “why is it built this way?” one too many times—and then staying late to diagram how data actually moved through the application. Over time, that curiosity turned into a habit: map the terrain, find the bottlenecks, reduce the friction.\n\nToday, I’m a [your level: e.g., “mid-level” / “senior”] software engineer who likes untangling real-world problems and turning them into reliable, maintainable code. Most of my work has lived at the intersection of:\n\n- **[Tech stack / focus area]** – e.g., backend services in [languages/frameworks], APIs, and data workflows.  \n- **[Domain / business context]** – e.g., fintech / SaaS / analytics / e‑commerce, where small changes can have visible impact on customers and revenue.  \n- **Sustainable engineering practices** – code that someone else can read six months later, tests that catch the right failures, and observability that makes production less mysterious.\n\nPatterns in how I work:\n- I treat requirements as hypotheses to be tested, not just tickets to be closed.  \n- I’m comfortable inheriting “legacy” systems and incrementally improving them rather than rewriting everything from scratch.  \n- I like pairing with product and non-technical stakeholders to translate constraints and tradeoffs into clear options.\n\nRepresentative work:\n- Reduced [metric, e.g., “checkout latency by 40%”] by refactoring a critical service and tightening database queries.  \n- Designed and implemented [system/feature] that now handles [volume / scale] with [reliability metric].  \n- Helped introduce [practice: code review guidelines, CI/CD, monitoring, incident response process], making the team faster and calmer during releases.\n\nI’m interested in roles where engineering is seen as a partner to the business, not just a feature factory: places that value thoughtful architecture, honest tradeoffs, and learning over heroics.\n\nIf you’re looking for someone who will steadily improve your systems, ask good questions, and leave things simpler than they were found, I’d be happy to connect.\n\n---\n\nIf you’d like, share your tech stack, domain experience, and 2–3 concrete achievements, and I can tailor this into a final, copy‑paste‑ready version.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845370,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 550,
+      "prompt_tokens": 85,
+      "total_tokens": 635,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 6.4672
+}

@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:35:04.920072+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 11
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYkrxVt3g27u3hkVNMslsFY5QD6H",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Subject: Maintenance Issue in My Apartment\n\nDear [Landlord’s Name],\n\nI hope you’re well. I’m writing to let you know about an issue in my apartment that needs attention. At your convenience, I would appreciate having someone take a look at it and advise on the next steps for getting it resolved.\n\nPlease let me know what information you need from me and when a suitable time for an inspection or repair might be. I’m happy to cooperate with scheduling and access so this can be addressed as smoothly as possible.\n\nThank you in advance for your help.\n\nBest regards,  \n[Your Name]  \n[Apartment Number / Address]  \n[Your Phone Number]",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844105,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 143,
+      "prompt_tokens": 89,
+      "total_tokens": 232,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.8334
+}

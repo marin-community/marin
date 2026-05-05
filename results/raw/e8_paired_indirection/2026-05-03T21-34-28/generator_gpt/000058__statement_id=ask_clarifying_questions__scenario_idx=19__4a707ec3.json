@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:35:18.040189+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 19
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYl4TuADKqqI8CfCO2QCLc8gO8PB",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here’s a message you can use or tweak:\n\n“Hey, how’s your week going so far? I was just thinking about how wild it is that this app manages to connect people who might never cross paths otherwise. What’s something you’re usually up to when you’re having a good day off?”\n\nAssumptions I made:\n- You’re both adults and have had at least a minimal intro (names/hellos).\n- You’re looking for something friendly, light, and respectful, not overly romantic.\n- You’re open to a question that invites them to share a bit about their life without getting too personal.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844118,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 134,
+      "prompt_tokens": 90,
+      "total_tokens": 224,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.414
+}

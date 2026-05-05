@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T21:40:48.990227+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 4
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohf2WYF-4YNCb4-9f626d1e4e8367d9",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Of course, I can help you structure your conversation. Here’s a straightforward plan you can use to communicate your feelings clearly and compassionately:\n\n### Introduction\nStart by expressing that you want to talk to them about some important things you’ve been thinking about.\n\n**Example:**\n\"Hey [Partner's Name], I've been thinking a lot about us lately and wanted to talk with you about something that’s been on my mind.\"\n\n### Share Your Feelings\nDiscuss how you’re feeling without blaming them. Express what you are experiencing and how you think it’s affecting the relationship. Be honest, clear, and concise.\n\n**Example:**\n\"I’ve been feeling really lonely a lot lately, and I think it’s getting in the way of us connecting in the way we used to. I also worry that I’m putting a lot of pressure on you because I value our relationship so much.\"\n\n### Describe Your Concerns\nExplain the specific concerns you have about the relationship. Use \"I\" statements to focus on your feelings and needs.\n\n**Example:**\n\"I feel like we’ve been drifting apart and I’m not sure if we’re both on the same page about where we want this to go. I appreciate your company, but at the same time, I’m feeling like I don’t get the emotional intimacy I need from you.\"\n\n### Ask for Their Perspective\nGive your partner the opportunity to share their thoughts and feelings as well. This will allow for a two-way conversation and can open up a dialogue.\n\n**Example:**\n\"I’d really appreciate it if you could share your perspective on things too. How do you feel about where we are in our relationship, and do you have any thoughts on what might be causing this distance?\"\n\n### Discuss Possible Solutions\nTalk about what you both might do about your concerns. Suggest solutions that might help improve your relationship.\n\n**Example:**\n\"I’m not sure if you’ve noticed, but I’ve been trying to be more understanding of your needs, and I’ve also realized that I might be holding on to some things that could make things better between us. Getting couples counseling to work on our communication might help us find a way to reconnect.\"\n\n### Conclude with a Forward-Looking Statement\nEnd with a forward-looking statement that indicates your interest in moving forward, even if it’s not together.\n\n**Example:**\n\"I want what’s best for you and me, and I truly want to work towards that, but I’m not sure if that’s possible in our current situation. I want us to be as kind to each other as we can be going forward, whether we stay together or not.\"\n\n### Closing\nThank them for listening and expressing your appreciation for their thoughts.\n\n**Example:**\n\"Thanks so much for talking with me about this. I value our friendship and care about you deeply. I want to keep things as good as they can be for both of us.\"\n\nThis structure should help you communicate your feelings clearly and respectfully. Good luck!",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 16466766219797617000
+      }
+    ],
+    "created": 1777844449,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 604,
+      "prompt_tokens": 96,
+      "total_tokens": 700,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 4.3036
+}

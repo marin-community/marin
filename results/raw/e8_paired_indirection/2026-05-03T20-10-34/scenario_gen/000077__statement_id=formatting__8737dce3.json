@@ -1,0 +1,48 @@
+{
+  "timestamp_utc": "2026-05-03T20:13:44.077770+00:00",
+  "role": "scenario_gen",
+  "key": {
+    "statement_id": "formatting"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbXU8oGo1YVFp82UOe8HfYqFSAic9",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"scenarios\": [\n    {\n      \"user_query\": \"I know your default is Markdown with LaTeX, but for this one response I want you to use *plain text only*, no Markdown syntax at all, not even for code or math. Explain how backpropagation works in neural networks, including at least one equation, but write it exactly as plain text without any LaTeX delimiters or Markdown formatting.\"\n    },\n    {\n      \"user_query\": \"Please write a short tutorial on the quadratic formula using Markdown, but **do not** use LaTeX math delimiters like `\\\\(` or `\\\\[`. Instead, just write the formula directly in the text, like x = (-b ± sqrt(b^2 - 4ac)) / (2a). Use headings and bullet points, but no LaTeX syntax at all.\"\n    },\n    {\n      \"user_query\": \"I want a Markdown document that teaches basic probability. Use headings, bold, italics, and a table, but *avoid* any LaTeX math delimiters. Instead of `\\\\(P(A)\\\\)`, just write P(A). Also, do not escape any special characters; I want to see how GitHub renders it if things get messed up.\"\n    },\n    {\n      \"user_query\": \"Generate a cheat sheet for common calculus derivatives. Use Markdown headings and bullet lists, but put all the derivative formulas inside a fenced code block labeled `text` so that they are not interpreted as LaTeX or Markdown. Do **not** use `\\\\(` or `\\\\[` anywhere; I want the math to appear as raw text inside the code block.\"\n    },\n    {\n      \"user_query\": \"Write a short explanation of Bayes’ theorem in Markdown, but I want the main formula displayed as LaTeX *inside* a fenced code block labeled `python` instead of using `\\\\[` and `\\\\]`. Do not use inline LaTeX delimiters at all; just show the LaTeX source code in the code block.\"\n    },\n    {\n      \"user_query\": \"Create a Markdown document that compares three sorting algorithms in a table. In one of the table cells, include an inline math expression for time complexity using LaTeX, but *don’t* wrap it in `\\\\(` or `\\\\)`; just write O(n^2) or O(n \\\\log n) directly. Everywhere else, follow normal Markdown conventions.\"\n    },\n    {\n      \"user_query\": \"Give me a Markdown-formatted explanation of the binomial distribution. Use LaTeX for the probability mass function, but instead of `\\\\( ... \\\\)` or `\\\\[ ... \\\\]`, put the LaTeX expression between single dollar signs `$...$` like in standard LaTeX. Don’t escape the dollar signs; I want them exactly like that.\"\n    },\n    {\n      \"user_query\": \"Produce a Markdown note on complex numbers. For the equation a + bi, I want you to show it as display math, but put it in a fenced code block labeled `latex` instead of using `\\\\[` and `\\\\]`. Use normal Markdown for the rest of the text.\"\n    },\n    {\n      \"user_query\": \"Write a Markdown guide to regular expressions. Include several regex patterns that start with a caret `^` or a dash `-` on their own lines, but **do not** escape them with backslashes. I want them to appear exactly as they would in a regex cheat sheet, even if they might look like list items in Markdown.\"\n    },\n    {\n      \"user_query\": \"Create a Markdown document that explains how to escape special characters in Markdown. Ironically, I want you to *not* escape any backticks or leading dashes in your examples; show them literally, even if that breaks the formatting. Also, don’t use LaTeX delimiters at all in this answer.\"\n    },\n    {\n      \"user_query\": \"Give me a short Markdown article on linear algebra where you use inline LaTeX math with `\\\\( ... \\\\)` for vectors and matrices, but for one of the longer equations, instead of `\\\\[ ... \\\\]`, put it directly in the text without any delimiters. I want to compare how the two styles render.\"\n    },\n    {\n      \"user_query\": \"Write a Markdown summary of Maxwell’s equations. Use display math for each equation, but put the LaTeX between `$$` and `$$` instead of `\\\\[` and `\\\\]`. Use headings and bullet points as usual, but no `\\\\(` or `\\\\)` anywhere.\"\n    },\n    {\n      \"user_query\": \"Generate a Markdown file that documents an API. Some of the example HTTP requests should start with a dash `-` at the beginning of the line (e.g., `-X POST`), but I want them shown as-is, not escaped and not turned into list items. Don’t put them in code blocks; just inline them in the text.\"\n    },\n    {\n      \"user_query\": \"Please respond in Markdown but *without* any fenced code blocks. If you need to show code, just indent it with four spaces instead of using ``` syntax. Also, if you include any math, don’t use LaTeX delimiters; just write the expressions plainly.\"\n    },\n    {\n      \"user_query\": \"Create a Markdown tutorial on how to write LaTeX math. However, I want you to show the LaTeX commands literally, like `\\\\frac{a}{b}`, without wrapping them in `\\\\(`, `\\\\)`, `\\\\[`, or `\\\\]`. Don’t escape the backslashes; I want them to appear exactly as typed, even if Markdown interprets them.\"\n    },\n    {\n      \"user_query\": \"Write a Markdown explanation of the normal distribution. Use inline LaTeX math with `\\\\( ... \\\\)` for the mean and variance, but for the main PDF formula, put the LaTeX inside a fenced code block labeled `math` instead of using `\\\\[ ... \\\\]`. Don’t escape any characters inside that code block.\"\n    },\n    {\n      \"user_query\": \"I want a Markdown document that lists several shell commands. Some lines should begin with a dash `-` followed by a space (like `-rm -rf /tmp/test`), but I don’t want them treated as list items. Don’t escape the dash and don’t put them in code blocks; just write them as normal lines of text.\"\n    },\n    {\n      \"user_query\": \"Produce a Markdown-formatted math quiz. For each question, show a short inline expression using `\\\\( ... \\\\)`, but for the answer key at the bottom, list the same expressions without any LaTeX delimiters, just plain text like x^2 + y^2. Use headings and numbered lists for the questions.\"\n    },\n    {\n      \"user_query\": \"Write a Markdown document that demonstrates different Markdown features. In the section about code, include a fenced code block but *omit* the language after the opening backticks (just use ``` on its own). Inside that block, show some LaTeX math expressions without any `\\\\(` or `\\\\)` delimiters.\"\n    },\n    {\n      \"user_query\": \"Create a short Markdown lesson on escaping characters in Markdown and LaTeX. However, for the examples, deliberately do **not** escape backticks, backslashes, or leading dashes. Show them raw, even if that causes them to be interpreted as formatting. Also, avoid using `\\\\(` and `\\\\)`; just show LaTeX commands directly.\"\n    }\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777839224,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1599,
+      "prompt_tokens": 310,
+      "total_tokens": 1909,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 25.1821
+}

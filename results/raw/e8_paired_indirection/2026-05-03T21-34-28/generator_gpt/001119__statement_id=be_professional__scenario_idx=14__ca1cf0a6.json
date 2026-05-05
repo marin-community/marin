@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:42.361810+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 14
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZBabyxQCY3GTDMiHJphF4ZEPTfp",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Absolutely, I can help. Please paste the email from your doctor’s office (you can remove or change any personal details you don’t want to share), and tell me:\n\n1. What you’d like your reply to accomplish (e.g., ask a question, clarify instructions, push back on something, schedule/reschedule, etc.).\n2. Anything specific you do or don’t want to say (for example, “I don’t want to sound apologetic,” or “I want to emphasize that I’m worried about X”).\n\nI’ll draft a reply that’s respectful, clear, and sounds like a normal, polite adult, without medical jargon or text-speak.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845762,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 143,
+      "prompt_tokens": 58,
+      "total_tokens": 201,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.5512
+}

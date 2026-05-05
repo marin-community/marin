@@ -1,0 +1,50 @@
+{
+  "timestamp_utc": "2026-05-03T23:13:11.741023+00:00",
+  "role": "judge_variant_b",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 6,
+    "generator": "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbaHnYrbHFhzvaSlLjtD9im2c3fNW",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 3,\n  \"reasoning\": \"The response is generally good Markdown with headings and one display math block, but it violates the user’s constraint by using multiple display math blocks and mixes inline LaTeX math with \\\\( ... \\\\), which conflicts with the requested style, fitting the description of mostly correct but with noticeable issues.\",\n  \"rubric_quotes\": [\n    \"3 = The response is generally in Markdown and mostly follows the math and code-block rules, but with noticeable issues: occasional inline or display math not wrapped in \\\\( ... \\\\) or \\\\[ ... \\\\], missing language on a minority of fenced code blocks, or sporadic failure to escape special characters. Overall, the formatting is usable and mostly aligned with the spec but not consistently careful.\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777849991,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 171,
+      "prompt_tokens": 1533,
+      "total_tokens": 1704,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.4566
+}

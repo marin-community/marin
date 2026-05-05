@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:22.095666+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZQk2edHGxsbygnwsxGJP9MkLIfb",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "\\begin{center}\n\\Large \\textbf{Linear Regression: One-Page Summary}\n\\end{center}\n\n\\section*{Model Setup}\n\nGiven data\n\\[\n\\{(x_i, y_i)\\}_{i=1}^n,\\quad x_i \\in \\mathbb{R}^p,\\; y_i \\in \\mathbb{R},\n\\]\nthe linear regression model assumes\n\\[\ny_i = \\beta_0 + x_i^\\top \\beta + \\varepsilon_i,\\quad \\varepsilon_i \\sim \\text{i.i.d. } (0,\\sigma^2).\n\\]\nUsing augmented features \\(\\tilde{x}_i = (1, x_i^\\top)^\\top \\in \\mathbb{R}^{p+1}\\) and \\(\\tilde{\\beta} = (\\beta_0, \\beta^\\top)^\\top\\),\n\\[\ny_i = \\tilde{x}_i^\\top \\tilde{\\beta} + \\varepsilon_i.\n\\]\n\nStacking observations:\n\\[\ny = X\\beta + \\varepsilon,\n\\]\nwhere \\(X \\in \\mathbb{R}^{n \\times p}\\), \\(y \\in \\mathbb{R}^n\\), \\(\\beta \\in \\mathbb{R}^p\\).\n\n\\section*{Ordinary Least Squares (OLS)}\n\nOLS estimates \\(\\beta\\) by minimizing the sum of squared residuals:\n\\[\n\\hat{\\beta} = \\arg\\min_{\\beta} \\; S(\\beta), \\quad S(\\beta) = \\sum_{i=1}^n (y_i - x_i^\\top \\beta)^2\n= \\|y - X\\beta\\|_2^2.\n\\]\n\nTaking derivatives and setting to zero:\n\\[\n\\frac{\\partial S}{\\partial \\beta}\n= -2X^\\top(y - X\\beta) = 0\n\\quad \\Rightarrow \\quad\nX^\\top X \\hat{\\beta} = X^\\top y.\n\\]\n\nIf \\(X^\\top X\\) is invertible,\n\\[\n\\hat{\\beta} = (X^\\top X)^{-1} X^\\top y.\n\\]\n\n\\section*{Geometric Interpretation}\n\nThe fitted values are\n\\[\n\\hat{y} = X\\hat{\\beta} = P_X y, \\quad\nP_X = X(X^\\top X)^{-1}X^\\top.\n\\]\n\\(P_X\\) is the orthogonal projection matrix onto the column space of \\(X\\). The residuals\n\\[\n\\hat{\\varepsilon} = y - \\hat{y}\n\\]\nare orthogonal to all columns of \\(X\\):\n\\[\nX^\\top \\hat{\\varepsilon} = 0.\n\\]\n\n\\section*{Statistical Properties (Classical Assumptions)}\n\nAssume\n\\[\ny = X\\beta + \\varepsilon,\\quad \\mathbb{E}[\\varepsilon]=0,\\quad \\operatorname{Var}(\\varepsilon)=\\sigma^2 I_n.\n\\]\nThen\n\\[\n\\hat{\\beta} = (X^\\top X)^{-1}X^\\top y\n= \\beta + (X^\\top X)^{-1}X^\\top \\varepsilon.\n\\]\n\nUnbiasedness:\n\\[\n\\mathbb{E}[\\hat{\\beta}] = \\beta.\n\\]\n\nVariance:\n\\[\n\\operatorname{Var}(\\hat{\\beta})\n= (X^\\top X)^{-1}X^\\top \\sigma^2 I_n X (X^\\top X)^{-1}\n= \\sigma^2 (X^\\top X)^{-1}.\n\\]\n\nError variance estimator:\n\\[\n\\hat{\\sigma}^2 = \\frac{1}{n-p}\\sum_{i=1}^n (y_i - \\hat{y}_i)^2\n= \\frac{\\|\\hat{\\varepsilon}\\|_2^2}{n-p}.\n\\]\n\n\\section*{Inference}\n\nFor component \\(j\\),\n\\[\n\\hat{\\beta}_j \\sim \\mathcal{N}\\left(\\beta_j,\\, \\sigma^2 [(X^\\top X)^{-1}]_{jj}\\right)\n\\quad \\text{(under normal errors)}.\n\\]\nEstimate standard error:\n\\[\n\\operatorname{SE}(\\hat{\\beta}_j) = \\sqrt{\\hat{\\sigma}^2 [(X^\\top X)^{-1}]_{jj}}.\n\\]\nA \\(100(1-\\alpha)\\%\\) confidence interval:\n\\[\n\\hat{\\beta}_j \\pm t_{n-p,\\,1-\\alpha/2",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846702,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 77,
+      "total_tokens": 1077,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 5.4544
+}

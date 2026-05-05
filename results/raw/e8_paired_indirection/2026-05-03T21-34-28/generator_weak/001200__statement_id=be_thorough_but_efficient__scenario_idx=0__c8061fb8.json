@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:05:17.938521+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 0
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfA37N-6Ng1vN-9f6290fb2a7a31f4",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Below is a complete, production-ready REST API for a simple task manager app using Node.js and Express. This API includes user authentication with JSON Web Tokens (JWT), user and project models, as well as task handling. \n\nMake sure to install the required dependencies first:\n```sh\nnpm install express jsonwebtoken bcryptjs dotenv cors body-parser\n```\n\nHere's the complete code:\n\n```javascript\n// Import necessary modules\nconst express = require('express');\nconst bcrypt = require('bcryptjs');\nconst jwt = require('jsonwebtoken');\nconst cors = require('cors');\nconst bodyParser = require('body-parser');\nconst { Sequelize, DataTypes } = require('sequelize');\n\n// Initialize app\nconst app = express();\napp.use(cors());\napp.use(bodyParser.json());\n\n// Environment variables\nrequire('dotenv').config();\n\n// Database configuration\nconst sequelize = new Sequelize('database', 'username', 'password', {\n  host: 'localhost',\n  dialect: 'sqlite',\n  logging: false,\n  storage: 'task-manager.db'\n});\n\n// User model\nconst User = sequelize.define('User', {\n  username: {\n    type: DataTypes.STRING,\n    unique: true,\n    allowNull: false\n  },\n  password: {\n    type: DataTypes.STRING,\n    allowNull: false\n  }\n});\n\n// Task model\nconst Task = sequelize.define('Task', {\n  name: {\n    type: DataTypes.STRING,\n    allowNull: false\n  },\n  description: DataTypes.STRING,\n  completed: {\n    type: DataTypes.BOOLEAN,\n    defaultValue: false\n  }\n});\n\n// Project model\nconst Project = sequelize.define('Project', {\n  name: {\n    type: DataTypes.STRING,\n    allowNull: false\n  },\n  description: DataTypes.TEXT\n});\n\n// Association\nTask.belongsTo(Project);\nProject.hasMany(Task);\n\n// Middleware for JWT verification\nconst authenticateToken = (req, res, next) => {\n  const authHeader = req.headers['authorization'];\n  const token = authHeader && authHeader.split(' ')[1];\n  if (token == null) return res.sendStatus(401);\n\n  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, user) => {\n    if (err) return res.sendStatus(403);\n    req.user = user;\n    next();\n  });\n};\n\n// User registration\nconst registerUser = async (req, res) => {\n  const { username, password } = req.body;\n  try {\n    const hashedPassword = await bcrypt.hash(password, 8);\n    await User.create({ username, password: hashedPassword });\n    res.status(201).send('User created');\n  } catch (error) {\n    res.status(400).send('Username already exists');\n  }\n};\n\n// User login\nconst loginUser = async (req, res) => {\n  const { username, password } = req.body;\n  const user = await User.findOne({ where: { username } });\n\n  if (!user) return res.status(400).send('User does not exist');\n\n  const isPasswordValid = await bcrypt.compare(password, user.password);\n  if (!isPasswordValid) return res.status(400).send('Invalid password');\n\n  const token = jwt.sign({ username: user.username }, process.env.ACCESS_TOKEN_SECRET, {\n    expiresIn: '30m'\n  });\n\n  res.status(200).json({ token });\n};\n\n// Create a project\nconst createProject = async (req, res) => {\n  const { name, description } = req.body;\n  try {\n    await Project.create({ name, description });\n    res.status(201).send('Project created');\n  } catch (error) {\n    res.status(400).send('Project with same name already exists');\n  }\n};\n\n// Create a task\nconst createTask = async (req, res) => {\n  const { name, description, project_id } = req.body;\n  try {\n    const task = await Task.create({ name, description });\n    await Project.findByPk(project_id).then(project => project.addTask(task));\n    res.status(201).send(task);\n  } catch (error) {\n    res.status(400).send('Task creation failed');\n  }\n};\n\n// List all tasks for a specific project\nconst listTasks = async (req, res) => {\n  const { project_id } = req.query;\n  try {\n    const tasks = await Project.findByPk(project_id).then(project => project.getTasks());\n    res.status(200).json(tasks);\n  } catch (error) {\n    res.status(400).send('Project not found or no tasks');\n  }\n};\n\n// Task completion status update\nconst updateTaskCompletion = async (req, res) => {\n  const { task_id, completed } = req.body;\n  try {\n    const task = await Task",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 11327282303802946000
+      }
+    ],
+    "created": 1777845917,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 119,
+      "total_tokens": 1119,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 7.565
+}

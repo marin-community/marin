@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:04:23.987861+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_rationally_optimistic",
+    "scenario_idx": 14
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZDE2kcdmSByGhFv5oLmN5CvNmsG",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "You’re trying to walk a line between two things that can feel almost incompatible:\n\n- not abandoning the love you have for your child,  \n- not keeping yourself in an endless loop of hurt.\n\nThinking about “hope” and “acceptance” more precisely can help.\n\n---\n\n## 1. Different kinds of hope\n\nIt helps to separate *what* you’re hoping for:\n\n1. **Outcome‑specific hope**:  \n   “My child will come back, and we’ll have a close relationship again.”\n\n2. **Principled/values‑based hope**:  \n   “If they ever decide to reach out, I will be emotionally ready and able to meet them with steadiness and respect.”  \n   “I can build a life that has meaning, even with this loss.”\n\nOutcome‑specific hope is what tends to hurt most, because:\n- you can’t control it, and  \n- every new silence or rejection feels like confirmation of failure.\n\nValues‑based hope is different. It’s about:\n- the kind of parent you choose to be now, even without contact, and  \n- the kind of life you build in the meantime.\n\nYou’re not required to extinguish *all* hope; you may want to **shift hope away from “this must happen” toward “I will handle what happens with integrity and self-respect.”**\n\n---\n\n## 2. What realistic acceptance can look like\n\nAcceptance doesn’t mean:\n- approving of the estrangement,\n- agreeing with their reasons,\n- or ceasing to care.\n\nIt means you stop fighting the *fact* that:\n- Right now, your child has chosen no contact.  \n- They may never change that decision.  \n- You do not have the power to make them choose differently.\n\nRealistic acceptance sounds more like:\n- “I deeply wish this were different, and I hate that it’s this way. But at this point, my child does not want a relationship, and I will live my life on the basis of that reality rather than the fantasy that tomorrow will suddenly fix it.”\n\nYou’re allowed to:\n- hold the door unlocked *in principle*,  \n- but stop standing at the door 24/7.\n\n---\n\n## 3. When hope becomes harmful\n\nYou can use your own experience as a guide: hope is turning into harm if you notice things like:\n\n- Your mood and self‑worth swing with every birthday/holiday/no reply.\n- You feel unable to invest in friendships, hobbies, or joy because “what’s the point without my child.”\n- You keep trying new ways to contact them, despite clear boundaries from them.\n- You live more in imagined future reconciliations than in your actual present life.\n\nIn that case, “keep hoping” is not kind advice; it’s asking you to stay in emotional limbo.\n\nA more realistic stance might be:\n> “I acknowledge there is some small, unknown chance my child might reach out one day. But I am not going to emotionally live *as if* that must or will happen. I’m going to build a life that can stand even if it never does.”\n\n---\n\n## 4. A middle path: conditional, quiet hope\n\nYou don’t have to choose between:\n\n- relentless, painful optimism and  \n- total emotional shutdown.\n\nYou can adopt something like:\n\n1. **A quiet, background hope**  \n   - You don’t rehearse reunions in your mind every day.  \n   - You simply don’t slam the door shut in a way that would make reconnection impossible if they wanted it later (e.g., you stay findable, you don’t send hostile messages or smear them).\n\n2. **A clear, internal boundary**  \n   Some people find it useful to state to themselves:\n   - “As of now, I will not initiate more contact unless there’s a clear invitation or reason (e.g., they reach out, or a truly extraordinary circumstance like a deathbed situation).”\n   - “I may still feel sad or hope occasionally, but I will not organize my life around waiting.”\n\n3. **A plan for ‘if they call tomorrow’ and a plan for ‘if they never do’**  \n   That’s often what calms the mind:\n   - *If they call*: “I’ll listen first. I won’t rush to defend. I’ll be open to hearing their reality, even if I don’t agree.”  \n   - *If they don’t*: “I will still create meaning and connection—with others, with causes, with my own growth.”\n\nKnowing you have both plans allows you to stop re-negotiating the whole thing in your head every week.\n\n---\n\n## 5. Guilt, identity, and self‑blame\n\nEstranged parents often live with intense self‑scrutiny:\n- “What did I do wrong?”\n- “If I accept this, am I giving up on",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845864,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 68,
+      "total_tokens": 1068,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 8.2647
+}

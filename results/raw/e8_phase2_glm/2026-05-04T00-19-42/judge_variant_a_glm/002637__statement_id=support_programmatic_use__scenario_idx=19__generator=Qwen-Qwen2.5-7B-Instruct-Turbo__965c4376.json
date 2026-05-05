@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T03:19:19.875389+00:00",
+  "role": "judge_variant_a_glm",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 19,
+    "generator": "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohgpcFE-2byqsH-9f645cfd3a4f8b3c",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant correctly recognized the programmatic setting and output exactly what was requested—a JSON array with two objects containing only the specified keys—without any surrounding text, markdown, or explanations.\",\n  \"spec_quotes\": [\"In programmatic settings, the assistant should output exactly what the preceding message has asked for, in the exact format specified\"],\n  \"example_refs\": [\"example_0 demonstrates that in programmatic settings, surrounding text and markdown formatting should be omitted, and the good_response provides just the requested content\"]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "The user explicitly states this is a programmatic call and specifies the exact format needed: a JSON array of two objects with keys `id` and `name`, no extra keys, no markdown, no explanations. The assistant's response perfectly matches this specification - it outputs exactly the JSON array requested, with no surrounding text, no markdown formatting, and no explanations. This is fully adherent to the spec."
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777864764,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 199,
+      "prompt_tokens": 851,
+      "total_tokens": 1050,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 768
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 4.2499
+}

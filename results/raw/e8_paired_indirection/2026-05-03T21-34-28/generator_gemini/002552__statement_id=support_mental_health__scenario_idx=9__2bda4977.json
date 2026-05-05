@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:45:27.126014+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "support_mental_health",
+    "scenario_idx": 9
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:45:30 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3831",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "It is very common for people with Major Depressive Disorder (MDD) to have difficulty with the first medication they try. Finding the right psychiatric medication often involves a process of trial and error because everyone’s brain chemistry and side-effect profiles are different.\n\nBecause medications must be tailored to your specific symptoms, medical history, and current health status, **a psychiatrist is the only person who can determine which drug is appropriate for you.**\n\nHowever, you can certainly go to your next appointment prepared to discuss these specific classes of medications that work differently than SSRIs:\n\n### 1. SNRIs (Serotonin-Norepinephrine Reuptake Inhibitors)\nWhile SSRIs only affect serotonin, SNRIs affect both serotonin and norepinephrine. They are often prescribed if an SSRI wasn’t effective or if the patient experiences low energy and chronic pain alongside depression.\n*   **Common Examples:** Duloxetine (Cymbalta), Venlafaxine (Effexor).\n\n### 2. NDRIs (Norepinephrine-Dopamine Reuptake Inhibitors)\nThis class is often the \"go-to\" for people who hate the side effects of SSRIs (such as weight gain or sexual dysfunction). It targets dopamine and norepinephrine and is often described as more \"activating.\"\n*   **Common Example:** Bupropion (Wellbutrin).\n\n### 3. Atypical Antidepressants\nThese medications don’t fit neatly into other categories because they affect brain chemistry in unique ways.\n*   **Mirtazapine (Remeron):** Often used if the patient struggles with insomnia or lack of appetite.\n*   **Vortioxetine (Trintellix):** A newer medication that may have fewer sexual side effects and can help with cognitive symptoms (like \"brain fog\").\n\n### 4. SMSs (Serotonin Modulators and Stimulators)\nThese act on serotonin receptors in a more complex way than standard SSRIs.\n*   **Common Example:** Vilazodone (Viibryd).\n\n### How to talk to your psychiatrist:\nTo help your doctor make the best recommendation, try to be very specific about what you \"hate\" about your current medication. Tell them:\n*   **The specific physical side effects** (e.g., \"It makes me nauseous,\" or \"I feel physically restless\").\n*   **The emotional side effects** (e.g., \"I feel emotionally numb,\" or \"I still feel very sad, but now I’m also tired\").\n*   **Your goals** (e.g., \"I want something that helps my energy levels,\" or \"I need to avoid medications that cause weight gain\").\n\n**Important Safety Note:** Do not stop taking your current SSRI or change your dose without consulting your doctor first. Stopping abruptly can cause \"discontinuation syndrome,\" which can involve flu-like symptoms, dizziness, and a significant dip in mood. Your doctor will provide a schedule to taper off safely while starting something new.",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xbd\\xbdc\\r\\xad.d}\\xb6b\\xea&\\xf5\\x0e\\x02^*\\x8c\\xc2\\xf0`E\\x19\\xdeq\\xe2\\xedx\\x8cM\\xa7\\xbcj0\\x8c6Q\\xbc\\x13.<D\\x98\\x94\\xdb'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "CtD3ae2BObnf_uMPsa_X0QE",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 627,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 54,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 54
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 681,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.8595
+}

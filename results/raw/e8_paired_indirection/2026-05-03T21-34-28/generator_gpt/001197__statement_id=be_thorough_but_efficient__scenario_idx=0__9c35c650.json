@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:05:11.360271+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 0
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZDzl5bJAXFHzb9Wpl8A9AYH82SJ",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Below is a complete, runnable example of a simple production-ready REST API for a task manager app using Node.js, Express, MongoDB (via Mongoose), and JWT.  \n\nFeatures:\n- Users: register/login with hashed passwords, get current user\n- JWT auth: protected routes\n- Projects: CRUD per user\n- Tasks: CRUD per project\n- Basic validation & error handling\n- Organized into models, controllers, routes, middleware\n\n**Instructions:**\n1. Create a new folder and `cd` into it.\n2. Save each code block into the file path indicated in the comment at the top of the block.\n3. Run:\n   ```bash\n   npm init -y\n   npm install express mongoose dotenv jsonwebtoken bcryptjs cors morgan\n   npm install --save-dev nodemon\n   ```\n4. Create `.env` file as shown.\n5. Start server:\n   ```bash\n   npx nodemon server.js\n   ```\n6. Test with a tool like Postman or curl.\n\n---\n\n### `.env`\n```env\nPORT=4000\nMONGO_URI=mongodb://127.0.0.1:27017/taskmanager\nJWT_SECRET=super_secret_jwt_key_change_me\nJWT_EXPIRES_IN=7d\nNODE_ENV=development\n```\n\n---\n\n### `server.js`\n```js\n// server.js - entry point\n\nrequire('dotenv').config();\nconst app = require('./src/app');\nconst mongoose = require('mongoose');\n\nconst PORT = process.env.PORT || 4000;\nconst MONGO_URI = process.env.MONGO_URI;\n\n// Connect to MongoDB and then start server\nmongoose\n  .connect(MONGO_URI)\n  .then(() => {\n    console.log('MongoDB connected');\n    app.listen(PORT, () => {\n      console.log(`Server listening on port ${PORT}`);\n    });\n  })\n  .catch((err) => {\n    console.error('MongoDB connection error:', err.message);\n    process.exit(1);\n  });\n```\n\n---\n\n### `src/app.js`\n```js\n// src/app.js - express app setup\n\nconst express = require('express');\nconst morgan = require('morgan');\nconst cors = require('cors');\n\nconst authRoutes = require('./routes/authRoutes');\nconst projectRoutes = require('./routes/projectRoutes');\nconst taskRoutes = require('./routes/taskRoutes');\nconst { notFound, errorHandler } = require('./middleware/errorMiddleware');\n\nconst app = express();\n\n// Middleware\napp.use(cors());\napp.use(express.json());\nif (process.env.NODE_ENV !== 'production') {\n  app.use(morgan('dev'));\n}\n\n// Health check\napp.get('/health', (req, res) => {\n  res.json({ status: 'ok' });\n});\n\n// Routes\napp.use('/api/auth', authRoutes);\napp.use('/api/projects', projectRoutes);\napp.use('/api/tasks', taskRoutes);\n\n// 404 + Error handling\napp.use(notFound);\napp.use(errorHandler);\n\nmodule.exports = app;\n```\n\n---\n\n### `src/models/User.js`\n```js\n// src/models/User.js - user model\n\nconst mongoose = require('mongoose');\nconst bcrypt = require('bcryptjs');\n\n// Basic user schema: email + password + name\nconst userSchema = new mongoose.Schema(\n  {\n    name: {\n      type: String,\n      required: [true, 'Name is required'],\n      trim: true,\n    },\n    email: {\n      type: String,\n      required: [true, 'Email is required'],\n      unique: true,\n      lowercase: true,\n      trim: true,\n    },\n    password: {\n      type: String,\n      required: [true, 'Password is required'],\n      minlength: 6,\n      select: false, // do not return by default\n    },\n  },\n  { timestamps: true }\n);\n\n// Hash password before save if modified\nuserSchema.pre('save', async function (next) {\n  if (!this.isModified('password')) return next();\n  const salt = await bcrypt.genSalt(10);\n  this.password = await bcrypt.hash(this.password, salt);\n  next();\n});\n\n// Compare raw password with hashed password\nuserSchema.methods.matchPassword = async function (enteredPassword) {\n  return bcrypt.compare(enteredPassword, this.password);\n};\n\nconst User = mongoose.model('User', userSchema);\nmodule.exports = User;\n```\n\n---\n\n### `src/models/Project.js`\n```js\n// src/models/Project.js - project model\n\nconst mongoose = require('mongoose');\n\n// Project belongs to a user (owner)\nconst projectSchema = new mongoose.Schema(\n  {\n    name: {\n      type: String,\n      required: [true, 'Project name is required'],\n      trim: true,\n    },\n    description: {\n      type: String,\n      trim: true,\n      default: '',\n    },\n    owner: {\n      type: mongoose",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845911,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 96,
+      "total_tokens": 1096,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 6.5779
+}

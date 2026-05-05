@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:47:05.447523+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 18
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZsX22vflh8fS5DeJL4S41oh02m1",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "A binary search tree (BST) is a way of organizing data in a tree structure so you can quickly look up, insert, and delete values. Each node in the tree can have up to two children: a left child and a right child. The key rule is:\n\n- All values in the left subtree of a node are **less than** the node’s value.\n- All values in the right subtree of a node are **greater than** the node’s value.\n\nBecause of this ordering, you can search for a value by starting at the root and, at each step, deciding to go left or right depending on whether the value you’re looking for is smaller or larger than the current node. In a well-shaped (balanced) BST, this makes operations like search, insert, and delete efficient—taking time proportional to the height of the tree, which is logarithmic in the number of nodes.\n\n{\"structure\":\"A hierarchical collection of nodes where each node has up to two children, and for any node, all keys in the left subtree are less than the node’s key and all keys in the right subtree are greater; this ordering enables efficient search, insertion, and deletion by traversing left or right based on comparisons.\",\"balanced\":false}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848425,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 260,
+      "prompt_tokens": 92,
+      "total_tokens": 352,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 2.3572
+}

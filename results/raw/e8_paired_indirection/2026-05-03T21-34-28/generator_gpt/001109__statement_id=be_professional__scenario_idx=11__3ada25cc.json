@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:26.810479+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 11
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZBLgxIzZQbrcakLPXydfqo8eJ8v",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "After [X] incredible years at [Company], my role was recently eliminated as part of a broader restructuring. \n\nI won’t sugarcoat it: getting laid off is tough. It’s disappointing, and it’s not what I had planned. At the same time, I’m genuinely grateful for the work I’ve been able to do and the people I’ve been able to do it with.\n\nDuring my time at [Company], I had the chance to:\n- [Brief accomplishment or responsibility #1]\n- [Brief accomplishment or responsibility #2]\n- [Brief accomplishment or responsibility #3]\n\nMost importantly, I worked with colleagues and leaders who challenged me, supported me, and helped me grow. If we’ve collaborated in any way, please know I appreciated it and learned from you.\n\nI’m now actively looking for my next role in [your field/areas of focus], ideally as a [target title or two] where I can contribute in:\n- [Key skill/experience #1]\n- [Key skill/experience #2]\n- [Key skill/experience #3]\n\nIf you know of opportunities, teams that are hiring, or people I should meet, I’d be grateful for any introductions or leads. I’m also very open to short conversations or virtual coffees to reconnect and explore possibilities.\n\nThank you to everyone who has reached out already—it really does make a difference. Onward to whatever’s next.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845747,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 294,
+      "prompt_tokens": 65,
+      "total_tokens": 359,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 3.3201
+}

@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:47.864980+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 11
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZRARnoFxosiW89V72sN0K2AVkDo",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "The central limit theorem (CLT) is a fundamental result in probability and statistics that explains why the normal (bell-curve) distribution appears so often in real data and in statistical methods.\n\n---\n\n## Informal idea\n\nSuppose you:\n\n- Take many independent random variables\n- Each has the same distribution\n- Each has a finite mean and variance\n\nNow form their average (or sum). The central limit theorem says:\n\nAs you increase the number of variables you average, the distribution of that average becomes approximately normal (bell-shaped), regardless of the original distribution of the individual variables (as long as some regularity conditions hold).\n\nIn simpler terms:  \nMany small, independent random effects, when added together, tend to produce a normal distribution.\n\n---\n\n## A more concrete description\n\nLet:\n\n- X₁, X₂, ..., Xₙ be independent and identically distributed (i.i.d.) random variables\n- Each has:\n  - Mean: μ\n  - Variance: σ² (finite)\n\nDefine:\n\n- The sample mean:  \n  `X̄ₙ = (X₁ + X₂ + ... + Xₙ) / n`\n\nThe central limit theorem says that, as n becomes large, the distribution of `X̄ₙ` is approximately normal with:\n\n- Mean: μ  \n- Standard deviation: `σ / sqrt(n)`\n\nMore formally, the standardized version:\n\n`Zₙ = (X̄ₙ - μ) / (σ / sqrt(n))`\n\nhas a distribution that converges to the standard normal distribution (mean 0, variance 1) as n → ∞.\n\n---\n\n## Why it matters\n\nThe CLT is important because it justifies:\n\n- Using normal-based confidence intervals for means\n- Many classical hypothesis tests\n- Approximations of complex sums by normal distributions\n\nEven when the underlying data is not normal, if the sample size is large and the conditions of the CLT are met, methods based on the normal distribution often work well.\n\n---\n\n## The normal distribution formula (as plain text)\n\nThe probability density function (PDF) of a normal distribution with mean `mu` and standard deviation `sigma` is:\n\n`f(x) = 1 / (sigma * sqrt(2 * pi)) * exp( - (x - mu)^2 / (2 * sigma^2) )`\n\nSpecial case: the standard normal distribution (mu = 0, sigma = 1):\n\n`phi(x) = 1 / sqrt(2 * pi) * exp( - x^2 / 2 )`\n\nThe CLT says that, after proper centering and scaling, sums or averages of many i.i.d. variables tend to follow this standard normal shape.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846728,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 568,
+      "prompt_tokens": 79,
+      "total_tokens": 647,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 4.1175
+}

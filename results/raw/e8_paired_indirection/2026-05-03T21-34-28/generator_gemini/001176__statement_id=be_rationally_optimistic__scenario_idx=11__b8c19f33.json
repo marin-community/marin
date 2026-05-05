@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:04:17.766668+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_rationally_optimistic",
+    "scenario_idx": 11
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:04:23 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=6193",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "This is a heavy reality to face, and your fear is a completely natural response to the loss of freedom and the unknown. You asked for the truth without hollow reassurances: prison is objectively hard. It is loud, monotonous, often lonely, and designed to strip away your autonomy.\n\nHowever, many people do not just \"survive\" prison; they find a way to maintain their humanity within it. Here is how you can mentally prepare for the road ahead, acknowledging the difficulty while finding a foundation to stand on.\n\n### 1. Accept the Loss of Control\nThe hardest part of prison for many is the loss of agency. You will be told when to eat, sleep, and move. \n*   **The Mindset:** Mentally \"surrender\" to the schedule before you arrive. If you fight the reality of the bars every minute, you will exhaust yourself. \n*   **The Hold:** While they control your body and your schedule, they cannot control your thoughts, your reactions, or your integrity. That internal space is yours alone. Protect it.\n\n### 2. Establish a \"Prison Persona\"\nYou do not need to be a \"tough guy,\" but you must be a \"composed person.\" \n*   **The Reality:** Prison is an environment where emotions can be exploited. \n*   **The Preparation:** Practice a \"neutral\" default setting. Be polite but not overly friendly; be observant but mind your own business. Cultivate a reputation for being reliable and quiet. Avoiding debt, drugs, and gossip is the most practical way to stay safe.\n\n### 3. The \"Small World\" Strategy\nLooking at a sentence of \"several years\" as one giant block of time is overwhelming. It can lead to despair.\n*   **The Strategy:** Shrink your world. Don't think about next year. Think about getting through this morning’s breakfast, then the afternoon yard time, then the evening. \n*   **The Hold:** Mark time by milestones—books read, letters written, or workouts completed. Give the time a purpose so it doesn't just \"pass,\" but rather \"serves\" a goal.\n\n### 4. Maintain a Tether to the Outside\nPrison can make the outside world feel like a dream that’s fading. This \"institutionalization\" is what many fear most.\n*   **The Hard Truth:** Some people will stop calling. Your life outside will change without you. \n*   **The Preparation:** Be intentional about your relationships now. Tell your loved ones how they can best support you (letters, books, etc.). \n*   **The Hold:** Use your time to become someone who is worthy of the life you want when you get out. Whether that’s through education, reflection, or physical health, let your \"future self\" be the person you are working for.\n\n### 5. Find Your \"Work\"\nIdleness is the enemy. It leads to depression and trouble.\n*   **The Reality:** There will be a lot of \"dead time.\"\n*   **The Preparation:** Decide now what your \"work\" will be. Will you read every classic novel in the library? Will you learn a craft or a trade available in the facility? Will you exercise until you are in the best shape of your life?\n*   **The Hold:** Productivity is the best antidote to the feeling of being \"discarded\" by society.\n\n### 6. Dealing with the Low Points\nThere will be nights when the weight of the walls feels unbearable. \n*   **The Strategy:** When those moments hit, remind yourself: **\"This is a moment in time, not the end of my story.\"** People go to prison, they serve their time, and they come home to build meaningful lives. The statistics prove that people rebuild every day.\n\n**A Final Thought:**\nYou are more than the worst thing you have ever done. Prison is a punishment, but it does not have to be a total erasure of who you are. Hold onto your dignity. Be the person in that environment who is known for their calm and their word. It won't make the experience \"okay,\" but it will make it manageable.",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\x88\\xa8\\x8f\\x19\\xf0\\xd9A\\xfcv\\x8aKL6\\x82\\x11\\xa8\\xd3n\\xbcZ\\xa5^i\\xb4\\xf2\\xce\\xde\\x887\\x94?G\\x19\\x8ey\\xe8\\xc1\\xcb\\xf6\\xff\\x15\\xf0\\xe4;\\xbe'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "Z8b3aYuYOcS2_uMPntLH-Qg",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 877,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 76,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 76
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 953,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 6.2208
+}

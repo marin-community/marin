@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:58:12.615131+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_empathetic",
+    "scenario_idx": 4
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ7EpY7g6CWbs5xHwaOnEh8iccwY",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here’s a 3‑day, step‑by‑step operational plan aimed at getting you functionally productive at work—not “healed,” just executing.\n\nI’ll assume:\n- You’re cognitively impacted (fatigue, distraction, slower thinking).\n- You still need to produce output that others depend on.\n- You have some control over your schedule and how you work.\n\nAdjust as needed for your specific job.\n\n---\n\n## Overall Strategy\n\n1. **Constrain the problem**: Strip your workload down to the 20–30% of tasks that drive 80% of the visible value.\n2. **Reduce cognitive load**: Externalize everything; rely on lists, timers, scripts, and routines, not memory or willpower.\n3. **Exploit short bursts**: Work in tight, timed sprints with brutal prioritization.\n4. **Design around failure**: Assume low focus and higher error rate; build in checks and fallbacks.\n\n---\n\n## PREP: Before Day 1 (if possible, 30–60 minutes)\n\n**Goal:** Set up a minimal execution system.\n\n1. **Dump all current obligations**\n   - Open a doc or notepad.\n   - Write down everything you can think of that’s on your plate: projects, deadlines, meetings, people waiting on you.\n   - Don’t organize yet—just extract from your head.\n\n2. **Categorize by urgency/impact**\n   Make 3 lists:\n   - **Critical** (must do within 3 days; business/relationship damage if missed).\n   - **Important but deferrable** (can be pushed 1–2 weeks with a message).\n   - **Non‑essential** (nice‑to‑have, internal initiatives, low‑visibility tasks).\n\n3. **Choose your “MVP workload” for 3 days**\n   - From the Critical list, select the **3–5 highest‑impact deliverables** for the next 3 days.\n   - Everything else is either:\n     - Deferred (you inform people), or\n     - Done at “good enough,” not perfect.\n\n4. **Set up a simple control board**\n   - Use any one of: a whiteboard, paper, or a simple Kanban tool (e.g., Trello/Notion).\n   - Columns:\n     - Backlog (this week)\n     - Today\n     - In Progress\n     - Blocked\n     - Done\n   - Move your 3–5 MVP tasks into **Backlog (this week)**.\n\nThat’s your constraint: you’re only optimizing for those MVP tasks for 3 days.\n\n---\n\n## DAY 1: Stabilization + Minimum Viable Output\n\n**Objective:** Re‑establish a working rhythm, protect time, and get through basic obligations with minimal energy.\n\n### Morning (0–2 hours)\n\n1. **Hard boundaries for energy management**\n   - Choose your work blocks:\n     - 3–4 focus blocks of 45–60 minutes.\n     - 10–15 minute breaks between.\n   - Commit to *not* working outside those blocks except for emergencies.\n\n2. **Control incoming stimuli**\n   - Email/Slack/calendar check: 3 windows only:\n     - Start of day\n     - Midday\n     - End of day\n   - Disable all non‑essential notifications for 3 days:\n     - Keep only direct messages and time‑sensitive alerts.\n\n3. ** triage communications (30–45 minutes)**\n   Go through email/Slack/messages quickly:\n   - For each item, decide:\n     - **Do today** (must be handled now; move into “Backlog”).\n     - **Defer with message** (reply with a short, specific new deadline).\n     - **Delegate** (send to the right person with clear ask).\n     - **Drop** (no action needed).\n   - Templates you can paste to defer:\n     - “Got this. I’m heads‑down on a few urgent items; I’ll get back to you by [DAY/TIME].”\n     - “Can we push this to next week? I can realistically give it proper attention then.”\n\n4. **Refine today’s target**\n   - Move 1–3 tasks from Backlog → Today.\n   - Pick **one primary win** for the day (the single task that, if done, makes the day “acceptable”).\n\n### Midday (2–5 hours)\n\n5. **Focus Block 1: Execution on the primary win (45–60 minutes)**\n   - Set a timer for 45–60 minutes.\n   - Close everything except what’s needed for the task.\n   - Break the task into micro‑steps in a scratchpad:\n     - Example: “Draft report” → outline headers → fill bullet points → polish language → send for review.\n   - Execute",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845492,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 76,
+      "total_tokens": 1076,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.5204
+}

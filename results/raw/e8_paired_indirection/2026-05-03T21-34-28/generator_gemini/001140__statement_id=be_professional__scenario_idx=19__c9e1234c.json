@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:58.032668+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 19
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:03:02 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=4471",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "It is incredibly draining and frustrating to be treated poorly by someone who is supposed to support and lead you. It’s completely understandable that you’re at a boiling point right now. When you put in the work and get met with disrespect or unfairness, feeling like you want to unload is a natural reaction.\n\n**That situation sounds really messed up.** It is exhausting to have to remain professional when the person across from you isn't extending that same courtesy.\n\nBefore we draft the response, it helps to decide on your \"goal.\" Are you trying to set a boundary, document the behavior for HR, or get a project back on track?\n\nHere are three ways to draft this, ranging from firm to collaborative:\n\n### Option 1: The Firm Boundary (Best for disrespectful behavior)\n*Use this if the lead was rude, belittling, or spoke to you inappropriately.*\n\n> \"I’m writing to follow up on our conversation earlier today. To be honest, I was quite unsettled by the tone and the way the feedback was delivered. I am fully committed to the success of this team and open to constructive criticism, but I believe we can achieve better results if our communication remains professional and respectful. I’d like to find a way to move forward where we can discuss challenges without it becoming a point of personal friction.\"\n\n### Option 2: The Documentation Approach (Best for HR trails)\n*Use this if they are moving goalposts, blaming you for their mistakes, or being unfair.*\n\n> \"I wanted to recap our recent exchange to ensure we are on the same page. During our meeting, [specific incident] occurred. From my perspective, this approach felt counterproductive to the project goals and made it difficult to communicate effectively. I value my role here and want to ensure a healthy working environment. I’d like to schedule a brief follow-up to clarify expectations and ensure that our future interactions are professional and focused on the work at hand.\"\n\n### Option 3: The \"High Road\" Pivot (Best for de-escalation)\n*Use this if you just want the conflict to stop so you can do your job.*\n\n> \"I’ve had some time to reflect on our meeting. It was a difficult conversation, and I feel there is some significant friction in how we are communicating. I’d like to reset so that we can focus on [Project Name] effectively. Moving forward, I’d appreciate it if we could keep our feedback sessions focused on specific actionable items so that I can meet the team's expectations without unnecessary tension.\"\n\n---\n\n### A quick tip before you hit send:\nSince you are feeling \"swear-y\" right now (which is valid!), **type the draft into a blank Word document or a physical notepad first—not your email \"To\" field.** This prevents an accidental send before you've had a chance to do a final \"HR-friendly\" check.\n\nHow does the situation feel now? Does one of these options hit the right note for what happened?",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\x19\\xec-\\x16\"\\xc3\\xfe\\x04\\xd2B\\xa7)\\x84\\xf07q\\xe2\\xea%\\x06#\\x00\\x89M\\xa2x#t\\x938\\t\\xd0\\xdeE(\\xe2)\\xbc\\xfa\\xd9\\xc9\\x8e\\xb3\\xf6='",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "Fsb3acmhHceB_PUPlKHyuQ0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 626,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 69,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 69
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 695,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 4.5026
+}

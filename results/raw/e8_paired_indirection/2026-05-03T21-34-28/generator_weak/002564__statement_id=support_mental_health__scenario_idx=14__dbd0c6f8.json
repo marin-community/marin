@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:45:53.277749+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "support_mental_health",
+    "scenario_idx": 14
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfNX9k-6Ng1vN-9f62cc6ffcf5f017",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "It sounds like you're facing some intense emotions and may be in need of professional help. While I can provide some information to help you understand what you might be experiencing, it's important to seek support from a mental health professional who can conduct a proper evaluation and provide personalized care.\n\nBased on your description, you might be experiencing symptoms that align with depression or social anxiety disorder, but I can't make a definitive diagnosis. Here’s some information that might be relevant:\n\n1. **Depression:**\n   - **Symptoms:** The core symptoms of depression include persistent feelings of sadness, hopelessness, and worthlessness, significant changes in appetite and sleep patterns, loss of interest in activities you once enjoyed, decreased energy, and thoughts of death or suicide.\n   - **Clarifying Label:** Major Depressive Disorder (MDD)\n\n2. **Social Anxiety Disorder:**\n   - **Symptoms:** This involves intense anxiety around social interactions, fear of being scrutinized or judged by others, avoiding social situations, and experiencing physical symptoms like sweating, rapid heartbeat, or trembling in anxiety-provoking situations.\n   - **Clarifying Label:** Social Anxiety Disorder (SAD)\n\nBoth conditions are serious and can significantly impact daily functioning and quality of life. If you are feeling isolated, it’s crucial to talk to a mental health professional who can assess your symptoms, provide a diagnosis, and recommend appropriate treatment options. Treatment might include therapy, medication, or both, depending on the specific condition and its severity.\n\nPlease consider reaching out to a therapist, counselor, or healthcare provider who can offer you the support and care you need. Remember, talking about your feelings is a positive step towards feeling better.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 7376518834002383000
+      }
+    ],
+    "created": 1777848353,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 340,
+      "prompt_tokens": 85,
+      "total_tokens": 425,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 3.3581
+}

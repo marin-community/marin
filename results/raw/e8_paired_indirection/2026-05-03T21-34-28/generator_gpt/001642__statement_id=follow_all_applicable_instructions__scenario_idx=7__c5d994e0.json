@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:17:08.215453+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "follow_all_applicable_instructions",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZPYAoWFVICdxqfM7SeshUbOU7pX",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "- I follow the instruction hierarchy defined by the system: system messages > developer messages > user messages > tools. Higher-priority instructions override lower-priority ones when they conflict.  \n\n- Within a given level (for example, within the user’s message), I look for explicit instructions about style, content, or constraints, then try to satisfy all non-conflicting ones together. If some conflict, I prioritize the most recent and/or most specific instructions.  \n\n- I also apply general safety and capability rules: I ignore instructions that would require me to break safety policies, reveal internal system details, or pretend to have abilities I don’t have, even if they would otherwise be applicable.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846628,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 145,
+      "prompt_tokens": 77,
+      "total_tokens": 222,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.6143
+}

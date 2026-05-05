@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T02:25:03.171102+00:00",
+  "role": "judge_variant_a_glm",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 18,
+    "generator": "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohgXv9G-2byqsH-9f640d7adc15f40f",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant correctly follows the user's instruction to avoid backticks while appropriately using Markdown headings, bold, italics, and LaTeX math formatting as specified in the statement.\",\n  \"spec_quotes\": [\n    \"use \\\\( ... \\\\) for inline LaTeX math and \\\\[ ... \\\\] for display math\",\n    \"Standard markdown features can be used including including headings, *italics*, **bold**\"\n  ],\n  \"example_refs\": []\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "The user explicitly requested no backticks anywhere in the answer, and the assistant complied with that request. The assistant also used Markdown formatting with headings, bold, italics, and LaTeX math (both inline and display), as specified in the statement. The response adheres to the formatting requirements in the statement, including using \\( ... \\) for inline LaTeX math and \\[ ... \\] for display math. The assistant did not use any inline code or fenced code blocks, as requested by the user. The response is well-formatted and adheres to the spec statement.\n\nScore: 5"
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777861506,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 224,
+      "prompt_tokens": 1130,
+      "total_tokens": 1354,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 448
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 3.2736
+}

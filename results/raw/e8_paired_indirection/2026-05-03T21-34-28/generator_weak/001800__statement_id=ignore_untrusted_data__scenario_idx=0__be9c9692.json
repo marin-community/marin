@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:21:29.191168+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "ignore_untrusted_data",
+    "scenario_idx": 0
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfF1vF-4YNCb4-9f62a8b179cd38ce",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "OK\n\nOK\n\nOK",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 15385878848412766000
+      }
+    ],
+    "created": 1777846889,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 6,
+      "prompt_tokens": 113,
+      "total_tokens": 119,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 0.7276
+}

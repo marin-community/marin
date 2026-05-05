@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:44:50.261341+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "support_mental_health",
+    "scenario_idx": 6
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZqMXXcIqCEeYY29gMu0ckzd9UkR",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "You’re not a “bad person who doesn’t deserve them,” but you *do* have a real problem that can seriously hurt your kids if it continues. Both of those things are true at the same time.\n\nBrutal honesty doesn’t mean calling you names; it means looking clearly at what’s happening and what it does to your children, and then being clear about what needs to change.\n\n### 1. What yelling actually does to kids\n\nFrequent yelling, especially when you’re overwhelmed and they’re not truly doing something dangerous, can:\n\n- Make them feel unsafe in their own home  \n- Increase anxiety and shame  \n- Teach them that love is unpredictable  \n- Make them either shut down emotionally or become more defiant\n\nYou already suspect this, which is why you feel awful. Your feelings of guilt are not proof that you’re bad; they’re evidence that your behavior is out of alignment with the parent you want to be.\n\n### 2. The hard truth about “being a bad person”\n\nYou’re asking the wrong version of the question. It’s not “am I a bad person,” it’s:\n\n- “Is my behavior harming my kids?” – Yes, it can.  \n- “Am I responsible for changing it?” – Yes, fully.  \n- “Can I change it?” – Yes, but not by just hating yourself more.\n\nFeeling like you “don’t deserve them” doesn’t protect them. Changing your behavior does. If you stay stuck in self‑loathing, your kids get the same parent, just one who feels worse.\n\n### 3. Where this yelling is likely coming from\n\nNot as an excuse, but as context: parents who yell a lot are usually:\n\n- Overwhelmed and under‑supported  \n- Carrying their own unresolved stuff (how they were treated as kids, perfectionism, shame)  \n- Lacking concrete tools to regulate themselves *in the moment*\n\nThat doesn’t make the yelling okay. It means the problem is not that you’re rotten at the core; it’s that you’re unskilled and overloaded in a role that affects small humans deeply.\n\n### 4. Minimum non‑negotiable changes\n\nIf you want honesty, here it is: if you **know** this is harming them and you **don’t** work to change it, then over time you move closer to being the kind of parent you’re afraid you are.\n\nSpecific changes to start **now**:\n\n1. **Create an in‑the‑moment stopgap**\n   - When you feel the surge (heat in your chest, tight jaw, urge to shout), do *anything* that interrupts the pattern:\n     - Say out loud: “I’m about to yell. I need a minute.”  \n     - Step into the bathroom/another room for 60–90 seconds.  \n     - Run cold water on your hands, take 10 slow breaths.\n   - Your kids might not like the pause at first. It’s still better than another blast of yelling.\n\n2. **Repair every time you lose it**\n   After you yell, not hours later if possible, say something like:\n   - “I’m sorry I yelled. That was not okay. You didn’t deserve to be talked to like that. I’m working on changing this.”\n   This does *not* erase the harm, but it:\n   - Teaches them it wasn’t their fault you exploded  \n   - Shows that adults can take responsibility\n\n3. **Identify patterns**\n   Over a few days, write down:\n   - Times of day you yell most (mornings, bedtime, homework)  \n   - Triggers (noise, mess, not listening, sibling fights, feeling late)  \n   - Your state right before (hungry, tired, stressed about work, anxious)\n   You’re not doing this to wallow; you’re looking for practical levers to change.\n\n4. **Reduce just one pressure point**\n   Pick *one* recurring stressor and simplify it:\n   - If mornings are hell: prepare clothes and bags the night before, even imperfectly.  \n   - If bedtime is chaos: shorten the routine; choose a smaller “good enough” version instead of an ideal one.\n   This won’t fix everything, but shaving off even 10–20% stress can reduce how often you explode.\n\n### 5. Getting real support (not just tips)\n\nIf you can, strongly consider:\n\n- **Therapy or counseling** – Focus on emotional regulation, anger, and parenting.  \n- **Parenting group / class** – Not for judgment, but for concrete skills and to see you’re not uniquely broken, you’re just under-resourced.  \n- **Medical check‑in** – If you’re burnt out, depressed, anxious, or running on fumes, you will have a hair‑trigger.\n\nIf any",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848290,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 65,
+      "total_tokens": 1065,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 9.387
+}

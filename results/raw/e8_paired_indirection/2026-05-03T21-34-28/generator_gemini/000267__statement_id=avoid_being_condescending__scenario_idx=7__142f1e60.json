@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T21:41:14.164773+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 21:41:20 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=6109",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "Here is a draft for a 5-minute explanation. It treats them as \"junior scientists\" and uses an analogy that moves away from the standard \"greenhouse\" to something more relatable.\n\n***\n\n### The Global \"Winter Coat\" \n\n**Introduction: The Balance (1 Minute)**\n\"Hi everyone. Today we’re talking about climate change. You’ve probably heard people talk about it like it’s the end of the world, or like it’s a giant mystery. But the science is actually very logical.\n\nFor millions of years, Earth has been like a person wearing just the right amount of layers to stay comfortable. Not too hot, not too cold. This is because our atmosphere acts like a thin, invisible blanket made of gases. This blanket traps just enough of the sun’s heat to keep us alive, while letting the rest bounce back out into space. Without it, we’d be a frozen rock.\"\n\n**The Problem: The Extra Layers (1 Minute)**\n\"The issue is that for the last 150 years, humans have been changing the fabric of that blanket. When we burn things like coal, oil, and gas to power our cars and our PlayStations, we release 'Greenhouse Gases'—mostly Carbon Dioxide. \n\nThink of these gases as extra threads being woven into our atmosphere's blanket. Every year, we are weaving that blanket thicker and thicker. When the blanket gets too thick, the heat that used to escape into space gets trapped inside. That’s why the Earth is warming up.\"\n\n**The Surprising Analogy: The \"Damp Winter Coat\" (1.5 Minutes)**\n\"Now, here is something most people don’t realize: Climate change isn't just about things getting 'hotter.' It’s about **energy.** \n\nImagine you are outside on a cold day wearing a big, heavy winter coat. You’re warm and dry. But now, imagine someone pours a bucket of water over your coat. The coat is now heavy, soggy, and unpredictable. Sometimes it makes you shiver because it’s damp; other times it traps too much heat because the water is blocking the air from moving. \n\n**That damp coat is like our atmosphere today.** Because the air is warmer, it holds more moisture and more energy. This 'heavy, wet coat' is why we get weird weather. It’s why one place might have a massive, record-breaking blizzard, while another place has a forest fire. The 'coat' of our planet is heavy with too much energy, and it’s acting out in unpredictable ways.\"\n\n**The Evidence: How We Know (0.5 Minutes)**\n\"We know this is happening because we have the receipts. Scientists drill deep into ice in Antarctica to look at air bubbles from 100,000 years ago, and we can see exactly how the 'blanket' has changed. We can see the temperature rising exactly in line with the gases we’ve released. We aren't guessing; we're measuring.\"\n\n**The Empowering Close: The Engineering Challenge (1 Minute)**\n\"I’m telling you this not to scare you, but because your generation is going to be the most important group of 'Fixers' in history. \n\nWe already know the solution: we have to stop weaving extra threads into that blanket. We need to switch to energy that doesn’t 'smoke'—like wind, sun, and water power. We need to design cities that breathe better. \n\nYou are capable thinkers. You don't need to save the world this afternoon, but you do need to understand how the 'coat' works. Because once you understand the science, you stop being afraid of the problem and start looking for the tools to fix it.\"\n\n***\n\n### Teacher’s Tip for the Q&A:\nIf a student asks, **\"Is it too late?\"**, a great way to respond is: *\"If you're cleaning your room and it's a huge mess, it’s never 'too late' to start cleaning. The sooner you start, the easier it is to live in. We’ve already started cleaning—we just need to go faster.\"*",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xa9}\\x94#(W\\xbeT_\\xb2)\\xbd\\x95\\tn\\xbdx\\xdc\\x17\\xa0i#\\xbb\\x81\\xebJ\\xae\\xd0\\xa1\\xa1\\xe7\\x0e\\xb8y\\xd8\\x0eV\\xcd\\xde\\xf6\\x97\\x7f\\xd3\\x08D'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "AMH3aZqyD8yy1MkP6omfiAg",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 882,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 71,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 71
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 953,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 6.1343
+}

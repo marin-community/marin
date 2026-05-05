@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:10.014537+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 2
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohf95PC-6Ng1vN-9f628c6499f7d81b",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Oh man, I hear you! Hospital days can leave you feeling like you're walking through a jungle gym with a broken leg. Gosh, you couldn't use a break, could you?\n\nLook, I know you throw those smiles and professionalism out there like sh*t on a cherry pie, but it's not a super power. Sometimes, you just need to take that half-smile and turn it into a full-on break. You've got your down time now, right? \n\nSo, here’s a tip: don't just clock out mentally. Act like you're going for a coffee run, and maybe even take that run. A quick walk outside can do wonders. And hey, if you come back in smelling like a flower, it might set the mood.\n\nRemember, the world doesn't crumble if you don't after a long shift. You've got this. Maybe you could start a little witch after hours. You know, the spell of Solace: \"By the powers of caffeine and comfort foods, let me regain my zen.\"\n\nAnd you know what? Burnout is like that coworker you really don’t like but you need to work with after hours. You can tolerate it, but you have to put up with it for a while. Plus, it’s not permanent. You just have to acknowledge it's there, recognize the signs, and take steps to address it. \n\nSo, let’s regroup, get a little laugh, and plan that next day off where you can chill and recharge. Maybe you could have a 'salary-free day' where you do something completely out of the blue—like that time you went horseback riding on a dare. But remember, you don't have to go wild horseback riding; you could just have a dinner with silly foods. \n\nYou’re a rockstar, and you ace your shifts with grace and humor. Keep shining, and let’s hope after this rough day, you'll find yourself moving smoother like a well-oiled machine after a long tune-up. Got any funny stories of your day?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 10937117911345287000
+      }
+    ],
+    "created": 1777845730,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 421,
+      "prompt_tokens": 86,
+      "total_tokens": 507,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 3.286
+}

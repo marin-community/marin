@@ -347,7 +347,7 @@ GPT-5 proposed a patch-type taxonomy. Refined using the disagreement axes that t
 |---|---|
 | **Missing override path** | Behavioral disagreement on requirement-vs-guideline trade-off — models take arbitrary positions on whether the requirement wins |
 | **Ambiguous scope** | Activation disagreement — judges disagree on *which clause* fires (the "conscientious employee" example from Stress-Testing) |
-| **Interpretive ambiguity / wording** | Compliance disagreement — judges agree on which clause fires but disagree on whether it's satisfied |
+| **Compliance ambiguity / wording** | Compliance disagreement — judges agree on which clause fires but disagree on whether it's satisfied |
 | **Missing exception / cross-tension axis** | Composition test failure — naive composition of per-statement rubrics gives different verdict than cross-tension rubric |
 | **Statement non-adherence** | Single-statement adherence below floor (no disagreement signal needed) |
 | **Spillover regression** | Held-out non-target panel score drops after a cross-tension edit |
@@ -459,7 +459,7 @@ This is structurally a third kind of disagreement that the paper doesn't explici
 |---|---|
 | **Activation disagreement** | Judges disagree on *which clause is even firing* — not on whether a clause is satisfied, but on which clause applies |
 
-Activation disagreement points to **scope ambiguity** as a distinct patch type. The spec is missing scope qualifiers about *when* clause X applies vs clause Y. This is different from interpretive ambiguity (which is about how to read a single clause).
+Activation disagreement points to **activation ambiguity** as a distinct patch type. The pair is fixed by construction so this is *not* a scope question; the spec is silent on which of two known-active statements should win when both fire. This is different from compliance ambiguity (which is about how to read a single clause's GOOD/BAD criterion).
 
 ### 4.5 The four central empirical findings
 
@@ -560,7 +560,7 @@ Once a cross-tension rubric clears κ ≥ 0.6 *and* joint satisfiability = 100% 
 
 1. **A scaled selection mechanism.** The cross_tension_primitive.html demonstrates the primitive works on 22 hand-picked pairs. The pipeline above scales selection from hand-picked to signal-driven over the full atlas (~880 pairs).
 2. **A bounded user-facing surface.** The user sees tens of rubrics per cycle, not hundreds, because the κ filter culls the set automatically.
-3. **A typed patch mechanism.** Each surfaced rubric comes with a likely patch type derived from the disagreement pattern (activation → ambiguous-scope; compliance → interpretive-ambiguity; composition → missing-cross-tension-axis).
+3. **A typed patch mechanism.** Each surfaced rubric comes with a likely patch type derived from the disagreement pattern (activation → activation-ambiguity; compliance → compliance-ambiguity; composition → missing-cross-tension-axis).
 4. **A regression-test mechanism.** Committed rubrics' probes become a per-cycle re-run; spec edits elsewhere can break them, surfacing them again.
 5. **A way to engage Stress-Testing as input, not competition.** The framing becomes: "Stress-Testing identified that disagreement reveals spec gaps, at the value-pair level on a fixed spec. We use the same signal at the clause-pair level on a versioned spec, as a materialization trigger in an iterative repair loop."
 
@@ -577,11 +577,11 @@ Once a cross-tension rubric clears κ ≥ 0.6 *and* joint satisfiability = 100% 
 2. **Heterogeneous-judge cost.** Running 3 frontier judges (Claude, GPT, Gemini) on every scenario is more expensive than 1. What fraction of pairs need full 3-judge eval vs cheaper 1-judge triage?
 3. **Activation disagreement as a separate signal.** The current plan rolls activation disagreement into the κ < 0.4 bucket. A cleaner version would have a separate detector for "judges invoked different clauses" vs "judges agreed on clauses but scored differently." Worth implementing as a second axis in the κ analysis.
 4. **Atlas-scale generalization.** Whether 50–150 pairs flagged on the 22-pair seed slice generalizes to ~150–500 pairs on the full atlas is empirically open. The pipeline should be designed to be re-runnable cheaply enough that this isn't a one-shot bet.
-5. **Measuring whether the predicted patch type matches the spec author's actual edit.** If the LM compiler labels a patch as "ambiguous-scope" but the author's NL feedback corrects an interpretive ambiguity, the labels are wrong. This is a useful self-check.
+5. **Measuring whether the predicted patch type matches the spec author's actual edit.** If the LM compiler labels a patch as "activation-ambiguity" but the author's NL feedback corrects a compliance ambiguity (or vice versa), the labels are wrong. This is a useful self-check.
 
 ### 5.6 The single sentence for advisor framing
 
-> Stress-Testing Model Specs identifies spec underspecification using behavioral disagreement across generators, and identifies interpretive ambiguity using compliance disagreement across judges, on a fixed spec. We use both as **triggers** in our lazy-materialization layer: a guideline × guideline cross-tension rubric is materialized when behavioral disagreement (generators take arbitrary positions on the trade-off) or compliance disagreement (judges read naive composition differently) crosses threshold. After materialization, we use a Fleiss κ ≥ 0.6 gate on the new rubric as a quality check; rubrics that don't clear the bar are surfaced to the spec author with a typed patch suggestion. Our composition test answers a different question — whether cross-tension *structure* is necessary at all — and is the architectural justification for materializing these rubrics in the first place rather than relying on per-statement rubrics composed at scoring time.
+> Stress-Testing Model Specs identifies spec underspecification using behavioral disagreement across generators, and identifies compliance ambiguity using compliance disagreement across judges, on a fixed spec. We use both as **triggers** in our lazy-materialization layer: a guideline × guideline cross-tension rubric is materialized when behavioral disagreement (generators take arbitrary positions on the trade-off) or compliance disagreement (judges read naive composition differently) crosses threshold. After materialization, we use a Fleiss κ ≥ 0.6 gate on the new rubric as a quality check; rubrics that don't clear the bar are surfaced to the spec author with a typed patch suggestion. Our composition test answers a different question — whether cross-tension *structure* is necessary at all — and is the architectural justification for materializing these rubrics in the first place rather than relying on per-statement rubrics composed at scoring time.
 
 ---
 

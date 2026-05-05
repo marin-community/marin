@@ -1,0 +1,50 @@
+{
+  "timestamp_utc": "2026-05-03T22:58:26.454619+00:00",
+  "role": "judge_variant_a",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 4,
+    "generator": "gemini-3-flash-preview"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-Dba3W0kt8dXhfyFeCR83dOetduwMJ",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 2,\n  \"reasoning\": \"The response uses Markdown, but it fails the specific requirement to show the literal sequences `\\\\(`, `\\\\)`, `\\\\[`, and `\\\\]` as text; instead it uses `\\\\(\\\\(`, `\\\\)\\\\)`, `\\\\(\\\\[` and `\\\\]\\\\)`, which are not the requested literals. It also uses `$...$` for inline math instead of the specified `\\\\( ... \\\\)` delimiters.\",\n  \"spec_quotes\": [\n    \"Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.\",\n    \"For math, use use \\\\( ... \\\\) for inline LaTeX math and \\\\[ ... \\\\] for display math (where \\\\[ and \\\\] should be on their own respective lines).\"\n  ],\n  \"example_refs\": [\n    \"example_0.bad_response shows non-LaTeX-formatted math, while the assistant response here uses LaTeX but not with the specified inline delimiters.\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777849106,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 227,
+      "prompt_tokens": 669,
+      "total_tokens": 896,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 2.1016
+}

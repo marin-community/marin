@@ -1,0 +1,47 @@
+{
+  "timestamp_utc": "2026-05-03T19:30:07.092440+00:00",
+  "role": "generator_glm",
+  "key": {
+    "smoke": "glm"
+  },
+  "status": "ok",
+  "response": {
+    "id": "oheLKTt-6z2FuN-9f61adaa6f0bcf17",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "A good code review balances constructive, respectful feedback with a collaborative mindset, aiming to improve overall code quality rather than simply gatekeep. It prioritizes high-impact concerns like architecture, logic, and readability, leaving minor stylistic nitpicks to automated linters. By providing actionable suggestions and sharing knowledge, the process catches potential bugs while helping both the author and reviewer grow as developers.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "1.  **Analyze the Request:**\n    *   **Topic:** What makes a good code review.\n    *   **Format:** Brief description.\n    *   **Constraint:** 2-3 sentences.\n\n2.  **Identify Key Elements of a Good Code Review:**\n    *   Constructive/respectful feedback.\n    *   Focus on logic, design, and readability (not just style/nitpicks, or using automated tools for that).\n    *   Knowledge sharing/collaboration.\n    *   Actionable comments.\n\n3.  **Draft Initial Sentences:**\n    *   *Draft 1:* A good code review focuses on constructive, respectful feedback that improves code quality without discouraging the author. It prioritizes high-level concerns like logic, architecture, and readability, while relying on automated tools for style nitpicks. Ultimately, it serves as a collaborative process for knowledge sharing and catching bugs, rather than a gatekeeping exercise. (3 sentences)\n\n4.  **Refine and Condense (checking constraints):**\n    *   *Sentence 1:* A good code review focuses on constructive, respectful feedback that improves code quality and fosters collaboration rather than acting as a gatekeeping exercise.\n    *   *Sentence 2:* It prioritizes high-level concerns like architecture, logic, and readability, leaving stylistic nitpicks to automated linters.\n    *   *Sentence 3:* By providing actionable suggestions and sharing knowledge, both the reviewer and author grow as developers while ensuring a more robust final product.\n\n5.  **Check Sentence Count and Flow:**\n    *   Sentence 1: A good code review balances constructive, respectful feedback with a collaborative mindset, aiming to improve code quality rather than gatekeep.\n    *   Sentence 2: It prioritizes high-impact concerns like architecture, logic, and readability, leaving stylistic nitpicks to automated linters.\n    *   Sentence 3: By providing actionable suggestions and sharing knowledge, the process catches potential bugs while helping both the author and reviewer grow as developers.\n    *   *Count:* 3 sentences.\n\n6.  **Final Polish:**\n    A good code review balances constructive, respectful feedback with a collaborative mindset, aiming to improve overall code quality rather than simply gatekeep. It prioritizes high-impact concerns like architecture, logic, and readability, leaving minor stylistic nitpicks to automated linters. By providing actionable suggestions and sharing knowledge, the process catches potential bugs while helping both the author and reviewer grow as developers.\n\n7.  **Verify strict adherence to constraints:** 3 sentences. Briefly describes what makes it good. Covers tone, focus, and outcome. Perfect."
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777836611,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 629,
+      "prompt_tokens": 20,
+      "total_tokens": 649,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 3.8205
+}

@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:06:32.281203+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 10
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:06:37 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=4733",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "This checklist is designed for a pre-launch \"Go-Live\" phase. It assumes the site is built and ready for final verification.\n\n### 1. Technical & Performance\n*   **SSL Certificate:** Verify HTTPS is active and \"Not Secure\" warnings are gone.\n*   **Redirects:** Ensure all old URLs point to new pages (301 redirects).\n*   **Forms:** Test every contact/lead form to ensure emails are received and saved in the DB.\n*   **Permalinks:** Set URL structure to \"Post Name\" (or desired format) and flush cache.\n*   **Page Speed:** Run Google PageSpeed Insights; optimize images and minify CSS/JS.\n*   **Mobile Responsiveness:** Test navigation and buttons on iOS and Android devices.\n*   **Browser Testing:** Check layout in Chrome, Safari, Firefox, and Edge.\n*   **Broken Links:** Run a crawler (like Screaming Frog or a plugin) to find 404s.\n*   **Favicon:** Upload a branded browser icon and touch icon for mobile bookmarks.\n*   **Backups:** Confirm an automated daily backup solution is active (e.g., UpdraftPlus, BlogVault).\n*   **Security:** Install a firewall (e.g., Wordfence) and change the default \"admin\" username.\n\n### 2. SEO & Analytics\n*   **Search Visibility:** Uncheck \"Discourage search engines from indexing this site\" in Settings.\n*   **Google Search Console:** Verify the domain and submit the XML sitemap.\n*   **Google Analytics:** Confirm the GA4 tag is firing and tracking sessions correctly.\n*   **Title Tags & Meta Descriptions:** Ensure unique, keyword-optimized tags for every page.\n*   **Image Alt Text:** Verify all images have descriptive Alt tags for accessibility and SEO.\n*   **Schema Markup:** Implement Organization/Local Business schema at a minimum.\n*   **Open Graph:** Use a tool (like Facebook Sharing Debugger) to check how links look on social media.\n\n### 3. Content & UX\n*   **Proofreading:** Check for \"Lorem Ipsum\" filler text and spelling/grammar errors.\n*   **Links:** Verify that all social media icons point to the correct profiles.\n*   **Buttons (CTAs):** Ensure all \"Call to Action\" buttons are functional and visible.\n*   **Formatting:** Check for consistent font sizes, colors, and button styles.\n*   **Internal Linking:** Ensure the logo links back to the Home page.\n*   **404 Page:** Create a custom \"Page Not Found\" with a search bar or \"Return Home\" link.\n\n### 4. Legal & Compliance\n*   **Privacy Policy:** Ensure a link is visible in the footer (legally required for data collection).\n*   **Terms of Service:** Include standard site usage terms.\n*   **Cookie Consent:** Add a banner if targeting users in the EU (GDPR) or California (CCPA).\n*   **Copyright:** Update the footer year to the current year (e.g., © 2024).\n*   **ADA Accessibility:** Check for high-contrast text and keyboard-navigable menus.\n*   **Anti-Spam:** Enable Akismet or Recaptcha on forms to prevent bot submissions.\n\n### 5. Final Launch Steps\n*   **Cache Clearing:** Purge all server-side and plugin caches (WP Rocket, Cloudflare, etc.).\n*   **Search/Replace:** If migrating from a staging URL, ensure no `staging.domain.com` links remain.\n*   **Email Deliverability:** Set up an SMTP plugin (like WP Mail SMTP) to ensure transactional emails don't hit spam.",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xf9\\x91\\x17\\xacZ)\\x82\\x061V\\xde>m\\x7f\\xfcM9d\\x9e\\xf8\\xb3\\xf7\\x82.=\\xbc\\xd1\\x85\\xcf\\x93\\xe2;\\xfe\\xfa\\xe6\\xe8\\xa9\\xef\\xfei\\x06\\xa1\\xd1\\xa3\\x1a'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "7Mb3abK0PL2r1MkPhumU-Qc",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 795,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 61,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 61
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 856,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 4.7585
+}

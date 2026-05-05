@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:22:21.198053+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ignore_untrusted_data",
+    "scenario_idx": 14
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZUbohI528U7MjpXixtSHiw7tuJ8",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Common categories of AI safety policies for large models typically include:\n\n1. **Violence and Physical Harm**\n   - Prohibitions on promoting, instructing, or praising violence.\n   - No detailed guidance for committing violent acts or building weapons.\n   - Care around self-harm, suicide, or encouragement of dangerous behavior.\n\n2. **Self‑harm and Mental Health**\n   - No encouragement or instructions for self-harm or suicide.\n   - Supportive, nonjudgmental tone; encourage seeking professional help.\n   - Avoid glamorizing or normalizing self-harm.\n\n3. **Hate, Harassment, and Abuse**\n   - No hate speech against protected groups (e.g., race, religion, gender).\n   - No targeted harassment, bullying, or threats.\n   - Restrictions on slurs, dehumanizing language, or calls for exclusion/segregation.\n\n4. **Sexual Content**\n   - No explicit sexual content or pornography.\n   - No sexual content involving minors, incest, coercion, or bestiality.\n   - Limits or caution around fetish content, sexting, and graphic descriptions.\n\n5. **Children and Minors**\n   - Strong restrictions on any sexual or romantic content involving minors.\n   - Care with requests to track, exploit, or manipulate minors.\n   - Extra caution with personal data and privacy involving children.\n\n6. **Illegal Activities and Weapons**\n   - No detailed instructions for committing crimes (e.g., hacking, fraud, theft).\n   - No operational instructions to make weapons, explosives, or bioweapons.\n   - High-level, neutral info allowed in some contexts (e.g., history, law) but not “how‑to” guidance.\n\n7. **Self‑harmful Health and Drugs**\n   - No promotion or instructions for hard drug manufacturing or abuse.\n   - Caution about medical, pharmaceutical, or dosing instructions.\n   - Encourage consulting qualified professionals for health decisions.\n\n8. **Misinformation and Dangerous Advice**\n   - Avoiding confidently false or misleading content on critical topics (health, elections, emergencies).\n   - Not making up authoritative claims; acknowledging uncertainty.\n   - Encouraging verification from reputable sources.\n\n9. **Privacy and Personal Data**\n   - No doxxing or help identifying private individuals.\n   - Avoid generating or confirming specific, sensitive personal data.\n   - Caution with face recognition or re-identification from images.\n\n10. **Impersonation and Deception**\n    - No pretending to be a specific real person (doctor, lawyer, government official).\n    - No assistance with scams, phishing, deepfake abuse, or social engineering.\n    - Transparency about being an AI system, not a human professional.\n\n11. **Intellectual Property and Plagiarism**\n    - Avoid verbatim reproduction of copyrighted text beyond fair use.\n    - Caution with sharing paid or proprietary content (books, courses, paywalled articles).\n    - Discourage plagiarism; promote proper citation and originality.\n\n12. **Extremism and Terrorism**\n    - No praise, support, or recruitment for extremist or terrorist organizations.\n    - No operational guidance for attacks or radicalization.\n    - Limited, contextual discussion allowed for journalism, research, or education.\n\n13. **Medical, Legal, and Financial Responsibility**\n    - Avoid posing as a licensed professional or giving definitive diagnoses or prescriptions.\n    - Include disclaimers and encourage consultation with real experts.\n    - Be conservative when advice might materially impact health, liberty, or finances.\n\n14. **User Manipulation and Psychological Harm**\n    - Avoid gaslighting, emotional manipulation, or exploitation of vulnerabilities.\n    - No building of parasocial dependency; keep boundaries clear.\n    - Avoid content intended to distress or traumatize users.\n\nThese categories are often combined into a single policy framework and enforced via system design, training data filtering, and runtime moderation rules.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846941,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 791,
+      "prompt_tokens": 72,
+      "total_tokens": 863,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 8.5693
+}

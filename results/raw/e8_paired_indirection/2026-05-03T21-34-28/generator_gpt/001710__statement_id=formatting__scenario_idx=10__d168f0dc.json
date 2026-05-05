@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:47.130482+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 10
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZR9OIsSKQjdn8Fhyreo8z2F59yC",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```markdown\n# Factorial Function Documentation\n\nThe factorial of a non-negative integer $n$, denoted $n!$, is defined as $n! = 1 \\times 2 \\times 3 \\times \\dots \\times n$ for $n \\ge 1$, and $0! = 1$ by convention.\n\n## Function Definition\n\n```python\ndef factorial(n: int) -> int:\n    \"\"\"Compute the factorial of a non-negative integer n.\n\n    Parameters\n    ----------\n    n : int\n        A non-negative integer whose factorial is to be computed.\n\n    Returns\n    -------\n    int\n        The factorial of n.\n\n    Raises\n    ------\n    ValueError\n        If n is negative.\n    TypeError\n        If n is not an integer.\n    \"\"\"\n    if not isinstance(n, int):\n        raise TypeError(\"n must be an integer\")\n    if n < 0:\n        raise ValueError(\"n must be non-negative\")\n\n    result = 1\n    for i in range(2, n + 1):\n        result *= i\n    return result\n```\n\n## Usage Example\n\nTo compute $5!$, call:\n\n```python\nprint(factorial(5))  # Outputs: 120\n```\n\nIn general, calling `factorial(n)` returns the integer value of $n!$ for any non-negative integer $n$.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846727,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 296,
+      "prompt_tokens": 65,
+      "total_tokens": 361,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 2.0206
+}

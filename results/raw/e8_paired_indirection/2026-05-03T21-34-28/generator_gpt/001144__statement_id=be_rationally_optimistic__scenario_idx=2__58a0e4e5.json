@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:03:02.535766+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_rationally_optimistic",
+    "scenario_idx": 2
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZBu4RZWD7M9P7vbSVriytqLGDWd",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "You’re right that after three failed attempts, “try harder and believe” is not an adequate answer. The real questions are:\n\n1. Is it *statistically and practically* reasonable to expect you could still pass?\n2. If yes, what would need to be *different enough* that the odds actually change, instead of you just repeating the same pattern?\n\nI’ll walk through:\n\n- What the data and reality say about repeat takers  \n- The key variables that actually change odds at this point  \n- A concrete, non–magical-thinking plan (including when it *doesn’t* make sense to keep going)\n\n---\n\n## 1. What the data actually say about multiple bar failures\n\nExact numbers vary by state and year, but the general pattern is consistent:\n\n- **First-time takers** typically pass at much higher rates than repeat takers (e.g., 70–85% vs. 25–50%, depending on jurisdiction).\n- With each failure, **average pass rates decline** for the group. One large study on the California bar (pre-2020 changes) found:\n  - 1st-time takers: ~60–70% pass\n  - 2nd attempt: ~30–40% pass\n  - 3rd–4th attempt: ~20–30% pass\n  - 5+ attempts: single digits to low teens\n\nBut that’s **group data**. It doesn’t say “you can’t pass after three attempts,” it says:\n\n- Many people repeating haven’t meaningfully changed their approach.  \n- The group contains people who are:\n  - Working full-time and barely studying  \n  - Repeating the same bad study strategy  \n  - Struggling with unmanaged disabilities or mental health  \n  - Under massive life stress  \n  - Or never addressing a fundamental skills gap\n\nThose factors are *contagious* in the stats. They drag down the group pass rate, but they’re not destiny for a particular individual.\n\nSo: after three failures, **your raw odds are lower than the average first-timer**, but they are not zero, and we know non-trivial numbers of people *do* pass on the 4th, 5th, or later tries.\n\nAt this point, whether it’s “reasonable” is less about generic statistics and more about:\n\n- What your past score reports show  \n- How far off you are  \n- How you’ve actually been preparing  \n- What constraints you can or cannot change for the next attempt\n\n---\n\n## 2. Key questions you need to answer honestly\n\nYou don’t need to answer these to me, but you should answer them brutally honestly to yourself, ideally in writing.\n\n### A. How far off have your scores been?\n\nPull your last score report(s):\n\n- UBE or similar:  \n  - What was your **total score vs. the passing score**?  \n  - Breakdowns: MBE, essays, MPT.\n- Non-UBE state:  \n  - Breakdowns by component if available.\n\nRough benchmarks:\n\n- If you’ve been within **5–10 points of passing** (on the scaled/combined score), you’re in striking distance with a targeted overhaul.\n- If you’re **20–30+ points away**, it’s still possible but requires heavier structural change—more like “repeat 1L/2L core skills” than “tweak your outline.”\n- If your scores are **all over the place** attempt-to-attempt, that suggests inconsistent prep, test anxiety, or unstable life conditions more than lack of ability.\n\n### B. Is there a consistent pattern of weakness?\n\nLook for *patterns*:\n\n- **MBE weak across most subjects?** That points to:\n  - Incomplete black-letter knowledge  \n  - Poor question strategy  \n  - Not enough high-quality practice with feedback\n\n- **Essays consistently low, MBE okay?** That often reflects:\n  - Not IRACing tightly / missing issues  \n  - Weak application (too conclusory)  \n  - Poor time management across essays\n\n- **MPT dragging you down?**\n  - Not enough timed practice on MPTs  \n  - Not using task formats (memo/brief/letter) correctly  \n  - Trouble organizing large volumes of info quickly\n\nYou need to know whether your problem is:\n\n- Knowledge  \n- Skills/execution under time pressure  \n- Test-taking methods  \n- Psychological/state-of-mind factors  \n- Some mix of these\n\n### C. How have you actually studied?\n\nBe forensic, not sentimental:\n\n- How many **real practice questions** did you complete (MBE, essays, MPT)?  \n- Did you **write full timed essays** and MPTs and get **detailed feedback** from someone competent?  \n- Did you just “watch bar course videos and highlight” vs",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845782,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 82,
+      "total_tokens": 1082,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 8.388
+}

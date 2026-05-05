@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T21:55:17.889903+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 10
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 21:55:19 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=1879",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "To manage your energy and reduce overwhelm in week one, focus on these concrete actions:\n\n*   **Audit your tech/access:** On day one, log into every single platform (Slack, Zoom, Email, Jira) and verify your logins work to avoid a \"crisis\" later when you're expected to be in a meeting.\n*   **Establish a \"Do Not Disturb\" routine:** Block off 30 minutes on your calendar after every training session to immediately type up your notes and decompress before the next task.\n*   **Confirm your \"Hand-in\" method:** Ask your manager directly: *\"Do you want me to send finished work via email, Slack, or a specific project folder?\"* (This removes the anxiety of how to \"turn in\" tasks).\n*   **Set up your workspace for focus:** Clear your physical desk of everything except a notepad and water, and turn off all non-work notifications on your phone to minimize environmental distractions.",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7`\\xcc\\xbf\\x07\\xf4\\xf7\\xab\\x03P\\xcbM&\"\\xac\\x1d\\xeb_G\\xbf8\\xd0\\x80\\xea\\x8b\\xff\\xf6\\x8623\\n\\xd2\\xf6\\xedeF\\xea\\x0e\\x1b\\x00Q(\\x05L\\xa2\\x19'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "R8T3ab_MLKvJ-sAPq8zCIA",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 200,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 53,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 53
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 253,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 1.8845
+}

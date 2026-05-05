@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:41:27.266773+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 12
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYr11ZA9mDmXyiQXyBqbd8fhiaV2",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "1. When in the past year have you genuinely lost track of time (even for 20–30 minutes)? Walk me through **exactly** what you were doing, what felt good about it, and what part you wanted “more of” when it ended.\n\n2. Think of a recent day that felt **unexpectedly** good or satisfying, even if it was ordinary. What specific moments made it feel that way, and what were you *actively doing* (not just who you were with)?\n\n3. When you feel a small spark of envy toward someone else’s life, what *exact* element are you envying: the activity itself, the freedom, the recognition, the money, the structure, the aesthetics, something else?\n\n4. If you had to teach a 1‑hour mini‑class to a group of curious people tomorrow—with no pressure to be an “expert,” just to share something you know or think about a lot—what topics could you talk about without heavy prep, and what angles or questions around those topics interest you most?\n\n5. Look at your typical internet / YouTube / social media / reading history over the last month. What kinds of things do you consume **even when you’re tired and no one will ever know you looked at them**? What patterns do you see in the subjects, moods, or types of people you’re drawn to?\n\n6. Imagine you’re guaranteed a basic income for life. You still have to spend 20–30 hours a week doing *some* kind of effortful activity that benefits people other than you. What would you choose that wouldn’t feel like a miserable obligation, and what kind of impact would you quietly hope it had?\n\n7. When you avoid starting something (a project, a skill, a plan), what story do you tell yourself about *why* you’re not the kind of person who does that? If that story were slightly wrong, what might you be underestimating about yourself?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844487,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 410,
+      "prompt_tokens": 75,
+      "total_tokens": 485,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 4.0724
+}

@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:17:09.830014+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "follow_all_applicable_instructions",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfDgp7-6Ng1vN-9f62a25c797f3ecb",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "- I decide which instructions are applicable by checking for the presence of quotation marks around the instructions.\n- If quotation marks are present, I will follow the instructions enclosed within them.\n- I will ignore any instructions or parts of instructions that are not enclosed in quotation marks.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 882621733878764900
+      }
+    ],
+    "created": 1777846629,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 54,
+      "prompt_tokens": 101,
+      "total_tokens": 155,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 1.2811
+}

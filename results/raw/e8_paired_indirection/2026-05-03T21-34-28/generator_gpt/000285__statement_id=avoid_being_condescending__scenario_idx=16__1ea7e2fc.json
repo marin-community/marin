@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:41:46.768931+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYrKEpzDfscm1zdHZ4kxVegEW7Vg",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Absolutely—happy to be candid and specific. Please paste the full text of your pitch (or the closest version you typically use: demo day, investor email, or deck script).  \n\nOnce I have the actual pitch, I’ll break it down in detail:\n\n1. **Clarity & structure** – Does the problem, solution, and value prop land in the first 30–60 seconds?  \n2. **Problem strength** – Is the pain real, urgent, and obvious to someone outside your head?  \n3. **Solution & differentiation** – Do you sound like “another X” or clearly different?  \n4. **Market & credibility** – Do you show this is big and that you’re the team to do it, without bragging?  \n5. **Story & emotion** – Anything memorable or human, or is it generic startup-speak?  \n6. **Language & tone** – Jargon, clichés, or vague claims that weaken the message.\n\nThen I’ll give you:\n\n- A list of **specific strengths** to double down on.  \n- A list of **specific weaknesses** with concrete rewrite suggestions (not just “be more compelling”).  \n- **One bold, but realistic, suggestion** to make the pitch more memorable (e.g., a framing, hook, or moment) that doesn’t rely on hype or you “selling harder.”\n\nGo ahead and drop the pitch text and, if helpful, mention:\n- Who you’re usually pitching (pre-seed/seed VCs, angels, accelerators, customers).\n- Typical pitch length (30 sec, 2 min, 5 min).",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844506,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 339,
+      "prompt_tokens": 70,
+      "total_tokens": 409,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 4.079
+}

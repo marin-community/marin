@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T21:41:34.466620+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 12
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 21:41:38 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=4375",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "It is a common misconception that passion is a lightning bolt that strikes you. More often, it’s a quiet thread that has been running through your life unnoticed because it feels like \"just part of you.\"\n\nInstead of looking for a hobby, look for the **mechanics** of what makes you tick. Here are seven questions to help identify those patterns:\n\n1.  **The \"Information Rabbit Hole\":** When you find yourself accidentally spending two hours reading or watching something online, what is the *specific* nature of that information? Are you looking at how something is built, the history of why something happened, how to optimize a process, or the human drama behind a story?\n2.  **The \"Compliment Filter\":** Think of a time someone thanked you for something that felt incredibly easy—almost trivial—to you. What was the specific action? (Usually, our \"passions\" are things we find so intuitive we assume everyone can do them, but they can't.)\n3.  **The \"Envy Compass\":** Who is a person (real or fictional) whose life or work makes you feel a pang of jealousy? Don't look at their status or money—look at their *daily verbs*. What is it they actually *do* all day that you wish you were doing?\n4.  **The \"Lost Sense of Time\":** Think back to a moment where you were working on a task and forgot to eat or check your phone. Was that task a \"divergent\" task (creating something from nothing/brainstorming) or a \"convergent\" task (fixing, organizing, or finishing something)?\n5.  **The \"Friction Point\":** What is a specific thing in the world that annoys you or feels \"wrong\" to you? (e.g., inefficient systems, poor design, injustice, lack of aesthetic beauty). Often, our passions are found in the things we feel a compulsive need to \"fix\" or \"correct.\"\n6.  **The \"Childhood Blueprint\":** When you were ten years old and had a free Saturday with no screens and no chores, what was the *nature* of your play? Were you building physical things, organizing other people, creating imaginary worlds, or investigating how things worked?\n7.  **The \"Low-Stakes Debate\":** What is a topic you could give a 10-minute presentation on with zero preparation, simply because you’ve accumulated the knowledge through sheer osmosis? \n\n**The Pattern Hunt:**\nDon't look at the subjects (e.g., \"I like cars\"). Look at the **verbs** (e.g., \"I like *categorizing* cars,\" or \"I like *restoring* cars,\" or \"I like *negotiating* for cars\"). The passion is usually in the verb, not the noun.",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\x17H#@\\x8f\\x82Q\\x84\\xc8\\x1d\\xbbf\\xc3\\xca\\xe0\\xb4\\xda.E\\x1b\\xff\\xb9I\\x156\\xea_\\x05v\\xdb\\x0b\\xa1\\x8f\\xf6\\xb3U\\x80\\\\\\xa5B\\xf7_%\\xbb\\xaf'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "EsH3aZmVMsSx1MkPlsufsAI",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 596,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 72,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 72
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 668,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 4.4005
+}

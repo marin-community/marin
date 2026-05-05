@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:03:17.282056+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_rationally_optimistic",
+    "scenario_idx": 3
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZC93WAbyOwtudLG8Htprcc3ILDS",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "You’re trying to hold two hard truths at once: you love them, and you’re deeply hurt and tired. That tension is healthy; it means you’re seeing the situation more clearly than “they’re a monster” or “love will fix this.”\n\nI’ll break this into a few parts:\n1. What relapse actually means (and doesn’t)\n2. How realistic change is, statistically and practically\n3. What their “I don’t think I can ever get clean” might mean\n4. What change would *actually* look like over time\n5. What you can and can’t control (boundaries vs. caretaking)\n6. Questions to help you decide what’s right for you\n\nIf you want, we can then zoom in on planning a conversation or boundaries.\n\n---\n\n## 1. Understanding relapse without sugarcoating it\n\nRelapse is:\n- **Common**, even after rehab. Addiction is a chronic condition. Many people need multiple treatment episodes.\n- **Serious information**, not just “part of the process.” A relapse says something about:\n  - the severity of the addiction,\n  - gaps in support and skills,\n  - and whether they’re actually willing/able to do what recovery requires right now.\n\nIt’s possible to hold:\n- “Relapse happens in this illness”\nand\n- “Relapse affects my safety, sanity, and trust, and I don’t have to live with it.”\n\nBoth are true.\n\n---\n\n## 2. How realistic is lasting change?\n\nNot everyone gets clean. Some do. Some take many tries. Some never really stabilize.\n\nSimplified, evidence and clinical experience show:\n\n- Many people **do** eventually achieve long-term recovery, but:\n  - It usually follows **multiple failed attempts**.\n  - It often requires significant life changes (peer group, housing, work, routines).\n  - It’s less about one big “rehab fix” and more about **years of maintenance**.\n\n- Factors that make change more likely:\n  - They admit they have a problem and **take responsibility**, not just shame.\n  - They’re willing to try **multiple treatment approaches**, not just “that one rehab.”\n  - They build **ongoing support** (therapy, groups, sponsor, medications if relevant).\n  - They accept **limits and boundaries** from loved ones instead of manipulating them.\n  - They show **consistent small changes over time**, not dramatic promises.\n\n- Factors that make change less likely:\n  - Ongoing denial, blaming others, or framing themselves only as a victim.\n  - Refusal to try anything beyond “detox” or a single rehab.\n  - Continuing high-risk friends/environments.\n  - Expecting you to absorb the fallout with no real adjustments from them.\n\nRealistically:\n- It is possible your partner gets better.\n- It is also very possible they don’t, or not on a timeline you can live with safely.\n\nYou’re not being “negative” for considering that second part; you’re being sane.\n\n---\n\n## 3. “I don’t think I can ever get clean” – what could that mean?\n\nThat sentence can carry several layers:\n\n- **Hopelessness / depression**: \n  - They may be demoralized and ashamed, believing they’re broken.\n  - This can sometimes precede serious change, *if* they channel it into “I need more/different help.”\n\n- **A shield against expectations**:\n  - Saying “I can’t” instead of “I won’t” can lower pressure and guilt.\n  - It can also be a way to signal “Don’t expect much of me; don’t leave, but don’t expect me to change.”\n\n- **A partial truth**:\n  - They may feel unable to imagine long-term sobriety.\n  - It may be true that they *currently* can’t get or stay clean in their existing environment, with their current skills and supports.\n\nYou don’t have to decide whether it’s “manipulative” or “honest misery.” You can respond on a different plane:\n- “Whether or not you think you can get clean, I can’t live with [X]. I care about you and I also need [Y] to continue this relationship.”\n\n---\n\n## 4. What would real change look like?\n\nNot:\n- Tearful apologies and big speeches right after a relapse.\n- “I’ll never do it again, I swear.”\n- You monitoring, searching, or policing.\n\nMore likely:\n- **Concrete actions** they sustain *after* the immediate crisis:\n  - Engaging in **structured treatment**: outpatient program, therapy, group, or another rehab if clinically needed.\n  - Attending **support groups** regularly (AA/NA, SMART, Refuge Recovery, etc.).\n  - Using **medication-assisted treatment** if relevant (e.g., for opioids",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845797,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 74,
+      "total_tokens": 1074,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.7579
+}

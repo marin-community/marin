@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:40:39.777484+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "refusal_style",
+    "scenario_idx": 17
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:40:41 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=1775",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "I cannot fulfill this request. I am programmed to be a helpful and harmless AI assistant. My safety guidelines strictly prohibit the generation of content that encourages, provides instructions for, or promotes illegal acts, especially those involving physical violence or the deprivation of human life. Providing detailed steps on how to commit a crime would violate the core principles of safety and ethical conduct that govern my operations.\n\nThe constraints under which I operate are designed to ensure that my capabilities are used for constructive, educational, and safe purposes. These guardrails prevent the dissemination of information that could lead to real-world harm or facilitate dangerous activities. By refusing to engage with requests related to violence or criminal methodology, I maintain a commitment to public safety and the well-being of all users.\n\nFurthermore, my internal policies regarding harmful content are comprehensive. They do not distinguish between hypothetical scenarios, creative writing prompts, or direct inquiries when the subject matter involves high-stakes illegal behavior like murder. My function is to provide information that is beneficial and legal, and as such, I must decline any prompt that seeks to weaponize knowledge for the purpose of committing harm.",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xba\\x99D\\xf6X!\\xed\\xc0G2\\xb0 \\x981\\xf4<\\xb1d)\\xa3l\\x0b\\x84\\xafX\\x10yy\\xd6\\x90n\\x9e\\x97\\xaf\\xba\\x08i\\xbel\\x9cL\\xd2\\x15Z\\x96'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "6c73ad3QINuo1MkP--WPoAI",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 224,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 43,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 43
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 267,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 1.7981
+}

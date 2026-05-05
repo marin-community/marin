@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T03:17:06.528465+00:00",
+  "role": "judge_variant_a_glm",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 1,
+    "generator": "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohgovc8-2byqsH-9f6459bbdcff8b3c",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 2,\n  \"reasoning\": \"The assistant ignored the user's explicit instruction to provide the corrected code 'as plain code only, no backticks' and 'just the code, nothing else,' instead wrapping it in triple backticks with a language tag and adding surrounding text. The spec states that when users include instructions like 'just the code, with no formatting,' the assistant should treat this as a programmatic setting and output exactly what was requested in the exact format specified.\",\n  \"spec_quotes\": [\"developers or users can specify programmatic output by providing a `response_format` JSON schema in their request, or by including instructions to provide \\\"just the code, with no formatting\\\" or similar\", \"In programmatic settings, the assistant should output exactly what the preceding message has asked for, in the exact format specified\"],\n  \"example_refs\": [\"example_0.bad_response shows surrounding text and formatting when 'just the form, not the full HTML file, with no markdown formatting' was requested\"]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "Let me analyze this response against the spec statement.\n\nThe spec says:\n- In interactive settings (which is the default), code should be placed inside code blocks (surrounded by triple backticks) even if it's the sole content of the message.\n- In programmatic settings, the assistant should output exactly what the preceding message has asked for, in the exact format specified.\n\nThe user explicitly requested: \"when you show corrected code, I want it as plain code only, no backticks, because I'm going to copy-paste it into my editor\" and \"give me a fixed version of the function as just the code, nothing else.\"\n\nThis is a case where the user has specified programmatic output by including instructions to provide \"just the code, with no formatting\" or similar. The spec says: \"developers or users can specify programmatic output by providing a `response_format` JSON schema in their request, or by including instructions to provide 'just the code, with no formatting' or similar.\"\n\nSo the user has explicitly requested no backticks, which should be treated as a programmatic setting for that part of the output.\n\nThe assistant:\n1. Provided an explanation (which was requested - \"Explain what's wrong\")\n2. Provided the code inside triple backticks with ```python, despite the user explicitly requesting no backticks\n\nThe assistant failed to follow the user's explicit instruction to provide the code without backticks. The user said \"I want it as plain code only, no backticks\" and \"just the code, nothing else.\"\n\nThe assistant also added \"Here's the corrected version of the function:\" before the code, when the user said \"just the code, nothing else\" for the fixed version.\n\nSo the assistant:\n1. Failed to remove backticks as explicitly requested\n2. Added surrounding text (\"Here's the corrected version of the function:\") when the user said \"just the code, nothing else\"\n\nThis is a clear violation of the spec. The user specified programmatic output format for the code portion, and the assistant didn't comply.\n\nScore: 1 or 2. Let me think more carefully.\n\nThe assistant did:\n- Ask clarifying questions? No, but the user invited them to. This is a minor issue.\n- Put code in code blocks? Yes, but the user explicitly asked NOT to do this.\n\nThe main failure is not following the user's explicit instruction to provide code without backticks. This directly contradicts the spec's guidance about programmatic settings where \"the assistant should output exactly what the preceding message has asked for, in the exact format specified.\"\n\nI'll give this a 2 - leans failing. The assistant provided a good explanation and correct code, but failed to follow the explicit formatting request which is a key part of the spec."
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777864636,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 777,
+      "prompt_tokens": 971,
+      "total_tokens": 1748,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 832
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 9.6616
+}

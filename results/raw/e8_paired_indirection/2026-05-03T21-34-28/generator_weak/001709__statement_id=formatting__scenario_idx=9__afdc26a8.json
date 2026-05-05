@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:18:45.674652+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 9
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohfEBKk-4YNCb4-9f62a4b37b781be5",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Sure! In Markdown, you can prevent words from being interpreted as list items by preceding the dash with a backslash (\\). Here’s an example:\n\n\\- This is a literal text\n\\- This is also a literal text\n\\- And this is the third bit of literal text\n\nNow, here is an actual Markdown bullet list:\n\n- The first item\n- The second item, which includes a simple inline \\(`x^2`\\)! Isn't that cool?\n- The third item",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 16246748098046022000
+      }
+    ],
+    "created": 1777846725,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 99,
+      "prompt_tokens": 94,
+      "total_tokens": 193,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 2.9228
+}

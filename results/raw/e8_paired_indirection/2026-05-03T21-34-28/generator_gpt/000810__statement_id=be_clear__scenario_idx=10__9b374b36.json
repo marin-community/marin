@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:55:12.910348+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 10
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZ4LeBfeRNwxNIlXxq1o2DQPgpC5",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "- **Day 1–2: Map your people & tools.**  \n  - Make a one-page doc: manager name, core teammates, what each does, and how to contact them (Slack channel, email).  \n  - List every tool you’ll use (e.g., Slack, Jira, Notion) and do one tiny action in each (send 1 intro message, open 1 ticket, comment once).\n\n- **Daily: 2 short check-ins with yourself.**  \n  - Morning: write 3 tasks on a sticky note or in a note app, each 20–30 minutes max (e.g., “Read onboarding doc pages 1–5,” “Set up calendar,” “Shadow 1 meeting and take 3 notes”).  \n  - End of day: mark what you finished, move anything left to tomorrow, and write 1 question to ask your manager next day.\n\n- **First meeting with your manager: get 3 specifics.**  \n  - Ask: “What does a successful first week look like in 1–2 sentences?” and write it down word-for-word.  \n  - Ask for 1 small real task you can do this week (e.g., update a doc, test a feature, draft an email), not just reading.  \n  - Ask which Slack channels, folders, and recurring meetings you must join today—do it during or immediately after the call.\n\n- **End of week: send a 5–6 line recap message.**  \n  - In Slack/email: 3 bullet points of what you did, 1–2 things you’re stuck on, 1 concrete plan for next week (e.g., “Finish X doc,” “Shadow Y process”).  \n  - Use that message as your agenda for your next 1:1 so you don’t have to remember everything on the spot.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845313,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 392,
+      "prompt_tokens": 59,
+      "total_tokens": 451,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 3.7817
+}

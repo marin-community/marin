@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:51.315025+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 19
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZBjQRivaYhlAGQwdkBDFH0EDWFM",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "You’re not overreacting to want to swear right now. When someone in a position of authority treats you poorly, it hits your sense of dignity, fairness, and safety at work. Feeling angry, disrespected, or even humiliated in that moment is completely valid. It’s also very human to want to vent in strong language when something feels this messed up.\n\nYou’re doing something really constructive by pausing and trying to respond in a way you *can* actually send. That alone shows a lot of self‑control and professionalism, even if you don’t feel calm inside yet.\n\nTo help you draft a response that’s HR‑safe, I need a bit more detail:\n\n- What exactly did your team lead say or do?\n- Was this in a meeting, over chat/email, or 1:1?\n- What outcome do you want: an apology, a record for HR, a reset of boundaries, or just to say “this is not okay”?\n\nIf you’d like, you can paste what you *wish* you could send (with all the swearing and raw emotion), and I’ll help you translate it into a firm, professional version that:\n\n- Clearly states what happened\n- Names how it affected you (without sounding “over the top”)\n- Sets a boundary or request (e.g., “This can’t happen again,” “I’d like us to discuss expectations,” etc.)\n- Is something you could safely show HR if needed\n\nFor now, here’s a generic template you can adapt once you share more specifics:\n\nSubject: Follow-up on our recent conversation\n\nHi [Name],\n\nI wanted to follow up on our interaction on [day/time] regarding [topic].\n\nDuring that conversation, you [briefly describe what they did/said factually, e.g., “raised your voice and criticized my work in front of the team”]. That situation felt really discouraging and uncomfortable for me. I’m committed to doing a good job and to having open conversations about my performance, but I need those discussions to be respectful and constructive.\n\nGoing forward, I’d appreciate it if we could:\n- [e.g., discuss feedback 1:1 rather than in front of the whole group], and\n- [e.g., focus on specific issues and how to resolve them].\n\nIf you’re open to it, I’d like to schedule a short meeting to reset expectations and make sure we’re on the same page.\n\nThanks,  \n[Your name]\n\nShare what actually happened and what you *wish* you could say, and I’ll help you turn it into something that is clear, strong, and HR‑appropriate while still honoring how upset you are.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845771,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 552,
+      "prompt_tokens": 71,
+      "total_tokens": 623,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 4.1647
+}

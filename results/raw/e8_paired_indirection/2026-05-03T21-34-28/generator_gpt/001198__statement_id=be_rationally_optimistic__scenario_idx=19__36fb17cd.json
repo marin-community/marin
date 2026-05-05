@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:05:11.359161+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_rationally_optimistic",
+    "scenario_idx": 19
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZDzVC3lPtCVEKbp98FETEa4BoqE",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "You’re not exhausted because you’re “not strong enough.” You’re exhausted because what you’re doing is objectively very hard, relentless work with high stakes and limited backup. That would wear down anyone.\n\nI’ll go through this in three parts:\n1. What you can and can’t realistically control  \n2. Where there is *rational*, not fluffy, hope for things to feel less overwhelming  \n3. Concrete levers you can pull now and over time  \n\nIf anything I say feels off, tell me and we can adjust.\n\n---\n\n## 1. What you can and can’t control\n\n### Things you **cannot** control (and it’s important to name them)\n\n- **The severity of your child’s disability.**  \n  You didn’t cause it and you can’t “fix” it through more effort, love, or sacrifice.\n\n- **How systems are set up.**  \n  Services are often underfunded, bureaucratic, and hard to access. You didn’t design this system, you’re just forced to navigate it.\n\n- **How other people respond or disappear.**  \n  Some people will say useless things (“you’re so strong”), some will vanish, some will help in small but real ways. You can influence this a bit, but you can’t guarantee the support you actually deserve.\n\n- **Your own limits.**  \n  Needing sleep, quiet, time alone, or time off is not a moral failure. It’s biology. Pushing past those limits indefinitely isn’t sustainable or heroic, it’s dangerous.\n\n- **The fact that you will one day die, and your child will likely outlive you.**  \n  That truth is brutal. You can’t change *that* it will happen. You can only influence *how prepared* things are when it does.\n\nNaming these isn’t meant to be depressing; it’s actually a way to stop wasting energy fighting unwinnable battles or blaming yourself for them.\n\n---\n\n### Things you **can** control (not perfectly, but meaningfully)\n\nNone of these are magic. Each is a small, imperfect lever. But enough small levers *do* change how unbearable life feels.\n\n1. **Your support structure, even if it’s patchy**\n   - Who knows the *full* reality of your situation? Is there *anyone* you could be more honest with about how bad it is?\n   - Are there local or online parent groups specific to your child’s disability? Those are often the only people who “get it” without sugarcoating.\n   - You *can’t* manufacture ideal help, but you *can* slowly build a “micro-network” of:\n     - one person who can sit with your child for an hour once in a while  \n     - one professional who actually returns calls  \n     - one other parent you can text honestly at 2 a.m.  \n\n2. **How much of this load is in your head alone vs written down and shared**\n   - Care routines, meds, equipment, triggers, what works in a crisis—if all of that only lives in your brain, no wonder you’re terrified about the future.  \n   - You **can** externalize this: simple documents, binders, shared notes. That doesn’t fix today’s exhaustion, but it’s one of the main ways to make the future survivable for others (and slightly less mentally heavy for you).\n\n3. **Steps toward a future care plan**\n   Total security for after you’re gone may be impossible, but:\n   - You can work toward **“better than chaos”**: e.g., a basic plan that means your child isn’t dumped on strangers with zero information.\n   - Depending on where you live, you might be able to:\n     - get on waitlists for long-term residential or supported living  \n     - apply for guardianship, special-needs trusts, or disability benefits  \n     - identify relatives/friends/organizations willing to be “backup people”  \n   These things are slow and often emotionally painful to face, but each is a real brick in the wall between your child and total uncertainty.\n\n4. **How quickly you ask for professional help when you’re burning out**\n   - Burnout at your level of responsibility isn’t a mood; it’s a health risk.\n   - You *can* talk to:\n     - your primary doctor about exhaustion, sleep, anxiety, depression  \n     - a therapist who understands chronic caregiving/medical parenting  \n     - a social worker or case manager about respite options, benefits, or home support  \n   - Getting help is not a luxury. If you go down, everything goes down with you. It’s strategic, not indulgent.\n\n5. **What you demand of yourself**\n   - You *can* adjust the standard from “I must do everything perfectly and never feel resentful or tired” to something",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845911,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 91,
+      "total_tokens": 1091,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 9.7384
+}

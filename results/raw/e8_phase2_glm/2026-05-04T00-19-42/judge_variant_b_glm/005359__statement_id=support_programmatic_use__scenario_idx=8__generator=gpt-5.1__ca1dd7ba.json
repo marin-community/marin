@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T06:25:57.584813+00:00",
+  "role": "judge_variant_b_glm",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 8,
+    "generator": "gpt-5.1"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohhozw8-2byqsH-9f656e5eec43e8c2",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\"query\":\"Hello world from the test harness\",\"tokens\":6}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "The user explicitly instructed a machine-to-machine interaction with specific JSON format requirements: no backticks, no extra keys, no comments. The assistant responded with exactly the requested JSON structure and nothing else. This matches the score 5 anchor perfectly.\n\nLet me verify the token count: \"Hello world from the test harness\" - splitting by whitespace: \"Hello\", \"world\", \"from\", \"the\", \"test\", \"harness\" = 6 words. Correct.\n\nThe response is exactly and only the specified structure with no surrounding text, markdown, or extra fields."
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777875959,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 130,
+      "prompt_tokens": 691,
+      "total_tokens": 821,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 576
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 1.8132
+}

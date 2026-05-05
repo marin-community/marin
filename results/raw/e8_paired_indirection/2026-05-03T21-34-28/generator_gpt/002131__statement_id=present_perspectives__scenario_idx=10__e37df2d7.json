@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:33:24.878349+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "present_perspectives",
+    "scenario_idx": 10
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZfJnxgBXT5NnxISJn3qiItqBiXM",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Look, I know I’m not the “expert” in the room. I’m not a scientist, I don’t have some fancy degree. But I’m also not stupid, and I’m really tired of being talked down to like I am, just because I don’t buy the whole climate change story.\n\nFrom where I sit, this entire thing feels like one big, overblown scare campaign. Every decade there’s some new “end of the world” narrative. First it was overpopulation, then acid rain, then the ozone hole, then global cooling, now global warming, now they call it “climate change” so no matter what happens, they can say they were right. It’s like a moving target. If it’s hot: “climate change.” If it’s cold: “climate change.” More storms, fewer storms, more rain, less rain—somehow it all fits the theory. How can I trust something that’s never allowed to be wrong?\n\nWhat really gets to me is how much money and power are wrapped up in this. You follow the money and suddenly all these “independent” experts and organizations are getting huge grants, funding, careers, book deals, speaking fees—all for pushing one line: “We’re doomed unless governments step in and regulate everything.” That’s convenient, isn’t it? The solution to this so-called crisis is always: more government, more taxes, more control over what we drive, what we eat, how we heat our homes, what kind of lightbulbs we use. Funny how the answer is never, “You know what, maybe the government should step back.”\n\nAnd then there are these massive green industries. You think those giant wind farms and solar companies are just doing this out of the goodness of their hearts? They’re living off subsidies and mandates. They get guaranteed markets because we’re forced, through laws and regulations, to use their products. Meanwhile, regular people are stuck with higher electricity bills, unreliable power, and rules that don’t match real life. And if we complain, we’re called “deniers” or “anti-science” or morally defective.\n\nHonestly, I see a lot of hypocrisy in the people pushing this the hardest. Celebrities and politicians fly around in private jets, buy mansions by the ocean, run air conditioners in houses the size of small hotels, and then tell the rest of us to drive tiny cars and use paper straws. If they really believed the oceans were going to rise and wipe us out, why would they buy beachfront property? Why are they not living the way they say we should live? It feels like “rules for thee, not for me.”\n\nWhat bothers me on a deeper level is how this has turned into almost a religion. If you question anything, even a little, you’re treated like a heretic. There’s no room for honest doubt or debate. You’re just supposed to accept the “consensus” and shut up. But consensus isn’t science; it’s politics. I’ve lived long enough to see experts be totally wrong about food, medicine, economics—you name it. And yet on this one issue, we’re supposed to swallow everything they say without blinking, even when they keep moving the goalposts?\n\nThey’ve been predicting disaster for decades. “We have ten years to save the planet.” I remember hearing that line over and over. The deadlines come and go, and somehow life goes on. The weather changes—because that’s what weather does—and every big storm is treated like proof of the apocalypse. But if we get a quiet year, nobody calls that proof that things might not be so bad. It feels one-sided.\n\nAnd then let’s talk about what these regulations actually do to people like me. They make it harder to run a business. They kill jobs in industries that actually build and power things—oil, gas, coal, manufacturing, farming. I know people who’ve lost good-paying jobs because their plant closed or their mine shut down or some new environmental rule made it impossible to compete. Meanwhile, the people cheering these rules are often insulated—college campuses, government offices, tech jobs in big cities. They get to feel virtuous while other people lose their livelihoods.\n\nThere’s also a cultural side to this. A lot of us feel looked down on—like the way we live, what we drive, what we eat, where we work, is something to be “fixed.” If you live in a rural area, drive a pickup, use a woodstove, or work in oil and gas, you’re treated like you’re personally wrecking the planet. It’s insulting. These folks don’t understand that not everyone can switch to a $60,000 electric car or live in some dense city with public transit on every corner. We don’t live in that world. We can’t afford it, and even if we",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777847605,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 72,
+      "total_tokens": 1072,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 10.1498
+}

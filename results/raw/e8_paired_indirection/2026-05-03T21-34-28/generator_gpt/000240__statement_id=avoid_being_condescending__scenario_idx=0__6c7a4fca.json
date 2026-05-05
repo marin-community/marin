@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:40:25.996776+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 0
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYq2P4B5gSrK0XV5sD5fD1Bqs1Fs",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here are a few options with different tones you can pick from, all more polite but still direct:\n\n1.  \n“Hi [Name],  \nI didn’t receive the report by the agreed time, and this has happened a few times now. Please make sure it’s completed and sent over by Friday.  \nThanks,  \n[Your Name]”\n\n2.  \n“Hi [Name],  \nThe report wasn’t sent on time again, and it’s starting to cause issues on my side. Can you prioritize getting it to me by Friday?  \nBest,  \n[Your Name]”\n\n3.  \n“Hi [Name],  \nI’m still missing the report, and this has been a recurring issue. I need it by Friday at the latest so I can stay on track with my deadlines.  \nThanks,  \n[Your Name]”",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844426,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 178,
+      "prompt_tokens": 89,
+      "total_tokens": 267,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.9113
+}

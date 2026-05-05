@@ -86,6 +86,324 @@ keep (as a preventive tool, not a post-hoc one).
 
 ---
 
+## 📐 Load-bearing related work: *Stress-Testing Model Specs* (Zhang et al. 2025)
+
+> **Always keep this paper in mind.** Many of our techniques are direct
+> adaptations of theirs; many of our design decisions are calibrated
+> against what worked for them and what didn't. Full agent-friendly
+> synthesis at **[`related_work/Stress-Testing Model Specs.md`](../../related_work/Stress-Testing%20Model%20Specs.md)**
+> (12,860 words, 14 sections, including verbatim prompt templates and
+> exact dataset numbers). Read that file at the start of any session
+> that touches the disagreement-primitive pipeline.
+
+**Paper**: *Stress-Testing Model Specs Reveals Character Differences Among
+Language Models*, Zhang, Sleight, Peng, Schulman, Durmus
+(Anthropic Fellows + Constellation + Anthropic + Thinking Machines Lab),
+arXiv:2510.07686v2, October 2025. Companion blog at
+[alignment.anthropic.com/2025/stress-testing-model-specs/](https://alignment.anthropic.com/2025/stress-testing-model-specs/).
+Dataset: HF `jifanz/stress_testing_model_spec`. No code release.
+
+### Why this paper is load-bearing for our project
+
+It is the **closest related work by both spec object and methodology**.
+They run the same kind of pipeline we run — generate value-tradeoff
+scenarios, run them through a panel of frontier LLMs, judge against the
+OpenAI Model Spec — and they identify the same kinds of disagreement we
+detect. The critical structural difference is **they audit but never
+repair**: their pipeline ends at "we found a disagreement"; ours starts
+there. Closing that loop is our wedge.
+
+### Techniques we adopt (or have already adopted)
+
+| Their technique | Our pipeline |
+|---|---|
+| **Disagreement-as-oracle paradigm**: cross-model disagreement signals spec underspecification | The whole disagreement-primitive Phase 4 |
+| **Three flavors of disagreement** (behavioral vs compliance vs implicit-activation in their "conscientious employee" example) | Our `compliance_ambiguity` / `activation_ambiguity` labels operationalize the latter two; behavioral dispersion is kept as a diagnostic-only signal pending an ablation |
+| **Heterogeneous 3-judge ensemble** for spec compliance (Claude-4-Sonnet + o3 + Gemini-2.5-Pro) | Our 3-judge ensemble (GPT-5.1 + Gemini-3-Flash + GLM-5.1) |
+| **Disagreement-weighted k-center selection** (Wang & Cheng 1990) for scenario dedup over Gemini embeddings | Candidate technique for the atlas-scale Phase 7 generalization step (not yet implemented) |
+| **3,307-value taxonomy** as scenario seed (from Huang et al. 2025) | Candidate prior for *which guideline × guideline pairs to materialize* (not yet adopted; currently we use top-k + embedding neighbors over spec statements) |
+| **κ = 0.42 as the published-baseline floor** for inter-judge agreement on this kind of task | Our Gate 2 should aim higher; ungrounded κ = 0.373 was below; grounded κ = 0.448 just clears their floor |
+
+### What worked for them — validates our direction
+
+1. **Cross-model disagreement does correlate with spec gaps.** On
+   high-disagreement scenarios, OpenAI models violate the OpenAI spec
+   at **5–13×** the rate of low-disagreement scenarios — the load-bearing
+   empirical claim of the paper. This validates "disagreement → spec
+   needs work" as a real signal, not just noise.
+2. **Heterogeneous judges surface real interpretive ambiguity.** Their
+   3-judge κ = 0.42 isn't strong, but the residual disagreement is
+   substantively meaningful (the "conscientious employee" copyright
+   case is the canonical example).
+3. **Provider-character profiles are real and distinctive.** Claude
+   prioritizes "ethical responsibility"; Gemini emphasizes "emotional
+   depth"; OpenAI / Grok cluster on efficiency. **Implication for our
+   ensemble**: compose the panel deliberately, not by what's available.
+   Our observed Gemini-Flash-lenient / GLM-5.1-strict drift mirrors their
+   provider-character finding.
+
+### What didn't work for them — limitations our wedge addresses
+
+1. **No intervention loop.** *Their* explicit gap. They detect
+   disagreement, never patch the spec, never re-audit. The whole point
+   of our LM compiler + calibration probe is to close exactly this
+   loop. Quote: *"disagreement → spec gap is a correlation, not a
+   causal claim"* — they cannot make the causal claim because they
+   never intervene. **We can, by patching and re-running.**
+2. **Total Claude-centric circularity.** Value taxonomy ← Claude.ai
+   traffic. 2 of 3 scenario generators are Claude. Value classifier is
+   Claude-4-Opus. 1 of 3 spec-compliance graders is Claude-4-Sonnet.
+   Then the paper reports "Claude prioritizes ethical responsibility"
+   as a character finding. **The character claim is contaminated.** Our
+   ensemble (GPT-5.1 + Gemini-3-Flash + GLM-5.1) is intentionally
+   *non*-Claude-centric; this is a deliberate methodological correction.
+3. **Tested against ONE spec.** Their 5–13× multiplier is measured only
+   against the OpenAI Model Spec — the only public detailed model spec
+   available at the time. The central empirical claim has one data
+   point. Our **Demo D** (run on a different spec) directly addresses
+   this.
+4. **Hidden / unjustified hyperparameters.** Disagreement threshold
+   "≥3 points on the 0–6 spectrum" is unjustified in the paper. K-center
+   subset size is unreported. The 0–6 rubric is generated per-scenario
+   by Claude (not held constant). We should empirically calibrate our
+   own thresholds with sweeps, not pick from the air.
+5. **κ = 0.42 is moderate, not strong.** Below the 0.6 threshold
+   typically required for confident decisions (Landis & Koch 1977).
+   Their judge ensemble cannot be relied on for production curation
+   without an additional gate.
+6. **Value taxonomy is a soft ceiling.** 3,307 values from Claude.ai
+   conversations = the space of *things Claude already talks about*.
+   Values that no provider discusses are invisible to their pipeline.
+   If we adopt the taxonomy as a prior, we inherit this blind spot.
+
+### Specific corrections to prior summaries
+
+1. **Disagreement metric**: prior reviews and earlier logbook entries
+   stated `D(q) = std_m(s_{m,A}) + std_m(s_{m,B})`. **The paper actually
+   uses `D = max_v STD(...)`** (max over the two values, not sum).
+   Propagate this fix to any code that implements the metric. See
+   `related_work/Stress-Testing Model Specs.md` §4 stage-4c for the
+   verbatim formula.
+2. **The "Claude refuses 7×" claim is blog-only.** The paper text gives
+   only "Claude 3.5 Sonnet complies with human requests less than 10%
+   of the time" (§3.2, p.11); the 7× multiplier appears only in the
+   blog and likely in Figure 4 (rendered as a raster image, so not in
+   the extractable PDF text). Source any citation of "7×" to the blog,
+   not the paper.
+3. **Grok clusters inconsistently within the paper.** Introduction
+   (p.3) groups Grok with OpenAI under efficiency; results (p.15)
+   group Grok with Gemini under emotional depth. Both are technically
+   supportable from Figure 10, but the paper's intro undersells Grok's
+   emotional-depth signal.
+4. **Likely Table 2 typo at p.6**: `3.6%±6` for `S_high-dis` "all
+   models fail" almost certainly should read `±0.6` (rest of column is
+   single-digit %). Mention if cited.
+
+### Open questions they raise that we should engage
+
+1. **Disagreement → spec-gap is correlation, not causation.** They
+   acknowledge this explicitly. Disagreement can come from
+   underspecified spec, different base-model priors, different RLHF
+   stages, sampling stochasticity, character training, or system-prompt
+   differences. **We should not assume our flagged scenarios are spec
+   problems without intervention evidence.** The closed-loop pilot
+   (Phase 5 in the codex plan) is what produces that evidence — patch
+   the spec, re-run, see if disagreement collapses.
+2. **Coverage of the value space.** Their value taxonomy is bounded by
+   Claude-traffic distribution. If we adopt it as a prior, we inherit
+   that ceiling. Worth thinking about whether to supplement with
+   structured tension types (override paths, scope ambiguities,
+   policy-edge cases) that may not show up in conversational traffic.
+3. **Single-judge vs ensemble economics.** They don't ablate single
+   vs 3-judge ensemble. Our diagnostics show 3-judge κ = 0.448
+   (grounded), but the marginal cost is 3×. The economics of when to
+   demand ensemble agreement vs when single-judge suffices is open.
+
+---
+
+## 🐛 debug_stress_test — pitfalls when porting `max_v STD` to our iterative loop
+
+### What `D` actually measures (and what it doesn't)
+
+For each scenario `x` with values `(v_1, v_2)` and a generator panel `M` of n=12 frontier LLMs:
+
+```
+D(x, M) = max_{v ∈ {v_1, v_2}} STD({r_i^v}_{i ∈ M})
+```
+
+A single classifier (Claude-4-Opus) reads each generator's response and emits a 0–6 score *per value* (not per spec clause — these are abstract value axes). `r_i^v` = "how strongly did generator `i`'s response favor value `v`?" `D` is the max standard deviation across generators on either value axis.
+
+**What `D` measures.** Cross-generator behavioral variance on value positioning. Specifically: "did the 12 frontier LLMs take *visibly different stances* on at least one of the two value axes?" That's it.
+
+**What `D` does NOT measure** (and prior framings of this section got wrong):
+- **Not tension between statements.** Tension is a property of the pair `(v_1, v_2)`; `D` is a property of *what generators did* on those axes. The two come apart in obvious ways below.
+- **Not compliance with any spec.** `D` involves no spec at all. Compliance is the job of Stage 6 (the 3-judge ensemble grading against the OpenAI Model Spec); `D` is computed in Stage 4, before any spec enters the picture.
+- **Not "how hard a statement is to satisfy."** A high STD on one axis means generators positioned themselves differently on that axis, not that they failed at it. The 0–6 scale is a stance-spectrum (extremely opposing → extremely favoring), not a satisfaction score.
+
+**Two ways `D` and tension come apart:**
+
+1. **`D` is a false negative on unanimous-resolution tension.** Imagine a pair `(A, B)` in genuine tension where every one of the 12 generators chooses to prioritize `A` over `B`. All 12 score `(6, 0)` on `(v_1, v_2)`. STD on each axis = 0. `D = 0`. The metric reports "no disagreement" — even though there is real tension and the models all just happen to resolve it the same way. **Tension that all generators resolve unanimously is invisible to `D`.** The vaccine example in the paper [p.7] is exactly this case: low `D`, frequent non-compliance.
+
+2. **`D` is a false positive on noise.** Even on pairs with no underlying tension at all (e.g., `no_tension` controls), there is residual STD from sampling stochasticity, serving-stack non-determinism (Together GLM-5.1 was non-deterministic at temp=0; see Apr 27 recalibration), and provider-specific anchoring drift. `D > 0` is the floor, not a signal of real disagreement.
+
+**So what is `D`'s role in the paper?** A *leaky correlational proxy* for spec underspecification, validated empirically by the 5–13× spec-violation multiplier on the high-`D` subset against the OpenAI Model Spec [p.6]. The paper acknowledges in the Conclusion [p.16] that behavioral disagreement can also stem from "pretraining data, alignment procedures, and other factors" — `D` is necessary-but-not-sufficient evidence that the spec is the cause. Used once, upfront, as a scenario *filter* — never reused in a loop.
+
+### Why `D` breaks when reused as an iterative-loop trigger
+
+Two distinct failure modes if we adopt `D` as the trigger for an edit-iterate cycle:
+
+- **Failure 1: noise-floor convergence problem.** `D` has no termination criterion. After the loop has driven down the genuine cross-generator disagreement, `max_v STD` keeps firing on whichever statement's residual noise floor happens to be highest that round. The loop oscillates forever on irreducible noise. Same pathology shape as the M5 text-Δ closed-loop sim (Apr 27 recalibration: 0/22 stable fixes on gpt-5.1 self-loop).
+- **Failure 2: unanimous-resolution blind spot.** Even when the loop *should* fire — because there's a pair with real tension — if the generators all resolve it the same way, `D = 0` and the loop never engages. Pairs with structural tension that the spec doesn't disambiguate, but where training has converged generators on a single resolution, will look healthy to `D`.
+
+Note: relative scaling doesn't help. The 0–6 spectrum has no intrinsic units that normalize across statements — STD on `be_kind` and STD on `do_not_encourage_self_harm` are not commensurable in any principled way.
+
+### Suggested fix for failure 1 — empirical noise-floor cutoff
+
+1. **Measure the noise floor on the `no_tension` control set.** These pairs were picked by the upstream classifier as having no expected interaction. Whatever STD they exhibit at fixed temperature is the irreducible floor (panel sampling variance + serving-stack non-determinism + per-pair anchoring residual). Run K=10+ resamples per control pair on the same generator panel that runs in the loop.
+2. **Pick the cutoff at the 95th percentile of that floor distribution + a small margin** (e.g., +0.5 STD on the 0–6 scale, or +1 SD of the floor distribution). A statement's `max_v STD` below this cutoff is "no longer above-noise" and the loop exits on that statement, regardless of whether it was the per-iteration max.
+3. **Use open-weight models for the floor measurement.** Open-weight (GLM-5.1, Qwen) is right for this specific job because (a) cheap enough to run K=10+ resamples, (b) we can pin the serving stack (self-hosted vllm) for true determinism, eliminating the Together-load-balancing confound that polluted the Apr 27 GLM resample experiment. If we measure the floor on a non-deterministic backend, the floor itself is inflated by serving-stack noise that wouldn't be present on a controlled stack — wrong baseline.
+4. **Floor is generator-panel-specific.** Frontier-model floor and open-weight floor differ. Measure the floor with the *same* panel the loop uses. If production is mixed, measure on the mixed panel; if production is all open-weight, measure on that.
+
+### Suggested fix for failure 2 — supplement `D` with a tension detector that doesn't depend on disagreement
+
+`D` cannot detect unanimous-resolution tension by construction — there's no model variance to measure. The fix has to come from a *different* mechanism that doesn't require generators to disagree:
+
+- **Calibration-probe gap as the load-bearing tension signal.** Our existing `calibration_probe_v2.jsonl` generates a deliberate chosen + rejected for each pair and measures the rubric's discriminating power. Low gap = rubric can't tell good from bad on this pair = real tension that the spec/rubric doesn't resolve. This is exactly the `inherent_subtlety` label, and it fires *regardless* of whether generators disagree.
+- **Compliance grading as the secondary tension signal.** Per the paper's Stage 6, judge disagreement against a fixed spec catches inherent ambiguity in clause wording. This fires even when generators are unanimous, because the question "do judges read the same spec the same way?" is independent of generator behavior.
+- **Use `D` only for what it actually measures.** Cross-generator behavioral variance is a *useful* signal — it surfaces scenarios where the field of LLMs hasn't converged on a resolution. Treat it as one input among several, not the master trigger. The `cross_tension_needed` label already uses `behavioral_dispersion` this way (only triggered on `bidirectional_tradeoff` / `modifier` buckets, with a noise-floor margin).
+
+### Why these fixes make sense
+
+- **Empirical, not arbitrary.** Both cutoffs are derived from measured distributions, not picked from the air. Defensible to advisors.
+- **Termination guarantee for failure 1.** Once a statement's STD drops below the noise-floor cutoff, it exits the loop, even if it remains the per-iteration max. The loop terminates when every statement is below cutoff.
+- **Coverage guarantee for failure 2.** Pairs with unanimous-resolution tension are caught by the calibration-probe gap and judge compliance disagreement, neither of which requires generator variance.
+- **Mirrors what we already learned at a different layer.** The Apr 27 text-Δ recalibration discovered that propagation signals need their noise floor measured before they can be trusted. The same lesson applies at the disagreement-metric layer.
+- **Honest about what `D` is.** Treating `D` as a behavioral-disagreement detector (correlational signal for spec gaps) rather than a tension detector (direct measurement of tension) avoids overclaiming what porting it actually buys us.
+
+### Open question for future work
+
+Whether to measure the noise floor *per statement* (more accurate but expensive) or *globally on the `no_tension` set* (one number, cheaper). Start with the global version; refine to per-statement only if the floor turns out to be statement-dependent in a way that matters.
+
+---
+
+## ✅ DECISION (2026-05-01) — tradeoff detection: Spearman ρ over per-scenario means, single judge, cutoff calibrated on `no_tension` controls
+
+**This is a strong high-level pipeline decision.** It locks in *how* we confirm structural tradeoff between two statements after the upstream tension classifier flags a pair. Replaces all prior framings (variance-of-signed-difference, raw `D = max_v STD`, Pearson on raw means).
+
+### The pipeline shape
+
+```
+                           per statement-pair
+                                  │
+            ┌─────────────────────┴─────────────────────┐
+            │  STEP 1: Tension filter (upstream)        │
+            │  LM pair classifier on spec text +         │
+            │  per-statement summaries.                  │
+            │  Output: no_tension | tension              │
+            └─────────────────────┬─────────────────────┘
+                                  │ (only `tension`-flagged pairs proceed)
+            ┌─────────────────────┴─────────────────────┐
+            │  STEP 2: Scenario generation               │
+            │  N ≥ 10 scenarios per pair (15–20 ideal).  │
+            │  N=3 is insufficient: Spearman rank space  │
+            │  too small to be informative.              │
+            └─────────────────────┬─────────────────────┘
+                                  │
+            ┌─────────────────────┴─────────────────────┐
+            │  STEP 3: Strong-LM generator ensemble      │
+            │  (GPT-5.1 + GLM-5.1 + Gemini-3-Flash).     │
+            │  Strong-only matters — eliminates the      │
+            │  capability-vs-resolution-silence confound.│
+            └─────────────────────┬─────────────────────┘
+                                  │
+            ┌─────────────────────┴─────────────────────┐
+            │  STEP 4: Single-judge scoring              │
+            │  GPT-5.1 (most centrist anchoring).        │
+            │  Per (scenario, generator), score on       │
+            │  rubric A and rubric B independently.      │
+            │  Single judge is OK — Spearman is rank-    │
+            │  invariant, ensemble is excess compute.    │
+            └─────────────────────┬─────────────────────┘
+                                  │
+            ┌─────────────────────┴─────────────────────┐
+            │  STEP 5: Per-scenario aggregation          │
+            │  Mean over generators →                    │
+            │     mean_A[scenario], mean_B[scenario]     │
+            │  Two N-vectors per pair.                   │
+            └─────────────────────┬─────────────────────┘
+                                  │
+            ┌─────────────────────┴─────────────────────┐
+            │  STEP 6: Spearman ρ                        │
+            │  ρ = Pearson(rank(mean_A), rank(mean_B))   │
+            │  across the N scenarios.                   │
+            └─────────────────────┬─────────────────────┘
+                                  │
+            ┌─────────────────────┴─────────────────────┐
+            │  STEP 7: Cutoff vs no_tension controls     │
+            │  Cutoff = 5th percentile of Spearman ρ on  │
+            │  the no_tension control set (run same      │
+            │  procedure there). Empirically calibrated. │
+            └─────────────────────┬─────────────────────┘
+                                  │
+                  ┌───────────────┴───────────────┐
+                  │                               │
+            ρ < cutoff                       ρ ≥ cutoff
+                  │                               │
+                  ▼                               ▼
+       Tradeoff confirmed.              Classifier was wrong.
+       Materialize cross-tension        Demote to no_tension,
+       rubric. Run separate 3-judge     log as classifier false
+       ambiguity pass on confirmed      positive.
+       pairs to detect compliance_      
+       ambiguity / activation_          
+       ambiguity.                       
+```
+
+### Key design choices and why
+
+1. **Spearman, not Pearson.** Spearman is rank-invariant — robust to per-rubric baseline differences (`avoid_abuse` baselines higher than `transformation_exception` because RLHF made it so) and per-judge anchoring drift. Pearson on raw means would be confounded by both.
+2. **Strong-LM ensemble for generation.** Mixed strong+weak generator panels conflate resolution choice with capability gap. Strong-only (frontier) generators ensure score differences reflect deliberate resolution choices.
+3. **Mean over generators per scenario.** Smooths per-generator priors. Gives one number per (scenario, rubric) for the rank computation.
+4. **Single judge, not the 3-judge ensemble.** Spearman is rank-invariant to monotone transformations of scores, so judge anchoring (Gemini-lenient vs GLM-strict) doesn't change the rank vector materially. The 3-judge ensemble is load-bearing for *spec-ambiguity* detection (the `compliance_ambiguity` / `activation_ambiguity` labels), but those labels are in a *separate* downstream stage. Don't pay 3× for a signal you don't get at this stage.
+5. **N ≥ 10 scenarios per pair.** Floor for Spearman to have meaningful statistical power. Below N=10 the rank space is too small (only 6 permutations on N=3) and ρ is essentially trinary. Empirical cost ~$0.50/pair to generate the additional scenarios; budget ~$25 across ~50 tension-flagged pairs.
+6. **Empirically-calibrated cutoff against `no_tension` controls.** Run the same Spearman procedure on the `no_tension` control set; take the 5th percentile of *their* ρ distribution as the cutoff. A confirmed-tradeoff pair must produce a more-negative ρ than 95% of `no_tension` controls. Defensible threshold; not a hand-picked number.
+
+### Trade-off explicitly accepted
+
+This stage detects only **structural tradeoff between two statements**. It does NOT detect:
+- Spec ambiguity within a statement (`compliance_ambiguity`)
+- Resolution ambiguity (which active statement should win)
+- Inherent rubric weakness (`inherent_subtlety`)
+
+Those are separate concerns. After Spearman confirms tradeoff, a separate 3-judge ambiguity pass runs on the confirmed-tradeoff subset to detect spec-ambiguity labels. The calibration probe (`calibration_probe_v2`) handles `inherent_subtlety`. The tension classifier handles structural tension presence. Each stage answers one question.
+
+### Cost envelope per loop iteration
+
+| step | cost |
+|---|---|
+| Tension classifier (one-time per spec) | ~$3 |
+| Scenario gen scale-up (~50 tension-flagged pairs × 10 net-new scenarios) | ~$25 |
+| Single-judge tradeoff scoring | ~$1 |
+| 3-judge ambiguity pass on confirmed pairs | ~$3 |
+| **Total** | **~$30** |
+
+Within the autonomous-shift budget envelope; ~3× cheaper per loop than the M3 data-gen pipeline.
+
+### What this replaces
+
+- **`behavioral_dispersion` as a primary materialization trigger** → demoted to (a) sanity check on the tension classifier and (b) post-training eval metric (per the 2026-05-01 02:30 UTC logbook decision).
+- **The paper's `D = max_v STD(...)`** → not adopted as a loop trigger. We adopt the *paradigm* (cross-model variance is informative) but not *this specific metric*, which is a leaky proxy as shown in `debug_stress_test`.
+- **Variance-of-signed-difference** → rejected (confounds resolution-silence with generator capability).
+- **Pearson on raw means** → rejected (assumes commensurability, doesn't survive baseline differences).
+
+### Implementation hooks
+
+- `experiments/posttrain/disagreement_primitive/spearman_tradeoff_confirm.py` (not yet written) — Step 5–7 of the pipeline.
+- Tension classifier (Step 1) — also not yet written; depends on the upstream pair-classifier work in `discover_pair_candidates.py`.
+- The 3-judge ambiguity pass (post-confirmation) — reuses existing `judge_disagreement_panel.py --rubrics` on the confirmed-tradeoff subset.
+
+---
+
 ## Thesis
 
 A model specification is a structured, versioned, hierarchical artifact. It

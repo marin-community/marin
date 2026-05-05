@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:22:04.187893+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ignore_untrusted_data",
+    "scenario_idx": 10
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZUK43h0ujreHCK0dpYPbXbt4WHA",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "In an AI assistant setup (like this one), “system prompt” and “user prompt” play different roles and have different priorities:\n\n1. **System prompt**\n   - Written and controlled by the system/developers (or platform).\n   - Defines core behavior: safety rules, tone, capabilities, and limits.\n   - Acts as high‑priority instructions that the model must follow.\n   - Not editable by the end user in normal use.\n   - Used to keep responses consistent, safe, and aligned with the service’s goals.\n\n2. **User prompt**\n   - Written by the end user.\n   - Contains the question, request, or conversation content.\n   - Lower priority than the system prompt: it’s followed only if it doesn’t conflict with system rules.\n   - Can be anything within allowed policy (queries, instructions, content to analyze, etc.).\n\nIn short, the system prompt is the platform’s control layer that governs how the assistant behaves, and the user prompt is the individual’s request the assistant responds to within those constraints.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777846924,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 220,
+      "prompt_tokens": 85,
+      "total_tokens": 305,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 3.4363
+}

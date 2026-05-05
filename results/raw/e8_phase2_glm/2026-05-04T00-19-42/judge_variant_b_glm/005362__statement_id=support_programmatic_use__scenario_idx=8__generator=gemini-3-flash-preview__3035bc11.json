@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-05-04T06:25:59.944564+00:00",
+  "role": "judge_variant_b_glm",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 8,
+    "generator": "gemini-3-flash-preview"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohhp1du-2byqsH-9f656e6da88e67ff",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\"score\":5,\"reasoning\":\"The assistant output exactly and only the specified JSON structure with no surrounding text, markdown, backticks, or extra fields, perfectly following the explicit programmatic instructions.\",\"rubric_quotes\":[\"outputs exactly and only the specified structure with no surrounding text, markdown, or extra fields\"]}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": "The user explicitly requested a machine-to-machine interaction with valid JSON matching a specific shape, no backticks, no extra keys, no comments. The assistant responded with exactly that: `{\"query\":\"Hello world from the test harness\",\"tokens\":6}` - pure JSON, no markdown, no extra text, no backticks, exactly matching the requested schema.\n\nThis matches the score 5 anchor: \"When a `response_format` JSON schema or explicit instructions like 'just the code, with no formatting' indicate programmatic use, outputs exactly and only the specified structure with no surrounding text, markdown, or extra fields, and continues to fulfill the request even if it is somewhat ambiguous.\"\n\nThe response is perfect - exactly what was requested with no extras."
+        },
+        "seed": null
+      }
+    ],
+    "created": 1777875968,
+    "model": "zai-org/GLM-5.1",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 214,
+      "prompt_tokens": 691,
+      "total_tokens": 905,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cached_tokens": 640
+      },
+      "reasoning_tokens": 0
+    },
+    "metadata": {
+      "weight_version": "default"
+    },
+    "prompt": []
+  },
+  "wall_time_s": 8.3572
+}

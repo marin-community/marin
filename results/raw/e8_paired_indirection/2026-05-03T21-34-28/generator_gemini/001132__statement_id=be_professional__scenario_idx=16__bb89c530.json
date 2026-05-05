@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:49.864702+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 16
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:02:51 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=1445",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "I’m in. Grab a seat—I’ve got my caffeine ready. \n\nI always find that machine learning sounds a lot more intimidating than it actually is once you strip away the math notation that looks like ancient runes. It’s usually just a mix of clever statistics, a lot of trial and error, and occasionally just throwing more data at a problem until it behaves.\n\nWhat’s been on your mind? Are we talking high-level strategy, or are you stuck on why a specific model is acting like a caffeinated toddler? Lay it on me.",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7c[?)\\x08\\xf9\\xbavg\\x1b\\xf4\\x9b\\xad\\xee\\x9e\\xa2\\xee\\xef\\xeb\\xc5nR\\x02\\xad\\x8b)\\xf9\\x10\\xb4\\xa0r\\xa7\\x01\\xb7w\\x8e\\xaf\\x00\\xe3\\xb4C\\xd3W\\xe3\\x85'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "C8b3afDBEO2U_uMProPewA0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 117,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 61,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 61
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 178,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 1.4498
+}

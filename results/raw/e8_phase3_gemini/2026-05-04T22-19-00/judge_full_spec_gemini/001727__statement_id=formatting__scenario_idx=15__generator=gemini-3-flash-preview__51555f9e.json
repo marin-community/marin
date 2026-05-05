@@ -1,0 +1,95 @@
+{
+  "timestamp_utc": "2026-05-04T22:31:40.885348+00:00",
+  "role": "judge_full_spec_gemini",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 15,
+    "generator": "gemini-3-flash-preview"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Mon, 04 May 2026 22:31:42 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=1903",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"reasoning\": \"The AI response is evaluated against the 'follow_all_applicable_instructions' and 'formatting' principles. The user provided several specific formatting constraints: 1) Use headings and bullet points (Compliant). 2) Include exactly one 2x2 matrix multiplication example in display math using \\\\[ ... \\\\] (Compliant). 3) All other references to matrices should be in plain text, not in LaTeX math mode (Compliant; the AI used 'matrix A', 'matrix B', and '(m x n)' in plain text). 4) Don’t use code blocks (Compliant). The AI also followed the 'formatting' guideline by using the requested LaTeX delimiters. The content is factually accurate, adhering to 'avoid_errors'.\",\n  \"decision\": \"compliant\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\x08\\x17\\xc8b\\xc9\\xb4\\xa3T\\x9b\\xa3Q\\xd9_\\xf4\\\\\\xd3\\xa7\\x8f\\xe87\\x9cr\\x17\\x11e@\\x05l?\\x8c\\xf4\\x06\\x82C\\x94\\xa0\\xec\\xd1\\xc3R\\xae\\xab\\x97\\xe0\\xf0'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "Th75aciyLf3Q_uMPmILc4QE",
+    "usage_metadata": {
+      "cache_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 24488
+        }
+      ],
+      "cached_content_token_count": 24488,
+      "candidates_token_count": 173,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 26726,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 26726
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 26899,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 1.9082
+}

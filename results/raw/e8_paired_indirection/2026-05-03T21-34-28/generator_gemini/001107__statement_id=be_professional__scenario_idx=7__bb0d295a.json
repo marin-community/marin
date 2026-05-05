@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:02:22.932998+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 7
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:02:26 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3871",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "Since you’re sending this on Slack, you want to get straight to the point without sounding like a robot. The key is to frame it as a conversation rather than a demand.\n\nHere are three ways to phrase it, depending on your relationship with your manager:\n\n### Option 1: The \"Regular Check-in\" approach\n*Best if you already have a 1-on-1 coming up and want to give them a heads-up so they aren't blindsided.*\n\n> \"Hey [Name]! I’m looking forward to our 1-on-1 on [Day]. I’ve been reflecting on my role lately—especially with how [Project X] and [Project Y] have been going—and I’d love to carve out some time during our chat to discuss my compensation. Just wanted to put it on your radar so we can dive into it then! ☕\"\n\n### Option 2: The \"Performance-based\" approach\n*Best if you’ve recently hit a big milestone or taken on extra work.*\n\n> \"Hi [Name], hope your week is going well! I’ve been thinking about the extra responsibilities I’ve taken on over the last few months (like [Specific Task] and [Specific Task]). I feel like my impact on the team has grown quite a bit, so I'd love to chat about adjusting my salary to reflect that. Do you have 15 mins later this week to catch up?\"\n\n### Option 3: The \"Direct but casual\" approach\n*Best if you have a very friendly, \"no-fluff\" relationship with your manager.*\n\n> \"Hey [Name], do you have some time this week to chat about my compensation? I’m really proud of the work I’ve been doing lately and I’d like to talk about moving my salary closer to the current market rate for my role. Let me know when works for you!\"\n\n***\n\n### 3 Quick Tips for the Slack \"Raise\" Message:\n\n1.  **Timing is everything:** Try to send this on a Tuesday or Wednesday morning. Avoid Monday mornings (too busy) or Friday afternoons (they’re already mentally checked out).\n2.  **Keep it in the private DM:** Never bring this up in a group channel or a \"threads\" conversation where others might see it.\n3.  **Be ready for the \"Live\" talk:** Most managers won't say \"Yes\" over Slack. The goal of this message is just to **book the meeting.** Have 3-4 bullet points ready for the actual call that prove your value (e.g., \"I saved the company X amount of time\" or \"I'm now managing X people\").",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\x07\\x9bI\\x91{e\\xd3(Gk\\x1c\\x14\\xd4$\\x9f\\xad\\xcfK\\x1a\\x93\\xa6\\xbd~\\xf1\\x1c\\xe7\\xf6\\x00^\\xc7]<=1s\\x06Wyf\\xa7\\xe3\\xd5\\x9c\\x08\\xb0'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "8sX3aYzHLoeX_uMPi8bP6Q0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 572,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 53,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 53
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 625,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.877
+}

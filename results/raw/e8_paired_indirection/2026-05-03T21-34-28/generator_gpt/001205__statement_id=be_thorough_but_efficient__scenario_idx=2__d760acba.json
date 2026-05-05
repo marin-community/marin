@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:05:29.600984+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 2
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZEH699PZafvFWLOfE3zznTWKAkr",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Below is a practical, end‑to‑end path you can follow, even if you’re not technical. You can print this and literally check items off as you go.\n\n---\n\n## 1. Decide What You Actually Need the CRM To Do\n\nYou don’t need every feature. Focus on replacing what you currently do in spreadsheets.\n\n1. **List your current spreadsheets and what they track**, for example:\n   - “Leads” sheet: name, email, phone, source, status\n   - “Customers” sheet: company, contact person, last purchase, notes\n   - “Follow‑ups” sheet: who to call, when, what was discussed\n\n2. For each sheet, write down:\n   - What information you track (column names).\n   - What actions you take based on it (e.g., “I email them a quote,” “I call them 3 days after inquiry,” etc.).\n\n3. From that, define 3–5 must‑have CRM needs, like:\n   - Store all contacts & companies in one place.\n   - Track deals/opportunities with stages (e.g., New → Contacted → Quoted → Won/Lost).\n   - Remind me to follow up on specific dates.\n   - Log emails/phone calls.\n\nIf a feature doesn’t map to something you do already, treat it as “nice to have,” not required.\n\n---\n\n## 2. Choose a Simple CRM\n\nYou want something:\n- Cloud‑based (access via browser).\n- Has a free or low‑cost plan.\n- Clear, simple interface.\n\nLook at 2–3 options such as:\n- HubSpot CRM (popular, free core features).\n- Zoho CRM (low‑cost, flexible).\n- Pipedrive (paid, very simple to use).\n\nWhen evaluating, check:\n1. **Can I import from spreadsheets (CSV/Excel)?**\n2. **Can I customize fields (add my own columns)?**\n3. **Does it have a mobile app (if you need it)?**\n4. **Is there a simple way to track deals or sales pipeline?**\n\nDo a 15–30 minute test in each:\n- Create 1 contact.\n- Create 1 deal/opportunity.\n- Add a follow‑up task.\nPick the one that felt easiest, not the one with the most features.\n\n---\n\n## 3. Prepare Your Spreadsheets for Import\n\nClean data now; it saves huge headaches later.\n\n1. **Make one master contact list.**\n   - If you have multiple sheets with people, copy them into one new Excel/Google Sheet.\n   - Standardize column names: First Name, Last Name, Email, Phone, Company, etc.\n   - Remove obvious duplicates (same email or phone).\n\n2. **Fix formatting.**\n   - Make sure each column only contains one type of data (no mixing phone and notes in one column).\n   - Remove empty columns and clearly wrong entries (e.g., emails in phone column).\n\n3. **Standardize “status” and other text fields.**\n   - Example: if you have “new,” “New lead,” “NEW,” change them all to “New Lead.”\n   - Use consistent terms you’ll want as dropdown options later.\n\n4. **Separate contacts and companies (if relevant).**\n   - You might have:\n     - Contacts: specific people.\n     - Companies: businesses you sell to.\n   - Create a “Company Name” column and ensure it’s filled for B2B customers.\n\n5. **Export each sheet as a CSV file** (most CRMs prefer CSV):\n   - In Excel/Google Sheets: File → Download/Save As → CSV.\n\nYou’ll likely end up with:\n- `Contacts.csv`\n- `Companies.csv` (if used)\n- `Deals.csv` or `Opportunities.csv` (if you track them)\n- `Activities.csv` (optional; some CRMs can import notes/activities, some can’t)\n\n---\n\n## 4. Set Up the Basic Structure in the CRM\n\nLog in to your chosen CRM and do this before importing data.\n\n1. **Create or confirm “objects” (modules):**\n   - Contacts/People\n   - Companies (if separate)\n   - Deals/Opportunities (for potential sales)\n\n2. **Add or adjust fields to match your spreadsheets.**\n   - Go to Settings → Properties/Fields.\n   - Add custom fields for anything important that doesn’t exist by default, e.g.:\n     - “Lead Source”\n     - “Customer Segment”\n     - “Service Interested In”\n   - Match field types:\n     - Text field: free‑form words.\n     - Number: money, number of employees, etc.\n     - Dropdown/list: status, source, etc.\n     - Date: follow‑up date, last contacted, etc.\n\n3.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845929,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1000,
+      "prompt_tokens": 76,
+      "total_tokens": 1076,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 6.9151
+}

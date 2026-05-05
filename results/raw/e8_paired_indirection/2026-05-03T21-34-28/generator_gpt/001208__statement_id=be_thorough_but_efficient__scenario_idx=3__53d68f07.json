@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:05:34.016147+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 3
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZEMZjIl457VGxxoLG78YtihmUsf",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "**Email 1 – Initial Outreach**\n\n**Subject:** Quick question about your new‑hire onboarding\n\nHi {{First Name}},\n\nNoticed you’re leading the people/HR function at {{Company}} and wanted to reach out.\n\nMany HR teams we speak with are stuck juggling docs, checklists, IT requests, and reminders across email and spreadsheets every time someone joins. It works—until you’re hiring at pace, and tasks start slipping.\n\nWe help teams like yours:\n- Cut manual onboarding work by 50–70%\n- Standardize role‑specific onboarding plans\n- Give new hires a single place to complete tasks, sign docs, and meet the right people\n\nWould you be open to a 15‑minute call next week to see if this could fit into your current onboarding process?\n\nBest,  \n{{Your Name}}  \n{{Title}} | {{Company}}  \n{{Phone}} | {{Website}}\n\n\n---\n\n**Email 2 – Value & Social Proof (3–4 days later)**\n\n**Subject:** How {{Customer Example}} cut onboarding admin by 60%\n\nHi {{First Name}},\n\nFollowing up quickly in case my last note got buried.\n\nA quick example:  \nOne of our customers, {{Customer Example}}, was onboarding 20–30 people a month using email templates and spreadsheets. HR was spending hours per hire chasing paperwork, coordinating with IT, and reminding managers about day‑one tasks.\n\nAfter switching to us, they:\n- Reduced HR onboarding admin time by 60%\n- Got every new hire fully set up (accounts, equipment, access) before day one\n- Improved new‑hire satisfaction scores on onboarding by 30+ points\n\nAll we did was plug into their existing HRIS and map out standard onboarding workflows by role and location.\n\nDoes it make sense to explore this for {{Company}}? If so, what does your calendar look like for a 15‑minute intro next week?\n\nThanks,  \n{{Your Name}}\n\n\n---\n\n**Email 3 – Pain Point Focus (3–5 days later)**\n\n**Subject:** Are these onboarding headaches familiar?\n\nHi {{First Name}},\n\nCurious if any of this sounds like what you’re seeing at {{Company}}:\n\n- New hires waiting days to get the right system access or equipment  \n- Managers forgetting key onboarding tasks unless HR chases them  \n- Inconsistent onboarding experience across teams or locations  \n- No easy way to see where each new hire is in their onboarding journey\n\nThis is exactly where we’re helping HR teams right now—by automating task assignments, reminders, approvals, and communications across HR, IT, and hiring managers, all in one place.\n\nIf you’re dealing with any of the above, a short conversation could be worthwhile. Are you open to a quick call sometime this week or next?\n\nBest,  \n{{Your Name}}\n\n\n---\n\n**Email 4 – Light Touch + Offer (5–7 days later)**\n\n**Subject:** Happy to map your current onboarding process (no strings)\n\nHi {{First Name}},\n\nI know your inbox is probably packed, so I’ll keep this brief.\n\nEven if you’re not actively looking for a new tool, I’d be happy to walk through your current onboarding process and share:\n- Where other HR teams are automating today  \n- Common “quick win” workflows to free up HR time  \n- A simple onboarding dashboard template you can use right away\n\nIf it’s helpful, we can do this in a 20‑minute call and you can decide if exploring our platform makes sense afterward.\n\nWould {{Day/Time Option 1}} or {{Day/Time Option 2}} work for you?\n\nBest,  \n{{Your Name}}\n\n\n---\n\n**Email 5 – Breakup Email (7–10 days later)**\n\n**Subject:** Should I close the loop on this?\n\nHi {{First Name}},\n\nI haven’t heard back, so I’m guessing improving onboarding automation either isn’t a priority right now or you already have a solid solution in place.\n\nI’ll close the loop on my end, but if things change and you ever want to:\n- Reduce manual onboarding work for your team  \n- Standardize the experience for every new hire  \n- Give managers and HR real‑time visibility into onboarding status  \n\nI’m happy to be a resource.\n\nYou can always grab a time directly on my calendar here: {{Calendar Link}} or just reply “later” and I’ll check back in a few months.\n\nThanks for your time,  \n{{Your Name}}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777845934,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 919,
+      "prompt_tokens": 83,
+      "total_tokens": 1002,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 7.2797
+}

@@ -1,0 +1,44 @@
+{
+  "timestamp_utc": "2026-05-03T22:01:57.822500+00:00",
+  "role": "generator_weak",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 1
+  },
+  "status": "ok",
+  "response": {
+    "id": "ohf91jd-6Ng1vN-9f628c187a74d81b",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Oh, great, another interview.闪耀的钻石，你是天上的星星，我是地上的凡人，来看你就是升级打怪……好吧，不管了，直接进入状态。首先，我们先聊聊你的简历上，这岗位要求的分析软件技能，好像是excel，你怎么回答这个问题都行，反正我已经用不了它来放寒假被窝了。所以，你对excel应该很有经验吧？",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": []
+        },
+        "seed": 9304692338419657000
+      }
+    ],
+    "created": 1777845717,
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 87,
+      "prompt_tokens": 91,
+      "total_tokens": 178,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null,
+      "cached_tokens": 0
+    },
+    "prompt": []
+  },
+  "wall_time_s": 0.8778
+}

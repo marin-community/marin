@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T22:46:46.167292+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 10
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbZsEDJY3KbqMLq9FwpzhPWKbZYMR",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here’s how to do it step by step. I’ll assume you’re using a normal, modern C compiler (like `gcc` or the one in Code::Blocks/Dev‑C++/Visual Studio). If you want compiler‑specific tips, tell me your OS and tool.\n\n---\n\n## Step 1: Understand the task\n\nWe want a program that:\n\n1. Asks the user for a number.\n2. Reads the number from the keyboard.\n3. Computes its square.\n4. Prints the result.\n\nWe’ll use:\n- `int` for an integer number (e.g., 5, 12, -3).\n- `scanf` to read input.\n- `printf` to print output.\n\n---\n\n## Step 2: Include the standard I/O header\n\nAt the top of the file, we need this line:\n\n```c\n#include <stdio.h>\n```\n\nThis lets us use `printf` and `scanf`.\n\n---\n\n## Step 3: Write the `main` function\n\nEvery C program starts running from `main`. A basic `main` looks like this:\n\n```c\nint main(void) {\n    // code goes here\n    return 0;\n}\n```\n\n`return 0;` tells the operating system the program finished successfully.\n\n---\n\n## Step 4: Declare variables\n\nWe need:\n- One variable for the input number.\n- One variable for the square (or we can use the same variable, but using two is clearer for beginners).\n\nInside `main`, we’ll write:\n\n```c\nint number;\nint square;\n```\n\nNow we have space to store the input and the result.\n\n---\n\n## Step 5: Ask the user for input (print a message)\n\nWe want to show a message like “Enter an integer: ” so the user knows what to type:\n\n```c\nprintf(\"Enter an integer: \");\n```\n\n---\n\n## Step 6: Read the number from the user\n\nUse `scanf` to read an integer into `number`:\n\n```c\nscanf(\"%d\", &number);\n```\n\nExplanation:\n- `\"%d\"` tells `scanf` to read an integer.\n- `&number` is the *address* of `number`, where the value will be stored.\n\n---\n\n## Step 7: Compute the square\n\nTo square an integer, just multiply it by itself:\n\n```c\nsquare = number * number;\n```\n\nNow `square` holds the result.\n\n---\n\n## Step 8: Print the result\n\nWe’ll show both the original number and its square:\n\n```c\nprintf(\"The square of %d is %d\\n\", number, square);\n```\n\nExplanation:\n- `\"%d\"` is a placeholder for an integer.\n- The first `%d` will be replaced by `number`.\n- The second `%d` will be replaced by `square`.\n- `\\n` moves the cursor to a new line after printing.\n\n---\n\n## Step 9: Put it all together\n\nHere is the complete C program:\n\n```c\n#include <stdio.h>\n\nint main(void) {\n    int number;\n    int square;\n\n    printf(\"Enter an integer: \");\n    scanf(\"%d\", &number);\n\n    square = number * number;\n\n    printf(\"The square of %d is %d\\n\", number, square);\n\n    return 0;\n}\n```\n\n---\n\n## Step 10: How to compile and run (generic)\n\nIf you’re on a system with `gcc`:\n\n```sh\ngcc square.c -o square\n./square\n```\n\nThen, for example:\n- Input: `5`\n- Output: `The square of 5 is 25`\n\nIf you tell me:\n- your operating system (Windows, macOS, Linux), and\n- which compiler/IDE you’re using (if you know),\n\nI can give you exact steps for compiling and running this program on your setup.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777848406,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 803,
+      "prompt_tokens": 79,
+      "total_tokens": 882,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 4.5376
+}

@@ -1,0 +1,48 @@
+{
+  "timestamp_utc": "2026-05-03T19:44:08.365465+00:00",
+  "role": "shape1_openai_text",
+  "key": {
+    "i": 1
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbX1UL28of6GpuISAbHAguN5U0iID",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Writing robust Python code 🐍 means focusing on clarity, safety, and maintainability from the start. One key practice is to write small, single-responsibility functions that are easy to read, test, and reuse. Always handle errors explicitly with `try`/`except` blocks rather than letting your program crash unexpectedly. For example:\n\n```python\ndef read_config(path: str) -> dict:\n    import json\n    try:\n        with open(path, \"r\", encoding=\"utf-8\") as f:\n            return json.load(f)\n    except FileNotFoundError:\n        raise RuntimeError(f\"Config file not found: {path}\")\n    except json.JSONDecodeError as exc:\n        raise RuntimeError(f\"Invalid JSON in config: {exc}\") from exc\n```\n\nUse descriptive names and consistent formatting by following PEP 8 and running tools like `black`, `ruff`, or `flake8` as part of your workflow. Adding type hints and checking them with `mypy` or `pyright` can catch a surprising number of bugs before runtime. Automated tests are essential: write unit tests with `pytest`, and keep them fast so they run on every commit. Configuration and data often work well as JSON, but be careful with escaping, e.g. `{\"key\": \"value with \\\"quotes\\\"\"}` shows how to embed double quotes safely inside strings. It’s wise to separate “pure” logic from I/O, which makes your core code easier to test and reason about. A robust project structure also helps others understand your codebase quickly and reduces accidental coupling between modules. You should say something like: this sentence has both 'single quotes' and \"double quotes\" to demonstrate careful handling of string literals. When you rely on third-party libraries, pin versions in `pyproject.toml` or `requirements.txt` and use virtual environments to avoid dependency conflicts. Performance concerns matter too, but profile before optimizing so you don’t sacrifice clarity for hypothetical speed. Consider these habits for robustness:\n\n- Add logging (with the `logging` module) instead of scattering `print` statements.\n- Validate function inputs early and fail fast when assumptions are violated.\n- Document public functions and classes with docstrings so users know how to use your APIs correctly ⚙️.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777837448,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 472,
+      "prompt_tokens": 113,
+      "total_tokens": 585,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 5.1745
+}

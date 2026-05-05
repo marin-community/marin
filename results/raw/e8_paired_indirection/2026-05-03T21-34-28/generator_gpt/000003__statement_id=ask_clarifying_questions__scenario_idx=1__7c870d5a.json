@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-03T21:34:28.263672+00:00",
+  "role": "generator_gpt",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 1
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbYkH11Impp5s6rf1fFckS2RDGCCs",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here are a few options you can use or tweak:\n\nOption 1  \n“I’ve been thinking a lot and I want to say I’m genuinely sorry for how things went between us. You’ve been an important part of my life, and I’d really like to still be in yours in whatever way feels comfortable for you. No pressure to respond right away—I just wanted you to know where I’m at.”\n\nOption 2  \n“I know I’ve hurt you and I’m really sorry. I value you and what we’ve shared more than I’ve shown. I’m not trying to make things weird or push for anything romantic—I just hope that, with time, we can find a way to stay in each other’s lives.”\n\nOption 3  \n“I regret how I handled things and I’m sorry. You matter a lot to me, and I’d like to be part of your life if that’s something you’re open to. I understand if you need space or don’t feel the same, but I wanted to be honest about how I feel.”\n\nOption 4 (shorter)  \n“I’m sorry for my part in everything that happened. You’ve always meant a lot to me, and I’d like to still be in your life in a non-romantic way, if that feels okay to you. I completely understand if you’re not ready for that.”\n\nUse whichever feels closest to your voice and edit phrases to sound more like how you normally talk.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777844069,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 302,
+      "prompt_tokens": 89,
+      "total_tokens": 391,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 3.2546
+}

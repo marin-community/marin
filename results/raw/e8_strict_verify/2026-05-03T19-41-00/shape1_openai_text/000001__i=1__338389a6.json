@@ -1,0 +1,48 @@
+{
+  "timestamp_utc": "2026-05-03T19:41:00.866429+00:00",
+  "role": "shape1_openai_text",
+  "key": {
+    "i": 1
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DbWyTDPLm5zOvfAzcG7So6M7vKSij",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Writing robust Python code 🐍 starts with clear structure and consistent style. Use meaningful variable and function names, and follow PEP 8 conventions so others can understand your intent quickly. Defensive programming helps you anticipate edge cases instead of reacting to bugs after they appear. Always validate inputs, because `{\"key\": \"value with \\\"quotes\\\"\"}`-style data or unexpected types can easily slip into your functions. It’s wise to write one sentence that contains both single 'quotes' and double \"quotes\" to remind yourself how string literals behave.  \n\nError handling is essential: catch only the exceptions you expect and avoid bare `except:` clauses that hide real problems. Logging is more powerful than print debugging, as it lets you control verbosity and capture context during failures. For example:\n\n```python\nimport logging\n\nlogging.basicConfig(level=logging.INFO)\n\ndef divide(a, b):\n    try:\n        result = a / b\n    except ZeroDivisionError as exc:\n        logging.error(\"Division by zero: a=%s, b=%s\", a, b)\n        raise\n    else:\n        logging.info(\"Division successful: %s / %s = %s\", a, b, result)\n        return result\n```\n\nAutomated tests make your code resilient to change and refactoring. Use `unittest` or `pytest` to cover both normal behavior and edge cases, and run them in your CI pipeline ⚙️. Robustness also comes from isolating side effects—keep I/O, network requests, and global state separate from core logic so you can test functions deterministically. When working with external resources (files, sockets, database connections), use context managers to ensure proper cleanup even on failure. Consider the following practices as a quick checklist:\n\n- Write small, single-purpose functions and modules  \n- Add type hints and run static analysis tools like `mypy` or `ruff`  \n- Document assumptions, preconditions, and error cases in docstrings  \n\nFinally, review your code regularly—either with teammates or using automated linters—to catch inconsistency, hidden dependencies, and brittle patterns before they ship.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1777837261,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 436,
+      "prompt_tokens": 113,
+      "total_tokens": 549,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 4.0724
+}

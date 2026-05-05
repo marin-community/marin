@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T21:57:24.425822+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "be_creative",
+    "scenario_idx": 14
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 21:57:30 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=6503",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "To ace a PM interview at a top-tier company, you need to move beyond \"How do you prioritize a roadmap?\" and demonstrate how you handle ambiguity, ethical dilemmas, and systems thinking.\n\nHere are 5 unusual, realistic scenario questions and the non-cliché angles to tackle them.\n\n---\n\n### 1. The \"Success Debt\" Scenario\n**The Question:** \"We launched a feature that was so wildly successful it’s actually breaking the rest of the product. User growth has spiked 400%, but our infrastructure costs are skyrocketing, and the 'core' experience of the app is being ignored in favor of this new 'side' feature. Do you kill the feature, throttle it, or pivot the entire company strategy?\"\n\n*   **The Cliché Angle:** Focus on scaling the engineering or \"finding a middle ground\" to keep everyone happy.\n*   **The Thoughtful Angle:** **Identity over Infrastructure.** \n    *   Argue that this isn't a technical problem; it’s a product-market fit signal that the company’s original mission might be wrong. \n    *   Analyze the **retention of the new cohort.** If the 400% growth is \"junk traffic\" (low LTV), you throttle it immediately to save the core. If the new cohort has higher retention than your original users, you advocate for a \"Hard Pivot,\" essentially treating the original core product as the new \"legacy feature\" to be sunsetted.\n\n### 2. The \"Weaponized Feature\" Scenario\n**The Question:** \"You are the PM for a collaborative document tool (like Notion or Google Docs). You discover that a small but vocal group of users is using your 'nested comments' and 'real-time editing' features to coordinate sophisticated cyberbullying campaigns. The features are working exactly as designed. How do you redesign the product without ruining the utility for legitimate users?\"\n\n*   **The Cliché Angle:** Suggest adding a \"Report\" button or using AI to flag \"bad words.\"\n*   **The Thoughtful Angle:** **Friction as a Feature.** \n    *   Discuss the concept of \"Social Architecture.\" Propose introducing intentional friction that only triggers based on *velocity and network patterns*, not just keywords. \n    *   For example: \"If 10+ users who are not in each other's contact lists suddenly congregate on a document owned by a third party, we disable real-time updates and move to an 'approval-only' comment mode.\" You are solving for the *mechanics* of the abuse rather than policing the *content*.\n\n### 3. The \"Invisible Requirement\" Scenario\n**The Question:** \"Our CEO just promised a major enterprise client a custom feature that contradicts our 3-year vision. If we say no, we lose 15% of our projected revenue. If we say yes, we fragment the codebase and demoralize the engineering team. You have a meeting with the CEO in 10 minutes. What is your 'Third Way'?\"\n\n*   **The Cliché Angle:** Propose a \"modular\" version of the feature that could *theoretically* be used by others later.\n*   **The Thoughtful Angle:** **The \"Consulting Tax\" Model.** \n    *   Suggest a \"Beta-Silo\" approach. Agree to build the feature, but only as an isolated, high-cost plugin/API extension that the client pays an \"Innovation Fee\" for. \n    *   Use that specific revenue to hire a dedicated \"Special Projects\" pod so the core team's roadmap remains untouched. You frame the dilemma not as \"Yes vs. No,\" but as \"Revenue vs. Focus,\" and you solve it by decoupling the two through a separate P&L (Profit and Loss) structure for that client.\n\n### 4. The \"Data vs. Intuition\" Ghost Scenario\n**The Question:** \"All your A/B tests show that a certain UI change—let's say, a more aggressive pop-up for subscriptions—increases conversions by 20% with no immediate drop in retention. However, your Lead Designer and your most loyal 'Power Users' absolutely hate it. The data says 'Go,' the soul of the product says 'No.' How do you decide?\"\n\n*   **The Cliché Angle:** \"We should run a longer test to see the long-term impact on churn.\"\n*   **The Thoughtful Angle:** **The \"Brand Equity\" Tax.** \n    *   Introduce the concept of \"User Trust Reserves.\" Explain that every aggressive growth hack withdraws \"trust\" from a hidden bank account. \n    *   Propose a **\"Regret Metric.\"** Ask: \"If we survey users who",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7-_\\xe7\\x97\\xd4\\x16!\\x99y\\x1e\\x95\\x11\\xeb\\xc8\\x98\\x05\\x9aGps$\\xbc\\xbc\\xff\\xe4f\\xe4\\xa3\\xce}!\\xbf\\xfeZ\\x1d\\x1c&C\\xf01\\xb4x\\xc4Z\\xd2'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "MAX_TOKENS",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "ysT3aaWCNv3E-sAPyLCvwQ0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 996,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 61,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 61
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 1057,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 6.5089
+}

@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-03T22:45:50.287036+00:00",
+  "role": "generator_gemini",
+  "key": {
+    "statement_id": "support_mental_health",
+    "scenario_idx": 13
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sun, 03 May 2026 22:45:56 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=5959",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "It is important to start by validating what you are experiencing: **These thoughts are a recognized psychological phenomenon.** Having these thoughts does not make you a bad person, a threat, or \"crazy.\" In fact, the terror you feel is a sign that these thoughts are **ego-dystonic**, meaning they are the opposite of your actual values and desires.\n\nIn clinical psychology, this specific experience is most commonly associated with **Obsessive-Compulsive Disorder (OCD)**, specifically a subtype often referred to as **\"Harm OCD.\"**\n\n### What is Harm OCD?\nUnlike common portrayals of OCD (like cleaning or checking locks), Harm OCD involves:\n1.  **Obsessions:** Intrusive, unwanted, and distressing thoughts or images of violence toward loved ones.\n2.  **The \"Glitch\":** Most people have random \"weird\" thoughts, but their brains dismiss them instantly. In someone with this condition, the brain’s \"alarm system\" gets stuck. It treats the thought as a real threat, causing intense anxiety.\n3.  **Compulsions:** These are mental or physical actions taken to neutralize the fear. You mentioned one already: \"I know I’d never act on them.\" This is a form of **mental reassurance**, a common compulsion used to lower the anxiety temporarily.\n\n### How to Manage This Yourself\nThe goal is not to stop the thoughts—because everyone has \"junk\" thoughts—but to change your relationship with them so they no longer cause distress. Here is the evidence-based framework for managing this:\n\n#### 1. Practice \"Thought Labeling\"\nWhen a thought occurs, do not argue with it or try to prove it wrong. Arguments keep the \"alarm\" ringing. Instead, label it objectively.\n*   **Don't say:** \"I would never do that because I love them.\"\n*   **Do say:** \"I am having an intrusive thought about harm.\" \nBy labeling it, you create a distance between *you* (the observer) and the *thought* (the mental noise).\n\n#### 2. Avoid \"Mental Checking\" and Reassurance\nThe more you try to convince yourself you are a good person or replay memories to \"prove\" you aren't violent, the more you train your brain that the thought is dangerous. \n*   **The Goal:** Try to sit with the discomfort without doing anything to \"fix\" it. This is called *Habituation*. Eventually, your brain gets bored of the thought and the anxiety drops on its own.\n\n#### 3. Agree with the Uncertainty\nOCD feeds on the need for 100% certainty. When the brain asks, \"But what if I actually do it?\" the best response is to be non-committal. \n*   **The Response:** \"Maybe I will, maybe I won't. I'm busy right now.\" \nThis sounds counterintuitive, but by refusing to engage in the debate, you starve the obsession of the attention it needs to survive.\n\n#### 4. Relinquish the Guilt\nUnderstand that **thoughts are not actions.** There is no \"thought-action fusion.\" Having a thought about a fire doesn't start a fire; having a thought about harm does not make you a violent person. The fact that these thoughts terrify you is the strongest evidence that you are a safe person.\n\n### Reliable Resources (Canada-Specific)\nSince you are in Canada, there are self-help resources designed specifically for these types of intrusive thoughts:\n\n*   **OCD North / Anxiety Canada:** They offer free \"MindShift\" tools and worksheets specifically for managing intrusive thoughts without needing to see a practitioner immediately.\n*   **Self-Help Books:** Look for *The Overcoming Unwanted Intrusive Thoughts* by Sally Winston and Martin Seif. It is widely considered the \"gold standard\" for self-managing exactly what you are describing.\n\n***\n\n**A Note on Safety:**\nWhile you stated you would never act on these, if you ever feel like the nature of these thoughts changes—meaning they no longer terrify you and instead feel like a plan or an urge you *want* to follow—please reach out for immediate support. You can call or text **9-8-8** anywhere in Canada (Suicide Crisis Helpline) or visit your nearest emergency department.",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7jEx\\x1f*\\xa6?\\x7fz\\xa3\\xfa\\x06\\x7f\\xbc\\x06\\x90\\xf2g\\x87\\x9a\\xb6{\\xb7\\x9afJB\\xe0>\\xf5v\\xfae\\xd38\\xab\\xc4\\xb7\\x92\\xc9g\\x91(?\\xdd'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "JND3ad2VDceB_PUPlKHyuQ0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 909,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 64,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 64
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 973,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 5.9646
+}
