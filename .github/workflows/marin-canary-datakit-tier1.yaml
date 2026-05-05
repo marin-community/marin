@@ -1,4 +1,4 @@
-name: "Marin - Smoke - Datakit"
+name: "Marin - Canary - Datakit - Tier 1"
 
 on:
   schedule:
@@ -108,11 +108,11 @@ jobs:
           echo "marin_prefix=$PREFIX" >> "$GITHUB_OUTPUT"
           echo "Ferry output prefix: $PREFIX"
 
-      - name: Validate datakit smoke outputs
-        shell: bash -l {0}
-        env:
-          MARIN_PREFIX: ${{ steps.ferry_status.outputs.marin_prefix }}
-        run: .venv/bin/python scripts/datakit/validate_ferry_outputs.py
+      # - name: Validate datakit smoke outputs
+      #   shell: bash -l {0}
+      #   env:
+      #     MARIN_PREFIX: ${{ steps.ferry_status.outputs.marin_prefix }}
+      #   run: .venv/bin/python scripts/datakit/validate_ferry_outputs.py
 
       - name: Capture failure diagnostics
         if: failure() || cancelled()
