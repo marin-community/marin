@@ -76,6 +76,7 @@ jobs:
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
+            -e FERRY_TEST_MAX_FILES "1000" \
             -- python -m experiments.ferries.datakit_nemotron_ferry)
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"

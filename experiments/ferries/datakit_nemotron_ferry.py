@@ -88,6 +88,9 @@ def build_steps(run_id: str) -> list[StepSpec]:
 
     # Sizes mirror validate_normalize_phase1.py, which ran successfully on
     # nemotron_v1 in eu-west4. 512 workers across all fan-out stages.
+    # The yaml sets FERRY_TEST_MAX_FILES=1000 to cap the input shard count
+    # (quality=high has ~2,755 shards / ~960 GB; 1000 keeps the run inside
+    # the GH 6h cap). Read at execution time by `_discover_files`.
     normalized = normalize_step(
         name="datakit-nemotron-smoke/normalize",
         download=download,

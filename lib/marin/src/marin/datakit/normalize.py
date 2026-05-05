@@ -131,6 +131,27 @@ def _make_normalize_fn(
     return normalize_record
 
 
+# Env var that ferries set on test/smoke runs to bound the input set on
+# very large staged dumps. Read at execution by ``_discover_files``; not
+# exposed as a public API parameter so production callers can't stumble into
+# it. If unset, no truncation. If set to a positive int, truncate the sorted
+# file list to that many files. Any other value raises.
+_FERRY_TEST_MAX_FILES_ENV = "FERRY_TEST_MAX_FILES"
+
+
+def _ferry_test_max_files() -> int | None:
+    raw = os.environ.get(_FERRY_TEST_MAX_FILES_ENV)
+    if raw is None or raw == "":
+        return None
+    try:
+        n = int(raw)
+    except ValueError as e:
+        raise RuntimeError(f"{_FERRY_TEST_MAX_FILES_ENV}={raw!r} is not an integer") from e
+    if n <= 0:
+        raise RuntimeError(f"{_FERRY_TEST_MAX_FILES_ENV}={n} must be a positive integer")
+    return n
+
+
 def _discover_files(
     input_path: str,
     file_extensions: tuple[str, ...] | None = None,
@@ -138,13 +159,10 @@ def _discover_files(
     """Walk *input_path* recursively and return a sorted flat list of data files.
 
     Only files with matching extensions are included; dotfiles and hidden
-    directories are skipped.
-
-    Args:
-        input_path: Root directory to walk.
-        file_extensions: Tuple of file extensions to include (e.g.
-            ``(".parquet",)``).  Defaults to all extensions supported by
-            ``zephyr.readers.load_file``.
+    directories are skipped. When the ``FERRY_TEST_MAX_FILES`` env var is set
+    to a positive integer, the sorted list is truncated to that many entries —
+    a smoke/test-only knob that bypasses any caller's intent, used by the
+    canary ferries to bound oversized staged dumps.
     """
     extensions = file_extensions or SUPPORTED_EXTENSIONS
     fs, resolved = url_to_fs(input_path)
@@ -167,6 +185,17 @@ def _discover_files(
             discovered.append(_full_path(os.path.join(root, fname)))
 
     discovered.sort()
+    cap = _ferry_test_max_files()
+    if cap is not None and cap < len(discovered):
+        logger.warning(
+            "_discover_files: respecting %s=%d env var; truncating discovered file list from %d to %d "
+            "(testing/smoke-only knob)",
+            _FERRY_TEST_MAX_FILES_ENV,
+            cap,
+            len(discovered),
+            cap,
+        )
+        discovered = discovered[:cap]
     return discovered
 
 
