@@ -49,6 +49,11 @@ def _expert_mlp(x, w_gate_up, w_down):
     return jnp.einsum("...i,id->...d", jax.nn.silu(gate) * up, w_down)
 
 
+def _vmap_expert_mlp(x_flat, w_gate_up_all, w_down_all):
+    """Run all experts via vmap, return (E, T, D)."""
+    return jax.vmap(lambda w_gu, w_d: _expert_mlp(x_flat, w_gu, w_d))(w_gate_up_all, w_down_all)
+
+
 def _make_forward_fn(model: Transformer):
     """Build a JIT-compiled forward pass that returns all intermediate activations."""
     cfg = model.config
@@ -100,15 +105,16 @@ def _make_forward_fn(model: Transformer):
             selected_experts_all.append(selected)
             combine_weights_all.append(weights)
 
-            # Per-expert outputs — use jnp.take to avoid gather sharding issues
+            # Per-expert outputs — run all experts once, select per token
             w_gate_up_local = reshard(block.mlp.w_gate_up, P(None, None, None))
             w_down_local = reshard(block.mlp.w_down, P(None, None, None))
+            all_expert_outs = _vmap_expert_mlp(x_flat, w_gate_up_local, w_down_local)  # (E, T, D)
+            num_experts = cfg.num_experts
             expert_outs = []
             for ki in range(k):
-                expert_ids = selected[:, ki]
-                w_gu = jnp.take(w_gate_up_local, expert_ids, axis=0)
-                w_d = jnp.take(w_down_local, expert_ids, axis=0)
-                expert_out = _expert_mlp(x_flat, w_gu, w_d)
+                expert_ids = selected[:, ki]  # (T,)
+                one_hot = jax.nn.one_hot(expert_ids, num_experts, dtype=x_flat.dtype)  # (T, E)
+                expert_out = jnp.einsum("te,etd->td", one_hot, all_expert_outs)
                 expert_outs.append(expert_out * weights[:, ki : ki + 1])
             per_expert_outputs_all.append(jnp.stack(expert_outs, axis=1))
 
