@@ -78,8 +78,8 @@ uv run iris --config lib/iris/examples/marin.yaml job run \
 # List jobs (filter by --state, --user, --prefix, etc).
 uv run iris --config lib/iris/examples/marin.yaml job list
 
-# Follow logs (--include-children streams per-task output as well).
-uv run iris --config lib/iris/examples/marin.yaml job logs --include-children /<user>/<job-name>
+# Follow logs (batch-fetches task logs for the job).
+uv run iris --config lib/iris/examples/marin.yaml job logs /<user>/<job-name>
 
 # Kill / Stop Job (if necessary / error / bug) -- kills the job and all its child tasks.
 uv run iris --config lib/iris/examples/marin.yaml job stop /<user>/<job-name>

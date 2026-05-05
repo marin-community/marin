@@ -294,7 +294,6 @@ iris --config cluster.yaml job run --zone us-central2-b -- python train.py
 iris --config cluster.yaml job logs /my-job
 iris --config cluster.yaml job logs /my-job --follow
 iris --config cluster.yaml job logs /my-job --since-seconds 300
-iris --config cluster.yaml job logs /my-job --include-children
 
 # Stop one or more jobs
 iris --config cluster.yaml job stop /my-job
