@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import json
+import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from fray.cluster import ResourceConfig
@@ -23,8 +26,8 @@ from levanter.callbacks.watch import WatchConfig
 from levanter.data import AsyncDataset
 from levanter.data.text import DirectDatasetComponent, GrugLmExample, LmDataConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.tracker import NoopConfig, TrackerConfig
-from levanter.tracker.json_logger import JsonLoggerConfig
+from levanter.tracker import NoopConfig, Tracker, TrackerConfig
+from levanter.tracker.json_logger import JsonLoggerConfig, _flatten, _to_jsonable
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
@@ -34,6 +37,66 @@ from experiments.grug.moe.launch import GRUG_MOE_TRIAL_MODEL, GrugMoeLaunchConfi
 DEFAULT_STEPS = 50
 DEFAULT_PROFILE_STEPS = 10
 DEFAULT_SYNTHETIC_EXAMPLES = 1_000_000
+
+
+class PerfJsonLoggerTracker(Tracker):
+    """JSON logger that keeps only timing-critical metrics for perf sweeps."""
+
+    name: str = "cw_perf_json_logger"
+
+    def __init__(self, logger_name: str, level: int):
+        self.logger = logging.getLogger(logger_name)
+        self.logger.setLevel(level)
+        self._summary: dict[str, Any] = {}
+        self._last: dict[str, Any] = {}
+
+    @staticmethod
+    def _keep(key: str) -> bool:
+        return key.startswith("throughput/") or key in {
+            "global_step",
+            "run_progress",
+            "train/cross_entropy_loss",
+            "train/loss",
+            "optim/learning_rate",
+        }
+
+    def _emit(self, event: str, payload: Mapping[str, Any]) -> None:
+        self.logger.info(json.dumps(_to_jsonable({"tracker": self.name, "event": event, **payload})))
+
+    def log_hyperparameters(self, hparams: dict[str, Any]):
+        del hparams
+
+    def log(self, metrics: Mapping[str, Any], *, step: int | None, commit: bool | None = None):
+        del commit
+        filtered = {k: v for k, v in _flatten(metrics).items() if self._keep(k)}
+        if not filtered:
+            return
+        if step is not None:
+            self._last.update(filtered)
+        self._emit("log", {"step": step, "metrics": filtered})
+
+    def log_summary(self, metrics: Mapping[str, Any]):
+        filtered = {k: v for k, v in _flatten(metrics).items() if self._keep(k)}
+        if not filtered:
+            return
+        self._summary.update(filtered)
+        self._emit("summary", {"metrics": filtered})
+
+    def log_artifact(self, artifact_path, *, name: str | None = None, type: str | None = None):  # noqa: A002
+        del artifact_path, name, type
+
+    def finish(self):
+        self._emit("finish", {"summary": {**self._summary, **self._last}})
+
+
+@dataclass(frozen=True)
+class PerfJsonLoggerConfig(TrackerConfig):
+    logger_name: str = "cw_grug.perf_metrics"
+    level: int = logging.INFO
+
+    def init(self, run_id: str | None) -> Tracker:
+        del run_id
+        return PerfJsonLoggerTracker(self.logger_name, self.level)
 
 
 @dataclass(frozen=True)
@@ -124,6 +187,9 @@ def _synthetic_data() -> LmDataConfig:
 def _tracker_from_env(tags: list[str]) -> TrackerConfig | tuple[TrackerConfig, ...]:
     mode = os.environ.get("CW_GRUG_TRACKER", "wandb").lower()
     json_logger = JsonLoggerConfig(logger_name=os.environ.get("CW_GRUG_JSON_LOGGER", "cw_grug.metrics"))
+    perf_json_logger = PerfJsonLoggerConfig(
+        logger_name=os.environ.get("CW_GRUG_PERF_JSON_LOGGER", "cw_grug.perf_metrics")
+    )
     wandb = WandbConfig(
         project=os.environ.get("WANDB_PROJECT", "marin"),
         tags=tags,
@@ -134,12 +200,16 @@ def _tracker_from_env(tags: list[str]) -> TrackerConfig | tuple[TrackerConfig, .
     )
     if mode == "json_logger":
         return json_logger
+    if mode == "perf_json_logger":
+        return perf_json_logger
     if mode == "both":
         return (wandb, json_logger)
     if mode == "noop":
         return NoopConfig()
     if mode != "wandb":
-        raise ValueError(f"Unknown CW_GRUG_TRACKER={mode!r}; expected wandb, json_logger, both, or noop")
+        raise ValueError(
+            f"Unknown CW_GRUG_TRACKER={mode!r}; expected wandb, json_logger, perf_json_logger, both, or noop"
+        )
     return wandb
 
 
