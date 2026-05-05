@@ -48,7 +48,7 @@ from zephyr.dataset import (
 )
 from zephyr.expr import Expr
 from zephyr.external_sort import external_sort_merge
-from zephyr.readers import InputFileSpec
+from zephyr.readers import InputFileSpec, load_file
 
 logger = logging.getLogger(__name__)
 
@@ -198,8 +198,6 @@ def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
 
 
 def _load_file_gen(stream: Iterator) -> Iterator:
-    from zephyr.readers import load_file
-
     for spec in stream:
         try:
             yield from load_file(spec)

@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from finelog.rpc import logging_pb2
-from finelog.types import LogPusherProtocol, str_to_log_level
+from finelog.types import LogWriterProtocol, str_to_log_level
 from rigging.log_setup import parse_log_level
 from rigging.timing import Timestamp
 
@@ -412,26 +412,31 @@ def _build_pod_manifest(
     if run_req.HasField("resources"):
         res = run_req.resources
         limits: dict[str, str] = {}
+        requests: dict[str, str] = {}
         if res.cpu_millicores:
-            limits["cpu"] = f"{res.cpu_millicores}m"
+            # CPU as a request only (no limits.cpu) so containers can burst onto
+            # idle node CPU. The scheduler still places by cpu_millicores, and
+            # under contention CFS shares CPU proportionally to requests. This
+            # matches the soft-cap behavior the docker runtime uses for
+            # CAPACITY_TYPE_ON_DEMAND workers.
+            requests["cpu"] = f"{res.cpu_millicores}m"
         if res.memory_bytes:
+            # Memory stays a hard cap — overshoot is fatal, not just slow.
             limits["memory"] = str(res.memory_bytes)
+            requests["memory"] = str(res.memory_bytes)
         if res.HasField("device"):
             gpu_count = get_gpu_count(res.device)
             has_tpu = res.device.HasField("tpu")
             if gpu_count > 0:
+                # K8s treats accelerator limits as implicit requests.
                 limits["nvidia.com/gpu"] = str(gpu_count)
                 if host_network:
                     # Request RDMA/IB devices for multi-host NCCL over InfiniBand.
                     limits["rdma/ib"] = str(gpu_count)
         if limits:
             resources["limits"] = limits
-            # Set requests = limits for CPU/memory so K8s schedules based on
-            # actual resource needs. GPU/RDMA are excluded (K8s treats GPU
-            # limits as implicit requests).
-            requests = {k: v for k, v in limits.items() if k in ("cpu", "memory")}
-            if requests:
-                resources.setdefault("requests", {}).update(requests)
+        if requests:
+            resources.setdefault("requests", {}).update(requests)
         if res.disk_bytes:
             disk_gi = max(1, res.disk_bytes // (1024**3))
             resources.setdefault("requests", {})["ephemeral-storage"] = f"{disk_gi}Gi"
@@ -885,13 +890,13 @@ class LogCollector:
     def __init__(
         self,
         kubectl: K8sService,
-        log_pusher: LogPusherProtocol,
+        log_client: LogWriterProtocol,
         concurrency: int = 8,
         poll_interval: float = 15.0,
         limit_bytes: int | None = _DEFAULT_LIMIT_BYTES,
     ):
         self._kubectl = kubectl
-        self._log_pusher = log_pusher
+        self._log_client = log_client
         self._poll_interval = poll_interval
         self._limit_bytes = limit_bytes
         self._pods: dict[str, _LogPod] = {}
@@ -954,7 +959,7 @@ class LogCollector:
             if result.lines:
                 entries = [_kubectl_log_line_to_log_entry(kll, pod.attempt_id) for kll in result.lines]
                 key = task_log_key(TaskAttempt(task_id=pod.task_id, attempt_id=pod.attempt_id))
-                self._log_pusher.push(key, entries)
+                self._log_client.write_batch(key, entries)
             pod.last_timestamp = result.last_timestamp
             pod.consecutive_failures = 0
             return True
@@ -1070,7 +1075,7 @@ class K8sTaskProvider:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
-    log_pusher: LogPusherProtocol | None = None
+    log_client: LogWriterProtocol | None = None
     poll_concurrency: int = 32
     log_poll_interval: float = 15.0
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
@@ -1086,9 +1091,9 @@ class K8sTaskProvider:
         return self._resource_collector
 
     def _ensure_log_collector(self) -> LogCollector | None:
-        if self._log_collector is None and self.log_pusher is not None:
+        if self._log_collector is None and self.log_client is not None:
             self._log_collector = LogCollector(
-                self.kubectl, self.log_pusher, concurrency=self.poll_concurrency, poll_interval=self.log_poll_interval
+                self.kubectl, self.log_client, concurrency=self.poll_concurrency, poll_interval=self.log_poll_interval
             )
         return self._log_collector
 

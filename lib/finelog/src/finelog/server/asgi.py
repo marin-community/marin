@@ -1,30 +1,74 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""ASGI app wiring for the finelog log server."""
+"""ASGI app wiring for the finelog log + stats server."""
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
+from pathlib import Path
 
 from connectrpc.interceptor import Interceptor
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from finelog.rpc.finelog_stats_connect import StatsServiceWSGIApplication
 from finelog.rpc.logging_connect import LogServiceWSGIApplication
 from finelog.server.interceptors import ConcurrencyLimitInterceptor
 from finelog.server.service import LogServiceImpl
+from finelog.server.stats_service import StatsServiceImpl
 
-# Cap on concurrent FetchLogs RPCs. Each read can fan out into DuckDB scans
-# across hundreds of MB of parquet; allowing unbounded parallelism evicts the
-# page cache and wedges the process. Tune alongside the working-set caps in
-# duckdb_store.py.
+logger = logging.getLogger(__name__)
+
+# Up four parents from server/asgi.py reaches lib/finelog/.
+_VUE_DIST_DIR = Path(__file__).parent.parent.parent.parent / "dashboard" / "dist"
+_DOCKER_VUE_DIST_DIR = Path("/app/dashboard/dist")
+
+
+def _vue_dist_dir() -> Path | None:
+    for candidate in (_VUE_DIST_DIR, _DOCKER_VUE_DIST_DIR):
+        if candidate.is_dir() and (candidate / "index.html").is_file():
+            return candidate
+    return None
+
+
+_NOT_BUILT_HTML = (
+    "<!doctype html><html><body>"
+    "<h1>Dashboard not built</h1>"
+    "<p>Run <code>npm run build</code> in <code>lib/finelog/dashboard</code>.</p>"
+    "</body></html>"
+)
+
+# When fronted by a reverse proxy at a sub-path the proxy sends
+# X-Forwarded-Prefix; we rewrite <base href="/"> so vue-router/asset URLs
+# resolve under that prefix instead of the origin root.
+_BASE_HREF_PLACEHOLDER = b'<base href="/"'
+
+
+def _index_html_with_base(raw: bytes, prefix: str) -> bytes:
+    if not prefix or prefix == "/":
+        return raw
+    if not prefix.startswith("/"):
+        prefix = "/" + prefix
+    if not prefix.endswith("/"):
+        prefix = prefix + "/"
+    replacement = f'<base href="{prefix}"'.encode()
+    return raw.replace(_BASE_HREF_PLACEHOLDER, replacement, 1)
+
+
+# Cap on concurrent read RPCs. Both FetchLogs and Query fan out into
+# DuckDB scans across hundreds of MB of parquet; unbounded parallelism
+# evicts the page cache and wedges the process. Tune alongside the
+# working-set caps in duckdb_store.py.
 _MAX_CONCURRENT_FETCH_LOGS = 4
+_MAX_CONCURRENT_QUERY = 4
 
 # CRON(2026-05-12) -- remove this legacy workaround as all workers & clients
 # will be updated by this point.
@@ -55,16 +99,17 @@ def build_log_server_asgi(
     *,
     interceptors: Iterable[Interceptor] = (),
     max_concurrent_fetch_logs: int = _MAX_CONCURRENT_FETCH_LOGS,
+    max_concurrent_query: int = _MAX_CONCURRENT_QUERY,
+    stats_service: StatsServiceImpl | None = None,
 ) -> Starlette:
-    """Build the ASGI app that serves the LogService RPC endpoints.
+    """Build the ASGI app that serves LogService and (optionally) StatsService.
 
-    A ``ConcurrencyLimitInterceptor`` is appended to ``interceptors`` to cap
-    parallel ``FetchLogs`` RPCs. Callers override ``max_concurrent_fetch_logs``
-    in tests that want to exercise the cap deterministically.
+    A ``ConcurrencyLimitInterceptor`` is appended to each service's chain
+    to cap parallel ``FetchLogs`` and ``Query`` RPCs.
     """
-    chain: list[Interceptor] = list(interceptors)
-    chain.append(ConcurrencyLimitInterceptor({"FetchLogs": max_concurrent_fetch_logs}))
-    log_wsgi_app = LogServiceWSGIApplication(service=service, interceptors=tuple(chain))
+    log_chain: list[Interceptor] = list(interceptors)
+    log_chain.append(ConcurrencyLimitInterceptor({"FetchLogs": max_concurrent_fetch_logs}))
+    log_wsgi_app = LogServiceWSGIApplication(service=service, interceptors=tuple(log_chain))
 
     async def _health(_: Request) -> PlainTextResponse:
         return PlainTextResponse("ok")
@@ -73,4 +118,35 @@ def build_log_server_asgi(
         Route("/health", _health),
         Mount(log_wsgi_app.path, app=WSGIMiddleware(log_wsgi_app)),
     ]
+    if stats_service is not None:
+        stats_chain: list[Interceptor] = list(interceptors)
+        stats_chain.append(ConcurrencyLimitInterceptor({"Query": max_concurrent_query}))
+        stats_wsgi_app = StatsServiceWSGIApplication(service=stats_service, interceptors=tuple(stats_chain))
+        routes.append(Mount(stats_wsgi_app.path, app=WSGIMiddleware(stats_wsgi_app)))
+
+    # SPA shell at "/" and any unknown path so Vue Router can take over
+    # client-side. Static assets under dist/static/* are content-hashed.
+    # Resolved at request time so the server boots cleanly without a built dist.
+    dist = _vue_dist_dir()
+    if dist is not None:
+        routes.append(Mount("/static", app=StaticFiles(directory=dist / "static"), name="static"))
+        favicon = dist / "favicon.ico"
+        if favicon.is_file():
+            routes.append(Route("/favicon.ico", lambda _r: FileResponse(favicon)))
+
+        async def _spa_index(request: Request) -> Response:
+            prefix = request.headers.get("x-forwarded-prefix", "")
+            html = _index_html_with_base((dist / "index.html").read_bytes(), prefix)
+            return Response(html, media_type="text/html")
+
+        routes.append(Route("/", _spa_index))
+        routes.append(Route("/{rest:path}", _spa_index))
+    else:
+        logger.info("Dashboard dist not found; serving placeholder at /")
+
+        async def _placeholder(_: Request) -> Response:
+            return Response(_NOT_BUILT_HTML, media_type="text/html")
+
+        routes.append(Route("/", _placeholder))
+
     return Starlette(routes=routes, middleware=[Middleware(_LegacyIrisLoggingPathMiddleware)])

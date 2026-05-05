@@ -226,8 +226,18 @@ export interface WorkerHealthStatus {
   statusMessage?: string
 }
 
+export interface WorkerQuery {
+  contains?: string
+  sortField?: string
+  sortDirection?: string
+  offset?: number
+  limit?: number
+}
+
 export interface ListWorkersResponse {
   workers: WorkerHealthStatus[]
+  totalCount: number
+  hasMore: boolean
 }
 
 export interface WorkerResourceSnapshot {

@@ -334,7 +334,7 @@ def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_pa
         caplog.clear()
         coord._log_status()
     msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]
-    assert msgs and "items=7" in msgs[-1] and "bytes_processed=0.0MiB" in msgs[-1], msgs
+    assert msgs and "items=7" in msgs[-1] and "bytes_processed=0 bytes" in msgs[-1], msgs
 
     # Same when only the byte counter is present.
     coord._worker_counters["worker-A"] = CounterSnapshot(
@@ -344,7 +344,7 @@ def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_pa
         caplog.clear()
         coord._log_status()
     msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]
-    assert msgs and "items=0" in msgs[-1] and "bytes_processed=" in msgs[-1], msgs
+    assert msgs and "items=0" in msgs[-1] and "bytes_processed=1 KiB" in msgs[-1], msgs
 
 
 def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):

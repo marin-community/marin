@@ -237,3 +237,4 @@ scr/*
 
 .worktrees
 .obsidian
+.cw_env

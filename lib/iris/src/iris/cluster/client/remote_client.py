@@ -12,8 +12,8 @@ from pathlib import Path
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
+from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from finelog.rpc.logging_connect import LogServiceClientSync
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.cluster.client.bundle import BundleCreator
@@ -79,8 +79,8 @@ class RemoteClusterClient:
             timeout_ms=timeout_ms,
             interceptors=interceptors,
         )
-        self._log_client = LogServiceClientSync(
-            address=controller_address,
+        self._log_client = LogClient.connect(
+            controller_address,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
         )

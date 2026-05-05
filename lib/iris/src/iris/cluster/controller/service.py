@@ -23,9 +23,8 @@ from typing import Any, Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
-from finelog.client import LogServiceProxy
+from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from finelog.server import LogServiceImpl
 from rigging.timing import Timer, Timestamp
 
 from iris.cluster.bundle import BundleStore
@@ -84,7 +83,7 @@ from iris.cluster.controller.schema import (
     WorkerRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.stores import TASK_RESOURCE_HISTORY_RETENTION, ControllerStore
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
@@ -225,9 +224,10 @@ def _active_worker_id(task: TaskDetailRow) -> WorkerId | None:
 def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.TaskStatus:
     """Convert a task row to a TaskStatus proto.
 
-    Handles attempt conversion and timestamps.  resource_usage is NOT populated
-    here — callers must attach it separately from task_resource_history.
-    The caller is responsible for resolving worker_address from worker_id if needed.
+    Handles attempt conversion and timestamps. ``resource_usage`` is no longer
+    populated by the controller — per-attempt samples live in the ``iris.task``
+    stats namespace. The caller is responsible for resolving worker_address
+    from worker_id if needed.
     """
     current_attempt = _current_attempt(task)
 
@@ -385,31 +385,6 @@ def _resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
     )
 
 
-_SNAPSHOT_FIELD_MAP = (
-    ("snapshot_host_cpu_percent", "host_cpu_percent"),
-    ("snapshot_memory_used_bytes", "memory_used_bytes"),
-    ("snapshot_memory_total_bytes", "memory_total_bytes"),
-    ("snapshot_disk_used_bytes", "disk_used_bytes"),
-    ("snapshot_disk_total_bytes", "disk_total_bytes"),
-    ("snapshot_running_task_count", "running_task_count"),
-    ("snapshot_total_process_count", "total_process_count"),
-    ("snapshot_net_recv_bps", "net_recv_bps"),
-    ("snapshot_net_sent_bps", "net_sent_bps"),
-)
-
-
-def _snapshot_row_to_proto(row: Any, timestamp_ms: int | None = None) -> job_pb2.WorkerResourceSnapshot:
-    """Reconstruct a WorkerResourceSnapshot proto from scalar columns."""
-    snap = job_pb2.WorkerResourceSnapshot()
-    for col, proto_field in _SNAPSHOT_FIELD_MAP:
-        val = getattr(row, col)
-        if val is not None:
-            setattr(snap, proto_field, val)
-    if timestamp_ms is not None:
-        snap.timestamp.epoch_ms = timestamp_ms
-    return snap
-
-
 def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Controller.LaunchJobRequest:
     """Reconstruct a LaunchJobRequest proto from native JobDetailRow columns."""
     req = controller_pb2.Controller.LaunchJobRequest(
@@ -505,12 +480,9 @@ def _decode_attribute_value(row: Any) -> tuple[str, str | int | float]:
 class _WorkerDetail:
     worker: WorkerDetailRow
     running_tasks: frozenset[JobName]
-    resource_history: tuple[job_pb2.WorkerResourceSnapshot, ...]
 
 
-def _read_worker_detail(
-    db: ControllerDB, worker_id: WorkerId, *, resource_history_limit: int = 200
-) -> _WorkerDetail | None:
+def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail | None:
     with db.read_snapshot() as q:
         worker = WORKER_DETAIL_PROJECTION.decode_one(
             q.fetchall(
@@ -534,21 +506,9 @@ def _read_worker_detail(
             (str(worker_id), *ACTIVE_TASK_STATES),
             decoders={"task_id": JobName.from_wire},
         )
-        resource_rows = q.raw(
-            "SELECT wrh.snapshot_host_cpu_percent, wrh.snapshot_memory_used_bytes, "
-            "wrh.snapshot_memory_total_bytes, wrh.snapshot_disk_used_bytes, "
-            "wrh.snapshot_disk_total_bytes, wrh.snapshot_running_task_count, "
-            "wrh.snapshot_total_process_count, wrh.snapshot_net_recv_bps, "
-            "wrh.snapshot_net_sent_bps, wrh.timestamp_ms "
-            "FROM worker_resource_history wrh "
-            "WHERE wrh.worker_id = ? ORDER BY wrh.id DESC LIMIT ?",
-            (str(worker_id), max(resource_history_limit, 0)),
-        )
-    resource_history = tuple(reversed([_snapshot_row_to_proto(r, timestamp_ms=r.timestamp_ms) for r in resource_rows]))
     return _WorkerDetail(
         worker=worker,
         running_tasks=frozenset(r.task_id for r in running_rows),
-        resource_history=resource_history,
     )
 
 
@@ -615,6 +575,38 @@ _SORT_FIELD_TO_SQL: dict[int, str] = {
 
 
 MAX_LIST_JOBS_LIMIT = 500
+MAX_LIST_WORKERS_LIMIT = 1000
+
+
+def _filter_and_sort_workers(
+    workers: list[WorkerDetailRow],
+    query: controller_pb2.Controller.WorkerQuery,
+) -> list[WorkerDetailRow]:
+    """Apply the ``WorkerQuery`` contains filter and sort the cached roster.
+
+    Filtering and sorting happen in Python against the cached worker roster
+    rather than in SQL: the roster is bounded by cluster size (low thousands)
+    and already cached on the controller, so the marginal cost of a re-scan
+    per request is much smaller than reissuing the SELECT + worker_attributes
+    fan-out.
+    """
+    needle = query.contains.lower() if query.contains else ""
+    if needle:
+        workers = [
+            w for w in workers if needle in str(w.worker_id).lower() or (w.address and needle in w.address.lower())
+        ]
+
+    sort_field = query.sort_field or controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID
+    descending = query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC
+    if sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT:
+        workers = sorted(workers, key=lambda w: w.last_heartbeat.epoch_ms(), reverse=descending)
+    elif sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE:
+        # CPU workers persist with ``device_type == ""``; under ascending sort
+        # they group first (treating CPU as the no-accelerator baseline).
+        workers = sorted(workers, key=lambda w: (w.device_type, str(w.worker_id)), reverse=descending)
+    else:
+        workers = sorted(workers, key=lambda w: str(w.worker_id), reverse=descending)
+    return workers
 
 
 def _resolve_state_filter(state_filter: str) -> tuple[int, ...] | None:
@@ -1010,7 +1002,7 @@ class ControllerServiceImpl:
         store: Controller store bundle (per-entity stores + transaction / read_snapshot).
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
-        log_service: LogService for fetching logs (in-process or remote proxy).
+        log_client: LogClient for reading task logs through LogService.FetchLogs.
     """
 
     def __init__(
@@ -1019,7 +1011,7 @@ class ControllerServiceImpl:
         store: ControllerStore,
         controller: ControllerProtocol,
         bundle_store: BundleStore,
-        log_service: LogServiceImpl | LogServiceProxy,
+        log_client: LogClient,
         auth: ControllerAuth | None = None,
         system_endpoints: dict[str, str] | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
@@ -1029,7 +1021,7 @@ class ControllerServiceImpl:
         self._db = store._db
         self._controller = controller
         self._bundle_store = bundle_store
-        self._log_service = log_service
+        self._log_client = log_client
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
@@ -1326,42 +1318,13 @@ class ControllerServiceImpl:
         if job.submitted_at:
             proto_job_status.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at))
 
-        # Compute min/max resource usage across running tasks via pure SQL.
-        resource_min = None
-        resource_max = None
-        with self._db.read_snapshot() as q:
-            agg = q.raw(
-                "SELECT "
-                "  MIN(trh.cpu_millicores) as min_cpu, MAX(trh.cpu_millicores) as max_cpu, "
-                "  MIN(trh.memory_mb) as min_mem, MAX(trh.memory_mb) as max_mem, "
-                "  MIN(trh.disk_mb) as min_disk, MAX(trh.disk_mb) as max_disk, "
-                "  MAX(trh.memory_peak_mb) as max_peak_mem, "
-                "  COUNT(*) as cnt "
-                "FROM task_resource_history trh "
-                "JOIN tasks t ON trh.task_id = t.task_id AND trh.attempt_id = t.current_attempt_id "
-                "WHERE t.job_id = ? AND t.state IN (?, ?)",
-                (job.job_id.to_wire(), job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_BUILDING),
-            )
-        if agg and agg[0].cnt > 0:
-            row = agg[0]
-            resource_min = job_pb2.ResourceUsage(
-                memory_mb=row.min_mem,
-                cpu_millicores=row.min_cpu,
-                disk_mb=row.min_disk,
-            )
-            resource_max = job_pb2.ResourceUsage(
-                memory_mb=row.max_mem,
-                cpu_millicores=row.max_cpu,
-                disk_mb=row.max_disk,
-                memory_peak_mb=row.max_peak_mem,
-            )
-
+        # Per-task resource samples now live in the ``iris.task`` stats
+        # namespace; the controller no longer aggregates min/max from a
+        # local table. Dashboard panels that need this should query stats.
         reconstructed_request = _reconstruct_launch_job_request(job)
         return controller_pb2.Controller.GetJobStatusResponse(
             job=proto_job_status,
             request=redact_request_env_vars(reconstructed_request),
-            resource_min=resource_min,
-            resource_max=resource_max,
         )
 
     def get_job_state(
@@ -1529,41 +1492,15 @@ class ControllerServiceImpl:
 
         proto = task_to_proto(task, worker_address=worker_address)
 
-        # Attach resource history and job resource limits (detail view only).
+        # Resource history / latest usage now comes from the ``iris.task``
+        # stats namespace; the controller only attaches the static job
+        # resource limits here.
         job_resources = None
         with self._db.read_snapshot() as q:
-            # Fetch newest rows first so active tasks with >N rows get current data.
-            history_rows = q.raw(
-                "SELECT trh.cpu_millicores, trh.memory_mb, trh.disk_mb, trh.memory_peak_mb "
-                "FROM task_resource_history trh "
-                "WHERE trh.task_id = ? AND trh.attempt_id = ? ORDER BY trh.id DESC LIMIT ?",
-                (task_id.to_wire(), task.current_attempt_id, TASK_RESOURCE_HISTORY_RETENTION),
-            )
             jc_row = q.raw(
                 "SELECT jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json "
                 "FROM job_config jc WHERE jc.job_id = ?",
                 (task.job_id.to_wire(),),
-            )
-        # Reverse to oldest-first for the API contract.
-        for r in reversed(history_rows):
-            proto.resource_history.append(
-                job_pb2.ResourceUsage(
-                    cpu_millicores=r.cpu_millicores,
-                    memory_mb=r.memory_mb,
-                    disk_mb=r.disk_mb,
-                    memory_peak_mb=r.memory_peak_mb,
-                )
-            )
-        # Populate resource_usage from the latest history entry (newest is first before reversal).
-        if history_rows:
-            latest = history_rows[0]
-            proto.resource_usage.CopyFrom(
-                job_pb2.ResourceUsage(
-                    cpu_millicores=latest.cpu_millicores,
-                    memory_mb=latest.memory_mb,
-                    disk_mb=latest.disk_mb,
-                    memory_peak_mb=latest.memory_peak_mb,
-                )
             )
         if jc_row:
             row = jc_row[0]
@@ -1589,40 +1526,13 @@ class ControllerServiceImpl:
         tasks = _tasks_for_listing(self._db, job_id=job_id)
         worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
 
-        # Batch-fetch latest resource usage per task from task_resource_history.
-        # Join through tasks table (same pattern as the aggregate query in get_job_status).
-        resource_by_task: dict[str, job_pb2.ResourceUsage] = {}
-        if tasks:
-            with self._db.read_snapshot() as q:
-                rows = q.raw(
-                    "SELECT trh.task_id, trh.cpu_millicores, trh.memory_mb, trh.disk_mb, trh.memory_peak_mb "
-                    "FROM task_resource_history trh "
-                    "INNER JOIN ("
-                    "  SELECT trh2.task_id, MAX(trh2.id) as max_id "
-                    "  FROM task_resource_history trh2 "
-                    "  JOIN tasks t ON trh2.task_id = t.task_id AND trh2.attempt_id = t.current_attempt_id "
-                    "  WHERE t.job_id = ? "
-                    "  GROUP BY trh2.task_id"
-                    ") latest ON trh.id = latest.max_id",
-                    (job_id.to_wire(),),
-                )
-            for r in rows:
-                resource_by_task[r.task_id] = job_pb2.ResourceUsage(
-                    cpu_millicores=r.cpu_millicores,
-                    memory_mb=r.memory_mb,
-                    disk_mb=r.disk_mb,
-                    memory_peak_mb=r.memory_peak_mb,
-                )
-
+        # Per-task latest resource usage now lives in the ``iris.task`` stats
+        # namespace; dashboard list views should query it there instead of
+        # the controller attaching it to every TaskStatus row.
         task_statuses = []
         for task in tasks:
             twid = _task_worker_id(task)
             proto_task_status = task_to_proto(task, worker_address=worker_addr_by_id.get(twid, "") if twid else "")
-
-            # Attach latest resource usage if available.
-            usage = resource_by_task.get(task.task_id.to_wire())
-            if usage is not None:
-                proto_task_status.resource_usage.CopyFrom(usage)
 
             # Don't add scheduling diagnostics in list view - too expensive
             # Users should check job detail page for scheduling diagnostics
@@ -1679,26 +1589,55 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.ListWorkersRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.ListWorkersResponse:
-        """List all workers with their running task counts."""
+        """List workers with their running task counts.
+
+        Filters/sorts the cached roster, then slices to the requested page so
+        only the page's workers pay the ``running_tasks_by_worker`` fan-out
+        and proto-build cost. ``query.limit == 0`` disables paging (preserves
+        CLI callers that fetch the whole roster); ``limit > 0`` is clamped to
+        ``MAX_LIST_WORKERS_LIMIT``.
+        """
         if self._controller.has_direct_provider:
             return controller_pb2.Controller.ListWorkersResponse()
-        workers = []
-        worker_rows = self._worker_roster_cached()
-        running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in worker_rows})
-        for worker in worker_rows:
-            workers.append(
-                controller_pb2.Controller.WorkerHealthStatus(
-                    worker_id=worker.worker_id,
-                    healthy=worker.healthy,
-                    consecutive_failures=worker.consecutive_failures,
-                    last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
-                    running_job_ids=[task_id.to_wire() for task_id in running_by_worker.get(worker.worker_id, [])],
-                    address=worker.address,
-                    metadata=_worker_metadata_to_proto(worker),
-                    status_message=worker_status_message(worker),
-                )
+
+        query = controller_pb2.Controller.WorkerQuery()
+        if request.HasField("query"):
+            query.CopyFrom(request.query)
+
+        all_rows = self._worker_roster_cached()
+        filtered = _filter_and_sort_workers(all_rows, query)
+        total_count = len(filtered)
+
+        offset = max(query.offset, 0)
+        limit = max(query.limit, 0)
+        if limit > MAX_LIST_WORKERS_LIMIT:
+            limit = MAX_LIST_WORKERS_LIMIT
+        if limit > 0:
+            page_rows = filtered[offset : offset + limit]
+            has_more = offset + limit < total_count
+        else:
+            page_rows = filtered[offset:] if offset else filtered
+            has_more = False
+
+        running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in page_rows})
+        workers = [
+            controller_pb2.Controller.WorkerHealthStatus(
+                worker_id=worker.worker_id,
+                healthy=worker.healthy,
+                consecutive_failures=worker.consecutive_failures,
+                last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
+                running_job_ids=[task_id.to_wire() for task_id in running_by_worker.get(worker.worker_id, [])],
+                address=worker.address,
+                metadata=_worker_metadata_to_proto(worker),
+                status_message=worker_status_message(worker),
             )
-        return controller_pb2.Controller.ListWorkersResponse(workers=workers)
+            for worker in page_rows
+        ]
+        return controller_pb2.Controller.ListWorkersResponse(
+            workers=workers,
+            total_count=total_count,
+            has_more=has_more,
+        )
 
     # --- Endpoint Management ---
 
@@ -1953,7 +1892,7 @@ class ControllerServiceImpl:
             min_level=request.min_level,
         )
 
-        fetch_response = self._log_service.fetch_logs(fetch_request, ctx)
+        fetch_response = self._log_client.fetch_logs(fetch_request)
         entries = fetch_response.entries
 
         batch = controller_pb2.Controller.TaskLogBatch(
@@ -2118,11 +2057,6 @@ class ControllerServiceImpl:
             recent_attempts=recent_attempts,
         )
         resp.worker.CopyFrom(worker_health)
-        resource_history = detail.resource_history
-        if resource_history:
-            resp.current_resources.CopyFrom(resource_history[-1])
-        for snapshot in resource_history:
-            resp.resource_history.append(snapshot)
         return resp
 
     def begin_checkpoint(
@@ -2712,7 +2646,6 @@ class ControllerServiceImpl:
                     cur,
                     HeartbeatApplyRequest(
                         worker_id=WorkerId(request.worker_id),
-                        worker_resource_snapshot=None,
                         updates=updates,
                     ),
                 )

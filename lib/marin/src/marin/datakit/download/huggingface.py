@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 
 import huggingface_hub
+from fray import ResourceConfig
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
 from rigging.filesystem import open_url, url_to_fs
@@ -103,6 +104,11 @@ class DownloadConfig:
     source_url_override: str | None = None
     """Optional fsspec URL to read from instead of HuggingFace. Bypasses HF-specific
     listing and revision handling; mainly intended for hermetic tests."""
+
+    worker_resources: ResourceConfig | None = None
+    """Per-worker resources for the Zephyr download workers. None falls back to
+    ZephyrContext defaults (1 CPU / 1 GB RAM). Bump for large parquet shards or
+    when HF streaming buffers spike memory."""
 
 
 def _strip_hf_protocol(path: str) -> str:
@@ -374,7 +380,10 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    ctx = ZephyrContext(name="download-hf", max_workers=cfg.zephyr_max_parallelism)
+    ctx_kwargs: dict = {"name": "download-hf", "max_workers": cfg.zephyr_max_parallelism}
+    if cfg.worker_resources is not None:
+        ctx_kwargs["resources"] = cfg.worker_resources
+    ctx = ZephyrContext(**ctx_kwargs)
     ctx.execute(pipeline)
 
     # Write Provenance JSON
@@ -396,6 +405,7 @@ def download_hf_step(
     zephyr_max_parallelism: int = 8,
     deps: list[StepSpec] | None = None,
     override_output_path: str | None = None,
+    worker_resources: ResourceConfig | None = None,
 ) -> StepSpec:
     """Create a StepSpec that downloads a HuggingFace dataset.
 
@@ -425,6 +435,7 @@ def download_hf_step(
                 gcs_output_path=output_path,
                 append_sha_to_path=append_sha_to_path,
                 zephyr_max_parallelism=zephyr_max_parallelism,
+                worker_resources=worker_resources,
             )
         )
 

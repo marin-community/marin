@@ -67,7 +67,7 @@ def serve(worker_config: str):
 
     config = worker_config_from_proto(wc_proto, resolve_image=resolve_image)
 
-    container_runtime = DockerRuntime(cache_dir=config.cache_dir)
+    container_runtime = DockerRuntime(cache_dir=config.cache_dir, capacity_type=config.capacity_type)
 
     worker = Worker(config, container_runtime=container_runtime)
 

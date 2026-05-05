@@ -1,0 +1,100 @@
+# Iris on CoreWeave RNO2A (GH200, 1 GPU per node).
+#
+# Single GPU NodePool: gd-1xgh200. The controller is pinned onto this same pool
+# because the cluster has no CPU nodes — see CAVEAT below.
+#
+# Setup:
+#   1. Split the multi-context kubeconfig (~/.kube/coreweave-rno2a holds both
+#      rno2a and usw09b) into a single-context file:
+#        KUBECONFIG=~/.kube/coreweave-rno2a \
+#          kubectl config view --minify --flatten --context=rno2a \
+#          > ~/.kube/cw-rno2a.yaml
+#        chmod 600 ~/.kube/cw-rno2a.yaml
+#   2. R2 credentials in env (consumed by `iris cluster start`):
+#        export R2_ACCESS_KEY_ID=<...>
+#        export R2_SECRET_ACCESS_KEY=<...>
+#   3. Start the cluster:
+#        cd lib/iris && uv run --group dev iris \
+#          --config=examples/coreweave-rno2a.yaml cluster start
+#
+# CAVEAT: the controller Deployment does NOT get the nvidia.com/gpu toleration
+# automatically. After the GPU NodePool scales up the first node, verify with
+# `kubectl describe node | grep -i taint`. If the GPU taint is present, either
+# (a) patch _build_controller_deployment in providers/k8s/controller.py to add
+# NVIDIA_GPU_TOLERATION when the controller scale_group is a GPU pool, or
+# (b) add a small CPU NodePool on this cluster and route the controller there.
+
+platform:
+  label_prefix: iris-rno2a
+  coreweave:
+    region: RNO2A
+    namespace: iris
+    kubeconfig_path: ~/.kube/cw-rno2a.yaml
+    # CoreWeave native object storage: virtual-hosted-style addressing
+    # (bucket goes in the subdomain). iris auto-detects cwobject.com domains
+    # and sets s3 addressing_style=virtual — see _needs_virtual_host_addressing.
+    # Bucket-less base endpoint. Virtual-host addressing prepends the bucket
+    # name as a subdomain at request time (s3://marin-poc/foo →
+    # https://marin-poc.cwobject.com/foo). Including the bucket here would
+    # double it (https://marin-poc.marin-poc.cwobject.com/...).
+    object_storage_endpoint: https://cwobject.com
+
+storage:
+  remote_state_dir: s3://marin-poc/iris/state/rno2a
+
+kubernetes_provider:
+  namespace: iris
+  default_image: ghcr.io/marin-community/iris-task:latest
+  host_network: true
+  cache_dir: /mnt/local/iris-cache
+  controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
+
+controller:
+  image: ghcr.io/marin-community/iris-controller:latest
+  coreweave:
+    port: 10000
+    service_name: iris-controller-svc
+    scale_group: gh200-1x
+
+defaults:
+  autoscaler:
+    evaluation_interval:
+      milliseconds: 10000
+    scale_up_delay:
+      milliseconds: 60000
+    scale_down_delay:
+      milliseconds: 300000
+    startup_grace_period:
+      milliseconds: 2400000    # 40 min — covers bare-metal node provisioning + Pod startup
+  task_env:
+    MARIN_PREFIX: s3://marin-na/marin
+  worker:
+    docker_image: ghcr.io/marin-community/iris-worker:latest
+    port: 10001
+    cache_dir: /mnt/local/iris-cache
+    runtime: kubernetes
+    default_task_image: ghcr.io/marin-community/iris-task:latest
+
+scale_groups:
+  gh200-1x:
+    num_vms: 1
+    resources:
+      cpu: 64
+      ram: 256GB
+      disk: 1TB
+      device_type: gpu
+      device_variant: H200
+      device_count: 1
+      capacity_type: on-demand
+    worker:
+      attributes:
+        pool: gh200-1x
+    # buffer_slices keeps one node warm so the controller always has a home.
+    buffer_slices: 1
+    max_slices: 4
+    priority: 100
+    slice_template:
+      num_vms: 1
+      coreweave:
+        region: RNO2A
+        instance_type: gd-1xgh200

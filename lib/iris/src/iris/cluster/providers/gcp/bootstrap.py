@@ -198,9 +198,9 @@ for i in $(seq 1 60); do
     if ! sudo docker ps -q -f name=iris-worker | grep -q .; then
         echo "[iris-init] ERROR: Worker container exited unexpectedly"
         echo "[iris-init] Container status:"
-        sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}"
+        sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}" 2>&1 | sed 's/^/[iris-init] /'
         echo "[iris-init] Container logs:"
-        sudo docker logs iris-worker --tail 100
+        sudo docker logs iris-worker --tail 100 2>&1 | sed 's/^/[iris-init] /'
         exit 1
     fi
 
@@ -216,9 +216,9 @@ done
 
 echo "[iris-init] ERROR: Worker failed to become healthy after 120s"
 echo "[iris-init] Container status:"
-sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}"
+sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}" 2>&1 | sed 's/^/[iris-init] /'
 echo "[iris-init] Container logs:"
-sudo docker logs iris-worker --tail 100
+sudo docker logs iris-worker --tail 100 2>&1 | sed 's/^/[iris-init] /'
 exit 1
 """
 

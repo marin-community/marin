@@ -289,8 +289,6 @@ class Trainer:
             else:
                 self.tracker = config.tracker.init(self.run_id)
 
-        self._cmanagers = []
-
         if add_default_hooks:
             self._add_default_hooks()
 

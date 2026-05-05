@@ -38,6 +38,7 @@ iris job bug-report /user/job-name      # structured diagnostic dump
 - **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--extra gpu`** installs CUDA jaxlib but does NOT request GPU hardware. Need both `--gpu H100x8 --extra gpu`.
+- **Use `--gpu` or `--tpu` to request accelerators, instead of `--region` or `--zone`.** Let Iris handle scaling group constraints. Use `--region` or `--zone` when you are trying to pin data to a particular location.
 - **`--reserve`** holds capacity for scheduling only — does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
 - **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 2g`), otherwise it hogs the GPU node and deadlocks. Memory at or above 4 GB requires `--enable-extra-resources` (see "Validator opt-in" below).
 
@@ -145,6 +146,29 @@ Prefer to use the last checkpoint from GCS. Only take a new controller checkpoin
 iris cluster controller checkpoint
 ```
 
+## Stats Namespaces
+
+Time-series measurements live in finelog stats namespaces, not the controller SQLite DB (see `AGENTS.md` "Decisions vs measurements"). The controller bundles a StatsService alongside its log server (started by `_start_local_log_server` in `controller/controller.py`); both are mounted on the same uvicorn app and reachable at the `/system/log-server` endpoint advertised by `cluster_config.endpoints` (or, in fallback mode, at the URL printed as `Local log server ready at <addr>` on controller startup).
+
+Namespaces:
+
+- `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
+- `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
+
+Retention: finelog evicts the globally-oldest sealed Parquet segments once either cap is exceeded. The caps are `DuckDBLogStore(max_local_segments=..., max_local_bytes=...)` constructor args (defaults: 1000 segments / 100 GB; see `lib/finelog/src/finelog/store/duckdb_store.py`). To change them on the controller-bundled store, edit the `DuckDBLogStore(...)` call in `_start_local_log_server`. For production-scale deployments, run `finelog-server` out-of-band and pass caps there.
+
+Example — utilization for a worker over the last hour:
+
+```sql
+SELECT ts, cpu_pct, mem_bytes, disk_used_bytes, running_task_count
+FROM "iris.worker"
+WHERE worker_id = 'WORKER_ID_HERE'
+  AND ts > now() - INTERVAL '1 hour'
+ORDER BY ts ASC;
+```
+
+Run via the StatsService `Query` RPC on the bundled log-server endpoint.
+
 ## Users & Auth
 
 ```bash
@@ -229,6 +253,8 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 ---
 
 ## CoreWeave (GPU) Operations
+
+Use `lib/iris/examples/coreweave-*.yaml` for CoreWeave scale group configurations.
 
 ### Connecting
 

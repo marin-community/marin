@@ -8,10 +8,11 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
-from finelog.client import LogPusher, RemoteLogHandler
+from finelog.client import LogClient, RemoteLogHandler, Table
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos
@@ -35,6 +36,14 @@ from iris.cluster.worker.env_probe import (
 )
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
+from iris.cluster.worker.stats import (
+    TASK_STATS_NAMESPACE,
+    WORKER_STATS_NAMESPACE,
+    IrisTaskStat,
+    IrisWorkerStat,
+    WorkerStatus,
+    build_worker_stat,
+)
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
@@ -44,6 +53,11 @@ from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
+
+
+def _now_dt() -> datetime:
+    """Tz-naive UTC datetime for stats namespaces' TIMESTAMP_MS column."""
+    return datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
 
 
 @dataclass
@@ -157,7 +171,7 @@ class Worker:
             controller_address=config.controller_address,
             max_cache_items=100,
         )
-        self._runtime = container_runtime or DockerRuntime(cache_dir=self._cache_dir)
+        self._runtime = container_runtime or DockerRuntime(cache_dir=self._cache_dir, capacity_type=config.capacity_type)
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
         # Resolve worker metadata: explicit > environment_provider > hardware probe
@@ -189,17 +203,21 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        # LogPusher and RemoteLogHandler are created in start() before container
+        # LogClient and RemoteLogHandler are created in start() before container
         # adoption and registration. Building before adoption ensures adopted
-        # attempts capture a live pusher (regression #5261). Building before
+        # attempts capture a live client (regression #5261). Building before
         # registration ensures pre-register failures (container bring-up,
         # disk/health probes, registration rejection) leave remote logs.
         # Attachment relies on ``self._worker_id`` having been resolved locally
         # (IRIS_WORKER_ID, slice_id + TPU index, or GCE instance name); the rare
         # case where the controller assigns the id is handled by re-attaching
         # post-register.
-        self._log_pusher: LogPusher | None = None
+        self._log_client: LogClient | None = None
         self._log_handler: RemoteLogHandler | None = None
+        # Stats Tables for the iris.worker / iris.task namespaces. Set in start()
+        # after the controller client is built so the LogClient resolver works.
+        self._worker_stats_table: Table | None = None
+        self._task_stats_table: Table | None = None
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -226,19 +244,39 @@ class Worker:
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
 
     def start(self) -> None:
-        # Build the LogPusher *before* adopting containers so adopted attempts
-        # capture a live pusher rather than a permanent ``None`` (regression #5261).
-        # The pusher only depends on auth + the resolver callback, neither of
-        # which need the uvicorn server or controller client to exist yet.
+        # Ordering matters here. Three invariants drive it:
+        #   1. LogClient must exist before adoption so adopted attempts capture
+        #      a live client (regression #5261). LogClient.connect is pure
+        #      construction — no I/O — so it can come first cheaply.
+        #   2. iris.worker / iris.task tables must be registered before adoption
+        #      runs. TaskAttempt.__init__ eagerly calls log_client.get_table,
+        #      which goes through the resolver (_resolve_log_service) — and the
+        #      resolver requires self._controller_client to be set. After the
+        #      controller_client is built and the tables are registered once,
+        #      the per-attempt get_table inside adoption is a cache hit.
+        #   3. The uvicorn server must be up before we register with the
+        #      controller, so the controller's first ping lands on a ready
+        #      worker. Lifecycle thread is spawned last for that reason.
         interceptors: tuple[AuthTokenInjector, ...] = ()
         if self._config.controller_address and self._config.auth_token:
             interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
+
         if self._config.controller_address:
-            self._log_pusher = LogPusher(
+            self._log_client = LogClient.connect(
                 "/system/log-server",
                 interceptors=interceptors,
                 resolver=self._resolve_log_service,
             )
+            self._controller_client = ControllerServiceClientSync(
+                address=self._config.controller_address,
+                timeout_ms=10_000,
+                interceptors=interceptors,
+            )
+            # Register stats namespaces eagerly. Schema bugs surface here at
+            # startup rather than silently producing empty namespaces.
+            assert self._log_client is not None
+            self._worker_stats_table = self._log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
+            self._task_stats_table = self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
 
         # Try to adopt running containers from a previous worker process.
         # If adoption succeeds, skip the destructive cleanup that would kill them.
@@ -246,7 +284,8 @@ class Worker:
         if adopted == 0:
             self._cleanup_all_iris_containers()
 
-        # Start HTTP server
+        # Bring the HTTP server up last so the worker is ready to serve
+        # controller pings the moment registration completes.
         # timeout_keep_alive=120: default 5s races with controller heartbeat intervals,
         # causing TCP resets on idle connections.
         self._server = uvicorn.Server(
@@ -260,22 +299,13 @@ class Worker:
             )
         )
         self._threads.spawn_server(self._server, name="worker-server")
-
-        # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server.started,
             timeout=Duration.from_seconds(5.0),
         )
 
-        # Create controller client if controller configured
+        # Start lifecycle thread: register + serve + reset loop
         if self._config.controller_address:
-            self._controller_client = ControllerServiceClientSync(
-                address=self._config.controller_address,
-                timeout_ms=10_000,
-                interceptors=interceptors,
-            )
-
-            # Start lifecycle thread: register + serve + reset loop
             self._threads.spawn(target=self._run_lifecycle, name="worker-lifecycle")
 
     def _cleanup_all_iris_containers(self) -> None:
@@ -326,7 +356,7 @@ class Worker:
             attempt = TaskAttempt.adopt(
                 discovered=container,
                 container_handle=handle,
-                log_pusher=self._log_pusher,
+                log_client=self._log_client,
                 port_allocator=self._port_allocator,
                 poll_interval_seconds=self._config.poll_interval.to_seconds(),
             )
@@ -398,8 +428,8 @@ class Worker:
         if self._controller_client:
             self._controller_client.close()
         self._detach_log_handler()
-        if self._log_pusher is not None:
-            self._log_pusher.close()
+        if self._log_client is not None:
+            self._log_client.close()
         self._bundle_store.close()
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:
@@ -496,11 +526,11 @@ class Worker:
 
     def _attach_log_handler(self) -> None:
         """Attach or rename the remote log handler under ``worker_log_key(self._worker_id)``."""
-        if not self._worker_id or self._log_pusher is None:
+        if not self._worker_id or self._log_client is None:
             return
         key = worker_log_key(self._worker_id)
         if self._log_handler is None:
-            self._log_handler = RemoteLogHandler(self._log_pusher, key=key)
+            self._log_handler = RemoteLogHandler(self._log_client, key=key)
             self._log_handler.setLevel(logging.INFO)
             self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
             logging.getLogger().addHandler(self._log_handler)
@@ -508,14 +538,18 @@ class Worker:
             self._log_handler.key = key
 
     def _detach_log_handler(self) -> None:
-        """Remove and close the current RemoteLogHandler and LogPusher if any."""
+        """Remove and close the current RemoteLogHandler and LogClient if any."""
         if self._log_handler is not None:
             logging.getLogger().removeHandler(self._log_handler)
             self._log_handler.close()
             self._log_handler = None
-        if self._log_pusher is not None:
-            self._log_pusher.close()
-            self._log_pusher = None
+        # Stats Tables belong to the LogClient; drop our cached references so
+        # post-shutdown writes are no-ops.
+        self._worker_stats_table = None
+        self._task_stats_table = None
+        if self._log_client is not None:
+            self._log_client.close()
+            self._log_client = None
 
     def _make_state_change_callback(self, attempt: TaskAttempt) -> Callable[[job_pb2.TaskState], None]:
         """Build a closure that pushes a WorkerTaskStatus to the controller on transition.
@@ -713,7 +747,7 @@ class Worker:
             default_task_image=self._config.default_task_image,
             resolve_image=self._config.resolve_image,
             port_allocator=self._port_allocator,
-            log_pusher=self._log_pusher,
+            log_client=self._log_client,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
         attempt.on_state_change = self._make_state_change_callback(attempt)
@@ -873,7 +907,7 @@ class Worker:
         return snapshot
 
     def handle_ping(self, request: worker_pb2.Worker.PingRequest) -> worker_pb2.Worker.PingResponse:
-        """Liveness check. Resets heartbeat deadline, returns resource snapshot and health."""
+        """Liveness check. Resets heartbeat deadline; emits host metrics to stats."""
         if rule := chaos("worker.ping"):
             if rule.delay_seconds > 0:
                 time.sleep(rule.delay_seconds)
@@ -886,11 +920,32 @@ class Worker:
         health = check_worker_health(disk_path=str(self._cache_dir))
         if not health.healthy:
             logger.warning("Worker health check failed: %s", health.error)
+        self._emit_worker_stat(resource_snapshot)
         return worker_pb2.Worker.PingResponse(
-            resource_snapshot=resource_snapshot,
             healthy=health.healthy,
             health_error=health.error,
         )
+
+    def _emit_worker_stat(self, snapshot: job_pb2.WorkerResourceSnapshot) -> None:
+        """Append one heartbeat row to the ``iris.worker`` stats namespace.
+
+        Non-blocking: ``Table.write`` queues for the bg flush thread, so the
+        ping path never waits on the stats service. Schema-validation
+        ``TypeError`` bugs from the row encoder deliberately propagate.
+        """
+        table = self._worker_stats_table
+        if table is None or self._worker_id is None:
+            return
+        status = WorkerStatus.RUNNING if self._tasks else WorkerStatus.IDLE
+        stat = build_worker_stat(
+            worker_id=self._worker_id,
+            ts=_now_dt(),
+            status=status,
+            address=self._resolve_address(),
+            snapshot=snapshot,
+            metadata=self._worker_metadata,
+        )
+        table.write([stat])
 
     def handle_start_tasks(self, request: worker_pb2.Worker.StartTasksRequest) -> worker_pb2.Worker.StartTasksResponse:
         """Start task attempts on this worker. Returns per-task ack."""
