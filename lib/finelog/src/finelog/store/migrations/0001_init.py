@@ -16,10 +16,13 @@ this migration is a no-op against the DDL but records v1 in
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import duckdb
 
 
-def migrate(conn: duckdb.DuckDBPyConnection) -> None:
+def migrate(conn: duckdb.DuckDBPyConnection, *, data_dir: Path | None) -> None:
+    del data_dir
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS namespaces (

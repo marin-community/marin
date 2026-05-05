@@ -58,7 +58,7 @@ if ! command -v docker &> /dev/null; then
 fi
 sudo systemctl start docker || true
 
-# Cache directory on the boot disk. Finelog offloads parquet segments to GCS
+# Cache directory on the boot disk. Finelog copies parquet segments to GCS
 # via FINELOG_REMOTE_DIR, so the boot disk only needs working space.
 # Owned by UID/GID 1000 to match the in-container `finelog` user (the
 # Dockerfile's chown is shadowed by this bind mount).

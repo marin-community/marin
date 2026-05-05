@@ -9,17 +9,17 @@ backs the in-memory store mode. Both satisfy :class:`LogNamespaceProtocol`.
 The two global locks (insertion mutex + query-visibility rwlock) live on the
 registry and are passed in at construction. The disk variant additionally
 owns a per-namespace flush mutex preventing the test ``_force_flush`` hook
-from racing the bg thread on the same ``tmp_*.parquet`` filename.
+from racing the bg thread on the same segment filename.
 """
 
 from __future__ import annotations
 
 import logging
-import re
+import os
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,8 +27,6 @@ from threading import Condition, Lock
 from typing import NamedTuple, Protocol
 
 import duckdb
-import fsspec.core
-import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -40,17 +38,23 @@ from finelog.store.catalog import (
     Catalog,
     NamespaceStats,
     SegmentRow,
-    SegmentState,
+)
+from finelog.store.compactor import (
+    CompactionConfig,
+    CompactionJob,
+    Compactor,
+    aggregate_key_bounds,
+    compaction_sort_keys,
+    parse_seg_filename,
+    seg_filename,
 )
 from finelog.store.rwlock import RWLock
 from finelog.store.schema import (
     IMPLICIT_SEQ_COLUMN,
     Column,
     Schema,
-    duckdb_type_for,
     schema_to_arrow,
 )
-from finelog.store.sql_escape import quote_ident, quote_literal
 from finelog.types import REGEX_META_RE, LogReadResult, parse_attempt_id, str_to_log_level
 
 logger = logging.getLogger(__name__)
@@ -70,10 +74,6 @@ LOG_REGISTERED_SCHEMA = Schema(
     key_column="key",
 )
 
-# Both prefixes keyed by min_seq, so sort-by-filename yields chronological order.
-_TMP_PREFIX = "tmp_"
-_LOG_PREFIX = "logs_"
-
 _ROW_GROUP_SIZE = 16_384
 
 # Append calls slower than this emit a warning so lock contention vs prepare
@@ -88,60 +88,104 @@ _BG_HEARTBEAT_INTERVAL_SEC = 10.0
 # queries that cannot be pruned by row-group statistics.
 _MAX_PARQUET_BYTES_PER_READ = 2_500 * 1024 * 1024
 
-_FILENAME_SEQ_RE = re.compile(rf"^(?:{_TMP_PREFIX}|{_LOG_PREFIX})(\d+)\.parquet$")
-
-
-def _tmp_filename(min_seq: int) -> str:
-    return f"{_TMP_PREFIX}{min_seq:019d}.parquet"
-
-
-def _log_filename(min_seq: int) -> str:
-    return f"{_LOG_PREFIX}{min_seq:019d}.parquet"
-
-
-def _is_tmp_path(path: str) -> bool:
-    return Path(path).name.startswith(_TMP_PREFIX)
-
-
-def _min_seq_from_filename(name: str) -> int | None:
-    match = _FILENAME_SEQ_RE.match(name)
-    if not match:
-        return None
-    return int(match.group(1))
-
 
 class SegmentMetadata(NamedTuple):
-    """``(min_seq, max_seq, row_count)`` derived from a segment's filename + parquet footer."""
+    """Per-segment metadata derived from filename + parquet footer.
 
+    ``level`` is read out of the filename (``seg_L<n>_*``); the catalog
+    holds the runtime source of truth, but a fresh boot reconciles from
+    disk so this is what populates the catalog rows on startup.
+
+    ``min_key_value`` / ``max_key_value`` are the parquet column statistics
+    for ``key_column``, when one is requested and the column carries
+    statistics. ``None`` when the namespace has no ``key_column``, the
+    column statistics weren't written, or the segment is empty.
+    """
+
+    level: int
     min_seq: int
     max_seq: int
     row_count: int
+    min_key_value: str | None
+    max_key_value: str | None
 
 
-_EMPTY_SEGMENT_METADATA = SegmentMetadata(min_seq=0, max_seq=0, row_count=0)
+_EMPTY_SEGMENT_METADATA = SegmentMetadata(
+    level=0, min_seq=0, max_seq=0, row_count=0, min_key_value=None, max_key_value=None
+)
 
 
-def _read_segment_metadata(path: Path) -> SegmentMetadata:
-    """Recover ``(min_seq, max_seq, row_count)`` from filename + parquet footer.
+def _level_histogram(segments: Iterable[LocalSegment]) -> dict[int, int]:
+    """Count segments per level for the bg-loop heartbeat log line."""
+    counts: dict[int, int] = {}
+    for s in segments:
+        counts[s.level] = counts.get(s.level, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _key_bounds_from_parquet(metadata: pq.FileMetaData, key_column: str | None) -> tuple[str | None, str | None]:
+    """Extract ``(min, max)`` for ``key_column`` across all row groups.
+
+    Returns ``(None, None)`` if no ``key_column`` was requested, the column
+    isn't present, or no row group carries statistics. The returned values
+    are stringified (parquet returns native types; we normalize to TEXT
+    because the catalog column is generic across namespaces).
+    """
+    if not key_column:
+        return None, None
+    try:
+        col_idx = metadata.schema.names.index(key_column)
+    except ValueError:
+        return None, None
+    overall_min: object | None = None
+    overall_max: object | None = None
+    for rg_idx in range(metadata.num_row_groups):
+        stats = metadata.row_group(rg_idx).column(col_idx).statistics
+        if stats is None or not stats.has_min_max:
+            continue
+        rg_min, rg_max = stats.min, stats.max
+        if overall_min is None or rg_min < overall_min:
+            overall_min = rg_min
+        if overall_max is None or rg_max > overall_max:
+            overall_max = rg_max
+    if overall_min is None:
+        return None, None
+    return str(overall_min), str(overall_max)
+
+
+def _read_segment_metadata(path: Path, key_column: str | None = None) -> SegmentMetadata:
+    """Recover (level, seq, row count, key_column bounds) from a segment file.
 
     Returns ``_EMPTY_SEGMENT_METADATA`` for unparseable filenames or footer-read
     failures — the caller treats that as an empty/discardable segment.
     """
-    min_seq = _min_seq_from_filename(path.name)
-    if min_seq is None:
+    parsed = parse_seg_filename(path.name)
+    if parsed is None:
         return _EMPTY_SEGMENT_METADATA
+    level, min_seq = parsed
     try:
-        num_rows = pq.read_metadata(path).num_rows
+        metadata = pq.read_metadata(path)
     except Exception:
         logger.warning("Failed to read parquet metadata for %s; treating as empty", path, exc_info=True)
         return _EMPTY_SEGMENT_METADATA
+    num_rows = metadata.num_rows
     if num_rows <= 0:
-        return SegmentMetadata(min_seq=min_seq, max_seq=min_seq, row_count=0)
-    return SegmentMetadata(min_seq=min_seq, max_seq=min_seq + num_rows - 1, row_count=num_rows)
+        return SegmentMetadata(
+            level=level, min_seq=min_seq, max_seq=min_seq, row_count=0, min_key_value=None, max_key_value=None
+        )
+    min_key, max_key = _key_bounds_from_parquet(metadata, key_column)
+    return SegmentMetadata(
+        level=level,
+        min_seq=min_seq,
+        max_seq=min_seq + num_rows - 1,
+        row_count=num_rows,
+        min_key_value=min_key,
+        max_key_value=max_key,
+    )
 
 
 def _discover_segments(log_dir: Path) -> list[Path]:
-    return sorted(list(log_dir.glob(f"{_TMP_PREFIX}*.parquet")) + list(log_dir.glob(f"{_LOG_PREFIX}*.parquet")))
+    return sorted(log_dir.glob("seg_L*_*.parquet"))
 
 
 def _recover_next_seq(log_dir: Path) -> int:
@@ -180,21 +224,18 @@ class _SealedBuffer:
 class LocalSegment:
     path: str
     size_bytes: int
+    level: int
     min_seq: int
     max_seq: int
     row_count: int
+    min_key_value: str | None = None
+    max_key_value: str | None = None
+    copied_at_ms: int | None = None
 
 
 def _stamp_seq_column(batch: pa.RecordBatch, first_seq: int, arrow_schema: pa.Schema) -> pa.Table:
-    """Project ``batch`` to ``arrow_schema`` with the implicit seq column filled.
-
-    Uses ``np.arange`` rather than ``pa.array(range(...), int64)``: the python
-    ``range`` path boxes every value into a PyLong before pyarrow re-unpacks
-    it, which dominated allocation count under load (150k allocs / 30 s on
-    prod). ``np.arange`` produces the int64 buffer in one C-level shot and
-    pyarrow wraps it zero-copy.
-    """
-    seq_array = pa.array(np.arange(first_seq, first_seq + batch.num_rows, dtype=np.int64))
+    """Project ``batch`` to ``arrow_schema`` with the implicit seq column filled."""
+    seq_array = pa.array(range(first_seq, first_seq + batch.num_rows), type=pa.int64())
     arrays: list[pa.Array] = []
     for field in arrow_schema:
         if field.name == IMPLICIT_SEQ_COLUMN:
@@ -346,13 +387,13 @@ class LogNamespaceProtocol(Protocol):
 
     def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]: ...
 
-    def sealed_segments(self) -> list[LocalSegment]: ...
-
     def all_segments_unlocked(self) -> list[LocalSegment]: ...
 
     def update_schema(self, new_schema: Schema) -> None: ...
 
     def evict_segment(self, path: str) -> int: ...
+
+    def mark_copied(self, path: str, copied_at_ms: int) -> None: ...
 
     def remove_local_storage(self) -> None: ...
 
@@ -361,10 +402,6 @@ class LogNamespaceProtocol(Protocol):
     def stop_and_join(self) -> None: ...
 
     def stats(self) -> NamespaceStats: ...
-
-    def ram_bytes(self) -> int: ...
-
-    def chunk_count(self) -> int: ...
 
 
 class DiskLogNamespace:
@@ -382,17 +419,16 @@ class DiskLogNamespace:
         name: str,
         schema: Schema,
         data_dir: Path,
-        remote_log_dir: str,
+        copy_wake: Callable[[], None],
         segment_target_bytes: int,
         flush_interval_sec: float,
-        compaction_interval_sec: float,
-        max_tmp_segments_before_compact: int,
+        compaction_config: CompactionConfig,
         insertion_lock: Lock,
         query_visibility_lock: RWLock,
-        compaction_conn: duckdb.DuckDBPyConnection,
+        duckdb_memory_limit: str,
+        duckdb_threads: str,
         read_pool: _ReadPoolProtocol,
         catalog: Catalog,
-        evict_hook: Callable[[], None] = lambda: None,
     ) -> None:
         self.name = name
         self.schema = schema
@@ -400,18 +436,24 @@ class DiskLogNamespace:
         self._data_dir = data_dir
         data_dir.mkdir(parents=True, exist_ok=True)
 
-        self._remote_log_dir = remote_log_dir
+        # Notifies the store-wide copy worker that fresh L>=1 catalog
+        # rows may exist; the worker polls the catalog regardless, this
+        # just shortens the latency from "compaction commit" to "upload".
+        self._copy_wake = copy_wake
         self._segment_target_bytes = segment_target_bytes
-        self._max_tmp_segments_before_compact = max_tmp_segments_before_compact
-        self._evict_hook = evict_hook
+        self._compactor = Compactor(compaction_config)
 
         self._insertion_lock = insertion_lock
         self._query_visibility_lock = query_visibility_lock
         # Prevents the test ``_force_flush`` hook racing the bg thread on
-        # the same tmp filename (both derive from this namespace's _next_seq).
+        # the same segment filename (both derive from this namespace's
+        # _next_seq).
         self._flush_lock = Lock()
 
-        self._compaction_conn = compaction_conn
+        # Per-namespace compaction connection. Cross-namespace COPYs would
+        # collide on a shared connection's session state, and we don't run
+        # cross-namespace queries through this conn anyway.
+        self._compaction_conn = duckdb.connect(config={"memory_limit": duckdb_memory_limit, "threads": duckdb_threads})
         self._read_pool = read_pool
         self._catalog = catalog
 
@@ -421,46 +463,43 @@ class DiskLogNamespace:
         )
         self._local_segments: deque[LocalSegment] = deque()
 
-        # Drop stale tmp segments left behind by a prior compaction that
-        # crashed between rename and unlink: any tmp whose [min, max] is
-        # fully covered by a logs_ segment is a duplicate.
-        discovered: list[LocalSegment] = []
+        # Reconcile from disk: parquet files are authoritative across
+        # crashes. Walk every ``seg_L<n>_*.parquet`` and rebuild the
+        # in-memory deque + catalog rows.
+        key_column = self.schema.key_column or None
         for p in _discover_segments(data_dir):
-            meta = _read_segment_metadata(p)
-            discovered.append(
+            meta = _read_segment_metadata(p, key_column=key_column)
+            self._local_segments.append(
                 LocalSegment(
                     path=str(p),
                     size_bytes=p.stat().st_size,
+                    level=meta.level,
                     min_seq=meta.min_seq,
                     max_seq=meta.max_seq,
                     row_count=meta.row_count,
+                    min_key_value=meta.min_key_value,
+                    max_key_value=meta.max_key_value,
                 )
             )
-        log_ranges = [(s.min_seq, s.max_seq) for s in discovered if not _is_tmp_path(s.path)]
-        for s in discovered:
-            if _is_tmp_path(s.path) and any(lo <= s.min_seq and s.max_seq <= hi for lo, hi in log_ranges):
-                logger.info("Dropping stale tmp segment %s covered by compacted logs_ range", s.path)
-                try:
-                    Path(s.path).unlink()
-                except OSError:
-                    logger.warning("Failed to unlink stale tmp segment %s", s.path, exc_info=True)
-                continue
-            self._local_segments.append(s)
 
-        # Reconcile the persistent catalog against the on-disk segment set.
-        # Parquet files are authoritative across crashes; the catalog rows
-        # for this namespace get rewritten to match exactly what's on disk
-        # right now so future reads from the catalog always agree with
-        # ``query_snapshot()``.
+        # Reconcile rewrites the catalog rows wholesale; it preserves any
+        # ``copied_at_ms`` already recorded for these paths so a re-upload
+        # stamp doesn't silently disappear across reboot.
         self._catalog.reconcile_segments(
             self.name,
             [self._segment_to_row(seg) for seg in self._local_segments],
         )
+        # Mirror the preserved stamps back into the in-memory deque.
+        for row in self._catalog.list_segments(self.name):
+            for seg in self._local_segments:
+                if seg.path == row.path:
+                    seg.copied_at_ms = row.copied_at_ms
+                    break
 
         self._flush_rl = RateLimiter(flush_interval_sec)
-        self._compaction_rl = RateLimiter(compaction_interval_sec)
+        self._compaction_rl = RateLimiter(compaction_config.check_interval_sec)
         # Mark just-run so the bg loop doesn't fire a spurious tick at startup
-        # and compact a partially-written set of tmp segments.
+        # and compact a partially-written set of segments.
         self._flush_rl.mark_run()
         self._compaction_rl.mark_run()
         self._stop = threading.Event()
@@ -592,20 +631,19 @@ class DiskLogNamespace:
         self._stop.set()
         self._wake.set()
         self._bg_thread.join()
+        # Flush turns RAM into L0 on disk so a clean restart picks it up.
+        # We do NOT promote L0 to L1 at close — L0 is local-only by design,
+        # and re-discovery on boot brings them back. The store-wide copy
+        # worker handles L1+ uploads independently.
         self._flush_step()
-        self._compaction_step(compact_single=True)
+        self._compaction_conn.close()
 
     def stop_and_join(self) -> None:
         """Stop the bg thread without flushing or compacting (used by ``DropTable``)."""
         self._stop.set()
         self._wake.set()
         self._bg_thread.join()
-
-    def ram_bytes(self) -> int:
-        return self._buffers.ram_bytes()
-
-    def chunk_count(self) -> int:
-        return self._buffers.chunk_count()
+        self._compaction_conn.close()
 
     def update_schema(self, new_schema: Schema) -> None:
         _assert_additive_schema_evolution(self.schema, new_schema)
@@ -621,20 +659,17 @@ class DiskLogNamespace:
                 ram_bytes = self._buffers.ram_bytes()
                 chunk_count = self._buffers.chunk_count()
                 next_seq = self._buffers.next_seq
-                tmp_count = sum(1 for s in self._local_segments if _is_tmp_path(s.path))
-                logs_count = len(self._local_segments) - tmp_count
+                level_counts = _level_histogram(self._local_segments)
             force_drain = ram_bytes >= self._segment_target_bytes
-            force_compaction = tmp_count > self._max_tmp_segments_before_compact
 
             now = time.monotonic()
             if now - last_heartbeat >= _BG_HEARTBEAT_INTERVAL_SEC:
                 logger.info(
-                    "bg-loop tick: chunks=%d ram_bytes=%d tmp=%d logs=%d next_seq=%d "
+                    "bg-loop tick: chunks=%d ram_bytes=%d levels=%s next_seq=%d "
                     "since_flush_ms=%d since_compact_ms=%d",
                     chunk_count,
                     ram_bytes,
-                    tmp_count,
-                    logs_count,
+                    level_counts,
                     next_seq,
                     int((now - last_flush_at) * 1000),
                     int((now - last_compact_at) * 1000),
@@ -648,10 +683,16 @@ class DiskLogNamespace:
             elif self._flush_rl.should_run():
                 self._flush_step()
                 last_flush_at = time.monotonic()
-            if force_compaction or self._compaction_rl.should_run():
-                self._compaction_step()
+            if self._compaction_rl.should_run():
+                # Drain promotable runs back-to-back on the same tick: a
+                # large flush burst can leave several tiers eligible at once,
+                # and waiting another check_interval per merge needlessly
+                # extends per-read fanout.
+                while self._compaction_step():
+                    pass
                 self._compaction_rl.mark_run()
                 last_compact_at = time.monotonic()
+                self._eviction_step()
 
             self._wake.wait(timeout=min(self._flush_rl.time_until_next(), 1.0))
             self._wake.clear()
@@ -697,48 +738,64 @@ class DiskLogNamespace:
                 self._flush_generation += 1
                 self._flush_generation_cond.notify_all()
 
-            self._evict_hook()
-
-    def _derive_seq_bounds_locked(self, table: pa.Table) -> tuple[int, int]:
-        seq_col = table.column(IMPLICIT_SEQ_COLUMN)
-        return pc.min(seq_col).as_py(), pc.max(seq_col).as_py()
-
     def _sort_for_flush(self, table: pa.Table) -> pa.Table:
-        keys = self._compaction_sort_keys()
+        keys = compaction_sort_keys(self.schema)
         return table.sort_by([(name, "ascending") for name in keys])
 
-    def _compaction_sort_keys(self) -> tuple[str, ...]:
-        # key_column first so range scans on it prune row groups efficiently.
-        if self.schema.key_column:
-            return (self.schema.key_column, IMPLICIT_SEQ_COLUMN)
-        return (IMPLICIT_SEQ_COLUMN,)
+    def _key_bounds_from_table(self, table: pa.Table) -> tuple[str | None, str | None]:
+        """Compute (min, max) over the namespace's ``key_column`` in ``table``.
+
+        Returns ``(None, None)`` when the schema has no key_column or the
+        column is empty / all null.
+        """
+        key_column = self.schema.key_column
+        if not key_column or table.num_rows == 0:
+            return None, None
+        col = table.column(key_column)
+        if col.null_count == col.length():
+            return None, None
+        result = pc.min_max(col)
+        lo = result["min"].as_py()
+        hi = result["max"].as_py()
+        if lo is None or hi is None:
+            return None, None
+        return str(lo), str(hi)
 
     def _segment_to_row(self, seg: LocalSegment) -> SegmentRow:
         """Build the catalog row that mirrors ``seg``."""
-        state = SegmentState.TMP if _is_tmp_path(seg.path) else SegmentState.FINALIZED
         return SegmentRow(
             namespace=self.name,
             path=seg.path,
-            state=state,
+            level=seg.level,
             min_seq=seg.min_seq,
             max_seq=seg.max_seq,
             row_count=seg.row_count,
             byte_size=seg.size_bytes,
             created_at_ms=int(time.time() * 1000),
+            min_key_value=seg.min_key_value,
+            max_key_value=seg.max_key_value,
+            copied_at_ms=seg.copied_at_ms,
         )
 
     def _write_new_segment(self, sealed: _SealedBuffer) -> None:
-        filename = _tmp_filename(sealed.min_seq)
+        filename = seg_filename(level=0, min_seq=sealed.min_seq)
         write_start = time.monotonic()
 
         filepath = self._data_dir / filename
-        tmp_path = filepath.with_suffix(".parquet.tmp")
+        staging_path = filepath.with_suffix(".parquet.tmp")
         # Materialize parquet in memory and flush in one write(). pyarrow's
         # path-based writer uses an unbuffered FileOutputStream that emits
         # ~40 syscalls per segment (most <100B — page headers, footer
         # fragments). On a contended boot disk those serialize against the
         # I/O queue and dominate flush latency.
         buf = pa.BufferOutputStream()
+        # L0 segments do not get a parquet bloom filter on key_column:
+        # pyarrow 22.0 does not yet expose ``bloom_filter_options`` to
+        # Python (the C++ option exists; the binding hasn't shipped). L0
+        # segments are short-lived (compacted within seconds) so the
+        # missing bloom doesn't matter much in practice. Compacted output
+        # written by the DuckDB COPY does get blooms via DuckDB ≥1.2's
+        # default behavior.
         pq.write_table(
             sealed.table,
             buf,
@@ -746,15 +803,21 @@ class DiskLogNamespace:
             row_group_size=_ROW_GROUP_SIZE,
             write_page_index=True,
         )
-        with pa.OSFile(str(tmp_path), "wb") as out:
+        with pa.OSFile(str(staging_path), "wb") as out:
             out.write(buf.getvalue())
-        tmp_path.rename(filepath)
+        staging_path.rename(filepath)
+        # Compute key_column bounds from the in-memory table — much cheaper
+        # than re-opening the freshly written parquet and reading its footer.
+        min_key_value, max_key_value = self._key_bounds_from_table(sealed.table)
         seg = LocalSegment(
             path=str(filepath),
             size_bytes=filepath.stat().st_size,
+            level=0,
             min_seq=sealed.min_seq,
             max_seq=sealed.max_seq,
             row_count=sealed.table.num_rows,
+            min_key_value=min_key_value,
+            max_key_value=max_key_value,
         )
 
         with self._insertion_lock:
@@ -763,7 +826,7 @@ class DiskLogNamespace:
             self._catalog.upsert_segment(self._segment_to_row(seg))
 
         logger.info(
-            "Wrote tmp segment %s: rows=%d bytes=%d seq=[%d,%d] elapsed_ms=%d",
+            "Wrote L0 segment %s: rows=%d bytes=%d seq=[%d,%d] elapsed_ms=%d",
             filename,
             sealed.table.num_rows,
             seg.size_bytes,
@@ -772,128 +835,186 @@ class DiskLogNamespace:
             int((time.monotonic() - write_start) * 1000),
         )
 
-    def _compaction_step(self, *, compact_single: bool = False) -> None:
+    def _compaction_step(self) -> bool:
+        """Execute one planner-issued compaction job.
+
+        Returns ``True`` when a job ran (caller may immediately tick again
+        to drain pending work), ``False`` when the planner had nothing to
+        do.
+        """
         with self._insertion_lock:
-            tmps = [s for s in self._local_segments if _is_tmp_path(s.path)]
-        if not tmps:
-            return
-        if len(tmps) < 2 and not compact_single:
-            return
+            segment_rows = [self._segment_to_row(s) for s in self._local_segments]
+        job = self._compactor.plan(segment_rows, now_ms=int(time.time() * 1000))
+        if job is None:
+            return False
+        self._run_job(job)
+        return True
 
-        tmps.sort(key=lambda s: s.min_seq)
-        min_seq = tmps[0].min_seq
-        max_seq = max(t.max_seq for t in tmps)
-        merged_filename = _log_filename(min_seq)
-        compaction_start = time.monotonic()
+    def _force_compact_l0(self) -> None:
+        """Test-only hook: synthesize a one-shot L0 → L1 merge regardless of policy.
 
-        merged_path = self._data_dir / merged_filename
-        staging_path = merged_path.with_suffix(".parquet.tmp")
-        sql = self._build_compaction_sql([Path(t.path) for t in tmps], staging_path)
-        try:
-            with self._insertion_lock:
-                self._compaction_conn.execute(sql)
-        except Exception:
-            logger.warning("Compaction failed, leaving tmp segments in place", exc_info=True)
-            staging_path.unlink(missing_ok=True)
+        Production code (including ``close()``) never calls this — the
+        regular bg loop is planner-driven, and L0 segments are intentionally
+        kept local-only between compactions. Tests use this when they need
+        to assert against L1 state without configuring tiny ``level_targets``
+        on every fixture.
+        """
+        with self._insertion_lock:
+            l0 = sorted(
+                [self._segment_to_row(s) for s in self._local_segments if s.level == 0],
+                key=lambda r: r.min_seq,
+            )
+        if not l0:
             return
-        merged_seg = LocalSegment(
-            path=str(merged_path),
-            size_bytes=staging_path.stat().st_size,
-            min_seq=min_seq,
-            max_seq=max_seq,
-            row_count=sum(t.row_count for t in tmps),
+        job = CompactionJob(
+            inputs=tuple(l0),
+            output_level=1,
+            output_min_seq=min(r.min_seq for r in l0),
+            output_max_seq=max(r.max_seq for r in l0),
         )
+        self._run_job(job)
 
-        tmp_paths = {t.path for t in tmps}
-
-        self._query_visibility_lock.write_acquire()
-        try:
-            staging_path.rename(merged_path)
-            with self._insertion_lock:
-                new_segments: deque[LocalSegment] = deque()
-                merged_inserted = False
-                for s in self._local_segments:
-                    if s.path in tmp_paths:
-                        if not merged_inserted:
-                            new_segments.append(merged_seg)
-                            merged_inserted = True
-                    else:
-                        new_segments.append(s)
-                if not merged_inserted:
-                    new_segments.append(merged_seg)
-                self._local_segments = new_segments
-                self._catalog.replace_segments(
-                    self.name,
-                    removed_paths=list(tmp_paths),
-                    added=[self._segment_to_row(merged_seg)],
-                )
-            for t in tmps:
-                try:
-                    Path(t.path).unlink(missing_ok=True)
-                except OSError:
-                    logger.warning("Failed to unlink tmp segment %s", t.path, exc_info=True)
-        finally:
-            self._query_visibility_lock.write_release()
-
+    def _run_job(self, job: CompactionJob) -> None:
+        # Single-input jobs skip the rewrite and just rename + bump level —
+        # the rewrite would be a byte-for-byte copy.
+        if len(job.inputs) == 1:
+            self._apply_level_bump(job)
+        else:
+            self._apply_merge(job)
         with self._compaction_generation_cond:
             self._compaction_generation += 1
             self._compaction_generation_cond.notify_all()
 
+    def _apply_level_bump(self, job: CompactionJob) -> None:
+        old = job.inputs[0]
+        new_filename = seg_filename(level=job.output_level, min_seq=old.min_seq)
+        new_path = self._data_dir / new_filename
+        os.rename(old.path, new_path)
+
+        bumped = LocalSegment(
+            path=str(new_path),
+            size_bytes=old.byte_size,
+            level=job.output_level,
+            min_seq=old.min_seq,
+            max_seq=old.max_seq,
+            row_count=old.row_count,
+            min_key_value=old.min_key_value,
+            max_key_value=old.max_key_value,
+        )
+        self._commit_swap(removed=[old.path], added=bumped, unlink_removed=False)
+        logger.info("Level-bumped %s -> L%d (%s)", Path(old.path).name, job.output_level, new_filename)
+        self._copy_wake()
+
+    def _apply_merge(self, job: CompactionJob) -> None:
+        merged_filename = seg_filename(level=job.output_level, min_seq=job.output_min_seq)
+        merged_path = self._data_dir / merged_filename
+        staging_path = merged_path.with_suffix(".parquet.tmp")
+        sql = self._compactor.merge_sql(job, schema=self.schema, staging_path=staging_path)
+        compaction_start = time.monotonic()
+        # COPY reads input parquet files from disk and writes a staging file;
+        # it touches neither ``_local_segments`` nor any other structure that
+        # ``_insertion_lock`` protects, so we run it lock-free. A multi-second
+        # COPY would otherwise stall every concurrent ``append_log_batch``.
+        try:
+            self._compaction_conn.execute(sql)
+        except Exception:
+            logger.warning("Compaction failed, leaving inputs in place", exc_info=True)
+            staging_path.unlink(missing_ok=True)
+            return
+
+        # min-of-mins / max-of-maxes — string lex order matches parquet's
+        # BYTE_ARRAY UNSIGNED comparison.
+        merged_min_key, merged_max_key = aggregate_key_bounds((s.min_key_value, s.max_key_value) for s in job.inputs)
+        merged_seg = LocalSegment(
+            path=str(merged_path),
+            size_bytes=staging_path.stat().st_size,
+            level=job.output_level,
+            min_seq=job.output_min_seq,
+            max_seq=job.output_max_seq,
+            row_count=sum(s.row_count for s in job.inputs),
+            min_key_value=merged_min_key,
+            max_key_value=merged_max_key,
+        )
+
+        staging_path.rename(merged_path)
+        self._commit_swap(removed=[s.path for s in job.inputs], added=merged_seg, unlink_removed=True)
+
         logger.info(
-            "Compacted %d tmp segments into %s: bytes=%d seq=[%d,%d] elapsed_ms=%d",
-            len(tmps),
+            "Merged %d L%d -> L%d %s: bytes=%d seq=[%d,%d] elapsed_ms=%d",
+            len(job.inputs),
+            job.inputs[0].level,
+            job.output_level,
             merged_filename,
             merged_seg.size_bytes,
-            min_seq,
-            max_seq,
+            merged_seg.min_seq,
+            merged_seg.max_seq,
             int((time.monotonic() - compaction_start) * 1000),
         )
-        self._offload_to_gcs(merged_filename, merged_path)
-        self._evict_hook()
+        self._copy_wake()
 
-    def _build_compaction_sql(self, input_paths: list[Path], staging_path: Path) -> str:
-        """Compose the COPY that merges ``input_paths`` to ``staging_path``.
+    def _commit_swap(self, *, removed: list[str], added: LocalSegment, unlink_removed: bool) -> None:
+        """Splice the deque + catalog: replace ``removed`` paths with ``added``.
 
-        Columns missing from every input become ``NULL::TYPE AS name``.
-        ``union_by_name=true`` fills NULL where a column is absent from
-        individual segments.
+        ``unlink_removed`` is False for level bumps (the file was renamed
+        in place, so the old path is already gone) and True for merges
+        (the inputs are still on disk and need cleanup).
         """
-        present_columns = self._present_input_columns(input_paths)
-        select_exprs: list[str] = []
-        for col in self.schema.columns:
-            ident = quote_ident(col.name)
-            if col.name in present_columns:
-                select_exprs.append(ident)
-            else:
-                select_exprs.append(f"NULL::{duckdb_type_for(col)} AS {ident}")
-
-        # Self-generated paths from _tmp_filename — no SQL injection surface.
-        paths_sql = ", ".join(quote_literal(str(p)) for p in input_paths)
-        select_clause = ", ".join(select_exprs)
-        order_clause = self._compaction_order_clause()
-        return (
-            f"COPY (SELECT {select_clause} "
-            f"FROM read_parquet([{paths_sql}], union_by_name=true) "
-            f"{order_clause}) "
-            f"TO {quote_literal(str(staging_path))} "
-            f"(FORMAT 'parquet', ROW_GROUP_SIZE {_ROW_GROUP_SIZE}, COMPRESSION 'zstd', COMPRESSION_LEVEL 1)"
-        )
-
-    def _present_input_columns(self, input_paths: list[Path]) -> set[str]:
-        present: set[str] = set()
-        for p in input_paths:
-            schema = pq.read_schema(p)
-            present.update(schema.names)
-        return present
-
-    def _compaction_order_clause(self) -> str:
-        cols = ", ".join(quote_ident(name) for name in self._compaction_sort_keys())
-        return f"ORDER BY {cols}"
-
-    def sealed_segments(self) -> list[LocalSegment]:
-        """Return flushed (logs_*) segments only, oldest first."""
+        removed_set = set(removed)
         with self._insertion_lock:
-            return [s for s in self._local_segments if not _is_tmp_path(s.path)]
+            new_segments: deque[LocalSegment] = deque()
+            inserted = False
+            for s in self._local_segments:
+                if s.path in removed_set:
+                    if not inserted:
+                        new_segments.append(added)
+                        inserted = True
+                else:
+                    new_segments.append(s)
+            if not inserted:
+                new_segments.append(added)
+            self._local_segments = new_segments
+            self._catalog.replace_segments(
+                self.name,
+                removed_paths=removed,
+                added=[self._segment_to_row(added)],
+            )
+        if unlink_removed:
+            for path in removed:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Failed to unlink merged input %s", path, exc_info=True)
+
+    def _eviction_step(self) -> None:
+        """Evict the namespace's oldest L>=1 copied segments until under caps.
+
+        Runs at the tail of every compaction tick. Per-namespace caps live
+        on ``CompactionConfig`` (``max_segments_per_namespace``,
+        ``max_bytes_per_namespace``); FIFO-by-min_seq picks the oldest
+        eligible segment.
+        """
+        config = self._compactor.config
+        while True:
+            with self._insertion_lock:
+                seg_count = len(self._local_segments)
+                byte_total = sum(s.size_bytes for s in self._local_segments)
+            if seg_count <= config.max_segments_per_namespace and byte_total <= config.max_bytes_per_namespace:
+                return
+            with self._insertion_lock:
+                row = self._catalog.select_eviction_candidate(self.name)
+            if row is None:
+                # Over the cap but nothing eligible (everything still L0,
+                # or terminal segments not yet copied). Bail and let the
+                # next tick try again.
+                return
+            self.evict_segment(row.path)
+            logger.info(
+                "Evicted L%d segment %s (bytes=%d, remaining=%d segments)",
+                row.level,
+                Path(row.path).name,
+                row.byte_size,
+                seg_count - 1,
+            )
 
     def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]:
         """Return all currently queryable local segments and RAM tables."""
@@ -903,6 +1024,19 @@ class DiskLogNamespace:
     def all_segments_unlocked(self) -> list[LocalSegment]:
         """Snapshot every locally-tracked segment. Caller MUST hold the insertion lock."""
         return list(self._local_segments)
+
+    def mark_copied(self, path: str, copied_at_ms: int) -> None:
+        """Stamp the catalog row + in-memory deque after a copy upload completes.
+
+        The copy worker calls this from its own thread; ``_insertion_lock``
+        serializes it against the bg thread's catalog mutations.
+        """
+        with self._insertion_lock:
+            for s in self._local_segments:
+                if s.path == path:
+                    s.copied_at_ms = copied_at_ms
+                    break
+            self._catalog.mark_copied(self.name, path, copied_at_ms)
 
     def evict_segment(self, path: str) -> int:
         """Remove ``path`` from tracking and unlink the file. Returns bytes freed."""
@@ -971,26 +1105,6 @@ class DiskLogNamespace:
             min_seq=min_seq,
             max_seq=max_seq,
             segment_count=len(self._local_segments),
-        )
-
-    def _offload_to_gcs(self, filename: str, filepath: Path) -> None:
-        if not self._remote_log_dir:
-            return
-
-        remote_path = f"{self._remote_log_dir.rstrip('/')}/{self.name}/{filename}"
-        upload_start = time.monotonic()
-        try:
-            with fsspec.core.open(str(filepath), "rb") as f_src, fsspec.core.open(remote_path, "wb") as f_dst:
-                f_dst.write(f_src.read())
-        except Exception:
-            logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
-            return
-        logger.info(
-            "Offloaded %s to %s: bytes=%d elapsed_ms=%d",
-            filename,
-            remote_path,
-            filepath.stat().st_size,
-            int((time.monotonic() - upload_start) * 1000),
         )
 
     def _execute_read(
@@ -1149,9 +1263,6 @@ class MemoryLogNamespace:
         with self._insertion_lock:
             return [], [self._table]
 
-    def sealed_segments(self) -> list[LocalSegment]:
-        return []
-
     def all_segments_unlocked(self) -> list[LocalSegment]:
         return []
 
@@ -1166,6 +1277,9 @@ class MemoryLogNamespace:
     def evict_segment(self, path: str) -> int:
         return 0
 
+    def mark_copied(self, path: str, copied_at_ms: int) -> None:
+        return None
+
     def remove_local_storage(self) -> None:
         with self._insertion_lock:
             self._table = self._arrow_schema.empty_table()
@@ -1175,12 +1289,6 @@ class MemoryLogNamespace:
 
     def stop_and_join(self) -> None:
         return
-
-    def ram_bytes(self) -> int:
-        return 0
-
-    def chunk_count(self) -> int:
-        return 0
 
     def stats(self) -> NamespaceStats:
         with self._insertion_lock:

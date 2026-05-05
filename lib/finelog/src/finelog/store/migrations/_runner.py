@@ -80,11 +80,15 @@ def _load_migration(path: Path):
 def apply_migrations(
     conn: duckdb.DuckDBPyConnection,
     migrations_dir: Path | None = None,
+    *,
+    data_dir: Path | None = None,
 ) -> None:
     """Apply pending migrations from ``migrations_dir`` to ``conn``.
 
-    ``migrations_dir`` defaults to this package's directory so callers from
-    ``RegistryDB`` don't need to know where the files live.
+    ``migrations_dir`` defaults to this package's directory. ``data_dir``
+    is the parent directory of the registry DB and is forwarded to any
+    migration whose ``migrate`` signature declares a ``data_dir`` parameter.
+    Migrations that need to rename on-disk parquet files use it.
     """
     if migrations_dir is None:
         migrations_dir = Path(__file__).parent
@@ -102,7 +106,7 @@ def apply_migrations(
         t0 = time.monotonic()
         migrate = _load_migration(path)
         with transactional(conn):
-            migrate(conn)
+            migrate(conn, data_dir=data_dir)
             conn.execute(
                 "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
                 [path.name, int(time.time() * 1000)],

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from finelog.store.catalog import Catalog
+from finelog.store.catalog import Catalog, SegmentRow
 from finelog.store.migrations import apply_migrations, transactional
 
 
@@ -38,7 +38,12 @@ def test_fresh_registry_runs_baseline_migration(tmp_path):
         assert "namespaces" in tables
         assert "segments" in tables
         assert "schema_migrations" in tables
-        assert _applied_migrations(db._conn) == ["0001_init.py"]
+        assert _applied_migrations(db._conn) == [
+            "0001_init.py",
+            "0002_segment_key_value_bounds.py",
+            "0003_segment_level.py",
+            "0004_segment_copied_at.py",
+        ]
     finally:
         db.close()
 
@@ -49,7 +54,12 @@ def test_reopen_is_idempotent(tmp_path):
     db = Catalog(tmp_path)
     try:
         # Still exactly one row, not two.
-        assert _applied_migrations(db._conn) == ["0001_init.py"]
+        assert _applied_migrations(db._conn) == [
+            "0001_init.py",
+            "0002_segment_key_value_bounds.py",
+            "0003_segment_level.py",
+            "0004_segment_copied_at.py",
+        ]
     finally:
         db.close()
 
@@ -81,7 +91,12 @@ def test_pre_migrations_database_inherits_baseline(tmp_path):
         # Existing row preserved; segments table created; baseline recorded.
         assert db._conn.execute("SELECT namespace FROM namespaces").fetchall() == [("iris.worker",)]
         assert "segments" in _list_tables(db._conn)
-        assert _applied_migrations(db._conn) == ["0001_init.py"]
+        assert _applied_migrations(db._conn) == [
+            "0001_init.py",
+            "0002_segment_key_value_bounds.py",
+            "0003_segment_level.py",
+            "0004_segment_copied_at.py",
+        ]
     finally:
         db.close()
 
@@ -98,12 +113,12 @@ def test_failing_migration_rolls_back(tmp_path):
     # only 0001 should be marked applied.
     (fake_dir / "0001_ok.py").write_text(
         "import duckdb\n"
-        "def migrate(conn: duckdb.DuckDBPyConnection) -> None:\n"
+        "def migrate(conn: duckdb.DuckDBPyConnection, *, data_dir) -> None:\n"
         "    conn.execute('CREATE TABLE ok_marker (n INTEGER)')\n"
     )
     (fake_dir / "0002_boom.py").write_text(
         "import duckdb\n"
-        "def migrate(conn: duckdb.DuckDBPyConnection) -> None:\n"
+        "def migrate(conn: duckdb.DuckDBPyConnection, *, data_dir) -> None:\n"
         "    conn.execute('CREATE TABLE will_be_rolled_back (n INTEGER)')\n"
         "    raise RuntimeError('simulated migration failure')\n"
     )
@@ -130,7 +145,7 @@ def test_failed_migration_retries_on_next_apply(tmp_path):
 
     # First version raises after a side-effect, simulating a half-failed apply.
     migration_path.write_text(
-        "def migrate(conn):\n"
+        "def migrate(conn, *, data_dir):\n"
         "    conn.execute('CREATE TABLE IF NOT EXISTS marker (n INTEGER)')\n"
         "    raise RuntimeError('not yet')\n"
     )
@@ -144,7 +159,7 @@ def test_failed_migration_retries_on_next_apply(tmp_path):
         # Author fixes the migration; next apply picks it up because no row
         # was inserted on the failed pass.
         migration_path.write_text(
-            "def migrate(conn):\n    conn.execute('CREATE TABLE IF NOT EXISTS marker (n INTEGER)')\n"
+            "def migrate(conn, *, data_dir):\n    conn.execute('CREATE TABLE IF NOT EXISTS marker (n INTEGER)')\n"
         )
         apply_migrations(conn, fake_dir)
         assert _applied_migrations(conn) == ["0001_flaky.py"]
@@ -193,7 +208,9 @@ def test_underscore_prefixed_files_are_skipped(tmp_path):
     fake_dir.mkdir()
     (fake_dir / "_runner.py").write_text("raise AssertionError('runner module should never be loaded as a migration')")
     (fake_dir / "__init__.py").write_text("raise AssertionError('package init should never be loaded as a migration')")
-    (fake_dir / "0001_real.py").write_text("def migrate(conn): conn.execute('CREATE TABLE m (n INTEGER)')\n")
+    (fake_dir / "0001_real.py").write_text(
+        "def migrate(conn, *, data_dir): conn.execute('CREATE TABLE m (n INTEGER)')\n"
+    )
 
     conn = duckdb.connect(":memory:")
     try:
@@ -210,25 +227,51 @@ def test_underscore_prefixed_files_are_skipped(tmp_path):
 
 def test_catalog_segments_apis_function_after_migration(tmp_path):
     """End-to-end check: write a segment row through the public Catalog API."""
-    from finelog.store.catalog import SegmentRow, SegmentState
-
     db = Catalog(tmp_path)
     try:
         # ``aggregate_namespace_stats`` and friends rely on the baseline schema.
         assert db.aggregate_namespace_stats("ns").row_count == 0
         seg = SegmentRow(
             namespace="ns",
-            path=str(Path("/x/0001.parquet")),
-            state=SegmentState.FINALIZED,
+            path=str(Path("/x/seg_L1_0000000000000000001.parquet")),
+            level=1,
             min_seq=1,
             max_seq=10,
             row_count=10,
             byte_size=1024,
             created_at_ms=0,
+            min_key_value="alpha",
+            max_key_value="zeta",
+            copied_at_ms=42,
         )
         db.upsert_segment(seg)
         stats = db.aggregate_namespace_stats("ns")
         assert stats.row_count == 10
         assert stats.segment_count == 1
+
+        # 0002 + 0003 + 0004 columns survive the round-trip.
+        rows = db.list_segments("ns")
+        assert len(rows) == 1
+        assert rows[0].level == 1
+        assert rows[0].min_key_value == "alpha"
+        assert rows[0].max_key_value == "zeta"
+        assert rows[0].copied_at_ms == 42
+
+        seg_no_key = SegmentRow(
+            namespace="ns",
+            path=str(Path("/x/seg_L1_0000000000000000011.parquet")),
+            level=1,
+            min_seq=11,
+            max_seq=20,
+            row_count=10,
+            byte_size=1024,
+            created_at_ms=0,
+        )
+        db.upsert_segment(seg_no_key)
+        rows = db.list_segments("ns")
+        no_key_row = next(r for r in rows if r.path.endswith("0000000011.parquet"))
+        assert no_key_row.min_key_value is None
+        assert no_key_row.max_key_value is None
+        assert no_key_row.copied_at_ms is None
     finally:
         db.close()

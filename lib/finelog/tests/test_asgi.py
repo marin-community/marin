@@ -97,7 +97,7 @@ def test_query_and_drop_via_asgi(tmp_path: Path):
 
             ns = log_service.log_store._namespaces["iris.worker"]
             ns._flush_step()
-            ns._compaction_step(compact_single=True)
+            ns._force_compact_l0()
 
             resp = client.post(
                 "/finelog.stats.StatsService/Query",

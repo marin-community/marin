@@ -159,7 +159,7 @@ def run_log_server(
     type=str,
     default="",
     envvar="FINELOG_REMOTE_DIR",
-    help="Remote log storage URI (e.g. gs://bucket/path); empty disables offload.",
+    help="Remote log storage URI (e.g. gs://bucket/path); empty disables remote copy.",
 )
 @click.option(
     "--log-level",

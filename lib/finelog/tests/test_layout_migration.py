@@ -187,30 +187,38 @@ def test_only_known_globs_are_migrated(tmp_path: Path):
 
 def test_full_store_round_trip_after_migration(tmp_path: Path):
     """End-to-end: pre-existing flat files migrate cleanly, then a fresh
-    store over the same dir reads them back."""
-    data_dir = tmp_path / "store"
+    store over the same dir reads them back.
 
-    s1 = DuckDBLogStore(log_dir=data_dir)
+    The flat layout pre-dates the per-namespace dir convention by enough
+    that segments were written with the legacy ``tmp_*`` / ``logs_*``
+    prefixes, not today's ``seg_L<n>_*``. The layout migration only
+    knows the legacy prefixes; migration 0003 rewrites them to the
+    leveled scheme on the next store boot. We synthesize a legacy file
+    by hand here rather than asking the new code path to produce it.
+    """
+    data_dir = tmp_path / "store"
+    data_dir.mkdir()
+
+    # Build one legacy logs_*.parquet that contains a single appendable
+    # log row in today's schema. Using the new code path then renaming
+    # would defeat the point of the test.
+    s_temp = DuckDBLogStore(log_dir=tmp_path / "_seed")
     entry = logging_pb2.LogEntry(source="stdout", data="hello")
     entry.timestamp.epoch_ms = 1
-    s1.append("/k", [entry])
-    s1._force_flush()
-    s1.close()
-
-    # Demote to flat layout: move every file out of log/ to the parent.
-    log_dir = data_dir / LOG_NAMESPACE_DIR
-    for f in list(log_dir.iterdir()):
-        f.rename(data_dir / f.name)
-    log_dir.rmdir()
-    sentinel = data_dir / SENTINEL_FILENAME
-    if sentinel.exists():
-        sentinel.unlink()
-
-    assert any(p.name.startswith("tmp_") or p.name.startswith("logs_") for p in data_dir.iterdir())
+    s_temp.append("/k", [entry])
+    s_temp._force_flush()
+    seed_dir = tmp_path / "_seed" / LOG_NAMESPACE_DIR
+    seg = next(seed_dir.glob("seg_L0_*.parquet"))
+    legacy_name = "logs_0000000000000000001.parquet"
+    (data_dir / legacy_name).write_bytes(seg.read_bytes())
+    s_temp.close()
 
     migrate_to_namespaced_layout(data_dir)
     s2 = DuckDBLogStore(log_dir=data_dir)
     try:
+        # Migration 0003 renamed logs_*.parquet -> seg_L1_*.parquet.
+        log_dir = data_dir / LOG_NAMESPACE_DIR
+        assert sorted(p.name for p in log_dir.glob("seg_L1_*.parquet"))
         result = s2.get_logs("/k")
         assert [e.data for e in result.entries] == ["hello"]
     finally:

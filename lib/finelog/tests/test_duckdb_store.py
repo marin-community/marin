@@ -63,12 +63,12 @@ def test_flush_and_compaction(tmp_path: Path):
         for batch in range(3):
             store.append(KEY, [_entry(f"b{batch}-{i}", epoch_ms=batch * 10 + i) for i in range(5)])
             store._force_flush()
-        assert len(sorted(namespace_dir.glob("tmp_*.parquet"))) == 3
+        assert len(sorted(namespace_dir.glob("seg_L0_*.parquet"))) == 3
 
         store._force_compaction()
 
-        assert len(sorted(namespace_dir.glob("tmp_*.parquet"))) == 0
-        assert len(sorted(namespace_dir.glob("logs_*.parquet"))) == 1
+        assert len(sorted(namespace_dir.glob("seg_L0_*.parquet"))) == 0
+        assert len(sorted(namespace_dir.glob("seg_L1_*.parquet"))) == 1
 
         result = store.get_logs(KEY)
         assert len(result.entries) == 15

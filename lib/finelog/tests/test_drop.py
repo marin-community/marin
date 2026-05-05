@@ -19,7 +19,7 @@ def test_drop_table_removes_namespace(store: DuckDBLogStore):
     _seal(store, "iris.worker")
 
     ns = store._namespaces["iris.worker"]
-    assert ns.sealed_segments(), "expected at least one sealed segment after _seal"
+    assert any(s.level >= 1 for s in ns.all_segments_unlocked()), "expected an L>=1 segment after _seal"
 
     store.drop_table("iris.worker")
 
@@ -82,12 +82,15 @@ def test_drop_table_does_not_delete_remote_objects(tmp_path: Path):
         ns = store._namespaces["iris.worker"]
         ns._flush_step()
         # Only compacted segments are uploaded.
-        ns._compaction_step(compact_single=True)
+        ns._force_compact_l0()
+        # Copy is async; wait for the worker to drain before asserting the
+        # file is visible at the destination.
+        assert store._wait_for_copies(timeout=5.0)
 
         remote_ns_dir = remote / "iris.worker"
         assert remote_ns_dir.exists()
         remote_files_before = sorted(p.name for p in remote_ns_dir.glob("*.parquet"))
-        assert remote_files_before, "expected at least one offloaded segment"
+        assert remote_files_before, "expected at least one copied segment"
 
         store.drop_table("iris.worker")
 

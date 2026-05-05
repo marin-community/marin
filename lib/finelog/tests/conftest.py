@@ -49,10 +49,10 @@ def _worker_batch(worker_ids: list[str], mem_bytes: list[int], ts: list[int]) ->
 
 
 def _seal(store: DuckDBLogStore, namespace: str) -> None:
-    """Flush and compact so the namespace's data is visible to queries."""
+    """Flush and drain L0 so the namespace's data is on the L1 tier."""
     ns = store._namespaces[namespace]
     ns._flush_step()
-    ns._compaction_step(compact_single=True)
+    ns._force_compact_l0()
 
 
 @pytest.fixture()

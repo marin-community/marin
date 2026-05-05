@@ -29,11 +29,10 @@ shared ``_insertion_lock`` around mutating calls, which serializes access.
 
 from __future__ import annotations
 
-import enum
 import logging
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import duckdb
@@ -46,28 +45,33 @@ logger = logging.getLogger(__name__)
 CATALOG_DB_FILENAME = "_finelog_registry.duckdb"
 
 
-class SegmentState(enum.StrEnum):
-    """Lifecycle state for a parquet segment in the catalog.
-
-    Persisted as ``state`` (TEXT) on each ``segments`` row.
-    """
-
-    TMP = "tmp"  # freshly flushed, awaiting compaction
-    FINALIZED = "finalized"  # produced by compaction
-
-
 @dataclass(frozen=True)
 class SegmentRow:
-    """One persisted row in the segments catalog table."""
+    """One persisted row in the segments catalog table.
+
+    ``level`` is the segment's tier in the leveled compaction scheme (0 =
+    freshly flushed; promoted to ``level + 1`` when the planner picks it
+    up). ``min_key_value`` / ``max_key_value`` carry the parquet footer's
+    column statistics for the namespace's declared ``Schema.key_column``.
+    They are ``None`` for namespaces whose schema has no ``key_column``,
+    or for empty segments where no statistics exist.
+    ``copied_at_ms`` is the wall-clock millisecond when the copy worker
+    reported a successful upload; ``None`` while the upload is still
+    pending. Eviction is gated on this so a fresh L1 cannot be deleted
+    before its remote copy is durable.
+    """
 
     namespace: str
     path: str
-    state: SegmentState
+    level: int
     min_seq: int
     max_seq: int
     row_count: int
     byte_size: int
     created_at_ms: int
+    min_key_value: str | None = None
+    max_key_value: str | None = None
+    copied_at_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -109,8 +113,9 @@ class Catalog:
             self._conn = duckdb.connect(str(self._path))
         # Schema is owned by ``finelog.store.migrations``; every additive
         # change (new column, new index, derived backfill) lands as a new
-        # numbered file in that package.
-        apply_migrations(self._conn)
+        # numbered file in that package. Migrations that need to rename
+        # on-disk parquet files receive ``data_dir`` via the runner.
+        apply_migrations(self._conn, data_dir=data_dir)
 
     def close(self) -> None:
         self._conn.close()
@@ -156,54 +161,65 @@ class Catalog:
 
     # ----- segments table -----------------------------------------------
 
+    _SEGMENT_COLUMNS = (
+        "namespace, path, level, min_seq, max_seq, row_count, byte_size, "
+        "created_at_ms, min_key_value, max_key_value, copied_at_ms"
+    )
+
     def list_segments(self, namespace: str) -> list[SegmentRow]:
         rows = self._conn.execute(
-            """
-            SELECT namespace, path, state, min_seq, max_seq, row_count, byte_size, created_at_ms
-            FROM segments
-            WHERE namespace = ?
-            ORDER BY min_seq
-            """,
+            f"SELECT {self._SEGMENT_COLUMNS} FROM segments WHERE namespace = ? ORDER BY min_seq",
             [namespace],
         ).fetchall()
-        return [
-            SegmentRow(
-                namespace=ns,
-                path=path,
-                state=SegmentState(state),
-                min_seq=min_seq,
-                max_seq=max_seq,
-                row_count=row_count,
-                byte_size=byte_size,
-                created_at_ms=created_at_ms,
-            )
-            for ns, path, state, min_seq, max_seq, row_count, byte_size, created_at_ms in rows
-        ]
+        return [self._row_from_tuple(r) for r in rows]
+
+    @staticmethod
+    def _row_from_tuple(r: tuple) -> SegmentRow:
+        return SegmentRow(
+            namespace=r[0],
+            path=r[1],
+            level=r[2],
+            min_seq=r[3],
+            max_seq=r[4],
+            row_count=r[5],
+            byte_size=r[6],
+            created_at_ms=r[7],
+            min_key_value=r[8],
+            max_key_value=r[9],
+            copied_at_ms=r[10],
+        )
 
     def upsert_segment(self, segment: SegmentRow) -> None:
         """Insert or replace one segment row (used by flush + reconciliation)."""
         self._conn.execute(
             """
             INSERT INTO segments
-                (namespace, path, state, min_seq, max_seq, row_count, byte_size, created_at_ms)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (namespace, path, level, min_seq, max_seq, row_count, byte_size, created_at_ms,
+                 min_key_value, max_key_value, copied_at_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (namespace, path) DO UPDATE SET
-                state = excluded.state,
+                level = excluded.level,
                 min_seq = excluded.min_seq,
                 max_seq = excluded.max_seq,
                 row_count = excluded.row_count,
                 byte_size = excluded.byte_size,
-                created_at_ms = excluded.created_at_ms
+                created_at_ms = excluded.created_at_ms,
+                min_key_value = excluded.min_key_value,
+                max_key_value = excluded.max_key_value,
+                copied_at_ms = excluded.copied_at_ms
             """,
             [
                 segment.namespace,
                 segment.path,
-                segment.state.value,
+                segment.level,
                 segment.min_seq,
                 segment.max_seq,
                 segment.row_count,
                 segment.byte_size,
                 segment.created_at_ms,
+                segment.min_key_value,
+                segment.max_key_value,
+                segment.copied_at_ms,
             ],
         )
 
@@ -215,9 +231,9 @@ class Catalog:
     ) -> None:
         """Atomically swap ``removed_paths`` for ``added`` rows in one txn.
 
-        Used by compaction, where N tmp segments collapse into one finalized
-        segment. The whole swap must be visible-or-not visible to callers
-        of :meth:`list_segments` — never half.
+        Used by compaction, where N inputs at level n collapse into one
+        level-(n+1) output. The whole swap must be visible-or-not visible
+        to callers of :meth:`list_segments` — never half.
         """
         with transactional(self._conn):
             for path in removed_paths:
@@ -237,11 +253,25 @@ class Catalog:
 
         Parquet files on disk are authoritative across crashes; on every
         ``DiskLogNamespace`` boot we discover the on-disk segment set and
-        push it through this method so the catalog matches reality.
+        push it through this method so the catalog matches reality. The
+        prior rows' ``copied_at_ms`` stamps are carried forward for
+        unchanged paths so a successfully-uploaded segment doesn't lose
+        its eviction-eligible flag across a restart.
         """
         with transactional(self._conn):
+            prior_copied = {
+                row[0]: row[1]
+                for row in self._conn.execute(
+                    "SELECT path, copied_at_ms FROM segments WHERE namespace = ?",
+                    [namespace],
+                ).fetchall()
+            }
             self._conn.execute("DELETE FROM segments WHERE namespace = ?", [namespace])
             for seg in segments:
+                if seg.copied_at_ms is None:
+                    stamp = prior_copied.get(seg.path)
+                    if stamp is not None:
+                        seg = replace(seg, copied_at_ms=stamp)
                 self.upsert_segment(seg)
 
     def aggregate_namespace_stats(self, namespace: str) -> NamespaceStats:
@@ -268,3 +298,57 @@ class Catalog:
             max_seq=int(row[3]),
             segment_count=int(row[4]),
         )
+
+    def mark_copied(self, namespace: str, path: str, copied_at_ms: int) -> None:
+        """Record successful remote upload of one segment."""
+        self._conn.execute(
+            "UPDATE segments SET copied_at_ms = ? WHERE namespace = ? AND path = ?",
+            [copied_at_ms, namespace, path],
+        )
+
+    def list_pending_copies(self) -> list[SegmentRow]:
+        """All L>=1 rows whose remote upload has not yet completed.
+
+        Ordered by ``min_seq`` so we drain oldest-first across the whole
+        store. This is the copy worker's only view into the catalog.
+        """
+        rows = self._conn.execute(
+            f"""
+            SELECT {self._SEGMENT_COLUMNS}
+            FROM segments
+            WHERE level >= 1
+              AND copied_at_ms IS NULL
+            ORDER BY namespace, min_seq
+            """
+        ).fetchall()
+        return [self._row_from_tuple(r) for r in rows]
+
+    def select_eviction_candidate(self, namespace: str) -> SegmentRow | None:
+        """Pick the oldest evictable segment in ``namespace``.
+
+        Eligibility:
+
+        * ``level >= 1`` — L0 is local-only and transient, so it's never
+          evicted.
+        * ``copied_at_ms IS NOT NULL`` — a freshly compacted segment
+          becomes evictable only after the upload worker confirms the
+          remote copy is durable.
+
+        Returns the ``SegmentRow`` with the smallest ``min_seq``, or
+        ``None`` when no eligible segment exists.
+        """
+        row = self._conn.execute(
+            f"""
+            SELECT {self._SEGMENT_COLUMNS}
+            FROM segments
+            WHERE namespace = ?
+              AND level >= 1
+              AND copied_at_ms IS NOT NULL
+            ORDER BY min_seq ASC
+            LIMIT 1
+            """,
+            [namespace],
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_from_tuple(row)

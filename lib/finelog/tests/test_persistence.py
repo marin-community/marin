@@ -60,12 +60,12 @@ def test_compaction_across_additive_evolution(tmp_path: Path):
         store.write_rows("ns.evolve", _ipc_bytes(batch2))
         ns._flush_step()
 
-        ns._compaction_step()
+        ns._force_compact_l0()
         seg_dir = tmp_path / "data" / "ns.evolve"
-        assert sorted(p.name for p in seg_dir.glob("tmp_*.parquet")) == []
-        log_files = sorted(seg_dir.glob("logs_*.parquet"))
-        assert len(log_files) == 1
-        table = pq.read_table(log_files[0])
+        assert sorted(p.name for p in seg_dir.glob("seg_L0_*.parquet")) == []
+        l1_files = sorted(seg_dir.glob("seg_L1_*.parquet"))
+        assert len(l1_files) == 1
+        table = pq.read_table(l1_files[0])
         # Implicit ``seq`` first, then registered columns, additive ``c`` last.
         assert table.column_names == ["seq", "a", "b", "timestamp_ms", "c"]
         rows = table.to_pylist()

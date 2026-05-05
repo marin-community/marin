@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 from finelog.rpc import logging_pb2
-from finelog.store.catalog import Catalog, NamespaceStats, SegmentState
+from finelog.store.catalog import Catalog, NamespaceStats
 from finelog.store.duckdb_store import DuckDBLogStore
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
@@ -29,7 +29,10 @@ def _stats(store: DuckDBLogStore, namespace: str) -> NamespaceStats:
 
 
 def _segments(store: DuckDBLogStore, namespace: str):
-    return store._catalog.list_segments(namespace)
+    # DuckDB conns aren't thread-safe; catalog reads serialize on the
+    # store's insertion lock, same contract as the production code.
+    with store._insertion_lock:
+        return store._catalog.list_segments(namespace)
 
 
 # ---------------------------------------------------------------------------
@@ -67,29 +70,29 @@ def test_stats_after_flush_match_segments_table(store):
 
     segs = _segments(store, "iris.worker")
     assert len(segs) == 1
-    assert segs[0].state == SegmentState.TMP
+    assert segs[0].level == 0
     assert segs[0].row_count == 2
     assert segs[0].min_seq == 1
     assert segs[0].max_seq == 2
 
 
-def test_compaction_replaces_tmp_rows_atomically(store):
+def test_compaction_replaces_l0_rows_atomically(store):
     store.register_table("iris.worker", _worker_schema())
     for i in range(3):
         batch = _worker_batch([f"w-{i}"], [i], [i])
         store.write_rows("iris.worker", _ipc_bytes(batch))
         store._namespaces["iris.worker"]._flush_step()
 
-    # Three tmp segments before compaction.
+    # Three L0 segments before compaction.
     pre = _segments(store, "iris.worker")
     assert len(pre) == 3
-    assert all(s.state == SegmentState.TMP for s in pre)
+    assert all(s.level == 0 for s in pre)
 
-    store._namespaces["iris.worker"]._compaction_step(compact_single=True)
+    store._namespaces["iris.worker"]._force_compact_l0()
 
     post = _segments(store, "iris.worker")
     assert len(post) == 1
-    assert post[0].state == SegmentState.FINALIZED
+    assert post[0].level == 1
     assert post[0].row_count == 3
     assert post[0].min_seq == 1
     assert post[0].max_seq == 3
@@ -163,6 +166,30 @@ def test_segments_catalog_survives_restart(tmp_path):
         s2.close()
 
 
+def test_reconcile_preserves_copied_at_ms(tmp_path):
+    """A successful upload's stamp survives the next-boot reconcile pass."""
+    log_dir = tmp_path / "store"
+    s1 = DuckDBLogStore(log_dir=log_dir)
+    s1.register_table("iris.worker", _worker_schema())
+    s1.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-0"], [1], [1])))
+    _seal(s1, "iris.worker")
+    seg = _segments(s1, "iris.worker")[0]
+    # Simulate a successful copy: stamp the catalog row.
+    s1._namespaces["iris.worker"].mark_copied(seg.path, copied_at_ms=12345)
+    assert _segments(s1, "iris.worker")[0].copied_at_ms == 12345
+    s1.close()
+
+    s2 = DuckDBLogStore(log_dir=log_dir)
+    try:
+        rows = _segments(s2, "iris.worker")
+        assert len(rows) == 1
+        assert rows[0].path == seg.path
+        # Reconcile rewrites the row but keeps the copy stamp.
+        assert rows[0].copied_at_ms == 12345
+    finally:
+        s2.close()
+
+
 def test_reconcile_drops_rows_for_missing_files(tmp_path):
     """An out-of-band parquet deletion is reflected after a restart."""
     log_dir = tmp_path / "store"
@@ -212,6 +239,93 @@ def test_log_namespace_stats_count_pushed_logs(store):
 
 
 # ---------------------------------------------------------------------------
+# key_column value bounds (catalog 0002)
+# ---------------------------------------------------------------------------
+
+
+def _flush_one(store: DuckDBLogStore, namespace: str) -> None:
+    store._namespaces[namespace]._flush_step()
+
+
+def test_key_value_bounds_populated_for_log_namespace(store):
+    entries = [
+        logging_pb2.LogEntry(
+            timestamp=logging_pb2.Timestamp(epoch_ms=ts),
+            source="stdout",
+            data=f"hello-{ts}",
+        )
+        for ts in (10, 20, 30)
+    ]
+    store.append("/system/aaa", entries)
+    store.append("/system/zzz", entries)
+    _flush_one(store, "log")
+
+    segs = _segments(store, "log")
+    assert len(segs) == 1
+    # ``key`` is the schema's key_column; bounds should bracket the
+    # smallest and largest source keys we just appended.
+    assert segs[0].min_key_value == "/system/aaa"
+    assert segs[0].max_key_value == "/system/zzz"
+
+
+def test_key_value_bounds_survive_compaction(store):
+    store.append(
+        "/system/aaa",
+        [logging_pb2.LogEntry(timestamp=logging_pb2.Timestamp(epoch_ms=1), source="s", data="x")],
+    )
+    _flush_one(store, "log")
+    store.append(
+        "/system/zzz",
+        [logging_pb2.LogEntry(timestamp=logging_pb2.Timestamp(epoch_ms=2), source="s", data="x")],
+    )
+    _flush_one(store, "log")
+
+    pre = _segments(store, "log")
+    assert {s.min_key_value for s in pre} == {"/system/aaa", "/system/zzz"}
+
+    store._namespaces["log"]._force_compact_l0()
+
+    post = _segments(store, "log")
+    assert len(post) == 1
+    # min-of-mins / max-of-maxes across the two tmp inputs.
+    assert post[0].min_key_value == "/system/aaa"
+    assert post[0].max_key_value == "/system/zzz"
+
+
+def test_key_value_bounds_null_when_schema_has_no_key_column(store):
+    store.register_table("iris.worker", _worker_schema())
+    store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-0"], [1], [1])))
+    _seal(store, "iris.worker")
+
+    segs = _segments(store, "iris.worker")
+    assert len(segs) == 1
+    # _worker_schema() declares key_column=""; bounds remain unset.
+    assert segs[0].min_key_value is None
+    assert segs[0].max_key_value is None
+
+
+def test_key_value_bounds_repopulated_on_reconcile(tmp_path):
+    log_dir = tmp_path / "store"
+    s1 = DuckDBLogStore(log_dir=log_dir)
+    s1.append(
+        "/system/mid",
+        [logging_pb2.LogEntry(timestamp=logging_pb2.Timestamp(epoch_ms=1), source="s", data="x")],
+    )
+    _seal(s1, "log")
+    s1.close()
+
+    s2 = DuckDBLogStore(log_dir=log_dir)
+    try:
+        # Reconciliation re-derived the bounds from the parquet footer.
+        segs = _segments(s2, "log")
+        assert len(segs) == 1
+        assert segs[0].min_key_value == "/system/mid"
+        assert segs[0].max_key_value == "/system/mid"
+    finally:
+        s2.close()
+
+
+# ---------------------------------------------------------------------------
 # Catalog unit checks
 # ---------------------------------------------------------------------------
 
@@ -225,7 +339,7 @@ def test_registry_replace_segments_is_atomic(tmp_path):
     initial = SegmentRow(
         namespace="ns",
         path="/old.parquet",
-        state=SegmentState.TMP,
+        level=0,
         min_seq=1,
         max_seq=10,
         row_count=10,
@@ -240,7 +354,7 @@ def test_registry_replace_segments_is_atomic(tmp_path):
     bad = SegmentRow(
         namespace="ns",
         path="/new.parquet",
-        state=SegmentState.FINALIZED,
+        level=1,
         min_seq=1,
         max_seq=10,
         row_count=10,

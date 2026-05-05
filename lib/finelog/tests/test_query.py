@@ -4,14 +4,12 @@
 from __future__ import annotations
 
 import threading
-import time
 
 import duckdb
 import pyarrow as pa
 import pytest
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.log_namespace import _is_tmp_path
 from finelog.store.schema import Column, Schema
 from finelog.store.sql_escape import quote_ident, quote_literal
 
@@ -118,8 +116,15 @@ def test_query_unknown_namespace_in_sql_raises(store: DuckDBLogStore):
         store.query('SELECT * FROM "nope.unknown"')
 
 
-def test_query_blocks_concurrent_compaction_commit(store: DuckDBLogStore):
-    """A reader holding the query-visibility lock blocks compaction's commit."""
+def test_compaction_commit_does_not_take_visibility_write_lock(store: DuckDBLogStore):
+    """Compaction's commit phase no longer acquires the visibility rwlock.
+
+    The previous design took the write side around the rename + replace_segments
+    pair as defense-in-depth. With per-namespace bg threads, the same thread
+    owns flush + compaction + eviction, so there is no concurrent unlinker to
+    defend against. A long-running reader on the rwlock must NOT block a
+    compaction commit.
+    """
     store.register_table("iris.worker", _worker_schema())
     ns = store._namespaces["iris.worker"]
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))
@@ -127,39 +132,27 @@ def test_query_blocks_concurrent_compaction_commit(store: DuckDBLogStore):
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["b"], [2], [2])))
     ns._flush_step()
 
-    # Hold the read lock; poll _pending_writers to confirm the compaction
-    # thread has queued without relying on sleep.
     rwlock = store._query_visibility_lock
     rwlock.read_acquire()
     try:
         compaction_done = threading.Event()
 
         def run_compaction():
-            ns._compaction_step()
+            ns._force_compact_l0()
             compaction_done.set()
 
         t = threading.Thread(target=run_compaction, daemon=True)
         t.start()
 
-        with rwlock._cond:
-            deadline = time.monotonic() + 5.0
-            while rwlock._pending_writers == 0:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise AssertionError("compaction thread never queued for the write lock")
-                rwlock._cond.wait(timeout=remaining)
-
-        assert not compaction_done.is_set()
+        # The compaction must finish promptly even with the read lock held.
+        assert compaction_done.wait(timeout=5.0), "compaction blocked on the visibility lock"
     finally:
         rwlock.read_release()
 
     t.join(timeout=5.0)
-    assert compaction_done.is_set()
-    ns = store._namespaces["iris.worker"]
-    sealed = ns.sealed_segments()
-    assert len(sealed) == 1
     all_segments = ns.all_segments_unlocked()
-    assert not any(_is_tmp_path(s.path) for s in all_segments)
+    assert len(all_segments) == 1
+    assert all(s.level >= 1 for s in all_segments)
 
 
 def test_query_completes_on_snapshot_during_compaction(store: DuckDBLogStore):
@@ -168,10 +161,10 @@ def test_query_completes_on_snapshot_during_compaction(store: DuckDBLogStore):
     ns = store._namespaces["iris.worker"]
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))
     ns._flush_step()
-    ns._compaction_step(compact_single=True)
+    ns._force_compact_l0()
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["b"], [2], [2])))
     ns._flush_step()
-    ns._compaction_step(compact_single=True)
+    ns._force_compact_l0()
 
     table = store.query('SELECT worker_id FROM "iris.worker" ORDER BY worker_id')
     assert table.column("worker_id").to_pylist() == ["a", "b"]
@@ -179,3 +172,67 @@ def test_query_completes_on_snapshot_during_compaction(store: DuckDBLogStore):
     ns._compaction_step()
     table2 = store.query('SELECT worker_id FROM "iris.worker" ORDER BY worker_id')
     assert table2.column("worker_id").to_pylist() == ["a", "b"]
+
+
+def test_writes_proceed_during_compaction_copy(store: DuckDBLogStore, monkeypatch):
+    """Compaction's parquet COPY must not block concurrent appends.
+
+    Stubs ``compaction_conn.execute`` to gate on an event so the COPY hangs
+    deterministically. A concurrent ``write_rows`` must finish before we
+    release the gate — proving the insertion lock is not held across the COPY.
+    """
+    store.register_table("iris.worker", _worker_schema())
+    ns = store._namespaces["iris.worker"]
+
+    # Two L0 segments so ``_compaction_step`` plans an actual merge.
+    store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))
+    ns._flush_step()
+    store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["b"], [2], [2])))
+    ns._flush_step()
+
+    copy_entered = threading.Event()
+    release_copy = threading.Event()
+    real_conn = ns._compaction_conn
+
+    class _GatedConn:
+        def execute(self, sql, *args, **kwargs):
+            copy_entered.set()
+            if not release_copy.wait(timeout=5.0):
+                raise AssertionError("test forgot to release the COPY gate")
+            return real_conn.execute(sql, *args, **kwargs)
+
+    monkeypatch.setattr(ns, "_compaction_conn", _GatedConn())
+
+    compaction_done = threading.Event()
+
+    def run_compaction():
+        ns._force_compact_l0()
+        compaction_done.set()
+
+    compactor = threading.Thread(target=run_compaction, daemon=True)
+    compactor.start()
+    assert copy_entered.wait(timeout=5.0), "compaction never entered the COPY"
+
+    write_done = threading.Event()
+    write_error: list[BaseException] = []
+
+    def run_write():
+        try:
+            store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["c"], [3], [3])))
+        except BaseException as exc:  # surface to the test thread
+            write_error.append(exc)
+        finally:
+            write_done.set()
+
+    writer = threading.Thread(target=run_write, daemon=True)
+    writer.start()
+
+    # Append must complete while the COPY is still gated.
+    assert write_done.wait(timeout=2.0), "append blocked behind compaction COPY"
+    assert not write_error, write_error
+    assert not compaction_done.is_set()
+
+    release_copy.set()
+    compactor.join(timeout=5.0)
+    assert compaction_done.is_set()
+    writer.join(timeout=1.0)
