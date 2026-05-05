@@ -46,6 +46,10 @@ def _batch_spec() -> P:
     return P(("data", "expert"))
 
 
+def _batch_seq_spec() -> P:
+    return P(("data", "expert"), None, None)
+
+
 @dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
@@ -132,7 +136,6 @@ class CausalSelfAttention(eqx.Module):
     def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
-        batch_spec = _batch_spec()
 
         q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
@@ -153,7 +156,7 @@ class CausalSelfAttention(eqx.Module):
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=_batch_seq_spec())
 
 
 class RMSNorm(eqx.Module):
@@ -230,7 +233,7 @@ class DenseMLP(eqx.Module):
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
-        return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+        return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _batch_seq_spec())
 
 
 def _routing_stats(
@@ -376,6 +379,7 @@ class MoEMLP(eqx.Module):
                 num_devices *= mesh.shape[a]
         local_tokens = s_minus_alpha.shape[0] // num_devices
         qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+        s_minus_alpha = reshard(s_minus_alpha, P(batch_axes, None))
 
         def _local_qb_beta(s_ma):
             topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
@@ -402,7 +406,7 @@ class MoEMLP(eqx.Module):
         )
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        routed = reshard(routed, _batch_spec())
+        routed = reshard(routed, _batch_seq_spec())
         return routed, router_stats
 
 
@@ -487,9 +491,8 @@ class Transformer(eqx.Module):
         if mask is None:
             mask = AttentionMask.causal()
 
-        batch_spec = _batch_spec()
         cfg = self.config
-        hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
+        hidden = self.token_embed.at[token_ids].get(out_sharding=_batch_seq_spec())
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -518,9 +521,8 @@ class Transformer(eqx.Module):
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
-        batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
-        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=_batch_seq_spec())
 
     def next_token_loss(
         self,

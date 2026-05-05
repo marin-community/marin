@@ -46,6 +46,17 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "fp8": 3.958e15 / 2,
         "int8": 3.958e15 / 2,
     },
+    # GH200 exposes an H100 Tensor Core GPU with Grace CPU memory attached.
+    # Source: NVIDIA GH200 Grace Hopper Superchip datasheet.
+    "gh200": {
+        "fp64": 67e12,
+        "fp32": 67e12,
+        "tf32": 989e12 / 2,
+        "fp16": 1.979e15 / 2,
+        "bf16": 1.979e15 / 2,
+        "fp8": 3.958e15 / 2,
+        "int8": 3.958e15 / 2,
+    },
     # source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf
     "a100": {  # Alias for backwards compatibility, defaults to 40G variant
         "fp64": 19.5e12,
@@ -105,6 +116,18 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "bf16": 1.979e15 / 2,
         "fp8": 3.958e15 / 2,
         "int8": 3.958e15 / 2,
+    },
+    # Source: NVIDIA HGX B200 specs. NVIDIA publishes sparse tensor values for
+    # most Tensor Core dtypes; these values use dense, per-GPU throughput.
+    "b200": {
+        "fp64": 296e12 / 8,
+        "fp32": 600e12 / 8,
+        "tf32": 18e15 / 2 / 8,
+        "fp16": 36e15 / 2 / 8,
+        "bf16": 36e15 / 2 / 8,
+        "fp8": 72e15 / 2 / 8,
+        "int8": 72e15 / 2 / 8,
+        "fp4": 72e15 / 8,
     },
     # source: https://images.nvidia.com/content/technologies/volta/pdf/volta-v100-datasheet-update-us-1165301-r5.pdf
     "v100": {
@@ -259,8 +282,12 @@ def jax_device_kind_to_fray_device_type(kind: str) -> str:
         return "h100-pcie"
     if "h100" in kind:
         return "h100"
+    if "gh200" in kind:
+        return "gh200"
     if "h200" in kind:
         return "h200"
+    if "b200" in kind:
+        return "b200"
     # Check for A100 variants - JAX returns "80gb" or "40gb" (with 'b')
     if "a100" in kind and "80g" in kind:  # Matches both "80g" and "80gb"
         return "a100-80g"
