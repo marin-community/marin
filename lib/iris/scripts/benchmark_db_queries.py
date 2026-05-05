@@ -395,36 +395,36 @@ def benchmark_dashboard(db: ControllerDB) -> None:
     jobs = _bench_jobs_in_states(db)
     job_ids = {j.job_id for j in jobs}
 
-    bench("_task_summaries_for_jobs (all)", lambda: _task_summaries_for_jobs(db, job_ids))
+    def _bench_task_summaries():
+        with db.read_snapshot() as q:
+            return _task_summaries_for_jobs(q, job_ids)
+
+    bench("_task_summaries_for_jobs (all)", _bench_task_summaries)
 
     roots_by_date = controller_pb2.Controller.JobQuery(
         scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
         limit=50,
     )
-    bench(
-        "_query_jobs (roots, by date)",
-        lambda: _query_jobs(db, roots_by_date, USER_JOB_STATES),
-    )
+
+    def _bench_query(query):
+        with db.read_snapshot() as q:
+            return _query_jobs(q, query, USER_JOB_STATES)
+
+    bench("_query_jobs (roots, by date)", lambda: _bench_query(roots_by_date))
 
     roots_by_name = controller_pb2.Controller.JobQuery(
         scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
         name_filter="test",
         limit=50,
     )
-    bench(
-        "_query_jobs (roots, name filter)",
-        lambda: _query_jobs(db, roots_by_name, USER_JOB_STATES),
-    )
+    bench("_query_jobs (roots, name filter)", lambda: _bench_query(roots_by_name))
 
     roots_by_failures = controller_pb2.Controller.JobQuery(
         scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
         sort_field=controller_pb2.Controller.JOB_SORT_FIELD_FAILURES,
         limit=50,
     )
-    bench(
-        "_query_jobs (roots, sort failures)",
-        lambda: _query_jobs(db, roots_by_failures, USER_JOB_STATES),
-    )
+    bench("_query_jobs (roots, sort failures)", lambda: _bench_query(roots_by_failures))
 
     sample_job = jobs[0] if jobs else None
     if sample_job:
@@ -460,13 +460,16 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
         limit=50,
     )
-    paginated_jobs, _ = _query_jobs(db, roots_query, USER_JOB_STATES)
+    with db.read_snapshot() as q:
+        paginated_jobs, _ = _query_jobs(q, roots_query, USER_JOB_STATES)
     root_job_ids = [j.job_id for j in paginated_jobs]
     if root_job_ids:
-        bench(
-            f"_parent_ids_with_children ({len(root_job_ids)} roots)",
-            lambda: _parent_ids_with_children(db, root_job_ids),
-        )
+
+        def _bench_parents():
+            with db.read_snapshot() as q:
+                return _parent_ids_with_children(q, root_job_ids)
+
+        bench(f"_parent_ids_with_children ({len(root_job_ids)} roots)", _bench_parents)
     else:
         print("  _parent_ids_with_children                         (skipped, no jobs)")
 
@@ -493,10 +496,11 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         bench("_tasks_for_worker", lambda: _tasks_for_worker(db, sample_worker_id))
 
     def _list_jobs_full(db):
-        paginated_jobs, _total = _query_jobs(db, roots_query, USER_JOB_STATES)
-        root_ids = [j.job_id for j in paginated_jobs]
-        _task_summaries_for_jobs(db, {j.job_id for j in paginated_jobs})
-        _parent_ids_with_children(db, root_ids)
+        with db.read_snapshot() as q:
+            paginated_jobs, _total = _query_jobs(q, roots_query, USER_JOB_STATES)
+            root_ids = [j.job_id for j in paginated_jobs]
+            _task_summaries_for_jobs(q, {j.job_id for j in paginated_jobs})
+            _parent_ids_with_children(q, root_ids)
 
     bench("list_jobs_full (composite)", lambda: _list_jobs_full(db))
 

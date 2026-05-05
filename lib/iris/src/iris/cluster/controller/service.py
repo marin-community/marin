@@ -56,6 +56,7 @@ from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     ControllerDB,
     EndpointQuery,
+    QuerySnapshot,
     TaskJobSummary,
     UserStats,
     attempt_is_worker_failure,
@@ -626,7 +627,7 @@ def _resolve_state_filter(state_filter: str) -> tuple[int, ...] | None:
 
 
 def _query_jobs(
-    db: ControllerDB,
+    q: QuerySnapshot,
     query: controller_pb2.Controller.JobQuery,
     state_ids: tuple[int, ...],
 ) -> tuple[list[JobRow], int]:
@@ -634,7 +635,9 @@ def _query_jobs(
 
     ``state_ids`` is the pre-resolved state filter (always non-empty); the
     caller owns "unknown state -> empty page" handling so that a bad filter
-    never reaches SQL.
+    never reaches SQL. The caller also owns the read snapshot — list_jobs
+    chains the SELECT, COUNT, and downstream summary/parent queries on a
+    single snapshot to keep the per-connection page cache hot.
     """
     assert state_ids, "_query_jobs requires at least one state id"
 
@@ -675,7 +678,10 @@ def _query_jobs(
     direction = "DESC" if sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC else "ASC"
     order_expr = _SORT_FIELD_TO_SQL.get(sort_field, "j.submitted_at_ms")
 
-    count_sql = f"SELECT COUNT(*) FROM jobs j {JOB_CONFIG_JOIN} WHERE {where_clause}"
+    # COUNT only filters on j.* columns; the projection-side join to job_config
+    # adds a B-tree probe per candidate row for nothing. The FK guarantees the
+    # row exists, so the COUNT cannot diverge from the unjoined form.
+    count_sql = f"SELECT COUNT(*) FROM jobs j WHERE {where_clause}"
 
     # Only join tasks when sorting by failure/preemption aggregates.
     # The common case (sort by date, name, state) skips the expensive LEFT JOIN + GROUP BY.
@@ -710,15 +716,8 @@ def _query_jobs(
         select_sql += " LIMIT ? OFFSET ?"
         select_params.extend([limit, offset])
 
-    with db.read_snapshot() as q:
-        rows = q.execute_sql(select_sql, tuple(select_params)).fetchall()
-        # Skip the COUNT query when we can infer the total from the result set:
-        # first page + short result means we already have everything.
-        if offset == 0 and limit > 0 and len(rows) < limit:
-            total = len(rows)
-        else:
-            total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
-
+    rows = q.execute_sql(select_sql, tuple(select_params)).fetchall()
+    total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
     return JOB_ROW_PROJECTION.decode(rows), total
 
 
@@ -746,7 +745,7 @@ def _query_from_list_jobs_request(
     return query
 
 
-def _parent_ids_with_children(db: ControllerDB, job_ids: list[JobName]) -> set[JobName]:
+def _parent_ids_with_children(q: QuerySnapshot, job_ids: list[JobName]) -> set[JobName]:
     """Return the subset of *job_ids* that currently have direct children."""
     if not job_ids:
         return set()
@@ -756,12 +755,11 @@ def _parent_ids_with_children(db: ControllerDB, job_ids: list[JobName]) -> set[J
         FROM jobs j
         WHERE j.parent_job_id IN ({placeholders})
     """
-    with db.read_snapshot() as q:
-        rows = q.raw(sql, tuple(job_id.to_wire() for job_id in job_ids))
+    rows = q.raw(sql, tuple(job_id.to_wire() for job_id in job_ids))
     return {JobName.from_wire(row.parent_job_id) for row in rows if row.parent_job_id}
 
 
-def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
+def _task_summaries_for_jobs(q: QuerySnapshot, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
     """Aggregate task counts per job using SQL GROUP BY instead of Python-side iteration."""
     if job_ids is not None:
         placeholders = ",".join("?" for _ in job_ids)
@@ -782,8 +780,7 @@ def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = No
         GROUP BY t.job_id, t.state
     """
     completed_states = (job_pb2.TASK_STATE_SUCCEEDED, job_pb2.TASK_STATE_KILLED)
-    with db.read_snapshot() as q:
-        rows = q.raw(sql, params, decoders={"job_id": JobName.from_wire})
+    rows = q.raw(sql, params, decoders={"job_id": JobName.from_wire})
 
     summaries: dict[JobName, TaskJobSummary] = {}
     for row in rows:
@@ -1271,7 +1268,8 @@ class ControllerServiceImpl:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
         # Aggregate task counts via a single GROUP BY query.
-        summaries = _task_summaries_for_jobs(self._db, {job.job_id})
+        with self._db.read_snapshot() as q:
+            summaries = _task_summaries_for_jobs(q, {job.job_id})
         summary = summaries.get(job.job_id)
 
         task_state_counts = (
@@ -1294,7 +1292,8 @@ class ControllerServiceImpl:
 
         resources = _resource_spec_from_job_row(job)
 
-        has_children = bool(_parent_ids_with_children(self._db, [job.job_id]))
+        with self._db.read_snapshot() as q:
+            has_children = bool(_parent_ids_with_children(q, [job.job_id]))
 
         proto_job_status = job_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
@@ -1455,12 +1454,17 @@ class ControllerServiceImpl:
         if state_ids is None:
             return controller_pb2.Controller.ListJobsResponse(jobs=[], total_count=0, has_more=False)
 
-        jobs, total_count = _query_jobs(self._db, query, state_ids)
-
-        task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in jobs})
+        # Share one read snapshot across SELECT, COUNT, task-summary, and
+        # parent-children queries. Each db.read_snapshot() takes a connection
+        # from the read pool and starts a fresh transaction; doing it four
+        # times per call also keeps each read on a different connection's
+        # cold page cache.
+        with self._db.read_snapshot() as q:
+            jobs, total_count = _query_jobs(q, query, state_ids)
+            task_summaries = _task_summaries_for_jobs(q, {j.job_id for j in jobs})
+            has_children = _parent_ids_with_children(q, [j.job_id for j in jobs])
         has_pending = any(j.state == job_pb2.JOB_STATE_PENDING for j in jobs)
         autoscaler_pending_hints = self._get_autoscaler_pending_hints() if has_pending else {}
-        has_children = _parent_ids_with_children(self._db, [j.job_id for j in jobs])
         all_jobs = self._jobs_to_protos(jobs, task_summaries, autoscaler_pending_hints, has_children=has_children)
         has_more = query.limit > 0 and query.offset + query.limit < total_count
         return controller_pb2.Controller.ListJobsResponse(
@@ -2440,12 +2444,16 @@ class ControllerServiceImpl:
         # --- User budgets and spend ---
         budgets = self._db.list_user_budgets()
         budget_limits: dict[str, int] = {b.user_id: b.budget_limit for b in budgets}
+
+        # All read queries share one snapshot so SELECT/COUNT/etc. stay warm on
+        # a single pooled connection's page cache instead of cycling through
+        # four cold connections. Python proto-building runs after the snapshot
+        # closes; we only hold it for SQL.
+        job_resources: dict[JobName, job_pb2.ResourceSpecProto] = {}
         with self._db.read_snapshot() as snap:
             user_spend = compute_user_spend(snap)
 
-        # --- Pending queue ---
-        # Inline _schedulable_tasks logic to avoid circular import with controller.py
-        with self._db.read_snapshot() as snap:
+            # Inline _schedulable_tasks logic to avoid circular import with controller.py
             task_rows = TASK_ROW_PROJECTION.decode(
                 snap.fetchall(
                     f"SELECT {TASK_ROW_PROJECTION.select_clause()} FROM tasks t WHERE t.state = ? "
@@ -2454,14 +2462,12 @@ class ControllerServiceImpl:
                     (job_pb2.TASK_STATE_PENDING,),
                 ),
             )
-        pending_tasks = [t for t in task_rows if task_row_can_be_scheduled(t)]
-        # Batch-fetch resource spec columns for resource values
-        job_ids = {t.job_id for t in pending_tasks}
-        job_resources: dict[JobName, job_pb2.ResourceSpecProto] = {}
-        if job_ids:
-            wires = [jid.to_wire() for jid in job_ids]
-            placeholders = ",".join("?" for _ in wires)
-            with self._db.read_snapshot() as snap:
+            pending_tasks = [t for t in task_rows if task_row_can_be_scheduled(t)]
+
+            job_ids = {t.job_id for t in pending_tasks}
+            if job_ids:
+                wires = [jid.to_wire() for jid in job_ids]
+                placeholders = ",".join("?" for _ in wires)
                 rows = snap.raw(
                     f"SELECT jc.job_id, jc.res_cpu_millicores, jc.res_memory_bytes, "
                     f"jc.res_disk_bytes, jc.res_device_json "
@@ -2469,8 +2475,24 @@ class ControllerServiceImpl:
                     tuple(wires),
                     decoders={"job_id": JobName.from_wire},
                 )
-            for row in rows:
-                job_resources[row.job_id] = _resource_spec_from_job_row(row)
+                for row in rows:
+                    job_resources[row.job_id] = _resource_spec_from_job_row(row)
+
+            # --- Running tasks (inline _get_running_tasks_with_band_and_value) ---
+            running_rows = snap.raw(
+                "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id, "
+                "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, "
+                "jc.res_device_json, jc.has_coscheduling "
+                "FROM tasks t "
+                "JOIN job_config jc ON jc.job_id = t.job_id "
+                "WHERE t.state = ? AND t.current_worker_id IS NOT NULL",
+                (job_pb2.TASK_STATE_RUNNING,),
+                decoders={
+                    "task_id": JobName.from_wire,
+                    "priority_band": int,
+                    "worker_id": WorkerId,
+                },
+            )
 
         # Group by effective band, interleaving by user within each band
         BAND_ORDER = [
@@ -2562,23 +2584,6 @@ class ControllerServiceImpl:
                 )
             )
 
-        # --- Running tasks ---
-        # Inline _get_running_tasks_with_band_and_value logic to avoid circular import
-        with self._db.read_snapshot() as snap:
-            running_rows = snap.raw(
-                "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id, "
-                "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, "
-                "jc.res_device_json, jc.has_coscheduling "
-                "FROM tasks t "
-                "JOIN job_config jc ON jc.job_id = t.job_id "
-                "WHERE t.state = ? AND t.current_worker_id IS NOT NULL",
-                (job_pb2.TASK_STATE_RUNNING,),
-                decoders={
-                    "task_id": JobName.from_wire,
-                    "priority_band": int,
-                    "worker_id": WorkerId,
-                },
-            )
         running_protos: list[controller_pb2.Controller.SchedulerRunningTask] = []
         for row in running_rows:
             res = _resource_spec_from_job_row(row)

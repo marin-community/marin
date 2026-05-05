@@ -999,7 +999,8 @@ def test_task_summaries_sql_group_by(state, service):
     service.launch_job(make_job_request("multi-task", replicas=3), None)
 
     job_id = JobName.root("test-user", "multi-task")
-    summaries = _task_summaries_for_jobs(state._db, {job_id})
+    with state._db.read_snapshot() as q:
+        summaries = _task_summaries_for_jobs(q, {job_id})
 
     assert job_id in summaries
     s = summaries[job_id]
