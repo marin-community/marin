@@ -107,6 +107,15 @@ def _validate_inputs(inputs: list[MinHashAttrData]) -> MinHashParams:
             )
         seen[m.source_main_dir] = i
 
+    legacy = [i for i, m in enumerate(inputs) if m.num_partitions is None]
+    if legacy:
+        raise ValueError(
+            f"MinHashAttrData inputs at indices {legacy} are missing num_partitions "
+            "(legacy v1 artifact). Re-run minhash to regenerate the artifact with "
+            "num_partitions populated; fuzzy dedup needs it to construct co-partitioned "
+            "output filenames."
+        )
+
     return head
 
 
@@ -281,7 +290,11 @@ def compute_fuzzy_dups_attrs(
     params = _validate_inputs(inputs)
     source_tag = _assign_source_tags(inputs)
     attr_files = _list_attr_files(inputs, source_tag)
-    source_tag_to_num_partitions: dict[str, int] = {source_tag[m.source_main_dir]: m.num_partitions for m in inputs}
+    # `_validate_inputs` guarantees every input has `num_partitions` populated.
+    source_tag_to_num_partitions: dict[str, int] = {}
+    for m in inputs:
+        assert m.num_partitions is not None
+        source_tag_to_num_partitions[source_tag[m.source_main_dir]] = m.num_partitions
 
     logger.info(
         "Computing fuzzy dups for %d inputs (%d total shards) → %s, params=%s",

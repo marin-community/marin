@@ -253,6 +253,20 @@ def test_fuzzy_dups_rejects_param_mismatch(fox_corpus):
         )
 
 
+def test_fuzzy_dups_rejects_legacy_v1_input(fox_corpus):
+    """Inputs missing num_partitions (legacy v1 cached artifacts) must be rejected with a clear message."""
+    source = _normalize(fox_corpus["test_dir"], os.path.join(fox_corpus["output_dir"], "norm"))
+    mh = compute_minhash_attrs(source=source, output_path=os.path.join(fox_corpus["output_dir"], "mh"))
+    legacy = mh.model_copy(update={"num_partitions": None})
+
+    with pytest.raises(ValueError, match=r"missing num_partitions.*Re-run minhash"):
+        compute_fuzzy_dups_attrs(
+            inputs=[legacy],
+            output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups"),
+            max_parallelism=4,
+        )
+
+
 def test_fuzzy_dups_rejects_duplicate_source(fox_corpus):
     """Two inputs pointing to the same ``source_main_dir`` must be rejected to avoid output clobbering."""
     source = _normalize(fox_corpus["test_dir"], os.path.join(fox_corpus["output_dir"], "norm"))

@@ -65,7 +65,10 @@ class MinHashAttrData(BaseModel):
             ``buckets: list[str]``.
         num_partitions: Number of source partitions. Copied from
             ``NormalizedData.num_partitions``; downstream shufflers use it to
-            reconstruct co-partitioned filenames without globbing.
+            reconstruct co-partitioned filenames without globbing. ``None`` on
+            legacy ``v1`` artifacts that pre-date the field; always populated
+            on ``v2``+ writes. Consumers that need it (e.g. ``fuzzy_dups``)
+            validate this explicitly.
         counters: Aggregated zephyr counters.
     """
 
@@ -73,7 +76,7 @@ class MinHashAttrData(BaseModel):
     params: MinHashParams
     source_main_dir: str
     attr_dir: str
-    num_partitions: int
+    num_partitions: int | None = None
     counters: dict[str, int]
 
 
