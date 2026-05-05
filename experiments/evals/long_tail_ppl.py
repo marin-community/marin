@@ -24,6 +24,17 @@ TIME_SERIES_ISSUE = 5059
 FORMAL_HARDWARE_ISSUE = 5060
 PACKAGE_METADATA_ISSUE = 5061
 GAME_MUSIC_ISSUE = 5062
+CODE_ECOSYSTEM_ISSUE = 5254
+
+STACK_V2_SOURCE_URL = "https://huggingface.co/datasets/bigcode/the-stack-v2"
+
+# Token budget tiers for Stack v2 per-language held-out slices.
+# Heuristic (per maintainer guidance on issue #5254): compressed bytes ≈ tokens.
+# Languages whose Stack v2 dedup volume falls below ~2M tokens are intentionally
+# omitted instead of held out, so the registry only enumerates languages above
+# that floor.
+CODE_ECOSYSTEM_LARGE_TARGET_TOKENS = 1_000_000
+CODE_ECOSYSTEM_SMALL_TARGET_TOKENS = 100_000
 
 
 class LongTailPplFamily(StrEnum):
@@ -36,6 +47,220 @@ class LongTailPplFamily(StrEnum):
     FORMAL_HARDWARE = "formal_hardware"
     PACKAGE_METADATA = "package_metadata"
     GAME_MUSIC = "game_music"
+    CODE_ECOSYSTEM = "code_ecosystem"
+
+
+class CodeEcosystemTier(StrEnum):
+    """Token-budget tiers for per-language Stack v2 held-out slices."""
+
+    LARGE = "large"
+    SMALL = "small"
+
+
+_CODE_ECOSYSTEM_TIER_TARGET_TOKENS: dict[CodeEcosystemTier, int] = {
+    CodeEcosystemTier.LARGE: CODE_ECOSYSTEM_LARGE_TARGET_TOKENS,
+    CodeEcosystemTier.SMALL: CODE_ECOSYSTEM_SMALL_TARGET_TOKENS,
+}
+
+
+# Stack v2 language config names (GitHub Linguist canonical) at the LARGE tier:
+# every language whose v2 dedup volume comfortably exceeds the 1M-token target,
+# spanning the C/C++/Apple/.NET/JVM ecosystems explicitly called out in #5254
+# and the rest of the head/torso of the v2 distribution.
+CODE_ECOSYSTEM_LARGE_LANGUAGES: tuple[str, ...] = (
+    # JVM and adjacent enterprise frameworks
+    "Java",
+    "Kotlin",
+    "Scala",
+    "Groovy",
+    "Clojure",
+    # Microsoft / .NET stack
+    "C#",
+    "F#",
+    "Visual Basic .NET",
+    "PowerShell",
+    # Apple ecosystem
+    "Swift",
+    "Objective-C",
+    "Objective-C++",
+    # C / C++ systems code
+    "C",
+    "C++",
+    "Cuda",
+    # Other compiled systems languages
+    "Rust",
+    "Go",
+    "Pascal",
+    "Fortran",
+    "Assembly",
+    "Ada",
+    # Mainstream scripting
+    "Python",
+    "JavaScript",
+    "TypeScript",
+    "Ruby",
+    "PHP",
+    "Lua",
+    "Perl",
+    "CoffeeScript",
+    "Dart",
+    # Functional / dynamic
+    "Haskell",
+    "OCaml",
+    "Erlang",
+    "Elixir",
+    "Common Lisp",
+    "Scheme",
+    "Racket",
+    # Numerical / scientific
+    "Julia",
+    "R",
+    "MATLAB",
+    "Mathematica",
+    # Web / markup / templates surface
+    "HTML",
+    "CSS",
+    "SCSS",
+    "Vue",
+    "Svelte",
+    "Markdown",
+    "TeX",
+    "ReStructuredText",
+    "AsciiDoc",
+    # Configuration / serialization formats
+    "JSON",
+    "YAML",
+    "TOML",
+    "XML",
+    "INI",
+    # Build / packaging artifacts
+    "Dockerfile",
+    "Makefile",
+    "CMake",
+    # Shells and OS scripting
+    "Shell",
+    "Batchfile",
+    # Database / query
+    "SQL",
+    # Hardware-description / domain-specific
+    "Verilog",
+    "VHDL",
+    "Solidity",
+    "Tcl",
+    # Smaller but still well above 1M tokens in v2 dedup
+    "Vala",
+    "Nim",
+    "Crystal",
+    "D",
+    "Zig",
+)
+
+# Stack v2 language config names at the SMALL tier: 100K-token slices for the
+# named long tail that still clears the 2M-token floor in v2 dedup. Ordering
+# is alphabetical for readability; tier assignment came from cross-referencing
+# Stack v1 dedup volumes (StarCoder / bigcode-data-mix `data_sources.csv`) with
+# the v2 ~ 4-7x v1 size scaling in the StarCoder2 paper.
+CODE_ECOSYSTEM_SMALL_LANGUAGES: tuple[str, ...] = (
+    "ABAP",
+    "ActionScript",
+    "Agda",
+    "Alloy",
+    "ANTLR",
+    "Apex",
+    "AppleScript",
+    "Augeas",
+    "Awk",
+    "Bluespec",
+    "Cap'n Proto",
+    "Coq",
+    "Cython",
+    "Eiffel",
+    "Elm",
+    "Emacs Lisp",
+    "Forth",
+    "GDScript",
+    "GLSL",
+    "Hack",
+    "HCL",
+    "Idris",
+    "Isabelle",
+    "Java Server Pages",
+    "Lean",
+    "Less",
+    "LFE",
+    "Literate Agda",
+    "Literate CoffeeScript",
+    "Literate Haskell",
+    "LiveScript",
+    "Maple",
+    "Modula-2",
+    "MoonScript",
+    "Nix",
+    "Objective-J",
+    "OpenCL",
+    "PostScript",
+    "Pony",
+    "Prolog",
+    "Protocol Buffer",
+    "Puppet",
+    "Pure Data",
+    "Q",
+    "QML",
+    "Raku",
+    "RDoc",
+    "Rmarkdown",
+    "RobotFramework",
+    "SaltStack",
+    "SAS",
+    "Slim",
+    "Smalltalk",
+    "SMT",
+    "SPARQL",
+    "Stan",
+    "Standard ML",
+    "Stata",
+    "Stylus",
+    "SystemVerilog",
+    "Tcsh",
+    "Thrift",
+    "Twig",
+    "WebAssembly",
+    "XSLT",
+    "Yacc",
+)
+
+CODE_ECOSYSTEM_LANGUAGES: dict[CodeEcosystemTier, tuple[str, ...]] = {
+    CodeEcosystemTier.LARGE: CODE_ECOSYSTEM_LARGE_LANGUAGES,
+    CodeEcosystemTier.SMALL: CODE_ECOSYSTEM_SMALL_LANGUAGES,
+}
+
+
+_LANGUAGE_SLUG_TRANSLATIONS = str.maketrans(
+    {
+        "+": "p",
+        "#": "_sharp",
+        "*": "_star",
+        " ": "_",
+        "-": "_",
+        ".": "_",
+        "/": "_",
+        "'": "",
+    }
+)
+
+
+def _language_to_slug(language: str) -> str:
+    """Slugify a Stack v2 language config name into a filesystem/registry-safe identifier.
+
+    Examples:
+        ``C++`` → ``cpp``; ``C#`` → ``c_sharp``; ``Objective-C++`` →
+        ``objective_cpp``; ``Visual Basic .NET`` → ``visual_basic_net``.
+    """
+
+    slug = language.translate(_LANGUAGE_SLUG_TRANSLATIONS).lower()
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    return slug.strip("_")
 
 
 @dataclass(frozen=True)
@@ -83,6 +308,40 @@ def _slice(
         raw_relative_path=raw_relative_path,
         notes=notes,
     )
+
+
+def _stack_v2_code_ecosystem_slice(language: str, tier: CodeEcosystemTier) -> LongTailPplSlice:
+    """Build a per-language held-out Stack v2 slice at the given token tier."""
+
+    slug = _language_to_slug(language)
+    target_tokens = _CODE_ECOSYSTEM_TIER_TARGET_TOKENS[tier]
+    return _slice(
+        name=f"stack_v2_{slug}",
+        family=LongTailPplFamily.CODE_ECOSYSTEM,
+        issue_number=CODE_ECOSYSTEM_ISSUE,
+        source_url=STACK_V2_SOURCE_URL,
+        surface_form=f"source_code:{language}",
+        raw_relative_path=f"code/stack_v2/{slug}/heldout.jsonl.gz",
+        notes=(
+            f"Hold out ~{target_tokens:,} tokens of {language} from Stack v2 dedup; "
+            "preserve raw source bytes and repository-relative paths."
+        ),
+    )
+
+
+def _build_code_ecosystem_slices() -> tuple[LongTailPplSlice, ...]:
+    """Materialize one held-out slice per registered Stack v2 language."""
+
+    slices: list[LongTailPplSlice] = []
+    seen: set[str] = set()
+    for tier in CodeEcosystemTier:
+        for language in CODE_ECOSYSTEM_LANGUAGES[tier]:
+            slug = _language_to_slug(language)
+            if slug in seen:
+                raise ValueError(f"Duplicate code-ecosystem slug for language {language!r}: {slug!r}")
+            seen.add(slug)
+            slices.append(_stack_v2_code_ecosystem_slice(language, tier))
+    return tuple(slices)
 
 
 LONG_TAIL_PPL_SLICES: tuple[LongTailPplSlice, ...] = (
@@ -444,6 +703,8 @@ LONG_TAIL_PPL_SLICES: tuple[LongTailPplSlice, ...] = (
         raw_relative_path="music/abc/notation.jsonl.gz",
         notes="Keep ABC headers, barlines, and note-length annotations.",
     ),
+    # Code ecosystem (per-language Stack v2 held-out slices, see #5254)
+    *_build_code_ecosystem_slices(),
 )
 
 LONG_TAIL_PPL_REGISTRY: dict[str, LongTailPplSlice] = {slice_.registry_key: slice_ for slice_ in LONG_TAIL_PPL_SLICES}
