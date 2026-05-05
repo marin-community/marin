@@ -14,8 +14,8 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from finelog.store.catalog import Catalog
 from finelog.store.migrations import apply_migrations, transactional
-from finelog.store.registry_db import RegistryDB
 
 
 def _list_tables(conn: duckdb.DuckDBPyConnection) -> set[str]:
@@ -32,7 +32,7 @@ def _applied_migrations(conn: duckdb.DuckDBPyConnection) -> list[str]:
 
 
 def test_fresh_registry_runs_baseline_migration(tmp_path):
-    db = RegistryDB(tmp_path)
+    db = Catalog(tmp_path)
     try:
         tables = _list_tables(db._conn)
         assert "namespaces" in tables
@@ -45,8 +45,8 @@ def test_fresh_registry_runs_baseline_migration(tmp_path):
 
 def test_reopen_is_idempotent(tmp_path):
     """Opening the same data dir twice does not re-apply migrations."""
-    RegistryDB(tmp_path).close()
-    db = RegistryDB(tmp_path)
+    Catalog(tmp_path).close()
+    db = Catalog(tmp_path)
     try:
         # Still exactly one row, not two.
         assert _applied_migrations(db._conn) == ["0001_init.py"]
@@ -76,7 +76,7 @@ def test_pre_migrations_database_inherits_baseline(tmp_path):
     legacy.execute('INSERT INTO namespaces VALUES (\'iris.worker\', \'{"columns":[],"key_column":""}\', 0, 0)')
     legacy.close()
 
-    db = RegistryDB(tmp_path)
+    db = Catalog(tmp_path)
     try:
         # Existing row preserved; segments table created; baseline recorded.
         assert db._conn.execute("SELECT namespace FROM namespaces").fetchall() == [("iris.worker",)]
@@ -126,30 +126,27 @@ def test_failed_migration_retries_on_next_apply(tmp_path):
     """A migration that failed once must run again on the next open."""
     fake_dir = tmp_path / "migs"
     fake_dir.mkdir()
-    (fake_dir / "0001_flaky.py").write_text(
-        "import duckdb, os\n"
-        "_FLAG = os.environ.get('FLAKY_PASS', '0')\n"
-        "def migrate(conn: duckdb.DuckDBPyConnection) -> None:\n"
+    migration_path = fake_dir / "0001_flaky.py"
+
+    # First version raises after a side-effect, simulating a half-failed apply.
+    migration_path.write_text(
+        "def migrate(conn):\n"
         "    conn.execute('CREATE TABLE IF NOT EXISTS marker (n INTEGER)')\n"
-        "    if _FLAG != '1':\n"
-        "        raise RuntimeError('not yet')\n"
+        "    raise RuntimeError('not yet')\n"
     )
 
     conn = duckdb.connect(":memory:")
     try:
-        # First attempt: env says fail.
-        with pytest.raises(RuntimeError):
+        with pytest.raises(RuntimeError, match="not yet"):
             apply_migrations(conn, fake_dir)
         assert _applied_migrations(conn) == []
 
-        # Second attempt: env says pass. Migration is retried.
-        import os
-
-        os.environ["FLAKY_PASS"] = "1"
-        try:
-            apply_migrations(conn, fake_dir)
-        finally:
-            del os.environ["FLAKY_PASS"]
+        # Author fixes the migration; next apply picks it up because no row
+        # was inserted on the failed pass.
+        migration_path.write_text(
+            "def migrate(conn):\n    conn.execute('CREATE TABLE IF NOT EXISTS marker (n INTEGER)')\n"
+        )
+        apply_migrations(conn, fake_dir)
         assert _applied_migrations(conn) == ["0001_flaky.py"]
     finally:
         conn.close()
@@ -211,21 +208,18 @@ def test_underscore_prefixed_files_are_skipped(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_registry_segments_apis_function_after_migration(tmp_path):
-    """End-to-end check: write a segment row through the public RegistryDB API."""
-    from finelog.store.registry_db import (
-        SEGMENT_STATE_FINALIZED,
-        SegmentRow,
-    )
+def test_catalog_segments_apis_function_after_migration(tmp_path):
+    """End-to-end check: write a segment row through the public Catalog API."""
+    from finelog.store.catalog import SegmentRow, SegmentState
 
-    db = RegistryDB(tmp_path)
+    db = Catalog(tmp_path)
     try:
         # ``aggregate_namespace_stats`` and friends rely on the baseline schema.
         assert db.aggregate_namespace_stats("ns").row_count == 0
         seg = SegmentRow(
             namespace="ns",
             path=str(Path("/x/0001.parquet")),
-            state=SEGMENT_STATE_FINALIZED,
+            state=SegmentState.FINALIZED,
             min_seq=1,
             max_seq=10,
             row_count=10,

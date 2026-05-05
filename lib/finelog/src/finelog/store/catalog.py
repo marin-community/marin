@@ -1,10 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sidecar DuckDB database persisting the namespace + segment catalog.
+"""Catalog: namespace + segment metadata in a sidecar DuckDB.
 
-The :class:`RegistryDB` persists two tables in a DuckDB file at
-``{data_dir}/_finelog_registry.duckdb``:
+Two tables in ``{data_dir}/_finelog_registry.duckdb``:
 
 * ``namespaces`` — one row per registered namespace holding its schema. Every
   ``RegisterTable`` mutates one row here. On finelog startup the table is
@@ -22,7 +21,7 @@ The DB is intentionally separate from the per-namespace Parquet directories:
 catalog metadata never lives in two places, so a row count or schema change
 is one ``UPDATE``, not a smear across every parquet footer in the namespace.
 
-Concurrency: the ``RegistryDB`` is not thread-safe by itself. Every caller
+Concurrency: the :class:`Catalog` is not thread-safe by itself. Every caller
 in :class:`finelog.store.duckdb_store.DuckDBLogStore` and
 :class:`finelog.store.log_namespace.DiskLogNamespace` already holds the
 shared ``_insertion_lock`` around mutating calls, which serializes access.
@@ -30,6 +29,7 @@ shared ``_insertion_lock`` around mutating calls, which serializes access.
 
 from __future__ import annotations
 
+import enum
 import logging
 import time
 from collections.abc import Sequence
@@ -43,26 +43,26 @@ from finelog.store.schema import Schema, schema_from_json, schema_to_json
 
 logger = logging.getLogger(__name__)
 
-REGISTRY_DB_FILENAME = "_finelog_registry.duckdb"
+CATALOG_DB_FILENAME = "_finelog_registry.duckdb"
 
-# Segment lifecycle states. ``tmp`` is a freshly-flushed segment awaiting
-# compaction; ``finalized`` is a compacted ``logs_*`` segment.
-SEGMENT_STATE_TMP = "tmp"
-SEGMENT_STATE_FINALIZED = "finalized"
+
+class SegmentState(enum.StrEnum):
+    """Lifecycle state for a parquet segment in the catalog.
+
+    Persisted as ``state`` (TEXT) on each ``segments`` row.
+    """
+
+    TMP = "tmp"  # freshly flushed, awaiting compaction
+    FINALIZED = "finalized"  # produced by compaction
 
 
 @dataclass(frozen=True)
 class SegmentRow:
-    """One persisted row in the segments catalog table.
-
-    ``state`` is :data:`SEGMENT_STATE_TMP` for in-flight ``tmp_*`` segments
-    written by ``_flush_step`` and :data:`SEGMENT_STATE_FINALIZED` for
-    ``logs_*`` segments produced by ``_compaction_step``.
-    """
+    """One persisted row in the segments catalog table."""
 
     namespace: str
     path: str
-    state: str
+    state: SegmentState
     min_seq: int
     max_seq: int
     row_count: int
@@ -89,8 +89,8 @@ class NamespaceStats:
         return cls(row_count=0, byte_size=0, min_seq=0, max_seq=0, segment_count=0)
 
 
-class RegistryDB:
-    """Thin wrapper around the sidecar DuckDB database.
+class Catalog:
+    """Sidecar DuckDB holding namespace schemas + segment metadata.
 
     Not concurrency-safe by itself — callers hold the shared insertion mutex
     around any mutating call.
@@ -105,7 +105,7 @@ class RegistryDB:
             self._path: Path | None = None
             self._conn = duckdb.connect(":memory:")
         else:
-            self._path = data_dir / REGISTRY_DB_FILENAME
+            self._path = data_dir / CATALOG_DB_FILENAME
             self._conn = duckdb.connect(str(self._path))
         # Schema is owned by ``finelog.store.migrations``; every additive
         # change (new column, new index, derived backfill) lands as a new
@@ -166,7 +166,19 @@ class RegistryDB:
             """,
             [namespace],
         ).fetchall()
-        return [SegmentRow(*row) for row in rows]
+        return [
+            SegmentRow(
+                namespace=ns,
+                path=path,
+                state=SegmentState(state),
+                min_seq=min_seq,
+                max_seq=max_seq,
+                row_count=row_count,
+                byte_size=byte_size,
+                created_at_ms=created_at_ms,
+            )
+            for ns, path, state, min_seq, max_seq, row_count, byte_size, created_at_ms in rows
+        ]
 
     def upsert_segment(self, segment: SegmentRow) -> None:
         """Insert or replace one segment row (used by flush + reconciliation)."""
@@ -186,7 +198,7 @@ class RegistryDB:
             [
                 segment.namespace,
                 segment.path,
-                segment.state,
+                segment.state.value,
                 segment.min_seq,
                 segment.max_seq,
                 segment.row_count,

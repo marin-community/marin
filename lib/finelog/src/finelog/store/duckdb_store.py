@@ -6,7 +6,7 @@
 :class:`DuckDBLogStore` holds the global locks (insertion mutex +
 query-visibility rwlock) and the shared connection pool, and routes RPCs to
 per-namespace storage (:class:`LogNamespaceProtocol`). Schemas persist via
-:class:`RegistryDB` and are rehydrated on startup. The ``log`` namespace is
+:class:`Catalog` and are rehydrated on startup. The ``log`` namespace is
 upserted on first boot for back-compat with deployments whose registry DB
 pre-dates the namespace registry.
 """
@@ -25,6 +25,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.ipc as paipc
 
+from finelog.store.catalog import Catalog, NamespaceStats
 from finelog.store.layout_migration import LOG_NAMESPACE_DIR
 from finelog.store.log_namespace import (
     LOG_REGISTERED_SCHEMA,
@@ -33,7 +34,6 @@ from finelog.store.log_namespace import (
     MemoryLogNamespace,
     _is_tmp_path,
 )
-from finelog.store.registry_db import NamespaceStats, RegistryDB
 from finelog.store.rwlock import RWLock
 from finelog.store.schema import (
     MAX_WRITE_ROWS_BYTES,
@@ -196,7 +196,7 @@ class DuckDBLogStore:
         self._insertion_lock = Lock()
         self._query_visibility_lock = RWLock()
         self._pool = _ConnectionPool(memory_limit=duckdb_memory_limit, threads=duckdb_threads)
-        self._registry_db = RegistryDB(self._data_dir)
+        self._catalog = Catalog(self._data_dir)
 
         # Global storage caps. Eviction picks the oldest sealed segment
         # across all namespaces (oldest-first by ``min_seq`` with namespace
@@ -240,12 +240,12 @@ class DuckDBLogStore:
             insertion_lock=self._insertion_lock,
             query_visibility_lock=self._query_visibility_lock,
             read_pool=self._pool,
-            registry_db=self._registry_db,
+            catalog=self._catalog,
             **self._disk_namespace_kwargs,
         )
 
     def _rehydrate_from_registry(self) -> None:
-        for name, schema in self._registry_db.list_all().items():
+        for name, schema in self._catalog.list_all().items():
             namespace_dir = self._namespace_dir(name)
             self._namespaces[name] = self._make_namespace(name, schema, namespace_dir)
             # Monotonic counter as the eviction tiebreak.
@@ -259,7 +259,7 @@ class DuckDBLogStore:
         resolve_key_column(LOG_REGISTERED_SCHEMA)
         stored_schema = with_implicit_seq(LOG_REGISTERED_SCHEMA)
         with self._insertion_lock:
-            self._registry_db.upsert(LOG_NAMESPACE_NAME, stored_schema)
+            self._catalog.upsert(LOG_NAMESPACE_NAME, stored_schema)
             self._namespaces[LOG_NAMESPACE_NAME] = self._make_namespace(LOG_NAMESPACE_NAME, stored_schema, log_dir)
             self._namespace_registered_at.setdefault(LOG_NAMESPACE_NAME, len(self._namespace_registered_at))
 
@@ -286,7 +286,7 @@ class DuckDBLogStore:
         with self._insertion_lock:
             existing_ns = self._namespaces.get(name)
             if existing_ns is None:
-                self._registry_db.upsert(name, stored_schema)
+                self._catalog.upsert(name, stored_schema)
                 self._namespaces[name] = self._make_namespace(name, stored_schema, namespace_dir)
                 self._namespace_registered_at[name] = len(self._namespace_registered_at)
                 return stored_schema
@@ -294,7 +294,7 @@ class DuckDBLogStore:
             # merge_schemas raises SchemaConflictError on non-additive change.
             effective = merge_schemas(existing_ns.schema, stored_schema)
             if effective != existing_ns.schema:
-                self._registry_db.upsert(name, effective)
+                self._catalog.upsert(name, effective)
                 existing_ns.update_schema(effective)
             return effective
 
@@ -422,7 +422,7 @@ class DuckDBLogStore:
             ns = self._namespaces.get(name)
             if ns is None:
                 raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
-            self._registry_db.delete(name)
+            self._catalog.delete(name)
             del self._namespaces[name]
             self._namespace_registered_at.pop(name, None)
 
@@ -534,7 +534,7 @@ class DuckDBLogStore:
         for ns in self._namespaces.values():
             ns.close()
         self._pool.close()
-        self._registry_db.close()
+        self._catalog.close()
 
     # Test hooks below; forward to the registered "log" namespace.
 

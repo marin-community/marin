@@ -29,9 +29,6 @@ import duckdb
 
 logger = logging.getLogger(__name__)
 
-# Files starting with one of these prefixes are not migrations.
-_NON_MIGRATION_PREFIXES = ("_",)
-
 
 @contextmanager
 def transactional(conn: duckdb.DuckDBPyConnection) -> Iterator[duckdb.DuckDBPyConnection]:
@@ -53,12 +50,9 @@ def transactional(conn: duckdb.DuckDBPyConnection) -> Iterator[duckdb.DuckDBPyCo
 
 
 def _discover_migrations(migrations_dir: Path) -> list[Path]:
-    files: list[Path] = []
-    for path in sorted(migrations_dir.glob("*.py")):
-        if any(path.name.startswith(p) for p in _NON_MIGRATION_PREFIXES):
-            continue
-        files.append(path)
-    return files
+    """Migration files in numeric order. Anything starting with ``_`` (e.g.
+    ``_runner.py``, ``__init__.py``) is skipped."""
+    return [p for p in sorted(migrations_dir.glob("*.py")) if not p.name.startswith("_")]
 
 
 def _ensure_schema_migrations_table(conn: duckdb.DuckDBPyConnection) -> None:

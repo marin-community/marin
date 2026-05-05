@@ -15,13 +15,8 @@ from __future__ import annotations
 
 import pytest
 from finelog.rpc import logging_pb2
+from finelog.store.catalog import Catalog, NamespaceStats, SegmentState
 from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.registry_db import (
-    SEGMENT_STATE_FINALIZED,
-    SEGMENT_STATE_TMP,
-    NamespaceStats,
-    RegistryDB,
-)
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 
@@ -34,7 +29,7 @@ def _stats(store: DuckDBLogStore, namespace: str) -> NamespaceStats:
 
 
 def _segments(store: DuckDBLogStore, namespace: str):
-    return store._registry_db.list_segments(namespace)
+    return store._catalog.list_segments(namespace)
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +67,7 @@ def test_stats_after_flush_match_segments_table(store):
 
     segs = _segments(store, "iris.worker")
     assert len(segs) == 1
-    assert segs[0].state == SEGMENT_STATE_TMP
+    assert segs[0].state == SegmentState.TMP
     assert segs[0].row_count == 2
     assert segs[0].min_seq == 1
     assert segs[0].max_seq == 2
@@ -88,13 +83,13 @@ def test_compaction_replaces_tmp_rows_atomically(store):
     # Three tmp segments before compaction.
     pre = _segments(store, "iris.worker")
     assert len(pre) == 3
-    assert all(s.state == SEGMENT_STATE_TMP for s in pre)
+    assert all(s.state == SegmentState.TMP for s in pre)
 
     store._namespaces["iris.worker"]._compaction_step(compact_single=True)
 
     post = _segments(store, "iris.worker")
     assert len(post) == 1
-    assert post[0].state == SEGMENT_STATE_FINALIZED
+    assert post[0].state == SegmentState.FINALIZED
     assert post[0].row_count == 3
     assert post[0].min_seq == 1
     assert post[0].max_seq == 3
@@ -217,20 +212,20 @@ def test_log_namespace_stats_count_pushed_logs(store):
 
 
 # ---------------------------------------------------------------------------
-# RegistryDB unit checks
+# Catalog unit checks
 # ---------------------------------------------------------------------------
 
 
 def test_registry_replace_segments_is_atomic(tmp_path):
     """A failing upsert mid-replace must roll the whole swap back."""
-    db = RegistryDB(tmp_path)
+    db = Catalog(tmp_path)
     db.upsert("ns", _worker_schema())
-    from finelog.store.registry_db import SegmentRow
+    from finelog.store.catalog import SegmentRow
 
     initial = SegmentRow(
         namespace="ns",
         path="/old.parquet",
-        state=SEGMENT_STATE_TMP,
+        state=SegmentState.TMP,
         min_seq=1,
         max_seq=10,
         row_count=10,
@@ -245,7 +240,7 @@ def test_registry_replace_segments_is_atomic(tmp_path):
     bad = SegmentRow(
         namespace="ns",
         path="/new.parquet",
-        state=SEGMENT_STATE_FINALIZED,
+        state=SegmentState.FINALIZED,
         min_seq=1,
         max_seq=10,
         row_count=10,

@@ -24,7 +24,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Condition, Lock
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 import duckdb
 import fsspec.core
@@ -35,12 +35,11 @@ from rigging.timing import RateLimiter
 
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
-from finelog.store.registry_db import (
-    SEGMENT_STATE_FINALIZED,
-    SEGMENT_STATE_TMP,
+from finelog.store.catalog import (
+    Catalog,
     NamespaceStats,
-    RegistryDB,
     SegmentRow,
+    SegmentState,
 )
 from finelog.store.rwlock import RWLock
 from finelog.store.schema import (
@@ -110,24 +109,34 @@ def _min_seq_from_filename(name: str) -> int | None:
     return int(match.group(1))
 
 
-def _read_segment_metadata(path: Path) -> tuple[int, int, int]:
-    """Compute ``(min_seq, max_seq, row_count)`` from filename + parquet footer.
+class SegmentMetadata(NamedTuple):
+    """``(min_seq, max_seq, row_count)`` derived from a segment's filename + parquet footer."""
 
-    Returns ``(0, 0, 0)`` for unparseable filenames or footer-read failures —
-    the caller treats that as an empty/discardable segment.
+    min_seq: int
+    max_seq: int
+    row_count: int
+
+
+_EMPTY_SEGMENT_METADATA = SegmentMetadata(min_seq=0, max_seq=0, row_count=0)
+
+
+def _read_segment_metadata(path: Path) -> SegmentMetadata:
+    """Recover ``(min_seq, max_seq, row_count)`` from filename + parquet footer.
+
+    Returns ``_EMPTY_SEGMENT_METADATA`` for unparseable filenames or footer-read
+    failures — the caller treats that as an empty/discardable segment.
     """
     min_seq = _min_seq_from_filename(path.name)
     if min_seq is None:
-        return 0, 0, 0
+        return _EMPTY_SEGMENT_METADATA
     try:
-        meta = pq.read_metadata(path)
-        num_rows = meta.num_rows
+        num_rows = pq.read_metadata(path).num_rows
     except Exception:
         logger.warning("Failed to read parquet metadata for %s; treating as empty", path, exc_info=True)
-        return 0, 0, 0
+        return _EMPTY_SEGMENT_METADATA
     if num_rows <= 0:
-        return min_seq, min_seq, 0
-    return min_seq, min_seq + num_rows - 1, num_rows
+        return SegmentMetadata(min_seq=min_seq, max_seq=min_seq, row_count=0)
+    return SegmentMetadata(min_seq=min_seq, max_seq=min_seq + num_rows - 1, row_count=num_rows)
 
 
 def _discover_segments(log_dir: Path) -> list[Path]:
@@ -137,9 +146,9 @@ def _discover_segments(log_dir: Path) -> list[Path]:
 def _recover_next_seq(log_dir: Path) -> int:
     next_seq = 1
     for p in _discover_segments(log_dir):
-        _, max_seq, _ = _read_segment_metadata(p)
-        if max_seq + 1 > next_seq:
-            next_seq = max_seq + 1
+        meta = _read_segment_metadata(p)
+        if meta.max_seq + 1 > next_seq:
+            next_seq = meta.max_seq + 1
     return next_seq
 
 
@@ -170,9 +179,9 @@ class _SealedBuffer:
 class LocalSegment:
     path: str
     size_bytes: int
-    min_seq: int = 0
-    max_seq: int = 0
-    row_count: int = 0
+    min_seq: int
+    max_seq: int
+    row_count: int
 
 
 def _stamp_seq_column(batch: pa.RecordBatch, first_seq: int, arrow_schema: pa.Schema) -> pa.Table:
@@ -370,7 +379,7 @@ class DiskLogNamespace:
         query_visibility_lock: RWLock,
         compaction_conn: duckdb.DuckDBPyConnection,
         read_pool: _ReadPoolProtocol,
-        registry_db: RegistryDB,
+        catalog: Catalog,
         evict_hook: Callable[[], None] = lambda: None,
     ) -> None:
         self.name = name
@@ -392,7 +401,7 @@ class DiskLogNamespace:
 
         self._compaction_conn = compaction_conn
         self._read_pool = read_pool
-        self._registry_db = registry_db
+        self._catalog = catalog
 
         self._buffers = RamBuffers(
             arrow_schema=self._arrow_schema,
@@ -405,14 +414,14 @@ class DiskLogNamespace:
         # fully covered by a logs_ segment is a duplicate.
         discovered: list[LocalSegment] = []
         for p in _discover_segments(data_dir):
-            min_seq, max_seq, row_count = _read_segment_metadata(p)
+            meta = _read_segment_metadata(p)
             discovered.append(
                 LocalSegment(
                     path=str(p),
                     size_bytes=p.stat().st_size,
-                    min_seq=min_seq,
-                    max_seq=max_seq,
-                    row_count=row_count,
+                    min_seq=meta.min_seq,
+                    max_seq=meta.max_seq,
+                    row_count=meta.row_count,
                 )
             )
         log_ranges = [(s.min_seq, s.max_seq) for s in discovered if not _is_tmp_path(s.path)]
@@ -431,7 +440,7 @@ class DiskLogNamespace:
         # for this namespace get rewritten to match exactly what's on disk
         # right now so future reads from the catalog always agree with
         # ``query_snapshot()``.
-        self._registry_db.reconcile_segments(
+        self._catalog.reconcile_segments(
             self.name,
             [self._segment_to_row(seg) for seg in self._local_segments],
         )
@@ -688,7 +697,7 @@ class DiskLogNamespace:
 
     def _segment_to_row(self, seg: LocalSegment) -> SegmentRow:
         """Build the catalog row that mirrors ``seg``."""
-        state = SEGMENT_STATE_TMP if _is_tmp_path(seg.path) else SEGMENT_STATE_FINALIZED
+        state = SegmentState.TMP if _is_tmp_path(seg.path) else SegmentState.FINALIZED
         return SegmentRow(
             namespace=self.name,
             path=seg.path,
@@ -733,7 +742,7 @@ class DiskLogNamespace:
         with self._insertion_lock:
             self._local_segments.append(seg)
             self._buffers.commit_flush()
-            self._registry_db.upsert_segment(self._segment_to_row(seg))
+            self._catalog.upsert_segment(self._segment_to_row(seg))
 
         logger.info(
             "Wrote tmp segment %s: rows=%d bytes=%d seq=[%d,%d] elapsed_ms=%d",
@@ -795,7 +804,7 @@ class DiskLogNamespace:
                 if not merged_inserted:
                     new_segments.append(merged_seg)
                 self._local_segments = new_segments
-                self._registry_db.replace_segments(
+                self._catalog.replace_segments(
                     self.name,
                     removed_paths=list(tmp_paths),
                     added=[self._segment_to_row(merged_seg)],
@@ -888,7 +897,7 @@ class DiskLogNamespace:
                     continue
                 new.append(s)
             self._local_segments = new
-            self._registry_db.remove_segment(self.name, path)
+            self._catalog.remove_segment(self.name, path)
         try:
             Path(path).unlink(missing_ok=True)
         except OSError:
@@ -903,7 +912,7 @@ class DiskLogNamespace:
             except OSError:
                 logger.warning("Failed to delete %s during drop", s.path, exc_info=True)
         self._local_segments.clear()
-        # The catalog row for this namespace is dropped by ``RegistryDB.delete``
+        # The catalog row for this namespace is dropped by ``Catalog.delete``
         # in :meth:`DuckDBLogStore.drop_table`; segments are cascaded there too.
         # Sweep stragglers (e.g. half-written .parquet.tmp) before rmdir.
         for p in list(self._data_dir.glob("*")):
