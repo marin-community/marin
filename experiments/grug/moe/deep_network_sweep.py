@@ -106,11 +106,4 @@ d512_steps = _make_steps(DEEP_CONFIGS_D512, tpu_type="v5p-8")
 d768_d1024_steps = _make_steps(DEEP_CONFIGS_D768_D1024, tpu_type="v5p-32")
 
 if __name__ == "__main__":
-    import sys
-
-    if "--d512" in sys.argv:
-        executor_main(steps=d512_steps, description="Deep networks d512 (v5p-8).")
-    elif "--large" in sys.argv:
-        executor_main(steps=d768_d1024_steps, description="Deep networks d768+d1024 (v5p-32).")
-    else:
-        executor_main(steps=d512_steps + d768_d1024_steps, description="Deep networks: all sizes.")
+    executor_main(steps=d512_steps, description="Deep networks d512 (v5p-8).")
