@@ -546,7 +546,7 @@ def test_table_close_drains_queue(tracked_clients):
 
 
 def test_table_close_drains_queue_when_thread_starts_late(monkeypatch):
-    sent: list[list[object]] = []
+    sent: list[pa.RecordBatch] = []
     thread_targets = []
 
     class DeferredThread:
@@ -564,18 +564,20 @@ def test_table_close_drains_queue_when_thread_starts_late(monkeypatch):
 
     monkeypatch.setattr(log_client_mod.threading, "Thread", DeferredThread)
 
+    schema = Schema(
+        columns=(Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),),
+    )
     table = log_client_mod.Table(
         namespace="iris.worker",
-        schema=Schema(columns=()),
+        schema=schema,
         flusher=lambda _namespace, batch: sent.append(batch),
-        batch_encoder=lambda rows: list(rows),
-        row_sizer=lambda _row: 1,
     )
-    table.write([{"worker_id": "w-1"}, {"worker_id": "w-2"}])
+    table.write([SimpleNamespace(worker_id="w-1"), SimpleNamespace(worker_id="w-2")])
     table.close()
 
     assert len(thread_targets) == 1
-    assert sent == [[{"worker_id": "w-1"}, {"worker_id": "w-2"}]]
+    assert len(sent) == 1
+    assert sent[0].column("worker_id").to_pylist() == ["w-1", "w-2"]
 
 
 def test_schema_from_proto_consistency():

@@ -186,22 +186,16 @@ class Table:
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
         max_buffer_rows: int = DEFAULT_BATCH_ROWS,
         thread_name: str | None = None,
-        batch_encoder: Callable[[list[Any]], pa.RecordBatch],
-        row_sizer: Callable[[Any], int],
     ) -> None:
         self._namespace = namespace
         self._schema = schema
+        self._arrow_schema = schema_to_arrow(schema)
         self._flusher = flusher
         self._querier = querier
         self._flush_interval = flush_interval
         self._batch_rows = batch_rows
         self._max_buffer_bytes = max_buffer_bytes
         self._max_buffer_rows = max_buffer_rows
-        # Caller-side: the row sizer is a cheap byte estimator used only for
-        # the buffer cap. The full Arrow RecordBatch for the batch is built
-        # once on the bg flush thread by ``batch_encoder``.
-        self._batch_encoder = batch_encoder
-        self._row_sizer = row_sizer
 
         self._cond = threading.Condition()
         self._queue: deque[_PendingItem] = deque()
@@ -241,7 +235,7 @@ class Table:
         rows_list = list(rows)
         if not rows_list:
             return
-        sizes = [self._row_sizer(row) for row in rows_list]
+        sizes = [_estimate_row_size(row, self._schema.columns) for row in rows_list]
         with self._cond:
             if self._closing or self._closed:
                 raise RuntimeError(f"Table({self._namespace}) is closed")
@@ -386,7 +380,7 @@ class Table:
             return 0, []
         rows = [item.payload for item in items]
         try:
-            batch = self._batch_encoder(rows)
+            batch = _rows_to_record_batch(rows, self._arrow_schema, self._schema)
             self._flusher(self._namespace, batch)
         except Exception as exc:
             retryable = is_retryable_error(exc) or isinstance(exc, (ConnectionError, OSError, TimeoutError))
@@ -545,14 +539,11 @@ class LogClient:
         except ConnectError as exc:
             raise _translate_connect_error(exc) from exc
         effective = schema_from_proto(response.effective_schema)
-        arrow_schema = schema_to_arrow(effective)
         table = Table(
             namespace=namespace,
             schema=effective,
             flusher=self._stats_flush,
             querier=self._stats_query,
-            batch_encoder=_make_stats_batch_encoder(arrow_schema, effective),
-            row_sizer=_make_row_sizer(effective),
         )
         with self._lock:
             if self._closed:
@@ -596,8 +587,6 @@ class LogClient:
                 namespace=LOG_NAMESPACE,
                 schema=LOG_REGISTERED_SCHEMA,
                 flusher=self._stats_flush,
-                batch_encoder=_make_stats_batch_encoder(schema_to_arrow(LOG_REGISTERED_SCHEMA), LOG_REGISTERED_SCHEMA),
-                row_sizer=_make_row_sizer(LOG_REGISTERED_SCHEMA),
                 thread_name="finelog-log-client",
             )
             self._tables[LOG_NAMESPACE] = tbl
@@ -721,61 +710,22 @@ def _rows_to_record_batch(rows: list[Any], arrow_schema: pa.Schema, schema: Sche
     return pa.RecordBatch.from_arrays(columns, schema=arrow_schema)
 
 
-def _make_stats_batch_encoder(arrow_schema: pa.Schema, schema: Schema) -> Callable[[list[Any]], pa.RecordBatch]:
-    def encode(rows: list[Any]) -> pa.RecordBatch:
-        return _rows_to_record_batch(rows, arrow_schema, schema)
+def _estimate_row_size(row: Any, columns: tuple[Column, ...]) -> int:
+    """Cheap byte estimate for buffer-cap accounting.
 
-    return encode
-
-
-# Cheap byte estimates per Arrow primitive; just enough for buffer-cap accounting.
-# Strings and bytes are sized at runtime; everything else is fixed-width.
-_FIXED_WIDTH_BYTES: dict[ColumnTypeValue, int] = {
-    stats_pb2.COLUMN_TYPE_INT64: 8,
-    stats_pb2.COLUMN_TYPE_FLOAT64: 8,
-    stats_pb2.COLUMN_TYPE_INT32: 4,
-    stats_pb2.COLUMN_TYPE_BOOL: 1,
-    stats_pb2.COLUMN_TYPE_TIMESTAMP_MS: 8,
-}
-
-
-def _make_row_sizer(schema: Schema) -> Callable[[Any], int]:
-    """Return a cheap byte estimator for queue capping.
-
-    The estimator avoids any Arrow construction (which is the cost we are
-    trying to defer to the flush thread) and approximates the eventual IPC
-    payload by summing per-column primitive sizes.
+    Strings count their length; everything else is treated as 8 bytes. This
+    is rough on purpose — the buffer cap only needs an order-of-magnitude
+    estimate, and the real Arrow encode runs once per batch on the flush
+    thread.
     """
-    fixed_total = 0
-    var_columns: list[str] = []
-    for col in schema.columns:
-        width = _FIXED_WIDTH_BYTES.get(col.type)
-        if width is not None:
-            fixed_total += width
-            continue
-        if col.type in (stats_pb2.COLUMN_TYPE_STRING, stats_pb2.COLUMN_TYPE_BYTES):
-            var_columns.append(col.name)
-            continue
-        # Unknown primitive — fall back to a reasonable default so we don't
-        # under-count the buffer.
-        fixed_total += 8
-
-    def size(row: Any) -> int:
-        total = fixed_total
-        for name in var_columns:
-            v = getattr(row, name, None)
-            if v is None:
-                continue
-            if isinstance(v, str):
-                # Approximate UTF-8 byte length without paying for ``encode``.
-                total += len(v) + 8
-            elif isinstance(v, (bytes, bytearray, memoryview)):
-                total += len(v) + 8
-            else:
-                total += 16
-        return total
-
-    return size
+    total = 0
+    for col in columns:
+        v = getattr(row, col.name, None)
+        if isinstance(v, str):
+            total += len(v)
+        else:
+            total += 8
+    return total
 
 
 def _log_entries_to_rows(key: str, messages: Sequence[logging_pb2.LogEntry]) -> list[Any]:
