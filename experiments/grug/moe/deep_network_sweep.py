@@ -45,7 +45,7 @@ def _make_steps(configs: list[tuple[int, int, float, int, int]], tpu_type: str) 
     steps: list[ExecutorStep] = []
     for dim, layers, budget, batch, num_steps in configs:
         for lr_mult in LR_MULTIPLIERS:
-            model, optimizer, _, _ = build_from_heuristic(budget=budget, hidden_dim=dim)
+            model, optimizer, _, _ = build_from_heuristic(budget=budget, hidden_dim=dim, min_batch_size=batch)
             model = dataclasses.replace(model, num_layers=layers)
             optimizer = dataclasses.replace(
                 optimizer,
