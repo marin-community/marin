@@ -254,7 +254,7 @@ def _routing_stats(
     load_balancing_loss = num_experts * jnp.sum(token_fraction * p)
     z = jsp.special.logsumexp(router_logits_f, axis=-1)
     router_z_loss = jnp.mean(z**2)
-    router_l2_loss = jnp.mean(jnp.sum(router_logits_f**2, axis=-1))
+    router_l2_loss = jnp.mean(router_logits_f**2)
 
     return {
         "routing_counts": expert_counts,

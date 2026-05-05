@@ -31,13 +31,13 @@ model, optimizer, batch, num_steps = build_from_heuristic(budget=2.19e17, hidden
 # 1. L2 logit penalty (no z-loss)
 model_l2 = dataclasses.replace(model, router_z_loss_coef=0.0, router_l2_loss_coef=0.001)
 l2_step = ExecutorStep(
-    name="grug/router-l2-d512-ckpt",
+    name="grug/router-l2-v2-d512-ckpt",
     fn=run_grug_moe_trial,
     config=GrugMoeLaunchConfig(
         model=versioned(model_l2),
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
         output_path=this_output_path(),
-        run_id="router-l2-d512-ckpt",
+        run_id="router-l2-v2-d512-ckpt",
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
         enable_cross_region_ckpt_read=True,
         steps=versioned(num_steps),
@@ -48,7 +48,7 @@ l2_step = ExecutorStep(
             project="dial_moe",
             tags=["router-l2", "ckpt-sweep", "d=512"],
             group="router-penalty",
-            name="router-l2-d512-ckpt",
+            name="router-l2-v2-d512-ckpt",
         ),
         optimizer=versioned(optimizer),
         grug_trainer=versioned(GrugTrainerConfig(z_loss_weight=1e-4, ema_beta=None, log_every=1)),
@@ -102,6 +102,6 @@ warmdown_step = ExecutorStep(
 
 if __name__ == "__main__":
     executor_main(
-        steps=[l2_step, warmdown_step],
+        steps=[l2_step],
         description="Router penalty variants: L2 logit + z-loss warmdown, with frequent checkpoints.",
     )
