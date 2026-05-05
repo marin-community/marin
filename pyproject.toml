@@ -37,6 +37,34 @@ override-dependencies = [
     "datasets>=3.1.0,<5.0.0",
     "equinox>=0.11.10",  # Override vizier's pin for modern JAX compatibility
 ]
+conflicts = [
+    # Temporary cross-package conflicts for the GPU JAX 0.10 / non-GPU JAX 0.9 split.
+    # Remove these once CPU, TPU, vLLM, and Fray TPU test paths can share the GPU JAX line.
+    [
+        { package = "marin-levanter", extra = "gpu" },
+        { package = "marin", extra = "cpu" },
+    ],
+    [
+        { package = "marin-levanter", extra = "gpu" },
+        { package = "marin", extra = "tpu" },
+    ],
+    [
+        { package = "marin-levanter", extra = "gpu" },
+        { package = "marin", extra = "vllm" },
+    ],
+    [
+        { package = "marin", extra = "gpu" },
+        { package = "marin-levanter", extra = "tpu" },
+    ],
+    [
+        { package = "marin", extra = "gpu" },
+        { package = "marin-fray", group = "fray_tpu_test" },
+    ],
+    [
+        { package = "marin-levanter", extra = "gpu" },
+        { package = "marin-fray", group = "fray_tpu_test" },
+    ],
+]
 
 [tool.uv.workspace]
 members = [
