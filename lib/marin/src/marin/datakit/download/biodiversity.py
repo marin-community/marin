@@ -36,26 +36,28 @@ PAGE_SEPARATOR = "\n\n"
 SOURCE_NAME = "biodiversity-heritage-library"
 
 
-def stitch_pages(item_id: str, pages: Iterator[dict]) -> list[dict]:
+def stitch_pages(item_id: str, pages: Iterator[dict]) -> Iterator[dict]:
     """Reducer: join ordered page texts into one item-level record.
 
     Pages arrive sorted by ``page_num`` via the group_by ``sort_by`` key.
     Empty page texts are dropped; items left with no usable pages emit
     nothing and are counted under ``biodiversity/dropped_items``.
+
+    Must be a generator: Zephyr's ``_reduce_gen`` only flattens reducer
+    output when the reducer is a generator function; a regular function
+    returning ``list[dict]`` would emit the list as a single record.
     """
     texts = [str(p["text"]) for p in pages if p.get("text")]
     if not texts:
         counters.increment("biodiversity/dropped_items")
-        return []
+        return
     counters.increment("biodiversity/kept_items")
     counters.increment("biodiversity/pages_stitched", len(texts))
-    return [
-        {
-            "text": PAGE_SEPARATOR.join(texts),
-            "source": SOURCE_NAME,
-            "item_id": item_id,
-        }
-    ]
+    yield {
+        "text": PAGE_SEPARATOR.join(texts),
+        "source": SOURCE_NAME,
+        "item_id": item_id,
+    }
 
 
 def transform(input_path: str, output_path: str) -> None:
