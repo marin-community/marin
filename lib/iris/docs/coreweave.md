@@ -201,11 +201,12 @@ iris --controller-url=http://localhost:10000 ...
 | Target | Iris config | `--gpu` request | `nvidia-smi` GPU name |
 |--------|-------------|-----------------|-----------------------|
 | H100 | `lib/iris/examples/coreweave-ci.yaml` | `H100x1` | `NVIDIA H100 80GB HBM3` |
-| GH200 | `lib/iris/examples/coreweave-rno2a.yaml` | `H200x1` | `NVIDIA GH200 480GB` |
+| GH200 | `lib/iris/examples/coreweave-rno2a.yaml` | `GH200x1` | `NVIDIA GH200 480GB` |
 | B200 | `lib/iris/examples/coreweave-usw09b.yaml` | `B200x1` | `NVIDIA B200` |
 
-Do not change the GH200 row to `GH200x1`: the RNO2A pool currently accepts
-`H200x1`, then reports `NVIDIA GH200 480GB` from `nvidia-smi`.
+Use `GH200x1` for RNO2A. `H200x1` also schedules there today; both land on
+CoreWeave `gd-1xgh200` nodes labeled `gpu.nvidia.com/model=GH200_480GB` and
+report `NVIDIA GH200 480GB`.
 
 Before the full GPU canary, run one tiny direct JAX job for each row. It should
 prove `nvidia-smi`, GPU-backed JAX, and a tiny matmul.
