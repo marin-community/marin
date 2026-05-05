@@ -6,9 +6,9 @@
 - Branch: `research/cw-grug-moe-accelerator-perf`, based on #5428.
 - GitHub issue: https://github.com/marin-community/marin/issues/5458.
 - Current status: precondition validation complete; exploratory single-node
-  batch-knee sweep is in progress.
+  batch-knee sweep complete for the first pass.
 
-## 2026-05-05T23:36Z - CW-GRUG-PERF-004..012 Single-Node Batch-Knee Sweep
+## 2026-05-05T23:45Z - CW-GRUG-PERF-004..015 Single-Node Batch-Knee Sweep
 
 - Confidence: `exploratory`.
 - Scope: 220-step synthetic-data Grug MoE single-node timing runs with profiler
@@ -22,29 +22,32 @@
 | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | H100x8 | batch 16 | succeeded | 220 | 120-219 | 382446 | 382625 | 47806 | 0.171 | 10.36 | 10.37 |
 | H100x8 | batch 32 rerun | succeeded | 220 | 120-219 | 426299 | 426369 | 53287 | 0.307 | 11.55 | 11.55 |
+| H100x8 | batch 64 | succeeded | 220 | 120-219 | 459259 | 459454 | 57407 | 0.571 | 12.45 | 12.45 |
 | GH200x1 | batch 1 | succeeded, partial child log | 141 | 41-140 | 45072 | 45146 | 45072 | 0.091 | 9.77 | 9.79 |
 | GH200x1 | batch 4 | succeeded | 220 | 120-219 | 59356 | 59314 | 59356 | 0.276 | 12.87 | 12.86 |
+| GH200x1 | batch 8 | succeeded | 220 | 120-219 | 62678 | 62600 | 62678 | 0.523 | 13.59 | 13.57 |
 | GH200x1 | batch 16 | succeeded | 220 | 120-219 | 47426 | 47388 | 47426 | 1.383 | 10.28 | 10.27 |
 | B200x8 | batch 16 | succeeded | 220 | 120-219 | 487089 | 489582 | 60886 | 0.134 | 5.80 | 5.83 |
 | B200x8 | batch 48 | succeeded | 220 | 120-219 | 560413 | 560627 | 70052 | 0.351 | 6.68 | 6.68 |
+| B200x8 | batch 64 | succeeded | 220 | 120-219 | 572084 | 572291 | 71511 | 0.458 | 6.82 | 6.82 |
 | B200x8 | batch 96 | succeeded | 220 | 120-219 | 444189 | 444310 | 55524 | 0.885 | 5.29 | 5.29 |
 
 Early interpretation:
 
-- H100x8 improves from batch 16 to batch 32 by about 11.5% in mean tokens/sec.
+- H100x8 improves from batch 16 to batch 64 by about 20.1% in mean tokens/sec.
   The first H100 batch-32 run failed late with an Iris `Pod not found` / missing
   job-status issue after logging through step 196; the clean rerun reproduced
   the same throughput and completed.
-- GH200x1 peaks among measured points at batch 4. Batch 16 regresses below batch
-  4 and is only slightly above the partial batch-1 window, so batch 8 is the
-  useful follow-up point if we want a sharper knee.
-- B200x8 peaks among measured points at batch 48. Batch 96 regresses below both
-  batch 48 and batch 16, so the current useful follow-up is around batch 32/64,
-  not larger batches.
-- At the best measured single-node points so far, B200x8 batch 48 is about 1.31x
-  H100x8 batch 32 in mean tokens/sec. It is not close to the theoretical FLOP
+- GH200x1 peaks among measured points at batch 8. Batch 16 regresses below both
+  batch 8 and batch 4, so batch 8 is the current best single-node GH200 point.
+- B200x8 peaks among measured points at batch 64. Batch 96 regresses below both
+  batch 64 and batch 48, so batch 64 is the current best single-node B200 point.
+- At the best measured single-node points so far, B200x8 batch 64 is about 1.25x
+  H100x8 batch 64 in mean tokens/sec. It is not close to the theoretical FLOP
   ratio, which suggests this workload/configuration is not simply BF16 dense
   compute-bound on these accelerators.
+- GH200x1 batch 8 mean tokens/sec per GPU is about 1.09x H100x8 batch 64
+  per-GPU throughput, and about 0.88x B200x8 batch 64 per-GPU throughput.
 
 Logs:
 
@@ -52,16 +55,22 @@ Logs:
   `/tmp/marin-cw-grug-moe-accelerator-perf/perf-h100-b16-20260505-2313.log`.
 - H100 batch 32 rerun:
   `/tmp/marin-cw-grug-moe-accelerator-perf/perf-h100-b32-rerun-20260505-2329.log`.
+- H100 batch 64:
+  `/tmp/marin-cw-grug-moe-accelerator-perf/perf-h100-b64-20260505-2339.log`.
 - GH200 batch 1 partial:
   `/tmp/marin-cw-grug-moe-accelerator-perf/perf-gh200-b1-20260505-2313.log`.
 - GH200 batch 4:
   `/tmp/marin-cw-grug-moe-accelerator-perf/perf-gh200-b4-20260505-2323.log`.
+- GH200 batch 8:
+  `/tmp/marin-cw-grug-moe-accelerator-perf/perf-gh200-b8-20260505-2339.log`.
 - GH200 batch 16:
   `/tmp/marin-cw-grug-moe-accelerator-perf/perf-gh200-b16-20260505-2329.log`.
 - B200 batch 16:
   `/tmp/marin-cw-grug-moe-accelerator-perf/perf-b200-b16-20260505-2313.log`.
 - B200 batch 48:
   `/tmp/marin-cw-grug-moe-accelerator-perf/perf-b200-b48-20260505-2323.log`.
+- B200 batch 64:
+  `/tmp/marin-cw-grug-moe-accelerator-perf/perf-b200-b64-20260505-2339.log`.
 - B200 batch 96:
   `/tmp/marin-cw-grug-moe-accelerator-perf/perf-b200-b96-20260505-2329.log`.
 
