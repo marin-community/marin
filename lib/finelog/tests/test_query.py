@@ -116,14 +116,14 @@ def test_query_unknown_namespace_in_sql_raises(store: DuckDBLogStore):
         store.query('SELECT * FROM "nope.unknown"')
 
 
-def test_compaction_commit_does_not_take_visibility_write_lock(store: DuckDBLogStore):
-    """Compaction's commit phase no longer acquires the visibility rwlock.
+def test_compaction_commit_waits_for_active_readers(store: DuckDBLogStore):
+    """Commit (rename + catalog swap + unlink) must drain readers first.
 
-    The previous design took the write side around the rename + replace_segments
-    pair as defense-in-depth. With per-namespace bg threads, the same thread
-    owns flush + compaction + eviction, so there is no concurrent unlinker to
-    defend against. A long-running reader on the rwlock must NOT block a
-    compaction commit.
+    DuckDB opens parquet files lazily, so a reader holds the visibility
+    read lock for the entire query and may dereference any path it
+    snapshotted. Unlinking those paths under an active reader surfaces
+    as ``IOException: No files found``. The commit therefore acquires
+    the write side, which blocks until in-flight readers release.
     """
     store.register_table("iris.worker", _worker_schema())
     ns = store._namespaces["iris.worker"]
@@ -134,8 +134,8 @@ def test_compaction_commit_does_not_take_visibility_write_lock(store: DuckDBLogS
 
     rwlock = store._query_visibility_lock
     rwlock.read_acquire()
+    compaction_done = threading.Event()
     try:
-        compaction_done = threading.Event()
 
         def run_compaction():
             ns._force_compact_l0()
@@ -144,11 +144,15 @@ def test_compaction_commit_does_not_take_visibility_write_lock(store: DuckDBLogS
         t = threading.Thread(target=run_compaction, daemon=True)
         t.start()
 
-        # The compaction must finish promptly even with the read lock held.
-        assert compaction_done.wait(timeout=5.0), "compaction blocked on the visibility lock"
+        # Compaction must NOT finish while the read lock is held.
+        assert not compaction_done.wait(
+            timeout=0.5
+        ), "compaction proceeded with active reader; concurrent unlink would race a lazy DuckDB scan"
     finally:
         rwlock.read_release()
 
+    # Releasing the read lock must let the queued writer proceed promptly.
+    assert compaction_done.wait(timeout=5.0), "compaction did not resume after reader released"
     t.join(timeout=5.0)
     all_segments = ns.all_segments_unlocked()
     assert len(all_segments) == 1

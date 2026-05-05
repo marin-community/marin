@@ -177,19 +177,26 @@ def _build_job(run: Sequence[SegmentRow], *, output_level: int) -> CompactionJob
 
 
 def aggregate_key_bounds(
-    bounds: Iterable[tuple[str | None, str | None]],
-) -> tuple[str | None, str | None]:
+    bounds: Iterable[tuple[object | None, object | None]],
+) -> tuple[object | None, object | None]:
     """Fold per-input ``(min, max)`` key tuples into a single ``(min, max)``.
+
+    Operates on the typed Python value (int, str, float, bool, bytes,
+    datetime — whatever ``pyarrow`` decoded the key column as) so numeric
+    keys keep native ordering. Stringification happens later, at the
+    catalog write boundary (``DiskLogNamespace._segment_to_row``); callers
+    must not stringify before passing through here or ``"10" < "2"``
+    flips the bound for an int64 key column.
 
     Inputs whose values are ``None`` (empty segment / no stats) are skipped.
     Returns ``(None, None)`` if every input was skipped.
     """
-    overall_min: str | None = None
-    overall_max: str | None = None
+    overall_min: object | None = None
+    overall_max: object | None = None
     for lo, hi in bounds:
-        if lo is not None and (overall_min is None or lo < overall_min):
+        if lo is not None and (overall_min is None or lo < overall_min):  # type: ignore[operator]
             overall_min = lo
-        if hi is not None and (overall_max is None or hi > overall_max):
+        if hi is not None and (overall_max is None or hi > overall_max):  # type: ignore[operator]
             overall_max = hi
     return overall_min, overall_max
 

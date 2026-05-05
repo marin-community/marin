@@ -106,8 +106,8 @@ class SegmentMetadata(NamedTuple):
     min_seq: int
     max_seq: int
     row_count: int
-    min_key_value: str | None
-    max_key_value: str | None
+    min_key_value: object | None
+    max_key_value: object | None
 
 
 _EMPTY_SEGMENT_METADATA = SegmentMetadata(
@@ -123,13 +123,14 @@ def _level_histogram(segments: Iterable[LocalSegment]) -> dict[int, int]:
     return dict(sorted(counts.items()))
 
 
-def _key_bounds_from_parquet(metadata: pq.FileMetaData, key_column: str | None) -> tuple[str | None, str | None]:
+def _key_bounds_from_parquet(metadata: pq.FileMetaData, key_column: str | None) -> tuple[object | None, object | None]:
     """Extract ``(min, max)`` for ``key_column`` across all row groups.
 
     Returns ``(None, None)`` if no ``key_column`` was requested, the column
     isn't present, or no row group carries statistics. The returned values
-    are stringified (parquet returns native types; we normalize to TEXT
-    because the catalog column is generic across namespaces).
+    are the parquet-native Python types (int / str / float / bytes /
+    datetime). Stringification happens at the catalog boundary so numeric
+    keys preserve their ordering through ``aggregate_key_bounds``.
     """
     if not key_column:
         return None, None
@@ -150,7 +151,7 @@ def _key_bounds_from_parquet(metadata: pq.FileMetaData, key_column: str | None) 
             overall_max = rg_max
     if overall_min is None:
         return None, None
-    return str(overall_min), str(overall_max)
+    return overall_min, overall_max
 
 
 def _read_segment_metadata(path: Path, key_column: str | None = None) -> SegmentMetadata:
@@ -228,8 +229,16 @@ class LocalSegment:
     min_seq: int
     max_seq: int
     row_count: int
-    min_key_value: str | None = None
-    max_key_value: str | None = None
+    # ``created_at_ms`` is stamped once at flush/merge time and preserved
+    # across level bumps and catalog reconcile so the planner can age out
+    # quiet L0 segments via ``CompactionConfig.max_l0_age_sec``.
+    created_at_ms: int = 0
+    # Typed key-column bounds (Python int / str / float / bool / bytes
+    # depending on schema). Stringified only at the catalog boundary in
+    # ``_segment_to_row``; held typed in memory so ``aggregate_key_bounds``
+    # can compare numeric keys with native ordering.
+    min_key_value: object | None = None
+    max_key_value: object | None = None
     copied_at_ms: int | None = None
 
 
@@ -465,10 +474,16 @@ class DiskLogNamespace:
 
         # Reconcile from disk: parquet files are authoritative across
         # crashes. Walk every ``seg_L<n>_*.parquet`` and rebuild the
-        # in-memory deque + catalog rows.
+        # in-memory deque + catalog rows. ``created_at_ms`` falls back to
+        # the file mtime when the catalog has nothing for this path —
+        # close enough for L0 aging and stable across reboots.
         key_column = self.schema.key_column or None
+        catalog_rows = {row.path: row for row in self._catalog.list_segments(self.name)}
         for p in _discover_segments(data_dir):
             meta = _read_segment_metadata(p, key_column=key_column)
+            row = catalog_rows.get(str(p))
+            created_at_ms = row.created_at_ms if row is not None else int(p.stat().st_mtime * 1000)
+            copied_at_ms = row.copied_at_ms if row is not None else None
             self._local_segments.append(
                 LocalSegment(
                     path=str(p),
@@ -477,24 +492,22 @@ class DiskLogNamespace:
                     min_seq=meta.min_seq,
                     max_seq=meta.max_seq,
                     row_count=meta.row_count,
+                    created_at_ms=created_at_ms,
                     min_key_value=meta.min_key_value,
                     max_key_value=meta.max_key_value,
+                    copied_at_ms=copied_at_ms,
                 )
             )
 
-        # Reconcile rewrites the catalog rows wholesale; it preserves any
-        # ``copied_at_ms`` already recorded for these paths so a re-upload
-        # stamp doesn't silently disappear across reboot.
+        # Reconcile rewrites the catalog rows wholesale; ``created_at_ms``
+        # and ``copied_at_ms`` already came back from the catalog above
+        # (or from mtime fallback), so the rewrite is a no-op for those
+        # fields and a refresh of structural columns (level, key bounds)
+        # for any catalog row that drifted from the parquet footer.
         self._catalog.reconcile_segments(
             self.name,
             [self._segment_to_row(seg) for seg in self._local_segments],
         )
-        # Mirror the preserved stamps back into the in-memory deque.
-        for row in self._catalog.list_segments(self.name):
-            for seg in self._local_segments:
-                if seg.path == row.path:
-                    seg.copied_at_ms = row.copied_at_ms
-                    break
 
         self._flush_rl = RateLimiter(flush_interval_sec)
         self._compaction_rl = RateLimiter(compaction_config.check_interval_sec)
@@ -742,11 +755,14 @@ class DiskLogNamespace:
         keys = compaction_sort_keys(self.schema)
         return table.sort_by([(name, "ascending") for name in keys])
 
-    def _key_bounds_from_table(self, table: pa.Table) -> tuple[str | None, str | None]:
+    def _key_bounds_from_table(self, table: pa.Table) -> tuple[object | None, object | None]:
         """Compute (min, max) over the namespace's ``key_column`` in ``table``.
 
         Returns ``(None, None)`` when the schema has no key_column or the
-        column is empty / all null.
+        column is empty / all null. The returned values keep their Arrow
+        Python type so ``aggregate_key_bounds`` can compare numerics
+        natively; ``_segment_to_row`` stringifies them at the catalog
+        boundary.
         """
         key_column = self.schema.key_column
         if not key_column or table.num_rows == 0:
@@ -759,10 +775,30 @@ class DiskLogNamespace:
         hi = result["max"].as_py()
         if lo is None or hi is None:
             return None, None
-        return str(lo), str(hi)
+        return lo, hi
+
+    def _segment_by_path(self, path: str) -> LocalSegment | None:
+        """Look up the in-memory ``LocalSegment`` matching ``path``.
+
+        Used to recover typed key bounds for a ``SegmentRow`` (the catalog
+        round-trip stringifies them). Safe without ``_insertion_lock``
+        when called from the per-namespace bg thread, which is the sole
+        mutator of ``_local_segments`` post-construction.
+        """
+        for seg in self._local_segments:
+            if seg.path == path:
+                return seg
+        return None
 
     def _segment_to_row(self, seg: LocalSegment) -> SegmentRow:
-        """Build the catalog row that mirrors ``seg``."""
+        """Build the catalog row that mirrors ``seg``.
+
+        ``created_at_ms`` reflects the segment's stamped birth time, never
+        ``now`` — overwriting it would defeat ``max_l0_age_sec`` aging,
+        which the planner reads from the round-trip catalog snapshot every
+        tick. Key bounds are stringified here because the catalog stores
+        them in a generic TEXT column.
+        """
         return SegmentRow(
             namespace=self.name,
             path=seg.path,
@@ -771,9 +807,9 @@ class DiskLogNamespace:
             max_seq=seg.max_seq,
             row_count=seg.row_count,
             byte_size=seg.size_bytes,
-            created_at_ms=int(time.time() * 1000),
-            min_key_value=seg.min_key_value,
-            max_key_value=seg.max_key_value,
+            created_at_ms=seg.created_at_ms,
+            min_key_value=None if seg.min_key_value is None else str(seg.min_key_value),
+            max_key_value=None if seg.max_key_value is None else str(seg.max_key_value),
             copied_at_ms=seg.copied_at_ms,
         )
 
@@ -816,6 +852,7 @@ class DiskLogNamespace:
             min_seq=sealed.min_seq,
             max_seq=sealed.max_seq,
             row_count=sealed.table.num_rows,
+            created_at_ms=int(time.time() * 1000),
             min_key_value=min_key_value,
             max_key_value=max_key_value,
         )
@@ -889,8 +926,11 @@ class DiskLogNamespace:
         old = job.inputs[0]
         new_filename = seg_filename(level=job.output_level, min_seq=old.min_seq)
         new_path = self._data_dir / new_filename
-        os.rename(old.path, new_path)
 
+        # Recover the typed key bounds from the in-memory deque — the
+        # SegmentRow on ``job.inputs`` carries the catalog's stringified
+        # form, which loses ordering for numeric keys.
+        old_local = self._segment_by_path(old.path)
         bumped = LocalSegment(
             path=str(new_path),
             size_bytes=old.byte_size,
@@ -898,10 +938,18 @@ class DiskLogNamespace:
             min_seq=old.min_seq,
             max_seq=old.max_seq,
             row_count=old.row_count,
-            min_key_value=old.min_key_value,
-            max_key_value=old.max_key_value,
+            # Preserve the input's birth time across the level bump:
+            # a single-input promotion is a rename, not a fresh write.
+            created_at_ms=old.created_at_ms,
+            min_key_value=old_local.min_key_value if old_local else None,
+            max_key_value=old_local.max_key_value if old_local else None,
         )
-        self._commit_swap(removed=[old.path], added=bumped, unlink_removed=False)
+        self._commit_swap(
+            removed=[old.path],
+            added=bumped,
+            unlink_removed=False,
+            pre_swap=lambda: os.rename(old.path, new_path),
+        )
         logger.info("Level-bumped %s -> L%d (%s)", Path(old.path).name, job.output_level, new_filename)
         self._copy_wake()
 
@@ -922,9 +970,13 @@ class DiskLogNamespace:
             staging_path.unlink(missing_ok=True)
             return
 
-        # min-of-mins / max-of-maxes — string lex order matches parquet's
-        # BYTE_ARRAY UNSIGNED comparison.
-        merged_min_key, merged_max_key = aggregate_key_bounds((s.min_key_value, s.max_key_value) for s in job.inputs)
+        # The catalog stores key bounds as TEXT; we compare on the typed
+        # values held in the in-memory deque to preserve numeric ordering,
+        # then stringify at the ``_segment_to_row`` boundary.
+        input_locals = [self._segment_by_path(s.path) for s in job.inputs]
+        merged_min_key, merged_max_key = aggregate_key_bounds(
+            (loc.min_key_value, loc.max_key_value) for loc in input_locals if loc is not None
+        )
         merged_seg = LocalSegment(
             path=str(merged_path),
             size_bytes=staging_path.stat().st_size,
@@ -932,6 +984,7 @@ class DiskLogNamespace:
             min_seq=job.output_min_seq,
             max_seq=job.output_max_seq,
             row_count=sum(s.row_count for s in job.inputs),
+            created_at_ms=int(time.time() * 1000),
             min_key_value=merged_min_key,
             max_key_value=merged_max_key,
         )
@@ -952,38 +1005,61 @@ class DiskLogNamespace:
         )
         self._copy_wake()
 
-    def _commit_swap(self, *, removed: list[str], added: LocalSegment, unlink_removed: bool) -> None:
+    def _commit_swap(
+        self,
+        *,
+        removed: list[str],
+        added: LocalSegment,
+        unlink_removed: bool,
+        pre_swap: Callable[[], None] | None = None,
+    ) -> None:
         """Splice the deque + catalog: replace ``removed`` paths with ``added``.
 
         ``unlink_removed`` is False for level bumps (the file was renamed
-        in place, so the old path is already gone) and True for merges
-        (the inputs are still on disk and need cleanup).
+        in place via ``pre_swap``, so the old path is already gone) and
+        True for merges (the inputs are still on disk and need cleanup).
+
+        The full transition runs under ``_query_visibility_lock`` write
+        mode: readers hold the read lock for their entire query (DuckDB
+        opens parquet files lazily), so renaming or unlinking a file
+        under a stale snapshot path would surface as
+        ``IOException: No files found``. Taking the write lock here
+        drains existing readers before any rename/unlink and blocks new
+        ones until the deque mirrors the post-swap state. ``pre_swap``
+        runs inside the lock so a level-bump rename happens after readers
+        have drained.
         """
         removed_set = set(removed)
-        with self._insertion_lock:
-            new_segments: deque[LocalSegment] = deque()
-            inserted = False
-            for s in self._local_segments:
-                if s.path in removed_set:
-                    if not inserted:
-                        new_segments.append(added)
-                        inserted = True
-                else:
-                    new_segments.append(s)
-            if not inserted:
-                new_segments.append(added)
-            self._local_segments = new_segments
-            self._catalog.replace_segments(
-                self.name,
-                removed_paths=removed,
-                added=[self._segment_to_row(added)],
-            )
-        if unlink_removed:
-            for path in removed:
-                try:
-                    Path(path).unlink(missing_ok=True)
-                except OSError:
-                    logger.warning("Failed to unlink merged input %s", path, exc_info=True)
+        self._query_visibility_lock.write_acquire()
+        try:
+            if pre_swap is not None:
+                pre_swap()
+            with self._insertion_lock:
+                new_segments: deque[LocalSegment] = deque()
+                inserted = False
+                for s in self._local_segments:
+                    if s.path in removed_set:
+                        if not inserted:
+                            new_segments.append(added)
+                            inserted = True
+                    else:
+                        new_segments.append(s)
+                if not inserted:
+                    new_segments.append(added)
+                self._local_segments = new_segments
+                self._catalog.replace_segments(
+                    self.name,
+                    removed_paths=removed,
+                    added=[self._segment_to_row(added)],
+                )
+            if unlink_removed:
+                for path in removed:
+                    try:
+                        Path(path).unlink(missing_ok=True)
+                    except OSError:
+                        logger.warning("Failed to unlink merged input %s", path, exc_info=True)
+        finally:
+            self._query_visibility_lock.write_release()
 
     def _eviction_step(self) -> None:
         """Evict the namespace's oldest L>=1 copied segments until under caps.
