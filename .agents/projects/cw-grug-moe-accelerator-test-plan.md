@@ -44,6 +44,10 @@ complete a cheap distributed Grug path.
 
 Status as of 2026-05-05, before #5428 has landed on `origin/main`:
 
+- Current #5428 branch confirmation: direct JAX/CUDA 13 smokes passed on
+  `research/cw-grug-moe-accelerator-perf` commit `2574d5c55`, based on #5428
+  head `7b53485c`, for H100/GH200/B200. Logs are
+  `/tmp/marin-cw-grug-moe-accelerator-perf/direct-*-20260505-2253.log`.
 - Dependency precheck: `uv lock --check` passed. Local macOS cannot install the
   CUDA 13 JAX wheels, so exact GPU package versions were verified inside
   CoreWeave jobs.

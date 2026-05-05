@@ -8,6 +8,28 @@
 - Current status: precondition validation only; single-node benchmark matrix is
   intentionally on hold.
 
+## 2026-05-05T22:56Z - CW-GRUG-007 Direct Runtime Smokes on Current #5428 Branch
+
+- Confidence: `exploratory`.
+- Scope: direct one-GPU JAX/CUDA 13 smokes on
+  `research/cw-grug-moe-accelerator-perf` commit `2574d5c55`, based on current
+  #5428 head `7b53485c`.
+- H100 job `/romain/cw-grug-direct-h100-20260505-2253`: passed on
+  `NVIDIA H100 80GB HBM3`, driver `595.45.04`, backend `gpu`, matmul sum
+  `512.0`.
+- GH200 job `/romain/cw-grug-direct-gh200-20260505-2253`: passed on
+  `NVIDIA GH200 480GB`, driver `595.45.04`, backend `gpu`, matmul sum `512.0`.
+- B200 job `/romain/cw-grug-direct-b200-20260505-2253`: passed on
+  `NVIDIA B200`, driver `595.45.04`, backend `gpu`, matmul sum `512.0`.
+- All three reported `jax==0.10.0`, `jaxlib==0.10.0`,
+  `jax-cuda13-plugin==0.10.0`, `jax-cuda13-pjrt==0.10.0`,
+  `nvidia-cublas==13.4.1.1`, and `nvidia-nccl-cu13==2.28.9`.
+- The first `20260505-2251` GH200/B200 probe failed before JAX/device execution
+  because the probe looked up `nvidia-cublas-cu13` package metadata; the actual
+  installed distribution is `nvidia-cublas`. H100 `20260505-2251` was stopped
+  while pending to avoid spending GPU time on a known-bad probe.
+- Logs are under `/tmp/marin-cw-grug-moe-accelerator-perf/direct-*-20260505-2253.log`.
+
 ## 2026-05-05T22:05Z - CW-GRUG-004/005/006 Short Training Smokes
 
 - Confidence: `exploratory`.
