@@ -24,7 +24,7 @@ import time
 import traceback
 import uuid
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from contextvars import ContextVar
@@ -184,6 +184,30 @@ def _format_count(n: float) -> str:
 def _format_bytes(n: float) -> str:
     """Format a byte count with binary (IEC) prefixes."""
     return humanfriendly.format_size(int(n), binary=True)
+
+
+def _stage_throughput(
+    counters: Mapping[str, int],
+    stage_name: str,
+    elapsed: float,
+) -> tuple[int, int, float, float] | None:
+    """Return ``(items, bytes_processed, item_rate, byte_rate)`` for *stage_name*.
+
+    Returns ``None`` when neither the item nor the byte counter has been
+    recorded for this stage. Map-only stages and stages still in run_stage
+    setup never populate these counters; ``None`` distinguishes that case
+    from a real zero count so callers can suppress misleading "0 items"
+    status lines.
+    """
+    item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
+    byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
+    if item_key not in counters and byte_key not in counters:
+        return None
+    items = counters.get(item_key, 0)
+    bytes_processed = counters.get(byte_key, 0)
+    item_rate = items / elapsed if elapsed > 0 else 0.0
+    byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
+    return items, bytes_processed, item_rate, byte_rate
 
 
 def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
@@ -561,11 +585,8 @@ class ZephyrCoordinator:
             stage_start = self._stage_monotonic_start
 
         totals = self.get_counters()
-        items = totals.get(ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name), 0)
-        bytes_processed = totals.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name), 0)
-        elapsed = time.monotonic() - (stage_start if stage_start is not None else float("inf"))
-        item_rate = items / elapsed if elapsed > 0 else 0.0
-        byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
+        elapsed = time.monotonic() - (stage_start or time.monotonic())
+        throughput = _stage_throughput(totals, stage_name, elapsed)
 
         lines = ["**Stages**\n"]
         for idx, stage in enumerate(plan_stages):
@@ -577,17 +598,20 @@ class ZephyrCoordinator:
         lines.append(
             f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
         )
-        lines.append(
-            f"\n**Throughput** — {_format_count(items)} items ({_format_count(item_rate)}/s), "
-            f"{_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)"
-        )
+        if throughput is not None:
+            items, bytes_processed, item_rate, byte_rate = throughput
+            lines.append(
+                f"\n**Throughput** — {_format_count(items)} items ({_format_count(item_rate)}/s), "
+                f"{_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)"
+            )
 
         detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
 
         current_stage_desc = _get_stage_description(plan_stages[current_stage_index]) if plan_stages else ""
         summary_lines = [f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})"]
         summary_lines.append(f"{completed}/{total_shards} shards ({pct}%)")
-        if items > 0:
+        if throughput is not None:
+            _, _, item_rate, byte_rate = throughput
             summary_lines.append(f"{_format_count(item_rate)} items/s")
             summary_lines.append(f"{_format_bytes(byte_rate)}/s")
         summary_md = "  \n".join(summary_lines)
@@ -605,8 +629,6 @@ class ZephyrCoordinator:
         dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
 
         totals = self.get_counters()
-        item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=self._stage_name)
-        byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=self._stage_name)
         base_msg = "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead"
         base_args = (
             self._execution_id,
@@ -623,14 +645,10 @@ class ZephyrCoordinator:
         # Map-only stages don't yield through ``_StageStatsGenerator`` and never
         # populate these counters. Drop the items/bytes_processed segment for
         # those stages.
-        if item_key in totals or byte_key in totals:
-            items = totals.get(item_key, 0)
-            bytes_processed = totals.get(byte_key, 0)
-            elapsed = time.monotonic() - (
-                self._stage_monotonic_start if self._stage_monotonic_start is not None else float("inf")
-            )
-            item_rate = items / elapsed
-            byte_rate = bytes_processed / elapsed
+        elapsed = time.monotonic() - (self._stage_monotonic_start or time.monotonic())
+        throughput = _stage_throughput(totals, self._stage_name, elapsed)
+        if throughput is not None:
+            items, bytes_processed, item_rate, byte_rate = throughput
             logger.info(
                 base_msg + "; items=%s (%s/s), bytes_processed=%s (%s/s)",
                 *base_args,
@@ -1238,14 +1256,7 @@ class ZephyrWorker:
             shard_idx = task.shard_idx
             total_shards = task.total_shards
             elapsed = time.monotonic() - self._task_monotonic_start
-
-            item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
-            byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
-
-            items = self._last_reported_counters.get(item_key, 0)
-            bytes_processed = self._last_reported_counters.get(byte_key, 0)
-            item_rate = items / elapsed if elapsed > 0 else 0.0
-            byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
+            throughput = _stage_throughput(self._last_reported_counters, stage_name, elapsed)
 
             summary_lines = [f"**{stage_name}**", f"shard {shard_idx + 1}/{total_shards}"]
             summary_md = "  \n".join(summary_lines)
@@ -1253,7 +1264,8 @@ class ZephyrWorker:
                 f"**Stage**: {stage_name}",
                 f"**Shard**: {shard_idx + 1}/{total_shards}",
             ]
-            if items > 0:
+            if throughput is not None:
+                items, bytes_processed, item_rate, byte_rate = throughput
                 detail_lines += [
                     f"**Items**: {_format_count(items)} ({_format_count(item_rate)}/s)",
                     f"**Throughput**: {_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)",
