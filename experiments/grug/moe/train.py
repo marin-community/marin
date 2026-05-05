@@ -59,6 +59,7 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+    router_z_loss_warmdown_frac: float = 0.0  # Fraction of training to linearly decay router z-loss to 0.
 
 
 @dataclass(frozen=True)
@@ -278,6 +279,8 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
+    router_z_loss_warmdown_frac: float = 0.0,
+    num_train_steps: int = 1,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -299,6 +302,13 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
+        # Router z-loss warmdown: scale from 1.0 to 0.0 over first warmdown_frac of training
+        if router_z_loss_warmdown_frac > 0:
+            warmdown_steps = int(num_train_steps * router_z_loss_warmdown_frac)
+            z_scale = jnp.clip(1.0 - state.step / warmdown_steps, 0.0, 1.0)
+        else:
+            z_scale = 1.0
+
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
@@ -308,6 +318,7 @@ def _make_train_step(
                 reduction="mean",
                 logsumexp_weight=z_loss,
                 return_router_metrics=True,
+                router_z_loss_scale=z_scale,
             )
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
@@ -373,6 +384,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
+        router_z_loss_warmdown_frac=config.trainer.router_z_loss_warmdown_frac,
+        num_train_steps=trainer.num_train_steps,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)

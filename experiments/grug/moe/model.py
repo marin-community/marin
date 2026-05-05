@@ -72,6 +72,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    router_l2_loss_coef: float = 0.0  # L2 penalty on router logits (minimized at zero)
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -253,12 +254,14 @@ def _routing_stats(
     load_balancing_loss = num_experts * jnp.sum(token_fraction * p)
     z = jsp.special.logsumexp(router_logits_f, axis=-1)
     router_z_loss = jnp.mean(z**2)
+    router_l2_loss = jnp.mean(jnp.sum(router_logits_f**2, axis=-1))
 
     return {
         "routing_counts": expert_counts,
         "routing_entropy": routing_entropy,
         "load_balancing_loss": load_balancing_loss,
         "router_z_loss": router_z_loss,
+        "router_l2_loss": router_l2_loss,
     }
 
 
@@ -507,6 +510,7 @@ class Transformer(eqx.Module):
             "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
             "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
             "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
+            "router_l2_loss_per_layer": jnp.stack([s["router_l2_loss"] for s in moe_router_stats], axis=0),
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
@@ -531,6 +535,7 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
+        router_z_loss_scale: float = 1.0,
         return_router_metrics: bool = False,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | Histogram]]:
         hidden, router_metrics = self(token_ids, mask=mask)
@@ -546,10 +551,11 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
         )
-        # No load-balancing loss; router z-loss only.
+        # Router regularization: z-loss and/or L2 logit penalty.
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
         rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
-        aux_loss = self.config.router_z_loss_coef * rzl
+        rl2 = jnp.sum(router_metrics["router_l2_loss_per_layer"]) / num_moe_layers
+        aux_loss = self.config.router_z_loss_coef * router_z_loss_scale * rzl + self.config.router_l2_loss_coef * rl2
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
