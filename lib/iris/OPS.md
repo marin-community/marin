@@ -335,8 +335,9 @@ uv run iris --config=<CONFIG> job run --no-wait \
   --cpu 1 --memory 16G --disk 16G \
   --extra gpu \
   -e IRIS_DEBUG_UV_SYNC 1 \
-  -- bash -lc 'set -euo pipefail
+  -- bash -c 'set -euo pipefail
 nvidia-smi
+echo "python=$(command -v python)"
 python - <<'"'"'PY'"'"'
 import jax
 import jax.numpy as jnp
@@ -357,7 +358,7 @@ Validation checklist:
 3. `jax.default_backend()` is `gpu`.
 4. `jax.devices()` is non-empty.
 5. The tiny matmul completes.
-6. Logs have no new CUDA, cuBLAS, or NCCL warnings.
+6. Logs have no new CUDA or cuBLAS warnings. Note NCCL warnings if emitted, but this single-GPU smoke does not validate NCCL collectives.
 
 If `nvidia-smi` succeeds but `import jax` fails, treat it as dependency setup
 failure, not as CUDA runtime validation. `IRIS_DEBUG_UV_SYNC=1` removes
@@ -417,7 +418,7 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 
 1. Run the bounded GPU smoke on H100, GH200, and B200.
 2. Confirm JAX imports, uses the GPU backend, lists devices, and completes the matmul.
-3. Check logs for CUDA, cuBLAS, and NCCL warnings.
+3. Check logs for CUDA and cuBLAS warnings; leave NCCL/all-to-all validation to the canary or a multi-GPU training smoke.
 4. Only then launch the full CoreWeave canary.
 
 ---
