@@ -67,6 +67,7 @@ jobs:
         run: |
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
+            --region=us-central1 \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             --priority production \
             -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
