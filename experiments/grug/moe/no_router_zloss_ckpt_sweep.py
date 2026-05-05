@@ -1,0 +1,88 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Rerun no-router-zloss d512 with frequent checkpoints for activation analysis."""
+
+import dataclasses
+from datetime import timedelta
+
+from fray.cluster import ResourceConfig
+from levanter.checkpoint import CheckpointerConfig
+from levanter.tracker.wandb import WandbConfig
+from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+
+from experiments.grug.moe.heuristic import build_from_heuristic
+from experiments.grug.moe.launch import (
+    NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+    GrugMoeLaunchConfig,
+    run_grug_moe_trial,
+)
+from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
+
+model, optimizer, batch, num_steps = build_from_heuristic(budget=2.19e17, hidden_dim=512)
+model = dataclasses.replace(model, router_z_loss_coef=0.0)
+
+run_id = "no-router-zloss-d512-ckpt"
+
+no_router_zloss_ckpt = ExecutorStep(
+    name=f"grug/{run_id}",
+    fn=run_grug_moe_trial,
+    config=GrugMoeLaunchConfig(
+        model=versioned(model),
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=this_output_path(),
+        run_id=run_id,
+        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+        enable_cross_region_ckpt_read=True,
+        steps=versioned(num_steps),
+        batch_size=versioned(batch),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["no-router-zloss", "ckpt-sweep", "d=512"],
+            group="no-router-zloss-ckpt",
+            name=run_id,
+        ),
+        optimizer=versioned(optimizer),
+        grug_trainer=versioned(
+            GrugTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=1,
+                trainer=TrainerConfig(
+                    use_explicit_mesh_axes=True,
+                    mesh=MeshConfig(axes={"expert": 1}),
+                    require_accelerator=True,
+                    checkpointer=CheckpointerConfig(
+                        base_path=this_output_path() + "/checkpoints",
+                        append_run_id_to_base_path=False,
+                        save_interval=timedelta(minutes=2),
+                        keep=[
+                            {"every": 20, "until": 300},
+                            {"every": 250, "until": 1000},
+                            {"every": 1000},
+                        ],
+                    ),
+                ),
+            )
+        ),
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=512,
+                steps_per_eval=1000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+    ),
+)
+
+if __name__ == "__main__":
+    executor_main(
+        steps=[no_router_zloss_ckpt],
+        description="No-router-zloss d512 with frequent checkpoints.",
+    )
