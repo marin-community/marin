@@ -107,8 +107,10 @@ VAL_DATASETS: tuple[tuple[str, str], ...] = (
 )
 
 # Training masks lowercase positions to 1% loss weight (consistent across
-# Bolinas DNA experiments).
-TRAIN_FORMAT = DNALmDatasetFormat(lowercase_weight=0.01)
+# Bolinas DNA experiments). The new zoonomia projection datasets use
+# ``sequence`` as the text field (vs the older ``seq`` default used by
+# genomes-v5 datasets), so override ``text_key`` accordingly.
+TRAIN_FORMAT = DNALmDatasetFormat(text_key="sequence", lowercase_weight=0.01)
 
 # Validation tokenization specs — only the two terms of the LL gap; we
 # deliberately skip a "default" matched-to-training variant since it adds eval
