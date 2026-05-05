@@ -20,7 +20,6 @@ import json
 import logging
 import os
 
-from fray import ResourceConfig
 from marin.datakit.download.starcoder2_extras import download_starcoder2_extras_step
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import Artifact
@@ -54,15 +53,12 @@ def build_steps(run_id: str) -> list[StepSpec]:
 
     download = download_starcoder2_extras_step(SUBSET)
 
-    # Bumped RAM (32g) to absorb the heavy tail — 37 docs are 10-62 MB and
-    # bloat several-fold once decoded into pyarrow.
     normalized = normalize_step(
         name="datakit-starcoder2-doc-smoke/normalize",
         download=download,
         text_field="content",
         id_field="id",
         file_extensions=(".parquet",),
-        worker_resources=ResourceConfig(cpu=2, ram="32g", disk="20g"),
         override_output_path=f"{ttl_base}/normalize",
     )
 
@@ -72,7 +68,6 @@ def build_steps(run_id: str) -> list[StepSpec]:
         fn=lambda output_path: compute_minhash_attrs(
             source=Artifact.load(normalized, NormalizedData),
             output_path=output_path,
-            worker_resources=ResourceConfig(cpu=5, ram="32g", disk="20g"),
         ),
         override_output_path=f"{ttl_base}/minhash",
     )
@@ -87,7 +82,6 @@ def build_steps(run_id: str) -> list[StepSpec]:
             output_path=output_path,
             max_parallelism=16,
             cc_max_iterations=3,
-            worker_resources=ResourceConfig(cpu=1, ram="16g", disk="30g"),
         ),
         override_output_path=f"{ttl_base}/fuzzy_dups",
     )
@@ -110,7 +104,6 @@ def build_steps(run_id: str) -> list[StepSpec]:
                     keep_if_missing=True,
                 ),
             ],
-            worker_resources=ResourceConfig(cpu=1, ram="16g"),
         ),
         override_output_path=f"{ttl_base}/consolidate",
     )
