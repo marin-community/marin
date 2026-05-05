@@ -38,6 +38,9 @@ iris job bug-report /user/job-name      # structured diagnostic dump
 - **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--extra gpu`** installs CUDA jaxlib but does NOT request GPU hardware. Need both `--gpu H100x8 --extra gpu`.
+- **B200/Blackwell JAX jobs:** use `--extra cuda13`, not `--extra gpu`.
+  `--extra gpu` is the CUDA 12 stack and can emit the B200 cuBLAS warning.
+  Do not combine `cuda13` with `gpu`, `tpu`, `cpu`, or `vllm`.
 - **`--reserve`** holds capacity for scheduling only — does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
 - **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 2g`), otherwise it hogs the GPU node and deadlocks. Memory at or above 4 GB requires `--enable-extra-resources` (see "Validator opt-in" below).
 

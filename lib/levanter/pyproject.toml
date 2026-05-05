@@ -85,6 +85,10 @@ gpu = [
   # until the JAX CUDA deps or the top-level lock exclude the bad NCCL line.
   "nvidia-nccl-cu12>=2.28.3; sys_platform == 'linux'",
 ]
+cuda13 = [
+  "jax[cuda13]>=0.9.2",
+  "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
+]
 tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.38"]
 torch_test = [
   "torch>=2.7.0",
@@ -170,6 +174,14 @@ conflicts = [
   [
     { extra = "gpu" },
     { extra = "tpu" },
+  ],
+  [
+    { extra = "gpu" },
+    { extra = "cuda13" },
+  ],
+  [
+    { extra = "tpu" },
+    { extra = "cuda13" },
   ],
 ]  # Never solve for both GPU and TPU at once
 
