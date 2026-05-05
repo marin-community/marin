@@ -107,9 +107,19 @@ message DropTableResponse {
 // Metadata for one registered namespace. Names are returned in registration
 // order. The privileged "log" namespace is included so dashboards can see
 // every queryable surface.
+//
+// Stats fields (3-7) are aggregated across all parquet segments and the
+// in-RAM write buffer. They cover every row currently visible to queries,
+// without scanning the data — clients can use them to render namespace
+// summary tables without issuing per-namespace `count(*)` queries.
 message NamespaceInfo {
   string namespace = 1;
   Schema schema = 2;
+  int64 row_count = 3;        // total visible rows (sealed + RAM)
+  int64 byte_size = 4;        // sealed parquet bytes + RAM buffer bytes
+  int64 min_seq = 5;          // 0 if empty
+  int64 max_seq = 6;          // 0 if empty
+  int32 segment_count = 7;    // sealed (logs_*) + in-flight (tmp_*) parquet files
 }
 
 message ListNamespacesRequest {}

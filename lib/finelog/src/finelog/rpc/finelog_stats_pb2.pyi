@@ -97,12 +97,22 @@ class DropTableResponse(_message.Message):
     def __init__(self) -> None: ...
 
 class NamespaceInfo(_message.Message):
-    __slots__ = ("namespace", "schema")
+    __slots__ = ("namespace", "schema", "row_count", "byte_size", "min_seq", "max_seq", "segment_count")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    ROW_COUNT_FIELD_NUMBER: _ClassVar[int]
+    BYTE_SIZE_FIELD_NUMBER: _ClassVar[int]
+    MIN_SEQ_FIELD_NUMBER: _ClassVar[int]
+    MAX_SEQ_FIELD_NUMBER: _ClassVar[int]
+    SEGMENT_COUNT_FIELD_NUMBER: _ClassVar[int]
     namespace: str
     schema: Schema
-    def __init__(self, namespace: _Optional[str] = ..., schema: _Optional[_Union[Schema, _Mapping]] = ...) -> None: ...
+    row_count: int
+    byte_size: int
+    min_seq: int
+    max_seq: int
+    segment_count: int
+    def __init__(self, namespace: _Optional[str] = ..., schema: _Optional[_Union[Schema, _Mapping]] = ..., row_count: _Optional[int] = ..., byte_size: _Optional[int] = ..., min_seq: _Optional[int] = ..., max_seq: _Optional[int] = ..., segment_count: _Optional[int] = ...) -> None: ...
 
 class ListNamespacesRequest(_message.Message):
     __slots__ = ()

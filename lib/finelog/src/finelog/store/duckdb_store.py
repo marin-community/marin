@@ -33,7 +33,7 @@ from finelog.store.log_namespace import (
     MemoryLogNamespace,
     _is_tmp_path,
 )
-from finelog.store.registry_db import RegistryDB
+from finelog.store.registry_db import NamespaceStats, RegistryDB
 from finelog.store.rwlock import RWLock
 from finelog.store.schema import (
     MAX_WRITE_ROWS_BYTES,
@@ -240,6 +240,7 @@ class DuckDBLogStore:
             insertion_lock=self._insertion_lock,
             query_visibility_lock=self._query_visibility_lock,
             read_pool=self._pool,
+            registry_db=self._registry_db,
             **self._disk_namespace_kwargs,
         )
 
@@ -304,6 +305,23 @@ class DuckDBLogStore:
                 key=lambda kv: self._namespace_registered_at.get(kv[0], 0),
             )
             return [(name, ns.schema) for name, ns in items]
+
+    def list_namespaces_with_stats(self) -> list[tuple[str, Schema, NamespaceStats]]:
+        """Like :meth:`list_namespaces`, but also returns per-namespace stats.
+
+        Each entry's stats are read from the namespace's in-memory state,
+        which is held in lockstep with the on-disk segment catalog. This is
+        the read path that backs ``StatsService.ListNamespaces`` — the
+        dashboard relies on it to render the namespace summary table without
+        issuing per-namespace ``count(*)`` queries against parquet.
+        """
+        with self._insertion_lock:
+            items = sorted(
+                self._namespaces.items(),
+                key=lambda kv: self._namespace_registered_at.get(kv[0], 0),
+            )
+            namespaces = [(name, ns) for name, ns in items]
+        return [(name, ns.schema, ns.stats()) for name, ns in namespaces]
 
     def get_table_schema(self, name: str) -> Schema:
         with self._insertion_lock:

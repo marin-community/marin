@@ -1,27 +1,39 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sidecar DuckDB database persisting the registered-schema table.
+"""Sidecar DuckDB database persisting the namespace + segment catalog.
 
-The :class:`RegistryDB` persists each namespace's registered schema in a
-DuckDB file at ``{data_dir}/_finelog_registry.duckdb``. Every
-``RegisterTable`` mutates one row here. On finelog startup the registry is
-read out and ``LogNamespace`` instances are rehydrated from the rows.
+The :class:`RegistryDB` persists two tables in a DuckDB file at
+``{data_dir}/_finelog_registry.duckdb``:
+
+* ``namespaces`` — one row per registered namespace holding its schema. Every
+  ``RegisterTable`` mutates one row here. On finelog startup the table is
+  read out and ``LogNamespace`` instances are rehydrated from the rows.
+
+* ``segments`` — one row per locally-tracked parquet file. Each
+  :class:`DiskLogNamespace` writes here in lockstep with its in-memory
+  ``_local_segments`` deque (insert on flush finalize, swap atomically on
+  compaction, delete on eviction). Aggregating this table answers every
+  shape-of-the-data query (row counts, seq ranges, byte totals,
+  per-namespace segment counts) without touching parquet — finelog's
+  catalog, in the Iceberg/ClickHouse-parts sense.
 
 The DB is intentionally separate from the per-namespace Parquet directories:
-schema metadata never lives in two places, so additive evolution is one
-``UPDATE``, not a smear across every parquet footer in the namespace.
+catalog metadata never lives in two places, so a row count or schema change
+is one ``UPDATE``, not a smear across every parquet footer in the namespace.
 
-This module only knows how to ``CREATE``/``UPSERT``/``SELECT`` rows. The
-register-time semantics (additive merge, conflict detection, ordering-key
-validation) live in :mod:`finelog.store.schema` and the routing/locking
-lives in :class:`finelog.store.duckdb_store.DuckDBLogStore`.
+Concurrency: the ``RegistryDB`` is not thread-safe by itself. Every caller
+in :class:`finelog.store.duckdb_store.DuckDBLogStore` and
+:class:`finelog.store.log_namespace.DiskLogNamespace` already holds the
+shared ``_insertion_lock`` around mutating calls, which serializes access.
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
@@ -32,12 +44,55 @@ logger = logging.getLogger(__name__)
 
 REGISTRY_DB_FILENAME = "_finelog_registry.duckdb"
 
+# Segment lifecycle states. ``tmp`` is a freshly-flushed segment awaiting
+# compaction; ``finalized`` is a compacted ``logs_*`` segment.
+SEGMENT_STATE_TMP = "tmp"
+SEGMENT_STATE_FINALIZED = "finalized"
+
+
+@dataclass(frozen=True)
+class SegmentRow:
+    """One persisted row in the segments catalog table.
+
+    ``state`` is :data:`SEGMENT_STATE_TMP` for in-flight ``tmp_*`` segments
+    written by ``_flush_step`` and :data:`SEGMENT_STATE_FINALIZED` for
+    ``logs_*`` segments produced by ``_compaction_step``.
+    """
+
+    namespace: str
+    path: str
+    state: str
+    min_seq: int
+    max_seq: int
+    row_count: int
+    byte_size: int
+    created_at_ms: int
+
+
+@dataclass(frozen=True)
+class NamespaceStats:
+    """Aggregate counters for one namespace's persisted segments.
+
+    Live (in-RAM) buffer counts are layered on top of these by the namespace
+    in :meth:`finelog.store.log_namespace.DiskLogNamespace.stats`.
+    """
+
+    row_count: int
+    byte_size: int
+    min_seq: int
+    max_seq: int
+    segment_count: int
+
+    @classmethod
+    def empty(cls) -> NamespaceStats:
+        return cls(row_count=0, byte_size=0, min_seq=0, max_seq=0, segment_count=0)
+
 
 class RegistryDB:
     """Thin wrapper around the sidecar DuckDB database.
 
-    Not concurrency-safe by itself — the caller (``DuckDBLogStore``) holds
-    the registry's insertion mutex around any mutating call.
+    Not concurrency-safe by itself — callers hold the shared insertion mutex
+    around any mutating call.
     """
 
     def __init__(self, data_dir: Path | None) -> None:
@@ -61,9 +116,26 @@ class RegistryDB:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS segments (
+                namespace     TEXT   NOT NULL,
+                path          TEXT   NOT NULL,
+                state         TEXT   NOT NULL,
+                min_seq       BIGINT NOT NULL,
+                max_seq       BIGINT NOT NULL,
+                row_count     BIGINT NOT NULL,
+                byte_size     BIGINT NOT NULL,
+                created_at_ms BIGINT NOT NULL,
+                PRIMARY KEY (namespace, path)
+            )
+            """
+        )
 
     def close(self) -> None:
         self._conn.close()
+
+    # ----- namespaces table ---------------------------------------------
 
     def get(self, namespace: str) -> Schema | None:
         row = self._conn.execute("SELECT schema_json FROM namespaces WHERE namespace = ?", [namespace]).fetchone()
@@ -76,7 +148,8 @@ class RegistryDB:
         return {name: schema_from_json(payload) for name, payload in rows}
 
     def delete(self, namespace: str) -> None:
-        """Remove the row for ``namespace`` if it exists. Idempotent."""
+        """Remove the namespace row and any segment rows. Idempotent."""
+        self._conn.execute("DELETE FROM segments WHERE namespace = ?", [namespace])
         self._conn.execute("DELETE FROM namespaces WHERE namespace = ?", [namespace])
 
     def upsert(self, namespace: str, schema: Schema) -> None:
@@ -99,4 +172,117 @@ class RegistryDB:
                   last_modified_ms = excluded.last_modified_ms
             """,
             [namespace, schema_to_json(schema), registered_at, now_ms],
+        )
+
+    # ----- segments table -----------------------------------------------
+
+    def list_segments(self, namespace: str) -> list[SegmentRow]:
+        rows = self._conn.execute(
+            """
+            SELECT namespace, path, state, min_seq, max_seq, row_count, byte_size, created_at_ms
+            FROM segments
+            WHERE namespace = ?
+            ORDER BY min_seq
+            """,
+            [namespace],
+        ).fetchall()
+        return [SegmentRow(*row) for row in rows]
+
+    def upsert_segment(self, segment: SegmentRow) -> None:
+        """Insert or replace one segment row (used by flush + reconciliation)."""
+        self._conn.execute(
+            """
+            INSERT INTO segments
+                (namespace, path, state, min_seq, max_seq, row_count, byte_size, created_at_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (namespace, path) DO UPDATE SET
+                state = excluded.state,
+                min_seq = excluded.min_seq,
+                max_seq = excluded.max_seq,
+                row_count = excluded.row_count,
+                byte_size = excluded.byte_size,
+                created_at_ms = excluded.created_at_ms
+            """,
+            [
+                segment.namespace,
+                segment.path,
+                segment.state,
+                segment.min_seq,
+                segment.max_seq,
+                segment.row_count,
+                segment.byte_size,
+                segment.created_at_ms,
+            ],
+        )
+
+    def replace_segments(
+        self,
+        namespace: str,
+        removed_paths: Sequence[str],
+        added: Sequence[SegmentRow],
+    ) -> None:
+        """Atomically swap ``removed_paths`` for ``added`` rows in one txn.
+
+        Used by compaction, where N tmp segments collapse into one finalized
+        segment. The whole swap must be visible-or-not visible to callers
+        of :meth:`list_segments` — never half.
+        """
+        self._conn.execute("BEGIN")
+        try:
+            for path in removed_paths:
+                self._conn.execute(
+                    "DELETE FROM segments WHERE namespace = ? AND path = ?",
+                    [namespace, path],
+                )
+            for seg in added:
+                self.upsert_segment(seg)
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+
+    def remove_segment(self, namespace: str, path: str) -> None:
+        """Drop one segment row. Idempotent."""
+        self._conn.execute("DELETE FROM segments WHERE namespace = ? AND path = ?", [namespace, path])
+
+    def reconcile_segments(self, namespace: str, segments: Sequence[SegmentRow]) -> None:
+        """Replace this namespace's segment rows wholesale (startup recovery).
+
+        Parquet files on disk are authoritative across crashes; on every
+        ``DiskLogNamespace`` boot we discover the on-disk segment set and
+        push it through this method so the catalog matches reality.
+        """
+        self._conn.execute("BEGIN")
+        try:
+            self._conn.execute("DELETE FROM segments WHERE namespace = ?", [namespace])
+            for seg in segments:
+                self.upsert_segment(seg)
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+
+    def aggregate_namespace_stats(self, namespace: str) -> NamespaceStats:
+        """Single-namespace aggregate over the segments table."""
+        row = self._conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(row_count), 0),
+                COALESCE(SUM(byte_size), 0),
+                COALESCE(MIN(min_seq), 0),
+                COALESCE(MAX(max_seq), 0),
+                COUNT(*)
+            FROM segments
+            WHERE namespace = ?
+            """,
+            [namespace],
+        ).fetchone()
+        if row is None:
+            return NamespaceStats.empty()
+        return NamespaceStats(
+            row_count=int(row[0]),
+            byte_size=int(row[1]),
+            min_seq=int(row[2]),
+            max_seq=int(row[3]),
+            segment_count=int(row[4]),
         )

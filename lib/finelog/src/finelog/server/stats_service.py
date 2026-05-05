@@ -112,8 +112,16 @@ class StatsServiceImpl:
         ctx: Any,
     ) -> stats_pb2.ListNamespacesResponse:
         infos = [
-            stats_pb2.NamespaceInfo(namespace=name, schema=schema_to_proto(schema))
-            for name, schema in self._log_store.list_namespaces()
+            stats_pb2.NamespaceInfo(
+                namespace=name,
+                schema=schema_to_proto(schema),
+                row_count=stats.row_count,
+                byte_size=stats.byte_size,
+                min_seq=stats.min_seq,
+                max_seq=stats.max_seq,
+                segment_count=stats.segment_count,
+            )
+            for name, schema, stats in self._log_store.list_namespaces_with_stats()
         ]
         return stats_pb2.ListNamespacesResponse(namespaces=infos)
 
