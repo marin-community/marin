@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.data import AsyncDataset
 from levanter.data.text import DirectDatasetComponent, GrugLmExample, LmDataConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
@@ -151,6 +152,7 @@ def _build_step_from_env() -> ExecutorStep:
     profiler_enabled = _env_bool("CW_GRUG_PROFILER_ENABLED", True)
     profiler_steps = _env_int("CW_GRUG_PROFILE_STEPS", DEFAULT_PROFILE_STEPS)
     log_every = _env_int("CW_GRUG_LOG_EVERY", 1)
+    watch_interval = _env_int("CW_GRUG_WATCH_INTERVAL", 10)
 
     tags = [
         "cw-grug",
@@ -178,6 +180,7 @@ def _build_step_from_env() -> ExecutorStep:
             grug_trainer=versioned(dataclasses.replace(CANARY_TRAINER, log_every=log_every)),
             eval=None,
             profiler=ProfilerConfig(enabled=profiler_enabled, start_step=5, num_steps=profiler_steps),
+            watch=WatchConfig(interval=watch_interval),
         ),
     )
 
