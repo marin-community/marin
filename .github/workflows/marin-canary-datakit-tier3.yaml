@@ -11,13 +11,13 @@ permissions:
 jobs:
   datakit-nemotron-ferry:
     runs-on: ubuntu-latest
-    timeout-minutes: 1440  # 24h — nemotron medium is ~3.4 TiB
+    timeout-minutes: 350  # GH-hosted runners cap at 6h; nemotron high (~28% of medium) targets 6h compute
     concurrency:
       group: datakit-nemotron-ferry
       cancel-in-progress: true
     env:
       SMOKE_RUN_ID: datakit-nemotron-ferry-${{ github.run_id }}-${{ github.run_attempt }}
-      FERRY_STATUS_PATH: gs://marin-eu-west4/tmp/ttl=1d/ci/datakit-nemotron-ferry-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
+      FERRY_STATUS_PATH: gs://marin-us-central1/tmp/ttl=1d/ci/datakit-nemotron-ferry-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/examples/marin.yaml
@@ -67,7 +67,6 @@ jobs:
         run: |
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
-            --region=europe-west4 \
             --memory=3G --disk=5G --cpu=1 --extra=cpu \
             --priority production \
             -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
