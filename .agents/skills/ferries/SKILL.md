@@ -12,6 +12,10 @@ Use this skill to run the two ferry lanes:
 
 Both ferries should keep core data assumptions aligned and share the same monitoring/triage discipline.
 
+If the request is to validate a JAX/CUDA/libtpu/vLLM/tpu-inference or accelerator
+runtime change, use `.agents/skills/accelerator-stack-validation/` first to pick
+the validation layer. Return here when the selected layer is a ferry run.
+
 ## Ferry Lanes
 Templates:
 - `experiments/ferries/canary_ferry.py` (MoE canary, TPU and GPU via `CANARY_ACCELERATOR`)

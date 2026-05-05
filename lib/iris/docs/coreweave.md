@@ -207,8 +207,27 @@ iris --controller-url=http://localhost:10000 ...
 Do not change the GH200 row to `GH200x1`: the RNO2A pool currently accepts
 `H200x1`, then reports `NVIDIA GH200 480GB` from `nvidia-smi`.
 
-Before the full GPU canary, run one tiny direct JAX job for each row. It should
-prove `nvidia-smi`, GPU-backed JAX, and a tiny matmul.
+### Bounded GPU Smoke Tests
+
+Before the full GPU canary, run one tiny direct JAX job for each GPU row. It
+should prove `nvidia-smi`, GPU-backed JAX, and a tiny matmul. This is a
+runtime/device smoke only, not a throughput claim.
+
+Use a streaming direct job so stdout and terminal state are preserved. Keep the
+sharp flags: install the controller extra first in a fresh venv, include
+`--enable-extra-resources`, request hardware with `--gpu`, and install the exact
+runtime extra under test with `--extra`.
+
+```bash
+uv run iris --cluster=<cluster> job run \
+  --enable-extra-resources --cpu=4 --memory=16G --disk=32G \
+  --gpu=<gpu-request> --extra=<runtime-extra> \
+  -- python -c '<probe nvidia-smi, jax backend/devices, and one tiny matmul>'
+```
+
+Use the `--cluster`/`--config` and `--gpu` values from "GPU Configs". For GH200,
+the GPU request is still `H200x1`. Capture the Iris job ID and logs, and check
+for CUDA, cuBLAS, NCCL, or driver warnings before moving to a training canary.
 
 ### KubernetesProvider Operations
 
