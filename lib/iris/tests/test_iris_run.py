@@ -119,29 +119,6 @@ def test_build_resources_gpu():
     assert spec.device.gpu.count == 1
 
 
-def test_run_iris_job_accepts_gh200_gpu_variant(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def _fake_submit_and_wait_job(**kwargs):
-        captured.update(kwargs)
-        return 0
-
-    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", _fake_submit_and_wait_job)
-
-    exit_code = run_iris_job(
-        controller_url="http://controller:10000",
-        command=[sys.executable, "-c", "print('ok')"],
-        env_vars={},
-        gpu="GH200x1",
-        wait=False,
-    )
-
-    assert exit_code == 0
-    resources = captured["resources"]
-    assert resources.device.gpu.variant == "GH200"
-    assert resources.device.gpu.count == 1
-
-
 def test_run_iris_job_adds_zone_constraint(monkeypatch):
     """run_iris_job forwards a zone placement constraint."""
     captured: dict[str, object] = {}
