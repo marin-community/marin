@@ -60,7 +60,7 @@ bl_sweep = ExecutorStep(
 )
 
 nz_sweep = ExecutorStep(
-    name="grug/activations-no-router-zloss-d512-zloss-compare",
+    name="grug/activations-no-router-zloss-d512-zloss-compare-v2",
     fn=run_sweep,
     config=LogActivationsSweepConfig(
         checkpoint_base=versioned(_NZ_BASE),
