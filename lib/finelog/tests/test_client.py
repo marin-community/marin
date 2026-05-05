@@ -430,25 +430,24 @@ def test_table_overflow_drops_oldest(tracked_clients, caplog):
 
     `_trim_oldest_locked` runs synchronously inside `Table.write()` once
     the queue exceeds the cap, so the warning is emitted on the calling
-    thread — no need to wait on the bg flush thread. We also block the
-    bg thread's send so the queue cannot drain underneath us, otherwise
-    a fast bg flush would empty the queue between writes and the
-    overflow trigger would never fire.
+    thread. We stop the bg flush thread first so its cond-wake on every
+    trim can't race the test into draining the queue mid-loop — the
+    semantic under test is purely the synchronous trim path.
     """
     client = LogClient.connect("http://h:1")
     try:
         client.get_table("iris.worker", WorkerStat)
-        flush_lock = threading.Event()
-
-        def blocked_write(request):
-            flush_lock.wait()
-            return stats_pb2.WriteRowsResponse(rows_written=0)
-
-        tracked_clients[0].write_rows = blocked_write  # type: ignore[method-assign]
         table = client._tables["iris.worker"]
+        # Stop the bg thread so trim_oldest's notify_all has no consumer.
+        # Re-enable writes by clearing the flag once the thread has exited.
+        with table._cond:
+            table._closing = True
+            table._cond.notify_all()
+        table._thread.join(timeout=2.0)
+        with table._cond:
+            table._closing = False
         table._max_buffer_rows = 4
         table._max_buffer_bytes = 1024
-        # Disable size-triggered notify so only the time-based wakeup fires.
         table._batch_rows = 1_000_000
         # Bypass the rate limiter so the very first overflow logs.
         table._overflow_log_limiter = log_client_mod.RateLimiter(interval_seconds=0)
@@ -460,11 +459,10 @@ def test_table_overflow_drops_oldest(tracked_clients, caplog):
                 table.write([WorkerStat(worker_id=f"w-{i}", timestamp_ms=i, mem_bytes=i)])
             assert any("buffer overflow" in r.message for r in caplog.records)
             with table._cond:
-                surviving_ids = [item.payload.column("worker_id")[0].as_py() for item in table._queue]
+                surviving_ids = [item.payload.worker_id for item in table._queue]
             assert surviving_ids == ["w-16", "w-17", "w-18", "w-19"]
         finally:
             client_logger.removeHandler(caplog.handler)
-            flush_lock.set()
     finally:
         client.close()
 
@@ -569,8 +567,9 @@ def test_table_close_drains_queue_when_thread_starts_late(monkeypatch):
     table = log_client_mod.Table(
         namespace="iris.worker",
         schema=Schema(columns=()),
-        flusher=lambda _namespace, rows: sent.append(list(rows)),
-        row_encoder=lambda row: (row, 1),
+        flusher=lambda _namespace, batch: sent.append(batch),
+        batch_encoder=lambda rows: list(rows),
+        row_sizer=lambda _row: 1,
     )
     table.write([{"worker_id": "w-1"}, {"worker_id": "w-2"}])
     table.close()

@@ -179,14 +179,15 @@ class Table:
         *,
         namespace: str,
         schema: Schema,
-        flusher: Callable[[str, list[Any]], None],
+        flusher: Callable[[str, pa.RecordBatch], None],
         querier: Callable[[str], pa.Table] | None = None,
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
         batch_rows: int = DEFAULT_BATCH_ROWS,
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
         max_buffer_rows: int = DEFAULT_BATCH_ROWS,
         thread_name: str | None = None,
-        row_encoder: Callable[[Any], tuple[Any, int]],
+        batch_encoder: Callable[[list[Any]], pa.RecordBatch],
+        row_sizer: Callable[[Any], int],
     ) -> None:
         self._namespace = namespace
         self._schema = schema
@@ -196,7 +197,11 @@ class Table:
         self._batch_rows = batch_rows
         self._max_buffer_bytes = max_buffer_bytes
         self._max_buffer_rows = max_buffer_rows
-        self._row_encoder = row_encoder
+        # Caller-side: the row sizer is a cheap byte estimator used only for
+        # the buffer cap. The full Arrow RecordBatch for the batch is built
+        # once on the bg flush thread by ``batch_encoder``.
+        self._batch_encoder = batch_encoder
+        self._row_sizer = row_sizer
 
         self._cond = threading.Condition()
         self._queue: deque[_PendingItem] = deque()
@@ -227,17 +232,22 @@ class Table:
         return self._schema
 
     def write(self, rows: Iterable[Any]) -> None:
-        """Buffer ``rows`` for write. Never blocks the caller."""
+        """Buffer ``rows`` for write. Never blocks the caller.
+
+        Caller-side cost is a cheap byte estimate per row plus an enqueue —
+        Arrow construction is deferred to the bg flush thread so a single
+        producer batch is encoded once instead of once per row.
+        """
         rows_list = list(rows)
         if not rows_list:
             return
+        sizes = [self._row_sizer(row) for row in rows_list]
         with self._cond:
             if self._closing or self._closed:
                 raise RuntimeError(f"Table({self._namespace}) is closed")
-            for row in rows_list:
-                payload, size = self._row_encoder(row)
+            for row, size in zip(rows_list, sizes, strict=True):
                 self._pushed_seq += 1
-                self._queue.append(_PendingItem(self._pushed_seq, payload, size))
+                self._queue.append(_PendingItem(self._pushed_seq, row, size))
                 self._queue_bytes += size
             self._trim_oldest_locked()
             if len(self._queue) >= self._batch_rows or self._queue_bytes >= self._max_buffer_bytes:
@@ -366,12 +376,18 @@ class Table:
                     self._cond.wait(timeout=remaining)
 
     def _send(self, items: list[_PendingItem]) -> tuple[int, list[_PendingItem]]:
-        """Send ``items`` via the flusher. Returns ``(max_sent_seq, unsent)``."""
+        """Send ``items`` via the flusher. Returns ``(max_sent_seq, unsent)``.
+
+        Builds the entire batch's RecordBatch in one pass on the bg thread,
+        amortizing Arrow construction across the whole queue rather than
+        per-row at write time.
+        """
         if not items:
             return 0, []
-        payloads = [item.payload for item in items]
+        rows = [item.payload for item in items]
         try:
-            self._flusher(self._namespace, payloads)
+            batch = self._batch_encoder(rows)
+            self._flusher(self._namespace, batch)
         except Exception as exc:
             retryable = is_retryable_error(exc) or isinstance(exc, (ConnectionError, OSError, TimeoutError))
             summary = _format_exc_summary(exc)
@@ -533,9 +549,10 @@ class LogClient:
         table = Table(
             namespace=namespace,
             schema=effective,
-            flusher=lambda ns, rows: self._stats_flush(ns, rows),
+            flusher=self._stats_flush,
             querier=self._stats_query,
-            row_encoder=_make_stats_row_encoder(arrow_schema, effective),
+            batch_encoder=_make_stats_batch_encoder(arrow_schema, effective),
+            row_sizer=_make_row_sizer(effective),
         )
         with self._lock:
             if self._closed:
@@ -579,7 +596,8 @@ class LogClient:
                 namespace=LOG_NAMESPACE,
                 schema=LOG_REGISTERED_SCHEMA,
                 flusher=self._stats_flush,
-                row_encoder=_make_stats_row_encoder(schema_to_arrow(LOG_REGISTERED_SCHEMA), LOG_REGISTERED_SCHEMA),
+                batch_encoder=_make_stats_batch_encoder(schema_to_arrow(LOG_REGISTERED_SCHEMA), LOG_REGISTERED_SCHEMA),
+                row_sizer=_make_row_sizer(LOG_REGISTERED_SCHEMA),
                 thread_name="finelog-log-client",
             )
             self._tables[LOG_NAMESPACE] = tbl
@@ -649,11 +667,10 @@ class LogClient:
         reader = paipc.open_stream(pa.BufferReader(bytes(response.arrow_ipc)))
         return reader.read_all()
 
-    def _stats_flush(self, namespace: str, batches: list[Any]) -> None:
-        combined = pa.concat_batches(batches)
+    def _stats_flush(self, namespace: str, batch: pa.RecordBatch) -> None:
         sink = io.BytesIO()
-        with paipc.new_stream(sink, combined.schema) as writer:
-            writer.write_batch(combined)
+        with paipc.new_stream(sink, batch.schema) as writer:
+            writer.write_batch(batch)
         batch_bytes = sink.getvalue()
         client = self._get_stats_client()
         try:
@@ -672,37 +689,93 @@ class LogClient:
 # ---------------------------------------------------------------------------
 
 
-def _row_to_record_batch(row: Any, arrow_schema: pa.Schema, schema: Schema) -> pa.RecordBatch:
-    """Convert a single dataclass (or attribute-bearing) row to a 1-row RecordBatch.
+def _rows_to_record_batch(rows: list[Any], arrow_schema: pa.Schema, schema: Schema) -> pa.RecordBatch:
+    """Build a single RecordBatch from ``rows``.
+
+    Builds one Arrow array per column for the entire batch — much cheaper
+    than constructing a 1-row RecordBatch per row and concatenating later.
 
     Missing or None values for non-nullable columns raise
     :class:`SchemaValidationError`; nullable columns become NULL.
     """
+    n = len(rows)
     columns: list[pa.Array] = []
     for col, field in zip(schema.columns, arrow_schema, strict=True):
-        value = getattr(row, col.name, None)
-        if value is None:
-            if not col.nullable:
-                raise SchemaValidationError(f"row missing required (non-nullable) column {col.name!r}")
-            raw: list[Any] = [None]
+        values: list[Any] = [None] * n
+        if col.nullable:
+            for i, row in enumerate(rows):
+                values[i] = getattr(row, col.name, None)
         else:
-            raw = [value]
+            for i, row in enumerate(rows):
+                v = getattr(row, col.name, None)
+                if v is None:
+                    raise SchemaValidationError(f"row missing required (non-nullable) column {col.name!r}")
+                values[i] = v
         try:
-            arr = pa.array(raw, type=field.type, from_pandas=False)
+            arr = pa.array(values, type=field.type, from_pandas=False)
         except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError, ValueError) as exc:
             raise SchemaValidationError(
-                f"column {col.name!r}: failed to encode row as " f"{stats_pb2.ColumnType.Name(col.type)}: {exc}"
+                f"column {col.name!r}: failed to encode batch as " f"{stats_pb2.ColumnType.Name(col.type)}: {exc}"
             ) from exc
         columns.append(arr)
     return pa.RecordBatch.from_arrays(columns, schema=arrow_schema)
 
 
-def _make_stats_row_encoder(arrow_schema: pa.Schema, schema: Schema) -> Callable[[Any], tuple[pa.RecordBatch, int]]:
-    def encode(row: Any) -> tuple[pa.RecordBatch, int]:
-        batch = _row_to_record_batch(row, arrow_schema, schema)
-        return batch, batch.nbytes
+def _make_stats_batch_encoder(arrow_schema: pa.Schema, schema: Schema) -> Callable[[list[Any]], pa.RecordBatch]:
+    def encode(rows: list[Any]) -> pa.RecordBatch:
+        return _rows_to_record_batch(rows, arrow_schema, schema)
 
     return encode
+
+
+# Cheap byte estimates per Arrow primitive; just enough for buffer-cap accounting.
+# Strings and bytes are sized at runtime; everything else is fixed-width.
+_FIXED_WIDTH_BYTES: dict[ColumnTypeValue, int] = {
+    stats_pb2.COLUMN_TYPE_INT64: 8,
+    stats_pb2.COLUMN_TYPE_FLOAT64: 8,
+    stats_pb2.COLUMN_TYPE_INT32: 4,
+    stats_pb2.COLUMN_TYPE_BOOL: 1,
+    stats_pb2.COLUMN_TYPE_TIMESTAMP_MS: 8,
+}
+
+
+def _make_row_sizer(schema: Schema) -> Callable[[Any], int]:
+    """Return a cheap byte estimator for queue capping.
+
+    The estimator avoids any Arrow construction (which is the cost we are
+    trying to defer to the flush thread) and approximates the eventual IPC
+    payload by summing per-column primitive sizes.
+    """
+    fixed_total = 0
+    var_columns: list[str] = []
+    for col in schema.columns:
+        width = _FIXED_WIDTH_BYTES.get(col.type)
+        if width is not None:
+            fixed_total += width
+            continue
+        if col.type in (stats_pb2.COLUMN_TYPE_STRING, stats_pb2.COLUMN_TYPE_BYTES):
+            var_columns.append(col.name)
+            continue
+        # Unknown primitive — fall back to a reasonable default so we don't
+        # under-count the buffer.
+        fixed_total += 8
+
+    def size(row: Any) -> int:
+        total = fixed_total
+        for name in var_columns:
+            v = getattr(row, name, None)
+            if v is None:
+                continue
+            if isinstance(v, str):
+                # Approximate UTF-8 byte length without paying for ``encode``.
+                total += len(v) + 8
+            elif isinstance(v, (bytes, bytearray, memoryview)):
+                total += len(v) + 8
+            else:
+                total += 16
+        return total
+
+    return size
 
 
 def _log_entries_to_rows(key: str, messages: Sequence[logging_pb2.LogEntry]) -> list[Any]:
