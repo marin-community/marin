@@ -10,6 +10,7 @@ without moving data across regions.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import os
 from collections.abc import Sequence
@@ -21,6 +22,8 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.data import AsyncDataset
 from levanter.data.text import DirectDatasetComponent, GrugLmExample, LmDataConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.tracker import NoopConfig, TrackerConfig
+from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
@@ -117,6 +120,28 @@ def _synthetic_data() -> LmDataConfig:
     )
 
 
+def _tracker_from_env(tags: list[str]) -> TrackerConfig | tuple[TrackerConfig, ...]:
+    mode = os.environ.get("CW_GRUG_TRACKER", "wandb").lower()
+    json_logger = JsonLoggerConfig(logger_name=os.environ.get("CW_GRUG_JSON_LOGGER", "cw_grug.metrics"))
+    wandb = WandbConfig(
+        project=os.environ.get("WANDB_PROJECT", "marin"),
+        tags=tags,
+        group=os.environ.get("CW_GRUG_WANDB_GROUP", "cw-grug-accelerator-smoke"),
+        mode=os.environ.get("WANDB_MODE", "offline"),
+        name=None,
+        replicate_path=this_output_path(),
+    )
+    if mode == "json_logger":
+        return json_logger
+    if mode == "both":
+        return (wandb, json_logger)
+    if mode == "noop":
+        return NoopConfig()
+    if mode != "wandb":
+        raise ValueError(f"Unknown CW_GRUG_TRACKER={mode!r}; expected wandb, json_logger, both, or noop")
+    return wandb
+
+
 def _build_step_from_env() -> ExecutorStep:
     gpu_type = os.environ.get("CW_GRUG_GPU_TYPE", "H100")
     gpu_count = _env_int("CW_GRUG_GPU_COUNT", 8)
@@ -125,7 +150,7 @@ def _build_step_from_env() -> ExecutorStep:
     batch_size = _env_int("CW_GRUG_BATCH_SIZE", 32)
     profiler_enabled = _env_bool("CW_GRUG_PROFILER_ENABLED", True)
     profiler_steps = _env_int("CW_GRUG_PROFILE_STEPS", DEFAULT_PROFILE_STEPS)
-    wandb_mode = os.environ.get("WANDB_MODE", "offline")
+    log_every = _env_int("CW_GRUG_LOG_EVERY", 1)
 
     tags = [
         "cw-grug",
@@ -148,16 +173,9 @@ def _build_step_from_env() -> ExecutorStep:
             batch_size=versioned(batch_size),
             seed=versioned(0),
             mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-            tracker=WandbConfig(
-                project=os.environ.get("WANDB_PROJECT", "marin"),
-                tags=tags,
-                group=os.environ.get("CW_GRUG_WANDB_GROUP", "cw-grug-accelerator-smoke"),
-                mode=wandb_mode,
-                name=None,
-                replicate_path=this_output_path(),
-            ),
+            tracker=_tracker_from_env(tags),
             optimizer=versioned(CANARY_OPTIMIZER),
-            grug_trainer=versioned(CANARY_TRAINER),
+            grug_trainer=versioned(dataclasses.replace(CANARY_TRAINER, log_every=log_every)),
             eval=None,
             profiler=ProfilerConfig(enabled=profiler_enabled, start_step=5, num_steps=profiler_steps),
         ),
