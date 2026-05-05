@@ -80,10 +80,17 @@ DEFAULT_BATCH_ROWS = 10_000
 # Per-Table queue cap in bytes. Matches WriteRows max body size.
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
 
-# Send and accept zstd; gzip kept as a fallback so we interop with older
-# servers (and the connect-go ecosystem). Order in `accept_compression` is
-# significant — the server walks the client's Accept-Encoding in order.
-_SEND_COMPRESSION = ZstdCompression()
+# Compression policy: prefer zstd, but never demand it.
+#
+# Connect has no per-request negotiation for the *send* direction — whatever
+# we set as ``send_compression`` is what every request body carries. To stay
+# safe across a phased rollout where clients and servers update in either
+# order, we send gzip (which every connectrpc server has accepted forever)
+# and only express the zstd preference on the response side via
+# ``accept_compression`` (zstd first). Servers that support zstd reply in
+# zstd; older servers fall back to gzip. Once we have confidence every
+# deployed server accepts zstd, flip ``_SEND_COMPRESSION`` to ``ZstdCompression``.
+_SEND_COMPRESSION = GzipCompression()
 _ACCEPT_COMPRESSIONS = (ZstdCompression(), GzipCompression())
 
 _BACKOFF_INITIAL = 0.5

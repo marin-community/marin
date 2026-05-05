@@ -349,19 +349,15 @@ class DuckDBLogStore:
     def memory_summary(self) -> dict[str, int]:
         """Aggregate ram_bytes/chunk_count across namespaces, for diagnostics.
 
-        Walks ``_buffers`` on each namespace defensively so the
-        ``MemoryLogNamespace`` (no buffers) is harmless. Used by the periodic
-        pool-diagnostics logger in the standalone server.
+        Used by the periodic pool-diagnostics logger in the standalone server.
+        ``MemoryLogNamespace`` reports zeros (no in-RAM segmented buffer).
         """
         total_ram_bytes = 0
         total_chunks = 0
         with self._insertion_lock:
             for ns in self._namespaces.values():
-                buffers = getattr(ns, "_buffers", None)
-                if buffers is None:
-                    continue
-                total_ram_bytes += buffers.ram_bytes()
-                total_chunks += buffers.chunk_count()
+                total_ram_bytes += ns.ram_bytes()
+                total_chunks += ns.chunk_count()
             return {
                 "namespaces": len(self._namespaces),
                 "ram_bytes": total_ram_bytes,
@@ -637,7 +633,10 @@ def _decode_single_record_batch(arrow_ipc_bytes: bytes) -> pa.RecordBatch:
     notes for why we may want a hard copy here later.
     """
     reader = paipc.open_stream(pa.BufferReader(arrow_ipc_bytes))
-    batch = reader.read_next_batch()
+    try:
+        batch = reader.read_next_batch()
+    except StopIteration:
+        raise SchemaValidationError("WriteRows: expected exactly one RecordBatch in IPC stream, got 0") from None
     try:
         reader.read_next_batch()
     except StopIteration:

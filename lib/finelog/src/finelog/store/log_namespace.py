@@ -362,6 +362,10 @@ class LogNamespaceProtocol(Protocol):
 
     def stats(self) -> NamespaceStats: ...
 
+    def ram_bytes(self) -> int: ...
+
+    def chunk_count(self) -> int: ...
+
 
 class DiskLogNamespace:
     """Disk-backed per-namespace storage.
@@ -596,6 +600,12 @@ class DiskLogNamespace:
         self._stop.set()
         self._wake.set()
         self._bg_thread.join()
+
+    def ram_bytes(self) -> int:
+        return self._buffers.ram_bytes()
+
+    def chunk_count(self) -> int:
+        return self._buffers.chunk_count()
 
     def update_schema(self, new_schema: Schema) -> None:
         _assert_additive_schema_evolution(self.schema, new_schema)
@@ -1165,6 +1175,12 @@ class MemoryLogNamespace:
 
     def stop_and_join(self) -> None:
         return
+
+    def ram_bytes(self) -> int:
+        return 0
+
+    def chunk_count(self) -> int:
+        return 0
 
     def stats(self) -> NamespaceStats:
         with self._insertion_lock:
