@@ -75,6 +75,6 @@ nz_sweep = ExecutorStep(
 
 if __name__ == "__main__":
     executor_main(
-        steps=[bl_sweep, nz_sweep],
-        description="Activation logging: baseline vs no-router-zloss d512 across all checkpoints.",
+        steps=[nz_sweep],
+        description="Activation logging: no-router-zloss d512 across all checkpoints.",
     )
