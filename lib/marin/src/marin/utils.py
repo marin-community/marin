@@ -1,14 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import functools
 import logging
 import os
 import subprocess
-from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import Any
 
 import braceexpand
 import datasets
@@ -19,7 +17,6 @@ from rigging.filesystem import url_to_fs
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
-T = TypeVar("T")
 
 
 def fsspec_exists(file_path):
@@ -114,24 +111,6 @@ def _hf_should_retry(exc: Exception) -> bool:
     return any(keyword in message for keyword in _HF_RETRY_KEYWORDS)
 
 
-def call_with_hf_backoff(
-    fn: Callable[[], T],
-    *,
-    context: str,
-    max_attempts: int = 6,
-    initial_delay: float = 2.0,
-    max_delay: float = 60.0,
-) -> T:
-    """Call ``fn`` with exponential backoff tuned for HF rate limits."""
-    return retry_with_backoff(
-        fn,
-        retryable=_hf_should_retry,
-        max_attempts=max_attempts,
-        backoff=ExponentialBackoff(initial=initial_delay, maximum=max_delay, factor=2.0, jitter=0.25),
-        operation=context,
-    )
-
-
 def load_dataset_with_backoff(
     *,
     context: str,
@@ -140,12 +119,13 @@ def load_dataset_with_backoff(
     max_delay: float = 120.0,
     **dataset_kwargs: Any,
 ):
-    return call_with_hf_backoff(
+    """Call ``datasets.load_dataset`` with exponential backoff tuned for HF rate limits."""
+    return retry_with_backoff(
         lambda: datasets.load_dataset(**dataset_kwargs),
-        context=context,
+        retryable=_hf_should_retry,
         max_attempts=max_attempts,
-        initial_delay=initial_delay,
-        max_delay=max_delay,
+        backoff=ExponentialBackoff(initial=initial_delay, maximum=max_delay, factor=2.0, jitter=0.25),
+        operation=context,
     )
 
 
@@ -206,31 +186,9 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
     return result
 
 
-def remove_tpu_lockfile_on_exit(fn=None):
-    """
-    Context manager to remove the TPU lockfile on exit. Can be used as a context manager or decorator.
-
-    Example:
-    ```
-    with remove_tpu_lockfile_on_exit():
-        # do something with TPU
-    ```
-
-    """
-    if fn is None:
-        return _remove_tpu_lockfile_on_exit_cm()
-    else:
-
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            with _remove_tpu_lockfile_on_exit_cm():
-                return fn(*args, **kwargs)
-
-        return wrapper
-
-
 @contextmanager
-def _remove_tpu_lockfile_on_exit_cm():
+def remove_tpu_lockfile_on_exit():
+    """Context manager that removes the TPU lockfile when the block exits."""
     try:
         yield
     finally:
