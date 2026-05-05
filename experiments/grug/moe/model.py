@@ -72,6 +72,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    double_swiglu: bool = False  # apply silu to both gate and up: silu(gate) * silu(up)
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -220,6 +221,7 @@ class DenseMLP(eqx.Module):
         x: Float[Array, "B S D"],
         *,
         activation: MoeActivation = ActivationFunctionEnum.silu,
+        double_activation: bool = False,
     ) -> Float[Array, "B S D"]:
         if isinstance(activation, ActivationFunctionEnum):
             activation_fn = activation.to_jax_fn()
@@ -230,7 +232,12 @@ class DenseMLP(eqx.Module):
         x_flat = rearrange(x, "b s d -> (b s) d")
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
+        out_flat = jnp.einsum(
+            "tm,md->td",
+            activation_fn(gate) * (activation_fn(up) if double_activation else up),
+            self.w_down,
+            out_sharding=_batch_spec(),
+        )
         return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
 
 
@@ -397,6 +404,7 @@ class MoEMLP(eqx.Module):
             self.w_gate_up,
             self.w_down,
             activation=ActivationFunctionEnum.silu,
+            double_activation=self.cfg.double_swiglu,
             mesh=get_abstract_mesh(),
             capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
         )
@@ -414,6 +422,7 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    double_swiglu: bool = eqx.field(static=True, default=False)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -431,6 +440,7 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            double_swiglu=cfg.double_swiglu,
         )
 
     @named_call
@@ -444,7 +454,9 @@ class Block(eqx.Module):
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            mlp_out = mlp_out + self.shared(
+                mlp_in, activation=ActivationFunctionEnum.silu, double_activation=self.double_swiglu
+            )
         x = x + mlp_out
         return x, router_stats
 
