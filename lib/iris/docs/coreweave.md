@@ -109,6 +109,11 @@ and Network (traffic, latency). No setup required.
 - A CoreWeave CKS cluster (created via Console or Terraform)
 - A kubeconfig downloaded from CoreWeave Console > Tokens
 - Images pushed to `ghcr.io/marin-community/`
+- Controller extras in the local Iris venv:
+  `uv pip install 'marin-iris[controller]'`
+
+Use [`../OPS.md`](../OPS.md) for day-to-day CoreWeave operations, cluster
+aliases, and the bounded GPU smoke ladder.
 
 ### Step 1: Save kubeconfig
 

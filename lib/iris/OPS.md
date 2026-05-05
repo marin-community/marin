@@ -37,7 +37,7 @@ iris job bug-report /user/job-name      # structured diagnostic dump
 
 - **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
-- **`--extra gpu`** installs CUDA jaxlib but does NOT request GPU hardware. Need both `--gpu H100x8 --extra gpu`.
+- **`--gpu` requests hardware; `--extra gpu` requests the Python dependency extra.** Need both for GPU JAX jobs.
 - **Use `--gpu` or `--tpu` to request accelerators, instead of `--region` or `--zone`.** Let Iris handle scaling group constraints. Use `--region` or `--zone` when you are trying to pin data to a particular location.
 - **`--reserve`** holds capacity for scheduling only — does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
 - **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 2g`), otherwise it hogs the GPU node and deadlocks. Memory at or above 4 GB requires `--enable-extra-resources` (see "Validator opt-in" below).
@@ -255,6 +255,24 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 ## CoreWeave (GPU) Operations
 
 Use `lib/iris/examples/coreweave-*.yaml` for CoreWeave scale group configurations.
+For platform architecture and setup details, see [`docs/coreweave.md`](docs/coreweave.md).
+
+Before the first CoreWeave CLI command in a fresh venv, install the controller extras:
+
+```bash
+uv pip install 'marin-iris[controller]'
+```
+
+Without these extras, auto-tunneled CoreWeave commands fail before connecting:
+`ImportError: Install iris[controller] to use CloudK8sService`.
+
+### GPU Configs
+
+| Target | Iris config | `--gpu` request | `nvidia-smi` GPU name |
+|--------|-------------|-----------------|-----------------------|
+| H100 | `lib/iris/examples/coreweave-ci.yaml` | `H100x1` | `NVIDIA H100 80GB HBM3` |
+| GH200 | `lib/iris/examples/coreweave-rno2a.yaml` | `H200x1` | `NVIDIA GH200 480GB` |
+| B200 | `lib/iris/examples/coreweave-usw09b.yaml` | `B200x1` | `NVIDIA B200` |
 
 ### Connecting
 
@@ -270,10 +288,8 @@ a `kubectl port-forward` to the controller service before each call, tearing it
 down on exit. The CLI prints `Establishing tunnel to controller... Tunnel
 ready: 127.0.0.1:<port> -> <svc>:10000`.
 
-Requires the `iris[controller]` extras (`duckdb`, `pyarrow`, `kubernetes`) in
-your venv — otherwise the CLI fails with `ImportError: Install
-iris[controller] to use CloudK8sService` before it can tunnel. If you see
-that error, `uv pip install 'marin-iris[controller]'` inside the venv.
+This path requires the `iris[controller]` extras (`duckdb`, `pyarrow`,
+`kubernetes`) described above.
 
 Fallback — manual port-forward (use if you don't have the extras or need to
 keep the tunnel up across many calls):
@@ -303,6 +319,52 @@ kci logs -n iris deployment/iris-controller -f        # controller logs
 ```
 
 (`kci` = `kubectl --kubeconfig ~/.kube/coreweave-iris`)
+
+### Bounded GPU Smoke Tests
+
+Run a tiny direct smoke on H100, GH200, and B200 before the full GPU canary.
+Use the config and request names from "GPU Configs". This command launches
+live GPU pods and consumes CoreWeave quota; skip it for docs-only validation.
+
+```bash
+uv run iris --config=<CONFIG> job run --no-wait \
+  --timeout 1800 \
+  --job-name <JOB> \
+  --enable-extra-resources \
+  --gpu <GPU> \
+  --cpu 1 --memory 16G --disk 16G \
+  --extra gpu \
+  -e IRIS_DEBUG_UV_SYNC 1 \
+  -- bash -lc 'set -euo pipefail
+nvidia-smi
+python - <<'"'"'PY'"'"'
+import jax
+import jax.numpy as jnp
+
+print(f"jax_version={jax.__version__}")
+print(f"jax_backend={jax.default_backend()}")
+print(f"jax_devices={jax.devices()}")
+x = jnp.ones((8, 8), dtype=jnp.float32)
+y = (x @ x).block_until_ready()
+print(f"matmul_sum={float(y.sum())}")
+PY'
+```
+
+Validation checklist:
+
+1. `nvidia-smi` prints the expected GPU name from the table.
+2. `import jax` succeeds.
+3. `jax.default_backend()` is `gpu`.
+4. `jax.devices()` is non-empty.
+5. The tiny matmul completes.
+6. Logs have no new CUDA, cuBLAS, or NCCL warnings.
+
+If `nvidia-smi` succeeds but `import jax` fails, treat it as dependency setup
+failure, not as CUDA runtime validation. `IRIS_DEBUG_UV_SYNC=1` removes
+`--quiet` from the task setup `uv sync`; inspect that output before drawing a
+runtime conclusion. Current Iris runtime builds `uv sync --all-packages` flags
+by stripping any `package:` prefix from extras, so `--extra marin:gpu` becomes
+`--extra gpu` and does not validate a separate dependency path.
 
 ### NodePool Management
 
@@ -350,6 +412,13 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 - Check **account-wide** H100 contention, not just `iris-canary`: `kci get nodepools -A`. If `iris-ci-h100-8x` (or any other pool) is already holding the zone's H100 quota at `maxNodes=1`, the canary's `iris-canary-h100-8x` cannot scale up — CW account caps total H100 in US-WEST-04A.
 - Workaround: reuse the CI nodepool (point `coreweave-canary.yaml` `h100-8x` selector at `iris-iris-ci-managed=true` and coordinate with iris-ci) or scale `iris-ci-h100-8x` to 0 before the canary runs.
 - Root fix: CW support ticket to raise `gd-8xh100ib-i128` account quota ≥2 in US-WEST-04A.
+
+### Before the full CoreWeave canary
+
+1. Run the bounded GPU smoke on H100, GH200, and B200.
+2. Confirm JAX imports, uses the GPU backend, lists devices, and completes the matmul.
+3. Check logs for CUDA, cuBLAS, and NCCL warnings.
+4. Only then launch the full CoreWeave canary.
 
 ---
 

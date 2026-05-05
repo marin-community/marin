@@ -88,7 +88,8 @@ uv run iris --config lib/iris/examples/marin.yaml job stop /<user>/<job-name>
 Notes:
 
 - `--extra marin:tpu` installs the Marin TPU deps into the task container; use `--extra marin:cpu` for CPU-only
-  entrypoints and `--extra gpu` (with `--gpu H100x8`) on CoreWeave.
+  entrypoints. On CoreWeave, `--gpu` requests hardware and `--extra gpu` requests the Python deps; see
+  [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) for current request names.
 - Request TPU hardware with `--tpu v5litepod-16` (or similar). `--reserve` only holds capacity for scheduling; it does
   not attach accelerator devices to the task container.
 - `WANDB_API_KEY`, `HF_TOKEN`, `HF_DATASETS_TRUST_REMOTE_CODE`, and `TOKENIZERS_PARALLELISM` are auto-injected from
