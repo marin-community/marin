@@ -2,8 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import random
+import string
 from pathlib import Path
 
+import dupekit
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray import LocalClient, set_current_client
@@ -14,7 +18,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashParams,
     compute_minhash_attrs,
 )
-from zephyr import write_parquet_file
+from zephyr import write_jsonl_file, write_parquet_file
 
 TEST_MINHASH_PARAMS = MinHashParams(num_perms=286, num_bands=26, ngram_size=5, seed=42)
 
@@ -255,3 +259,145 @@ def test_fuzzy_dups_rejects_duplicate_source(fox_corpus):
             output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups"),
             max_parallelism=4,
         )
+
+
+# ---------------------------------------------------------------------------
+# Char-5-gram Jaccard recall / precision tests.
+#
+# The dupekit MinHash pipeline shingles by character (rust/dupekit/src/
+# minhash_ops.rs:69-76: text.chars().windows(ngram_size)), so char-Jaccard
+# directly governs LSH collision probability. We construct text from a
+# lowercase-only alphabet so dupekit's CleanText (lowercase + strip punct +
+# collapse whitespace) is the identity, and the Jaccard we measure on the
+# raw string equals what the system sees internally.
+# ---------------------------------------------------------------------------
+
+_CHAR_VOCAB = string.ascii_lowercase
+
+
+def _char_5grams(text: str) -> set[str]:
+    return {text[i : i + 5] for i in range(len(text) - 4)}
+
+
+def _char_5gram_jaccard(a: str, b: str) -> float:
+    ga, gb = _char_5grams(a), _char_5grams(b)
+    return len(ga & gb) / len(ga | gb) if (ga | gb) else 1.0
+
+
+def _make_pair_with_char_5gram_jaccard(seed: int, target_j: float, n_chars: int = 1000) -> tuple[str, str]:
+    """Build (a, b) with char-5-gram-Jaccard(a, b) ≈ ``target_j``.
+
+    A is ``n_chars`` random lowercase letters. B differs from A at ``k``
+    well-spaced positions (each ≥5 apart, and bounded away from the edges)
+    so each substitution kills exactly 5 char-5-grams from the intersection
+    and adds 5 novel ones to the union, giving::
+
+        J = (M - 5k) / (M + 5k),   M = n_chars - 4
+
+    Solve for k: ``k = round(M*(1-J) / (5*(1+J)))``. Each substituted char
+    is replaced with a different alphabet letter; with a 1000-char random
+    backbone, accidental collisions of new 5-grams with existing ones occur
+    at ~8e-5 per gram (996 unique grams over 26^5 possibilities), small
+    enough to ignore at the construction tolerances asserted below.
+    """
+    M = n_chars - 4
+    k = round(M * (1.0 - target_j) / (5.0 * (1.0 + target_j)))
+
+    rng = random.Random(seed)
+    a_chars = [rng.choice(_CHAR_VOCAB) for _ in range(n_chars)]
+
+    # Restrict to non-edge positions so each substitution kills exactly 5
+    # 5-grams. Greedy pick with mutual spacing ≥5.
+    chosen: list[int] = []
+    candidates = list(range(4, n_chars - 4))
+    while len(chosen) < k:
+        if not candidates:
+            raise RuntimeError(f"could not place {k} substitutions ≥5 apart in {n_chars} chars")
+        p = rng.choice(candidates)
+        chosen.append(p)
+        candidates = [c for c in candidates if abs(c - p) >= 5]
+
+    b_chars = list(a_chars)
+    for pos in chosen:
+        b_chars[pos] = rng.choice([c for c in _CHAR_VOCAB if c != a_chars[pos]])
+
+    return "".join(a_chars), "".join(b_chars)
+
+
+def _dupekit_pipeline(params: MinHashParams) -> list:
+    return [
+        dupekit.Transformation.CleanText(input_col="text", output_col="clean_text"),
+        dupekit.Transformation.MinHash(
+            input_col="clean_text",
+            output_col="signature",
+            num_perms=params.num_perms,
+            ngram_size=params.ngram_size,
+            seed=params.seed,
+        ),
+        dupekit.Transformation.MinHashLSH(input_col="signature", output_col="buckets", num_bands=params.num_bands),
+        dupekit.Transformation.SelectColumns(columns=["id", "buckets"]),
+    ]
+
+
+def _shared_lsh_bucket(text_a: str, text_b: str) -> bool:
+    """Return True iff (a, b) share at least one MinHash-LSH bucket."""
+    batch = pa.RecordBatch.from_pylist([{"id": "a", "text": text_a}, {"id": "b", "text": text_b}])
+    out = dupekit.transform(batch, _dupekit_pipeline(TEST_MINHASH_PARAMS))
+    return bool(set(out["buckets"][0].as_py()) & set(out["buckets"][1].as_py()))
+
+
+# Recall: at TEST_MINHASH_PARAMS (b=26, r=11),
+#   P(collide | char-J=0.95) = 1 - (1 - 0.95^11)^26 ≈ 1 - 2e-10
+# so the assertion is effectively deterministic across all parametrizations.
+@pytest.mark.parametrize("seed", range(20))
+@pytest.mark.parametrize("target_j", [0.95, 0.97, 0.99])
+def test_high_char_5gram_jaccard_pairs_share_lsh_bucket(seed: int, target_j: float):
+    a, b = _make_pair_with_char_5gram_jaccard(seed, target_j)
+    measured = _char_5gram_jaccard(a, b)
+    # At n_chars=1000 the round() drift on k is well under 0.005. Wider drift
+    # would mean the construction itself is broken, not the system.
+    assert abs(measured - target_j) < 0.005, f"construction off-target: requested {target_j}, got {measured:.4f}"
+    assert _shared_lsh_bucket(a, b), f"high-Jaccard pair (char-J={measured:.4f}) failed to share an LSH bucket"
+
+
+# Precision: at (b=26, r=11),
+#   P(collide | char-J=0.5) = 1 - (1 - 0.5^11)^26 ≈ 1.27%
+#   P(collide | char-J=0.3) = 1 - (1 - 0.3^11)^26 ≈ 4.6e-5
+# Over 50 seeds we expect ~0-1 collisions at J=0.5 and ~0 at J=0.3. Cap at 5
+# leaves slack for parameter changes (e.g. dropping to b=20) without flaking,
+# while still failing if precision degrades by ~5x.
+@pytest.mark.parametrize("target_j", [0.3, 0.5])
+def test_low_char_5gram_jaccard_rarely_collides(target_j: float):
+    n_seeds = 50
+    collisions = sum(_shared_lsh_bucket(*_make_pair_with_char_5gram_jaccard(seed, target_j)) for seed in range(n_seeds))
+    assert collisions <= 5, f"{collisions}/{n_seeds} pairs collided at char-J={target_j} (expected ≤5)"
+
+
+def test_high_char_5gram_jaccard_pair_clusters_end_to_end(tmp_path: Path):
+    """A constructed J≈0.97 char-5-gram pair gets one shared dup_cluster_id.
+
+    The parametrized LSH-level tests above cover recall across the Jaccard
+    band; this single case exercises the full bucket → connected-components
+    → per-source attr-output path.
+    """
+    a, b = _make_pair_with_char_5gram_jaccard(seed=0, target_j=0.97)
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    write_jsonl_file(
+        [{"id": "doc_a", "text": a}, {"id": "doc_b", "text": b}],
+        str(src_dir / "shard_0.jsonl.gz"),
+    )
+
+    source = _normalize(str(src_dir), str(tmp_path / "norm"))
+    minhash = compute_minhash_attrs(source=source, output_path=str(tmp_path / "minhash"))
+    dups = compute_fuzzy_dups_attrs(inputs=[minhash], output_path=str(tmp_path / "dups"), max_parallelism=1)
+
+    by_id = _read_main_records(source)
+    rows = _read_cluster_attrs(dups.sources[source.main_output_dir].attr_dir)
+    by_source_id = {by_id[r["id"]]["source_id"]: r for r in rows if r["id"] in by_id}
+
+    assert {"doc_a", "doc_b"} <= by_source_id.keys(), "both docs must have attr rows"
+    cluster_ids = {by_source_id[s]["attributes"]["dup_cluster_id"] for s in ("doc_a", "doc_b")}
+    assert len(cluster_ids) == 1, f"expected one shared dup_cluster_id; got {cluster_ids}"
+    canonicals = [s for s in ("doc_a", "doc_b") if by_source_id[s]["attributes"]["is_cluster_canonical"]]
+    assert len(canonicals) == 1, f"expected exactly one canonical; got {canonicals}"
