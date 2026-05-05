@@ -116,16 +116,12 @@ class Controller(_message.Message):
         job_id: str
         def __init__(self, job_id: _Optional[str] = ...) -> None: ...
     class GetJobStatusResponse(_message.Message):
-        __slots__ = ("job", "request", "resource_min", "resource_max")
+        __slots__ = ("job", "request")
         JOB_FIELD_NUMBER: _ClassVar[int]
         REQUEST_FIELD_NUMBER: _ClassVar[int]
-        RESOURCE_MIN_FIELD_NUMBER: _ClassVar[int]
-        RESOURCE_MAX_FIELD_NUMBER: _ClassVar[int]
         job: _job_pb2.JobStatus
         request: Controller.LaunchJobRequest
-        resource_min: _job_pb2.ResourceUsage
-        resource_max: _job_pb2.ResourceUsage
-        def __init__(self, job: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., request: _Optional[_Union[Controller.LaunchJobRequest, _Mapping]] = ..., resource_min: _Optional[_Union[_job_pb2.ResourceUsage, _Mapping]] = ..., resource_max: _Optional[_Union[_job_pb2.ResourceUsage, _Mapping]] = ...) -> None: ...
+        def __init__(self, job: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., request: _Optional[_Union[Controller.LaunchJobRequest, _Mapping]] = ...) -> None: ...
     class GetJobStateRequest(_message.Message):
         __slots__ = ("job_ids",)
         JOB_IDS_FIELD_NUMBER: _ClassVar[int]

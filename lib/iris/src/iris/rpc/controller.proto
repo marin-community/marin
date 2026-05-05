@@ -129,9 +129,8 @@ message Controller {
   message GetJobStatusResponse {
     iris.job.JobStatus job = 1;
     LaunchJobRequest request = 2;  // Original job request for debugging
-    // Min/max resource usage across currently-running tasks.
-    iris.job.ResourceUsage resource_min = 3;
-    iris.job.ResourceUsage resource_max = 4;
+    reserved 3;  // was: ResourceUsage resource_min (now derived from iris.task stats client-side)
+    reserved 4;  // was: ResourceUsage resource_max (now derived from iris.task stats client-side)
   }
 
   // Lightweight batch state query — returns only the state enum for each job,

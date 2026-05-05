@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from finelog.client.log_client import Table
 from finelog.rpc import logging_pb2
 from finelog.types import LogWriterProtocol, str_to_log_level
 from rigging.log_setup import parse_log_level
@@ -42,6 +43,7 @@ from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
 from iris.cluster.types import JobName, TaskAttempt, get_gpu_count
+from iris.cluster.worker.stats import build_task_stat
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.time_proto import timestamp_to_proto
 
@@ -976,48 +978,39 @@ class LogCollector:
 
 
 class ResourceCollector:
-    """Background resource usage collector.
+    """Background resource usage collector that writes to ``iris.task`` stats.
 
     Same set_pods() pattern as LogCollector: the sync loop declares the
-    authoritative set of running pods once per cycle, and the collector
-    diffs internally. Pods removed from the set have their cached results
-    cleaned up immediately.
+    authoritative set of running pods once per cycle. Each tick, the collector
+    fans out to ``kubectl top`` per pod and appends one ``IrisTaskStat`` row
+    per successful read to the supplied stats Table — the same table the
+    worker daemon writes to on the GCE/TPU path, so the dashboard's
+    ``iris.task`` queries cover both runtimes uniformly.
     """
 
-    def __init__(self, kubectl: K8sService, concurrency: int = 8):
+    def __init__(self, kubectl: K8sService, task_stats_table: Table, *, concurrency: int = 8):
         self._kubectl = kubectl
-        self._pods: dict[str, str] = {}  # cursor_key -> pod_name
-        self._results: dict[str, job_pb2.ResourceUsage] = {}  # cursor_key -> latest reading
+        self._table = task_stats_table
+        # (task_id_wire, attempt_id) -> pod_name. Tuple keys carry the
+        # identity needed to build IrisTaskStat without parsing strings.
+        self._pods: dict[tuple[str, int], str] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="resource-collect")
         self._thread = threading.Thread(target=self._run, daemon=True, name="resource-collector")
         self._thread.start()
 
-    def set_pods(self, pods: dict[str, str]) -> None:
-        """Declare the authoritative set of pods to collect resources for.
-
-        `pods` maps cursor_key -> pod_name. Keys absent from `pods` are
-        removed along with their cached results.
-        """
+    def set_pods(self, pods: dict[tuple[str, int], str]) -> None:
+        """Declare the authoritative set of pods to collect resources for."""
         with self._lock:
-            removed_keys = self._pods.keys() - pods.keys()
-            for key in removed_keys:
-                self._results.pop(key, None)
             self._pods = dict(pods)
-
-    def get(self, task_id: JobName, attempt_id: int) -> job_pb2.ResourceUsage | None:
-        """Return the latest resource reading for a pod (non-blocking)."""
-        key = f"{task_id.to_wire()}:{attempt_id}"
-        with self._lock:
-            return self._results.get(key)
 
     def _run(self) -> None:
         while not self._stop.is_set():
             with self._lock:
                 snapshot = list(self._pods.items())
             if snapshot:
-                futures = {self._executor.submit(self._fetch_one, key, pod_name): key for key, pod_name in snapshot}
+                futures = [self._executor.submit(self._fetch_one, key, pod_name) for key, pod_name in snapshot]
                 for f in concurrent.futures.as_completed(futures):
                     try:
                         f.result()
@@ -1025,22 +1018,34 @@ class ResourceCollector:
                         pass
             self._stop.wait(timeout=5.0)
 
-    def _fetch_one(self, key: str, pod_name: str) -> None:
+    def _fetch_one(self, key: tuple[str, int], pod_name: str) -> None:
         try:
             top = self._kubectl.top_pod(pod_name)
         except Exception as e:
             logger.debug("ResourceCollector: top_pod raised for pod %s: %s", pod_name, e)
-            top = None
+            return
+        if top is None:
+            return
 
-        if top is not None:
-            usage = job_pb2.ResourceUsage(
-                cpu_millicores=top.cpu_millicores,
-                memory_mb=top.memory_bytes // (1024 * 1024),
-            )
-            with self._lock:
-                # Only store if the key is still tracked (may have been removed by set_pods).
-                if key in self._pods:
-                    self._results[key] = usage
+        task_id_wire, attempt_id = key
+        usage = job_pb2.ResourceUsage(
+            cpu_millicores=top.cpu_millicores,
+            memory_mb=top.memory_bytes // (1024 * 1024),
+        )
+        ts = datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
+        stat = build_task_stat(
+            task_id=task_id_wire,
+            attempt_id=attempt_id,
+            # Pod name is the per-attempt platform identity on k8s, mirroring
+            # worker_id on the GCE/TPU path.
+            worker_id=pod_name,
+            ts=ts,
+            usage=usage,
+        )
+        try:
+            self._table.write([stat])
+        except Exception:
+            logger.debug("ResourceCollector: write to iris.task failed", exc_info=True)
 
     def close(self) -> None:
         self._stop.set()
@@ -1076,6 +1081,10 @@ class K8sTaskProvider:
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
     log_client: LogWriterProtocol | None = None
+    # Pre-resolved iris.task Table handle. The controller injects this after
+    # constructing the LogClient (see controller.py); when None — e.g. tests
+    # without finelog — the resource collector is disabled.
+    task_stats_table: Table | None = None
     poll_concurrency: int = 32
     log_poll_interval: float = 15.0
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
@@ -1085,9 +1094,13 @@ class K8sTaskProvider:
     _last_gc_time: float = field(default=0.0, init=False, repr=False)
     _pending_gc_hashes: set[str] = field(default_factory=set, init=False, repr=False)
 
-    def _ensure_resource_collector(self) -> ResourceCollector:
+    def _ensure_resource_collector(self) -> ResourceCollector | None:
+        if self.task_stats_table is None:
+            return None
         if self._resource_collector is None:
-            self._resource_collector = ResourceCollector(self.kubectl, concurrency=self.poll_concurrency)
+            self._resource_collector = ResourceCollector(
+                self.kubectl, self.task_stats_table, concurrency=self.poll_concurrency
+            )
         return self._resource_collector
 
     def _ensure_log_collector(self) -> LogCollector | None:
@@ -1508,7 +1521,10 @@ class K8sTaskProvider:
 
         # Build up the authoritative pod sets for collectors.
         log_pods: dict[str, _LogPod] = {}
-        resource_pods: dict[str, str] = {}  # cursor_key -> pod_name
+        # (task_id_wire, attempt_id) -> pod_name. Resource samples are
+        # appended directly to iris.task by the collector; the controller no
+        # longer multiplexes them through TaskUpdate.
+        resource_pods: dict[tuple[str, int], str] = {}
         terminal_log_pods: dict[str, _LogPod] = {}  # pods that completed this cycle
 
         for entry in running:
@@ -1551,27 +1567,13 @@ class K8sTaskProvider:
             if phase not in ("Succeeded", "Failed"):
                 log_pods[cursor_key] = _LogPod(pod_name=pod_name, task_id=entry.task_id, attempt_id=entry.attempt_id)
                 if phase == "Running":
-                    resource_pods[cursor_key] = pod_name
+                    resource_pods[(entry.task_id.to_wire(), entry.attempt_id)] = pod_name
             else:
                 terminal_log_pods[cursor_key] = _LogPod(
                     pod_name=pod_name, task_id=entry.task_id, attempt_id=entry.attempt_id
                 )
 
-            # Read latest cached resource usage (non-blocking).
-            resource_usage = None
-            if self._resource_collector is not None:
-                resource_usage = self._resource_collector.get(entry.task_id, entry.attempt_id)
-
-            updates.append(
-                TaskUpdate(
-                    task_id=update.task_id,
-                    attempt_id=update.attempt_id,
-                    new_state=update.new_state,
-                    error=update.error,
-                    exit_code=update.exit_code,
-                    resource_usage=resource_usage or update.resource_usage,
-                )
-            )
+            updates.append(update)
 
         # Sync collectors with the authoritative pod sets.
         # set_pods() does a final log fetch for pods that drop out of the set.
@@ -1583,7 +1585,9 @@ class K8sTaskProvider:
             if terminal_log_pods:
                 log_collector.set_pods({**log_pods, **terminal_log_pods})
             log_collector.set_pods(log_pods)
-        self._ensure_resource_collector().set_pods(resource_pods)
+        resource_collector = self._ensure_resource_collector()
+        if resource_collector is not None:
+            resource_collector.set_pods(resource_pods)
 
         return updates
 

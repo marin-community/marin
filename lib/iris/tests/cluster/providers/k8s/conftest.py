@@ -34,6 +34,16 @@ class InProcessLogClient:
         pass
 
 
+class FakeStatsTable:
+    """Records every Table.write call so tests can assert on emitted rows."""
+
+    def __init__(self) -> None:
+        self.writes: list[list[object]] = []
+
+    def write(self, rows) -> None:
+        self.writes.append(list(rows))
+
+
 @pytest.fixture
 def k8s() -> InMemoryK8sService:
     return InMemoryK8sService(namespace="iris")
@@ -50,13 +60,19 @@ def log_client(log_service) -> InProcessLogClient:
 
 
 @pytest.fixture
-def provider(k8s, log_client):
+def task_stats_table() -> FakeStatsTable:
+    return FakeStatsTable()
+
+
+@pytest.fixture
+def provider(k8s, log_client, task_stats_table):
     p = K8sTaskProvider(
         kubectl=k8s,
         namespace="iris",
         default_image="myrepo/iris:latest",
         cache_dir="/cache",
         log_client=log_client,
+        task_stats_table=task_stats_table,
         log_poll_interval=1.0,
     )
     yield p

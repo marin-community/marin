@@ -191,7 +191,6 @@ class TaskUpdate:
     new_state: int
     error: str | None = None
     exit_code: int | None = None
-    resource_usage: job_pb2.ResourceUsage | None = None
     container_id: str | None = None
 
 
@@ -212,7 +211,6 @@ def task_updates_from_proto(entries) -> list[TaskUpdate]:
                 new_state=entry.state,
                 error=entry.error or None,
                 exit_code=entry.exit_code if entry.HasField("exit_code") else None,
-                resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
                 container_id=entry.container_id or None,
             )
         )
@@ -1379,7 +1377,7 @@ class ControllerTransitions:
             prior_state = task.state
 
             # Fast path: task already in the reported state with no new data to apply.
-            has_new_data = update.error is not None or update.exit_code is not None or update.resource_usage is not None
+            has_new_data = update.error is not None or update.exit_code is not None
             if update.new_state == prior_state and not has_new_data:
                 continue
 
@@ -1590,15 +1588,11 @@ class ControllerTransitions:
     def apply_heartbeats_batch(self, cur: TransactionCursor, requests: list[HeartbeatApplyRequest]) -> list[TxResult]:
         """Apply multiple heartbeats in a single transaction.
 
-        Two-pass architecture to minimise SQL round-trips:
-
-        1. Bulk-fetch all referenced task rows, classify each update as
-           *steady-state* (same state, no error/exit_code) or *transition*.
-        2a. Batch steady-state resource_usage writes via ``executemany``.
-        2b. Feed only transitions through ``_apply_task_transitions``, which
-            retains the full state machine (retry, cascade, decommit, etc.).
-
-        Worker health updates are also batched via ``executemany``.
+        Bulk-fetch all referenced task rows, drop steady-state updates whose
+        only payload would have been (now-vestigial) resource samples, and feed
+        the remaining state-changing or terminal updates through
+        ``_apply_task_transitions``. Worker health updates are batched via
+        ``executemany``.
         """
         _empty = TxResult(tasks_to_kill=set())
         results: list[TxResult] = [_empty] * len(requests)
@@ -1648,8 +1642,6 @@ class ControllerTransitions:
 
                 if is_state_change or has_terminal_data:
                     transition_updates.append(update)
-                # Steady-state resource usage no longer persisted; iris.worker /
-                # iris.task stats namespaces own per-tick measurements.
 
             if transition_updates:
                 transition_entries.append(

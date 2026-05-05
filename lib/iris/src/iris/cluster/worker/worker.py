@@ -575,15 +575,6 @@ class Worker:
             )
             if attempt.finished_at is not None:
                 entry.finished_at.CopyFrom(timestamp_to_proto(attempt.finished_at))
-            usage = job_pb2.ResourceUsage(
-                memory_mb=attempt.current_memory_mb,
-                memory_peak_mb=attempt.peak_memory_mb,
-                disk_mb=attempt.disk_mb,
-                cpu_millicores=attempt.current_cpu_millicores,
-                process_count=attempt.process_count,
-            )
-            if usage.ByteSize() > 0:
-                entry.resource_usage.CopyFrom(usage)
             try:
                 client.update_task_status(
                     controller_pb2.Controller.UpdateTaskStatusRequest(
@@ -829,8 +820,6 @@ class Worker:
         )
         if task.status in self._TERMINAL_STATES:
             entry.finished_at.CopyFrom(task_proto.finished_at)
-        if task_proto.resource_usage.ByteSize() > 0:
-            entry.resource_usage.CopyFrom(task_proto.resource_usage)
         return entry
 
     @staticmethod

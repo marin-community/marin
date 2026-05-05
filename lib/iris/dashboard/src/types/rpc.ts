@@ -87,6 +87,9 @@ export interface TaskStatus {
   startedAt?: ProtoTimestamp
   finishedAt?: ProtoTimestamp
   ports?: Record<string, number>
+  // Worker-resident in-memory snapshot (Worker.GetTaskStatus only). The
+  // controller-served TaskStatus carries no resourceUsage; query the
+  // iris.task stats namespace via useLogServerStatsRpc for time series.
   resourceUsage?: ResourceUsage
   buildMetrics?: BuildMetrics
   currentAttemptId?: number
@@ -94,7 +97,6 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
-  resourceHistory?: ResourceUsage[]
   statusTextDetailMd?: string
   statusTextSummaryMd?: string
 }
@@ -109,7 +111,6 @@ export interface JobStatus {
   startedAt?: ProtoTimestamp
   finishedAt?: ProtoTimestamp
   ports?: Record<string, number>
-  resourceUsage?: ResourceUsage
   statusMessage?: string
   buildMetrics?: BuildMetrics
   failureCount?: number
@@ -147,8 +148,6 @@ export interface ListJobsResponse {
 export interface GetJobStatusResponse {
   job: JobStatus
   request?: LaunchJobRequest
-  resourceMin?: ResourceUsage
-  resourceMax?: ResourceUsage
 }
 
 export interface CommandEntrypoint {
@@ -240,19 +239,6 @@ export interface ListWorkersResponse {
   hasMore: boolean
 }
 
-export interface WorkerResourceSnapshot {
-  timestamp?: ProtoTimestamp
-  hostCpuPercent?: number
-  memoryUsedBytes?: string
-  memoryTotalBytes?: string
-  diskUsedBytes?: string
-  diskTotalBytes?: string
-  runningTaskCount?: number
-  totalProcessCount?: number
-  netRecvBps?: string
-  netSentBps?: string
-}
-
 export interface WorkerTaskAttempt {
   taskId: string
   attempt?: TaskAttempt
@@ -267,8 +253,6 @@ export interface GetWorkerStatusResponse {
   // page render on a slow LogService proxy. Fetched separately via
   // LogService.FetchLogs(source="/system/worker/<worker_id>").
   recentAttempts?: WorkerTaskAttempt[]
-  currentResources?: WorkerResourceSnapshot
-  resourceHistory?: WorkerResourceSnapshot[]
 }
 
 // -- Endpoints --

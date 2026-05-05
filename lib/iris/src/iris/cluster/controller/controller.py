@@ -127,6 +127,7 @@ from iris.cluster.types import (
     get_tpu_count,
     is_job_finished,
 )
+from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider, TokenVerifier
@@ -1177,11 +1178,13 @@ class Controller:
         self._remote_stats_service = StatsServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
 
         # Providers that collect logs outside the worker process push directly
-        # to the log server via RPC.
+        # to the log server via RPC. K8s pods have no worker daemon, so the
+        # provider also writes per-pod resource samples to iris.task itself —
+        # mirroring what the worker daemon does on the GCE/TPU path.
         if isinstance(self._provider, K8sTaskProvider):
-            self._provider.log_client = LogClient.connect(
-                self._log_service_address, interceptors=log_client_interceptors
-            )
+            k8s_log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
+            self._provider.log_client = k8s_log_client
+            self._provider.task_stats_table = k8s_log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
 
         # Controller process logs ship to the log server via RemoteLogHandler.
         self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)

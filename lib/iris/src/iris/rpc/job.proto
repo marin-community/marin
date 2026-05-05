@@ -221,6 +221,10 @@ message TaskStatus {
   iris.time.Timestamp finished_at = 10;
 
   map<string, int32> ports = 11;      // Per-task port allocations
+  // Worker-resident in-memory ResourceUsage. Filled by Worker self-RPCs
+  // (Worker.GetTaskStatus / Worker.ListTasks). The controller does NOT set
+  // this — controller-served TaskStatus carries no resource_usage; consumers
+  // must query the iris.task stats namespace for per-attempt time series.
   ResourceUsage resource_usage = 12;
   BuildMetrics build_metrics = 13;
 
@@ -232,8 +236,7 @@ message TaskStatus {
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
   // field 18 was log_directory, removed
   string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
-  // Historical resource snapshots (oldest first). Populated only in GetTaskStatus detail view.
-  repeated ResourceUsage resource_history = 20;
+  reserved 20;                        // was: repeated ResourceUsage resource_history (now in iris.task stats)
   // Markdown status text pushed by the task (held in memory only, not in history).
   // Full detail view shown on the task detail page.
   string status_text_detail_md = 21;
@@ -300,7 +303,7 @@ message JobStatus {
   // Port allocations
   map<string, int32> ports = 7;
 
-  ResourceUsage resource_usage = 8;
+  reserved 8;  // was: ResourceUsage resource_usage (never populated; per-task usage lives in iris.task stats)
 
   // Status message for current phase (e.g., "downloading bundle", "populating uv cache")
   string status_message = 9;
@@ -603,7 +606,7 @@ message WorkerTaskStatus {
   string error = 5;
   iris.time.Timestamp finished_at = 6;
   // field 7 was log_directory, removed
-  ResourceUsage resource_usage = 8;
+  reserved 8;  // was: ResourceUsage resource_usage (now appended to iris.task by the worker / k8s ResourceCollector)
   reserved 9;  // was log_entries (pushed via LogService now)
   string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
 }
