@@ -181,12 +181,13 @@ def _model_seq_len() -> int:
     return dna_effective_seq_len(DNA_BASE_SEQ_LEN, TOKENIZER)
 
 
-# Marin's only CPU worker pool is n2-highmem-2 (2 vCPU / 16 GiB), so override
-# default_tokenize's cpu=4 ask down to fit on that pool — otherwise the
-# coordinator step pends forever on "Insufficient CPU". The actual heavy work
-# runs on zephyr workers spawned by this coordinator at their own resource
-# spec; this is purely the orchestrator footprint.
-_TOKENIZE_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="8g", disk="10g")
+# Marin's only CPU worker pool is n2-highmem-2 (2 vCPU / 16 GiB) and is
+# typically near-saturated by other users' small coordinators, so override
+# default_tokenize's cpu=4 ask down to a minimal orchestrator footprint that
+# can pack alongside an existing job on the same VM. The tokenize step is
+# pure orchestration — heavy work runs on zephyr workers spawned at their
+# own resource spec — so cpu=1 is plenty.
+_TOKENIZE_RESOURCES = ResourceConfig.with_cpu(cpu=1, ram="4g", disk="10g")
 
 
 def _tokenize(name: str, dataset: str, dataset_format: DNALmDatasetFormat) -> ExecutorStep:
