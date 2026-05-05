@@ -25,7 +25,12 @@ _CHECKPOINT_KEEP = [
 model, optimizer, batch, num_steps = build_from_heuristic(budget=2.19e17, hidden_dim=512)
 model = dataclasses.replace(model, router_z_loss_coef=0.0)
 
-ROUTER_LR_MULTS = [0.6, 0.8, 1.2, 1.4]
+ROUTER_LR_MULTS = [
+    # 0.6, 0.8, 1.2, 1.4,  # already done
+    1.7,
+    2.0,
+    3.0,
+]
 
 
 def _make_steps() -> list[ExecutorStep]:
