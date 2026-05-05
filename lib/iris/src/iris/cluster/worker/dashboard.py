@@ -52,14 +52,14 @@ class WorkerDashboard:
         return Starlette(routes=routes)
 
     def _status_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Status", "worker"))
+        return HTMLResponse(html_shell("worker"))
 
     def _health(self, _request: Request) -> JSONResponse:
         """Simple health check endpoint for bootstrap and load balancers."""
         return JSONResponse({"status": "healthy"})
 
     def _dashboard(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Worker", "worker"))
+        return HTMLResponse(html_shell("worker"))
 
     def _task_detail_page(self, request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Task Detail", "worker"))
+        return HTMLResponse(html_shell("worker"))

@@ -539,7 +539,7 @@ class ControllerDashboard:
 
     @public
     def _dashboard(self, request: Request) -> Response:
-        return HTMLResponse(html_shell("Iris Controller", "controller"))
+        return HTMLResponse(html_shell("controller"))
 
     @public
     def _session_bootstrap(self, request: Request) -> Response:
@@ -564,11 +564,11 @@ class ControllerDashboard:
 
     @public
     def _job_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Job Detail", "controller"))
+        return HTMLResponse(html_shell("controller"))
 
     @public
     def _worker_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Worker Detail", "controller"))
+        return HTMLResponse(html_shell("controller"))
 
     @public
     def _auth_config(self, request: Request) -> JSONResponse:
@@ -694,7 +694,7 @@ class ProxyControllerDashboard:
         return Starlette(routes=routes, lifespan=on_shutdown(self._client.aclose))
 
     def _proxy_html(self, dashboard_type: str) -> HTMLResponse:
-        html = html_shell("Iris Controller (Proxy)", dashboard_type)
+        html = html_shell(dashboard_type)
         banner = (
             '<div style="background:#f59e0b;color:#000;text-align:center;'
             "padding:4px 8px;font-size:13px;font-weight:600;position:fixed;"
