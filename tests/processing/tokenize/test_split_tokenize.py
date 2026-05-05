@@ -22,12 +22,13 @@ from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize._core import IdPreservingPreprocessor, attach_id
 from marin.processing.tokenize.attributes import (
     TokenizeAttributesConfig,
-    TokenizedData,
+    TokenizedAttrData,
     tokenize_attributes,
     tokenize_attributes_step,
 )
 from marin.processing.tokenize.store_builder import (
     BuildLevanterStoreConfig,
+    _first_nonempty_exemplar,
     build_levanter_store,
     build_levanter_store_step,
 )
@@ -151,7 +152,7 @@ def test_split_pipeline_matches_legacy_tokenize(tmp_path):
         tokenizer="gpt2",
         format=TextLmDatasetFormat(),
     )
-    tokenized: TokenizedData = tokenize_attributes(attr_config)
+    tokenized: TokenizedAttrData = tokenize_attributes(attr_config)
 
     train_shards = tokenized.shard_paths("train")
     assert len(train_shards) == 1, f"expected 1 attribute shard, got {len(train_shards)}: {train_shards}"
@@ -269,6 +270,34 @@ def test_build_levanter_store_step_wires_deps():
 def test_build_levanter_store_step_requires_at_least_one_source():
     with pytest.raises(ValueError, match="at least one"):
         build_levanter_store_step(name="store", tokenize_steps=[])
+
+
+def _write_attr_shard(path, ids: list[str], input_ids_lists: list[list[int]]) -> None:
+    """Write a small attribute parquet file with the canonical {id, input_ids} schema."""
+    schema = pa.schema([("id", pa.string()), ("input_ids", pa.list_(pa.int32()))])
+    table = pa.Table.from_pylist(
+        [{"id": i, "input_ids": ii} for i, ii in zip(ids, input_ids_lists, strict=True)],
+        schema=schema,
+    )
+    pq.write_table(table, str(path))
+
+
+def test_first_nonempty_exemplar_skips_empty_leading_shards(tmp_path):
+    """Empty shards must not block exemplar derivation when later shards have rows."""
+    empty = tmp_path / "part-00000-of-00002.parquet"
+    nonempty = tmp_path / "part-00001-of-00002.parquet"
+    _write_attr_shard(empty, ids=[], input_ids_lists=[])
+    _write_attr_shard(nonempty, ids=["abc"], input_ids_lists=[[1, 2, 3]])
+
+    exemplar = _first_nonempty_exemplar([str(empty), str(nonempty)])
+    assert exemplar == {"input_ids": [1, 2, 3]}
+
+
+def test_first_nonempty_exemplar_raises_when_all_empty(tmp_path):
+    p = tmp_path / "part-00000-of-00001.parquet"
+    _write_attr_shard(p, ids=[], input_ids_lists=[])
+    with pytest.raises(ValueError, match="empty"):
+        _first_nonempty_exemplar([str(p)])
 
 
 def test_build_levanter_store_step_hash_id_changes_with_batch_size():

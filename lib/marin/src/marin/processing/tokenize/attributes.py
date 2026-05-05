@@ -17,7 +17,7 @@ datakit invariants hold by construction:
 Downstream:
 
 * :func:`marin.processing.tokenize.store_builder.build_levanter_store` consumes
-  one or more :class:`TokenizedData` artifacts to produce a Levanter ``TreeStore``.
+  one or more :class:`TokenizedAttrData` artifacts to produce a Levanter ``TreeStore``.
 * Other datakit attribute consumers (joins, mixing) can use the ``id`` column to
   align tokens with quality scores, dedup flags, etc.
 """
@@ -44,7 +44,7 @@ from marin.utils import fsspec_glob
 logger = logging.getLogger(__name__)
 
 
-class TokenizedData(BaseModel):
+class TokenizedAttrData(BaseModel):
     """Per-split datakit attribute datasets produced by :func:`tokenize_attributes`.
 
     Each split's attribute parquet shards live under ``output_dirs[split]/`` with
@@ -54,7 +54,7 @@ class TokenizedData(BaseModel):
     and co-partitioned with the source — both datakit invariants.
 
     Persisted as the step's ``.artifact``. Load via
-    ``Artifact.load(step, TokenizedData)``.
+    ``Artifact.load(step, TokenizedAttrData)``.
 
     Attributes:
         version: Schema version.
@@ -188,7 +188,7 @@ def _attribute_schema(data_format: LmDatasetFormatBase) -> pa.Schema | None:
     return None
 
 
-def tokenize_attributes(config: TokenizeAttributesConfig) -> TokenizedData:
+def tokenize_attributes(config: TokenizeAttributesConfig) -> TokenizedAttrData:
     """Tokenize :class:`NormalizedData` source(s) into datakit attribute parquet.
 
     Each split's source shards become co-partitioned attribute parquet files
@@ -199,7 +199,7 @@ def tokenize_attributes(config: TokenizeAttributesConfig) -> TokenizedData:
         config: See :class:`TokenizeAttributesConfig`.
 
     Returns:
-        A :class:`TokenizedData` describing the per-split output directories,
+        A :class:`TokenizedAttrData` describing the per-split output directories,
         source linkage, tokenizer config, and counters.
     """
     output_dirs: dict[str, str] = {}
@@ -218,7 +218,7 @@ def tokenize_attributes(config: TokenizeAttributesConfig) -> TokenizedData:
         source_main_dirs[split] = source.main_output_dir
         counters[split] = split_counters
 
-    return TokenizedData(
+    return TokenizedAttrData(
         output_dirs=output_dirs,
         source_main_dirs=source_main_dirs,
         tokenizer=config.tokenizer,
@@ -246,7 +246,7 @@ def tokenize_attributes_step(
     At least one of ``train_normalize`` or ``validation_normalize`` must be provided;
     each upstream step's output is loaded as :class:`NormalizedData` and routed to
     the corresponding split. The artifact persisted at the step's output path is
-    a :class:`TokenizedData`.
+    a :class:`TokenizedAttrData`.
 
     Args:
         name: Step name (e.g. ``"fineweb/tokenize"``).
@@ -269,7 +269,7 @@ def tokenize_attributes_step(
     fmt = data_format or TextLmDatasetFormat()
     deps: list[StepSpec] = [s for s in (train_normalize, validation_normalize) if s is not None]
 
-    def _fn(output_path: str) -> TokenizedData:
+    def _fn(output_path: str) -> TokenizedAttrData:
         kwargs: dict = {
             "output_path": output_path,
             "tokenizer": tokenizer,

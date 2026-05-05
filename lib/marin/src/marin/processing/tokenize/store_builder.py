@@ -11,7 +11,7 @@ Two entry points:
   on the legacy hot path (no parquet round-trip) and by :func:`build_levanter_store`.
 
 * :func:`build_levanter_store` — convenience wrapper. Reads attribute parquet
-  partitions from one or more :class:`TokenizedData` artifacts and builds a single
+  partitions from one or more :class:`TokenizedAttrData` artifacts and builds a single
   ``TreeStore`` per split.
 """
 from __future__ import annotations
@@ -22,16 +22,18 @@ import logging
 import os
 import time
 
+import pyarrow.parquet as pq
 from fray import ResourceConfig
 from levanter.store.cache import CacheLedger, consolidate_shard_cache_ledgers
 from pydantic import BaseModel
-from rigging.filesystem import open_url
+from rigging.filesystem import open_url, url_to_fs
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
 
 from marin.execution.artifact import Artifact
 from marin.execution.step_spec import StepSpec
-from marin.processing.tokenize.attributes import TokenizedData
+from marin.processing.tokenize.attributes import TokenizedAttrData
+from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +64,7 @@ class LevanterStoreData(BaseModel):
             ``cache_path/<split>``.
         splits: Map from split name to per-split stats.
         source_dirs: For provenance — the ``output_dirs`` of each source
-            :class:`TokenizedData` flattened in input order.
+            :class:`TokenizedAttrData` flattened in input order.
         tokenizer: Tokenizer name copied from the first source (informational).
     """
 
@@ -170,14 +172,14 @@ def write_stats_json(output_path: str, ledger: CacheLedger) -> tuple[str, dict[s
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class BuildLevanterStoreConfig:
-    """Config for assembling a Levanter ``TreeStore`` from one or more :class:`TokenizedData` sources.
+    """Config for assembling a Levanter ``TreeStore`` from one or more :class:`TokenizedAttrData` sources.
 
     All sources must agree on tokenizer/format — that's the caller's responsibility.
     The store builder concatenates attribute records across sources in the order
     provided and writes one consolidated cache per split.
     """
 
-    sources: list[TokenizedData]
+    sources: list[TokenizedAttrData]
     cache_path: str
     max_workers: int = 4096
     levanter_batch_size: int | None = None
@@ -188,7 +190,7 @@ class BuildLevanterStoreConfig:
             raise ValueError("BuildLevanterStoreConfig: at least one source required")
 
 
-def _split_shard_paths(sources: list[TokenizedData], split: str) -> list[str]:
+def _split_shard_paths(sources: list[TokenizedAttrData], split: str) -> list[str]:
     """Collect the parquet shard paths for a given split across all sources."""
     paths: list[str] = []
     for source in sources:
@@ -199,23 +201,26 @@ def _split_shard_paths(sources: list[TokenizedData], split: str) -> list[str]:
     return paths
 
 
-def _exemplar_from_attribute_path(attr_path: str) -> dict:
-    """Read the first record from an attribute parquet file and return its post-strip exemplar."""
-    import pyarrow.parquet as pq
-    from rigging.filesystem import url_to_fs
+def _first_nonempty_exemplar(shard_paths: list[str]) -> dict:
+    """Return the first record (id stripped) from the first non-empty shard.
 
-    fs, resolved = url_to_fs(attr_path)
-    with fs.open(resolved, "rb") as f:
-        pf = pq.ParquetFile(f)
-        if pf.metadata.num_rows == 0:
-            raise ValueError(f"Attribute parquet {attr_path} is empty; cannot derive exemplar")
-        first_batch = next(pf.iter_batches(batch_size=1))
-    record = first_batch.to_pylist()[0]
-    return _strip_id(record)
+    Co-partitioned attribute datasets may legitimately have empty partitions
+    (filtering, sparse splits); skipping them lets the store build proceed as
+    long as at least one shard has rows.
+    """
+    for path in shard_paths:
+        fs, resolved = url_to_fs(path)
+        with fs.open(resolved, "rb") as f:
+            pf = pq.ParquetFile(f)
+            if pf.metadata.num_rows == 0:
+                continue
+            first_batch = next(pf.iter_batches(batch_size=1))
+        return _strip_id(first_batch.to_pylist()[0])
+    raise ValueError(f"All {len(shard_paths)} attribute shards are empty; cannot derive exemplar")
 
 
 def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
-    """Build one consolidated Levanter store per split from :class:`TokenizedData` sources.
+    """Build one consolidated Levanter store per split from :class:`TokenizedAttrData` sources.
 
     For each split that exists in any source, this:
 
@@ -243,7 +248,7 @@ def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
             continue
 
         split_output = os.path.join(config.cache_path, split)
-        exemplar = _exemplar_from_attribute_path(shard_paths[0])
+        exemplar = _first_nonempty_exemplar(shard_paths)
 
         if _ledger_exists(split_output):
             logger.info("Shard ledger already exists for %s at %s; loading", split, split_output)
@@ -290,8 +295,6 @@ def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
 
 def _ledger_exists(cache_path: str) -> bool:
     """Return whether a consolidated Levanter ledger already exists at ``cache_path``."""
-    from marin.utils import fsspec_exists
-
     return fsspec_exists(os.path.join(cache_path, "shard_ledger.json"))
 
 
@@ -305,7 +308,7 @@ def build_levanter_store_step(
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a :class:`StepSpec` that assembles a Levanter store from one or more
-    :class:`TokenizedData` step outputs.
+    :class:`TokenizedAttrData` step outputs.
 
     The step's output path becomes ``LevanterStoreData.cache_path``; per-split
     consolidated caches live at ``cache_path/<split>``.
@@ -325,7 +328,7 @@ def build_levanter_store_step(
 
     def _fn(output_path: str) -> LevanterStoreData:
         kwargs: dict = {
-            "sources": [Artifact.load(s, TokenizedData) for s in tokenize_steps],
+            "sources": [Artifact.load(s, TokenizedAttrData) for s in tokenize_steps],
             "cache_path": output_path,
             "max_workers": max_workers,
             "levanter_batch_size": levanter_batch_size,
