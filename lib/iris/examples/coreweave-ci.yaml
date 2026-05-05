@@ -39,6 +39,8 @@ defaults:
       milliseconds: 1200000    # 20 min — nodes are pinned warm so this rarely fires
   task_env:
     MARIN_PREFIX: s3://marin-na/marin
+    # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces.
+    NCCL_SOCKET_IFNAME: =enp157s0np0
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001

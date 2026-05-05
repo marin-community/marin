@@ -66,6 +66,7 @@ defaults:
       milliseconds: 2400000    # 40 min — covers bare-metal node provisioning + Pod startup
   task_env:
     MARIN_PREFIX: s3://marin-na/marin
+    NCCL_SOCKET_IFNAME: =eth0
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001

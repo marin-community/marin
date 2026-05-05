@@ -64,6 +64,8 @@ defaults:
       milliseconds: 2400000    # 40 min — covers bare-metal node provisioning + Pod startup
   task_env:
     MARIN_PREFIX: s3://marin-na/marin
+    # B200 hostNetwork pods also see IB and SR-IOV link-local interfaces.
+    NCCL_SOCKET_IFNAME: =enp44s0np0
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001
