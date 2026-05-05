@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Iris job monitoring CLI: status, wait, failure-diagnostics, and CoreWeave port-forward."""
+"""Iris job monitoring CLI used by GitHub workflows."""
 
 import json
 import os
-import socket
+import re
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import click
-
-# Cross-module imports from iris: the script lives downstream of iris and must
-# stay in lockstep with how the controller labels managed pods (otherwise our
-# kubectl selectors silently miss everything) and what set of states iris
-# considers terminal (otherwise `wait` falls through to a ValueError on real
-# terminal states like JOB_STATE_KILLED). Importing rather than mirroring
-# means future iris changes propagate automatically.
 from iris.cluster.providers.k8s.tasks import _sanitize_label_value
 from iris.cluster.types import is_job_finished
 from iris.rpc import job_pb2
@@ -29,9 +24,6 @@ _REPO_ROOT = Path(__file__).parents[2]
 
 JOB_STATE_SUCCEEDED = job_pb2.JobState.Name(job_pb2.JOB_STATE_SUCCEEDED)
 
-# SSH command run on every Iris-managed VM. Dumps every container's logs (not
-# just iris-controller) plus the GCE startup-script and cloud-init journals,
-# so we capture worker-side failures and "controller never booted" cases.
 _HOST_SSH_COMMAND = """\
 set +e
 echo '=== docker ps -a ==='
@@ -80,7 +72,6 @@ def job_status(
     repo_root: Path,
     controller_url: str | None = None,
 ) -> IrisJobStatus:
-    """Look up a job by exact job_id via `iris job list --json --prefix <job_id>`."""
     cmd = [
         *iris_command(repo_root),
         *_iris_flags(iris_config, controller_url),
@@ -110,7 +101,7 @@ def wait_for_job(
     repo_root: Path,
     controller_url: str | None = None,
 ) -> IrisJobStatus:
-    """Poll until the job reaches a terminal state. Raises TimeoutError on timeout."""
+    """Poll until the job reaches a terminal state. Raises TimeoutError if `timeout` elapses."""
     start = time.monotonic()
     while True:
         status = job_status(job_id, iris_config=iris_config, repo_root=repo_root, controller_url=controller_url)
@@ -126,7 +117,6 @@ def _list_managed_instances(
     controller_label: str,
     managed_label: str | None,
 ) -> list[tuple[str, str, str]]:
-    """Return (name, zone, role) for every controller and managed worker VM."""
     if managed_label:
         filter_ = f"labels.{managed_label}=true OR labels.{controller_label}=true"
     else:
@@ -230,7 +220,6 @@ def _kubectl_dump(
     output_path: Path,
     description: str,
 ) -> str | None:
-    """Run kubectl, write combined stdout+stderr to output_path, return error string or None."""
     result = _run(cmd)
     output_path.write_text(result.stdout or result.stderr or "")
     if result.returncode != 0:
@@ -248,17 +237,11 @@ def _collect_coreweave(
     include_cluster_context: bool,
     iris_cmd: list[str],
 ) -> tuple[list[str], list[str]]:
-    """Collect controller pod logs, worker pod logs, and (optionally) cluster-wide context.
-
-    Returns (files_written, errors). `kubernetes-pods.json` is required.
-    """
     written: list[str] = []
     errors: list[str] = []
     kctl = _kubectl(kubeconfig)
 
-    # Required: pod listing for the job. Must use the same sanitization the
-    # iris controller uses when writing iris.job_id labels (interior '/' →
-    # '.'), or the selector matches nothing.
+    # Match the controller's iris.job_id label sanitization, or the selector misses everything.
     label = _sanitize_label_value(job_id.lstrip("/"))[:63]
     pods_path = output_dir / "kubernetes-pods.json"
     err = _kubectl_dump(
@@ -271,7 +254,6 @@ def _collect_coreweave(
     else:
         written.append("kubernetes-pods.json")
 
-    # Controller pod logs / describe (current + previous container).
     for fname, args, desc in [
         (
             "controller.log",
@@ -292,10 +274,7 @@ def _collect_coreweave(
         err = _kubectl_dump([*kctl, *args], output_dir / fname, desc)
         if err is None:
             written.append(fname)
-        # Failures here are best-effort; we always at least attempted to write the file.
 
-    # Per-managed-pod logs and describes. Without a managed label we can't
-    # enumerate workers cheaply; skip silently in that case.
     if managed_label:
         list_result = _run([*kctl, "-n", namespace, "get", "pods", "-l", f"{managed_label}=true", "-o", "name"])
         if list_result.returncode == 0:
@@ -318,7 +297,6 @@ def _collect_coreweave(
         else:
             errors.append(f"kubectl get pods -l {managed_label}=true failed: {list_result.stderr.strip()}")
 
-    # Recent events scoped to namespace.
     err = _kubectl_dump(
         [*kctl, "-n", namespace, "get", "events", "--sort-by=.lastTimestamp"],
         output_dir / "events.txt",
@@ -359,18 +337,14 @@ def _collect_coreweave(
     return written, errors
 
 
-# Required artifacts per provider — used by summary.json's missing_required_files
-# field so the workflow run can tell at a glance whether collection succeeded.
-_REQUIRED_GCP = ("controller-*.log",)  # at least one match
+_REQUIRED_GCP = ("controller-*.log",)
 _REQUIRED_COREWEAVE = ("kubernetes-pods.json",)
 
 
 def _missing_required(provider: str, files: list[str]) -> list[str]:
     if provider == "gcp":
-        # At least one SSH-fetched controller log must be present.
-        # `controller-process.log` (iris RPC dump) does not satisfy this — it
-        # comes from RPC, not from a host SSH, and is present even when every
-        # GCE VM was unreachable, which is exactly the case we want to flag.
+        # `controller-process.log` is from iris RPC, not host SSH — it's present even when every VM was unreachable,
+        # which is exactly the case we want to flag.
         if any(f.startswith("controller-") and f.endswith(".log") and f != "controller-process.log" for f in files):
             return []
         return ["controller-*.log"]
@@ -394,7 +368,6 @@ def collect_diagnostics(
     include_cluster_context: bool,
     repo_root: Path,
 ) -> Path:
-    """Collect Iris controller, job tree, and provider-specific diagnostics into output_dir."""
     output_dir.mkdir(parents=True, exist_ok=True)
     iris_cmd = [*iris_command(repo_root), *_iris_flags(iris_config, controller_url)]
     files: list[str] = []
@@ -469,89 +442,59 @@ def _write_summary(
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
 
-def _free_local_port() -> int:
-    with socket.socket() as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
+_DASHBOARD_URL_RE = re.compile(r"Dashboard:\s+(http://\S+)")
 
 
-def _start_port_forward(
-    namespace: str,
-    service: str,
-    local_port: int,
-    target_port: int,
-    kubeconfig: Path | None,
-) -> subprocess.Popen:
-    cmd = [
-        *_kubectl(kubeconfig),
-        "-n",
-        namespace,
-        "port-forward",
-        f"svc/{service}",
-        f"{local_port}:{target_port}",
-    ]
-    # start_new_session detaches from the parent so the forwarder survives this
-    # python process exiting; the workflow step records PF_PID and kills it later.
-    return subprocess.Popen(
+def open_controller_tunnel(
+    iris_config: Path,
+    *,
+    health_path: str,
+    timeout: float,
+    poll_interval: float,
+    repo_root: Path,
+) -> tuple[str, int]:
+    """Run ``iris cluster dashboard`` detached and return ``(controller_url, pid)``.
+
+    The iris CLI establishes the tunnel via the provider bundle (kubectl
+    port-forward on K8s, IAP/SSH on GCP) and prints the URL. We parse it,
+    probe ``health_path``, and leave the process running so the caller can
+    kill it later.
+    """
+    cmd = [*iris_command(repo_root), f"--config={iris_config}", "cluster", "dashboard"]
+    proc = subprocess.Popen(
         cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
         start_new_session=True,
     )
 
-
-def port_forward_until_healthy(
-    namespace: str,
-    service: str,
-    *,
-    target_port: int,
-    timeout: float,
-    poll_interval: float,
-    kubeconfig: Path | None,
-    rollout_deployment: str | None,
-    rollout_timeout: float,
-    health_path: str,
-) -> tuple[int, int]:
-    """Wait for the controller deployment to roll out, then port-forward and probe /health.
-
-    Returns (local_port, pf_pid). Raises TimeoutError if the controller never becomes healthy.
-    """
-    import urllib.error
-    import urllib.request
-
-    kctl = _kubectl(kubeconfig)
-    if rollout_deployment:
-        rollout = _run(
-            [
-                *kctl,
-                "-n",
-                namespace,
-                "rollout",
-                "status",
-                f"deployment/{rollout_deployment}",
-                f"--timeout={int(rollout_timeout)}s",
-            ]
-        )
-        if rollout.returncode != 0:
-            raise RuntimeError(
-                f"deployment/{rollout_deployment} rollout failed: {(rollout.stderr or rollout.stdout).strip()}"
-            )
-
-    local_port = _free_local_port()
-    proc = _start_port_forward(namespace, service, local_port, target_port, kubeconfig)
-    health_url = f"http://localhost:{local_port}{health_path}"
-
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        # Restart the forwarder if it died (konnectivity flakes after rollout).
-        if proc.poll() is not None:
-            proc = _start_port_forward(namespace, service, local_port, target_port, kubeconfig)
-            time.sleep(poll_interval)
+    url: str | None = None
+    while url is None and time.monotonic() < deadline:
+        line = proc.stdout.readline() if proc.stdout else ""
+        if not line:
+            if proc.poll() is not None:
+                raise RuntimeError(f"`iris cluster dashboard` exited with code {proc.returncode} before printing URL")
+            time.sleep(0.2)
             continue
+        click.echo(line.rstrip(), err=True)
+        match = _DASHBOARD_URL_RE.search(line)
+        if match:
+            url = match.group(1)
+    if url is None:
+        proc.terminate()
+        raise TimeoutError(f"`iris cluster dashboard` never printed a URL within {timeout}s")
+
+    health_url = url + health_path
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f"`iris cluster dashboard` exited (code {proc.returncode}) while probing health")
         try:
             with urllib.request.urlopen(health_url, timeout=poll_interval) as resp:
                 if 200 <= resp.status < 300:
-                    return local_port, proc.pid
+                    return url, proc.pid
         except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
             pass
         time.sleep(poll_interval)
@@ -562,7 +505,7 @@ def port_forward_until_healthy(
 
 @click.group()
 def cli() -> None:
-    """Iris job monitor: status, wait, collect, and port-forward."""
+    pass
 
 
 @cli.command()
@@ -701,29 +644,14 @@ def collect(
 
 
 @cli.command(name="port-forward")
-@click.option("--namespace", required=True, help="Kubernetes namespace.")
-@click.option("--service", required=True, help="Service name to port-forward (without svc/ prefix).")
-@click.option("--target-port", default=10000, show_default=True, type=int, help="Service port to forward to.")
-@click.option("--kubeconfig", default=None, type=click.Path(path_type=Path), help="Path to kubeconfig file.")
 @click.option(
-    "--rollout-deployment",
-    default="iris-controller",
-    show_default=True,
-    help="Deployment to wait for before port-forwarding. Pass empty string to skip.",
+    "--iris-config", required=True, type=click.Path(exists=True, path_type=Path), help="Path to iris config file."
 )
 @click.option(
-    "--rollout-timeout", default=120.0, show_default=True, type=float, help="Seconds to wait for rollout to settle."
+    "--timeout", default=300.0, show_default=True, type=float, help="Seconds to wait for the controller to be healthy."
 )
-@click.option(
-    "--timeout", default=300.0, show_default=True, type=float, help="Seconds to wait for /health to return 2xx."
-)
-@click.option("--poll-interval", default=5.0, show_default=True, type=float, help="Seconds between probes.")
-@click.option(
-    "--health-path",
-    default="/health",
-    show_default=True,
-    help="HTTP path to probe for readiness on the forwarded service.",
-)
+@click.option("--poll-interval", default=5.0, show_default=True, type=float, help="Seconds between health probes.")
+@click.option("--health-path", default="/health", show_default=True, help="HTTP path to probe for readiness.")
 @click.option(
     "--url-var",
     default="IRIS_CONTROLLER_URL",
@@ -731,41 +659,29 @@ def collect(
     help="$GITHUB_ENV variable name to write the controller URL under.",
 )
 def port_forward(
-    namespace: str,
-    service: str,
-    target_port: int,
-    kubeconfig: Path | None,
-    rollout_deployment: str,
-    rollout_timeout: float,
+    iris_config: Path,
     timeout: float,
     poll_interval: float,
     health_path: str,
     url_var: str,
 ) -> None:
-    """Port-forward to an Iris controller service and wait for it to be healthy.
+    """Open a tunnel to the iris controller via ``iris cluster dashboard`` and probe ``/health``.
 
-    Spawns a detached `kubectl port-forward` and writes IRIS_CONTROLLER_URL,
-    LOCAL_PORT, and PF_PID to $GITHUB_ENV. The forwarder survives this process
-    exiting so subsequent workflow steps can reach the controller.
+    Writes the controller URL and tunnel PID to $GITHUB_ENV so a later
+    ``Stop port-forward`` step can ``kill $PF_PID`` to tear it down.
     """
-    click.echo(f"Port-forwarding to {service} in {namespace} ...", err=True)
-    local_port, pf_pid = port_forward_until_healthy(
-        namespace,
-        service,
-        target_port=target_port,
+    url, pf_pid = open_controller_tunnel(
+        iris_config,
+        health_path=health_path,
         timeout=timeout,
         poll_interval=poll_interval,
-        kubeconfig=kubeconfig,
-        rollout_deployment=rollout_deployment or None,
-        rollout_timeout=rollout_timeout,
-        health_path=health_path,
+        repo_root=_REPO_ROOT,
     )
-    url = f"http://localhost:{local_port}"
     click.echo(f"Controller healthy on {url} (pid={pf_pid})", err=True)
 
     if path := os.environ.get("GITHUB_ENV"):
         with open(path, "a") as fh:
-            fh.write(f"{url_var}={url}\nLOCAL_PORT={local_port}\nPF_PID={pf_pid}\n")
+            fh.write(f"{url_var}={url}\nPF_PID={pf_pid}\n")
 
 
 if __name__ == "__main__":

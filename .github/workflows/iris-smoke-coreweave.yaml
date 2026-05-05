@@ -111,9 +111,7 @@ jobs:
       - name: Port-forward to iris-ci controller
         run: |
           uv run python scripts/workflows/iris_monitor.py port-forward \
-            --namespace "$IRIS_NAMESPACE" \
-            --service iris-ci-controller-svc \
-            --kubeconfig "$HOME/.kube/coreweave-iris"
+            --iris-config lib/iris/examples/coreweave-ci.yaml
 
       - name: Run integration tests
         env:
@@ -161,11 +159,8 @@ jobs:
         env:
           LOG_DIR: ${{ github.workspace }}/iris-cw-logs
         run: |
-          # iris_monitor.py collect handles controller logs (current+previous),
-          # describe, per-managed-pod logs/describes, and events. The job_id
-          # filter on `kubectl get pods -l iris.job_id=...` will not match here
-          # (no submitted job), so kubernetes-pods.json may be empty — that's
-          # tolerated below via continue-on-error.
+          # No job submitted in this lane, so the iris.job_id selector matches
+          # nothing — continue-on-error tolerates the empty kubernetes-pods.json.
           uv run python scripts/workflows/iris_monitor.py collect \
             --job-id "ci-smoke" \
             --iris-config lib/iris/examples/coreweave-ci.yaml \

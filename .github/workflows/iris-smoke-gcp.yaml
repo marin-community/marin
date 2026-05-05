@@ -175,11 +175,6 @@ jobs:
           LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
           PROJECT: ${{ secrets.GCP_PROJECT_ID }}
         run: |
-          # iris_monitor.py collect SSHes both the controller and every managed
-          # worker (--managed-label), dumping all containers + journalctl on
-          # each VM. When IRIS_CONTROLLER_URL is set we additionally fetch
-          # controller-process.log via the iris CLI's `process logs` RPC; if
-          # the controller never booted we omit it and rely entirely on SSH.
           ARGS=(
             collect
             --job-id "smoke-${LABEL_PREFIX}"

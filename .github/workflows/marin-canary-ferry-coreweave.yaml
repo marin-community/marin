@@ -106,13 +106,6 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: .venv/bin/iris -v --config=${{ env.IRIS_CONFIG }} cluster start --fresh
 
-      - name: Port-forward to iris-ci controller
-        run: |
-          uv run python scripts/workflows/iris_monitor.py port-forward \
-            --namespace "$IRIS_NAMESPACE" \
-            --service iris-ci-controller-svc \
-            --kubeconfig "$HOME/.kube/coreweave-iris"
-
       - name: Submit canary ferry
         id: submit
         shell: bash -l {0}
@@ -249,12 +242,6 @@ jobs:
           path: slack_message.md
           retention-days: 1
           if-no-files-found: ignore
-
-      - name: Stop port-forward
-        if: always()
-        run: |
-          [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true
-          pkill -f "kubectl port-forward.*$IRIS_NAMESPACE" 2>/dev/null || true
 
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. `needs.canary-ferry-cw.result` reflects the main
