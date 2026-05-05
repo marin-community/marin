@@ -56,7 +56,7 @@ def _make_steps(configs: list[tuple[int, int, float, int, int]], tpu_type: str) 
                 optimizer = dataclasses.replace(optimizer, expert_lr=optimizer.expert_lr * lr_mult)
 
             lr_label = f"lr{lr_mult:.1f}x"
-            run_id = f"deep-d{dim}-L{layers}-{lr_label}-{budget:.2e}"
+            run_id = f"deep-d{dim}-L{layers}-{lr_label}-{budget:.2e}-v2"
 
             steps.append(
                 ExecutorStep(
