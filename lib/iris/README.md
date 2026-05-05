@@ -290,7 +290,7 @@ iris --config cluster.yaml job run --no-wait -- python long_job.py
 # Pin a zone when you need to colocate with data or target a specific pool.
 iris --config cluster.yaml job run --zone us-central2-b -- python train.py
 
-# Stream logs for a job (batch-fetches from all tasks in one RPC)
+# Stream logs for a job and child jobs (batch-fetches matching tasks in one RPC)
 iris --config cluster.yaml job logs /my-job
 iris --config cluster.yaml job logs /my-job --follow
 iris --config cluster.yaml job logs /my-job --since-seconds 300

@@ -26,7 +26,7 @@ If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (re
 ```bash
 iris job run -- python train.py         # submit + stream logs
 iris job list --state running           # filter by state
-iris job logs /user/job-name -f         # follow logs
+iris job logs /user/job-name -f         # follow job + child logs
 iris job stop /user/job-name            # kill job + children
 iris job summary /user/job-name         # per-task state, exit, duration, peak memory
 iris job summary /user/job-name --json  # same, machine-readable

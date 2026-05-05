@@ -1202,7 +1202,7 @@ def logs(
     tail: bool,
     level: str | None,
 ) -> None:
-    """Stream task logs for a job using batch log fetching."""
+    """Stream task logs for a job and its descendants using batch log fetching."""
     if since_ms is not None and since_seconds is not None:
         raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
 
