@@ -95,6 +95,8 @@ jobs:
           fi
 
       - name: Publish release and update pyproject
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/rust_package.py --skip-build
 
       - name: Open or update PR
