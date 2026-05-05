@@ -1,9 +1,9 @@
 name: Marin - CoreWeave GPU Canary Ferry
 
 # The canary submits a small training job to the shared `iris-ci` controller
-# and reuses the warm `iris-ci-h100-8x` NodePool. We do *not* provision a
-# separate H100 — CoreWeave's account quota in US-WEST-04A only allows one
-# `gd-8xh100ib-i128` at a time, which the permanent iris-ci nodepool holds.
+# and reuses the warm `iris-ci-h100-8x` NodePool. Scheduled runs use the warm
+# single H100 host; manual multi-host runs may autoscale the same NodePool to a
+# second `gd-8xh100ib-i128` host.
 #
 # `iris cluster start --fresh` rebuilds the controller/worker/task images from
 # the current checkout and rolls the shared controller deployment to pick them
@@ -18,6 +18,11 @@ on:
       target_tokens:
         description: 'Override training token budget'
         type: number
+        required: false
+      multi_host:
+        description: 'Run across two H100 hosts'
+        type: boolean
+        default: false
         required: false
 
 permissions:
@@ -42,6 +47,7 @@ jobs:
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: gpu
       CANARY_BATCH_SIZE: "16"
+      CANARY_MULTI_HOST: ${{ github.event_name == 'workflow_dispatch' && inputs.multi_host && '1' || '' }}
       CANARY_TARGET_TOKENS: "6553600"
       CANARY_MIN_STEPS: "40"
       CANARY_MAX_LOSS: "8.0"
@@ -110,12 +116,14 @@ jobs:
           LOCAL_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()")
           kubectl port-forward -n "$IRIS_NAMESPACE" svc/iris-ci-controller-svc "${LOCAL_PORT}:10000" &
           PF_PID=$!
-          echo "PF_PID=$PF_PID" >> "$GITHUB_ENV"
-          echo "LOCAL_PORT=$LOCAL_PORT" >> "$GITHUB_ENV"
-          echo "IRIS_CONTROLLER_URL=http://localhost:${LOCAL_PORT}" >> "$GITHUB_ENV"
+          {
+            echo "PF_PID=$PF_PID"
+            echo "LOCAL_PORT=$LOCAL_PORT"
+            echo "IRIS_CONTROLLER_URL=http://localhost:${LOCAL_PORT}"
+          } >> "$GITHUB_ENV"
 
           # Konnectivity can take ~20s to become usable after controller restart.
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if ! kill -0 "$PF_PID" 2>/dev/null; then
               kubectl port-forward -n "$IRIS_NAMESPACE" svc/iris-ci-controller-svc "${LOCAL_PORT}:10000" &
               PF_PID=$!
@@ -136,6 +144,7 @@ jobs:
         id: submit
         shell: bash -l {0}
         run: |
+          echo "Multi-host canary: ${CANARY_MULTI_HOST:-0}"
           JOB_ID=$(.venv/bin/iris --controller-url="$IRIS_CONTROLLER_URL" \
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
@@ -143,6 +152,7 @@ jobs:
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
             -e CANARY_BATCH_SIZE "$CANARY_BATCH_SIZE" \
+            -e CANARY_MULTI_HOST "$CANARY_MULTI_HOST" \
             -e CANARY_TARGET_TOKENS "$CANARY_TARGET_TOKENS" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
             -e WANDB_PROJECT "$WANDB_PROJECT" \

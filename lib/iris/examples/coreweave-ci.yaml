@@ -1,5 +1,6 @@
-# Persistent CoreWeave CI cluster. Both scale groups are pinned at min=max=1
-# so nodes stay warm between runs — only controller and worker pods are reset.
+# Persistent CoreWeave CI cluster. The CPU pool and the first H100 node stay
+# warm between runs; the H100 pool may autoscale to a second node for manual
+# multi-host canary runs.
 
 platform:
   label_prefix: iris-ci
@@ -80,7 +81,7 @@ scale_groups:
       attributes:
         pool: h100-8x
     buffer_slices: 1
-    max_slices: 1
+    max_slices: 2
     priority: 100
     slice_template:
       num_vms: 1
