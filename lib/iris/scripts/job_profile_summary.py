@@ -36,7 +36,6 @@ from __future__ import annotations
 import argparse
 import logging
 import re
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -157,8 +156,6 @@ def find_latest_checkpoint(remote_state_dir: str, after_timestamp: int | None = 
         for ts, path in timestamps:
             if ts > after_timestamp:
                 return path + "/"
-        # Fall back to latest if none found after? Or error?
-        # User asked for "the one immediately after", if none exist, we'll error.
         raise RuntimeError(f"No checkpoint found after timestamp {after_timestamp} under {prefix}")
 
     timestamps.sort(reverse=True)
@@ -182,7 +179,7 @@ def decompress_zst(src: Path, dst: Path) -> None:
     dctx = zstandard.ZstdDecompressor()
     with open(src, "rb") as f_in, open(dst, "wb") as f_out:
         dctx.copy_stream(f_in, f_out)
-    src.unlink()
+
 
 # ---------------------------------------------------------------------------
 # SQLite queries
@@ -427,6 +424,7 @@ def render_flame_svg(
 # Local cache lookup
 # ---------------------------------------------------------------------------
 
+
 def list_cached_checkpoints(cache_dir: Path, cluster: str) -> list[tuple[int, Path]]:
     cluster_cache = cache_dir / cluster
     if not cluster_cache.exists():
@@ -440,18 +438,11 @@ def list_cached_checkpoints(cache_dir: Path, cluster: str) -> list[tuple[int, Pa
 
     return checkpoints
 
+
 def find_job_times_in_local_cache(cache_dir: Path, cluster: str, job_id: str) -> tuple[int | None, int | None]:
     """Look for the most recent local checkpoint and fetch job start/end times if available."""
-    cluster_cache = cache_dir / cluster
-    if not cluster_cache.exists():
-        return None, None
-
-    # Checkpoint directories are named by timestamp (epoch_ms)
-    checkpoints = []
     try:
-        for d in cluster_cache.iterdir():
-            if d.is_dir() and d.name.isdigit():
-                checkpoints.append((int(d.name), d))
+        checkpoints = list_cached_checkpoints(cache_dir, cluster)
     except OSError:
         return None, None
 
@@ -490,24 +481,32 @@ def find_job_times_in_local_cache(cache_dir: Path, cluster: str, job_id: str) ->
 
     return None, None
 
-def find_best_checkpoint(cached_checkpoints: list[tuple[int, Path]], end_ms: int) -> str | None:
-    two_hours_ms = 2 * 60 * 60 * 1000
-    eligible = [
-        (ts, path) for ts, path in cached_checkpoints
-        if end_ms <= ts <= end_ms + two_hours_ms
-    ]
+
+def find_best_checkpoint(cached_checkpoints: list[tuple[int, Path]], end_ms: int, max_lag_ms: int) -> Path | None:
+    eligible = [(ts, path) for ts, path in cached_checkpoints if end_ms <= ts <= end_ms + max_lag_ms]
 
     if eligible:
         eligible.sort()
         found_ts, found_path = eligible[0]
-        logger.info("Found snapshot within 2h after job end: %s (at %d ms)", found_path, found_ts)
+        logger.info(
+            "Found snapshot within %.1fh after job end: %s (at %d ms)", max_lag_ms / 3600000, found_path, found_ts
+        )
         return found_path
 
     return None
 
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+
+def download_latest(cluster: str, cache_dir: Path, after_timestamp: int | None = None) -> Path:
+    remote_dir = find_latest_checkpoint(remote_state_dir_for_cluster(cluster), after_timestamp=after_timestamp)
+    epoch_label = remote_dir.rstrip("/").rsplit("/", 1)[-1]
+    local_dir = cache_dir / cluster / epoch_label
+    download_checkpoint(remote_dir, local_dir)
+    return local_dir
 
 
 def main() -> int:
@@ -524,6 +523,11 @@ def main() -> int:
         default=Path.home() / ".cache" / "iris-job-profile",
         help="Local cache directory for downloaded checkpoints",
     )
+    p.add_argument(
+        "--checkpoint-dir",
+        type=Path,
+        help="Use this local checkpoint directory directly (bypasses remote discovery/download)",
+    )
     p.add_argument("--top", type=int, default=20, help="Top-N stacks/leaves/tasks to print (default 20)")
     p.add_argument("--show-stacks", action="store_true", help="Print the top stacks table")
     p.add_argument("--show-tasks", action="store_true", help="Print the top tasks table")
@@ -534,46 +538,56 @@ def main() -> int:
         help="Write a basic flamegraph SVG to this path (default: <cache>/<cluster>/<epoch>/flame.svg)",
     )
     p.add_argument("--refresh", action="store_true", help="Force re-download even if cache is present")
+    p.add_argument(
+        "--max-snapshot-lag",
+        type=float,
+        default=2.0,
+        help="Max hours to look past job end for a snapshot (default 2.0)",
+    )
     args = p.parse_args()
 
     job_id = parse_job_id(args.job)
     logger.info("Job ID: %s", job_id)
 
-    already_downloaded_latest = False
-    def download(after_timestamp = None):
-        nonlocal already_downloaded_latest
+    max_lag_ms = int(args.max_snapshot_lag * 3600 * 1000)
 
-        remote_dir = find_latest_checkpoint(remote_state_dir_for_cluster(args.cluster), after_timestamp=after_timestamp)
-        epoch_label = remote_dir.rstrip("/").rsplit("/", 1)[-1]
-
-        local_dir = args.cache_dir / args.cluster / epoch_label
-        download_checkpoint(remote_dir, local_dir)
-        already_downloaded_latest = True
-
-    cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
-    if not cached_checkpoints:
-        download()
-
-    start_ms, end_ms = find_job_times_in_local_cache(args.cache_dir, args.cluster, job_id)
-    if start_ms is None or end_ms is None:
-        download()
-        start_ms, end_ms = find_job_times_in_local_cache(args.cache_dir, args.cluster, job_id)
-
-    logger.info("Job times: %s - %s", start_ms, end_ms)
-
-    best_checkpoint = None
-    if end_ms:
-        best_checkpoint = find_best_checkpoint(cached_checkpoints, end_ms)
-        if best_checkpoint is None:
-            download(end_ms)
-            cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
-            best_checkpoint = find_best_checkpoint(cached_checkpoints, end_ms)
+    if args.checkpoint_dir:
+        best_checkpoint = args.checkpoint_dir
     else:
-        if not already_downloaded_latest:
-            download()
+        if args.refresh:
+            best_checkpoint = download_latest(args.cluster, args.cache_dir)
+        else:
+            cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
+            if not cached_checkpoints:
+                download_latest(args.cluster, args.cache_dir)
+                cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
 
-        best_checkpoint = sorted(list_cached_checkpoints(args.cache_dir, args.cluster))[-1][1]
+            start_ms, end_ms = find_job_times_in_local_cache(args.cache_dir, args.cluster, job_id)
+            if start_ms is None or end_ms is None:
+                download_latest(args.cluster, args.cache_dir)
+                start_ms, end_ms = find_job_times_in_local_cache(args.cache_dir, args.cluster, job_id)
 
+            logger.info("Job times: %s - %s", start_ms, end_ms)
+
+            best_checkpoint = None
+            if end_ms:
+                best_checkpoint = find_best_checkpoint(cached_checkpoints, end_ms, max_lag_ms)
+                if best_checkpoint is None:
+                    download_latest(args.cluster, args.cache_dir, end_ms)
+                    cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
+                    best_checkpoint = find_best_checkpoint(cached_checkpoints, end_ms, max_lag_ms)
+            else:
+                # Still running? Use latest.
+                if not cached_checkpoints:
+                    download_latest(args.cluster, args.cache_dir)
+                    cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
+
+                if checkpoints := sorted(cached_checkpoints):
+                    best_checkpoint = checkpoints[-1][1]
+
+    if best_checkpoint is None:
+        logger.error("Could not find a suitable checkpoint for job %s", job_id)
+        return 1
 
     logger.info("Using checkpoint: %s", best_checkpoint)
 
