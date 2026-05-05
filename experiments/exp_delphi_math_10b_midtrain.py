@@ -69,6 +69,7 @@ from experiments.midtraining_mixes import (
     FULL_HIGHQUALITY_NEMO_MATH_NAME,
     MIDTRAIN_BUDGET_FRACTION,
     PRETRAIN_33P_MATH_67P_HIGHQUALITY_NEMO_MATH_NAME,
+    PRETRAIN_50P_MATH_50P_HIGHQUALITY_NEMO_MATH_NAME,
     PRETRAIN_67P_MATH_33P_HIGHQUALITY_NEMO_MATH_NAME,
     PRETRAIN_70P_MATH_30P_HIGHQUALITY_NEMO_MATH_NAME,
     full_highquality_nemo_math,
@@ -227,6 +228,7 @@ BASES: dict[str, MidtrainingBaseConfig] = {
         train_batch_size=512,
         default_tpu_type="v5p-256",
         v5p_compute=(
+            V5PComputeConfig("v5p-32"),
             V5PComputeConfig("v5p-64"),
             V5PComputeConfig("v5p-128"),
             V5PComputeConfig("v5p-256"),
@@ -271,7 +273,7 @@ BASES: dict[str, MidtrainingBaseConfig] = {
 # 10B/20B prior sweeps showed monotone lr0.5 < lr0.67 < lr0.83 on eval/loss
 # for both mixes — optimum at or below 0.5. Shift the grid down to bracket
 # the new minimum. See logbook §"2026-05-01 20:30 UTC — new sweep plan".
-LR_FACTORS: tuple[float, ...] = (0.33, 0.5, 0.67)
+LR_FACTORS: tuple[float, ...] = (0.33, 0.5, 0.67, 0.83)
 
 
 # ----------------------------------------------------------------------------
@@ -305,6 +307,7 @@ _MIX_OUTPUT_TAGS = {
     FULL_HIGHQUALITY_NEMO_MATH_NAME: "math",
     PRETRAIN_70P_MATH_30P_HIGHQUALITY_NEMO_MATH_NAME: "p70m30",
     PRETRAIN_67P_MATH_33P_HIGHQUALITY_NEMO_MATH_NAME: "p67m33",
+    PRETRAIN_50P_MATH_50P_HIGHQUALITY_NEMO_MATH_NAME: "p50m50",
     PRETRAIN_33P_MATH_67P_HIGHQUALITY_NEMO_MATH_NAME: "p33m67",
 }
 

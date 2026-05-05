@@ -8053,3 +8053,319 @@ of this file. In particular, grep startup logs for `Using output path` and
 the job recovered. For MirrorFS-specific failures, also grep for
 `TransferBudgetExceeded`, `Could not acquire mirror lock`, and
 `_stage_mirror_to_local`.
+
+## 2026-05-02/03 — autonomous monitor cron `332f56ed`, ticks 1–35 summary [LEGACY DEPRECATED]
+
+> ⚠️ **LEGACY DEPRECATED — this entire section is historical only.** It documents what a previous agent did wrong using the now-disabled `MIDTRAIN_OUTPUT_PATH_OVERRIDE` env var. **Do not treat any command, env var, or "key fix" in this section as guidance.** The canonical recovery contract is at the top of this file (line 3) and in `.agents/ops/2026-05-02-delphi-midtrain-resume-namespace.md`. The legacy env var now hard-fails in `experiments/exp_delphi_math_10b_midtrain.py`.
+
+**Cadence:** every 30 min at :13/:43 UTC. **First fire:** 06:35 UTC May 2. **Last fire & cancellation:** 23:43 UTC May 2 (cron deleted by user after wandb-fragmentation issue surfaced). 35 ticks total. Most ticks (~22 of 35) were no-ops; the rest involved relaunches or success transitions. Full per-tick entries were on the working branch but have been stashed (`stash@{0}: midtrain logbook tick-28-to-35 entries`) — only the rolled-up summary survives here.
+
+### Outcome ledger
+
+- **1e20:** all 6/6 succeeded by tick 15 (13:43 UTC). One slot (`p67m33-lr0.5`) needed a v5p-32 resume after a v5p-64 worker died.
+- **1e21:** 4/6 succeeded by tick 30 (21:13 UTC) — `p67m33-lr0.33` (resume), `p33m67-lr{0.33,0.5,0.67}` (originals). 2 still running at cron cancellation: `p67m33-lr0.5-batch64-resume-151756`, `p67m33-lr0.67-batch64-resume-161841`.
+- **1e22:** 0/6 done at cron cancellation. All 6 actively training; expected first finisher ~06:00 UTC May 3, full sweep ~11:30 UTC May 3 modulo more cascades.
+
+### Cron-driven relaunches
+
+12 relaunches dispatched over the 17-hour cron window:
+
+| Tick | Slot | Reason | New job |
+|---|---|---|---|
+| 2 | `1e21-p67m33-lr0.33` | `failures=1`, JAX cascade | `lr0p33-batch64-resume-072010` (override `ab4e64`) |
+| 5 | `1e22-p67m33-lr{0.33,0.5,0.67}` | 3× JAX cascade after 2h | `resume-084859` (overrides `4e8cc7a7`, `f60cb12a`, `3c17740e`) |
+| 6 | 5× 1e22 (p67m33×2 + p33m67×3) | JAX cascade re-fail / fresh fails | `resume2-091855` |
+| 7 | `1e22-p67m33-lr0.67` (4th attempt) | JAX cascade again | `resume3-094809` |
+| 18 | `1e21-p67m33-lr0.5` + `1e22-p67m33-lr0.33` | 9h7m cascade + 4m35s recover-fail | resumes |
+| 19 | `1e22-p67m33-lr0.5` | 6h11m cascade | `resume3-154733` |
+| 20 | `1e22-p67m33-lr0.5` + `1e21-p67m33-lr0.67` | 26-min cascade + 9.5h cascade | `resume4-161841` (1e22), `lr0p67-resume-161841` (1e21) |
+| 26 | `1e22-p67m33-lr0.5` (5th attempt) | child-recycle didn't recover | `resume5-191734` |
+| 34 | `1e22-p67m33-lr0.67` (5th attempt) | `failures=1, preemptions=2` cascade | `resume4-231948` |
+
+### Failure mode dominance
+
+Every relaunch was the **JAX-coordinator stale-port-8476 cascade** (`failures=1, preemptions=0` or `preemptions={1,2}`). v5p-256 (32-host coscheduling) is the highest-blast-radius case: `1e22-p67m33-lr0.5` cascaded **5 times** and `lr0.67` cascaded **5 times**. Capacity-pending and child-recycle states were never relaunched (per policy), and iris consistently auto-recovered them.
+
+### What broke: the resume-namespace / wandb-id mismatch (discovered post-cancellation)
+
+> **Authoritative version: read the top-of-file warning (line 3), the "Hard resume rule" section (line 71), and `.agents/ops/2026-05-02-delphi-midtrain-resume-namespace.md`.** The bullets below are kept only as historical context for what this agent did wrong; do **not** treat them as a recipe.
+
+The autonomous monitor used the (then-recorded) resume pattern `MIDTRAIN_OUTPUT_PATH_OVERRIDE + WANDB_RUN_ID + WANDB_RESUME=allow` but set those env vars to the **resume's marin-derived config-hash** rather than the **original's actual run hash**. Because `MIDTRAIN_OUTPUT_PATH_OVERRIDE` is itself part of the marin StepSpec, adding it to the config changed the hash, so the resume's auto-derived hash ≠ the original's hash. Consequences:
+
+1. **Wandb fragmentation:** every resume created a new wandb row instead of merging into the original's. User saw 12 rows for the 6 1e22 slots and 5 rows for the 3 1e21 p67m33 slots.
+2. **Lost progress on 1e21-p67m33-lr0.67 only:** override path `99752407` did not match the original `ecbd27` path. Resume loaded a stale temp `step-1013` from an earlier `99752407` chaos attempt instead of the original's `step-2646`. **~1638 steps redone (~2.3 h v5p-64 wasted).** Note: this agent at one point claimed in conversation that the original had reached step 5500-6500 — that was wrong; the postmortem authoritatively places `ecbd27` at `step=2651, run_progress=0.601` at crash. All other resumes either had matching hashes by luck (`1e21-lr0.5` → `fdc4ebf1`) or had no real progress to lose (1e22 originals all died at ~3 min from the JAX cascade with no checkpoints).
+3. **1e22 cascade chain is intact:** every 1e22 resume after the first uses the same hash (`f60cb12a`, `4e8cc7a7`, `3c17740e`), so checkpoints chain forward correctly. Per-cascade waste ≈ 1 checkpoint cadence (~750 steps) until the next save catches up.
+
+### Net wasted compute estimate
+
+- 1e21 lr0.67: ~2.3 h v5p-64 (the only material loss)
+- 1e21 lr0.5: ~0 (lucky hash match)
+- 1e22 cumulative across all cascades: ~5-6 h v5p-256 (mostly the lr0.5 5-cascade chain)
+
+### Fix landed (do not undo)
+
+After this incident, Codex landed the following on `midtrain_data`. **The legacy pattern used above is now disabled in code** — a future agent literally cannot repeat it without an immediate `ValueError`:
+
+- `experiments/exp_delphi_math_10b_midtrain.py`:
+  - `MIDTRAIN_OUTPUT_PATH_OVERRIDE` raises at module import (line 482).
+  - Recovery uses **one** env var, `MIDTRAIN_RESUME_OUTPUT_PATH`, from which the script derives `RUN_ID`, `WANDB_RUN_ID`, and the executor `override_output_path` (line 534).
+  - `MIDTRAIN_EXPECT_RESUME_MIN_STEP` is required for real resumes; `MIDTRAIN_ALLOW_EMPTY_RESUME=1` is the only escape hatch.
+  - Pre-launch checks the path matches the selected (base, lr, mix), and that latest permanent or temp checkpoint exists ≥ floor (line 543, 586).
+- `lib/marin/src/marin/training/training.py:_enforce_run_id` (line 190): generic guard — any executor-backed training where resolved `run_id != basename(output_path)` now hard-fails. This catches the same class of bug on **any** future experiment script.
+- Regression tests: `experiments/test_default_train_init_mode.py:107` and `tests/test_training.py:184`.
+
+**Recovery shape going forward** (also documented at the top of this file and in the ops postmortem):
+
+```bash
+-e MIDTRAIN_RESUME_OUTPUT_PATH gs://marin-<region>/checkpoints/<old-run-id> \
+-e MIDTRAIN_EXPECT_RESUME_MIN_STEP <last-known-good-step>
+```
+
+Do not pass `MIDTRAIN_OUTPUT_PATH_OVERRIDE`, `WANDB_RUN_ID`, or a hand-written `RUN_ID`. The script derives all of them from the one path.
+
+## 2026-05-03 ~17:30 UTC — full sweep status (4 LRs × 3 mixes × 3 scales = 36 points)
+
+**Targeted design matrix:** `LR ∈ {0.33, 0.5, 0.67, 0.83}` × `mix ∈ {p33m67, p50m50, p67m33}` × `scale ∈ {1e20, 1e21, 1e22}` = 36 cells.
+
+Legend: ✅ done · 🟢 running · ⏳ pending · ❌ dead (no in-flight replacement)
+
+### 1e20 (v5p-32, batch / interactive priority) — 10/12 done
+
+| LR ↓ / mix → | p33m67 | p50m50 | p67m33 |
+|---|---|---|---|
+| 0.33 | ✅ orig | ✅ batch32 | ✅ orig |
+| 0.5  | ✅ orig | ✅ batch32 | ✅ orig (+ v5p-32 resume variant) |
+| 0.67 | ✅ orig | ✅ batch32 | ✅ orig |
+| 0.83 | 🟢 batch32 | ✅ batch32 | 🟢 batch32 |
+
+### 1e21 (v5p-64 originals; v5p-128 for new + resumes) — 4/12 done, 3 running, 5 pending
+
+| LR ↓ / mix → | p33m67 | p50m50 | p67m33 |
+|---|---|---|---|
+| 0.33 | ✅ orig (v5p-64) | 🟢 v5p-128 | ✅ resume on v5p-64 |
+| 0.5  | ✅ orig (v5p-64) | 🟢 v5p-128 | ⏳ v5p-128 resume2 from `114e49` ≥3528 |
+| 0.67 | ✅ orig (v5p-64) | 🟢 v5p-128 | ⏳ v5p-128 resume2 from `ecbd27` ≥2646 |
+| 0.83 | ⏳ v5p-128 | ⏳ v5p-128 | ⏳ v5p-128 |
+
+Notes on 1e21 holes (`p67m33-lr0.5` and `p67m33-lr0.67`):
+- Each ran ~9-9.5 h on v5p-64 originally, then JAX-cascade-died at step ≥2646–3541. Multiple v5p-64 resume attempts collided with `/moojink/`'s priority-band-2 batch jobs and got preemption-thrashed (`preemptions=707-708`).
+- Migrated to v5p-128 (empty pool) using the new `MIDTRAIN_RESUME_OUTPUT_PATH` contract. First v5p-128 resume launch failed at parse time due to a Bash IFS=':' delimiter colliding with the `gs://` URI. Resubmitted with `|` delimiter — both pending now.
+- Use the original-namespace path (`114e49` and `ecbd27`) so wandb consolidates with the original failed run.
+
+### 1e22 (v5p-256, batch priority) — 6/12 done, 6 running
+
+| LR ↓ / mix → | p33m67 | p50m50 | p67m33 |
+|---|---|---|---|
+| 0.33 | ✅ resume2 (5 cascades) | 🟢 batch256 | ✅ resume3 |
+| 0.5  | ✅ resume2 | 🟢 batch256 | ✅ resume5 (5 cascades) |
+| 0.67 | ✅ resume2 | 🟢 batch256 | ✅ resume4 (5 cascades) |
+| 0.83 | 🟢 batch256 | 🟢 batch256 | 🟢 batch256 |
+
+### Aggregate
+
+- **Done: 20/36** (10 × 1e20, 4 × 1e21, 6 × 1e22)
+- **Running: 11/36** (2 × 1e20, 3 × 1e21, 6 × 1e22)
+- **Pending: 5/36** (5 × 1e21 on v5p-128, queued behind the 3 running)
+- **Dead: 0** (the original v5p-64 `p67m33-lr0.5/0.67` and the failed v5p-64 resume attempts are succeeded by the v5p-128 resume2 jobs that point at the original namespaces, so wandb will reconcile cleanly)
+
+### Wandb identity invariants
+
+- All 1e22 cells write to a stable namespace pinned by the auto-derived hash on the first launch; subsequent resumes used `MIDTRAIN_OUTPUT_PATH_OVERRIDE` (now disabled) to that hash. wandb shows 2 rows per p67m33 1e22 cell (a fossil at ~3 min and the live run); cosmetic, no compute lost (originals had no checkpoints).
+- 1e21 `p67m33-lr0.5` consolidates to `delphi-1e21-p67m33-9p25b-lr0.5-114e49`. 1e21 `p67m33-lr0.67` consolidates to `delphi-1e21-p67m33-9p25b-lr0.67-ecbd27`. The `fdc4ebf1` and `99752407` rows are stale broken-recovery namespaces; ignore them in analysis.
+
+### ETA picture from 17:30 UTC May 3
+
+- 1e20 last 2 finish in a few hours (lr0.83 jobs are well under way)
+- 1e22 6 in-flight ones each ~10-22h to go from now → last 1e22 cell done by mid-late May 4 UTC
+- 1e21 3 running v5p-128 jobs ~7-9h on v5p-128 (faster than v5p-64); pending 5 start as those finish; last 1e21 cell done by ~12-18h after the running 3 finish
+
+Full sweep complete: **mid-late May 4 UTC** modulo more cascades or preemptions.
+
+## 2026-05-04 ~22:11 UTC — GCP v5p-256/v5p-128/v5p-512 mass eviction (sweep stops here for 1e22)
+
+At ~22:11 UTC GCP appears to have wholesale-reclaimed the large-slice v5p capacity in the iris pool. Within minutes, **0 v5p-256, 0 v5p-128, and 0 v5p-512 healthy hosts** remained. Smaller slices (v5p-32, v5p-16, v5p-8) survived; v5p-8 actually grew (148 → 226). This is GCP-side pool rebalancing, not user contention or iris bug.
+
+Verified by:
+
+```sql
+SELECT wa.str_value as variant, count(DISTINCT w.worker_id) as healthy
+FROM workers w JOIN worker_attributes wa ON w.worker_id=wa.worker_id
+WHERE wa.key='device-variant' AND wa.str_value LIKE 'v5p%' AND w.healthy=1
+GROUP BY wa.str_value
+-- Result: v5p-8 226, v5p-32 32, v5p-16 14, v5p-64 16, v5p-128 0, v5p-256 0, v5p-512 0
+```
+
+`/quevedo/`'s production-priority v5p-256 job submitted ~22:20 UTC is also stuck pending — confirms it's pool-level, not specific to our jobs.
+
+### Effect on the in-flight 1e22 runs
+
+iris bounced a sibling task (probably task 19 of `lr0.33`) due to the host eviction; coscheduling layer marked all 32 tasks of all 3 jobs as `pending` waiting for atomic re-coscheduling — but no v5p-256 hosts exist to coschedule onto. Symptom: parents stuck at `state=running` while every train_lm task sits at `state=pending` with error `"Coscheduled sibling .../task/19 bounced for atomic re-scheduling"`.
+
+The 1e22 base config in `experiments/exp_delphi_math_10b_midtrain.py` only allows v5p-128/256/512 — NONE of which currently exist. So the runs cannot dispatch on any allowed pool. Killing them rather than letting them sit indefinitely.
+
+### 1e22 final cell status
+
+| Cell | Status | Latest checkpoint |
+|---|---|---|
+| `p33m67-lr0.33` | ✅ done | `delphi-1e22-p33m67-32p07b-lr0.33-e9132105/hf/step-7646/` |
+| `p33m67-lr0.5` | ✅ done | `delphi-1e22-p33m67-32p07b-lr0.5-0eeca70d/hf/step-7646/` |
+| `p33m67-lr0.67` | ✅ done | `delphi-1e22-p33m67-32p07b-lr0.67-54770ae7/hf/step-7646/` |
+| `p33m67-lr0.83` | ❌ unfinished — resume hit GCP eviction at step ~7182/7647 (94%) | `delphi-1e22-p33m67-32p07b-lr0.83-78fd44/checkpoints/step-6876/` (perm), `step-7182` (temp) |
+| `p50m50-lr0.33` | ✅ effectively done — HF FINAL `step-7646` saved before stall, killed mid-iris-cleanup | `delphi-1e22-p50m50-32p07b-lr0.33-c43ada/hf/step-7646/` |
+| `p50m50-lr0.5` | ❌ unfinished — killed at ~step-5034 temp / step-4584 perm (~66%) | `delphi-1e22-p50m50-32p07b-lr0.5-ecfa99/checkpoints/step-4584/` (perm), `step-5034` (temp) |
+| `p50m50-lr0.67` | ❌ unfinished — killed at ~step-3649 temp / step-3056 perm (~48%) | `delphi-1e22-p50m50-32p07b-lr0.67-e78260/checkpoints/step-3056/` (perm), `step-3649` (temp) |
+| `p50m50-lr0.83` | ✅ done | `delphi-1e22-p50m50-32p07b-lr0.83-3c9f70/hf/step-7646/` |
+| `p67m33-lr0.33` | ✅ done | `delphi-1e22-p67m33-32p07b-lr0.33-4e8cc7a7/hf/step-7646/` |
+| `p67m33-lr0.5` | ✅ done | `delphi-1e22-p67m33-32p07b-lr0.5-f60cb12a/hf/step-7646/` |
+| `p67m33-lr0.67` | ✅ done | `delphi-1e22-p67m33-32p07b-lr0.67-3c17740e/hf/step-7646/` |
+| `p67m33-lr0.83` | ✅ done | `delphi-1e22-p67m33-32p07b-lr0.83-d35daa/hf/step-7646/` |
+
+**1e22 final tally: 9 of 12 cells with a final HF checkpoint. 3 cells partially trained (no final).**
+
+### Recovery path (when GCP restores v5p-256)
+
+To resume the 3 unfinished cells later, use the standard `MIDTRAIN_RESUME_OUTPUT_PATH` contract pointing at the namespaces above:
+
+```bash
+# p33m67-lr0.83 — resume from step-6876 (perm); temp step-7182 will be picked
+-e MIDTRAIN_RESUME_OUTPUT_PATH "gs://marin-us-east5/checkpoints/delphi-1e22-p33m67-32p07b-lr0.83-78fd44"
+-e MIDTRAIN_EXPECT_RESUME_MIN_STEP "6876"
+
+# p50m50-lr0.5
+-e MIDTRAIN_RESUME_OUTPUT_PATH "gs://marin-us-east5/checkpoints/delphi-1e22-p50m50-32p07b-lr0.5-ecfa99"
+-e MIDTRAIN_EXPECT_RESUME_MIN_STEP "4584"
+
+# p50m50-lr0.67
+-e MIDTRAIN_RESUME_OUTPUT_PATH "gs://marin-us-east5/checkpoints/delphi-1e22-p50m50-32p07b-lr0.67-e78260"
+-e MIDTRAIN_EXPECT_RESUME_MIN_STEP "3056"
+```
+
+### Killed jobs
+
+- `/ahmedah/delphi-1e22-p50m50-lr0p33-batch256-20260503-013817` (final HF saved, killing only loses iris cleanup)
+- `/ahmedah/delphi-1e22-p50m50-lr0p5-batch256-resume-20260503-201536` (~66%, kept ckpt for later resume)
+- `/ahmedah/delphi-1e22-p50m50-lr0p67-batch256-resume-20260504-065803` (~48%, kept ckpt for later resume)
+
+## 2026-05-04 ~23:09 UTC — full sweep ledger (post-GCP-eviction handoff state)
+
+Comprehensive view of every cell across the 4 LRs × 3 mixes × 3 scales = 36-point design matrix. Wandb project: `marin-community/delphi-midtraining`.
+
+### 1e20 — 12/12 ✅ all done (v5p-32 / v5p-64 mix)
+
+Final HF checkpoint at `step-9412` for every cell. Path pattern: `gs://marin-us-east5/checkpoints/delphi-1e20-{mix}-4p94b-lr{lr}-{hash}/hf/step-9412/`.
+
+| Cell | Run-name suffix |
+|---|---|
+| p33m67 lr0.33 | `delphi-1e20-p33m67-4p94b-lr0.33-307237` |
+| p33m67 lr0.5  | `delphi-1e20-p33m67-4p94b-lr0.5-2004f8` |
+| p33m67 lr0.67 | `delphi-1e20-p33m67-4p94b-lr0.67-7c32da` |
+| p33m67 lr0.83 | `delphi-1e20-p33m67-4p94b-lr0.83-2a22e0` |
+| p50m50 lr0.33 | `delphi-1e20-p50m50-4p94b-lr0.33-9a74fa` |
+| p50m50 lr0.5  | `delphi-1e20-p50m50-4p94b-lr0.5-3475fa` |
+| p50m50 lr0.67 | `delphi-1e20-p50m50-4p94b-lr0.67-554fb6` |
+| p50m50 lr0.83 | `delphi-1e20-p50m50-4p94b-lr0.83-95e10d` |
+| p67m33 lr0.33 | `delphi-1e20-p67m33-4p94b-lr0.33-590ea1` |
+| p67m33 lr0.5  | `delphi-1e20-p67m33-4p94b-lr0.5-9e1229` |
+| p67m33 lr0.67 | `delphi-1e20-p67m33-4p94b-lr0.67-64a9c5` |
+| p67m33 lr0.83 | `delphi-1e20-p67m33-4p94b-lr0.83-1965f3` |
+
+### 1e21 — 10/12 done, 2 IN PROGRESS (v5p-64 batch priority)
+
+Final HF checkpoint at `step-4410` for each done cell. Path pattern: `gs://marin-us-east5/checkpoints/delphi-1e21-{mix}-9p25b-lr{lr}-{hash}/hf/step-4410/`.
+
+**Done (10):**
+
+| Cell | Run-name suffix |
+|---|---|
+| p33m67 lr0.33 | `delphi-1e21-p33m67-9p25b-lr0.33-58ebcb` |
+| p33m67 lr0.5  | `delphi-1e21-p33m67-9p25b-lr0.5-efbc63` |
+| p33m67 lr0.67 | `delphi-1e21-p33m67-9p25b-lr0.67-9cf8da` |
+| p50m50 lr0.33 | `delphi-1e21-p50m50-9p25b-lr0.33-bccff4` |
+| p50m50 lr0.5  | `delphi-1e21-p50m50-9p25b-lr0.5-973c46` |
+| p50m50 lr0.67 | `delphi-1e21-p50m50-9p25b-lr0.67-7e82b3` |
+| p50m50 lr0.83 | `delphi-1e21-p50m50-9p25b-lr0.83-f9edd2` |
+| p67m33 lr0.33 | `delphi-1e21-p67m33-9p25b-lr0.33-ab4e64` |
+| p67m33 lr0.5  | `delphi-1e21-p67m33-9p25b-lr0.5-114e49` (resume2 consolidation) |
+| p67m33 lr0.83 | `delphi-1e21-p67m33-9p25b-lr0.83-a1a261` |
+
+**In progress (2)** — submitted to v5p-64 us-east5 batch priority on 2026-05-04 ~23:07-23:09 UTC after the v5p-128 zombie kill:
+
+| Cell | Iris job ID | Status |
+|---|---|---|
+| p67m33 lr0.67 (resume) | `/ahmedah/delphi-1e21-p67m33-lr0p67-batch64-resume4-20260504-230740` | resuming from `delphi-1e21-p67m33-9p25b-lr0.67-ecbd27` step-2646 (~60% preserved); pending v5p-64 dispatch |
+| p33m67 lr0.83 (fresh)   | `/ahmedah/delphi-1e21-p33m67-lr0p83-batch64-fresh-20260504-230900` | fresh start, no checkpoint; pending v5p-64 dispatch |
+
+Both pending behind /moojink/ + /michaelryan/ band-2 jobs on the 16-host v5p-64 us-east5 pool. Children at band 0 (auto-promoted) so should preempt them when iris allocator fires.
+
+### 1e22 — 9/12 effectively done, 3 UNFINISHED (v5p-256 pool wiped at 22:11 UTC)
+
+Final HF checkpoint at `step-7646` for each fully-done cell. Path pattern: `gs://marin-us-east5/checkpoints/delphi-1e22-{mix}-32p07b-lr{lr}-{hash}/hf/step-7646/`.
+
+**Done (9 — all have final HF checkpoint):**
+
+| Cell | Run-name suffix |
+|---|---|
+| p33m67 lr0.33 | `delphi-1e22-p33m67-32p07b-lr0.33-e9132105` |
+| p33m67 lr0.5  | `delphi-1e22-p33m67-32p07b-lr0.5-0eeca70d` |
+| p33m67 lr0.67 | `delphi-1e22-p33m67-32p07b-lr0.67-54770ae7` |
+| p50m50 lr0.33 | `delphi-1e22-p50m50-32p07b-lr0.33-c43ada` (HF FINAL saved before kill) |
+| p50m50 lr0.83 | `delphi-1e22-p50m50-32p07b-lr0.83-3c9f70` |
+| p67m33 lr0.33 | `delphi-1e22-p67m33-32p07b-lr0.33-4e8cc7a7` |
+| p67m33 lr0.5  | `delphi-1e22-p67m33-32p07b-lr0.5-f60cb12a` |
+| p67m33 lr0.67 | `delphi-1e22-p67m33-32p07b-lr0.67-3c17740e` |
+| p67m33 lr0.83 | `delphi-1e22-p67m33-32p07b-lr0.83-d35daa` |
+
+**Unfinished (3 — partial checkpoints preserved, need v5p-256 to resume):**
+
+| Cell | Run-name suffix | Latest perm | Latest temp | % |
+|---|---|---|---|---|
+| p33m67 lr0.83 | `delphi-1e22-p33m67-32p07b-lr0.83-78fd44` | step-6876 | step-7182 | ~94% |
+| p50m50 lr0.5  | `delphi-1e22-p50m50-32p07b-lr0.5-ecfa99` | step-4584 | step-5034 | ~66% |
+| p50m50 lr0.67 | `delphi-1e22-p50m50-32p07b-lr0.67-e78260` | step-3056 | step-3649 | ~48% |
+
+Recovery commands when GCP restores v5p-256/128/512 capacity:
+
+```bash
+# p33m67-lr0.83 resume
+-e MIDTRAIN_RESUME_OUTPUT_PATH "gs://marin-us-east5/checkpoints/delphi-1e22-p33m67-32p07b-lr0.83-78fd44"
+-e MIDTRAIN_EXPECT_RESUME_MIN_STEP "6876"
+
+# p50m50-lr0.5 resume
+-e MIDTRAIN_RESUME_OUTPUT_PATH "gs://marin-us-east5/checkpoints/delphi-1e22-p50m50-32p07b-lr0.5-ecfa99"
+-e MIDTRAIN_EXPECT_RESUME_MIN_STEP "4584"
+
+# p50m50-lr0.67 resume
+-e MIDTRAIN_RESUME_OUTPUT_PATH "gs://marin-us-east5/checkpoints/delphi-1e22-p50m50-32p07b-lr0.67-e78260"
+-e MIDTRAIN_EXPECT_RESUME_MIN_STEP "3056"
+```
+
+### Aggregate scoreboard
+
+| Scale | ✅ Done with final HF | ⏳ In progress | ❌ Unfinished (need capacity) |
+|---|---|---|---|
+| 1e20 | 12 | 0 | 0 |
+| 1e21 | 10 | 2 | 0 |
+| 1e22 | 9 | 0 | 3 |
+| **Total** | **31** | **2** | **3** |
+
+If the 2 in-progress 1e21 jobs both finish, **33/36** cells will have a usable HF checkpoint.
+
+The remaining 3 (all 1e22) are blocked on GCP restoring v5p-256/128/512 to the iris pool. The script's 1e22 base config currently only allows those three TPU types; resuming on v5p-64 would require adding `V5PComputeConfig("v5p-64")` to the 1e22-v5 base in `experiments/exp_delphi_math_10b_midtrain.py` and accepting ~30 hours of training per cell. Documented as recovery option but not yet attempted.
+
+### Killed jobs (terminated to free iris reservations after the GCP eviction)
+
+- `/ahmedah/delphi-1e22-p50m50-lr0p33-batch256-20260503-013817` (had final HF, kill is cosmetic)
+- `/ahmedah/delphi-1e22-p50m50-lr0p5-batch256-resume-20260503-201536`
+- `/ahmedah/delphi-1e22-p50m50-lr0p67-batch256-resume-20260504-065803`
+- `/ahmedah/delphi-1e21-p67m33-lr0p67-batch128-resume3-20260504-170536` (v5p-128 zombie; replaced by `resume4-230740` on v5p-64)
+
+### Wandb identity caveats for downstream analysis
+
+- HF checkpoints' `config.json` says `architectures: ["LlamaForCausalLM"]` due to marin PR #3092 (Qwen3 export bug, still open). Weights are actual Qwen3 (q_norm/k_norm, vocab=128256, no attn bias). For inference, override at load time via `Qwen3ForCausalLM.from_pretrained(...)` directly OR via vLLM's `hf_overrides={"architectures": ["Qwen3ForCausalLM"]}`. See `experiments/evals/exp_eval_delphi_midtrain_math500.py` (on `patch_vllm` branch) for the runtime-override pattern.
+- Tokenizer files in the HF dirs are correct (Llama-3.1).
+- `rope_scaling.original_max_position_embeddings=8192` paired with `max_position_embeddings=4096` in saved configs trips transformers AutoConfig validation. Workaround: edit the LOCAL config.json copy to strip rope_scaling (see `EvalchemyEvaluator._repair_local_config` on `patch_vllm` branch).
+- Run-name suffix hashes (e.g. `f60cb12a`) are marin StepSpec config hashes, NOT wandb auto-IDs. They're preserved as wandb run IDs because the script sets `WANDB_RUN_ID` from the namespace.
+
+### Inference handoff doc
+
+`.agents/handoffs/delphi-midtrain-finished-runs.md` (kept up to date) — has all wandb URLs and HF checkpoint paths in inference-ready form for labmate consumption.

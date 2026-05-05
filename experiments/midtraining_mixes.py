@@ -70,6 +70,7 @@ HIGHQUALITY_NEMO_MATH_KEY: str = "nemotron_cc_math_v1/4plus"
 FULL_HIGHQUALITY_NEMO_MATH_NAME = "full_highquality_nemo_math"
 PRETRAIN_70P_MATH_30P_HIGHQUALITY_NEMO_MATH_NAME = "70p_30m_highquality_nemo_math"
 PRETRAIN_67P_MATH_33P_HIGHQUALITY_NEMO_MATH_NAME = "67p_33m_highquality_nemo_math"
+PRETRAIN_50P_MATH_50P_HIGHQUALITY_NEMO_MATH_NAME = "50p_50m_highquality_nemo_math"
 PRETRAIN_33P_MATH_67P_HIGHQUALITY_NEMO_MATH_NAME = "33p_67m_highquality_nemo_math"
 
 
@@ -387,6 +388,11 @@ MIDTRAIN_SPECS: dict[str, MidtrainMixSpec] = {
         pretrain_share=0.67,
         math_share=0.33,
     ),
+    PRETRAIN_50P_MATH_50P_HIGHQUALITY_NEMO_MATH_NAME: _replay_math_spec(
+        PRETRAIN_50P_MATH_50P_HIGHQUALITY_NEMO_MATH_NAME,
+        pretrain_share=0.50,
+        math_share=0.50,
+    ),
     PRETRAIN_33P_MATH_67P_HIGHQUALITY_NEMO_MATH_NAME: _replay_math_spec(
         PRETRAIN_33P_MATH_67P_HIGHQUALITY_NEMO_MATH_NAME,
         pretrain_share=0.33,
@@ -403,6 +409,7 @@ MIDTRAINING_MIXES: dict[str, LmDataConfig] = {
 full_highquality_nemo_math = MIDTRAINING_MIXES[FULL_HIGHQUALITY_NEMO_MATH_NAME]
 pretrain_70p_math_30p_highquality_nemo_math = MIDTRAINING_MIXES[PRETRAIN_70P_MATH_30P_HIGHQUALITY_NEMO_MATH_NAME]
 pretrain_67p_math_33p_highquality_nemo_math = MIDTRAINING_MIXES[PRETRAIN_67P_MATH_33P_HIGHQUALITY_NEMO_MATH_NAME]
+pretrain_50p_math_50p_highquality_nemo_math = MIDTRAINING_MIXES[PRETRAIN_50P_MATH_50P_HIGHQUALITY_NEMO_MATH_NAME]
 pretrain_33p_math_67p_highquality_nemo_math = MIDTRAINING_MIXES[PRETRAIN_33P_MATH_67P_HIGHQUALITY_NEMO_MATH_NAME]
 
 
