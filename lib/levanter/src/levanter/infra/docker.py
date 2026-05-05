@@ -231,7 +231,7 @@ def make_docker_run_command(image_id, command, *, foreground, env, name="levante
         "/tmp:/tmp",
     ]
 
-    # optionally add multislice env vars (if set by ray runtime env vars)
+    # optionally forward multislice env vars (set by the orchestrator, e.g. Iris/Fray)
     for v in ["MEGASCALE_COORDINATOR_ADDRESS", "MEGASCALE_NUM_SLICES", "MEGASCALE_PORT", "MEGASCALE_SLICE_ID"]:
         v = shlex.quote(str(v))
         docker_command.extend(["-e", v])

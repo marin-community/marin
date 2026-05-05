@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from rigging.timing import Timestamp
+
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.env import write_workdir_files
 from iris.cluster.runtime.profile import (
@@ -50,8 +52,7 @@ from iris.cluster.runtime.types import (
     MountSpec,
 )
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
-from iris.rpc import cluster_pb2
-from rigging.timing import Timestamp
+from iris.rpc import config_pb2, job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -309,7 +310,7 @@ class DockerContainerHandle:
         # which don't reference config fields.
         config = ContainerConfig(
             image="",
-            entrypoint=cluster_pb2.RuntimeEntrypoint(),
+            entrypoint=job_pb2.RuntimeEntrypoint(),
             env={},
         )
         handle = cls(config=config, runtime=runtime, _run_container_id=container_id)
@@ -348,7 +349,8 @@ class DockerContainerHandle:
         setup_script = self._generate_setup_script()
         self._write_setup_script(setup_script)
 
-        # Build containers get max(8 GB, task request) memory
+        # Build containers get max(32 GB, task request) memory — uv sync on a large
+        # workspace OOMed at the old 8 GB ceiling on a host with 1.4 TB free.
         task_memory_bytes = self.config.resources.memory_bytes if self.config.resources else 0
         build_memory_bytes = (
             max(self._BUILD_MEMORY_LIMIT_BYTES, task_memory_bytes)
@@ -478,7 +480,7 @@ exec {quoted_cmd}
     def stats(self) -> ContainerStats:
         """Get resource usage statistics."""
         if not self._run_container_id:
-            return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+            return ContainerStats(memory_mb=0, cpu_millicores=0, process_count=0, available=False)
         return self._docker_stats(self._run_container_id)
 
     def disk_usage_mb(self) -> int:
@@ -490,7 +492,7 @@ exec {quoted_cmd}
                     return int(shutil.disk_usage(path).used / (1024 * 1024))
         return 0
 
-    def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
+    def profile(self, duration_seconds: int, profile_type: "job_pb2.ProfileType") -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
         container_id = self._run_container_id
         if not container_id:
@@ -528,7 +530,7 @@ exec {quoted_cmd}
         self._docker_exec(container_id, ["rm", "-f", *paths], capture_output=True, timeout=10)
 
     def _profile_cpu(
-        self, container_id: str, duration_seconds: int, cpu_config: "cluster_pb2.CpuProfile", profile_id: str
+        self, container_id: str, duration_seconds: int, cpu_config: "job_pb2.CpuProfile", profile_id: str
     ) -> bytes:
         """Profile CPU using py-spy."""
         spec = resolve_cpu_spec(cpu_config, duration_seconds, pid="1")
@@ -552,7 +554,7 @@ exec {quoted_cmd}
             self._docker_rm_files(container_id, [output_path])
 
     def _profile_memory(
-        self, container_id: str, duration_seconds: int, memory_config: "cluster_pb2.MemoryProfile", profile_id: str
+        self, container_id: str, duration_seconds: int, memory_config: "job_pb2.MemoryProfile", profile_id: str
     ) -> bytes:
         """Profile memory using memray."""
         spec = resolve_memory_spec(memory_config, duration_seconds, pid="1")
@@ -602,7 +604,7 @@ exec {quoted_cmd}
     # Docker CLI helpers
     # -------------------------------------------------------------------------
 
-    _BUILD_MEMORY_LIMIT_BYTES = 8 * 1024**3
+    _BUILD_MEMORY_LIMIT_BYTES = 32 * 1024**3
 
     def _docker_create(
         self,
@@ -659,7 +661,9 @@ exec {quoted_cmd}
 
         if not is_tpu_run:
             cmd.extend(["--cap-drop", "ALL"])
-            cmd.extend(["--cap-add", "SYS_PTRACE"])
+        # Always add SYS_PTRACE so py-spy can attach via docker exec regardless of TPU/CPU.
+        # TPU containers use --privileged but docker exec processes don't reliably inherit it.
+        cmd.extend(["--cap-add", "SYS_PTRACE"])
 
         # Device flags (TPU passthrough etc) - only for run container
         if include_devices:
@@ -683,8 +687,13 @@ exec {quoted_cmd}
         # Resource limits (cgroups v2) — always applied
         cpu_millicores = config.get_cpu_millicores()
         if cpu_millicores:
-            cpus = cpu_millicores / 1000
-            cmd.extend(["--cpus", str(cpus)])
+            if self.runtime.capacity_type == config_pb2.CAPACITY_TYPE_ON_DEMAND:
+                # Soft weight: on-demand workers let containers burst onto idle
+                # host CPU; the scheduler still places by cpu_millicores.
+                shares = max(2, int(cpu_millicores * 1024 / 1000))
+                cmd.extend(["--cpu-shares", str(shares)])
+            else:
+                cmd.extend(["--cpus", str(cpu_millicores / 1000)])
         effective_memory_mb = memory_limit_mb or config.get_memory_mb()
         if effective_memory_mb:
             cmd.extend(["--memory", f"{effective_memory_mb}m"])
@@ -793,7 +802,7 @@ exec {quoted_cmd}
         if result.returncode != 0:
             return ContainerStats(
                 memory_mb=0,
-                cpu_percent=0,
+                cpu_millicores=0,
                 process_count=0,
                 available=False,
             )
@@ -805,21 +814,24 @@ exec {quoted_cmd}
             memory_mb = _parse_memory_size(memory_str)
 
             cpu_str = stats.get("CPUPerc", "0%").rstrip("%")
-            cpu_percent = int(float(cpu_str)) if cpu_str else 0
+            # Docker reports CPUPerc with 100% == one fully utilized CPU core, so
+            # converting to millicores is a straight percent * 10. See
+            # https://docs.docker.com/reference/cli/docker/container/stats/
+            cpu_millicores = int(float(cpu_str) * 10) if cpu_str else 0
 
             pids_str = stats.get("PIDs", "0")
             process_count = int(pids_str) if pids_str.isdigit() else 0
 
             return ContainerStats(
                 memory_mb=memory_mb,
-                cpu_percent=cpu_percent,
+                cpu_millicores=cpu_millicores,
                 process_count=process_count,
                 available=True,
             )
         except (json.JSONDecodeError, ValueError, KeyError):
             return ContainerStats(
                 memory_mb=0,
-                cpu_percent=0,
+                cpu_millicores=0,
                 process_count=0,
                 available=False,
             )
@@ -858,8 +870,13 @@ class DockerRuntime:
     Tracks all created containers for cleanup on shutdown.
     """
 
-    def __init__(self, cache_dir: Path) -> None:
+    def __init__(self, cache_dir: Path, capacity_type: int = 0) -> None:
         self._cache_dir = cache_dir
+        # Drives whether per-container CPU is a hard cap (`--cpus`) or a soft
+        # weight (`--cpu-shares`). On-demand workers use soft weights so small
+        # entrypoint/coordinator containers can burst onto otherwise-idle host
+        # CPU; preemptible/reserved keep the hard cap for predictability.
+        self.capacity_type = capacity_type
         self._handles: list[DockerContainerHandle] = []
         self._created_containers: set[str] = set()
         # Serializes `docker pull` per image tag so that concurrent task threads

@@ -7,11 +7,6 @@ Convert Lingoly dataset from zip to Dolma format.
 Processes zip file containing test.jsonl, concatenates preamble/context/questions,
 and chunks into ~7000 character text blocks.
 
-Example Usage:
-uv run zephyr --backend=sync \
-    lib/marin/src/marin/transform/lingoly/to_dolma.py \
-    --input_path gs://path/to/lingoly.zip \
-    --output_path gs://path/to/output/lingoly_preamble_context_questions_joined
 """
 
 import json
@@ -83,7 +78,7 @@ def convert_lingoly_to_dolma(config: ConvertLingolyToDolmaConfig) -> None:
         .write_jsonl(f"{config.output_path}/{{shard:05d}}.jsonl")
     )
     ctx = ZephyrContext(name="lingoly-to-dolma")
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)
 
 
 @draccus.wrap()

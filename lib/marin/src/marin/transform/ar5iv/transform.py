@@ -4,12 +4,6 @@
 """
 Transform ar5iv HTML to markdown in two stages: clean_html and markdownify.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=600 --memory=512MB \
-    lib/marin/src/marin/transform/ar5iv/transform.py \
-    --input_path gs://bucket/ar5iv/ \
-    --output_path gs://bucket/ar5iv-processed/ \
-    --file_size 256
 """
 
 import datetime

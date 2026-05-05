@@ -5,7 +5,7 @@ import dataclasses
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union, cast
+from typing import Any, Literal, Optional, Union, cast
 
 import equinox as eqx
 import haliax as hax
@@ -17,11 +17,12 @@ from haliax.partitioning import named_jit, round_axis_for_partitioning
 import levanter
 import levanter.callbacks
 from levanter import callbacks
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
 from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import (
+    BlockShuffleConfig,
     DpoExample,
     PreferenceChatLmDatasetFormat,
     PreferenceLmDataConfig,
@@ -98,6 +99,25 @@ def _get_training_components(config: PreferenceLmDataConfig) -> dict[str, Any]:
     return {name: comp for name, comp in config.components.items() if name in has_weight}
 
 
+def _shuffle_dpo_dataset(
+    dataset: AsyncDataset[DpoExample],
+    shuffle: bool | BlockShuffleConfig,
+    *,
+    key: jrandom.PRNGKey,
+    perm_type: Literal["feistel", "linear"],
+) -> AsyncDataset[DpoExample]:
+    if isinstance(shuffle, BlockShuffleConfig):
+        return dataset.block_shuffle(
+            io_block_size=shuffle.io_block_size,
+            window_blocks=shuffle.window_blocks,
+            key=key,
+            perm_type=shuffle.perm_type,
+        )
+    if shuffle is True:
+        return dataset.shuffle(key, perm_type=perm_type)
+    return dataset
+
+
 def _build_dpo_dataset(
     config: PreferenceLmDataConfig,
     Pos: Axis,
@@ -127,14 +147,8 @@ def _build_dpo_dataset(
     perm_type = config.permutation_type
     if perm_type == "linear":
         logger.warning("Using linear shuffling, not recommended. Please use Feistel permutation instead.")
-    elif perm_type is None:
-        perm_type = "feistel"
 
-    train_dataset = base_dataset
-    if config.shuffle is True:
-        train_dataset = train_dataset.shuffle(key, perm_type=perm_type)
-    elif isinstance(config.shuffle, int) and config.shuffle > 0:
-        train_dataset = train_dataset.era_shuffle(config.shuffle, key=key, perm_type=perm_type)
+    train_dataset = _shuffle_dpo_dataset(base_dataset, config.shuffle, key=key, perm_type=perm_type)
 
     mix_key, _ = jrandom.split(key)
     mixture = MixtureDataset(
@@ -186,14 +200,8 @@ def _build_validation_split(
     perm_type = config.permutation_type
     if perm_type == "linear":
         logger.warning("Using linear shuffling, not recommended. Please use Feistel permutation instead.")
-    elif perm_type is None:
-        perm_type = "feistel"
 
-    train_dataset = train_base
-    if config.shuffle is True:
-        train_dataset = train_dataset.shuffle(key, perm_type=perm_type)
-    elif isinstance(config.shuffle, int) and config.shuffle > 0:
-        train_dataset = train_dataset.era_shuffle(config.shuffle, key=key, perm_type=perm_type)
+    train_dataset = _shuffle_dpo_dataset(train_base, config.shuffle, key=key, perm_type=perm_type)
 
     mix_key, _ = jrandom.split(key)
     mixture = MixtureDataset(
@@ -379,9 +387,8 @@ def main(config: TrainDpoConfig):
             elif config.initialize_from_checkpoint_path is not None:
                 with use_cpu_device():
                     policy_model = eqx.filter_eval_shape(config.model.build, Vocab, key=init_policy_key)
-                    policy_model = load_checkpoint(
-                        policy_model, config.initialize_from_checkpoint_path, subpath="model"
-                    )
+                    checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
+                    policy_model = load_checkpoint(policy_model, checkpoint_path, subpath="model")
                 policy_model = hax.shard(policy_model, parameter_axis_mapping)
                 policy_model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(policy_model)
             else:
@@ -406,7 +413,8 @@ def main(config: TrainDpoConfig):
         else:
             with use_cpu_device():
                 reference_model = eqx.filter_eval_shape(config.model.build, Vocab, key=model_key)
-                reference_model = load_checkpoint(reference_model, config.reference_model_path, subpath="model")
+                checkpoint_path = latest_checkpoint_path(config.reference_model_path)
+                reference_model = load_checkpoint(reference_model, checkpoint_path, subpath="model")
             reference_model = hax.shard(reference_model, parameter_axis_mapping)
 
         reference_model = cast(LmHeadModel, inference_mode(reference_model, True))

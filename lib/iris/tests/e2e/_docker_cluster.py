@@ -14,19 +14,21 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+
+from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client import IrisClient
+from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.providers.types import find_free_port
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
-from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import cluster_pb2, config_pb2, logging_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
+from iris.rpc import config_pb2, controller_pb2, job_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration
 
@@ -54,7 +56,7 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
 
     sg = config_pb2.ScaleGroupConfig(
         name="local-cpu",
-        min_slices=num_workers,
+        buffer_slices=num_workers,
         max_slices=num_workers,
         num_vms=1,
         resources=config_pb2.ScaleGroupResources(
@@ -205,7 +207,7 @@ class E2ECluster:
         """Wait for all workers to register with the controller."""
         start = time.time()
         while time.time() - start < timeout:
-            request = cluster_pb2.Controller.ListWorkersRequest()
+            request = controller_pb2.Controller.ListWorkersRequest()
             assert self._controller_client is not None
             response = self._controller_client.list_workers(request)
             healthy_workers = [w for w in response.workers if w.healthy]
@@ -272,12 +274,12 @@ class E2ECluster:
 
     def status(self, job_or_id) -> dict:
         job_id = self._to_job_id_str(job_or_id)
-        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
+        request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         assert self._controller_client is not None
         response = self._controller_client.get_job_status(request)
         return {
             "jobId": response.job.job_id,
-            "state": cluster_pb2.JobState.Name(response.job.state),
+            "state": job_pb2.JobState.Name(response.job.state),
             "exitCode": response.job.exit_code,
             "error": response.job.error,
         }
@@ -286,12 +288,12 @@ class E2ECluster:
         """Get status of a specific task within a job."""
         job_id = self._to_job_id_str(job_or_id)
         task_id = JobName.from_wire(job_id).task(task_index).to_wire()
-        request = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_id)
+        request = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id)
         assert self._controller_client is not None
         response = self._controller_client.get_task_status(request)
         return {
             "taskId": response.task.task_id,
-            "state": cluster_pb2.TaskState.Name(response.task.state),
+            "state": job_pb2.TaskState.Name(response.task.state),
             "workerId": response.task.worker_id,
             "workerAddress": response.task.worker_address,
             "exitCode": response.task.exit_code,
@@ -325,7 +327,7 @@ class E2ECluster:
 
     def kill(self, job_or_id) -> None:
         job_id = self._to_job_id_str(job_or_id)
-        request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
+        request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id)
         assert self._controller_client is not None
         self._controller_client.terminate_job(request)
 

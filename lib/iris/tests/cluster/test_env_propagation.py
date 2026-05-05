@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from unittest.mock import patch
 
 import pytest
-
 from iris.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
@@ -135,8 +134,8 @@ def test_child_job_inherits_parent_constraints(capturing_client, parent_context)
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
     parent_constraints = [
-        Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4"),
-        Constraint(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value="true"),
+        Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4"),
+        Constraint.create(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value="true"),
     ]
 
     with (
@@ -157,8 +156,8 @@ def test_child_explicit_constraints_override_parent(capturing_client, parent_con
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
-    parent_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
-    child_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
+    parent_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
+    child_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
 
     with (
         iris_ctx_scope(parent_context),
@@ -201,7 +200,7 @@ def test_child_explicit_region_not_overridden_by_worker_region(capturing_client,
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
-    child_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
+    child_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
 
     with (
         iris_ctx_scope(parent_context),
@@ -226,7 +225,7 @@ def test_parent_region_constraint_not_overridden_by_worker_region(capturing_clie
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
-    parent_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
+    parent_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
 
     with (
         iris_ctx_scope(parent_context),

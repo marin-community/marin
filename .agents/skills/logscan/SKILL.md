@@ -13,7 +13,7 @@ be used independently or piped together.
 
 - Log files too large to read in context (>1000 lines)
 - Searching for errors, anomalies, or patterns in job/worker/controller logs
-- Triaging failures from Iris, Ray, Zephyr, or training jobs
+- Triaging failures from Iris, Zephyr, or training jobs
 - Any time you need to understand what happened in a big log file
 
 ## Prerequisites

@@ -8,15 +8,14 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
-import haliax as hax
 from levanter.layers.attention import AttentionMask
+from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmHeadModel
 from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
-from levanter.metrics import Metric, ReductionType
-
 from marin.rl.types import Rollout, TrainingBatch
 
 # TODO(power) - these should be refactored to accept the precomputed logits instead
@@ -34,7 +33,11 @@ class RLLossModule(Protocol):
         """Compute advantages for a group of rollouts."""
         ...
 
-    def create_loss_fn(self, reference_model: eqx.Module, train_model: eqx.Module) -> Callable:
+    def needs_reference_model(self) -> bool:
+        """Return whether this loss needs a separately retained reference model."""
+        ...
+
+    def create_loss_fn(self, reference_model: eqx.Module | None, train_model: eqx.Module) -> Callable:
         """Create the loss function for training."""
         ...
 
@@ -263,7 +266,7 @@ def importance_sampling_ratio(
 
 def rloo_loss_with_importance_sampling(
     model: LmHeadModel,
-    reference_model: LmHeadModel,
+    reference_model: LmHeadModel | None,
     batch: TrainingBatch,
     *,
     key: jax.Array | None,
@@ -350,6 +353,8 @@ def rloo_loss_with_importance_sampling(
     # KL regularization
 
     if kl_coef > 0:
+        if reference_model is None:
+            raise ValueError("reference_model is required when kl_coef > 0")
         reference_logprobs = compute_logprobs_fn(reference_model, batch, key)
         reference_logprobs = reference_logprobs * loss_masks_array
         # log_ratio = (current_logprobs - reference_logprobs_array) * loss_masks_array
@@ -432,8 +437,14 @@ class RLOOLoss(RLLossModule):
         """Compute advantages for a group of rollouts."""
         return compute_rloo_advantages(rollout_group)
 
-    def create_loss_fn(self, reference_model: eqx.Module, train_model: eqx.Module) -> Callable:
+    def needs_reference_model(self) -> bool:
+        """Return whether KL regularization requires a reference model."""
+        return self.kl_coef > 0
+
+    def create_loss_fn(self, reference_model: eqx.Module | None, train_model: eqx.Module) -> Callable:
         """Create the loss function for training."""
+        if self.needs_reference_model() and reference_model is None:
+            raise ValueError("reference_model is required when kl_coef > 0")
 
         def loss_fn(model, batch, key):
             if self.vocab_tile_size is not None:

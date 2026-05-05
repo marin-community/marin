@@ -23,7 +23,7 @@ import os
 
 from google.protobuf import json_format
 
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -86,13 +86,13 @@ class TaskResources:
 
 
 @functools.cache
-def _read_iris_resource_proto() -> cluster_pb2.ResourceSpecProto | None:
+def _read_iris_resource_proto() -> job_pb2.ResourceSpecProto | None:
     """Parse ``IRIS_TASK_RESOURCES`` into a ``ResourceSpecProto``, or None."""
     raw = os.environ.get(_IRIS_TASK_RESOURCES_ENV)
     if not raw:
         return None
     try:
-        proto = cluster_pb2.ResourceSpecProto()
+        proto = job_pb2.ResourceSpecProto()
         json_format.Parse(raw, proto)
         return proto
     except json_format.ParseError:
@@ -125,7 +125,7 @@ def _read_proc_meminfo_total() -> int | None:
     return None
 
 
-def _resolve_memory(proto: cluster_pb2.ResourceSpecProto | None) -> int:
+def _resolve_memory(proto: job_pb2.ResourceSpecProto | None) -> int:
     """Return memory limit in bytes using the escalation chain."""
     if proto is not None and proto.memory_bytes:
         return proto.memory_bytes
@@ -148,7 +148,7 @@ def _resolve_memory(proto: cluster_pb2.ResourceSpecProto | None) -> int:
     return 0
 
 
-def _resolve_cpu(proto: cluster_pb2.ResourceSpecProto | None) -> float:
+def _resolve_cpu(proto: job_pb2.ResourceSpecProto | None) -> float:
     """Return CPU limit in cores using the escalation chain."""
     if proto is not None and proto.cpu_millicores:
         return proto.cpu_millicores / 1000

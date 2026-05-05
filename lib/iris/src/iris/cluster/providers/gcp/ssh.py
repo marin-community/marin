@@ -35,7 +35,7 @@ class OsLoginKeyProvisioner:
     when expired.
     """
 
-    _TTL = 86400  # 1 day
+    _TTL = 3600  # 1 hour
     _REFRESH_MARGIN = 300  # re-register 5 min before expiry
 
     def __init__(self) -> None:
@@ -59,11 +59,12 @@ class OsLoginKeyProvisioner:
         os.makedirs(os.path.dirname(key_path), exist_ok=True)
         logger.info("Generating SSH keypair at %s", key_path)
         subprocess.run(
-            ["ssh-keygen", "-t", "rsa", "-b", "4096", "-f", key_path, "-N", "", "-q"],
+            ["ssh-keygen", "-t", "ed25519", "-f", key_path, "-N", "", "-q"],
             check=True,
         )
 
     def _register_os_login(self, pub_key_path: str, impersonate_sa: str | None) -> None:
+        self._purge_stale_keys(impersonate_sa)
         cmd = [
             "gcloud",
             "compute",
@@ -80,6 +81,55 @@ class OsLoginKeyProvisioner:
         if result.returncode != 0:
             raise RuntimeError(f"Failed to register SSH key with OS Login: {result.stderr.strip()}")
         self._registration_expiry = time.monotonic() + self._TTL - self._REFRESH_MARGIN
+
+    def _purge_stale_keys(self, impersonate_sa: str | None) -> None:
+        """Remove expired and no-expiration SSH keys from the OS Login profile.
+
+        The profile has a 32 KiB limit. Old keys registered without --ttl have
+        expirationTimeUsec=0 and accumulate forever, so we remove those too.
+        Keys with a future expiration are left alone.
+        """
+        list_cmd = [
+            "gcloud",
+            "compute",
+            "os-login",
+            "ssh-keys",
+            "list",
+            "--format=value(fingerprint,expirationTimeUsec)",
+        ]
+        if impersonate_sa:
+            list_cmd.append(f"--impersonate-service-account={impersonate_sa}")
+        result = subprocess.run(list_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.warning("Failed to list OS Login keys for purge: %s", result.stderr.strip())
+            return
+
+        now_us = int(time.time() * 1e6)
+        removed = 0
+        for line in (result.stdout or "").splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            fingerprint = parts[0]
+            expiry_us = 0
+            if len(parts) >= 2:
+                try:
+                    expiry_us = int(parts[1])
+                except ValueError:
+                    pass
+
+            # Remove keys that are expired OR have no expiration (legacy keys
+            # registered without --ttl). Keys with a future expiry are kept.
+            if expiry_us > now_us:
+                continue
+
+            rm_cmd = ["gcloud", "compute", "os-login", "ssh-keys", "remove", f"--key={fingerprint}"]
+            if impersonate_sa:
+                rm_cmd.append(f"--impersonate-service-account={impersonate_sa}")
+            subprocess.run(rm_cmd, capture_output=True, text=True)
+            removed += 1
+        if removed:
+            logger.info("Purged %d stale OS Login SSH keys", removed)
 
 
 _os_login_key_provisioner = OsLoginKeyProvisioner()

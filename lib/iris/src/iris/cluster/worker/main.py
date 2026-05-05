@@ -12,12 +12,12 @@ from pathlib import Path
 
 import click
 from google.protobuf.json_format import ParseDict
+from rigging.log_setup import configure_logging
 
 from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.worker.env_probe import detect_gcp_zone
 from iris.cluster.worker.worker import Worker, worker_config_from_proto
-from rigging.log_setup import configure_logging
 from iris.rpc import config_pb2
 
 
@@ -67,7 +67,7 @@ def serve(worker_config: str):
 
     config = worker_config_from_proto(wc_proto, resolve_image=resolve_image)
 
-    container_runtime = DockerRuntime(cache_dir=config.cache_dir)
+    container_runtime = DockerRuntime(cache_dir=config.cache_dir, capacity_type=config.capacity_type)
 
     worker = Worker(config, container_runtime=container_runtime)
 

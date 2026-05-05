@@ -37,13 +37,15 @@ Local executor run:
 uv run python experiments/grug/base/launch.py
 ```
 
-Ray cluster run:
+Iris cluster run (from a dev box, on `marin` prod cluster):
 
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py \
-  --env_vars WANDB_API_KEY=${WANDB_API_KEY} \
-  -- python experiments/grug/base/launch.py
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.grug.base.launch
 ```
+
+The entrypoint job is CPU-only; `executor_main` inside it submits TPU sub-tasks via Fray. See [`lib/iris/OPS.md`](../../lib/iris/OPS.md) for flag reference and troubleshooting.
 
 ## Visual diff for template variants
 
@@ -163,5 +165,4 @@ enforces these minimum interfaces:
 - Executor mechanics: [`/docs/explanations/executor.md`](../../docs/explanations/executor.md)
 - Executor tutorial: [`/docs/tutorials/executor-101.md`](../../docs/tutorials/executor-101.md)
 - TPU debug workflow: [`.agents/skills/dev-tpu/`](../../.agents/skills/dev-tpu/SKILL.md)
-- Legacy Ray TPU debug workflow: [`.agents/skills/dev-tpu-ray/`](../../.agents/skills/dev-tpu-ray/SKILL.md)
-- Cluster launch details: [`/docs/tutorials/tpu-cluster-setup.md`](../../docs/tutorials/tpu-cluster-setup.md)
+- Cluster launch details: [`lib/iris/OPS.md`](../../lib/iris/OPS.md), [`.agents/skills/ferries/SKILL.md`](../../.agents/skills/ferries/SKILL.md)

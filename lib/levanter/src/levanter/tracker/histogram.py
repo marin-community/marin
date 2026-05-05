@@ -107,13 +107,6 @@ def _single_shard_histogram(a: NamedArray, bin_edges, reduce_mesh):
     bin_idx = ((a_exp >= left_edges) & (a_exp < right_edges)).astype(dtype)
     counts = bin_idx.sum(axis=1, dtype=dtype)
 
-    # bin_idx = jnp.searchsorted(bin_edges, a, side='right', method='compare_all')
-    # bin_idx = jnp.where(a == bin_edges[-1], len(bin_edges) - 1, bin_idx)
-    # counts = jnp.zeros(len(bin_edges), a.dtype).at[bin_idx].add(1.0)[1:]
-
-    # pallas histogram
-    # counts = histogram_large_a(a, bin_edges)
-
     if len(reduce_mesh):
         counts = jax.lax.psum(counts, axis_name=reduce_mesh)
     return counts
@@ -123,11 +116,13 @@ def _shardmap_histogram(a: NamedArray, bins):
     spec = hax.partitioning.pspec_for_axis(a.axes)
     flattened_spec = _flattened_spec(spec)
 
-    def _wrapped_hist(arr):
-        return _single_shard_histogram(arr, bin_edges=bins, reduce_mesh=flattened_spec)
+    def _wrapped_hist(arr, bin_edges):
+        return _single_shard_histogram(arr, bin_edges=bin_edges, reduce_mesh=flattened_spec)
 
-    shard_h = shard_map(_wrapped_hist)
-    res = shard_h(a)
+    shard_h = shard_map(
+        _wrapped_hist, in_specs=(spec, jax.sharding.PartitionSpec()), out_specs=jax.sharding.PartitionSpec()
+    )
+    res = shard_h(a, bins)
 
     # the filter misses the last bin, so we need to add it
     if res.size >= 1:

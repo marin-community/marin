@@ -4,15 +4,17 @@ import { computed } from 'vue'
 const props = withDefaults(defineProps<{
   data: number[]
   color?: string
-  width?: number
   height?: number
   fillColor?: string
 }>(), {
   color: 'var(--color-accent, #2563eb)',
-  width: 64,
   height: 20,
 })
 
+// Internal viewBox width. The SVG renders at 100% of its container with
+// preserveAspectRatio="none", so this only sets coordinate density for
+// stroke positioning and does not affect on-screen width.
+const VIEWBOX_W = 100
 const PAD = 1
 
 /**
@@ -26,7 +28,7 @@ const points = computed(() => {
   const data = props.data.length === 1 ? [props.data[0], props.data[0]] : props.data
   const max = Math.max(...data)
 
-  const innerW = props.width - 2 * PAD
+  const innerW = VIEWBOX_W - 2 * PAD
   const innerH = props.height - 2 * PAD
 
   return data.map((v, i) => {
@@ -41,7 +43,7 @@ const points = computed(() => {
 /** Area fill polygon: the line points plus closing along the bottom edge. */
 const areaPoints = computed(() => {
   if (!points.value) return ''
-  const innerW = props.width - 2 * PAD
+  const innerW = VIEWBOX_W - 2 * PAD
   const innerH = props.height - 2 * PAD
   const bottomRight = `${(PAD + innerW).toFixed(1)},${(PAD + innerH).toFixed(1)}`
   const bottomLeft = `${PAD.toFixed(1)},${(PAD + innerH).toFixed(1)}`
@@ -55,10 +57,11 @@ const hasData = computed(() => props.data && props.data.length >= 1)
   <svg
     v-if="hasData"
     class="sparkline"
-    :width="width"
+    width="100%"
     :height="height"
-    :viewBox="`0 0 ${width} ${height}`"
+    :viewBox="`0 0 ${VIEWBOX_W} ${height}`"
     preserveAspectRatio="none"
+    :style="{ display: 'block' }"
   >
     <polygon
       v-if="fillColor"

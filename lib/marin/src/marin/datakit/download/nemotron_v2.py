@@ -11,8 +11,12 @@ All use parquet format with a "text" field.
 """
 
 from dataclasses import dataclass, field
+from functools import cache
+
+from fray import ResourceConfig
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 
@@ -24,6 +28,10 @@ class NemotronV2Dataset:
     revision: str
     subsets: dict[str, str] = field(default_factory=dict)
     """Maps subset_name -> glob pattern for parquet files within the download."""
+    subset_text_fields: dict[str, str] = field(default_factory=dict)
+    """Per-subset overrides for the text column. Subsets not listed use ``"text"``."""
+    subset_normalize_worker_resources: dict[str, ResourceConfig] = field(default_factory=dict)
+    """Optional custom per-subset overrides for normalize worker resources"""
     override_output_path: str | None = None
     """Allow to point at existing download output to avoid re-downloading"""
 
@@ -88,11 +96,19 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
         revision="7b1a453",
         subsets={
             "code_metadata": "Nemotron-Code-Metadata/**/*.parquet",
-            "synthetic_question_answering": "Synthetic-Question-Answering/**/*.parquet",
-            "synthetic_student_teacher": "Synthetic-Student-Teacher/**/*.parquet",
-            "synthetic_code_review": "Synthetic-Code-Review/**/*.parquet",
-            "synthetic_rewriting": "Synthetic-Rewriting/**/*.parquet",
-            "synthetic_transpilation": "Synthetic-Transpilation/**/*.parquet",
+            "synthetic_question_answering": "Synthetic-Code/synthetic-question-answering/**/*.parquet",
+            "synthetic_student_teacher": "Synthetic-Code/synthetic-student-teacher/**/*.parquet",
+            "synthetic_code_review": "Synthetic-Code/synthetic-code-review/**/*.parquet",
+            "synthetic_rewriting": "Synthetic-Code/synthetic-rewriting/**/*.parquet",
+            "synthetic_transpilation": "Synthetic-Code/synthetic-transpilation/**/*.parquet",
+        },
+        # Synthetic-Code/* parquet files store the document under `content`, not `text`.
+        subset_text_fields={
+            "synthetic_question_answering": "content",
+            "synthetic_student_teacher": "content",
+            "synthetic_code_review": "content",
+            "synthetic_rewriting": "content",
+            "synthetic_transpilation": "content",
         },
         override_output_path="raw/nemotron_pretraining_code_v2-d15a24",
     ),
@@ -117,13 +133,39 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "sft_general": "Nemotron-SFT-General/**/*.parquet",
             "sft_math": "Nemotron-SFT-MATH/**/*.parquet",
         },
+        # SFT-General and SFT-MATH have skewed shards and unrealistic row group sizes, e.g.:
+        # "NumRowGroups": 3", "RowGroups": [{ "NumRows": 262144, "TotalByteSize": 4715315268, ...
+        # Instead of fighting it, let's just normalize it to something reasonable and move
+        # forward.
+        subset_normalize_worker_resources={
+            "sft_general": ResourceConfig(cpu=2, ram="64g", disk="10g"),
+            "sft_math": ResourceConfig(cpu=2, ram="64g", disk="10g"),
+        },
         override_output_path="raw/nemotron_pretraining_sft_v1-10f77e",
+    ),
+    "nemotron_pretraining_specialized_v1_1": NemotronV2Dataset(
+        hf_dataset_id="nvidia/Nemotron-Pretraining-Specialized-v1.1",
+        revision="13fa979",
+        subsets={
+            "code_concepts": "Nemotron-Pretraining-Code-Concepts/**/*.parquet",
+            "economics": "Nemotron-Pretraining-Economics/**/*.parquet",
+            "formal_logic": "Nemotron-Pretraining-Formal-Logic/**/*.parquet",
+            "multiple_choice": "Nemotron-Pretraining-Multiple-Choice/**/*.parquet",
+            "unconditional_algorithmic": "Nemotron-Pretraining-Unconditional-Algorithmic/**/*.parquet",
+        },
+        override_output_path="raw/nemotron_pretraining_specialized_v1_1-b12f71",
     ),
 }
 
 
+@cache
 def download_nemotron_v2_step(family: str) -> StepSpec:
-    """Create a download StepSpec for a Nemotron v2 dataset family."""
+    """Create a download StepSpec for a Nemotron v2 dataset family.
+
+    Cached because the registry flattens each family to per-subset rows; all
+    subsets of a family must see the SAME download StepSpec object so the
+    ferry dedupes it once across the DAG.
+    """
     info = NEMOTRON_V2_DATASETS[family]
     return download_hf_step(
         f"raw/{family}",
@@ -131,3 +173,41 @@ def download_nemotron_v2_step(family: str) -> StepSpec:
         revision=info.revision,
         override_output_path=info.override_output_path,
     )
+
+
+def normalize_nemotron_v2_step(download: StepSpec, *, family: str, subset: str) -> StepSpec:
+    """Normalize one subset of a Nemotron v2 family.
+
+    Each subset gets its own normalize step because normalize now processes a
+    single directory. The subset's glob pattern (e.g. ``Diverse-QA/**/*.parquet``)
+    is used to derive the input subdirectory under the family download.
+    """
+    info = NEMOTRON_V2_DATASETS[family]
+    glob_pattern = info.subsets[subset]
+    # Extract the directory prefix from the glob (e.g. "Diverse-QA/**/*.parquet" → "Diverse-QA")
+    subset_dir = glob_pattern.split("/**")[0]
+    return normalize_step(
+        name=f"normalized/{family}/{subset}",
+        download=download,
+        text_field=info.subset_text_fields.get(subset, "text"),
+        id_field="id",
+        file_extensions=(".parquet",),
+        relative_input_path=subset_dir,
+        worker_resources=info.subset_normalize_worker_resources.get(subset),
+    )
+
+
+def nemotron_v2_normalize_steps(family: str) -> dict[str, tuple[StepSpec, ...]]:
+    """Full ``(download, normalize)`` chain per subset of a Nemotron v2 family.
+
+    One download step is shared across every subset; each subset gets its own
+    normalize step parameterized by the subset glob's directory prefix.
+    Returns ``{marin_name: (download, normalize)}`` where marin_name is
+    ``f"{family}/{subset}"`` — matching the ``DatakitSource.name`` convention.
+    """
+    info = NEMOTRON_V2_DATASETS[family]
+    download = download_nemotron_v2_step(family)
+    return {
+        f"{family}/{subset}": (download, normalize_nemotron_v2_step(download, family=family, subset=subset))
+        for subset in info.subsets
+    }

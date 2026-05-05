@@ -8,17 +8,62 @@ Defines the ``iris`` Click group and registers all subcommands.
 
 import logging as _logging_module
 import sys
+from pathlib import Path
 
 import click
+from rigging.config_discovery import resolve_cluster_config
+from rigging.log_setup import configure_logging
 
 from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
-from rigging.log_setup import configure_logging
-from iris.rpc import cluster_pb2 as _cluster_pb2, config_pb2
+from iris.rpc import config_pb2, job_pb2
+from iris.rpc import controller_pb2 as _controller_pb2
 from iris.rpc.auth import AuthTokenInjector, GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
 logger = _logging_module.getLogger(__name__)
+
+
+def _bundled_iris_examples_dir() -> str | None:
+    """Return the iris package's bundled examples/ dir when it ships on disk.
+
+    Probes two layouts because the examples directory can physically live in
+    two places depending on how iris was installed:
+
+    1. Wheel installs (site-packages): hatchling force-include places the
+       yamls at ``iris/examples/`` inside the package. Resolve that via
+       ``Path(__file__).parent.parent / "examples"``.
+    2. Editable workspace installs: the yamls stay at their source location
+       ``lib/iris/examples/`` — reachable via ``parents[3] / "examples"`` from
+       ``lib/iris/src/iris/cli/main.py``.
+
+    Returns the first directory that exists, or ``None`` for wheel installs
+    that don't ship examples at all.
+    """
+    here = Path(__file__).resolve()
+    # Wheel install: examples is a sibling of cli/ inside the iris package.
+    wheel_path = here.parent.parent / "examples"
+    if wheel_path.is_dir():
+        return str(wheel_path)
+    # Editable install: examples lives at lib/iris/examples/ (parents[3]).
+    editable_path = here.parents[3] / "examples"
+    if editable_path.is_dir():
+        return str(editable_path)
+    return None
+
+
+# Directories searched (in priority order) to resolve ``--cluster=<name>`` to
+# a YAML config file. Relative paths are resolved against the marin project
+# root by ``rigging.config_discovery``; absolute paths are used as-is.
+IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
+    p
+    for p in (
+        "~/.config/marin/clusters",  # user override — checked first
+        "lib/iris/examples",  # in-tree marin checkout
+        _bundled_iris_examples_dir(),  # editable install from sibling workspace
+    )
+    if p is not None
+)
 
 
 def resolve_cluster_name(
@@ -131,7 +176,9 @@ def require_controller_url(ctx: click.Context) -> str:
             f"Could not connect to controller (config: {config_file}). "
             "Check that the controller is running and reachable."
         )
-    raise click.ClickException("Either --controller-url or --config is required")
+    raise click.ClickException(
+        "No controller specified. Pass --cluster=<name> (see `iris cluster list`), --controller-url, or --config."
+    )
 
 
 @click.group()
@@ -139,7 +186,12 @@ def require_controller_url(ctx: click.Context) -> str:
 @click.option("--traceback", "show_traceback", is_flag=True, help="Show full stack traces on errors")
 @click.option("--controller-url", help="Controller URL (e.g., http://localhost:10000)")
 @click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config file")
-@click.option("--cluster", "cluster_name", default=None, help="Cluster name for token lookup")
+@click.option(
+    "--cluster",
+    "cluster_name",
+    default=None,
+    help="Cluster name (resolves config automatically) or used for token lookup",
+)
 @click.pass_context
 def iris(
     ctx,
@@ -159,6 +211,17 @@ def iris(
         configure_logging(level=_logging_module.DEBUG)
     else:
         configure_logging(level=_logging_module.INFO)
+
+    # Resolve cluster name to config file if no explicit config or URL given
+    if cluster_name and not config_file and not controller_url:
+        try:
+            resolved = resolve_cluster_config(cluster_name, dirs=IRIS_CLUSTER_CONFIG_DIRS)
+            logger.info("Resolved cluster %r to config: %s", cluster_name, resolved)
+            config_file = str(resolved)
+        except FileNotFoundError:
+            raise click.UsageError(
+                f"Unknown cluster {cluster_name!r}. Run `iris cluster list` to see available clusters."
+            ) from None
 
     # Validate mutually exclusive options
     if controller_url and config_file:
@@ -209,14 +272,12 @@ def login(ctx):
     controller_url = require_controller_url(ctx)
     config = ctx.obj.get("config")
 
-    from iris.rpc import cluster_pb2
-
     if config and config.HasField("auth"):
         provider = config.auth.WhichOneof("provider")
     else:
         with rpc_client(controller_url) as client:
             try:
-                auth_info = client.get_auth_info(cluster_pb2.GetAuthInfoRequest())
+                auth_info = client.get_auth_info(job_pb2.GetAuthInfoRequest())
             except Exception as e:
                 raise click.ClickException(f"Failed to discover auth method: {e}") from e
         provider = auth_info.provider or None
@@ -242,7 +303,7 @@ def login(ctx):
     # All providers converge: exchange identity_token for JWT via Login RPC
     with rpc_client(controller_url) as client:
         try:
-            response = client.login(cluster_pb2.LoginRequest(identity_token=identity_token))
+            response = client.login(job_pb2.LoginRequest(identity_token=identity_token))
         except Exception as e:
             raise click.ClickException(f"Login failed: {e}") from e
 
@@ -272,10 +333,8 @@ def key_create(ctx, name: str, user_id: str, ttl_ms: int):
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider")
 
-    from iris.rpc import cluster_pb2
-
     with rpc_client(controller_url, token_provider) as client:
-        response = client.create_api_key(cluster_pb2.CreateApiKeyRequest(user_id=user_id, name=name, ttl_ms=ttl_ms))
+        response = client.create_api_key(job_pb2.CreateApiKeyRequest(user_id=user_id, name=name, ttl_ms=ttl_ms))
 
     click.echo(f"Key ID:  {response.key_id}")
     click.echo(f"Token:   {response.token}")
@@ -291,10 +350,8 @@ def key_list(ctx, user_id: str):
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider")
 
-    from iris.rpc import cluster_pb2
-
     with rpc_client(controller_url, token_provider) as client:
-        response = client.list_api_keys(cluster_pb2.ListApiKeysRequest(user_id=user_id))
+        response = client.list_api_keys(job_pb2.ListApiKeysRequest(user_id=user_id))
 
     if not response.keys:
         click.echo("No API keys found.")
@@ -313,10 +370,8 @@ def key_revoke(ctx, key_id: str):
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider")
 
-    from iris.rpc import cluster_pb2
-
     with rpc_client(controller_url, token_provider) as client:
-        client.revoke_api_key(cluster_pb2.RevokeApiKeyRequest(key_id=key_id))
+        client.revoke_api_key(job_pb2.RevokeApiKeyRequest(key_id=key_id))
 
     click.echo(f"Revoked key: {key_id}")
 
@@ -357,7 +412,7 @@ def budget_set(ctx, user_id: str, budget_limit: int, max_band: str):
 
     with rpc_client(controller_url, token_provider) as client:
         client.set_user_budget(
-            _cluster_pb2.Controller.SetUserBudgetRequest(
+            _controller_pb2.Controller.SetUserBudgetRequest(
                 user_id=user_id,
                 budget_limit=budget_limit,
                 max_band=priority_band_value(max_band),
@@ -376,7 +431,7 @@ def budget_get(ctx, user_id: str):
     token_provider = ctx.obj.get("token_provider")
 
     with rpc_client(controller_url, token_provider) as client:
-        resp = client.get_user_budget(_cluster_pb2.Controller.GetUserBudgetRequest(user_id=user_id))
+        resp = client.get_user_budget(_controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id))
 
     click.echo(f"User:      {resp.user_id}")
     click.echo(f"Limit:     {resp.budget_limit}")
@@ -392,7 +447,7 @@ def budget_list(ctx):
     token_provider = ctx.obj.get("token_provider")
 
     with rpc_client(controller_url, token_provider) as client:
-        resp = client.list_user_budgets(_cluster_pb2.Controller.ListUserBudgetsRequest())
+        resp = client.list_user_budgets(_controller_pb2.Controller.ListUserBudgetsRequest())
 
     if not resp.users:
         click.echo("No user budgets found.")
@@ -405,10 +460,10 @@ def budget_list(ctx):
 
 # Register subcommand groups — imported at module level to ensure they are
 # always available when the ``iris`` group is used.
+from iris.cli.actor import actor as actor_cmd  # noqa: E402
 from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
 from iris.cli.job import job  # noqa: E402
-from iris.cli.actor import actor as actor_cmd  # noqa: E402
 from iris.cli.process_status import register_process_status_commands  # noqa: E402
 from iris.cli.query import query_cmd  # noqa: E402
 from iris.cli.rpc import register_rpc_commands  # noqa: E402

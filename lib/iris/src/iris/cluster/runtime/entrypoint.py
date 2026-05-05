@@ -13,7 +13,7 @@ import shlex
 from collections.abc import Sequence
 
 from iris.cluster.types import Entrypoint
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 
 def _build_uv_sync_flags(extras: Sequence[str]) -> str:
@@ -43,8 +43,8 @@ def _build_pip_install_args(pip_packages: Sequence[str]) -> str:
 
 def build_runtime_entrypoint(
     entrypoint: Entrypoint,
-    env_config: cluster_pb2.EnvironmentConfig,
-) -> cluster_pb2.RuntimeEntrypoint:
+    env_config: job_pb2.EnvironmentConfig,
+) -> job_pb2.RuntimeEntrypoint:
     """Build a structured RuntimeEntrypoint from a user Entrypoint + env config.
 
     The setup_commands handle environment preparation (copying bundle, syncing deps,
@@ -101,7 +101,7 @@ def build_runtime_entrypoint(
     setup_commands.append("python -c \"import sys; print('sys.path:', sys.path)\"")
     setup_commands.append("echo 'running user command'")
 
-    rt = cluster_pb2.RuntimeEntrypoint()
+    rt = job_pb2.RuntimeEntrypoint()
     rt.setup_commands[:] = setup_commands
     rt.run_command.argv[:] = entrypoint.command
     for k, v in entrypoint.workdir_files.items():
@@ -109,7 +109,7 @@ def build_runtime_entrypoint(
     return rt
 
 
-def runtime_entrypoint_to_bash_script(rt: cluster_pb2.RuntimeEntrypoint) -> str:
+def runtime_entrypoint_to_bash_script(rt: job_pb2.RuntimeEntrypoint) -> str:
     """Generate a bash setup script from a RuntimeEntrypoint.
 
     Used by DockerRuntime to produce the _setup_env.sh that runs setup commands

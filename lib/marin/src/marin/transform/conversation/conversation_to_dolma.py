@@ -4,11 +4,6 @@
 """
 Transform conversation format to Dolma format.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
-    lib/marin/src/marin/transform/conversation/conversation_to_dolma.py \
-    --input_path gs://marin-us-central2/conversations/ \
-    --output_path gs://marin-data/processed/conversations/dolma-v1.0/
 """
 
 import dataclasses

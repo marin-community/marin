@@ -11,7 +11,7 @@ import uuid
 
 import pytest
 from iris.chaos import enable_chaos
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 pytestmark = [pytest.mark.e2e, pytest.mark.timeout(60)]
 
@@ -57,7 +57,7 @@ def test_multiple_attempts_preserve_logs(cluster, caplog):
         )
 
         status = cluster.wait(job, timeout=60)
-        assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED, f"Job should succeed after retry: {status}"
+        assert status.state == job_pb2.JOB_STATE_SUCCEEDED, f"Job should succeed after retry: {status}"
 
         # Fetch logs for all attempts
         task_id = job.job_id.task(0)
@@ -100,7 +100,7 @@ def test_superseding_attempt_logs_info(cluster):
     )
 
     status = cluster.wait(job, timeout=60)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED, f"Job should succeed after retry: {status}"
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED, f"Job should succeed after retry: {status}"
 
 
 def test_attempt_specific_log_fetch(cluster):
@@ -122,7 +122,7 @@ def test_attempt_specific_log_fetch(cluster):
     )
 
     status = cluster.wait(job, timeout=60)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
     # Fetch logs for attempt 0 only
     task_id = job.job_id.task(0)

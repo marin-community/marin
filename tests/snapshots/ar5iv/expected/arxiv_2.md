@@ -41,7 +41,8 @@ and
 
 $$W\_{k}(r)\\\,=\\\,\\sum\_{i}\\int{\\rm d}r^{\\prime}\\\,u^{\*}\_{i}(r^{\\prime})\\\,\\int{\\rm d}\\Omega\\int{\\rm d}\\Omega^{\\prime}\\\,\\\,\\tilde{k}^{\*}(\\Omega)\\tilde{i}^{\*}(\\Omega^{\\prime})V(|{\\bf r}-{\\bf r}^{\\prime}|)\\tilde{i}(\\Omega)\\tilde{k}(\\Omega^{\\prime})\\\,\\\,u\_{i}(r)\\\,u\_{k}(r^{\\prime}).$$  
 
-(4)   
+(4)
+
 While the interaction depends from the relative distance between two nucleons, the HF equations (2) depend upon the distance of the particles from the origin of the reference system. The implementation of finite range interactions in the HF equations requires the separation of the coordinate variables in the interaction. For the central and tensor channels this separation is done by considering the interaction in coordinate space as Fourier transform of the interaction expressed in momentum space (see ref. for details). For the spin–orbit channels ($p=7,8$) we use a different strategy consisting in expanding in multipoles the interaction:
 
 $$V\_{p}(r\_{12})=4\\pi\\\,\\sum\_{LM}\\frac{1}{\\widehat{L}^{2}}{\\cal V}^{p}\_{L}(r\_{1},r\_{2})\\\,Y^{\*}\_{LM}(\\widehat{r}\_{1})Y\_{LM}(\\widehat{r}\_{2}).$$  
@@ -215,7 +216,8 @@ It is convenient to express these operators such as the coordinates of each part
 
 $$O^{LL^{\\prime}}\_{00}(ijk)=\\sqrt{3}\\sum\_{KM}(-1)^{L+M}\\left\\\{\\begin{array}\[\]{ccc}L&L^{\\prime}&1\\\\ 1&1&K\\end{array}\\right\\\}\\tilde{O}^{M}\_{LL^{\\prime}K}(ijk),$$  
 
-(40)   
+(40)
+
 where we have used the Racah 6-$j$ symbol and we have defined the operators:
 
 $$\\tilde{O}^{M}\_{LL^{\\prime}K}(ijk)=e(ijk)\\\,\\bar{A}^{\\left(ijk\\right)}\_{JM}(1)\\\,\\bar{B}^{\\left(ijk\\right)}\_{J-M}(2).$$  
@@ -234,14 +236,16 @@ where $f$ is given by:
 
 $$f(L,L^{\\prime},K)=(-)^{L+K}\\xi(L+L^{\\prime}+1)\\frac{\\widehat{L^{\\prime}}}{\\widehat{L}}\\left(\\begin{array}\[\]{ccc}1&K&L^{\\prime}\\\\ 1&-1&0\\end{array}\\right)\\left(\\begin{array}\[\]{ccc}1&K&L\\\\ 1&-1&0\\end{array}\\right).$$  
 
-(43)   
+(43)
+
 In the calculation of the HF equations for the spin–orbit channels we have used the results corresponding to the matrix elements $\\tilde{O}^{M}\_{LL^{\\prime}K}(ijk)$ which in the tab. 6 are shown to be function of ${\\cal C}^{K}\_{LM}$, ${\\cal M}^{K}\_{LM}$, ${\\cal S}^{L^{\\prime}K}\_{LM}$ defined in (5) and of the spherical harmonics $Y\_{LM}(\\widehat{r})$.
 
 Using the function $\\xi(l)$ =1 if $l$ is even and =0 if $l$ is odd, we express the reduced matrix elements for the spherical harmonics as:
 
 $$\\langle l\\frac{1}{2}j||Y\_{L}||l^{\\prime}\\frac{1}{2}j^{\\prime}\\rangle\\\,=\\\,\\frac{1}{\\sqrt{4\\pi}}(-1)^{j^{\\prime}+L+\\frac{3}{2}}\\\,\\widehat{j}\\\,\\widehat{j^{\\prime}}\\\,\\widehat{L}\\\,\\xi(l+l^{\\prime}+L)\\\,\\left(\\begin{array}\[\]{ccc}j&j^{\\prime}&L\\\\ \\frac{1}{2}&-\\frac{1}{2}&0\\end{array}\\right).$$  
 
-(44)   
+(44)
+
 For the other three operators we obtain the following operators:
 
 $\\displaystyle\\langle l\\frac{1}{2}j||{\\cal S}^{L^{\\prime}K}\_{L}||l^{\\prime}\\frac{1}{2}j^{\\prime}\\rangle$ $\\displaystyle=$ $\\displaystyle\\sqrt{\\frac{3}{2\\pi}}(-1)^{l^{\\prime}}\\\,\\widehat{j}\\\,\\widehat{j^{\\prime}}\\\,\\widehat{l}\\\,\\widehat{l^{\\prime}}\\\,\\widehat{L}\\\,\\widehat{L^{\\prime}}\\\,\\widehat{K}\\\,\\left\\\{\\begin{array}\[\]{ccc}l&\\frac{1}{2}&j\\\\ l^{\\prime}&\\frac{1}{2}&j^{\\prime}\\\\ K&1&L\\end{array}\\right\\\}$ (58)   

@@ -4,11 +4,6 @@
 """
 Download and process Ar5iv dataset from a zip file.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --memory=10GB \
-    lib/marin/src/marin/download/ar5iv/download.py \
-    --input_path gs://bucket/ar5iv.zip \
-    --output_path gs://bucket/output
 """
 
 import json
@@ -19,10 +14,11 @@ from dataclasses import dataclass
 
 import draccus
 from rigging.filesystem import open_url
-from marin.execution.step_spec import StepSpec
+from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
-from rigging.log_setup import configure_logging
+
+from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 

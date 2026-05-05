@@ -109,6 +109,10 @@ and Network (traffic, latency). No setup required.
 - A CoreWeave CKS cluster (created via Console or Terraform)
 - A kubeconfig downloaded from CoreWeave Console > Tokens
 - Images pushed to `ghcr.io/marin-community/`
+- Controller extras in the local Iris venv:
+  `uv pip install 'marin-iris[controller]'`
+
+This document is the canonical runbook for day-to-day CoreWeave operations.
 
 ### Step 1: Save kubeconfig
 
@@ -137,7 +141,7 @@ environment variables automatically.
 ### Step 3: Start the cluster
 
 ```bash
-iris --config=lib/iris/examples/coreweave.yaml cluster start
+iris --cluster=coreweave cluster start
 ```
 
 This is fully idempotent. It creates/reconciles:
@@ -151,18 +155,123 @@ This is fully idempotent. It creates/reconciles:
 ### Step 4: Use the cluster
 
 ```bash
-iris --config=lib/iris/examples/coreweave.yaml cluster status
-iris --config=lib/iris/examples/coreweave.yaml cluster dashboard
+iris --cluster=coreweave cluster status
+iris --cluster=coreweave cluster dashboard
 ```
 
 ### Step 5: Stop
 
 ```bash
-iris --config=lib/iris/examples/coreweave.yaml cluster stop
+iris --cluster=coreweave cluster stop
 ```
 
 Deletes worker Pods and controller resources. NodePools are left in place (they
 scale to zero when idle).
+
+### Connecting
+
+Preferred: use `--cluster=NAME` so Iris opens and closes the controller tunnel:
+
+```bash
+iris --cluster=coreweave-ci job logs /runner/my-job
+iris cluster list
+```
+
+`--cluster=NAME` resolves to a config under `lib/iris/examples/` and opens a
+`kubectl port-forward` to the controller service. This path requires the
+`iris[controller]` extras (`duckdb`, `pyarrow`, `kubernetes`). Without them,
+auto-tunneled CoreWeave commands fail before connecting:
+`ImportError: Install iris[controller] to use CloudK8sService`.
+
+Fallback: manual port-forward if you need a long-lived tunnel:
+
+```bash
+kubectl --kubeconfig ~/.kube/coreweave-iris \
+  port-forward -n <namespace> svc/<service_name> 10000:10000 &
+iris --controller-url=http://localhost:10000 ...
+```
+
+| Cluster name | Namespace | Service | Config file |
+|--------------|-----------|---------|-------------|
+| `coreweave` | `iris` | `iris-controller-svc` | `coreweave.yaml` |
+| `coreweave-ci` | `iris-ci` | `iris-ci-controller-svc` | `coreweave-ci.yaml` |
+
+### GPU Configs
+
+| Target | Iris config | `--gpu` request | `nvidia-smi` GPU name |
+|--------|-------------|-----------------|-----------------------|
+| H100 | `lib/iris/examples/coreweave-ci.yaml` | `H100x1` | `NVIDIA H100 80GB HBM3` |
+| GH200 | `lib/iris/examples/coreweave-rno2a.yaml` | `GH200x1` | `NVIDIA GH200 480GB` |
+| B200 | `lib/iris/examples/coreweave-usw09b.yaml` | `B200x1` | `NVIDIA B200` |
+
+Use `GH200x1` for RNO2A. `H200x1` also schedules there today; both land on
+CoreWeave `gd-1xgh200` nodes labeled `gpu.nvidia.com/model=GH200_480GB` and
+report `NVIDIA GH200 480GB`.
+
+Before the full GPU canary, run one tiny direct JAX job for each row. It should
+prove `nvidia-smi`, GPU-backed JAX, and a tiny matmul.
+
+### KubernetesProvider Operations
+
+On CoreWeave, there are no persistent worker daemons. The controller dispatches
+tasks directly as Kubernetes Pods, `list-workers` returns empty, and the
+`workers` SQL table is empty. Use:
+
+```bash
+kci get pods -n iris -l iris.managed=true
+kci get nodepools
+kci get events -n iris --sort-by=.lastTimestamp | tail -30
+kci logs -n iris deployment/iris-controller -f
+iris rpc controller get-kubernetes-cluster-status
+```
+
+(`kci` = `kubectl --kubeconfig ~/.kube/coreweave-iris`)
+
+### NodePool Operations
+
+```bash
+kci get nodepools
+kci patch nodepool <name> --type=merge -p '{"spec":{"targetNodes":N}}'
+kci delete nodepool <name>
+```
+
+Do not use `kubectl scale --replicas` for NodePools; patch
+`spec.targetNodes`.
+
+If deletion is stuck because the autoscaler fights deletion or the node is
+mid-delivery:
+
+```bash
+kci scale deployment iris-controller -n iris --replicas=0
+kci patch nodepool <name> --type=merge -p '{"spec":{"autoscaling":false,"targetNodes":0}}'
+kci patch nodepool <name> --type=json -p '[{"op":"remove","path":"/metadata/finalizers"}]'
+kci delete nodepool <name>
+```
+
+`iris cluster stop` deletes pods but NodePools survive. Delete managed NodePools
+explicitly to avoid lingering GPU costs:
+
+```bash
+iris cluster stop
+kci delete nodepool -l iris-<label_prefix>-managed=true
+```
+
+### Gotchas
+
+- **NodePools survive `cluster stop`.** Delete explicitly to avoid lingering GPU costs.
+- **`list-workers` returns empty.** KubernetesProvider dispatches pods directly.
+- **`list-tasks` requires `job_id`.** Calling without it throws `ConnectError: job_id is required`.
+- **`cluster start` always rebuilds+pushes images.** Needs `docker login ghcr.io` with `write:packages` PAT.
+- **Konnectivity agent.** `kubectl port-forward` returns 500 until `konnectivity-agent` pods are running (~18-30s after node provisions).
+- **H100 quota is account-wide.** If a canary pod is stuck with `NotTriggerScaleUp: 2 max node group size reached`, check `kci get nodepools -A`; another H100 pool can consume the shared US-WEST-04A cap.
+
+Cold-start timings:
+
+| Resource | Time |
+|----------|------|
+| CW CPU node | ~14 min |
+| CW H100 bare-metal | ~20 min |
+| CW first training step (from zero) | ~25-30 min |
 
 ## 5. RBAC Permissions
 
@@ -439,7 +548,7 @@ scale_groups:
         region: US-WEST-04A
         pool: h100-16x
         backend.coreweave.cloud/superpod: same-slice
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 1
     priority: 50
     slice_template:

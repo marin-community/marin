@@ -1,5 +1,5 @@
 # Iris local configuration with GCP OAuth2 access token authentication
-# Usage: iris --config lib/iris/examples/local-auth-gcp.yaml cluster start --local
+# Usage: iris --cluster=local-auth-gcp cluster start --local
 # Requires: gcloud auth login && gcloud auth application-default login
 
 platform:
@@ -28,7 +28,7 @@ scale_groups:
       device_type: cpu
       device_variant: cpu
       capacity_type: on-demand
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 4
     slice_template:
       num_vms: 1

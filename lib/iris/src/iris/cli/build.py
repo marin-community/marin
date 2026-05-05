@@ -279,6 +279,10 @@ def build_image(
     click.echo()
 
     if verbose:
+        cmd.extend(["--progress", "plain"])
+        result = subprocess.run(cmd)
+    elif push:
+        cmd.extend(["--progress", "plain"])
         result = subprocess.run(cmd)
     else:
         result = subprocess.run(cmd, capture_output=True, text=True)

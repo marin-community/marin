@@ -16,8 +16,17 @@ import re
 import threading
 from dataclasses import dataclass
 
+from rigging.timing import Duration, Timestamp
+
+from iris.cluster.providers._worker_base import RemoteExecWorkerBase
 from iris.cluster.providers.gcp.service import GcpService
 from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account, ssh_key_file, uses_os_login
+from iris.cluster.providers.remote_exec import (
+    DirectSshRemoteExec,
+    GceRemoteExec,
+    GcloudRemoteExec,
+    resolve_current_os_login_user,
+)
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -27,16 +36,8 @@ from iris.cluster.providers.types import (
     WorkerStatus,
 )
 from iris.cluster.types import get_tpu_topology
-from iris.cluster.providers._worker_base import RemoteExecWorkerBase
-from iris.cluster.providers.remote_exec import (
-    DirectSshRemoteExec,
-    GceRemoteExec,
-    GcloudRemoteExec,
-    resolve_current_os_login_user,
-)
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -179,10 +180,10 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
         logger.info("Rebooting GCE instance: %s", self._gce_vm_name)
         self._gcp_service.vm_reset(self._gce_vm_name, self._zone)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         assert self._gcp_service is not None
         logger.info("Deleting GCE instance: %s", self._gce_vm_name)
-        self._gcp_service.vm_delete(self._gce_vm_name, self._zone)
+        self._gcp_service.vm_delete(self._gce_vm_name, self._zone, wait=wait)
 
     def set_labels(self, labels: dict[str, str]) -> None:
         assert self._gcp_service is not None
@@ -366,13 +367,18 @@ class GcpSliceHandle:
         # QUEUED, PROVISIONING, WAITING_FOR_RESOURCES → still creating
         return SliceStatus(state=CloudSliceState.CREATING, worker_count=0)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         if self.is_queued_resource:
             logger.info("Terminating queued resource (force): %s", self._slice_id)
             self._gcp_service.queued_resource_delete(self._slice_id, self._zone)
         else:
             logger.info("Terminating TPU (async): %s", self._slice_id)
             self._gcp_service.tpu_delete(self._slice_id, self._zone)
+
+    def cleanup_bootstrap_failure(self) -> None:
+        """Clean up provider state after bootstrap fails."""
+        if self.is_queued_resource:
+            self.terminate()
 
 
 class GcpVmSliceHandle:
@@ -478,6 +484,9 @@ class GcpVmSliceHandle:
         )
         return SliceStatus(state=state, worker_count=1, workers=[worker])
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         logger.info("Terminating VM slice: %s (vm=%s)", self._slice_id, self._vm_name)
-        self._gcp_service.vm_delete(self._vm_name, self._zone)
+        self._gcp_service.vm_delete(self._vm_name, self._zone, wait=wait)
+
+    def cleanup_bootstrap_failure(self) -> None:
+        """Clean up provider state after bootstrap fails."""

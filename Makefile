@@ -1,4 +1,4 @@
-.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit rust-dev rust-user rust-status rust-package
+.PHONY: help clean check fix setup_pre_commit rust-dev rust-user rust-status rust-package
 .DEFAULT: help
 
 
@@ -51,89 +51,8 @@ test:
 	export HF_HUB_TOKEN=$HF_TOKEN
 	RAY_ADDRESS= PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v
 
-# Define regions and tags for the Docker images
-CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 us-east5 us-east1
-TAG_DATE = $(shell date -u +"%Y%m%d")
-TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(TAG_DATE)
-
-# If VLLM is defined, use different Dockerfile and image name
-ifdef VLLM
-	DOCKERFILE = docker/marin/Dockerfile.vllm
-	DOCKER_IMAGE_NAME = marin_vllm
-else
-	DOCKERFILE = docker/marin/Dockerfile.cluster
-	DOCKER_IMAGE_NAME = marin_cluster
-endif
-
-# Target to build the Docker image and tag it appropriately
-cluster_docker_build:
-	@echo "Building Docker image using Dockerfile: $(DOCKERFILE)"
-	docker buildx build --platform linux/amd64 --output "type=docker,compression=zstd" -t '$(DOCKER_IMAGE_NAME):latest' -f $(DOCKERFILE) .
-	@echo "Tagging Docker image for each region and version..."
-	$(foreach region,$(CLUSTER_REPOS), \
-		$(foreach version,$(TAG_VERSIONS), \
-			docker tag '$(DOCKER_IMAGE_NAME):latest' '$(region)-docker.pkg.dev/hai-gcp-models/marin/$(DOCKER_IMAGE_NAME):$(version)';))
-	@echo "Docker image build and tagging complete, updating config.py with latest version..."
-
-cluster_tag:
-	@if [ "$$(uname)" = "Darwin" ]; then \
-		sed -i '' -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" lib/marin/src/marin/cluster/config.py; \
-	else \
-		sed -i -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" lib/marin/src/marin/cluster/config.py; \
-	fi
-
-# Target to push the tagged Docker images to their respective Artifact Registries
-cluster_docker_push: cluster_tag
-	@echo "Authenticating and preparing repositories..."
-	$(foreach region,$(CLUSTER_REPOS), \
-		gcloud auth configure-docker $(region)-docker.pkg.dev;)
-	$(foreach region,$(CLUSTER_REPOS), \
-		gcloud artifacts repositories list --location=$(region) --filter 'name:marin' > /dev/null || \
-		gcloud artifacts repositories create --repository-format=docker --location=$(region) marin;)
-	@echo "Pushing Docker images for each region and version..."
-	$(foreach region,$(CLUSTER_REPOS), \
-		$(foreach version,$(TAG_VERSIONS), \
-			docker push '$(region)-docker.pkg.dev/hai-gcp-models/marin/$(DOCKER_IMAGE_NAME):$(version)';))
-
-cluster_docker_ghcr_push: cluster_docker_build
-	@echo "Pushing Docker image to GitHub Container Registry..."
-	$(foreach version,$(TAG_VERSIONS), \
-		docker tag '$(DOCKER_IMAGE_NAME):latest' 'ghcr.io/stanford-crfm/marin/$(DOCKER_IMAGE_NAME):$(version)';)
-
-	$(foreach version,$(TAG_VERSIONS), \
-		docker push 'ghcr.io/stanford-crfm/marin/$(DOCKER_IMAGE_NAME):$(version)';)
-
-
-# Meta-target that builds and then pushes the Docker images
-cluster_docker: cluster_docker_build cluster_docker_push
-	@echo "Docker image build and push complete."
-
-# Staging/test image flow (does not update lib/marin/src/marin/cluster/config.py)
-# Used by infra/marin-us-central2-staging.yaml, which points at marin_cluster_test:latest.
-TEST_CLUSTER_REPO ?= us-central2
-TEST_DOCKER_IMAGE_NAME ?= marin_cluster_test
-
-.PHONY: cluster_docker_test_build cluster_docker_test_push cluster_docker_test
-
-cluster_docker_test_build:
-	@echo "Building staging Docker image using Dockerfile: docker/marin/Dockerfile.cluster"
-	docker buildx build --platform linux/amd64 --output "type=docker,compression=zstd" -t '$(TEST_DOCKER_IMAGE_NAME):latest' -f docker/marin/Dockerfile.cluster .
-	@echo "Tagging staging Docker image for $(TEST_CLUSTER_REPO)..."
-	docker tag '$(TEST_DOCKER_IMAGE_NAME):latest' '$(TEST_CLUSTER_REPO)-docker.pkg.dev/hai-gcp-models/marin/$(TEST_DOCKER_IMAGE_NAME):latest'
-
-cluster_docker_test_push: cluster_docker_test_build
-	@echo "Authenticating and preparing repository in $(TEST_CLUSTER_REPO)..."
-	gcloud auth configure-docker $(TEST_CLUSTER_REPO)-docker.pkg.dev
-	gcloud artifacts repositories list --location=$(TEST_CLUSTER_REPO) --filter 'name:marin' > /dev/null || \
-		gcloud artifacts repositories create --repository-format=docker --location=$(TEST_CLUSTER_REPO) marin
-	@echo "Pushing staging Docker image..."
-	docker push '$(TEST_CLUSTER_REPO)-docker.pkg.dev/hai-gcp-models/marin/$(TEST_DOCKER_IMAGE_NAME):latest'
-
-cluster_docker_test: cluster_docker_test_push
-	@echo "Staging Docker image build and push complete."
-
-
 # Target to configure GCP registry cleanup policy for all standard regions
+CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 us-east5 us-east1
 default_registry_name = marin
 configure_gcp_registry_all:
 	@echo "Configuring GCP registry cleanup policy for all standard regions..."
@@ -179,31 +98,6 @@ install_gcloud:
 	gcloud config set project hai-gcp-models
 
 
-# get secret ssh key from gcp secrets
-get_secret_key: install_gcloud
-	mkdir -p ~/.ssh
-	gcloud secrets versions access latest --secret=RAY_CLUSTER_PRIVATE_KEY > ~/.ssh/marin_ray_cluster.pem && \
-	chmod 600 ~/.ssh/marin_ray_cluster.pem
-	gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
-
-get_ray_auth_token: install_gcloud
-	mkdir -p $$HOME/.ray
-	gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN > $$HOME/.ray/auth_token
-	chmod 600 $$HOME/.ray/auth_token
-
-init_ray_auth_token_secret: install_gcloud
-	@if [ ! -f "$$HOME/.ray/auth_token" ]; then \
-		echo "Missing $$HOME/.ray/auth_token; generate one first (e.g. export RAY_AUTH_MODE=token && ray get-auth-token --generate)"; \
-		exit 1; \
-	fi
-	@if gcloud secrets describe RAY_AUTH_TOKEN >/dev/null 2>&1; then \
-		echo "Secret RAY_AUTH_TOKEN already exists; refusing to add a new version (token rotation) via Makefile."; \
-		exit 1; \
-	fi
-	gcloud secrets create RAY_AUTH_TOKEN --replication-policy=automatic
-	gcloud secrets versions add RAY_AUTH_TOKEN --data-file="$$HOME/.ray/auth_token"
-
-
 setup_pre_commit:
 	@HOOK_PATH=.git/hooks/pre-commit; \
 	mkdir -p .git/hooks; \
@@ -227,7 +121,7 @@ install_node:
 	fi
 
 
-dev_setup: install_uv install_gcloud install_node get_secret_key get_ray_auth_token setup_pre_commit
+dev_setup: install_uv install_gcloud install_node setup_pre_commit
 	@echo "Dev setup complete."
 
 

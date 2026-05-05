@@ -22,22 +22,24 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
-
-from fray.v2.iris_backend import FrayIrisClient
-from fray.v2.types import Entrypoint as FrayEntrypoint
-from fray.v2.types import GpuConfig, JobRequest, ResourceConfig
+from finelog.rpc import logging_pb2
+from finelog.server.service import LogServiceImpl
+from fray.iris_backend import FrayIrisClient
+from fray.types import Entrypoint as FrayEntrypoint
+from fray.types import GpuConfig, JobRequest, ResourceConfig
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.log_server.server import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.service import CloudK8sService
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider, _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
+from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE, K8sTaskProvider
+from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, TaskAttempt
-from iris.rpc import cluster_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration
 
 # ---------------------------------------------------------------------------
@@ -73,13 +75,15 @@ class ServiceTestHarness:
 
     def sync_k8s(self) -> None:
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
-        batch = self.state.drain_for_direct_provider()
+        with self.state._store.transaction() as cur:
+            batch = self.state.drain_for_direct_provider(cur)
         result = self.k8s_provider.sync(batch)
-        self.state.apply_direct_provider_updates(result.updates)
+        with self.state._store.transaction() as cur:
+            self.state.apply_direct_provider_updates(cur, result.updates)
 
 
-def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
+def _make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
+    entrypoint = job_pb2.RuntimeEntrypoint()
     entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
@@ -112,18 +116,18 @@ skip_no_kind = pytest.mark.skipif(
 )
 
 
-def _gpu_resources() -> cluster_pb2.ResourceSpecProto:
-    resources = cluster_pb2.ResourceSpecProto(
+def _gpu_resources() -> job_pb2.ResourceSpecProto:
+    resources = job_pb2.ResourceSpecProto(
         cpu_millicores=32_000,
         memory_bytes=256 * 1024**3,
         disk_bytes=256 * 1024**3,
     )
-    resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="H100", count=8))
+    resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
     return resources
 
 
-def _cpu_resources() -> cluster_pb2.ResourceSpecProto:
-    return cluster_pb2.ResourceSpecProto(
+def _cpu_resources() -> job_pb2.ResourceSpecProto:
+    return job_pb2.ResourceSpecProto(
         cpu_millicores=1000,
         memory_bytes=16 * 1024**3,
         disk_bytes=16 * 1024**3,
@@ -131,13 +135,27 @@ def _cpu_resources() -> cluster_pb2.ResourceSpecProto:
 
 
 def _get_iris_pods(k8s: InMemoryK8sService) -> list[dict]:
-    return k8s.list_json("pod", labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
+    return k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
+
+
+class _FakeLogClient:
+    """In-process LogClient adapter that calls LogServiceImpl.fetch_logs directly."""
+
+    def __init__(self, log_service: LogServiceImpl) -> None:
+        self._log_service = log_service
+
+    def query(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
+        return self._log_service.fetch_logs(request, ctx=None)
+
+    def close(self) -> None:
+        return
 
 
 def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "cw_db")
     log_service = LogServiceImpl(log_dir=tmp_path / "cw_logs")
-    state = ControllerTransitions(db=db)
+    store = ControllerStore(db)
+    state = ControllerTransitions(store=store)
 
     k8s = InMemoryK8sService()
     k8s.add_node_pool(
@@ -179,10 +197,10 @@ def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
 
     service = ControllerServiceImpl(
         state,
-        db,
+        store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "cw_bundles")),
-        log_service=log_service,
+        log_client=_FakeLogClient(log_service),
     )
 
     return ServiceTestHarness(
@@ -318,21 +336,21 @@ def test_gpu_pod_attributes_with_in_memory_k8s(tmp_path: Path) -> None:
     harness = _make_coreweave_harness(tmp_path)
     try:
         launcher_id = JobName.root("runner", "canary-launcher")
-        launcher_request = cluster_pb2.Controller.LaunchJobRequest(
+        launcher_request = controller_pb2.Controller.LaunchJobRequest(
             name=launcher_id.to_wire(),
             entrypoint=_make_test_entrypoint(),
             resources=_cpu_resources(),
-            environment=cluster_pb2.EnvironmentConfig(),
+            environment=job_pb2.EnvironmentConfig(),
             replicas=1,
         )
         harness.service.launch_job(launcher_request, None)
         harness.sync_k8s()
 
-        child_request = cluster_pb2.Controller.LaunchJobRequest(
+        child_request = controller_pb2.Controller.LaunchJobRequest(
             name=launcher_id.child("grug-train").to_wire(),
             entrypoint=_make_test_entrypoint(),
             resources=_gpu_resources(),
-            environment=cluster_pb2.EnvironmentConfig(),
+            environment=job_pb2.EnvironmentConfig(),
             replicas=1,
         )
         harness.service.launch_job(child_request, None)

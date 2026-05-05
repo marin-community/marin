@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from rigging.filesystem import open_url
 from pydantic import BaseModel
+from rigging.filesystem import open_url
 
 
 # === General Pydantic Schema for Quick & Easy Ser/De + Validation ==

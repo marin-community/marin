@@ -1,0 +1,74 @@
+name: Claude Canary Triage
+description: Run the canary-triage skill against a failed Iris job. Centralizes the claude-code-action SHA, prompt, and tool allowlist.
+
+inputs:
+  oauth-token:
+    description: Claude Code OAuth token (CLAUDE_CODE_OAUTH_TOKEN or CLAUDE_MAX_OAUTH_TOKEN).
+    required: true
+  lane:
+    description: 'Canary lane identifier (e.g. tpu, gpu, datakit-smoke). Surfaced to the skill via $CANARY_LANE.'
+    required: true
+  job-id:
+    description: Iris job ID under triage.
+    required: true
+  run-id:
+    description: Workflow run identifier (RUN_ID env in the workflow).
+    required: true
+  iris-config:
+    description: Iris config path used to talk to the controller.
+    required: true
+  gha-run-url:
+    description: Public URL of the GitHub Actions run.
+    required: true
+  wandb-entity:
+    description: WANDB entity for the run.
+    required: true
+  wandb-project:
+    description: WANDB project for the run.
+    required: true
+  wandb-api-key:
+    description: WANDB API key for read access.
+    required: true
+  iris-namespace:
+    description: 'Kubernetes namespace (CoreWeave only). Empty for GCP lanes.'
+    required: false
+    default: ''
+  allowed-tools:
+    description: |
+      Override the --allowedTools list. Leave at default for GCP/TPU lanes (no kubectl); CoreWeave lanes
+      should pass the extended list including Bash(kubectl:*), Write, Read, Edit, etc.
+    required: false
+    default: 'Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*)'
+  max-turns:
+    description: Maximum agent turns.
+    required: false
+    default: '500'
+  timeout-minutes:
+    description: Per-action timeout in minutes.
+    required: false
+    default: '30'
+
+runs:
+  using: composite
+  steps:
+    - name: Run claude-code-action
+      uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
+      timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
+      with:
+        claude_code_oauth_token: ${{ inputs.oauth-token }}
+        prompt: |
+          Read .agents/skills/canary-triage/SKILL.md and follow it.
+        claude_args: |
+          --model opus
+          --max-turns ${{ inputs.max-turns }}
+          --allowedTools "${{ inputs.allowed-tools }}"
+      env:
+        CANARY_LANE: ${{ inputs.lane }}
+        CANARY_JOB_ID: ${{ inputs.job-id }}
+        CANARY_RUN_ID: ${{ inputs.run-id }}
+        IRIS_CONFIG: ${{ inputs.iris-config }}
+        IRIS_NAMESPACE: ${{ inputs.iris-namespace }}
+        WANDB_ENTITY: ${{ inputs.wandb-entity }}
+        WANDB_PROJECT: ${{ inputs.wandb-project }}
+        WANDB_API_KEY: ${{ inputs.wandb-api-key }}
+        GHA_RUN_URL: ${{ inputs.gha-run-url }}

@@ -18,7 +18,7 @@ from google.protobuf.descriptor import FieldDescriptor
 from google.protobuf.message import Message
 
 from iris.cli.main import require_controller_url
-from iris.rpc import actor_connect, cluster_connect
+from iris.rpc import actor_connect, controller_connect, worker_connect
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 
 PROTO_TYPE_TO_CLICK: dict[int, click.ParamType] = {
@@ -127,13 +127,13 @@ def register_services() -> None:
     _register_service(
         name="controller",
         full_name="iris.cluster.ControllerService",
-        client_class=cluster_connect.ControllerServiceClientSync,
+        client_class=controller_connect.ControllerServiceClientSync,
     )
 
     _register_service(
         name="worker",
         full_name="iris.cluster.WorkerService",
-        client_class=cluster_connect.WorkerServiceClientSync,
+        client_class=worker_connect.WorkerServiceClientSync,
     )
 
     _register_service(

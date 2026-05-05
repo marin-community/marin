@@ -3,22 +3,25 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "iris"
-version = "0.1.0"
+name = "marin-iris"
+version = "0.99"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "rigging",
+    "marin-rigging",
+    "marin-finelog",
     "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python>=0.9.0",
     "fsspec>=2024.0.0",
     "gcsfs>=2024.0.0",
+    "google-auth>=2.0",
+    "google-cloud-tpu>=1.18.0",
     "s3fs>=2024.0.0",
     "grpcio>=1.76.0",
     "httpx>=0.28.1",
     "humanfriendly>=10.0",
-    "pydantic>=2.12.5",
-    "PyJWT>=2.8.0",
+    "pydantic>=2.0",
+    "PyJWT>=2.12.0",
     "pyyaml>=6.0",
     "starlette>=0.50.0",
     "tabulate>=0.9.0",
@@ -31,7 +34,9 @@ dependencies = [
 controller = [
     "duckdb>=1.0.0",
     "pyarrow>=19.0.0",
+    "kubernetes>=31.0.0",
 ]
+worker = []
 
 [project.scripts]
 iris = "iris.cli:iris"
@@ -47,6 +52,7 @@ examples = [
 dev = [
     "duckdb>=1.0.0",
     "pyarrow>=19.0.0",
+    "kubernetes>=31.0.0",
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",
     "nbconvert>=7.16.6",
@@ -58,23 +64,34 @@ dev = [
     "pytest-playwright>=0.6.2",
     "pytest-timeout",
     "pytest-xdist",
-    "pytest>=8.3.2",
+    "pytest>=8.4",
 ]
-
-[tool.hatch.build.hooks.custom]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/iris"]
 
+[tool.hatch.build.targets.wheel.force-include]
+# Cluster YAML configs live outside src/ because they are configuration data,
+# not Python package source. force-include maps them into the wheel at
+# iris/examples/ so that when iris is installed as a wheel, the bundled configs
+# are reachable via Path(__file__).parent.parent / "examples" (the wheel-layout
+# probe in _bundled_iris_examples_dir() in iris.cli.main).
+"examples" = "iris/examples"
+
 [tool.pytest.ini_options]
 timeout = 10
-addopts = "-n auto --durations=25 -m 'not slow and not docker' -v"
+timeout_method = "thread"
+addopts = "-n auto --durations=25 -m 'not slow and not docker and not e2e' -v"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "docker: marks tests requiring Docker runtime (slow, needs daemon)",
     "e2e: end-to-end cluster tests (chaos, dashboard, scheduling)",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
+# Cap assertion-diff output even under -v, so a single bad assertion
+# can't dump tens of KB of proto repr into CI logs.
+truncation_limit_lines = 100
+truncation_limit_chars = 10000
 log_level = "INFO"
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"

@@ -19,6 +19,8 @@ from iris.cluster.providers.types import (
     CommandResult,
     Labels,
     SliceStatus,
+)
+from iris.cluster.providers.types import (
     WorkerStatus as CloudWorkerStatus,
 )
 from iris.rpc import config_pb2, vm_pb2
@@ -120,7 +122,7 @@ class FakeSliceHandle:
     def describe(self) -> SliceStatus:
         return self._status
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         self.terminated = True
         if self.terminate_error is not None:
             raise self.terminate_error

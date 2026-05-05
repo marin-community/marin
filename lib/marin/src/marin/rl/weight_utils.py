@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import jax
-from flax import nnx
 import jax.numpy as jnp
+from flax import nnx
 from levanter.models.lm_model import LmHeadModel
 
 

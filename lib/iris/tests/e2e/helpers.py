@@ -94,8 +94,8 @@ class TestJobs:
     def register_endpoint(prefix):
         """Register an endpoint via RPC and verify it's listed."""
         from iris.cluster.client import get_job_info
-        from iris.rpc import cluster_pb2
-        from iris.rpc.cluster_connect import ControllerServiceClientSync
+        from iris.rpc import controller_pb2
+        from iris.rpc.controller_connect import ControllerServiceClientSync
 
         info = get_job_info()
         if info is None:
@@ -104,7 +104,7 @@ class TestJobs:
         client = ControllerServiceClientSync(address=info.controller_address, timeout_ms=5000)
         try:
             endpoint_name = f"{prefix}/actor1"
-            request = cluster_pb2.Controller.RegisterEndpointRequest(
+            request = controller_pb2.Controller.RegisterEndpointRequest(
                 name=endpoint_name,
                 address="localhost:5000",
                 task_id=info.task_id.to_wire(),
@@ -113,7 +113,7 @@ class TestJobs:
             response = client.register_endpoint(request)
             assert response.endpoint_id
 
-            list_request = cluster_pb2.Controller.ListEndpointsRequest(prefix=f"{prefix}/")
+            list_request = controller_pb2.Controller.ListEndpointsRequest(prefix=f"{prefix}/")
             list_response = client.list_endpoints(list_request)
             assert len(list_response.endpoints) == 1
             names = [ep.name for ep in list_response.endpoints]

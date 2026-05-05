@@ -15,31 +15,35 @@ For now, we're training on DCLM's best mix, but that will change.
 
 # You will see in many, many places in this file that I (dlwh) made many, many mistakes.
 # I'm leaving them in for posterity.
-# NOTE: Marin now always uses Feistel permutation in mixture configs. Historical runs in this file that originally
-# used linear permutation will not reproduce exactly if re-run today.
+# NOTE: Marin's LM mixture helpers now default to hierarchical block shuffle with Feistel as the permutation type.
+# Historical runs in this file that originally used linear permutation will not reproduce exactly if re-run today.
 
 import dataclasses
 
+from fray.cluster import ResourceConfig
 from levanter.schedule import ScheduleStep
+from marin.execution.executor import executor_main
+from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
-from experiments.pretraining_datasets.dclm import (
-    DCLM_MIXTURE_WEIGHTS,
-    dclm_components_llama3,
-    dclm_mixture_config_llama3,
-)
 from experiments.defaults import default_train
-from experiments.pretraining_datasets import tokenize_dolma
-from experiments.pretraining_datasets import tokenize_dolmino_math, tokenize_dolmino_subset
 from experiments.evals.evals import default_base_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
-from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
+from experiments.pretraining_datasets import (
+    NEMOTRON_WEIGHTS,
+    tokenize_dolma,
+    tokenize_dolmino_math,
+    tokenize_dolmino_subset,
+    tokenize_nemotron,
+)
+from experiments.pretraining_datasets.dclm import (
+    DCLM_MIXTURE_WEIGHTS,
+    dclm_components_llama3,
+    dclm_mixture_config_llama3,
+)
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
-from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
-from fray.cluster import ResourceConfig
 
 # Phases/Runs in this file:
 # 1. Kestrel: WSD-S on DCLM+Starcode+Proofpile on 2x v5litepod-256 (from scratch)

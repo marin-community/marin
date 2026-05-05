@@ -10,7 +10,6 @@ import operator
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, TypeVar, Union
 
@@ -21,7 +20,7 @@ import numpy as np
 import pyarrow as pa
 import tensorstore as ts
 from dataclasses_json import dataclass_json
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from fsspec import AbstractFileSystem
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
@@ -220,7 +219,7 @@ class CacheMetadata:
 
 class SerialCacheWriter:
     """
-    Writes TreeCache-compatible caches to disk without Ray. Mostly for scripts and debugging.
+    Writes TreeCache-compatible caches to disk directly. Mostly for scripts and debugging.
     """
 
     def __init__(
@@ -329,7 +328,7 @@ def build_cache(
         max_workers=min(128, len(shard_jobs)),
         name="levanter-cache-build",
     )
-    shard_results = ctx.execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False)
+    shard_results = ctx.execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False).results
     shard_results = sorted(shard_results, key=lambda r: r["index"])
 
     shard_cache_paths = [s["path"] for s in shard_results]
@@ -436,15 +435,25 @@ def consolidate_shard_caches(
     shard_info: list[dict] = []
     total_rows = 0
 
-    shard_ledgers = [CacheLedger.load(p, metadata) for p in shard_cache_paths]
-
-    # Parallel: open each TreeStore to read data_size (dominates wall time on remote storage)
-    def _get_data_sizes(shard_path):
+    # Distributed: load ledger + read data_size for each shard in parallel.
+    # Both operations are S3 I/O-bound; distributing across zephyr workers
+    # avoids serializing thousands of S3 calls in the coordinator process.
+    def _probe_shard(shard_path):
+        ledger = CacheLedger.load(shard_path, metadata)
         store = TreeStore.open(exemplar, shard_path, mode="r", cache_metadata=True)
-        return jax.tree.map(lambda x: x.data_size, store.tree)
+        data_sizes = jax.tree.map(lambda x: x.data_size, store.tree)
+        return (data_sizes, ledger)
 
-    with ThreadPoolExecutor(max_workers=CONSOLIDATE_DATA_SIZE_WORKERS) as executor:
-        per_shard_sizes = list(executor.map(_get_data_sizes, shard_cache_paths))
+    probe_ctx = ZephyrContext(
+        resources=ResourceConfig(ram="5g", cpu=2),
+        max_workers=min(CONSOLIDATE_DATA_SIZE_WORKERS, len(shard_cache_paths)),
+        name="levanter-cache-probe",
+    )
+    probe_results = probe_ctx.execute(
+        Dataset.from_list(shard_cache_paths).map(_probe_shard),
+    ).results
+    per_shard_sizes = [r[0] for r in probe_results]
+    shard_ledgers = [r[1] for r in probe_results]
 
     # Serial: accumulate row_offset and data_offset_tree (order-dependent)
     for shard_path, ledger, this_offsets in zip(shard_cache_paths, shard_ledgers, per_shard_sizes):
@@ -471,7 +480,7 @@ def consolidate_shard_caches(
         )
 
     ctx = ZephyrContext(
-        resources=ResourceConfig(ram="32g", disk="16g"),
+        resources=ResourceConfig(ram="10g", disk="16g"),
         max_workers=min(copy_max_workers, len(shard_info)),
         name="levanter-cache-copy",
     )

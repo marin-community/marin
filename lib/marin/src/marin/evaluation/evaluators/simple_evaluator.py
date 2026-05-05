@@ -6,11 +6,9 @@ import traceback
 from dataclasses import dataclass
 from typing import ClassVar
 
-from fray.v1.cluster import ResourceConfig
-
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
-from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, resolve_model_name_or_path, resolve_vllm_mode
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.inference.vllm_server import resolve_model_name_or_path
 
 
 @dataclass(frozen=True)
@@ -171,29 +169,3 @@ class SimpleEvaluator(Evaluator):
         except Exception as e:
             traceback.print_exc()
             raise RuntimeError("SimpleEvaluator failed. Please check the logs for more information.") from e
-
-    def launch_evaluate_with_ray(
-        self,
-        model: ModelConfig,
-        evals: list[EvalTaskConfig],
-        output_path: str,
-        resource_config: ResourceConfig,
-        max_eval_instances: int | None = None,
-        wandb_tags: list[str] | None = None,
-    ) -> None:
-        """Launch the evaluation run with Fray."""
-
-        mode_str = resolve_vllm_mode(None)
-        pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
-        launch_evaluate_with_ray(
-            evaluator=self,
-            job_name="simple-eval",
-            model=model,
-            evals=evals,
-            output_path=output_path,
-            resource_config=resource_config,
-            max_eval_instances=max_eval_instances,
-            wandb_tags=wandb_tags,
-            extras=("eval", "tpu"),
-            pip_packages=pip_packages,
-        )

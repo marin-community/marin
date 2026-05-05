@@ -121,15 +121,20 @@ def build_tensorstore_metrics_logger(every: int):
     return _log_tensorstore_metrics
 
 
-def install_tensorstore_metrics_hook_if_enabled(trainer: Trainer) -> None:
-    """Install a hook that logs TensorStore metrics if configured via environment."""
-    every = tensorstore_metrics_interval_from_env()
-    if every is None:
-        return
-
+def install_tensorstore_metrics_hook(trainer: Trainer, *, every: int) -> None:
+    """Install a step hook that logs TensorStore metrics every ``every`` steps."""
     log_tensorstore_metrics = build_tensorstore_metrics_logger(every)
 
     def _log_tensorstore_metrics(step_info):
         log_tensorstore_metrics(step_info.step)
 
     trainer.add_hook(_log_tensorstore_metrics, every=every)
+
+
+def install_tensorstore_metrics_hook_if_enabled(trainer: Trainer) -> None:
+    """Install a hook that logs TensorStore metrics if configured via environment."""
+    every = tensorstore_metrics_interval_from_env()
+    if every is None:
+        return
+
+    install_tensorstore_metrics_hook(trainer, every=every)

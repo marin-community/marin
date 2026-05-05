@@ -4,10 +4,6 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from openai.types.chat import ChatCompletion, ChatCompletionMessage
-from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
-from openai.types.completion_usage import CompletionUsage
-
 from marin.rl.environments.mock_env import (
     AdditionTask,
     MoarCatsTask,
@@ -16,6 +12,9 @@ from marin.rl.environments.mock_env import (
     compute_soft_reward,
 )
 from marin.rl.types import Rollout, RolloutGroup
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
+from openai.types.completion_usage import CompletionUsage
 
 
 def create_test_tokenizer():
@@ -87,7 +86,15 @@ def create_test_inference_context():
         def __init__(self):
             self.tokenizer = create_test_tokenizer()
 
-        def batch_completions(self, prompts, temperature, n, max_tokens=None, stop=None, system_prompt=None):
+        def batch_completions(
+            self,
+            prompts,
+            temperature,
+            n,
+            max_tokens=None,
+            stop=None,
+            system_prompt=None,
+        ):
             completions = []
             for prompt in prompts:
                 responses = [f"mock_response_{i}" for i in range(n)]
