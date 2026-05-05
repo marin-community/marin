@@ -38,6 +38,7 @@ from pathlib import Path
 
 import duckdb
 
+from finelog.store.migrations import apply_migrations, transactional
 from finelog.store.schema import Schema, schema_from_json, schema_to_json
 
 logger = logging.getLogger(__name__)
@@ -106,31 +107,10 @@ class RegistryDB:
         else:
             self._path = data_dir / REGISTRY_DB_FILENAME
             self._conn = duckdb.connect(str(self._path))
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS namespaces (
-                namespace        TEXT PRIMARY KEY,
-                schema_json      TEXT NOT NULL,
-                registered_at_ms BIGINT NOT NULL,
-                last_modified_ms BIGINT NOT NULL
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS segments (
-                namespace     TEXT   NOT NULL,
-                path          TEXT   NOT NULL,
-                state         TEXT   NOT NULL,
-                min_seq       BIGINT NOT NULL,
-                max_seq       BIGINT NOT NULL,
-                row_count     BIGINT NOT NULL,
-                byte_size     BIGINT NOT NULL,
-                created_at_ms BIGINT NOT NULL,
-                PRIMARY KEY (namespace, path)
-            )
-            """
-        )
+        # Schema is owned by ``finelog.store.migrations``; every additive
+        # change (new column, new index, derived backfill) lands as a new
+        # numbered file in that package.
+        apply_migrations(self._conn)
 
     def close(self) -> None:
         self._conn.close()
@@ -227,8 +207,7 @@ class RegistryDB:
         segment. The whole swap must be visible-or-not visible to callers
         of :meth:`list_segments` — never half.
         """
-        self._conn.execute("BEGIN")
-        try:
+        with transactional(self._conn):
             for path in removed_paths:
                 self._conn.execute(
                     "DELETE FROM segments WHERE namespace = ? AND path = ?",
@@ -236,10 +215,6 @@ class RegistryDB:
                 )
             for seg in added:
                 self.upsert_segment(seg)
-            self._conn.execute("COMMIT")
-        except Exception:
-            self._conn.execute("ROLLBACK")
-            raise
 
     def remove_segment(self, namespace: str, path: str) -> None:
         """Drop one segment row. Idempotent."""
@@ -252,15 +227,10 @@ class RegistryDB:
         ``DiskLogNamespace`` boot we discover the on-disk segment set and
         push it through this method so the catalog matches reality.
         """
-        self._conn.execute("BEGIN")
-        try:
+        with transactional(self._conn):
             self._conn.execute("DELETE FROM segments WHERE namespace = ?", [namespace])
             for seg in segments:
                 self.upsert_segment(seg)
-            self._conn.execute("COMMIT")
-        except Exception:
-            self._conn.execute("ROLLBACK")
-            raise
 
     def aggregate_namespace_stats(self, namespace: str) -> NamespaceStats:
         """Single-namespace aggregate over the segments table."""
