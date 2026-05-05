@@ -56,6 +56,7 @@ class GrugMoeLaunchConfig:
     # If a preempted TPU gets rescheduled in a different region, scan all
     # regional buckets to find and resume from the latest checkpoint.
     enable_cross_region_ckpt_read: bool = False
+    checkpoint_keep: list[dict] | None = None  # override checkpoint keep policy
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -163,7 +164,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
             base_path=checkpoint_base,
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
-            keep=[{"every": 10000}],
+            keep=config.checkpoint_keep or [{"every": 10000}],
         ),
     )
 

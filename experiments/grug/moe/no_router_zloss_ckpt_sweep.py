@@ -4,13 +4,9 @@
 """Rerun no-router-zloss d512 with frequent checkpoints for activation analysis."""
 
 import dataclasses
-from datetime import timedelta
 
 from fray.cluster import ResourceConfig
-from levanter.checkpoint import CheckpointerConfig
 from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
-from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
 from experiments.grug.moe.heuristic import build_from_heuristic
@@ -52,21 +48,6 @@ no_router_zloss_ckpt = ExecutorStep(
                 z_loss_weight=1e-4,
                 ema_beta=None,
                 log_every=1,
-                trainer=TrainerConfig(
-                    use_explicit_mesh_axes=True,
-                    mesh=MeshConfig(axes={"expert": 1}),
-                    require_accelerator=True,
-                    checkpointer=CheckpointerConfig(
-                        base_path=this_output_path() + "/checkpoints",
-                        append_run_id_to_base_path=False,
-                        save_interval=timedelta(minutes=2),
-                        keep=[
-                            {"every": 20, "until": 300},
-                            {"every": 250, "until": 1000},
-                            {"every": 1000},
-                        ],
-                    ),
-                ),
             )
         ),
         eval=versioned(
@@ -77,6 +58,13 @@ no_router_zloss_ckpt = ExecutorStep(
                 eval_current=True,
                 eval_ema=False,
             )
+        ),
+        checkpoint_keep=versioned(
+            [
+                {"every": 20, "until": 300},
+                {"every": 250, "until": 1000},
+                {"every": 1000},
+            ]
         ),
     ),
 )
