@@ -69,10 +69,13 @@ DEFAULT_MAX_TMP_SEGMENTS_BEFORE_COMPACT = 10
 DEFAULT_MAX_LOCAL_SEGMENTS = 1000
 DEFAULT_MAX_LOCAL_BYTES = 100 * 1024**3
 
-# Tight DuckDB limits (e.g. 256MB) caused spill-to-disk loops under concurrent
-# tail reads over large row groups, wedging the controller. 4GB is generous
-# against 5 segments x 500MB + zstd decompression scratch.
-_DEFAULT_DUCKDB_MEMORY_LIMIT = "4GB"
+# 4GB was the previous default but in practice finelog's read pattern
+# rarely needs more than tens of MB; the high cap mostly let mimalloc/DuckDB
+# retain pages indefinitely. 512MB on the read pool is plenty against 5
+# segments x ~50MB + zstd decompression scratch. Compaction tier-merges can
+# spill larger sort buffers, so it gets its own (still bounded) limit.
+_DEFAULT_DUCKDB_MEMORY_LIMIT = "512MB"
+_DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT = "1GB"
 _DEFAULT_DUCKDB_THREADS = "4"
 
 # Embedded mode (iris controller's bundled log-server) keeps VMS small so the
@@ -110,12 +113,20 @@ class _ConnectionPool:
     def __init__(
         self,
         memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
+        compaction_memory_limit: str = _DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT,
         threads: str = _DEFAULT_DUCKDB_THREADS,
     ):
-        config = {"memory_limit": memory_limit, "threads": threads}
-        self._conn = duckdb.connect(config=config)
+        self._conn = duckdb.connect(config={"memory_limit": memory_limit, "threads": threads})
         self._conn.execute("SET enable_object_cache=true")
-        self._compaction_conn = duckdb.connect(config=config)
+        self._compaction_conn = duckdb.connect(
+            config={"memory_limit": compaction_memory_limit, "threads": threads},
+        )
+        # Serializes DDL on the shared read connection. ``query()`` issues
+        # ``CREATE OR REPLACE VIEW {namespace}`` for every registered
+        # namespace, and concurrent calls would collide on the same view
+        # names. Held end-to-end through the fetch so the views stay valid
+        # while the result materializes.
+        self._read_query_lock = Lock()
 
     @contextmanager
     def checkout(self, buffer_tables: list[pa.Table]) -> Iterator[tuple[duckdb.DuckDBPyConnection, list[str]]]:
@@ -187,6 +198,7 @@ class DuckDBLogStore:
         max_tmp_segments_before_compact: int = DEFAULT_MAX_TMP_SEGMENTS_BEFORE_COMPACT,
         segment_target_bytes: int = SEGMENT_TARGET_BYTES,
         duckdb_memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
+        duckdb_compaction_memory_limit: str = _DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT,
         duckdb_threads: str = _DEFAULT_DUCKDB_THREADS,
     ):
         self._data_dir: Path | None = log_dir
@@ -195,7 +207,11 @@ class DuckDBLogStore:
 
         self._insertion_lock = Lock()
         self._query_visibility_lock = RWLock()
-        self._pool = _ConnectionPool(memory_limit=duckdb_memory_limit, threads=duckdb_threads)
+        self._pool = _ConnectionPool(
+            memory_limit=duckdb_memory_limit,
+            compaction_memory_limit=duckdb_compaction_memory_limit,
+            threads=duckdb_threads,
+        )
         self._catalog = Catalog(self._data_dir)
 
         # Global storage caps. Eviction picks the oldest sealed segment
@@ -388,10 +404,22 @@ class DuckDBLogStore:
 
         Unknown namespaces in the FROM clause surface as DuckDB
         ``CatalogException`` (the view doesn't exist).
+
+        Uses a cursor on the shared read connection rather than opening a
+        fresh ``duckdb.connect()`` per call: a fresh connection is its own
+        in-process DB instance with its own buffer manager, and mimalloc
+        retained those arenas long after ``con.close()`` (RSS climbed by
+        ~50-100MB per call under load). The view + RAM-table names are
+        suffixed with a unique cursor id so concurrent calls on the shared
+        connection don't collide; views and registrations are torn down in
+        ``finally`` to keep the connection clean for the next caller.
         """
-        con = duckdb.connect()
+        cid = _next_cursor_id()
         registered_names: list[str] = []
+        view_names: list[str] = []
         self._query_visibility_lock.read_acquire()
+        self._pool._read_query_lock.acquire()
+        cursor = self._pool._conn.cursor()
         try:
             # Snapshot under the insertion lock so a concurrent drop_table
             # (which mutates the dict under the same lock) can't trigger
@@ -400,12 +428,13 @@ class DuckDBLogStore:
                 ns_snapshot = list(self._namespaces.items())
             for ns_name, ns in ns_snapshot:
                 ns_quoted = quote_ident(ns_name)
+                view_names.append(ns_quoted)
                 segments, ram_tables = ns.query_snapshot()
                 if not segments and not ram_tables:
                     cols_sql = ", ".join(
                         f"NULL::{duckdb_type_for(c)} AS {quote_ident(c.name)}" for c in ns.schema.columns
                     )
-                    con.execute(f"CREATE VIEW {ns_quoted} AS SELECT {cols_sql} WHERE FALSE")
+                    cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS SELECT {cols_sql} WHERE FALSE")
                     continue
 
                 parts: list[str] = []
@@ -413,17 +442,20 @@ class DuckDBLogStore:
                     paths_literal = "[" + ", ".join(quote_literal(s.path) for s in segments) + "]"
                     parts.append(f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)")
                 for table in ram_tables:
-                    reg_name = f"_seg_{len(registered_names)}"
-                    con.register(reg_name, table)
+                    reg_name = f"_q{cid}_seg_{len(registered_names)}"
+                    cursor.register(reg_name, table)
                     registered_names.append(reg_name)
                     parts.append(f"SELECT * FROM {reg_name}")
-                con.execute(f"CREATE VIEW {ns_quoted} AS {' UNION ALL BY NAME '.join(parts)}")
-            return con.execute(sql).fetch_arrow_table()
+                cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS {' UNION ALL BY NAME '.join(parts)}")
+            return cursor.execute(sql).fetch_arrow_table()
         finally:
             for name in registered_names:
-                con.unregister(name)
+                cursor.unregister(name)
+            for vname in view_names:
+                cursor.execute(f"DROP VIEW IF EXISTS {vname}")
+            cursor.close()
+            self._pool._read_query_lock.release()
             self._query_visibility_lock.read_release()
-            con.close()
 
     def drop_table(self, name: str) -> None:
         """Remove ``name`` from the registry and delete its local segments.

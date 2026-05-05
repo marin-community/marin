@@ -99,6 +99,13 @@ RUN groupadd --system --gid 1000 finelog \
 
 VOLUME ["/var/cache/finelog"]
 
+# Tell mimalloc (used by both pyarrow and DuckDB) to return freed pages to the
+# kernel after 10 minutes of disuse instead of holding them indefinitely. This
+# bounds the RSS that retained arenas can pin without churning page faults on
+# short-term reuse. PURGE_DELAY is the v2 spelling, DECOMMIT_DELAY the v1.
+ENV MIMALLOC_PURGE_DELAY=600000
+ENV MIMALLOC_DECOMMIT_DELAY=600000
+
 USER finelog
 
 EXPOSE 10001
