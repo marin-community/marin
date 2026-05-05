@@ -60,24 +60,31 @@ class MinHashAttrData(BaseModel):
         source_main_dir: Source ``NormalizedData.main_output_dir`` whose shards
             this dataset mirrors 1:1.
         attr_dir: Directory containing per-shard attr Parquet files. Filenames
-            mirror the source shards. Each row has ``id: str`` and
+            mirror the source shards. Each row has ``id: str``,
+            ``partition_id: int`` (passed through from the source row), and
             ``buckets: list[str]``.
+        num_partitions: Number of source partitions. Copied from
+            ``NormalizedData.num_partitions``; downstream shufflers use it to
+            reconstruct co-partitioned filenames without globbing.
         counters: Aggregated zephyr counters.
     """
 
-    version: str = "v1"
+    version: str = "v2"
     params: MinHashParams
     source_main_dir: str
     attr_dir: str
+    num_partitions: int
     counters: dict[str, int]
 
 
 def _attr_records(batch: pa.RecordBatch, params: MinHashParams) -> list[dict]:
     """Run the dupekit MinHash+LSH pipeline on *batch* and yield attr records.
 
-    Yields one ``{id, buckets}`` record per input document with at least one
-    bucket. Documents whose signature column is null (empty/whitespace text
-    after cleaning) are dropped and counted via ``minhash/empty_signatures``.
+    Yields one ``{id, partition_id, buckets}`` record per input document with
+    at least one bucket. Documents whose signature column is null
+    (empty/whitespace text after cleaning) are dropped and counted via
+    ``minhash/empty_signatures``. ``partition_id`` is passed through unchanged
+    so downstream shufflers can route output back to the source partition.
     """
     pipeline = [
         dupekit.Transformation.CleanText(input_col="text", output_col="clean_text"),
@@ -89,27 +96,28 @@ def _attr_records(batch: pa.RecordBatch, params: MinHashParams) -> list[dict]:
             seed=params.seed,
         ),
         dupekit.Transformation.MinHashLSH(input_col="signature", output_col="buckets", num_bands=params.num_bands),
-        dupekit.Transformation.SelectColumns(columns=["id", "buckets"]),
+        dupekit.Transformation.SelectColumns(columns=["id", "partition_id", "buckets"]),
     ]
     result_batch = dupekit.transform(batch, pipeline)
     ids = result_batch["id"]
+    partition_ids = result_batch["partition_id"]
     buckets_col = result_batch["buckets"]
 
     out: list[dict] = []
-    for doc_id, doc_buckets in zip(ids, buckets_col, strict=True):
+    for doc_id, partition_id, doc_buckets in zip(ids, partition_ids, buckets_col, strict=True):
         if not doc_buckets.is_valid:
             counters.increment("minhash/empty_signatures")
             continue
         bucket_strs = [str(b) for b in doc_buckets.as_py()]
         counters.increment("minhash/documents")
         counters.increment("minhash/buckets", len(bucket_strs))
-        out.append({"id": doc_id.as_py(), "buckets": bucket_strs})
+        out.append({"id": doc_id.as_py(), "partition_id": partition_id.as_py(), "buckets": bucket_strs})
     return out
 
 
 def _shard_attr_records(shard_path: str, params: MinHashParams) -> Iterator[dict]:
-    """Stream ``{id, buckets}`` attr records for one source parquet shard."""
-    for batch in _load_batches(shard_path, columns=["id", "text"]):
+    """Stream ``{id, partition_id, buckets}`` attr records for one source parquet shard."""
+    for batch in _load_batches(shard_path, columns=["id", "partition_id", "text"]):
         yield from _attr_records(batch, params)
 
 
@@ -127,9 +135,10 @@ def compute_minhash_attrs(
     """Compute MinHash bucket attributes for *source* and persist as Parquet.
 
     Each source shard under ``source.main_output_dir`` produces a same-named
-    attr file under ``<output_path>/outputs/`` with columns ``id`` and
-    ``buckets`` (``list[str]``). The output dataset is co-partitioned with the
-    source per the datakit invariant.
+    attr file under ``<output_path>/outputs/`` with columns ``id``,
+    ``partition_id`` (passed through from the source), and ``buckets``
+    (``list[str]``). The output dataset is co-partitioned with the source per
+    the datakit invariant.
 
     Args:
         source: The normalized source dataset to read from.
@@ -191,6 +200,7 @@ def compute_minhash_attrs(
         params=params,
         source_main_dir=source.main_output_dir,
         attr_dir=attr_dir,
+        num_partitions=source.num_partitions,
         counters=dict(outcome.counters),
     )
 

@@ -34,14 +34,13 @@ artifacts produces fresh markers without re-reading any source text.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Iterator
-from typing import Any
 
 from fray import ResourceConfig
 from pydantic import BaseModel
 from zephyr import Dataset, ZephyrContext, counters, write_parquet_file
 
+from marin.datakit import partition_filename
 from marin.execution.artifact import Artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.connected_components import connected_components
@@ -111,37 +110,28 @@ def _validate_inputs(inputs: list[MinHashAttrData]) -> MinHashParams:
     return head
 
 
-def _build_shard_index(inputs: list[MinHashAttrData]) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    """Enumerate every source shard across *inputs* and assign a global file_idx.
+def _assign_source_tags(inputs: list[MinHashAttrData]) -> dict[str, str]:
+    """Assign a deterministic ``source_NNN`` tag per input ``source_main_dir``.
 
-    Returns:
-        (entries, source_tag_for_input) where ``entries[file_idx]`` holds
-        ``{attr_path, source_main_dir, source_tag, basename}`` and
-        ``source_tag_for_input[source_main_dir] = "source_NNN"``.
+    Sorting by ``source_main_dir`` keeps tags stable regardless of the order
+    callers happen to pass inputs in. Returns ``{source_main_dir: source_tag}``.
     """
-    # Sort inputs by source_main_dir so source_tags are deterministic regardless
-    # of the order callers happen to pass them in.
-    ordered = sorted(enumerate(inputs), key=lambda iv: iv[1].source_main_dir)
     source_tag: dict[str, str] = {}
-    for new_idx, (_, m) in enumerate(ordered):
+    for new_idx, m in enumerate(sorted(inputs, key=lambda m: m.source_main_dir)):
         source_tag[m.source_main_dir] = f"source_{new_idx:03d}"
+    return source_tag
 
-    entries: list[dict[str, Any]] = []
+
+def _list_attr_files(inputs: list[MinHashAttrData], source_tag: dict[str, str]) -> list[dict[str, str]]:
+    """Return ``[{attr_path, source_tag}, ...]`` for every attr shard across *inputs*."""
+    files: list[dict[str, str]] = []
     for m in inputs:
         attr_shards = sorted(fsspec_glob(f"{m.attr_dir.rstrip('/')}/*.parquet"))
         if not attr_shards:
             raise FileNotFoundError(f"No attr parquet shards under {m.attr_dir}")
         for attr_path in attr_shards:
-            entries.append(
-                {
-                    "file_idx": len(entries),
-                    "attr_path": attr_path,
-                    "source_main_dir": m.source_main_dir,
-                    "source_tag": source_tag[m.source_main_dir],
-                    "basename": os.path.basename(attr_path),
-                }
-            )
-    return entries, source_tag
+            files.append({"attr_path": attr_path, "source_tag": source_tag[m.source_main_dir]})
+    return files
 
 
 # Separator between the per-source CC tag and the original content-hash id.
@@ -157,42 +147,60 @@ def _cc_id(source_tag: str, doc_id: str) -> str:
     inputs can carry byte-identical normalized ids (e.g. exact text overlap
     across datasets), and without this prefix they collapse to a single
     node — under-reporting dups and potentially clobbering co-partitioned
-    attr files. The prefix is stripped in :func:`_strip_cc_prefix` before
-    the final attr parquet is written.
+    attr files. The prefix is recovered in :func:`_split_cc_id` before the
+    final attr parquet is written.
     """
     return f"{source_tag}{_CC_ID_SEP}{doc_id}"
 
 
-def _strip_cc_prefix(record_id: str) -> str:
-    """Reverse :func:`_cc_id`, returning the original ``doc_id``."""
-    return record_id.split(_CC_ID_SEP, 1)[1]
+def _split_cc_id(record_id: str) -> tuple[str, str]:
+    """Reverse :func:`_cc_id`, returning ``(source_tag, doc_id)``."""
+    source_tag, doc_id = record_id.split(_CC_ID_SEP, 1)
+    return source_tag, doc_id
 
 
-def _emit_bucket_records(entries: list[dict[str, Any]]) -> Iterator[dict]:
-    """For each (bucket, id) pair across all attr shards in *entries*, emit a routing record."""
-    for entry in entries:
-        for batch in _load_batches(entry["attr_path"], columns=["id", "buckets"]):
+def _emit_bucket_records(group: list[dict[str, str]]) -> Iterator[dict]:
+    """For each (bucket, id) pair across all attr shards in *group*, emit a routing record.
+
+    ``CCInput.file_idx`` is an opaque routing payload: we stuff each row's
+    source-stamped ``partition_id`` (read directly from the attr parquet
+    column) into it so the post-CC writer can reconstruct co-partitioned
+    output filenames without re-globbing the source tree.
+    """
+    for entry in group:
+        for batch in _load_batches(entry["attr_path"], columns=["id", "partition_id", "buckets"]):
             ids = batch["id"]
+            partition_ids = batch["partition_id"]
             buckets_col = batch["buckets"]
-            for doc_id, doc_buckets in zip(ids, buckets_col, strict=True):
+            for doc_id, partition_id, doc_buckets in zip(ids, partition_ids, buckets_col, strict=True):
                 if not doc_buckets.is_valid:
                     continue
                 cc_id = _cc_id(entry["source_tag"], doc_id.as_py())
+                p_id = partition_id.as_py()
                 for b in doc_buckets.as_py():
-                    yield {"bucket": str(b), "id": cc_id, "file_idx": entry["file_idx"]}
+                    yield {"bucket": str(b), "id": cc_id, "file_idx": p_id}
 
 
-def _make_per_shard_writer(output_path: str, entries: list[dict[str, Any]], counter_prefix: str):
+def _make_per_shard_writer(
+    output_path: str,
+    source_tag_to_num_partitions: dict[str, int],
+    counter_prefix: str,
+):
     """Return a group_by reducer that writes per-shard cluster-annotation parquet files.
 
-    Skips singletons entirely. For every non-singleton cluster member, writes
+    Group key is ``(source_tag, partition_id)``: the writer reconstructs the
+    output filename via ``partition_filename`` so attr files stay in lockstep
+    with the source's ``part-NNNNN-of-MMMMM.parquet`` naming and consolidate's
+    filename-rebase join keeps finding them. Skips singletons entirely. For
+    every non-singleton cluster member, writes
     ``{id, attributes: {dup_cluster_id, is_cluster_canonical}}``. Rows are
     already sorted by ``id`` thanks to the upstream ``group_by(sort_by=id)``.
     """
 
-    def aggregate(file_idx: int, records: Iterator[dict]) -> dict:
-        entry = entries[file_idx]
-        out_path = f"{output_path}/outputs/{entry['source_tag']}/{entry['basename']}"
+    def aggregate(group_key: tuple[str, int], records: Iterator[dict]) -> dict:
+        source_tag, partition_id = group_key
+        num_partitions = source_tag_to_num_partitions[source_tag]
+        out_path = f"{output_path}/outputs/{source_tag}/{partition_filename(partition_id, num_partitions)}"
 
         cluster_members = 0
         canonicals = 0
@@ -219,8 +227,8 @@ def _make_per_shard_writer(output_path: str, entries: list[dict[str, Any]], coun
         result = write_parquet_file(cluster_member_rows(), out_path)
         return {
             **result,
-            "file_idx": file_idx,
-            "source_tag": entry["source_tag"],
+            "source_tag": source_tag,
+            "partition_id": partition_id,
             "cluster_members": cluster_members,
             "canonicals": canonicals,
         }
@@ -271,12 +279,14 @@ def compute_fuzzy_dups_attrs(
         FileNotFoundError: If any input ``attr_dir`` is missing parquet shards.
     """
     params = _validate_inputs(inputs)
-    entries, source_tag = _build_shard_index(inputs)
+    source_tag = _assign_source_tags(inputs)
+    attr_files = _list_attr_files(inputs, source_tag)
+    source_tag_to_num_partitions: dict[str, int] = {source_tag[m.source_main_dir]: m.num_partitions for m in inputs}
 
     logger.info(
         "Computing fuzzy dups for %d inputs (%d total shards) → %s, params=%s",
         len(inputs),
-        len(entries),
+        len(attr_files),
         output_path,
         params,
     )
@@ -290,15 +300,15 @@ def compute_fuzzy_dups_attrs(
         ctx_kwargs["coordinator_resources"] = coordinator_resources
     ctx = ZephyrContext(**ctx_kwargs)
 
-    # Cap shard count at max_parallelism. Each group reads its attr files
-    # sequentially and emits bucket records; file_idx is preserved on the entry
-    # itself, not by enumeration order, so grouping is safe.
-    n_groups = min(max_parallelism, len(entries))
-    entry_groups: list[list[dict[str, Any]]] = [[] for _ in range(n_groups)]
-    for i, entry in enumerate(entries):
-        entry_groups[i % n_groups].append(entry)
+    # Cap fan-out at max_parallelism. Each group reads its attr files
+    # sequentially and emits bucket records; partition_id rides on each row
+    # in the parquet itself, so chunking by file order is safe.
+    n_groups = min(max_parallelism, len(attr_files))
+    file_groups: list[list[dict[str, str]]] = [[] for _ in range(n_groups)]
+    for i, af in enumerate(attr_files):
+        file_groups[i % n_groups].append(af)
 
-    bucket_ds = Dataset.from_list(entry_groups).flat_map(_emit_bucket_records)
+    bucket_ds = Dataset.from_list(file_groups).flat_map(_emit_bucket_records)
     converged, cc_files = connected_components(
         bucket_ds,
         ctx,
@@ -310,26 +320,34 @@ def compute_fuzzy_dups_attrs(
         # TODO (rav): log the number of changed nodes?
         logger.warning("Connected components did not converge")
 
-    aggregator = _make_per_shard_writer(output_path, entries, counter_prefix="dedup/fuzzy/document")
+    aggregator = _make_per_shard_writer(
+        output_path,
+        source_tag_to_num_partitions,
+        counter_prefix="dedup/fuzzy/document",
+    )
 
     # CC's Hash-to-Min guarantees component_id == min(id_norm) across a cluster,
     # so `component_id == id_norm` cheaply identifies the natural canonical.
     # `preserve_singletons=True` wires singletons as self-links, so a node is a
     # singleton iff its adjacency_list is exactly [id_norm] — no cluster peers.
+    def _enrich(r: dict) -> dict:
+        source_tag_str, doc_id = _split_cc_id(r["record_id"])
+        return {
+            "id": doc_id,
+            "source_tag": source_tag_str,
+            # CC's file_idx slot carried partition_id through the shuffle.
+            "partition_id": r["file_idx"],
+            "component_id": r["component_id"],
+            "is_canonical": r["component_id"] == r["id_norm"],
+            "is_singleton": len(r["adjacency_list"]) == 1 and r["adjacency_list"][0] == r["id_norm"],
+        }
+
     shard_pipeline = (
         Dataset.from_list(cc_files)
         .load_parquet()
-        .map(
-            lambda r: {
-                "id": _strip_cc_prefix(r["record_id"]),
-                "component_id": r["component_id"],
-                "is_canonical": r["component_id"] == r["id_norm"],
-                "is_singleton": len(r["adjacency_list"]) == 1 and r["adjacency_list"][0] == r["id_norm"],
-                "file_idx": r["file_idx"],
-            }
-        )
+        .map(_enrich)
         .group_by(
-            lambda r: r["file_idx"],
+            lambda r: (r["source_tag"], r["partition_id"]),
             sort_by=lambda r: r["id"],
             reducer=aggregator,
         )

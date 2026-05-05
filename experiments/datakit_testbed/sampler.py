@@ -216,6 +216,7 @@ def sample_normalized_shards(
         return NormalizedData(
             main_output_dir=main_out,
             dup_output_dir=source.dup_output_dir,
+            num_partitions=total,
             counters={"sampler/selected_shards": total, "sampler/total_shards": total},
         )
 
@@ -247,6 +248,7 @@ def sample_normalized_shards(
         return NormalizedData(
             main_output_dir=main_out,
             dup_output_dir=source.dup_output_dir,
+            num_partitions=1,
             counters={
                 "sampler/selected_shards": 1,
                 "sampler/total_shards": total,
@@ -287,6 +289,7 @@ def sample_normalized_shards(
     return NormalizedData(
         main_output_dir=main_out,
         dup_output_dir=source.dup_output_dir,
+        num_partitions=output_total,
         counters={
             "sampler/selected_shards": output_total,
             "sampler/total_shards": total,

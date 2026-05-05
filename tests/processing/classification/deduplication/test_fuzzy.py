@@ -53,20 +53,26 @@ def _write_minhash_attr_dataset(
     source_main_dir: str,
     rows: list[dict],
 ) -> MinHashAttrData:
-    """Write a one-shard MinHash attr dataset for focused fuzzy-dup tests."""
+    """Write a one-shard MinHash attr dataset for focused fuzzy-dup tests.
+
+    Each row is stamped with ``partition_id=0`` so it routes through
+    fuzzy_dups' partition-aware writer; ``num_partitions=1`` on the artifact.
+    """
     attr_dir = os.path.join(output_dir, "outputs")
     Path(attr_dir).mkdir(parents=True, exist_ok=True)
-    write_parquet_file(rows, os.path.join(attr_dir, "part-00000.parquet"))
+    rows_with_partition = [{**r, "partition_id": 0} for r in rows]
+    write_parquet_file(rows_with_partition, os.path.join(attr_dir, "part-00000-of-00001.parquet"))
     return MinHashAttrData(
         params=TEST_MINHASH_PARAMS,
         source_main_dir=source_main_dir,
         attr_dir=attr_dir,
+        num_partitions=1,
         counters={},
     )
 
 
 def test_minhash_attrs_co_partitioned_with_source(fox_corpus):
-    """Each source shard produces a same-named MinHash attr parquet with {id, buckets}."""
+    """Each source shard produces a same-named MinHash attr parquet with {id, partition_id, buckets}."""
     norm_dir = os.path.join(fox_corpus["output_dir"], "normalized")
     minhash_dir = os.path.join(fox_corpus["output_dir"], "minhash")
 
@@ -74,6 +80,7 @@ def test_minhash_attrs_co_partitioned_with_source(fox_corpus):
     minhash = compute_minhash_attrs(source=source, output_path=minhash_dir)
 
     assert minhash.source_main_dir == source.main_output_dir
+    assert minhash.num_partitions == source.num_partitions
     assert minhash.params.num_perms == 286
     assert minhash.params.num_bands == 26
 
@@ -82,7 +89,7 @@ def test_minhash_attrs_co_partitioned_with_source(fox_corpus):
     assert source_basenames == attr_basenames
     assert source_basenames  # non-empty
 
-    # At least one non-empty shard exists with the expected {id, buckets} schema.
+    # At least one non-empty shard exists with {id, partition_id, buckets}.
     # Empty source shards produce empty attr parquets with no schema, which we skip.
     seen_non_empty = False
     for pf in Path(minhash.attr_dir).glob("*.parquet"):
@@ -92,6 +99,8 @@ def test_minhash_attrs_co_partitioned_with_source(fox_corpus):
         seen_non_empty = True
         rec = rows[0]
         assert isinstance(rec["id"], str)
+        assert isinstance(rec["partition_id"], int)
+        assert 0 <= rec["partition_id"] < source.num_partitions
         assert isinstance(rec["buckets"], list)
         assert all(isinstance(b, str) for b in rec["buckets"])
     assert seen_non_empty, "expected at least one non-empty MinHash attr shard"

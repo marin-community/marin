@@ -30,7 +30,12 @@ def _make_normalized(tmp_path: Path, shards: dict[str, list[str]]) -> Normalized
     dup_dir.mkdir(parents=True, exist_ok=True)
     for rel, ids in shards.items():
         _write_normalized_shard(main_dir / rel, ids)
-    return NormalizedData(main_output_dir=str(main_dir), dup_output_dir=str(dup_dir), counters={})
+    return NormalizedData(
+        main_output_dir=str(main_dir),
+        dup_output_dir=str(dup_dir),
+        num_partitions=len(shards),
+        counters={},
+    )
 
 
 def test_sample_takes_first_k_deterministically(tmp_path: Path):
@@ -111,6 +116,7 @@ def test_sample_no_shards_raises(tmp_path: Path):
     source = NormalizedData(
         main_output_dir=str(empty),
         dup_output_dir=str(tmp_path / "d"),
+        num_partitions=0,
         counters={},
     )
     with pytest.raises(ValueError, match="No parquet shards"):
