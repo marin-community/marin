@@ -11,6 +11,7 @@ from starlette.routing import Mount, Route
 
 from iris.cluster.dashboard_common import favicon_route, html_shell, static_files_mount
 from iris.cluster.worker.service import WorkerServiceImpl
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.worker_connect import WorkerServiceWSGIApplication
 
 
@@ -37,7 +38,7 @@ class WorkerDashboard:
         return self._app
 
     def _create_app(self) -> Starlette:
-        rpc_wsgi_app = WorkerServiceWSGIApplication(service=self._service)
+        rpc_wsgi_app = WorkerServiceWSGIApplication(service=self._service, compressions=IRIS_RPC_COMPRESSIONS)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         routes = [

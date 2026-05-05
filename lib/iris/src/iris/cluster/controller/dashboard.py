@@ -56,6 +56,7 @@ from iris.cluster.dashboard_common import (
     static_files_mount,
 )
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, ConcurrencyLimitInterceptor, RequestTimingInterceptor
 from iris.rpc.stats import RpcStatsCollector
@@ -387,7 +388,9 @@ class ControllerDashboard:
             # when present but treat everything as anonymous/admin.
             auth_interceptor = NullAuthInterceptor(verifier=self._auth_verifier)
         controller_interceptors = [auth_interceptor, controller_timing]
-        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=controller_interceptors)
+        rpc_wsgi_app = ControllerServiceWSGIApplication(
+            service=self._service, interceptors=controller_interceptors, compressions=IRIS_RPC_COMPRESSIONS
+        )
 
         # StatsService: reuses the auth interceptor (so non-admins can't read
         # sampled request previews) but skips RequestTimingInterceptor so the
@@ -395,6 +398,7 @@ class ControllerDashboard:
         stats_wsgi_app = StatsServiceWSGIApplication(
             service=RpcStatsService(self._stats_collector),
             interceptors=[auth_interceptor],
+            compressions=IRIS_RPC_COMPRESSIONS,
         )
         stats_app = WSGIMiddleware(stats_wsgi_app)
 
@@ -406,7 +410,9 @@ class ControllerDashboard:
         # Cap concurrent FetchLogs RPCs to avoid evicting the page cache with
         # parallel DuckDB scans. See duckdb_store.py for working-set caps.
         log_interceptors = [auth_interceptor, log_timing, ConcurrencyLimitInterceptor({"FetchLogs": 4})]
-        log_wsgi_app = LogServiceWSGIApplication(service=self._log_service, interceptors=log_interceptors)
+        log_wsgi_app = LogServiceWSGIApplication(
+            service=self._log_service, interceptors=log_interceptors, compressions=IRIS_RPC_COMPRESSIONS
+        )
         log_app = WSGIMiddleware(log_wsgi_app)
 
         # Backward-compat: old clients call ControllerService/FetchLogs (removed
@@ -505,6 +511,7 @@ class ControllerDashboard:
             finelog_stats_wsgi_app = FinelogStatsServiceWSGIApplication(
                 service=self._finelog_stats_service,
                 interceptors=[auth_interceptor],
+                compressions=IRIS_RPC_COMPRESSIONS,
             )
             routes.append(Mount(finelog_stats_wsgi_app.path, app=WSGIMiddleware(finelog_stats_wsgi_app)))
         routes.append(static_files_mount())
