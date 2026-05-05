@@ -153,10 +153,24 @@ def tracked_clients(monkeypatch):
 class _FakeLogServiceClient:
     def __init__(self, address, **_kwargs):
         self.address = address
+        self.pushes: list[logging_pb2.PushLogsRequest] = []
         self.requests: list[logging_pb2.FetchLogsRequest] = []
         self.response: logging_pb2.FetchLogsResponse = logging_pb2.FetchLogsResponse()
+        self.errors: list[Exception] = []
+        self.push_errors_by_key: dict[str, list[Exception]] = {}
+
+    def push_logs(self, request):
+        if self.errors:
+            raise self.errors.pop(0)
+        key_errors = self.push_errors_by_key.get(request.key)
+        if key_errors:
+            raise key_errors.pop(0)
+        self.pushes.append(request)
+        return logging_pb2.PushLogsResponse()
 
     def fetch_logs(self, request):
+        if self.errors:
+            raise self.errors.pop(0)
         self.requests.append(request)
         return self.response
 
@@ -164,33 +178,39 @@ class _FakeLogServiceClient:
         pass
 
 
+def _push_payloads(client: _FakeLogServiceClient) -> list[tuple[str, list[str]]]:
+    return [(push.key, [entry.data for entry in push.entries]) for push in client.pushes]
+
+
 @pytest.fixture
 def tracked_log_service_clients(monkeypatch):
-    """Patch LogServiceClientSync; expose request/response on the singleton fake."""
-    fake = _FakeLogServiceClient(address=None)
+    """Patch the LogService client class to record every constructed instance."""
+    clients: list[_FakeLogServiceClient] = []
 
     def factory(address, timeout_ms=10_000, interceptors=()):
-        fake.address = address
-        return fake
+        c = _FakeLogServiceClient(address, timeout_ms=timeout_ms, interceptors=interceptors)
+        clients.append(c)
+        return c
 
     monkeypatch.setattr(log_client_mod, "LogServiceClientSync", factory)
-    return fake
+    return clients
 
 
-def test_connect_returns_usable_client(tracked_clients):
+def test_connect_returns_usable_client(tracked_clients, tracked_log_service_clients):
     client = LogClient.connect("http://h:1")
     try:
         client.write_batch("key", [logging_pb2.LogEntry(source="t", data="hi")])
         assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
-        assert tracked_clients and tracked_clients[0].writes[0].namespace == "log"
-        decoded = _decode_ipc_table(tracked_clients[0].writes[0].arrow_ipc)
-        assert decoded.column("key").to_pylist() == ["key"]
-        assert decoded.column("data").to_pylist() == ["hi"]
+        assert tracked_clients == []
+        assert tracked_log_service_clients
+        push = tracked_log_service_clients[0].pushes[0]
+        assert push.key == "key"
+        assert [entry.data for entry in push.entries] == ["hi"]
     finally:
         client.close()
 
 
-def test_close_is_idempotent(tracked_clients):
+def test_close_is_idempotent():
     client = LogClient.connect("http://h:1")
     client.close()
     client.close()
@@ -198,17 +218,17 @@ def test_close_is_idempotent(tracked_clients):
         client.write_batch("k", [logging_pb2.LogEntry(source="t", data="x")])
 
 
-def test_connect_accepts_host_port_tuple(tracked_clients):
+def test_connect_accepts_host_port_tuple(tracked_log_service_clients):
     client = LogClient.connect(("h", 1234))
     try:
         client.write_batch("k", [logging_pb2.LogEntry(source="t", data="x")])
         assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
-        assert tracked_clients[0].address == "http://h:1234"
+        assert tracked_log_service_clients[0].address == "http://h:1234"
     finally:
         client.close()
 
 
-def test_resolver_runs_per_resolve(tracked_clients):
+def test_resolver_runs_per_resolve(tracked_log_service_clients):
     addresses = iter(["http://primary:1", "http://secondary:1"])
     resolver_calls: list[str] = []
 
@@ -225,7 +245,7 @@ def test_resolver_runs_per_resolve(tracked_clients):
     assert resolver_calls == ["/system/log-server"]
 
 
-def test_invalidates_on_connection_refused(tracked_clients, monkeypatch):
+def test_invalidates_on_connection_refused(tracked_log_service_clients, monkeypatch):
     """Retryable failure invalidates the cached client; the next send re-resolves.
 
     The client retries with exponential backoff. To keep this test
@@ -240,16 +260,34 @@ def test_invalidates_on_connection_refused(tracked_clients, monkeypatch):
     try:
         client.write_batch("k", [logging_pb2.LogEntry(source="t", data="primer")])
         assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
-        tracked_clients[0].errors.append(ConnectError(Code.UNAVAILABLE, "down"))
+        tracked_log_service_clients[0].errors.append(ConnectError(Code.UNAVAILABLE, "down"))
         client.write_batch("k", [logging_pb2.LogEntry(source="t", data="retry")])
         assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
-        assert len(tracked_clients) >= 2, "expected re-resolution to construct a new client"
+        assert len(tracked_log_service_clients) >= 2, "expected re-resolution to construct a new client"
+        assert any(entry.data == "retry" for push in tracked_log_service_clients[1].pushes for entry in push.entries)
+    finally:
+        client.close()
 
-        def _retry_landed(req):
-            decoded = _decode_ipc_table(req.arrow_ipc)
-            return "retry" in decoded.column("data").to_pylist()
 
-        assert any(_retry_landed(w) for w in tracked_clients[1].writes)
+def test_log_retry_rebuffers_from_failed_key_run_without_duplicating_prefix(
+    tracked_log_service_clients,
+    monkeypatch,
+):
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_INITIAL", 1e-9)
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_MAX", 1e-9)
+    client = LogClient.connect("http://h:1")
+    try:
+        client.fetch_logs(logging_pb2.FetchLogsRequest(source="warm"))
+        tracked_log_service_clients[0].push_errors_by_key["b"] = [ConnectError(Code.UNAVAILABLE, "down")]
+
+        client.write_batch("a", [logging_pb2.LogEntry(source="t", data="a1")])
+        client.write_batch("b", [logging_pb2.LogEntry(source="t", data="b1")])
+        client.write_batch("a", [logging_pb2.LogEntry(source="t", data="a2")])
+
+        assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
+        assert len(tracked_log_service_clients) >= 2
+        assert _push_payloads(tracked_log_service_clients[0]) == [("a", ["a1"])]
+        assert _push_payloads(tracked_log_service_clients[1]) == [("b", ["b1"]), ("a", ["a2"])]
     finally:
         client.close()
 
@@ -263,11 +301,12 @@ def test_fetch_logs_round_trips(tracked_log_service_clients):
             cursor=42,
         )
         canned.entries[0].timestamp.epoch_ms = 1700000000000
-        tracked_log_service_clients.response = canned
+        client._get_log_service_client()
+        tracked_log_service_clients[0].response = canned
 
         resp = client.fetch_logs(request)
 
-        assert tracked_log_service_clients.requests == [request]
+        assert tracked_log_service_clients[0].requests == [request]
         assert resp.cursor == 42
         assert [e.data for e in resp.entries] == ["hi"]
     finally:
@@ -415,13 +454,13 @@ def test_table_query_translates_invalid_argument(tracked_clients):
         client.close()
 
 
-def test_close_drains_pending_log_rows(tracked_clients):
+def test_close_drains_pending_log_rows(tracked_log_service_clients):
     client = LogClient.connect("http://h:1")
     entry = logging_pb2.LogEntry(source="t", data="line")
     client.write_batch("k", [entry, entry])
     client.close()
-    assert tracked_clients[0].writes
-    total = sum(_decode_ipc_table(w.arrow_ipc).num_rows for w in tracked_clients[0].writes)
+    assert tracked_log_service_clients[0].pushes
+    total = sum(len(push.entries) for push in tracked_log_service_clients[0].pushes)
     assert total == 2
 
 
@@ -508,7 +547,7 @@ def test_schema_from_dataclass_rejects_unsupported_type():
         schema_from_dataclass(Stat)
 
 
-def test_remote_log_handler_writes_via_log_client(tracked_clients):
+def test_remote_log_handler_writes_via_log_client(tracked_log_service_clients):
     client = LogClient.connect("http://h:1")
     handler = RemoteLogHandler(client, key="proc")
     log = logging.getLogger("e2e_handler")
@@ -517,8 +556,8 @@ def test_remote_log_handler_writes_via_log_client(tracked_clients):
     try:
         log.info("end-to-end")
         assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
-        decoded = _decode_ipc_table(tracked_clients[0].writes[0].arrow_ipc)
-        assert decoded.column("key").to_pylist() == ["proc"]
+        assert tracked_log_service_clients[0].pushes[0].key == "proc"
+        assert [entry.data for entry in tracked_log_service_clients[0].pushes[0].entries] == ["end-to-end"]
     finally:
         log.removeHandler(handler)
         handler.close()

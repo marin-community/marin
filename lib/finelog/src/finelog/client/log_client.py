@@ -38,7 +38,6 @@ from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 from finelog.rpc.logging_connect import LogServiceClientSync
-from finelog.store.log_namespace import LOG_REGISTERED_SCHEMA
 from finelog.store.schema import (
     IMPLICIT_SEQ_COLUMN,
     Column,
@@ -81,6 +80,7 @@ DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
 _BACKOFF_INITIAL = 0.5
 _BACKOFF_MAX = 30.0
 _OVERFLOW_LOG_INTERVAL = 5.0
+_LOG_ITEM_OVERHEAD_BYTES = 64
 
 
 class FlushResult(StrEnum):
@@ -162,6 +162,14 @@ def schema_from_dataclass(cls: type) -> Schema:
 class _PendingItem:
     seq: int
     payload: Any
+    size_bytes: int
+
+
+@dataclass(slots=True)
+class _PendingLogItem:
+    seq: int
+    key: str
+    entry: logging_pb2.LogEntry
     size_bytes: int
 
 
@@ -390,6 +398,197 @@ class Table:
         return items[-1].seq, []
 
 
+class _LogWriter:
+    """Internal buffered writer for the privileged ``log`` namespace."""
+
+    def __init__(
+        self,
+        *,
+        pusher: Callable[[str, list[logging_pb2.LogEntry]], None],
+        flush_interval: float = DEFAULT_FLUSH_INTERVAL,
+        batch_rows: int = DEFAULT_BATCH_ROWS,
+        max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
+        max_buffer_rows: int = DEFAULT_BATCH_ROWS,
+        thread_name: str = "finelog-log-client",
+    ) -> None:
+        self._pusher = pusher
+        self._flush_interval = flush_interval
+        self._batch_rows = batch_rows
+        self._max_buffer_bytes = max_buffer_bytes
+        self._max_buffer_rows = max_buffer_rows
+
+        self._cond = threading.Condition()
+        self._queue: deque[_PendingLogItem] = deque()
+        self._queue_bytes = 0
+        self._closing = False
+        self._closed = False
+
+        self._pushed_seq = 0
+        self._processed_seq = 0
+
+        self._overflow_dropped_pending = 0
+        self._overflow_log_limiter = RateLimiter(interval_seconds=_OVERFLOW_LOG_INTERVAL)
+        self._backoff = ExponentialBackoff(initial=_BACKOFF_INITIAL, maximum=_BACKOFF_MAX, factor=2.0)
+
+        self._thread = threading.Thread(target=self._run, name=thread_name, daemon=True)
+        self._thread.start()
+
+    def write_batch(self, key: str, messages: Sequence[logging_pb2.LogEntry]) -> None:
+        """Buffer ``messages`` for write. Never blocks the caller."""
+        messages_list = list(messages)
+        if not messages_list:
+            return
+        with self._cond:
+            if self._closing or self._closed:
+                raise RuntimeError("Log writer is closed")
+            for entry in messages_list:
+                self._pushed_seq += 1
+                size = _log_item_size_bytes(key, entry)
+                self._queue.append(_PendingLogItem(self._pushed_seq, key, entry, size))
+                self._queue_bytes += size
+            self._trim_oldest_locked()
+            if len(self._queue) >= self._batch_rows or self._queue_bytes >= self._max_buffer_bytes:
+                self._cond.notify_all()
+
+    def flush(self, timeout: float | None = None) -> FlushResult:
+        """Block until log entries enqueued before this call have been processed."""
+        with self._cond:
+            target = self._pushed_seq
+            if target == 0 or self._processed_seq >= target:
+                return FlushResult.SUCCEEDED
+            self._cond.notify_all()
+            deadline = (time.monotonic() + timeout) if timeout is not None else None
+            while self._processed_seq < target:
+                if self._closed:
+                    return FlushResult.SUCCEEDED if self._processed_seq >= target else FlushResult.TIMEOUT
+                if deadline is None:
+                    self._cond.wait(timeout=1.0)
+                else:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return FlushResult.TIMEOUT
+                    self._cond.wait(timeout=remaining)
+            return FlushResult.SUCCEEDED
+
+    def close(self) -> None:
+        """Stop the flush thread after one best-effort drain."""
+        with self._cond:
+            if self._closed:
+                return
+            self._closing = True
+            self._cond.notify_all()
+        self._thread.join(timeout=max(self._flush_interval * 2, 10.0))
+        with self._cond:
+            self._closed = True
+            self._cond.notify_all()
+
+    def _trim_oldest_locked(self) -> None:
+        dropped = 0
+        max_dropped_seq = 0
+        while len(self._queue) > self._max_buffer_rows or self._queue_bytes > self._max_buffer_bytes:
+            if not self._queue:
+                break
+            item = self._queue.popleft()
+            self._queue_bytes -= item.size_bytes
+            if item.seq > max_dropped_seq:
+                max_dropped_seq = item.seq
+            dropped += 1
+        if dropped:
+            self._overflow_dropped_pending += dropped
+            if self._overflow_log_limiter.should_run():
+                logger.warning(
+                    "LogClient log buffer overflow: dropped %d oldest entries (rows=%d/%d, bytes=%d/%d)",
+                    self._overflow_dropped_pending,
+                    len(self._queue),
+                    self._max_buffer_rows,
+                    self._queue_bytes,
+                    self._max_buffer_bytes,
+                )
+                self._overflow_dropped_pending = 0
+            if max_dropped_seq > self._processed_seq:
+                self._processed_seq = max_dropped_seq
+                self._cond.notify_all()
+
+    def _take_queue_locked(self) -> list[_PendingLogItem]:
+        items = list(self._queue)
+        self._queue.clear()
+        self._queue_bytes = 0
+        return items
+
+    def _rebuffer_at_head_locked(self, items: list[_PendingLogItem]) -> None:
+        for item in reversed(items):
+            self._queue.appendleft(item)
+            self._queue_bytes += item.size_bytes
+        self._trim_oldest_locked()
+
+    def _run(self) -> None:
+        while True:
+            with self._cond:
+                while not self._closing and not self._queue:
+                    self._cond.wait(timeout=self._flush_interval)
+                if not self._queue:
+                    return
+                items = self._take_queue_locked()
+
+            sent_max_seq, unsent = self._send(items)
+            with self._cond:
+                if sent_max_seq > self._processed_seq:
+                    self._processed_seq = sent_max_seq
+                    self._cond.notify_all()
+            if not unsent:
+                self._backoff.reset()
+                continue
+
+            with self._cond:
+                if self._closing:
+                    if unsent[-1].seq > self._processed_seq:
+                        self._processed_seq = unsent[-1].seq
+                        self._cond.notify_all()
+                    return
+                self._rebuffer_at_head_locked(unsent)
+            deadline = time.monotonic() + self._backoff.next_interval()
+            with self._cond:
+                while not self._closing:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._cond.wait(timeout=remaining)
+
+    def _send(self, items: list[_PendingLogItem]) -> tuple[int, list[_PendingLogItem]]:
+        """Send contiguous key runs. Returns ``(max_contiguous_sent_seq, unsent)``."""
+        if not items:
+            return 0, []
+
+        sent_max_seq = 0
+        index = 0
+        while index < len(items):
+            start = index
+            key = items[index].key
+            entries: list[logging_pb2.LogEntry] = []
+            while index < len(items) and items[index].key == key:
+                entries.append(items[index].entry)
+                index += 1
+
+            try:
+                self._pusher(key, entries)
+            except Exception as exc:
+                retryable = is_retryable_error(exc) or isinstance(exc, (ConnectionError, OSError, TimeoutError))
+                summary = _format_exc_summary(exc)
+                logger.warning(
+                    "LogClient log send failure for key=%s (%d entries, retryable=%s): %s",
+                    key,
+                    len(entries),
+                    retryable,
+                    summary,
+                )
+                if not retryable:
+                    return items[-1].seq, []
+                return sent_max_seq, items[start:]
+
+            sent_max_seq = items[index - 1].seq
+        return items[-1].seq, []
+
+
 class LogClient:
     """Domain client for the finelog process.
 
@@ -414,8 +613,9 @@ class LogClient:
         self._closed = False
         self._stats_client: StatsServiceClientSync | None = None
         self._log_service_client: LogServiceClientSync | None = None
+        self._log_writer: _LogWriter | None = None
 
-        # The log namespace's Table is constructed lazily on first
+        # The log namespace's writer is constructed lazily on first
         # write_batch/fetch_logs so connect() does not pay the resolver cost
         # when a caller only needs stats.
         self._tables: dict[str, Table] = {}
@@ -448,9 +648,9 @@ class LogClient:
         )
 
     def close(self) -> None:
-        """Drain and join every open Table, then close the RPC clients.
+        """Drain and join the log writer and every open Table, then close RPC clients.
 
-        Tables are drained before the client is marked closed so the bg
+        Writers are drained before the client is marked closed so the bg
         flush threads can complete one final send.
         """
         with self._lock:
@@ -458,6 +658,10 @@ class LogClient:
                 return
             tables = list(self._tables.values())
             self._tables.clear()
+            log_writer = self._log_writer
+            self._log_writer = None
+        if log_writer is not None:
+            log_writer.close()
         for tbl in tables:
             tbl.close()
         with self._lock:
@@ -475,8 +679,8 @@ class LogClient:
         """Append ``messages`` to the ``log`` namespace under ``key``."""
         if not messages:
             return
-        table = self._get_log_table()
-        table.write(_log_entries_to_rows(key, messages))
+        writer = self._get_log_writer()
+        writer.write_batch(key, messages)
 
     def fetch_logs(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
         """Read from the ``log`` namespace via ``LogService.FetchLogs``.
@@ -497,16 +701,16 @@ class LogClient:
             raise
 
     def flush(self, timeout: float | None = None) -> FlushResult:
-        """Flush the ``log`` namespace's Table, if any."""
-        table = self._tables.get(LOG_NAMESPACE)
-        if table is None:
+        """Flush the ``log`` namespace's writer, if any."""
+        writer = self._log_writer
+        if writer is None:
             return FlushResult.SUCCEEDED
-        return table.flush(timeout=timeout)
+        return writer.flush(timeout=timeout)
 
     def get_table(self, namespace: str, schema: type | Schema) -> Table:
         """Idempotently register ``namespace`` and return a Table handle."""
         if namespace == LOG_NAMESPACE:
-            raise InvalidNamespaceError("use write_batch/query for the privileged 'log' namespace")
+            raise InvalidNamespaceError("use write_batch/fetch_logs for the privileged 'log' namespace")
         if isinstance(schema, Schema):
             requested = schema
         elif isinstance(schema, type):
@@ -567,23 +771,18 @@ class LogClient:
                 return
             raise translated from exc
 
-    def _get_log_table(self) -> Table:
+    def _get_log_writer(self) -> _LogWriter:
         with self._lock:
-            tbl = self._tables.get(LOG_NAMESPACE)
-            if tbl is not None:
-                return tbl
+            writer = self._log_writer
+            if writer is not None:
+                return writer
             if self._closed:
                 raise RuntimeError("LogClient is closed")
-            # ``log`` is auto-registered server-side; skip register_table.
-            tbl = Table(
-                namespace=LOG_NAMESPACE,
-                schema=LOG_REGISTERED_SCHEMA,
-                flusher=self._stats_flush,
-                row_encoder=_make_stats_row_encoder(schema_to_arrow(LOG_REGISTERED_SCHEMA), LOG_REGISTERED_SCHEMA),
-                thread_name="finelog-log-client",
+            writer = _LogWriter(
+                pusher=self._push_logs,
             )
-            self._tables[LOG_NAMESPACE] = tbl
-            return tbl
+            self._log_writer = writer
+            return writer
 
     def _get_stats_client(self) -> StatsServiceClientSync:
         with self._lock:
@@ -666,6 +865,18 @@ class LogClient:
             self._invalidate(_format_exc_summary(exc))
             raise
 
+    def _push_logs(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
+        client = self._get_log_service_client()
+        try:
+            client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
+        except ConnectError as exc:
+            if is_retryable_error(exc):
+                self._invalidate(_format_exc_summary(exc))
+            raise
+        except (ConnectionError, OSError, TimeoutError) as exc:
+            self._invalidate(_format_exc_summary(exc))
+            raise
+
 
 # ---------------------------------------------------------------------------
 # Row → Arrow conversion for stats Tables.
@@ -705,19 +916,8 @@ def _make_stats_row_encoder(arrow_schema: pa.Schema, schema: Schema) -> Callable
     return encode
 
 
-def _log_entries_to_rows(key: str, messages: Sequence[logging_pb2.LogEntry]) -> list[Any]:
-    rows: list[Any] = []
-    for entry in messages:
-        rows.append(
-            types.SimpleNamespace(
-                key=key,
-                source=entry.source,
-                data=entry.data,
-                epoch_ms=entry.timestamp.epoch_ms,
-                level=int(entry.level),
-            )
-        )
-    return rows
+def _log_item_size_bytes(key: str, entry: logging_pb2.LogEntry) -> int:
+    return len(key) + len(entry.source) + len(entry.data) + _LOG_ITEM_OVERHEAD_BYTES
 
 
 def _translate_connect_error(exc: ConnectError) -> Exception:

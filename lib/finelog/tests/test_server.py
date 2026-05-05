@@ -9,11 +9,15 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from finelog.rpc import finelog_stats_pb2 as stats_pb2
+from finelog.rpc import logging_pb2
 from finelog.server.asgi import build_log_server_asgi
 from finelog.server.service import LogServiceImpl
 from finelog.server.stats_service import StatsServiceImpl
 from finelog.store.duckdb_store import DuckDBLogStore
 from starlette.testclient import TestClient
+
+from tests.conftest import _ipc_to_table, _seal
 
 
 @pytest.fixture
@@ -106,6 +110,30 @@ def test_push_then_fetch_round_trip(tmp_path: Path):
         body = fetch_resp.json()
         entries = body.get("entries", [])
         assert [e["data"] for e in entries] == ["hello", "world"]
+    finally:
+        svc.close()
+
+
+def test_push_logs_are_visible_to_stats_query(tmp_path: Path):
+    svc = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
+    stats_service = StatsServiceImpl(log_store=svc.log_store)
+    try:
+        entry = logging_pb2.LogEntry(source="stdout", data="hello", level=logging_pb2.LOG_LEVEL_INFO)
+        entry.timestamp.epoch_ms = 1
+        svc.push_logs(logging_pb2.PushLogsRequest(key="/job/test/0:0", entries=[entry]), ctx=None)
+        _seal(svc.log_store, "log")
+
+        response = stats_service.query(
+            stats_pb2.QueryRequest(sql='SELECT key, source, data, epoch_ms, level FROM "log"'),
+            ctx=None,
+        )
+        table = _ipc_to_table(response.arrow_ipc)
+
+        assert table.column("key").to_pylist() == ["/job/test/0:0"]
+        assert table.column("source").to_pylist() == ["stdout"]
+        assert table.column("data").to_pylist() == ["hello"]
+        assert table.column("epoch_ms").to_pylist() == [1]
+        assert table.column("level").to_pylist() == [int(logging_pb2.LOG_LEVEL_INFO)]
     finally:
         svc.close()
 
