@@ -109,6 +109,7 @@ def test_job_summary_payload_preserves_summary_task_fields():
     assert payload["tasks"][0]["index"] == "0"
     assert payload["tasks"][0]["exit_code"] is None
     assert "resource_requests" in payload
+    assert "resource_usage" not in payload
 
 
 def test_jobs_with_prefix_excludes_string_prefix_siblings():

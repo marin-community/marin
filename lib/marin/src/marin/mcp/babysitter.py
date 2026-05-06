@@ -182,7 +182,6 @@ def job_status_to_json(job: job_pb2.JobStatus, tasks: Iterable[job_pb2.TaskStatu
         "completed_count": int(job.completed_count),
         "task_state_counts": dict(job.task_state_counts),
         "has_children": bool(job.has_children),
-        "resource_usage": _resource_usage_to_json(job.resource_usage),
         "resource_requests": _resource_spec_to_json(job.resources),
         "ports": dict(job.ports),
         "tasks": task_payloads,
