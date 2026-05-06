@@ -206,11 +206,10 @@ layout: split-left-green
 
 ::right::
 
-- Pulled **57** finished `dial_moe` runs in the **2.5e18-4.0e18** FLOP band.
-- Same metric as March: `eval/paloma/c4_en/bpb`; lower is better. Orange is the cumulative best achieved so far.
-- The teal line is the Delphi AdamH ladder winner at **3e18**: **1.0871** BPB.
-- The March 24 reference was **1.0407** BPB. The current best is **0.9889** BPB, a **0.0518** BPB drop.
-- The best point is an exact **3e18** run: `isoflop-k5e256-d768-3e+18`, finished **May 2**.
+- **57** finished `dial_moe` runs in the **2.5e18-4.0e18** FLOP band; metric is `eval/paloma/c4_en/bpb`.
+- Orange is cumulative best; teal lines are Delphi AdamH refs: **3e18 1.0871**, **2e19 0.9948**, **3e19 0.9720**.
+- Current best is **0.9889** BPB at exact **3e18**: `isoflop-k5e256-d768-3e+18`, finished **May 2**.
+- That is below Delphi **2e19** and within **0.0169** BPB of Delphi **3e19**. March 24 MoE best was **1.0407**.
 
 <Box bold>
 

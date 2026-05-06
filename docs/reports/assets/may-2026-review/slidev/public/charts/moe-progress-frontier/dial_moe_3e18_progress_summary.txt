@@ -2,12 +2,16 @@ entity_project: marin-community/dial_moe
 metric: eval/paloma/c4_en/bpb
 compute_band_flops: 2.500000e+18..4.000000e+18
 source_csv: dial_moe_runs.csv
-generated_at_utc: 2026-05-06T20:17:11.399024+00:00
+generated_at_utc: 2026-05-06T20:28:20.795166+00:00
 runs_in_band: 57
-first_created_at: 2026-04-07T20:15:05+00:00
-last_created_at: 2026-05-05T01:14:55+00:00
+first_created_at: 2026-04-07T20:15:05Z
+last_created_at: 2026-05-05T01:14:55Z
 delphi_3e18_reference_bpb: 1.087110
 delphi_3e18_reference_run: isoflop-3e+18-d896-L10-B8-adamh_scaling_v6
+delphi_2e19_reference_bpb: 0.994790
+delphi_2e19_reference_run: isoflop-2e+19-d1408-L15-B16-adamh_scaling_v6
+delphi_3e19_reference_bpb: 0.972027
+delphi_3e19_reference_run: isoflop-3e+19-d1536-L16-B32-adamh_scaling_v6
 march_reference_bpb: 1.040673
 dense_reference_bpb: 1.156400
 best_bpb: 0.988889
@@ -16,9 +20,10 @@ best_group: may-arch-isoflop
 best_created_at: 2026-05-02T10:34:22Z
 best_compute_flops: 3.000000e+18
 improvement_vs_march_reference_bpb: 0.051784
+gap_vs_delphi_2e19_reference_bpb: -0.005900
+gap_vs_delphi_3e19_reference_bpb: 0.016862
 frontier_updates:
   2026-04-07T20:15:05Z  1.043723  3.691606e+18  cbs-d768-2e+18-bs384  cbs-sweep
-  2026-04-09T07:37:14Z  1.036950  3.885095e+18  beta2-d768-2e18-bs64-b2_0.95  beta2-sweep
   2026-04-09T07:37:14Z  1.029837  3.885095e+18  beta2-d768-2e18-bs64-b2_0.99  beta2-sweep
   2026-04-09T11:29:58Z  1.029270  3.885095e+18  beta2-d768-2e18-bs64-b2_0.999  beta2-sweep
   2026-04-09T11:40:57Z  1.028644  3.885095e+18  beta2-d768-2e18-bs64-b2_0.995  beta2-sweep

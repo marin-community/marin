@@ -154,7 +154,8 @@ This is the training-performance section.
 - New progress figure uses finished `marin-community/dial_moe` runs in the 3e18-scale band from April 7 through May 5.
 - The band is `2.5e18-4.0e18` FLOPs. Exact 3e18 runs only cover May 2-3, so the band preserves the month-long progress story while keeping the compute scale comparable.
 - Pull result: 57 finished runs with `eval/paloma/c4_en/bpb` in the band.
-- The Delphi AdamH ladder winner at 3e18 is `isoflop-3e+18-d896-L10-B8-adamh_scaling_v6` at `1.087110` BPB. This is now a teal reference line on the chart.
+- The Delphi AdamH ladder winners at 3e18, 2e19, and 3e19 are now teal reference lines on the chart: `1.087110`, `0.994790`, and `0.972027` BPB.
+- Story read: the 3e18 MoE best of `0.988889` BPB is below the Delphi 2e19 point and `0.016862` BPB above the Delphi 3e19 point.
 - The full Delphi by-band C4 table is in `public/charts/moe-progress-frontier/delphi_c4_by_flop_band.txt`.
 - The March chart's best-so-far point was `1.040673` BPB at March 24. The current best is `isoflop-k5e256-d768-3e+18` at `0.988889` BPB, a `0.051784` BPB drop.
 - Configurable MoE implementation: `#4964`.
