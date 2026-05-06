@@ -13,6 +13,7 @@ DATASET_REPO = "ravwojdyla/marin-test-data-fixtures"
 PARSER_VARIANTS_REVISION = "b4410029dd8fd57171283c681912adc3a5092e88"
 SAME_SITE_DISTINCT_REVISION = "88401e16e3ae1f03e23a9ca3b48d453727af41ad"
 WIKIPEDIA_REVISIONS_REVISION = "67a6e5a4482bf348c22d4c96d45d246ddba2d843"
+QUOTE_INCLUSION_REVISION = "02092a40e90a9c7e6eaa9398cea37cf60284a1d8"
 
 # Back-compat alias used by existing parser-variants fixtures below.
 PARSER_VARIANTS_REPO = DATASET_REPO
@@ -111,6 +112,24 @@ def wikipedia_revisions_docs(wikipedia_revisions_corpus) -> list[dict]:
 def wikipedia_revisions_articles(wikipedia_revisions_corpus) -> list[str]:
     """Sorted distinct article slugs present in the revisions corpus."""
     return sorted({r["article_slug"] for r in wikipedia_revisions_corpus})
+
+
+@pytest.fixture(scope="session")
+def quote_inclusion_corpus():
+    """Pinned ``quote_inclusion`` config from the marin test-fixtures HF dataset.
+
+    Two real Wikipedia articles. The synthetic 'host article with embedded
+    long quote of the other' document is built at test time inside the
+    test, not stored here.
+    """
+    from datasets import load_dataset
+
+    return load_dataset(
+        DATASET_REPO,
+        "quote_inclusion",
+        revision=QUOTE_INCLUSION_REVISION,
+        split="train",
+    )
 
 
 def load_dedup_outputs(output_dir: str) -> dict[str, dict]:

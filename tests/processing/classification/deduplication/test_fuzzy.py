@@ -541,3 +541,50 @@ def test_wikipedia_revisions_cluster_per_article(tmp_path: Path, wikipedia_revis
 
     cluster_ids = list(article_to_cluster.values())
     assert len(set(cluster_ids)) == len(cluster_ids), f"distinct articles clustered together: {article_to_cluster}"
+
+
+@pytest.mark.data_integration
+def test_quote_inclusion_clusters_with_host_not_quoted(tmp_path: Path, quote_inclusion_corpus):
+    """A host article with an inserted long quote of another must cluster with the host, not the source.
+
+    Precision regression on citation patterns: a doc that quotes a chunk
+    of another doc should remain distinct from the source unless the
+    quote dominates. Construction at test time keeps the fixture minimal:
+    fetch two real articles A and B; build ``A_with_B_quote`` by
+    splicing ~1500 chars from the middle of B into the middle of A.
+
+    Expected:
+    * cluster(article_a, article_a_with_quote)  — host pair clusters
+    * article_b is a singleton — source not over-merged with the quoter
+    """
+    by_doc_id = {r["doc_id"]: r["text"] for r in quote_inclusion_corpus}
+    article_a = by_doc_id["article_a"]
+    article_b = by_doc_id["article_b"]
+
+    quote_chars = 1500
+    b_mid = len(article_b) // 2
+    quote = article_b[b_mid : b_mid + quote_chars]
+    a_mid = len(article_a) // 2
+    article_a_with_quote = article_a[:a_mid] + "\n\n" + quote + "\n\n" + article_a[a_mid:]
+
+    docs = [
+        {"id": "article_a", "text": article_a},
+        {"id": "article_b", "text": article_b},
+        {"id": "article_a_with_quote", "text": article_a_with_quote},
+    ]
+    by_source_id = _run_dedup_on_corpus(tmp_path, docs)
+
+    a_cluster = _cluster_id(by_source_id, "article_a")
+    a_with_quote_cluster = _cluster_id(by_source_id, "article_a_with_quote")
+    b_cluster = _cluster_id(by_source_id, "article_b")
+
+    assert a_cluster is not None, "article_a should not be a singleton"
+    assert a_with_quote_cluster is not None, "article_a_with_quote should not be a singleton"
+    assert (
+        a_cluster == a_with_quote_cluster
+    ), f"host A and A_with_quote did not cluster: {a_cluster!r} vs {a_with_quote_cluster!r}"
+
+    assert b_cluster is None, (
+        f"article_b clustered (over-merge with quoter): cluster={b_cluster!r}; "
+        "the source of a quote should not be merged with the quoter unless the quote dominates"
+    )
