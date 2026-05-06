@@ -150,28 +150,38 @@ class ConnectionPool:
     @contextmanager
     def cursor(
         self,
-        buffer_tables: list[pa.Table] | None = None,
-    ) -> Iterator[tuple[duckdb.DuckDBPyConnection, list[str]]]:
-        """Yield ``(cursor, ram_table_names)`` under the pool lock.
+        buffers: dict[str, list[pa.Table]] | None = None,
+    ) -> Iterator[duckdb.DuckDBPyConnection]:
+        """Yield a cursor under the pool lock.
 
-        Recycles the underlying connection if stale, registers any
-        ``buffer_tables`` with auto-generated names, and tears
-        everything down on exit.
+        Recycles the underlying connection if stale. ``buffers`` maps
+        view names to lists of Arrow tables; each entry becomes a
+        ``CREATE VIEW <name> AS SELECT * FROM ... UNION ALL ...``
+        so the caller can reference the tables by the view name it
+        chose. Everything is torn down on exit.
         """
         with self._lock:
             self._maybe_recycle()
             cid = _next_cursor_id()
             cur = self._conn.cursor()
-            names: list[str] = []
+            registered: list[str] = []
+            views: list[str] = []
             try:
-                for i, table in enumerate(buffer_tables or []):
-                    name = f"_ram_{cid}_{i}"
-                    cur.register(name, table)
-                    names.append(name)
-                yield cur, names
+                for view_name, tables in (buffers or {}).items():
+                    parts: list[str] = []
+                    for table in tables:
+                        reg = f"_reg_{cid}_{len(registered)}"
+                        cur.register(reg, table)
+                        registered.append(reg)
+                        parts.append(f"SELECT * FROM {reg}")
+                    cur.execute(f"CREATE VIEW {view_name} AS {' UNION ALL '.join(parts)}")
+                    views.append(view_name)
+                yield cur
             finally:
-                for name in names:
-                    cur.unregister(name)
+                for v in views:
+                    cur.execute(f"DROP VIEW IF EXISTS {v}")
+                for r in registered:
+                    cur.unregister(r)
                 cur.close()
 
     def close(self) -> None:
@@ -524,7 +534,7 @@ class DuckDBLogStore:
         view_names: list[str] = []
         self._query_visibility_lock.read_acquire()
         try:
-            with self._pool.cursor() as (cursor, _):
+            with self._pool.cursor() as cursor:
                 # Snapshot under the insertion lock so a concurrent drop_table
                 # can't trigger "dictionary changed size during iteration".
                 with self._insertion_lock:

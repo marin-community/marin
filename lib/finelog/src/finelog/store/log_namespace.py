@@ -1285,8 +1285,8 @@ class DiskLogNamespace:
         order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
         limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
 
-        with self._read_pool.cursor(ram_tables) as (conn, ram_names):
-            source = _build_union_source(parquet_files, ram_names, self._arrow_schema)
+        with self._read_pool.cursor(buffers={"_ram": ram_tables} if ram_tables else None) as conn:
+            source = _build_union_source(parquet_files, ["_ram"] if ram_tables else [], self._arrow_schema)
             sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
             return conn.execute(sql, params).fetchall()
 
@@ -1381,8 +1381,8 @@ class MemoryLogNamespace:
         limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
         where_clause = " AND ".join(where_parts)
 
-        with self._read_pool.cursor([table]) as (conn, ram_names):
-            source = _build_union_source([], ram_names, self._arrow_schema)
+        with self._read_pool.cursor(buffers={"_ram": [table]}) as conn:
+            source = _build_union_source([], ["_ram"], self._arrow_schema)
             sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
             rows = conn.execute(sql, params).fetchall()
 
@@ -1444,8 +1444,8 @@ class MemoryLogNamespace:
 class _ReadPoolProtocol(Protocol):
     def cursor(
         self,
-        buffer_tables: list[pa.Table] | None = None,
-    ) -> AbstractContextManager[tuple[duckdb.DuckDBPyConnection, list[str]]]: ...
+        buffers: dict[str, list[pa.Table]] | None = None,
+    ) -> AbstractContextManager[duckdb.DuckDBPyConnection]: ...
 
 
 def _assert_additive_schema_evolution(old: Schema, new: Schema) -> None:

@@ -69,7 +69,9 @@ sudo chown -R 1000:1000 {{ cache_dir }}
 echo "[finelog-init] Pulling image: {{ docker_image }}"
 sudo docker pull {{ docker_image }}
 
-# Force-remove any existing finelog container so re-runs replace it.
+# Gracefully stop any existing container so the server can flush RAM
+# buffers to L0 on disk, then remove it.
+sudo docker stop --time 5 {{ container_name }} 2>/dev/null || true
 sudo docker rm -f {{ container_name }} 2>/dev/null || true
 
 # Reserve 0.5 vCPU and 512 MiB for the host VM (sshd, docker daemon, ops
