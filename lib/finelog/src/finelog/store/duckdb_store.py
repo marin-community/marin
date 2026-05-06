@@ -413,6 +413,24 @@ class DuckDBLogStore:
                 raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
             return ns.schema
 
+    def memory_summary(self) -> dict[str, int]:
+        """Aggregate ram_bytes / chunk_count across namespaces, for diagnostics.
+
+        Used by the periodic pool-diagnostics logger in the standalone server.
+        ``MemoryLogNamespace`` reports zeros (no in-RAM segmented buffer).
+        """
+        total_ram_bytes = 0
+        total_chunks = 0
+        with self._insertion_lock:
+            for ns in self._namespaces.values():
+                total_ram_bytes += ns.ram_bytes()
+                total_chunks += ns.chunk_count()
+            return {
+                "namespaces": len(self._namespaces),
+                "ram_bytes": total_ram_bytes,
+                "chunks": total_chunks,
+            }
+
     def write_rows(self, name: str, arrow_ipc_bytes: bytes) -> int:
         """Validate ``arrow_ipc_bytes`` and append the rows to ``name``.
 
