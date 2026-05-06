@@ -113,6 +113,27 @@ jobs:
             esac
           done
 
+      - name: Capture perf report
+        if: success()
+        shell: bash -l {0}
+        run: |
+          uv run python scripts/datakit/collect_perf_metrics.py \
+            --job-id "${{ steps.submit.outputs.job_id }}" \
+            --iris-config "${{ env.IRIS_CONFIG }}" \
+            --status "$FERRY_STATUS_PATH" \
+            --ferry-module experiments.ferries.datakit_tier2_skewed_ferry \
+            --report-name tier2 \
+            --out perf-report.json \
+            --gcs-prefix gs://marin-us-central1/infra/datakit/ferry_perf
+
+      - name: Upload perf report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: datakit-tier2-perf-report
+          path: perf-report.json
+          retention-days: 90
+
       - name: Capture failure diagnostics
         if: failure() || cancelled()
         run: |
