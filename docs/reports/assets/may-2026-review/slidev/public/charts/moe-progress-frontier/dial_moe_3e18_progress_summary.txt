@@ -2,10 +2,12 @@ entity_project: marin-community/dial_moe
 metric: eval/paloma/c4_en/bpb
 compute_band_flops: 2.500000e+18..4.000000e+18
 source_csv: dial_moe_runs.csv
-generated_at_utc: 2026-05-06T19:57:54.180069+00:00
+generated_at_utc: 2026-05-06T20:17:11.399024+00:00
 runs_in_band: 57
 first_created_at: 2026-04-07T20:15:05+00:00
 last_created_at: 2026-05-05T01:14:55+00:00
+delphi_3e18_reference_bpb: 1.087110
+delphi_3e18_reference_run: isoflop-3e+18-d896-L10-B8-adamh_scaling_v6
 march_reference_bpb: 1.040673
 dense_reference_bpb: 1.156400
 best_bpb: 0.988889

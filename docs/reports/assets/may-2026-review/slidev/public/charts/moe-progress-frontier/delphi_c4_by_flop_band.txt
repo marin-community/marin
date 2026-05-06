@@ -1,0 +1,17 @@
+Delphi C4_en BPB winners by FLOP band
+project: marin-community/marin
+metric: eval/paloma/c4_en/bpb
+selection: lowest W&B summary value among finished runs matching isoflop-.*adamh_scaling_v6 or adamh-scaling-ladder-nemotron-optimal
+
+| FLOPs | C4_en BPB | Run | Family | Finished runs w/ C4 |
+| ---: | ---: | --- | --- | ---: |
+| 3e+18 | 1.087110 | `isoflop-3e+18-d896-L10-B8-adamh_scaling_v6` | isoflop | 5 |
+| 9e+18 | 1.029155 | `isoflop-9e+18-d1152-L12-B16-adamh_scaling_v6` | isoflop | 10 |
+| 2e+19 | 0.994790 | `isoflop-2e+19-d1408-L15-B16-adamh_scaling_v6` | isoflop | 15 |
+| 3e+19 | 0.972027 | `isoflop-3e+19-d1536-L16-B32-adamh_scaling_v6` | isoflop | 9 |
+| 9e+19 | 0.924102 | `isoflop-9e+19-d1792-L18-B64-adamh_scaling_v6` | isoflop | 14 |
+| 2e+20 | 0.896859 | `isoflop-2e+20-d2048-L21-B64-adamh_scaling_v6` | isoflop | 14 |
+| 3e+20 | 0.878126 | `isoflop-3e+20-d2048-L21-B128-adamh_scaling_v6` | isoflop | 14 |
+| 1e+21 | 0.840744 | `adamh-scaling-ladder-nemotron-optimal-1e+21-v5-seed62746-659a1b` | optimal | 4 |
+| 1e+22 | 0.774874 | `adamh-scaling-ladder-nemotron-optimal-1e+22-v5-seed62746-10f597` | optimal | 3 |
+| 1e+23 | 0.721256 | `adamh-scaling-ladder-nemotron-optimal-1e+23-v5-27f2fb` | optimal | 1 |
