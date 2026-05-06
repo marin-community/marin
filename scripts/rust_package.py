@@ -2,25 +2,32 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build, publish, and pin dupekit wheels for all platforms.
+"""Build, publish, and pin marin-dupekit wheels for all platforms.
 
-Builds all wheels from a single machine:
-  - Linux x86_64 + aarch64 via maturin + zig cross-compilation (any host OS)
-  - macOS x86_64 + arm64 natively (requires macOS host)
+End-to-end release flow (driven by .github/workflows/dupekit-release-wheels.yaml):
 
-Publishes wheels to a GitHub Release and updates pyproject.toml's find-links.
+1. Bump the patch version in rust/dupekit/Cargo.toml (PyPI disallows re-uploads
+   at the same version). The matrix legs each bump independently to the same
+   value because the bump is `current + 1`.
+2. Build wheels (Linux x86_64 + aarch64 via maturin + zig; macOS x86_64 +
+   arm64 natively) into dist/.
+3. Build the sdist exactly once in the release job (--sdist-only) to avoid
+   duplicate sdists across matrix legs clobbering on download-artifact merge.
+4. Publish dist/ to PyPI (handled by pypa/gh-action-pypi-publish in the
+   workflow itself; this script does not call PyPI).
+5. Update the root pyproject.toml: rewrite the marin-dupekit dependency pin
+   to the new version. The dupekit find-links line was removed when we cut
+   over from GitHub Releases to PyPI; we no longer rewrite find-links.
+6. Re-resolve uv.lock so the auto-PR commits a consistent lockfile.
 
 Usage:
-    python scripts/rust_package.py              # full flow: build + publish + update pyproject
-    python scripts/rust_package.py --skip-build  # reuse existing dist/, publish + update
-    python scripts/rust_package.py --skip-publish # build only, don't upload or update pyproject
-    python scripts/rust_package.py --targets linux  # build Linux wheels only
-    python scripts/rust_package.py --targets macos  # build macOS wheels only (requires macOS host)
+    python scripts/rust_package.py --bump --build-wheels --targets linux
+    python scripts/rust_package.py --bump --build-wheels --targets macos
+    python scripts/rust_package.py --bump --sdist-only
+    python scripts/rust_package.py --bump --update-pyproject
 
 Prerequisites:
     maturin (installed automatically via uv tool if missing)
-    gh auth login
-
     zig is downloaded automatically if not found on PATH.
 """
 
@@ -55,8 +62,6 @@ MAC_TARGETS = [
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
 ]
-
-REPO = "marin-community/marin"
 
 
 def _check_tool(name: str, install_hint: str) -> None:
@@ -148,37 +153,58 @@ def _read_cargo_version() -> str:
     return m.group(1)
 
 
-def _git_short_sha() -> str:
-    return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True, cwd=REPO_ROOT).strip()
+def _write_cargo_version(new_version: str) -> None:
+    text = MANIFEST_PATH.read_text()
+    new_text, n = re.subn(
+        r'^(version\s*=\s*)"[^"]+"',
+        rf'\1"{new_version}"',
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if n != 1:
+        print(f"ERROR: Failed to rewrite version in {MANIFEST_PATH}", file=sys.stderr)
+        sys.exit(1)
+    MANIFEST_PATH.write_text(new_text)
 
 
-def _host_rust_target() -> str:
-    """Return the Rust target triple for the current host, or empty string if unsupported."""
-    machine = platform.machine()
-    system = platform.system()
+def _bump_patch(version: str) -> str:
+    """Bump the patch component of a semver string (e.g. 0.1.0 -> 0.1.1).
 
-    arch = {"x86_64": "x86_64", "AMD64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}.get(machine)
-    if arch is None:
-        return ""
+    Pre-release / build metadata are not handled; Cargo.toml is expected to
+    hold a clean semver triple.
+    """
+    parts = version.split(".")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        print(f"ERROR: Cargo.toml version {version!r} is not a semver triple", file=sys.stderr)
+        sys.exit(1)
+    major, minor, patch = (int(p) for p in parts)
+    return f"{major}.{minor}.{patch + 1}"
 
-    if system == "Darwin":
-        return f"{arch}-apple-darwin"
-    elif system == "Linux":
-        return f"{arch}-unknown-linux-gnu"
-    return ""
+
+def bump_cargo_patch_version() -> str:
+    """Bump rust/dupekit/Cargo.toml patch version and return the new version."""
+    current = _read_cargo_version()
+    new = _bump_patch(current)
+    _write_cargo_version(new)
+    print(f"Bumped marin-dupekit version: {current} -> {new}")
+    return new
+
+
+def _ensure_dist_dir() -> None:
+    DIST_DIR.mkdir(exist_ok=True)
 
 
 def build_wheels(targets: str) -> None:
-    """Build platform wheels + sdist into dist/.
+    """Build platform wheels into dist/ (no sdist; see build_sdist).
 
     Args:
-        targets: Which platforms to build for — "all" (default), "linux", or "macos".
+        targets: Which platforms to build for - "all" (default), "linux", or "macos".
             "all" builds Linux via zig and macOS natively (macOS host required for macOS wheels).
             "linux" builds only Linux wheels via zig cross-compilation (works from any host).
             "macos" builds only macOS wheels natively (requires macOS host).
     """
     maturin = _ensure_maturin()
-    _check_tool("gh", "https://cli.github.com/")
 
     if DIST_DIR.exists():
         shutil.rmtree(DIST_DIR)
@@ -241,6 +267,23 @@ def build_wheels(targets: str) -> None:
             ]
             subprocess.run(cmd, check=True, cwd=REPO_ROOT)
 
+    wheels = list(DIST_DIR.glob("*.whl"))
+    print(f"\nBuilt {len(wheels)} wheel(s):")
+    for f in sorted(wheels):
+        print(f"  {f.name}")
+
+
+def build_sdist() -> None:
+    """Build the sdist into dist/ exactly once.
+
+    Lifted out of build_wheels() because each matrix leg uploaded a duplicate
+    sdist tarball, and download-artifact's merge-multiple silently clobbers on
+    duplicate filenames - whichever leg finished last wins, hiding any
+    host-dependent metadata drift.
+    """
+    maturin = _ensure_maturin()
+    _ensure_dist_dir()
+
     print("\n--- Building sdist ---")
     subprocess.run(
         [maturin, "sdist", "--out", str(DIST_DIR), "--manifest-path", str(MANIFEST_PATH)],
@@ -248,101 +291,72 @@ def build_wheels(targets: str) -> None:
         cwd=REPO_ROOT,
     )
 
-    wheels = list(DIST_DIR.glob("*.whl"))
     sdists = list(DIST_DIR.glob("*.tar.gz"))
-    print(f"\nBuilt {len(wheels)} wheel(s) and {len(sdists)} sdist(s):")
-    for f in sorted(wheels + sdists):
+    print(f"\nBuilt {len(sdists)} sdist(s):")
+    for f in sorted(sdists):
         print(f"  {f.name}")
 
 
-def publish_release(tag: str, title: str) -> None:
-    """Create a GitHub Release and upload all artifacts from dist/."""
-    _check_tool("gh", "https://cli.github.com/")
-
-    files = sorted(DIST_DIR.glob("*"))
-    if not files:
-        print("ERROR: No files in dist/ to publish", file=sys.stderr)
-        sys.exit(1)
-
-    # Delete existing release if present (idempotent)
-    subprocess.run(
-        ["gh", "release", "delete", tag, "--yes", "--repo", REPO],
-        check=False,
-        capture_output=True,
-    )
-
-    # Create pinned release
-    print(f"\n--- Creating release {tag} ---")
-    subprocess.run(
-        [
-            "gh",
-            "release",
-            "create",
-            tag,
-            *[str(f) for f in files],
-            "--repo",
-            REPO,
-            "--prerelease",
-            "--title",
-            title,
-        ],
-        check=True,
-    )
-
-    # Update rolling "dupekit-latest" release
-    subprocess.run(
-        ["gh", "release", "delete", "dupekit-latest", "--yes", "--repo", REPO],
-        check=False,
-        capture_output=True,
-    )
-    print("\n--- Updating dupekit-latest rolling release ---")
-    subprocess.run(
-        [
-            "gh",
-            "release",
-            "create",
-            "dupekit-latest",
-            *[str(f) for f in files],
-            "--repo",
-            REPO,
-            "--prerelease",
-            "--title",
-            "dupekit (latest wheels)",
-            "--notes",
-            f"Rolling release. Currently pointing at {tag}.",
-        ],
-        check=True,
-    )
+# Marker substring identifying the dupekit find-links line. Matching on the
+# repo+package prefix avoids touching the kitoken find-links line that lives
+# in the same array and survives the cutover to PyPI.
+_DUPEKIT_FIND_LINKS_MARKER = "releases/expanded_assets/dupekit-"
 
 
-def update_pyproject(tag: str, version: str) -> None:
-    """Update pyproject.toml find-links to point at the new release, then uv lock."""
+def _remove_dupekit_find_links_line(text: str) -> tuple[str, bool]:
+    """Drop the dupekit find-links line from a multi-line find-links array.
+
+    Returns (new_text, removed). `removed` is False if no matching line was
+    found - this is fine on subsequent runs once the line has already been
+    removed; the caller decides whether that's an error.
+    """
+    new_lines: list[str] = []
+    removed = False
+    for line in text.splitlines(keepends=True):
+        if _DUPEKIT_FIND_LINKS_MARKER in line and "find-links" not in line:
+            # Skip the dupekit URL line entirely. The kitoken line and the
+            # surrounding `find-links = [` / `]` brackets are preserved with
+            # correct comma/whitespace because we never alter their lines.
+            removed = True
+            continue
+        new_lines.append(line)
+    return "".join(new_lines), removed
+
+
+def update_pyproject(version: str) -> None:
+    """Pin marin-dupekit to `version` in root pyproject.toml and re-lock.
+
+    Idempotent: re-running with the same version is a no-op except for the
+    uv lock invocation. Re-running with the dupekit find-links line already
+    removed is also fine.
+    """
     original = PYPROJECT_PATH.read_text()
     text = original
 
-    new_url = f"https://github.com/{REPO}/releases/expanded_assets/{tag}"
+    # Remove the dupekit find-links entry (if still present from prior cutover).
+    text, _ = _remove_dupekit_find_links_line(text)
 
-    # Replace find-links URL
-    text = re.sub(
-        r'find-links\s*=\s*\["https://github\.com/[^"]*"\]',
-        f'find-links = ["{new_url}"]',
+    # Rewrite the dependency pin. Match either the legacy "dupekit ..." or the
+    # current "marin-dupekit ..." line so the script keeps working both on a
+    # fresh post-cutover repo and on any leftover branches still mid-rename.
+    new_text, n = re.subn(
+        r'"(?:marin-)?dupekit\s*>=\s*[^"]*"',
+        f'"marin-dupekit >= {version}"',
         text,
     )
-
-    # Update dupekit version pin
-    text = re.sub(
-        r'"dupekit\s*>=\s*[^"]*"',
-        f'"dupekit >= {version}"',
-        text,
-    )
-
-    if text == original:
-        print("ERROR: pyproject.toml regex substitutions did not match anything.", file=sys.stderr)
-        print("The find-links or dupekit dependency format may have changed.", file=sys.stderr)
+    if n == 0:
+        print(
+            "ERROR: pyproject.toml has no marin-dupekit (or dupekit) dependency line to update.",
+            file=sys.stderr,
+        )
         sys.exit(1)
+    text = new_text
 
-    PYPROJECT_PATH.write_text(text)
-    print(f"\n--- Updated pyproject.toml find-links to {tag} ---")
+    if text != original:
+        PYPROJECT_PATH.write_text(text)
+        print(f"\n--- Updated pyproject.toml: marin-dupekit pinned to >= {version} ---")
+    else:
+        print(f"\n--- pyproject.toml already pinned to marin-dupekit >= {version} ---")
 
     print("\n--- Running uv lock ---")
     subprocess.run(["uv", "lock"], check=True, cwd=REPO_ROOT)
@@ -350,34 +364,52 @@ def update_pyproject(tag: str, version: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--skip-build", action="store_true", help="Reuse existing dist/")
-    parser.add_argument("--skip-publish", action="store_true", help="Build only, don't upload or update pyproject")
+    parser.add_argument(
+        "--bump",
+        action="store_true",
+        help="Bump the patch version in rust/dupekit/Cargo.toml before any other action.",
+    )
+    parser.add_argument(
+        "--build-wheels",
+        action="store_true",
+        help="Build platform wheels into dist/ (use --targets to pick a subset).",
+    )
     parser.add_argument(
         "--targets",
         choices=["all", "linux", "macos"],
         default="all",
-        help="Which platforms to build: all (default), linux, or macos",
+        help="Which platforms to build wheels for: all (default), linux, or macos.",
+    )
+    parser.add_argument(
+        "--sdist-only",
+        action="store_true",
+        help="Build only the sdist into dist/ (run once in the release job, not per matrix leg).",
+    )
+    parser.add_argument(
+        "--update-pyproject",
+        action="store_true",
+        help="Update root pyproject.toml dependency pin and run uv lock.",
     )
     args = parser.parse_args()
 
-    version = _read_cargo_version()
-    short_sha = _git_short_sha()
-    tag = f"dupekit-{version}-{short_sha}"
-    title = f"dupekit {version} ({short_sha})"
+    if not (args.bump or args.build_wheels or args.sdist_only or args.update_pyproject):
+        parser.error("nothing to do; pass at least one of --bump, --build-wheels, --sdist-only, --update-pyproject")
 
-    print(f"dupekit version: {version}")
-    print(f"git sha: {short_sha}")
-    print(f"release tag: {tag}")
+    if args.bump:
+        version = bump_cargo_patch_version()
+    else:
+        version = _read_cargo_version()
 
-    if not args.skip_build:
+    print(f"marin-dupekit version: {version}")
+
+    if args.build_wheels:
         build_wheels(args.targets)
 
-    if not args.skip_publish:
-        publish_release(tag, title)
-        update_pyproject(tag, version)
-        print("\nDone. Run 'uv sync' to install the new wheels.")
-    else:
-        print(f"\nBuild complete. Wheels in {DIST_DIR}/")
+    if args.sdist_only:
+        build_sdist()
+
+    if args.update_pyproject:
+        update_pyproject(version)
 
 
 if __name__ == "__main__":
