@@ -141,6 +141,43 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
     )
 
 
+def _make_tpu_worker_metadata(tpu_name: str, worker_index: int) -> job_pb2.WorkerMetadata:
+    return job_pb2.WorkerMetadata(
+        hostname=f"{tpu_name}-worker-{worker_index}",
+        ip_address=f"10.0.0.{worker_index + 1}",
+        cpu_count=128,
+        memory_bytes=256 * 1024**3,
+        disk_bytes=100 * 1024**3,
+        tpu_name=tpu_name,
+        tpu_worker_id=str(worker_index),
+        tpu_worker_hostnames=f"{tpu_name}-0,{tpu_name}-1,{tpu_name}-2,{tpu_name}-3",
+        tpu_chips_per_host_bounds="2,2,1",
+        device=job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+        attributes={
+            WellKnownAttribute.DEVICE_TYPE: job_pb2.AttributeValue(string_value="tpu"),
+            WellKnownAttribute.DEVICE_VARIANT: job_pb2.AttributeValue(string_value="v5litepod-16"),
+            WellKnownAttribute.TPU_NAME: job_pb2.AttributeValue(string_value=tpu_name),
+            WellKnownAttribute.TPU_WORKER_ID: job_pb2.AttributeValue(int_value=worker_index),
+        },
+    )
+
+
+def _make_coscheduled_tpu_request(name: str, replicas: int = 4) -> controller_pb2.Controller.LaunchJobRequest:
+    request = controller_pb2.Controller.LaunchJobRequest(
+        name=name,
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+        ),
+        replicas=replicas,
+        environment=job_pb2.EnvironmentConfig(),
+    )
+    request.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    return request
+
+
 def test_db_snapshot_select_returns_typed_rows(state) -> None:
     request = make_job_request("typed-rows")
     tasks = submit_job(state, "typed-rows", request)
@@ -1091,6 +1128,69 @@ def test_multiple_small_tasks_fill_worker_capacity(state):
     context = _build_scheduling_context(scheduler, state)
     result = scheduler.find_assignments(context)
     assert len(result.assignments) == 0
+
+
+def test_queue_assignments_rejects_stale_coscheduled_tpu_double_book(state):
+    """Commit-time validation rejects stale assignments that double-book a TPU slice."""
+    workers: list[WorkerId] = []
+    for i in range(4):
+        workers.append(register_worker(state, f"w{i}", f"addr{i}:8080", _make_tpu_worker_metadata("tpu-a", i)))
+    first_tasks = submit_job(state, "j1", _make_coscheduled_tpu_request("first-tpu"))
+    second_tasks = submit_job(state, "j2", _make_coscheduled_tpu_request("second-tpu"))
+    first_assignments = [
+        Assignment(task_id=task.task_id, worker_id=worker_id)
+        for task, worker_id in zip(first_tasks, workers, strict=True)
+    ]
+    second_assignments = [
+        Assignment(task_id=task.task_id, worker_id=worker_id)
+        for task, worker_id in zip(second_tasks, workers, strict=True)
+    ]
+
+    with state._store.transaction() as cur:
+        result = state.queue_assignments(cur, first_assignments + second_assignments)
+
+    assert result.accepted == first_assignments
+    assert result.rejected == second_assignments
+    for task, worker_id in zip(first_tasks, workers, strict=True):
+        row = _query_task(state, task.task_id)
+        assert row.state == job_pb2.TASK_STATE_ASSIGNED
+        assert row.current_worker_id == worker_id
+    for task in second_tasks:
+        row = _query_task(state, task.task_id)
+        assert row.state == job_pb2.TASK_STATE_PENDING
+        assert row.current_worker_id is None
+        assert row.current_attempt_id == -1
+    for worker_id in workers:
+        worker = _query_worker(state, worker_id)
+        assert worker.committed_tpu == 4
+
+
+def test_queue_assignments_rejects_partial_coscheduled_tpu_gang(state):
+    """A live validation failure rejects the whole incoming coscheduled gang."""
+    workers: list[WorkerId] = []
+    for i in range(3):
+        workers.append(register_worker(state, f"w{i}", f"addr{i}:8080", _make_tpu_worker_metadata("tpu-a", i)))
+    tasks = submit_job(state, "j1", _make_coscheduled_tpu_request("partial-tpu"))
+    assignments = [
+        Assignment(task_id=tasks[0].task_id, worker_id=workers[0]),
+        Assignment(task_id=tasks[1].task_id, worker_id=workers[1]),
+        Assignment(task_id=tasks[2].task_id, worker_id=workers[2]),
+        Assignment(task_id=tasks[3].task_id, worker_id=WorkerId("missing-worker")),
+    ]
+
+    with state._store.transaction() as cur:
+        result = state.queue_assignments(cur, assignments)
+
+    assert result.accepted == []
+    assert result.rejected == assignments
+    for task in tasks:
+        row = _query_task(state, task.task_id)
+        assert row.state == job_pb2.TASK_STATE_PENDING
+        assert row.current_worker_id is None
+        assert row.current_attempt_id == -1
+    for worker_id in workers:
+        worker = _query_worker(state, worker_id)
+        assert worker.committed_tpu == 0
 
 
 # =============================================================================

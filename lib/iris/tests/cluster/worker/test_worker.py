@@ -24,7 +24,7 @@ from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.stats import IrisTaskStat, IrisWorkerStat
-from iris.cluster.worker.task_attempt import TaskAttempt
+from iris.cluster.worker.task_attempt import TaskAttempt, build_iris_env
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import job_pb2, worker_pb2
@@ -585,6 +585,34 @@ def test_port_env_vars_set(mock_worker, mock_runtime):
         int(config.env["IRIS_PORT_METRICS"]),
     }
     assert len(ports) == 3
+
+
+def test_build_iris_env_includes_tpu_runtime_metadata() -> None:
+    """TPU task containers receive the metadata JAX needs for native discovery."""
+    request = create_run_task_request(num_tasks=4)
+    request.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v5litepod-16", count=4))
+    metadata = job_pb2.WorkerMetadata(
+        tpu_name="tpu-slice-a",
+        tpu_worker_id="2",
+        tpu_worker_hostnames="host-0,host-1,host-2,host-3",
+        tpu_chips_per_host_bounds="2,2,1",
+    )
+
+    class EnvTask:
+        def __init__(self, task_request: job_pb2.RunTaskRequest, worker_metadata: job_pb2.WorkerMetadata) -> None:
+            self.request = task_request
+            self.attempt_id = task_request.attempt_id
+            self.num_tasks = task_request.num_tasks
+            self.ports: dict[str, int] = {}
+            self._worker_metadata = worker_metadata
+
+    with patch("iris.cluster.worker.task_attempt._get_host_ip", return_value="10.0.0.2"):
+        env = build_iris_env(EnvTask(request, metadata), "worker-2", "controller:8080")
+
+    assert env["TPU_NAME"] == "tpu-slice-a"
+    assert env["TPU_WORKER_ID"] == "2"
+    assert env["TPU_WORKER_HOSTNAMES"] == "host-0,host-1,host-2,host-3"
+    assert env["TPU_CHIPS_PER_HOST_BOUNDS"] == "2,2,1"
 
 
 def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):

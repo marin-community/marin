@@ -173,6 +173,17 @@ def build_iris_env(
     for name, port in task.ports.items():
         env[f"IRIS_PORT_{name.upper()}"] = str(port)
 
+    worker_metadata = task._worker_metadata
+    tpu_env = {
+        "TPU_NAME": worker_metadata.tpu_name,
+        "TPU_WORKER_ID": worker_metadata.tpu_worker_id,
+        "TPU_WORKER_HOSTNAMES": worker_metadata.tpu_worker_hostnames,
+        "TPU_CHIPS_PER_HOST_BOUNDS": worker_metadata.tpu_chips_per_host_bounds,
+    }
+    for key, value in tpu_env.items():
+        if value:
+            env[key] = value
+
     return env
 
 

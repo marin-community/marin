@@ -97,6 +97,12 @@ def _poll_for_coordinator(
     return result[0]
 
 
+def _job_scoped_endpoint_name(job_info, endpoint_name: str) -> str:
+    if endpoint_name.startswith("/"):
+        return endpoint_name
+    return f"{job_info.job_id.to_wire()}/{endpoint_name}"
+
+
 def initialize_jax(
     port: int = 8476,
     endpoint_name: str = "jax_coordinator",
@@ -124,15 +130,16 @@ def initialize_jax(
         poll_timeout: Maximum seconds for non-coordinator tasks to wait.
         poll_interval: Initial backoff delay for polling (seconds).
     """
-    import jax
-
-    # TPU has its own distributed init via the TPU runtime; skip the
-    # coordinator dance entirely to avoid conflicts.
-    if os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get("JAX_PLATFORMS", "") == "tpu":
+    is_tpu = os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get("JAX_PLATFORMS", "") == "tpu"
+    if is_tpu:
         logger.info("TPU detected; skipping Iris JAX distributed init (TPU runtime handles it)")
         return
 
+    import jax
+
     job_info = get_job_info()
+    if job_info is not None:
+        endpoint_name = _job_scoped_endpoint_name(job_info, endpoint_name)
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
     if job_info is None:
         return
