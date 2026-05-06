@@ -9,6 +9,7 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass
 from threading import Event, Thread
+from typing import NamedTuple
 
 import marin.execution.executor_step_status as executor_step_status
 import pytest
@@ -764,6 +765,80 @@ def test_mirrored_instantiate_config():
     cfg = Cfg(input_path=mirrored(versioned("documents/data"), budget_gb=10), output_path="out")
     resolved = instantiate_config(cfg, output_path="/out", output_paths={}, prefix="/bucket")
     assert resolved.input_path == "mirror://documents/data"
+
+
+def test_tuple_values_are_resolved_in_executor_configs():
+    @dataclass(frozen=True)
+    class Cfg:
+        values: tuple[object, ...]
+
+    dependency = ExecutorStep(name="dependency", fn=lambda _: None, config=None)
+    cfg = Cfg(
+        values=(
+            output_path_of(dependency, "artifact"),
+            this_output_path("tracker"),
+            {"mirrored": mirrored(versioned("documents/data"), budget_gb=10)},
+        )
+    )
+
+    deps = collect_dependencies_and_version(cfg)
+    assert deps.dependencies == [dependency]
+    assert deps.version == {
+        "values.[0]": "DEP[0]/artifact",
+        "values.[2].mirrored": "documents/data",
+    }
+
+    resolved = instantiate_config(cfg, output_path="/out", output_paths={dependency: "/dependency"}, prefix="/bucket")
+    assert resolved.values == (
+        "/dependency/artifact",
+        "/out/tracker",
+        {"mirrored": "mirror://documents/data"},
+    )
+
+
+def test_plain_tuple_values_are_resolved_without_type_error():
+    @dataclass(frozen=True)
+    class Cfg:
+        values: tuple[object, ...]
+
+    dependency = ExecutorStep(name="dependency", fn=lambda _: None, config=None)
+    cfg = Cfg(
+        values=(
+            output_path_of(dependency, "artifact"),
+            this_output_path("tracker"),
+        )
+    )
+
+    resolved = instantiate_config(cfg, output_path="/out", output_paths={dependency: "/dependency"}, prefix="/bucket")
+
+    assert resolved.values == (
+        "/dependency/artifact",
+        "/out/tracker",
+    )
+
+
+def test_namedtuple_values_are_resolved_without_losing_type():
+    class Coords(NamedTuple):
+        x: object
+        y: object
+
+    @dataclass(frozen=True)
+    class Cfg:
+        coords: Coords
+
+    dependency = ExecutorStep(name="dependency", fn=lambda _: None, config=None)
+    cfg = Cfg(
+        coords=Coords(
+            output_path_of(dependency, "artifact"),
+            this_output_path("tracker"),
+        )
+    )
+
+    resolved = instantiate_config(cfg, output_path="/out", output_paths={dependency: "/dependency"}, prefix="/bucket")
+
+    assert isinstance(resolved.coords, Coords)
+    assert resolved.coords.x == "/dependency/artifact"
+    assert resolved.coords.y == "/out/tracker"
 
 
 def test_mirrored_nesting_raises():

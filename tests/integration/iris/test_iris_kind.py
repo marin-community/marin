@@ -22,6 +22,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from finelog.rpc import logging_pb2
 from finelog.server.service import LogServiceImpl
 from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint as FrayEntrypoint
@@ -137,6 +138,19 @@ def _get_iris_pods(k8s: InMemoryK8sService) -> list[dict]:
     return k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
 
 
+class _FakeLogClient:
+    """In-process LogClient adapter that calls LogServiceImpl.fetch_logs directly."""
+
+    def __init__(self, log_service: LogServiceImpl) -> None:
+        self._log_service = log_service
+
+    def query(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
+        return self._log_service.fetch_logs(request, ctx=None)
+
+    def close(self) -> None:
+        return
+
+
 def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "cw_db")
     log_service = LogServiceImpl(log_dir=tmp_path / "cw_logs")
@@ -186,7 +200,7 @@ def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
         store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "cw_bundles")),
-        log_service=log_service,
+        log_client=_FakeLogClient(log_service),
     )
 
     return ServiceTestHarness(

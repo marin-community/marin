@@ -14,6 +14,7 @@ Dataset families are organized in separate modules:
 
 from marin.datakit.download.dolma import DOLMA_DATASETS
 
+from experiments.pretraining_datasets.diagnostic_logs import tokenize_ghalogs
 from experiments.pretraining_datasets.dolma import (
     DOLMA_LLAMA3_OVERRIDES,
     DOLMA_OLMO_MIXTURE_WEIGHTS,
@@ -25,6 +26,9 @@ from experiments.pretraining_datasets.dolmino import (
     tokenize_dolmino,
     tokenize_dolmino_math,
     tokenize_dolmino_subset,
+)
+from experiments.pretraining_datasets.dolmino import (
+    downloads as dolmino_downloads,
 )
 from experiments.pretraining_datasets.nemotron import (
     NEMOTRON_DATASETS,
@@ -60,6 +64,7 @@ __all__ = [
     "tokenize_dolmino",
     "tokenize_dolmino_math",
     "tokenize_dolmino_subset",
+    "tokenize_ghalogs",
     "tokenize_nemotron",
     "tokenize_nemotron_subset",
     "tokenize_nemotron_v2_family",

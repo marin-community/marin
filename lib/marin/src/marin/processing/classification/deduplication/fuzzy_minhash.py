@@ -18,12 +18,13 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterator
 
 import dupekit
 import pyarrow as pa
 from fray import ResourceConfig
 from pydantic import BaseModel
-from zephyr import Dataset, ZephyrContext, counters, write_parquet_file
+from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
@@ -106,21 +107,10 @@ def _attr_records(batch: pa.RecordBatch, params: MinHashParams) -> list[dict]:
     return out
 
 
-def _make_shard_processor(attr_dir: str, params: MinHashParams):
-    """Return a per-shard map fn that loads one source parquet, runs MinHash, writes attr parquet."""
-
-    def process(shard_path: str) -> dict:
-        basename = os.path.basename(shard_path)
-        attr_path = f"{attr_dir}/{basename}"
-
-        def records():
-            for batch in _load_batches(shard_path, columns=["id", "text"]):
-                yield from _attr_records(batch, params)
-
-        result = write_parquet_file(records(), attr_path)
-        return {"source_path": shard_path, "attr_path": attr_path, "count": result["count"]}
-
-    return process
+def _shard_attr_records(shard_path: str, params: MinHashParams) -> Iterator[dict]:
+    """Stream ``{id, buckets}`` attr records for one source parquet shard."""
+    for batch in _load_batches(shard_path, columns=["id", "text"]):
+        yield from _attr_records(batch, params)
 
 
 def compute_minhash_attrs(
@@ -184,7 +174,17 @@ def compute_minhash_attrs(
         ctx_kwargs["max_workers"] = max_workers
     ctx = ZephyrContext(**ctx_kwargs)
 
-    pipeline = Dataset.from_list(source_shards).map(_make_shard_processor(attr_dir, params))
+    # Preserve source basenames; zephyr's `{basename}` placeholder is synthetic.
+    output_basenames = tuple(os.path.basename(p) for p in source_shards)
+
+    def _output_path(shard_idx: int, total_shards: int, ad: str = attr_dir, bn: tuple = output_basenames) -> str:
+        return f"{ad}/{bn[shard_idx]}"
+
+    pipeline = (
+        Dataset.from_list(source_shards)
+        .flat_map(lambda path, p=params: _shard_attr_records(path, p))
+        .write_parquet(_output_path, skip_existing=True)
+    )
     outcome = ctx.execute(pipeline, verbose=True)
 
     return MinHashAttrData(

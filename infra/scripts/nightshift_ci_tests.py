@@ -22,12 +22,12 @@ from urllib import error, parse, request
 logger = logging.getLogger(__name__)
 
 WORKFLOWS = (
-    ".github/workflows/marin-unit-tests.yaml",
-    ".github/workflows/iris-unit-tests.yaml",
-    ".github/workflows/levanter-tests.yaml",
-    ".github/workflows/fray-unit-tests.yaml",
-    ".github/workflows/zephyr-unit-tests.yaml",
-    ".github/workflows/marin-itest.yaml",
+    ".github/workflows/marin-unit.yaml",
+    ".github/workflows/iris-unit.yaml",
+    ".github/workflows/levanter-unit.yaml",
+    ".github/workflows/fray-unit.yaml",
+    ".github/workflows/zephyr-unit.yaml",
+    ".github/workflows/marin-integration.yaml",
 )
 MAX_RUNS_PER_WORKFLOW = 5
 MAX_CANDIDATES = 8

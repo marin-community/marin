@@ -76,8 +76,8 @@ might be:
   finish executing (or even check if it is executing or failed) before running.
 """
 
-import copy
 import contextlib
+import copy
 import dataclasses
 import hashlib
 import inspect
@@ -929,6 +929,8 @@ def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
             return {k: recurse(v) for k, v in obj.items()}
         if isinstance(obj, list):
             return [recurse(x) for x in obj]
+        if isinstance(obj, tuple):
+            return tuple(recurse(x) for x in obj)
         return obj
 
     return recurse(value)  # type: ignore
@@ -1133,6 +1135,9 @@ def _max_mirror_budget(config: Any) -> float | None:
         elif isinstance(obj, list):
             for x in obj:
                 recurse(x)
+        elif isinstance(obj, tuple):
+            for x in obj:
+                recurse(x)
         elif isinstance(obj, dict):
             for x in obj.values():
                 recurse(x)
@@ -1185,13 +1190,15 @@ def instantiate_config(
                 value = getattr(obj, field.name)
                 result[field.name] = recurse(value)
             return replace(obj, **result)
+        elif isinstance(obj, tuple) and hasattr(obj, "_fields"):
+            # Preserve NamedTuple subclasses when resolving nested values.
+            return type(obj)(*(recurse(x) for x in obj))
+        elif isinstance(obj, tuple):
+            # Plain tuples must be rebuilt from a single iterable.
+            return tuple(recurse(x) for x in obj)
         elif isinstance(obj, list):
             # Recurse through lists
             return [recurse(x) for x in obj]
-        elif isinstance(obj, tuple) and hasattr(obj, "_fields"):
-            return type(obj)(*(recurse(x) for x in obj))
-        elif isinstance(obj, tuple):
-            return tuple(recurse(x) for x in obj)
         elif isinstance(obj, dict):
             # Recurse through dicts
             return dict((i, recurse(x)) for i, x in obj.items())

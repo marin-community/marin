@@ -1,0 +1,89 @@
+name: "Dupekit - Unit"
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590  # v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'rust/dupekit/**'
+              - 'uv.lock'
+              - '.github/workflows/dupekit-unit.yaml'
+
+  check-user-mode:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Ensure pyproject.toml is in user mode
+        run: |
+          if grep -q 'dupekit = { path' pyproject.toml; then
+            echo "ERROR: pyproject.toml has dev-mode dupekit source. Run 'make rust-user' before committing."
+            exit 1
+          fi
+
+  unit-test:
+    needs: [changes, check-user-mode]
+    if: needs.changes.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "rust/dupekit/uv.lock"
+
+      - name: Test dupekit
+        run: |
+          cd rust/dupekit && uv run --frozen --group test pytest tests/ -v
+
+  rust-checks:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy, rustfmt
+      - name: cargo fmt
+        run: cargo fmt --manifest-path rust/dupekit/Cargo.toml -- --check
+      - name: cargo clippy
+        run: cargo clippy --manifest-path rust/dupekit/Cargo.toml -- -D warnings
+      - name: cargo test
+        run: cargo test --manifest-path rust/dupekit/Cargo.toml

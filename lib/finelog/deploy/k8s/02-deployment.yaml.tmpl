@@ -35,6 +35,11 @@ spec:
         - name: finelog
           image: {{ image }}
           imagePullPolicy: IfNotPresent
+          # SYS_PTRACE lets memray/py-spy attach to the running server for
+          # in-prod profiling without rolling the pod.
+          securityContext:
+            capabilities:
+              add: ["SYS_PTRACE"]
           ports:
             - name: rpc
               containerPort: {{ port }}

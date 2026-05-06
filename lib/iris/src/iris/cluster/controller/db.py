@@ -417,6 +417,11 @@ class ControllerDB:
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
+        # Default page cache (2000 pages ≈ 8 MB) is too small for an 815 MB
+        # controller DB. With 32 read connections each caching independently
+        # the working set rotates fast and "warm" reads keep going to disk.
+        # 64 MB per connection caps total cache at ~2 GB on a 32 GB host.
+        conn.execute("PRAGMA cache_size = -65536")
 
     def optimize(self) -> None:
         """Run PRAGMA optimize to refresh statistics for tables with stale data.

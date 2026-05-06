@@ -243,7 +243,6 @@ def scenario_register_assign_run_succeed(transitions: ControllerTransitions, clo
         ApplyTaskUpdates(
             request=HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=attempt, new_state=job_pb2.TASK_STATE_RUNNING)],
             ),
         ),
@@ -253,7 +252,6 @@ def scenario_register_assign_run_succeed(transitions: ControllerTransitions, clo
         ApplyTaskUpdates(
             request=HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=attempt, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
             ),
         ),
@@ -272,7 +270,6 @@ def scenario_task_failure_with_retry(transitions: ControllerTransitions, clock: 
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task_id,
@@ -291,7 +288,6 @@ def scenario_task_failure_with_retry(transitions: ControllerTransitions, clock: 
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=second_attempt, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
             )
         ),
@@ -381,7 +377,6 @@ def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerT
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_a,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=tasks[0], attempt_id=a0, new_state=job_pb2.TASK_STATE_RUNNING)],
             )
         ),
@@ -391,7 +386,6 @@ def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerT
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_b,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=tasks[1], attempt_id=a1, new_state=job_pb2.TASK_STATE_RUNNING)],
             )
         ),
@@ -401,7 +395,6 @@ def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerT
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_a,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=tasks[0],
@@ -469,7 +462,6 @@ def scenario_prune_old_data(transitions: ControllerTransitions, clock: FrozenClo
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=attempt, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
             )
         ),

@@ -36,7 +36,6 @@ from __future__ import annotations
 import argparse
 import logging
 import re
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -127,8 +126,12 @@ def parse_job_id(arg: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def find_latest_checkpoint(remote_state_dir: str) -> str:
-    """Return the gs:// URI of the most recent timestamped checkpoint dir."""
+def find_latest_checkpoint(remote_state_dir: str, after_timestamp: int | None = None) -> str:
+    """Return the gs:// URI of the most recent timestamped checkpoint dir.
+
+    If ``after_timestamp`` is provided, returns the earliest checkpoint whose
+    timestamp is > ``after_timestamp``.
+    """
     prefix = remote_state_dir.rstrip("/") + "/controller-state/"
     result = subprocess.run(
         ["gcloud", "storage", "ls", prefix],
@@ -146,6 +149,15 @@ def find_latest_checkpoint(remote_state_dir: str) -> str:
             timestamps.append((int(basename), line))
     if not timestamps:
         raise RuntimeError(f"No timestamped checkpoint directories under {prefix}")
+
+    if after_timestamp is not None:
+        # Find the earliest checkpoint that is AFTER the given timestamp.
+        timestamps.sort()  # Ascending
+        for ts, path in timestamps:
+            if ts > after_timestamp:
+                return path + "/"
+        raise RuntimeError(f"No checkpoint found after timestamp {after_timestamp} under {prefix}")
+
     timestamps.sort(reverse=True)
     return timestamps[0][1] + "/"
 
@@ -409,8 +421,92 @@ def render_flame_svg(
 
 
 # ---------------------------------------------------------------------------
+# Local cache lookup
+# ---------------------------------------------------------------------------
+
+
+def list_cached_checkpoints(cache_dir: Path, cluster: str) -> list[tuple[int, Path]]:
+    cluster_cache = cache_dir / cluster
+    if not cluster_cache.exists():
+        return []
+
+    # Checkpoint directories are named by timestamp (epoch_ms)
+    checkpoints = []
+    for d in cluster_cache.iterdir():
+        if d.is_dir() and d.name.isdigit():
+            checkpoints.append((int(d.name), d))
+
+    return checkpoints
+
+
+def find_job_times_in_local_cache(cache_dir: Path, cluster: str, job_id: str) -> tuple[int | None, int | None]:
+    """Look for the most recent local checkpoint and fetch job start/end times if available."""
+    try:
+        checkpoints = list_cached_checkpoints(cache_dir, cluster)
+    except OSError:
+        return None, None
+
+    if not checkpoints:
+        return None, None
+
+    checkpoints.sort(reverse=True)
+
+    for _, local_dir in checkpoints:
+        controller_path = local_dir / CONTROLLER_DB
+        # If the uncompressed DB doesn't exist, try to decompress it.
+        if not controller_path.exists():
+            zst = local_dir / f"{CONTROLLER_DB}.zst"
+            if zst.exists():
+                try:
+                    decompress_zst(zst, controller_path)
+                except Exception as e:
+                    logger.debug("Failed to decompress %s: %s", zst, e)
+                    continue
+            else:
+                continue
+
+        try:
+            # Open the DB and look for the job.
+            conn = sqlite3.connect(f"file:{controller_path}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT started_at_ms, finished_at_ms FROM jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            conn.close()
+            if row:
+                return row["started_at_ms"], row["finished_at_ms"]
+        except sqlite3.Error:
+            continue
+
+    return None, None
+
+
+def find_best_checkpoint(cached_checkpoints: list[tuple[int, Path]], end_ms: int, max_lag_ms: int) -> Path | None:
+    eligible = [(ts, path) for ts, path in cached_checkpoints if end_ms <= ts <= end_ms + max_lag_ms]
+
+    if eligible:
+        eligible.sort()
+        found_ts, found_path = eligible[0]
+        logger.info(
+            "Found snapshot within %.1fh after job end: %s (at %d ms)", max_lag_ms / 3600000, found_path, found_ts
+        )
+        return found_path
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+
+def download_latest(cluster: str, cache_dir: Path, after_timestamp: int | None = None) -> Path:
+    remote_dir = find_latest_checkpoint(remote_state_dir_for_cluster(cluster), after_timestamp=after_timestamp)
+    epoch_label = remote_dir.rstrip("/").rsplit("/", 1)[-1]
+    local_dir = cache_dir / cluster / epoch_label
+    download_checkpoint(remote_dir, local_dir)
+    return local_dir
 
 
 def main() -> int:
@@ -422,65 +518,97 @@ def main() -> int:
         help="Cluster name; resolves storage.remote_state_dir from lib/iris/examples/<cluster>.yaml (default: marin)",
     )
     p.add_argument(
-        "--remote-state-dir",
-        help="Override the state dir inferred from --cluster (e.g. gs://...).",
-    )
-    p.add_argument(
         "--cache-dir",
         type=Path,
         default=Path.home() / ".cache" / "iris-job-profile",
         help="Local cache directory for downloaded checkpoints",
     )
+    p.add_argument(
+        "--checkpoint-dir",
+        type=Path,
+        help="Use this local checkpoint directory directly (bypasses remote discovery/download)",
+    )
     p.add_argument("--top", type=int, default=20, help="Top-N stacks/leaves/tasks to print (default 20)")
+    p.add_argument("--show-stacks", action="store_true", help="Print the top stacks table")
+    p.add_argument("--show-tasks", action="store_true", help="Print the top tasks table")
     p.add_argument("-o", "--output", type=Path, help="Write merged folded-stack profile to this path")
     p.add_argument(
         "--svg",
         type=Path,
         help="Write a basic flamegraph SVG to this path (default: <cache>/<cluster>/<epoch>/flame.svg)",
     )
-    p.add_argument(
-        "--checkpoint-dir",
-        help="Use this checkpoint directory (gs:// or local) instead of finding the latest",
-    )
     p.add_argument("--refresh", action="store_true", help="Force re-download even if cache is present")
+    p.add_argument(
+        "--max-snapshot-lag",
+        type=float,
+        default=2.0,
+        help="Max hours to look past job end for a snapshot (default 2.0)",
+    )
     args = p.parse_args()
 
     job_id = parse_job_id(args.job)
     logger.info("Job ID: %s", job_id)
 
-    state_dir = args.remote_state_dir or remote_state_dir_for_cluster(args.cluster)
-    logger.info("State dir: %s", state_dir)
+    max_lag_ms = int(args.max_snapshot_lag * 3600 * 1000)
 
     if args.checkpoint_dir:
-        remote_dir = args.checkpoint_dir.rstrip("/") + "/"
+        best_checkpoint = args.checkpoint_dir
     else:
-        remote_dir = find_latest_checkpoint(state_dir)
-    epoch_label = remote_dir.rstrip("/").rsplit("/", 1)[-1]
-    logger.info("Checkpoint: %s", remote_dir)
+        if args.refresh:
+            best_checkpoint = download_latest(args.cluster, args.cache_dir)
+        else:
+            cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
+            if not cached_checkpoints:
+                download_latest(args.cluster, args.cache_dir)
+                cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
 
-    local_dir = args.cache_dir / args.cluster / epoch_label
-    if args.refresh and local_dir.exists():
-        shutil.rmtree(local_dir)
-    download_checkpoint(remote_dir, local_dir)
+            start_ms, end_ms = find_job_times_in_local_cache(args.cache_dir, args.cluster, job_id)
+            if start_ms is None or end_ms is None:
+                download_latest(args.cluster, args.cache_dir)
+                start_ms, end_ms = find_job_times_in_local_cache(args.cache_dir, args.cluster, job_id)
+
+            logger.info("Job times: %s - %s", start_ms, end_ms)
+
+            best_checkpoint = None
+            if end_ms:
+                best_checkpoint = find_best_checkpoint(cached_checkpoints, end_ms, max_lag_ms)
+                if best_checkpoint is None:
+                    download_latest(args.cluster, args.cache_dir, end_ms)
+                    cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
+                    best_checkpoint = find_best_checkpoint(cached_checkpoints, end_ms, max_lag_ms)
+            else:
+                # Still running? Use latest.
+                if not cached_checkpoints:
+                    download_latest(args.cluster, args.cache_dir)
+                    cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
+
+                if checkpoints := sorted(cached_checkpoints):
+                    best_checkpoint = checkpoints[-1][1]
+
+    if best_checkpoint is None:
+        logger.error("Could not find a suitable checkpoint for job %s", job_id)
+        return 1
+
+    logger.info("Using checkpoint: %s", best_checkpoint)
 
     for name in (CONTROLLER_DB, PROFILES_DB):
-        zst = local_dir / f"{name}.zst"
+        zst = best_checkpoint / f"{name}.zst"
         if zst.exists():
-            decompress_zst(zst, local_dir / name)
+            decompress_zst(zst, best_checkpoint / name)
 
-    controller_path = local_dir / CONTROLLER_DB
-    profiles_path = local_dir / PROFILES_DB
+    controller_path = best_checkpoint / CONTROLLER_DB
+    profiles_path = best_checkpoint / PROFILES_DB
     if not controller_path.exists():
-        logger.error("Missing %s in %s", CONTROLLER_DB, local_dir)
+        logger.error("Missing %s in %s", CONTROLLER_DB, best_checkpoint)
         return 1
     if not profiles_path.exists():
-        logger.error("Missing %s in %s (controller may not have written profiles yet)", PROFILES_DB, local_dir)
+        logger.error("Missing %s in %s (controller may not have written profiles yet)", PROFILES_DB, best_checkpoint)
         return 1
 
     conn = open_db(controller_path, profiles_path)
     profiles = fetch_task_profiles(conn, job_id)
     if not profiles:
-        logger.error("No CPU profiles found under %s in checkpoint %s", job_id, epoch_label)
+        logger.error("No CPU profiles found under %s in checkpoint %s", job_id, best_checkpoint)
         return 2
 
     merged_stacks: dict[str, int] = defaultdict(int)
@@ -505,41 +633,43 @@ def main() -> int:
 
     # --- Summary header ---------------------------------------------------
     print(f"Job:        {job_id}")
-    print(f"Checkpoint: {remote_dir}")
+    print(f"Checkpoint: {best_checkpoint}")
     print(f"Tasks with profiles: {len(profiles)}")
     print(f"Merged samples:      {fmt_int(grand_total)}")
     print(f"Distinct stacks:     {fmt_int(len(merged_stacks))}")
 
     # --- Per-task table (top N only; full job paths are long) ------------
     sorted_tasks = sorted(per_task_samples.items(), key=lambda kv: -kv[1])
-    rows = []
-    job_prefix = job_id.rstrip("/") + "/"
-    for task_id, samples in sorted_tasks[: args.top]:
-        state = per_task_state[task_id]
-        # Strip the common job prefix so per-task rows stay readable.
-        short = task_id[len(job_prefix) :] if task_id.startswith(job_prefix) else task_id
-        rows.append(
-            [
-                short,
-                STATE_NAMES.get(state, str(state)),
-                fmt_int(samples),
-                fmt_pct(samples, grand_total),
-                str(per_task_captured[task_id]),
-            ]
+    if args.show_tasks:
+        rows = []
+        job_prefix = job_id.rstrip("/") + "/"
+        for task_id, samples in sorted_tasks[: args.top]:
+            state = per_task_state[task_id]
+            # Strip the common job prefix so per-task rows stay readable.
+            short = task_id[len(job_prefix) :] if task_id.startswith(job_prefix) else task_id
+            rows.append(
+                [
+                    short,
+                    STATE_NAMES.get(state, str(state)),
+                    fmt_int(samples),
+                    fmt_pct(samples, grand_total),
+                    str(per_task_captured[task_id]),
+                ]
+            )
+        print_table(
+            f"Top {len(rows)} of {len(sorted_tasks)} tasks by samples (relative to '{job_prefix}')",
+            ["task", "state", "samples", "share", "captured_at_ms"],
+            rows,
         )
-    print_table(
-        f"Top {len(rows)} of {len(sorted_tasks)} tasks by samples (relative to '{job_prefix}')",
-        ["task", "state", "samples", "share", "captured_at_ms"],
-        rows,
-    )
 
     # --- Top stacks -------------------------------------------------------
-    top_stacks = sorted(merged_stacks.items(), key=lambda kv: -kv[1])[: args.top]
-    print_table(
-        f"Top {len(top_stacks)} stacks (merged across tasks)",
-        ["samples", "share", "stack"],
-        [[fmt_int(c), fmt_pct(c, grand_total), s] for s, c in top_stacks],
-    )
+    if args.show_stacks:
+        top_stacks = sorted(merged_stacks.items(), key=lambda kv: -kv[1])[: args.top]
+        print_table(
+            f"Top {len(top_stacks)} stacks (merged across tasks)",
+            ["samples", "share", "stack"],
+            [[fmt_int(c), fmt_pct(c, grand_total), s] for s, c in top_stacks],
+        )
 
     # --- Top leaves -------------------------------------------------------
     top_leaves = sorted(merged_leaves.items(), key=lambda kv: -kv[1])[: args.top]
@@ -557,8 +687,8 @@ def main() -> int:
         logger.info("Wrote merged folded profile to %s (%d stacks)", args.output, len(merged_stacks))
 
     # --- Flame SVG --------------------------------------------------------
-    svg_path = args.svg or (local_dir / "flame.svg")
-    svg_title = f"{job_id}  ({len(profiles)} tasks, {grand_total:,} samples, ckpt {epoch_label})"
+    svg_path = args.svg or (best_checkpoint / "flame.svg")
+    svg_title = f"{job_id}  ({len(profiles)} tasks, {grand_total:,} samples, ckpt {best_checkpoint})"
     render_flame_svg(merged_stacks, grand_total, svg_path, title=svg_title)
     logger.info("Wrote flame SVG to %s", svg_path)
     print(f"\nFlame SVG: {svg_path}")

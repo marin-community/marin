@@ -1,4 +1,4 @@
-name: Iris - Dev Cluster Daily Restart
+name: "Iris - Dev Restart"
 
 on:
   schedule:

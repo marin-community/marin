@@ -48,7 +48,7 @@ from zephyr.dataset import (
 )
 from zephyr.expr import Expr
 from zephyr.external_sort import external_sort_merge
-from zephyr.readers import InputFileSpec
+from zephyr.readers import InputFileSpec, load_file
 
 logger = logging.getLogger(__name__)
 
@@ -198,8 +198,6 @@ def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
 
 
 def _load_file_gen(stream: Iterator) -> Iterator:
-    from zephyr.readers import load_file
-
     for spec in stream:
         try:
             yield from load_file(spec)
@@ -496,7 +494,10 @@ def _compute_file_pushdown(
             select_columns = list(op.columns)
             ops_to_skip.add(i)
         elif isinstance(op, FilterOp) and op.expr is None:
-            continue  # Lambda filter, can't push down
+            # Lambda filter — can't introspect what columns it reads, so any
+            # later SelectOp pushdown could KeyError the lambda by dropping
+            # columns it needs. Stop pushdown here.
+            break
         elif isinstance(op, (MapOp | FlatMapOp)):
             break  # Transform ops stop pushdown
         else:

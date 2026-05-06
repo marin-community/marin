@@ -10,7 +10,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
@@ -49,7 +49,6 @@ from iris.cluster.controller.stores import (
     JobConfigInsertParams,
     JobInsertParams,
     JobStore,
-    ResourceUsageInsertParams,
     TaskAttemptStore,
     TaskAttemptUpdateParams,
     TaskInsertParams,
@@ -192,7 +191,6 @@ class TaskUpdate:
     new_state: int
     error: str | None = None
     exit_code: int | None = None
-    resource_usage: job_pb2.ResourceUsage | None = None
     container_id: str | None = None
 
 
@@ -213,7 +211,6 @@ def task_updates_from_proto(entries) -> list[TaskUpdate]:
                 new_state=entry.state,
                 error=entry.error or None,
                 exit_code=entry.exit_code if entry.HasField("exit_code") else None,
-                resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
                 container_id=entry.container_id or None,
             )
         )
@@ -225,7 +222,6 @@ class HeartbeatApplyRequest:
     """Batch of worker heartbeat updates applied atomically."""
 
     worker_id: WorkerId
-    worker_resource_snapshot: job_pb2.WorkerResourceSnapshot | None
     updates: list[TaskUpdate]
 
 
@@ -1312,7 +1308,6 @@ class ControllerTransitions:
                 else:
                     self._store.dispatch.enqueue_run(cur, assignment.worker_id, run_request.SerializeToString(), now_ms)
                 has_real_dispatch = True
-            self._store.workers.record_task_assignment(cur, assignment.worker_id, assignment.task_id, now_ms)
             jobs_to_update.add(job_id_wire)
             accepted.append(assignment)
         for job_id_wire in jobs_to_update:
@@ -1337,7 +1332,7 @@ class ControllerTransitions:
             return False
         self._store.workers.apply_snapshots(
             cur,
-            [(req.worker_id, req.worker_resource_snapshot)],
+            [req.worker_id],
             now_ms,
             reset_health=True,
         )
@@ -1386,7 +1381,7 @@ class ControllerTransitions:
             prior_state = task.state
 
             # Fast path: task already in the reported state with no new data to apply.
-            has_new_data = update.error is not None or update.exit_code is not None or update.resource_usage is not None
+            has_new_data = update.error is not None or update.exit_code is not None
             if update.new_state == prior_state and not has_new_data:
                 continue
 
@@ -1407,20 +1402,6 @@ class ControllerTransitions:
                 )
                 continue
             worker_id = attempt.worker_id
-            if update.resource_usage is not None:
-                ru = update.resource_usage
-                self._store.tasks.insert_resource_usage(
-                    cur,
-                    ResourceUsageInsertParams(
-                        task_id=update.task_id,
-                        attempt_id=update.attempt_id,
-                        cpu_millicores=ru.cpu_millicores,
-                        memory_mb=ru.memory_mb,
-                        disk_mb=ru.disk_mb,
-                        memory_peak_mb=ru.memory_peak_mb,
-                        timestamp_ms=now_ms,
-                    ),
-                )
             terminal_ms: int | None = None
             started_ms: int | None = None
             task_state = prior_state
@@ -1611,15 +1592,11 @@ class ControllerTransitions:
     def apply_heartbeats_batch(self, cur: TransactionCursor, requests: list[HeartbeatApplyRequest]) -> list[TxResult]:
         """Apply multiple heartbeats in a single transaction.
 
-        Two-pass architecture to minimise SQL round-trips:
-
-        1. Bulk-fetch all referenced task rows, classify each update as
-           *steady-state* (same state, no error/exit_code) or *transition*.
-        2a. Batch steady-state resource_usage writes via ``executemany``.
-        2b. Feed only transitions through ``_apply_task_transitions``, which
-            retains the full state machine (retry, cascade, decommit, etc.).
-
-        Worker health updates are also batched via ``executemany``.
+        Bulk-fetch all referenced task rows, drop steady-state updates whose
+        only payload would have been (now-vestigial) resource samples, and feed
+        the remaining state-changing or terminal updates through
+        ``_apply_task_transitions``. Worker health updates are batched via
+        ``executemany``.
         """
         _empty = TxResult(tasks_to_kill=set())
         results: list[TxResult] = [_empty] * len(requests)
@@ -1630,11 +1607,7 @@ class ControllerTransitions:
         existing_workers = self._store.workers.filter_existing(cur, [req.worker_id for req in requests])
         self._store.workers.apply_snapshots(
             cur,
-            [
-                (req.worker_id, req.worker_resource_snapshot)
-                for req in requests
-                if str(req.worker_id) in existing_workers
-            ],
+            [req.worker_id for req in requests if str(req.worker_id) in existing_workers],
             now_ms,
             reset_health=True,
         )
@@ -1654,7 +1627,6 @@ class ControllerTransitions:
         task_map = self._store.tasks.bulk_get_detail(cur, all_task_ids)
 
         # ── Classify and split ────────────────────────────────────────
-        task_history_params: list[ResourceUsageInsertParams] = []
         # (request_index, transition_request) pairs so results stay aligned.
         transition_entries: list[tuple[int, HeartbeatApplyRequest]] = []
 
@@ -1674,25 +1646,6 @@ class ControllerTransitions:
 
                 if is_state_change or has_terminal_data:
                     transition_updates.append(update)
-                else:
-                    # Steady-state: check finished / stale attempt before writing.
-                    if task_row_is_finished(task):
-                        continue
-                    if update.attempt_id != task.current_attempt_id:
-                        continue
-                    if update.resource_usage is not None:
-                        u = update.resource_usage
-                        task_history_params.append(
-                            ResourceUsageInsertParams(
-                                task_id=update.task_id,
-                                attempt_id=update.attempt_id,
-                                cpu_millicores=u.cpu_millicores,
-                                memory_mb=u.memory_mb,
-                                disk_mb=u.disk_mb,
-                                memory_peak_mb=u.memory_peak_mb,
-                                timestamp_ms=now_ms,
-                            )
-                        )
 
             if transition_updates:
                 transition_entries.append(
@@ -1700,16 +1653,12 @@ class ControllerTransitions:
                         req_idx,
                         HeartbeatApplyRequest(
                             worker_id=req.worker_id,
-                            worker_resource_snapshot=None,  # already handled above
                             updates=transition_updates,
                         ),
                     )
                 )
 
-        # ── Pass 2a: batch task resource history writes ─────────────────
-        self._store.tasks.insert_resource_usage_many(cur, task_history_params)
-
-        # ── Pass 2b: transitions via existing state machine ───────────
+        # ── Apply transitions via existing state machine ──────────────
         for req_idx, treq in transition_entries:
             results[req_idx] = self._apply_task_transitions(cur, treq, now_ms)
 
@@ -2218,7 +2167,7 @@ class ControllerTransitions:
             jobs_deleted += 1
             time.sleep(pause_between_s)
 
-        # 2. Workers: one at a time (CASCADE to attributes, task_history, resource_history)
+        # 2. Workers: one at a time (CASCADE to attributes)
         workers_deleted = 0
         while not _stopped():
             with self._store.read_snapshot() as snap:
@@ -2266,23 +2215,22 @@ class ControllerTransitions:
     def update_worker_pings(
         self,
         cur: TransactionCursor,
-        snapshots: Mapping[WorkerId, job_pb2.WorkerResourceSnapshot | None],
+        worker_ids: Iterable[WorkerId],
     ) -> None:
         """Apply a batch of Ping RPC results within the caller's transaction.
 
-        For each entry, bumps last_heartbeat_ms; if the value is a snapshot,
-        also rewrites the worker's snapshot_* columns and appends a row to
-        worker_resource_history. A None value means liveness-only — the ping
-        loop emits these on cycles where it skips the resource refresh.
+        Bumps ``last_heartbeat_ms`` for each successfully-pinged worker.
+        Per-tick host utilization is no longer persisted in the controller DB —
+        workers emit it directly to the ``iris.worker`` stats namespace.
         Does not touch healthy/active/consecutive_failures — the ping loop
-        tracks failures in-memory and uses fail_workers_batch to remove
+        tracks failures in-memory and uses ``fail_workers_batch`` to remove
         workers past threshold.
         """
-        if not snapshots:
+        ids = list(worker_ids)
+        if not ids:
             return
         now_ms = Timestamp.now().epoch_ms()
-        items = list(snapshots.items())
-        self._store.workers.apply_snapshots(cur, items, now_ms, reset_health=False)
+        self._store.workers.apply_snapshots(cur, ids, now_ms, reset_health=False)
 
     def get_running_tasks_for_poll(
         self,
@@ -2367,9 +2315,9 @@ class ControllerTransitions:
 
     # --- Task Status Text ---
 
-    def record_task_status_text(self, task_id: JobName, status_text_md: str) -> None:
+    def record_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
         """Update the task's markdown status text for UI display (held in memory only)."""
-        self._store.tasks.set_status_text(task_id.to_wire(), status_text_md)
+        self._store.tasks.set_status_text(task_id.to_wire(), detail_md, summary_md)
 
     # --- Endpoint Management ---
 
@@ -2547,20 +2495,6 @@ class ControllerTransitions:
                 )
                 continue
 
-            if update.resource_usage is not None:
-                ru = update.resource_usage
-                self._store.tasks.insert_resource_usage(
-                    cur,
-                    ResourceUsageInsertParams(
-                        task_id=update.task_id,
-                        attempt_id=update.attempt_id,
-                        cpu_millicores=ru.cpu_millicores,
-                        memory_mb=ru.memory_mb,
-                        disk_mb=ru.disk_mb,
-                        memory_peak_mb=ru.memory_peak_mb,
-                        timestamp_ms=now_ms,
-                    ),
-                )
             if update.container_id is not None:
                 self._store.tasks.update_container_id(cur, update.task_id, update.container_id)
 

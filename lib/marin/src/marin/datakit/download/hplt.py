@@ -6,13 +6,14 @@
 import json
 import logging
 import os
-import time
 from collections.abc import Iterator
 from contextlib import closing
+from dataclasses import dataclass
+from functools import cache
 
 import requests
-import urllib3
 import zstandard
+from fray import ResourceConfig
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext, counters
@@ -143,17 +144,32 @@ def _is_non_cc_source(crawl_id: str) -> bool:
     return any(crawl_id.startswith(prefix) for prefix in NON_CC_PREFIXES)
 
 
-def _get_all_shard_urls() -> list[tuple[int, int, str]]:
-    """Return (wds_tier, shard_num, url) for every HPLT English shard."""
+@dataclass(frozen=True)
+class HpltShard:
+    """Identifier and source URL for a single HPLT English shard."""
+
+    tier: int
+    shard: int
+    url: str
+
+
+def _get_all_shards() -> list[HpltShard]:
+    """Return one ``HpltShard`` for every HPLT English shard."""
     shards = []
     for tier, count in HPLT_SHARD_COUNTS.items():
         for shard in range(1, count + 1):
             url = f"{HPLT_BASE_URL}/{tier}_{shard}.jsonl.zst"
-            shards.append((tier, shard, url))
+            shards.append(HpltShard(tier=tier, shard=shard, url=url))
     return shards
 
 
+@cache
 def _make_session() -> requests.Session:
+    """Return a per-process ``requests.Session`` with retry-aware HTTPS adapter.
+
+    Cached so repeated shard tasks on the same worker reuse the connection pool
+    instead of opening a new one per shard.
+    """
     session = requests.Session()
     retries = Retry(total=5, backoff_factor=1.0, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
     adapter = HTTPAdapter(max_retries=retries)
@@ -162,82 +178,71 @@ def _make_session() -> requests.Session:
     return session
 
 
-MAX_SHARD_RETRIES = 3
+def _download_and_filter_shard(shard: HpltShard) -> Iterator[dict]:
+    """Stream filtered HPLT records from a shard URL.
 
-
-def _download_and_filter_shard(tier: int, shard: int, url: str) -> Iterator[dict]:
-    """Download an HPLT shard, filter, and yield dolma-format records with retries."""
+    CC + quality filters applied inline; records are yielded one at a time so
+    worker memory stays O(record) rather than O(shard). Mid-stream failures
+    propagate to zephyr, which retries the whole shard task (atomic parquet
+    writes mean the partial output is discarded). The session adapter handles
+    transient connection-level retries before any record is yielded.
+    """
     session = _make_session()
-    for attempt in range(MAX_SHARD_RETRIES):
-        try:
-            logger.info(f"Processing HPLT shard {tier}_{shard} (attempt {attempt + 1}/{MAX_SHARD_RETRIES})")
-            response = session.get(url, headers={"user-agent": "marin-hplt-ingress/1.0"}, stream=True)
-            response.raise_for_status()
+    logger.info(f"Processing HPLT shard {shard.tier}_{shard.shard}")
+    response = session.get(shard.url, headers={"user-agent": "marin-hplt-ingress/1.0"}, stream=True)
+    response.raise_for_status()
 
-            num_input = 0
-            num_non_cc = 0
-            num_kept = 0
-            filtered_records = []
-            with closing(response):
-                for record in _iter_jsonl_from_zstd_stream(response.raw):
-                    num_input += 1
-                    crawl_id = record.get("crawl_id", "")
+    num_input = 0
+    num_non_cc = 0
+    num_kept = 0
+    try:
+        with closing(response):
+            for record in _iter_jsonl_from_zstd_stream(response.raw):
+                num_input += 1
+                crawl_id = record.get("crawl_id", "")
+                if not _is_non_cc_source(crawl_id):
+                    continue
+                num_non_cc += 1
 
-                    if not _is_non_cc_source(crawl_id):
-                        continue
-                    num_non_cc += 1
-
-                    if not passes_quality_filter(record, tier):
-                        continue
-
-                    num_kept += 1
-                    filtered_records.append(
-                        {
-                            "id": record.get("id", ""),
-                            "text": record.get("text", ""),
-                            "source": f"hplt_v3_{crawl_id}",
-                            "format": "text",
-                            "metadata": {
-                                "hplt_wds_tier": tier,
-                                "hplt_crawl_id": crawl_id,
-                                "hplt_url": record.get("u", ""),
-                                "hplt_timestamp": record.get("ts", ""),
-                                "hplt_web_register": record.get("web-register", {}),
-                                "hplt_doc_scores": record.get("doc_scores", []),
-                            },
-                        }
-                    )
-
-            counters.increment("hplt/input", num_input)
-            counters.increment("hplt/non_cc", num_non_cc)
-            counters.increment("hplt/kept", num_kept)
-            yield from filtered_records
-            return
-        except (
-            requests.exceptions.ConnectionError,
-            requests.exceptions.ChunkedEncodingError,
-            urllib3.exceptions.ProtocolError,
-        ) as e:
-            if attempt + 1 == MAX_SHARD_RETRIES:
-                raise
-            wait = 2 ** (attempt + 1)
-            logger.warning(f"Shard {tier}_{shard} failed (attempt {attempt + 1}): {e}. Retrying in {wait}s.")
-            time.sleep(wait)
-    raise RuntimeError(f"unreachable: retry loop for shard {tier}_{shard} exited without return or raise")
+                if not passes_quality_filter(record, shard.tier):
+                    continue
+                num_kept += 1
+                yield {
+                    "id": record.get("id", ""),
+                    "text": record.get("text", ""),
+                    "source": f"hplt_v3_{crawl_id}",
+                    "format": "text",
+                    "metadata": {
+                        "hplt_wds_tier": shard.tier,
+                        "hplt_crawl_id": crawl_id,
+                        "hplt_url": record.get("u", ""),
+                        "hplt_timestamp": record.get("ts", ""),
+                        "hplt_web_register": record.get("web-register", {}),
+                        "hplt_doc_scores": record.get("doc_scores", []),
+                    },
+                }
+    finally:
+        counters.increment("hplt/input", num_input)
+        counters.increment("hplt/non_cc", num_non_cc)
+        counters.increment("hplt/kept", num_kept)
 
 
 def download_hplt_v3(output_path: str) -> None:
     """Download and filter HPLT v3.0 English dataset, keeping only non-CC sources."""
-    all_shards = _get_all_shard_urls()
+    all_shards = _get_all_shards()
     logger.info(f"Processing {len(all_shards)} HPLT shards")
 
     pipeline = (
         Dataset.from_list(all_shards)
-        .flat_map(lambda info: _download_and_filter_shard(info[0], info[1], info[2]))
+        .flat_map(_download_and_filter_shard)
         .write_parquet(os.path.join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
     )
 
-    ctx = ZephyrContext(name="download-hplt-v3", max_workers=32)
+    ctx = ZephyrContext(
+        name="download-hplt-v3",
+        max_workers=512,
+        resources=ResourceConfig(cpu=1, ram="8g", disk="5g"),
+    )
     ctx.execute(pipeline)
 
     logger.info(f"Downloaded HPLT v3 files to {output_path}")
@@ -248,7 +253,6 @@ def download_hplt_v3_step() -> StepSpec:
     return StepSpec(
         name="raw/hplt_v3",
         fn=lambda output_path: download_hplt_v3(output_path=output_path),
-        override_output_path="raw/hplt_v3",
     )
 
 

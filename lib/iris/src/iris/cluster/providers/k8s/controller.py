@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 from rigging.timing import Deadline
 
 from iris.cluster.config import config_to_dict
+from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.types import InfraError, Labels
@@ -75,13 +76,18 @@ def configure_client_s3(config: config_pb2.IrisClusterConfig) -> None:
         os.environ.setdefault("AWS_SECRET_ACCESS_KEY", r2_secret)
 
     os.environ.setdefault("AWS_ENDPOINT_URL", endpoint)
+    os.environ.setdefault("AWS_REGION", "auto")
+    os.environ.setdefault("AWS_DEFAULT_REGION", "auto")
 
     if "FSSPEC_S3" not in os.environ:
         fsspec_conf: dict = {"endpoint_url": endpoint}
         if _needs_virtual_host_addressing(endpoint):
             fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
-        if ".r2.cloudflarestorage.com" in endpoint:
-            fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
+        # Non-AWS S3-compatible endpoints (R2, CoreWeave Object Storage, etc.)
+        # don't honor the AWS region scheme; signing with the wrong region
+        # surfaces as 400 Bad Request. "auto" tells boto3 to skip region
+        # validation and let the endpoint route the request itself.
+        fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
         os.environ["FSSPEC_S3"] = json.dumps(fsspec_conf)
 
     # Flush fsspec/s3fs cached instances so they pick up the new config.
@@ -161,6 +167,10 @@ def _build_controller_deployment(
                 "spec": {
                     "serviceAccountName": "iris-controller",
                     "nodeSelector": node_selector,
+                    # Tolerate the standard NVIDIA GPU taint so the controller
+                    # can schedule onto GPU-only clusters (no CPU NodePool).
+                    # Harmless on untainted nodes.
+                    "tolerations": [NVIDIA_GPU_TOLERATION],
                     "containers": [
                         {
                             "name": "iris-controller",
@@ -686,9 +696,15 @@ class K8sControllerProvider:
         endpoint = self._config.object_storage_endpoint
         if endpoint:
             env.append({"name": "AWS_ENDPOINT_URL", "value": endpoint})
+            env.append({"name": "AWS_REGION", "value": "auto"})
+            env.append({"name": "AWS_DEFAULT_REGION", "value": "auto"})
             fsspec_conf: dict = {"endpoint_url": endpoint}
             if _needs_virtual_host_addressing(endpoint):
                 fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
+            # Non-AWS S3-compatible endpoints (R2, CoreWeave Object Storage)
+            # reject the default us-east-1 region in the v4 signature with
+            # 400 Bad Request. "auto" tells boto3 to skip region validation.
+            fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
             env.append({"name": "FSSPEC_S3", "value": json.dumps(fsspec_conf)})
         return env
 
