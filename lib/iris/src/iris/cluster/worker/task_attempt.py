@@ -26,6 +26,12 @@ from rigging.timing import Duration, Timestamp
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.providers.gcp.bootstrap import zone_to_multi_region
+from iris.cluster.providers.gcp.pypi_mirror import (
+    IRIS_PYPI_MIRROR_ENV_VAR,
+    IRIS_PYPI_MIRROR_OPT_OUT,
+    build_pypi_mirror_env,
+)
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
@@ -705,6 +711,28 @@ class TaskAttempt:
         region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
         if region_attr and region_attr.string_value:
             env["IRIS_WORKER_REGION"] = region_attr.string_value
+
+        # PyPI mirror injection. Reads opt-out from the user-supplied
+        # EnvironmentConfig.env_vars directly, so user `IRIS_PYPI_MIRROR=0`
+        # in env_vars suppresses injection (the value also flows through to
+        # the task via the env.update below).
+        mirror_disabled = self.request.environment.env_vars.get(IRIS_PYPI_MIRROR_ENV_VAR) == IRIS_PYPI_MIRROR_OPT_OUT
+        if region_attr and region_attr.string_value and not mirror_disabled:
+            try:
+                multi_region = zone_to_multi_region(region_attr.string_value)
+            except ValueError:
+                logger.info(
+                    "pypi mirror skipped: zone %s is unsupported (asia/me/etc.)",
+                    region_attr.string_value,
+                )
+                multi_region = None
+            if multi_region is None:
+                logger.info(
+                    "pypi mirror skipped: region %s has no AR continent mapping",
+                    region_attr.string_value,
+                )
+            else:
+                env.update(build_pypi_mirror_env(multi_region).as_env())
 
         env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
