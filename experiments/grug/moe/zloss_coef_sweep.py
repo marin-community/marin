@@ -22,7 +22,8 @@ GATE1_CONFIGS: list[tuple[int, float]] = [
     (768, 1.70e18),
 ]
 
-ZLOSS_COEFS: list[float] = [0.0001, 0.0005, 0.005, 0.01]
+# ZLOSS_COEFS: list[float] = [0.0001, 0.0005, 0.005, 0.01]
+ZLOSS_COEFS: list[float] = [0.00005, 0.00001]
 
 
 def _make_steps() -> list[ExecutorStep]:
