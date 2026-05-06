@@ -3,7 +3,7 @@ requires = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "dupekit"
+name = "marin-dupekit"
 version = "0.1.0"
 description = "Optimized code for text de-duplication, written in Rust"
 readme = "README.md"
