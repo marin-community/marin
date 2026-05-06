@@ -25,6 +25,11 @@ STEPMATH_TASKS: tuple[str, ...] = (
     "algebra_linear_equation",
 )
 
+STEPMATH_ICL_TASKS: tuple[tuple[str, int], ...] = (
+    ("arithmetic_5shot_icl", 5),
+    ("algebra_linear_equation_3shot_icl", 3),
+)
+
 NATIVE_TASKS: tuple[str, ...] = (
     "bfs_shortest_path",
     "binary_search",
@@ -46,6 +51,19 @@ NATIVE_TASKS: tuple[str, ...] = (
     "propositional_entailment",
     "topological_sort",
     "union_find_connectivity",
+)
+
+NATIVE_ICL_TASKS: tuple[tuple[str, int], ...] = (
+    ("binary_search_5shot_icl", 5),
+    ("euclid_gcd_5shot_icl", 5),
+    ("parentheses_balance_5shot_icl", 5),
+    ("edit_distance_dp_1shot_icl", 1),
+    ("interval_scheduling_1shot_icl", 1),
+    ("kmp_string_search_1shot_icl", 1),
+    ("knapsack_01_dp_1shot_icl", 1),
+    ("lcs_dp_1shot_icl", 1),
+    ("n_queens_backtracking_1shot_icl", 1),
+    ("union_find_connectivity_1shot_icl", 1),
 )
 
 CLRS_STYLE_TASKS: tuple[str, ...] = (
@@ -73,6 +91,7 @@ class SyntheticReasoningPplSlice:
     family: SyntheticReasoningFamily
     task_name: str
     hf_config_name: str
+    icl_shots: int = 0
 
     @property
     def registry_key(self) -> str:
@@ -90,6 +109,7 @@ class SyntheticReasoningPplSlice:
             f"seed:{DEV_SEED_BASE}",
             f"examples:{EXAMPLES_PER_SUBCORPUS}",
             f"source_commit:{SYNTHETIC_REASONING_SOURCE_COMMIT}",
+            *((f"icl_shots:{self.icl_shots}",) if self.icl_shots else ()),
         )
 
     def to_raw_text_dataset(self, *, hf_dataset_id: str) -> RawTextEvaluationDataset:
@@ -105,17 +125,27 @@ def _slice(
     *,
     family: SyntheticReasoningFamily,
     task_name: str,
+    icl_shots: int = 0,
 ) -> SyntheticReasoningPplSlice:
     return SyntheticReasoningPplSlice(
         family=family,
         task_name=task_name,
         hf_config_name=f"{family.value}_{task_name}",
+        icl_shots=icl_shots,
     )
 
 
 SYNTHETIC_REASONING_PPL_SLICES: tuple[SyntheticReasoningPplSlice, ...] = (
     *(_slice(family=SyntheticReasoningFamily.STEPMATH, task_name=task) for task in STEPMATH_TASKS),
+    *(
+        _slice(family=SyntheticReasoningFamily.STEPMATH, task_name=task, icl_shots=icl_shots)
+        for task, icl_shots in STEPMATH_ICL_TASKS
+    ),
     *(_slice(family=SyntheticReasoningFamily.NATIVE, task_name=task) for task in NATIVE_TASKS),
+    *(
+        _slice(family=SyntheticReasoningFamily.NATIVE, task_name=task, icl_shots=icl_shots)
+        for task, icl_shots in NATIVE_ICL_TASKS
+    ),
     *(_slice(family=SyntheticReasoningFamily.CLRS_STYLE, task_name=task) for task in CLRS_STYLE_TASKS),
 )
 
