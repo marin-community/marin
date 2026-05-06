@@ -20,9 +20,6 @@ from enum import StrEnum, auto
 from itertools import groupby, islice
 from typing import Any, Protocol
 
-import msgspec
-import xxhash
-from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
@@ -47,8 +44,8 @@ from zephyr.dataset import (
     resolve_glob,
 )
 from zephyr.expr import Expr
-from zephyr.external_sort import external_sort_merge
 from zephyr.readers import InputFileSpec, load_file
+from zephyr.shuffle import ScatterReader
 
 logger = logging.getLogger(__name__)
 
@@ -177,14 +174,14 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
 
 
 def _reduce_gen(
-    shard: Any,
+    shard: ScatterReader,
     key_fn: Callable,
     reducer_fn: Callable,
     sort_fn: Callable | None = None,
     external_sort_dir: str | None = None,
 ) -> Iterator:
     is_gen = inspect.isgeneratorfunction(reducer_fn)
-    for key, items_iter in _merge_sorted_chunks(shard, key_fn, sort_fn, external_sort_dir=external_sort_dir):
+    for key, items_iter in shard.merge_sorted_chunks(key_fn, sort_fn, external_sort_dir=external_sort_dir):
         if is_gen:
             yield from reducer_fn(key, items_iter)
         else:
@@ -556,12 +553,6 @@ def compute_plan(dataset: Dataset) -> PhysicalPlan:
     return PhysicalPlan(source_items=source_items, stages=stages)
 
 
-def deterministic_hash(obj: object) -> int:
-    """Compute a deterministic hash for an object."""
-    s = msgspec.msgpack.encode(obj, order="deterministic")
-    return xxhash.xxh3_64_intdigest(s)
-
-
 def make_windows(
     items: Iterable,
     folder_fn: Callable[[object, Any], tuple[bool, object]],
@@ -597,78 +588,6 @@ def make_windows(
 
     if window:
         yield window
-
-
-def _merge_sorted_chunks(
-    shard: Shard, key_fn: Callable, sort_fn: Callable | None = None, external_sort_dir: str | None = None
-) -> Iterator[tuple[object, Iterator]]:
-    """Merge sorted chunks using k-way merge, yielding (key, items_iterator) groups.
-
-    Each chunk is assumed to be sorted by key (and optionally by sort_fn within key).
-    This function performs a k-way merge across all chunks and groups consecutive
-    items with the same key.
-
-    Args:
-        shard: Shard containing sorted chunks (iterable of chunk lists)
-        key_fn: Function to extract grouping key from item
-        sort_fn: Optional secondary sort key. When provided, the merge uses
-            (key_fn, sort_fn) for ordering but still groups by key_fn alone.
-
-    Yields:
-        Tuples of (key, iterator_of_items) for each unique key
-    """
-    # Merge by composite key when sort_fn is provided, but group by key_fn only.
-    # Rebind to captured_sort_fn so pyrefly narrows the type inside the closure.
-    if sort_fn is not None:
-        captured_sort_fn = sort_fn
-
-        def merge_key(item):
-            return (key_fn(item), captured_sort_fn(item))
-
-    else:
-        merge_key = key_fn
-
-    # Check if external sort is needed BEFORE materializing all iterators.
-    # ScatterReader can decide using manifest stats (no file opens needed).
-    from zephyr.shuffle import ScatterReader
-
-    use_external = (
-        external_sort_dir is not None
-        and isinstance(shard, ScatterReader)
-        and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
-    )
-
-    if use_external:
-        from zephyr.external_sort import compute_fan_in, compute_write_batch_size
-
-        memory_limit = _TaskResources.from_environment().memory_bytes
-        # Per-iterator memory ~= compressed bytes for one chunk held by
-        # cat_file. Use the actual max compressed chunk size from the sidecar.
-        per_iter_bytes = shard.max_compressed_chunk_bytes
-        fan_in = compute_fan_in(per_iter_bytes, memory_limit)
-        write_batch_size = compute_write_batch_size(shard.avg_item_bytes)
-        logger.info(
-            "External sort triggered for shard with %d iterators, "
-            "fan_in=%d (per_iter≈%dKB), write_batch_size=%d, spilling to %s",
-            sum(it.chunk_count for it in shard.iterators),
-            fan_in,
-            per_iter_bytes // 1024,
-            write_batch_size,
-            external_sort_dir,
-        )
-        # Pass lazy generator — external_sort_merge consumes in batches without opening all files
-        merged_stream = external_sort_merge(
-            shard.get_iterators(),
-            merge_key,
-            external_sort_dir,
-            fan_in=fan_in,
-            write_batch_size=write_batch_size,
-        )
-    else:
-        chunk_iterators = list(shard.get_iterators())
-        logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
-        merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
-    yield from groupby(merged_stream, key=key_fn)
 
 
 def _sorted_merge_join(
@@ -838,8 +757,6 @@ def run_stage(
         elif isinstance(op, Reduce):
             # Build ScatterReader directly from per-mapper sidecars, then
             # merge sorted chunks and reduce per key.
-            from zephyr.shuffle import ScatterReader
-
             shard = ctx.shard
             if not isinstance(shard, ScatterReader):
                 # Shard contains every mapper's scatter-data path — reducer

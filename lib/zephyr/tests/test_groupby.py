@@ -392,23 +392,6 @@ def test_group_by_non_vortex_serializable(zephyr_ctx):
     assert results[1] == {"key": "b", "value": frozenset([2])}
 
 
-def test_scatter_file_iterator_pickle_roundtrip(tmp_path):
-    """ScatterFileIterator round-trips non-Arrow-serializable items (e.g. frozenset)."""
-    from zephyr.shuffle import ScatterFileIterator, _write_chunk_frame
-
-    items = [frozenset([1, 2]), frozenset([3, 4, 5])]
-    frame = _write_chunk_frame(items)
-
-    path = str(tmp_path / "test.shuffle")
-    with open(path, "wb") as f:
-        f.write(frame)
-
-    it = ScatterFileIterator(path=path, chunks=((0, len(frame)),))
-    chunks = [list(chunk_iter) for chunk_iter in it.get_chunk_iterators()]
-    assert len(chunks) == 1
-    assert chunks[0] == items
-
-
 def test_group_by_schema_evolution(zephyr_ctx):
     """Schema evolution: a field that is null in some chunks gains a type in others."""
     data = []

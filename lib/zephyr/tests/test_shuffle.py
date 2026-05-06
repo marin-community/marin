@@ -7,14 +7,21 @@ Covers the scatter write/read roundtrip, per-shard stats, and external sort —
 without spinning up a full coordinator.
 """
 
-from zephyr.plan import deterministic_hash
+import msgspec
+import pyarrow as pa
 from zephyr.shuffle import (
-    ScatterFileIterator,
+    _SORT_KEY_COL,
     ScatterReader,
     ScatterWriter,
-    _write_chunk_frame,
+    _batches_to_items,
+    _items_to_record_batch,
     _write_scatter,
+    deterministic_hash,
 )
+
+
+def _read_shard(shard: ScatterReader) -> list:
+    return list(_batches_to_items(shard.get_iterators()))
 
 
 def _key(item):
@@ -53,7 +60,7 @@ def test_scatter_roundtrip(tmp_path):
     recovered = []
     for shard_idx in range(num_shards):
         shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-        recovered.extend(list(shard))
+        recovered.extend(_read_shard(shard))
 
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
@@ -66,7 +73,7 @@ def test_scatter_each_shard_gets_correct_items(tmp_path):
 
     for shard_idx in range(num_shards):
         shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-        recovered = sorted(list(shard), key=lambda x: x["v"])
+        recovered = sorted(_read_shard(shard), key=lambda x: x["v"])
         expected = sorted([x for x in items if _target(x["k"], num_shards) == shard_idx], key=lambda x: x["v"])
         assert recovered == expected, f"shard {shard_idx} mismatch"
 
@@ -78,8 +85,8 @@ def test_scatter_roundtrip_sorted_chunks(tmp_path):
 
     for shard_idx in range(2):
         shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-        for chunk_iter in shard.get_iterators():
-            chunk = list(chunk_iter)
+        for batch in shard.get_iterators():
+            chunk = list(_batches_to_items([batch]))
             keys = [_key(x) for x in chunk]
             assert keys == sorted(keys), f"chunk for shard {shard_idx} not sorted"
 
@@ -113,12 +120,9 @@ def test_max_chunk_rows_per_shard(tmp_path):
 
 
 def test_needs_external_sort_triggers(tmp_path):
-    # Use a local path: ScatterFileIterator.__post_init__ resolves the fs at
-    # construction; a gs:// path would force gcsfs auth on import (~15s in CI)
-    # even though this test never reads from the file.
     fake_path = str(tmp_path / "fake.shuffle")
     shard = ScatterReader(
-        iterators=[ScatterFileIterator(path=fake_path, chunks=tuple((i, 1) for i in range(1000)))],
+        files=[(fake_path, tuple((i, 1) for i in range(1000)))],
         max_chunk_rows=1000,
         avg_item_bytes=1000.0,
     )
@@ -134,7 +138,7 @@ def test_needs_external_sort_below_threshold(tmp_path):
 
 
 def test_needs_external_sort_empty_shard():
-    shard = ScatterReader(iterators=[], max_chunk_rows=100_000, avg_item_bytes=200.0)
+    shard = ScatterReader(files=[], max_chunk_rows=100_000, avg_item_bytes=200.0)
     assert not shard.needs_external_sort(memory_limit=32 * 1024**3)
 
 
@@ -148,6 +152,133 @@ def test_avg_item_bytes_written(tmp_path):
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=1)
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
     assert shard.avg_item_bytes > 0
+
+
+def test_merge_sorted_chunks_basic(tmp_path):
+    """merge_sorted_chunks yields grouped (key, items) across all chunks."""
+    items = [
+        {"k": "a", "v": 1},
+        {"k": "b", "v": 2},
+        {"k": "a", "v": 3},
+        {"k": "b", "v": 4},
+    ]
+    # Force two chunks by writing twice
+    data_path = str(tmp_path / "shard-0000.shuffle")
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, num_output_shards=1)
+    writer.write(_items_to_record_batch(items[:2], _key, None, 1))
+    writer.write(_items_to_record_batch(items[2:], _key, None, 1))
+    scatter_paths = list(writer.close())
+
+    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    groups = {k: list(items) for k, items in shard.merge_sorted_chunks(key_fn=_key)}
+
+    assert len(groups) == 2
+    assert sorted([item["v"] for item in groups["a"]]) == [1, 3]
+    assert sorted([item["v"] for item in groups["b"]]) == [2, 4]
+
+
+def test_merge_sorted_chunks_secondary_sort(tmp_path):
+    """merge_sorted_chunks respects sort_fn for ordering within groups."""
+    items = [
+        {"k": "a", "ts": 10, "v": 1},
+        {"k": "a", "ts": 5, "v": 2},
+    ]
+    # Write as two separate chunks
+    data_path = str(tmp_path / "shard-0000.shuffle")
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, num_output_shards=1)
+    writer.write(_items_to_record_batch([items[0]], _key, lambda x: x["ts"], 1))
+    writer.write(_items_to_record_batch([items[1]], _key, lambda x: x["ts"], 1))
+    scatter_paths = list(writer.close())
+
+    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    # Sort by ts
+    groups = {k: list(items) for k, items in shard.merge_sorted_chunks(key_fn=_key, sort_fn=lambda x: x["ts"])}
+
+    assert len(groups["a"]) == 2
+    assert [item["v"] for item in groups["a"]] == [2, 1]  # 5 comes before 10
+
+
+def test_scatter_with_combiner(tmp_path):
+    """ScatterWriter applies combiner_fn during flushes."""
+    items = [
+        {"k": "a", "v": 1},
+        {"k": "a", "v": 2},
+    ]
+
+    def sum_combiner(key, items):
+        yield {"k": key, "v": sum(i["v"] for i in items)}
+
+    data_path = str(tmp_path / "shard-0000.shuffle")
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, num_output_shards=1, combiner_fn=sum_combiner)
+    writer.write(_items_to_record_batch(items, _key, None, 1))
+    scatter_paths = list(writer.close())
+
+    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    recovered = _read_shard(shard)
+    assert len(recovered) == 1
+    assert recovered[0] == {"k": "a", "v": 3}
+
+
+def test_merge_sorted_chunks_external_trigger(tmp_path):
+    """merge_sorted_chunks successfully spills to disk when budget is exceeded."""
+    from unittest.mock import patch
+
+    from iris.env_resources import TaskResources
+
+    items = [{"k": i, "v": i} for i in range(10)]
+    data_path = str(tmp_path / "shard-0000.shuffle")
+    # Write many small chunks
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, num_output_shards=1)
+    for i in range(10):
+        writer.write(_items_to_record_batch([items[i]], _key, None, 1))
+    scatter_paths = list(writer.close())
+
+    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+
+    # Force external sort by mocking a tiny memory limit
+    external_dir = tmp_path / "sort_work"
+    external_dir.mkdir()
+
+    with patch("iris.env_resources.TaskResources.from_environment") as mock_res:
+        # 1 byte memory limit will trigger external sort
+        mock_res.return_value = TaskResources(memory_bytes=1, cpu_cores=1, gpu_count=0, tpu_count=0)
+        groups = {k: list(it) for k, it in shard.merge_sorted_chunks(key_fn=_key, external_sort_dir=str(external_dir))}
+
+    assert len(groups) == 10
+    assert sorted(groups.keys()) == list(range(10))
+
+
+def test_scatter_null_keys(tmp_path):
+    """Items with None keys are handled correctly."""
+    items = [{"k": None, "v": 1}, {"k": None, "v": 2}]
+    num_shards = 2
+    scatter_paths = _build_shard(tmp_path, items, num_output_shards=num_shards)
+
+    # Both should go to the same shard
+    shard_idx = deterministic_hash(None) % num_shards
+    shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
+    recovered = _read_shard(shard)
+    assert len(recovered) == 2
+
+
+def test_scatter_empty_input(tmp_path):
+    """Scatter handles zero items gracefully."""
+    scatter_paths = _build_shard(tmp_path, [], num_output_shards=1)
+    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    assert _read_shard(shard) == []
+    assert list(shard.merge_sorted_chunks(key_fn=_key)) == []
+
+
+def test_scatter_all_non_serializable(tmp_path):
+    """Everything works even if NO items are Arrow-serializable."""
+    items = [
+        {"k": "a", "v": frozenset([1])},
+        {"k": "b", "v": frozenset([2])},
+    ]
+    scatter_paths = _build_shard(tmp_path, items, num_output_shards=1)
+    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    recovered = sorted(_read_shard(shard), key=lambda x: x["k"])
+    assert recovered == items
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +299,7 @@ def test_scatter_handles_arbitrary_python_objects(tmp_path):
     recovered = []
     for shard_idx in range(2):
         shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-        recovered.extend(list(shard))
+        recovered.extend(_read_shard(shard))
 
     def _ord(x):
         return (x["k"], repr(x["v"]))
@@ -187,15 +318,17 @@ def test_scatter_byte_budget_flushes_mid_write(tmp_path):
     items = [{"k": i % num_shards, "v": i} for i in range(200)]
     data_path = str(tmp_path / "shard-0000.shuffle")
 
-    # Budget of 1 byte forces a flush on every write after the first.
+    # Budget of 1 byte forces a flush on every batch after the first.
     writer = ScatterWriter(
         data_path=data_path,
         key_fn=_key,
         num_output_shards=num_shards,
         buffer_limit_bytes=1,
     )
-    for item in items:
-        writer.write(item)
+    batch_size = 10
+    for i in range(0, len(items), batch_size):
+        batch = _items_to_record_batch(items[i : i + batch_size], _key, None, num_shards)
+        writer.write(batch)
     writer.close()
 
     # Multiple chunks must have been written (not just the close-time flush).
@@ -224,13 +357,16 @@ def test_scatter_estimate_tracks_skewed_items(tmp_path):
         num_output_shards=num_shards,
         buffer_limit_bytes=budget,
     )
-    for item in small_items + large_items:
-        writer.write(item)
+    # Write small items as one batch, large items one-at-a-time so EMA adapts
+    # after each large item (same closed-loop behavior as the old per-item path).
+    writer.write(_items_to_record_batch(small_items, _key, None, num_shards))
+    for item in large_items:
+        writer.write(_items_to_record_batch([item], _key, None, num_shards))
     writer.close()
 
     # All items must survive the skewed flush pattern.
     scatter_paths = [data_path]
-    recovered = list(ScatterReader.from_sidecars(scatter_paths, 0))
+    recovered = _read_shard(ScatterReader.from_sidecars(scatter_paths, 0))
     all_items = small_items + large_items
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(all_items, key=lambda x: x["v"])
 
@@ -249,10 +385,9 @@ def test_scatter_estimate_adapts_to_gradual_drift(tmp_path):
     n_items = 200
     items = [{"k": 0, "v": "x" * (100 + i * 500)} for i in range(n_items)]
 
-    # 500 KB budget. With a frozen first-item estimate (~110 B) the budget check
-    # would read 200 * 110 = 22 KB < 500 KB and never flush mid-write, letting
-    # all items accumulate. With EMA adaptation the estimate tracks the growing
-    # sizes and flushes before peak RSS reaches the budget.
+    # 500 KB budget. With a frozen first-batch estimate the budget check would
+    # let all items accumulate. With EMA adaptation across batches the estimate
+    # tracks the growing sizes and flushes before peak RSS reaches the budget.
     budget = 500_000
     writer = ScatterWriter(
         data_path=data_path,
@@ -260,12 +395,15 @@ def test_scatter_estimate_adapts_to_gradual_drift(tmp_path):
         num_output_shards=num_shards,
         buffer_limit_bytes=budget,
     )
-    for item in items:
-        writer.write(item)
+    # Write in small batches so EMA has chances to adapt as item sizes grow.
+    batch_size = 10
+    for i in range(0, n_items, batch_size):
+        batch = _items_to_record_batch(items[i : i + batch_size], _key, None, num_shards)
+        writer.write(batch)
     writer.close()
 
     scatter_paths = [data_path]
-    recovered = list(ScatterReader.from_sidecars(scatter_paths, 0))
+    recovered = _read_shard(ScatterReader.from_sidecars(scatter_paths, 0))
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
     assert writer._mid_write_flushes > 0, "expected mid-write flushes as item sizes grew"
@@ -288,32 +426,9 @@ def test_scatter_byte_budget_preserves_all_items(tmp_path):
     recovered = []
     for shard_idx in range(num_shards):
         shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-        recovered.extend(list(shard))
+        recovered.extend(_read_shard(shard))
 
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
-
-
-# ---------------------------------------------------------------------------
-# ScatterFileIterator low-level
-# ---------------------------------------------------------------------------
-
-
-def test_scatter_file_iterator_multiple_chunks(tmp_path):
-    """Multiple frames in one file are read in declared order."""
-    chunk_a = [{"i": i} for i in range(5)]
-    chunk_b = [{"i": i} for i in range(100, 103)]
-
-    frame_a = _write_chunk_frame(chunk_a)
-    frame_b = _write_chunk_frame(chunk_b)
-
-    path = str(tmp_path / "two-chunks.shuffle")
-    with open(path, "wb") as f:
-        f.write(frame_a)
-        f.write(frame_b)
-
-    it = ScatterFileIterator(path=path, chunks=((0, len(frame_a)), (len(frame_a), len(frame_b))))
-    chunks = [list(c) for c in it.get_chunk_iterators()]
-    assert chunks == [chunk_a, chunk_b]
 
 
 # ---------------------------------------------------------------------------
@@ -321,25 +436,52 @@ def test_scatter_file_iterator_multiple_chunks(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _make_sorted_batch(values: list[int]) -> pa.RecordBatch:
+    """Build a RecordBatch sorted by _SORT_KEY_COL for use in external sort tests."""
+    sort_keys = [msgspec.msgpack.encode(v, order="deterministic") for v in values]
+    return pa.record_batch(
+        {"v": pa.array(values, type=pa.int64()), _SORT_KEY_COL: pa.array(sort_keys, type=pa.binary())}
+    )
+
+
 def test_external_sort_merge_streaming(tmp_path):
     from zephyr.external_sort import external_sort_merge
 
-    iters = [iter([1, 4, 7]), iter([2, 5, 8]), iter([3, 6, 9])]
-    result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
+    batches = [_make_sorted_batch([1, 4, 7]), _make_sorted_batch([2, 5, 8]), _make_sorted_batch([3, 6, 9])]
+    result_batches = list(external_sort_merge(iter(batches), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
+    result = [v for b in result_batches for v in b.column("v").to_pylist()]
     assert result == list(range(1, 10))
 
 
 def test_external_sort_merge_single_batch(tmp_path):
     from zephyr.external_sort import external_sort_merge
 
-    iters = [iter([i]) for i in range(10)]
-    result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
+    batches = [_make_sorted_batch([i]) for i in range(10)]
+    result_batches = list(external_sort_merge(iter(batches), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
+    result = [v for b in result_batches for v in b.column("v").to_pylist()]
     assert result == list(range(10))
 
 
 def test_external_sort_merge_cleans_up(tmp_path):
     from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
 
-    iters = [iter([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
-    list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
+    batches = [_make_sorted_batch([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
+    list(external_sort_merge(iter(batches), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
+
+
+def test_k_way_merge_promotes_null_column_with_int64():
+    """``null`` vs ``int64`` across batches must unify (from_pylist pinned null early)."""
+    from zephyr.external_sort import k_way_merge
+
+    sort_keys_a = [msgspec.msgpack.encode(v, order="deterministic") for v in [1, 3]]
+    batch_a = pa.record_batch(
+        {"v": pa.array([None, None], type=pa.null()), _SORT_KEY_COL: pa.array(sort_keys_a, type=pa.binary())}
+    )
+    sort_keys_b = [msgspec.msgpack.encode(v, order="deterministic") for v in [2, 4]]
+    batch_b = pa.record_batch(
+        {"v": pa.array([2, 4], type=pa.int64()), _SORT_KEY_COL: pa.array(sort_keys_b, type=pa.binary())}
+    )
+    merged = list(k_way_merge(iter([batch_a, batch_b]), key=_SORT_KEY_COL))
+    values = [v for b in merged for v in b.column("v").to_pylist()]
+    assert values == [None, 2, None, 4]
