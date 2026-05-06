@@ -19,7 +19,7 @@ import click
 from iris.cluster.providers.k8s.tasks import _sanitize_label_value
 from iris.cluster.types import is_job_finished
 from iris.rpc import job_pb2
-from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
+from rigging.redaction import redact_value
 
 _REPO_ROOT = Path(__file__).parents[2]
 
@@ -224,48 +224,52 @@ def _kubectl(kubeconfig: Path | None) -> list[str]:
     return cmd
 
 
-def _redact_kubernetes_env_literal(name: object, value: object) -> object:
-    if not isinstance(value, str):
-        return redact_value(value)
-    if isinstance(name, str) and is_sensitive_key_name(name):
-        return REDACTED_VALUE
+def _redact_pod_doc(value: object) -> object:
+    """Redact a parsed Kubernetes pod document via the shared rigging redactor.
 
-    stripped = value.lstrip()
-    if not stripped.startswith(("{", "[")):
-        return redact_string(value)
-
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        return redact_string(value)
-
-    return json.dumps(redact_value(parsed), separators=(",", ":"))
-
-
-def _redact_kubernetes_env_entry(entry: object) -> object:
-    if not isinstance(entry, dict):
-        return _redact_kubernetes_env_values(entry)
-
-    redacted = {}
-    name = entry.get("name")
-    for key, value in entry.items():
-        if key == "value":
-            redacted[key] = _redact_kubernetes_env_literal(name, value)
-        else:
-            redacted[key] = _redact_kubernetes_env_values(value)
-    return redacted
-
-
-def _redact_kubernetes_env_values(value: object) -> object:
+    Kubernetes encodes container env as ``[{"name": ..., "value": ...}, ...]``,
+    which hides the env-var name from a generic dict redactor. We lift each
+    entry into a single-key ``{name: value}`` dict so name-based sensitivity
+    matching applies, then write the redacted value back.
+    """
     if isinstance(value, list):
-        return [_redact_kubernetes_env_values(item) for item in value]
+        return [_redact_pod_doc(item) for item in value]
     if not isinstance(value, dict):
-        return value
+        return redact_value(value)
+    return {
+        key: _redact_pod_env_array(val) if key == "env" and isinstance(val, list) else _redact_pod_doc(val)
+        for key, val in value.items()
+    }
 
-    redacted = {key: _redact_kubernetes_env_values(child) for key, child in value.items()}
-    env = value.get("env")
-    if isinstance(env, list):
-        redacted["env"] = [_redact_kubernetes_env_entry(entry) for entry in env]
+
+def _redact_pod_env_array(env_list: list) -> list:
+    out = []
+    for entry in env_list:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or "value" not in entry:
+            # `valueFrom`-only entries and malformed shapes flow through the general redactor unchanged.
+            out.append(_redact_pod_doc(entry))
+            continue
+        new_entry = {key: _redact_pod_doc(val) for key, val in entry.items() if key != "value"}
+        new_entry["value"] = _redact_env_literal(entry["name"], entry["value"])
+        out.append(new_entry)
+    return out
+
+
+def _redact_env_literal(name: str, raw: object) -> object:
+    """Redact a literal env value by lifting ``{name: raw}`` into a dict for ``redact_value``.
+
+    JSON-encoded values (e.g. ``IRIS_JOB_ENV``) are parsed first so nested
+    secrets are caught, then re-serialized.
+    """
+    parsed = raw
+    if isinstance(raw, str) and raw.lstrip().startswith(("{", "[")):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = raw
+    redacted = redact_value({name: parsed})[name]
+    if isinstance(redacted, (dict, list)):
+        return json.dumps(redacted, separators=(",", ":"))
     return redacted
 
 
@@ -297,7 +301,7 @@ def _kubectl_pod_json_dump(
         output_path.write_text("")
         return f"{description} returned invalid JSON: {exc}"
 
-    output_path.write_text(json.dumps(_redact_kubernetes_env_values(data), indent=2) + "\n")
+    output_path.write_text(json.dumps(_redact_pod_doc(data), indent=2) + "\n")
     return None
 
 

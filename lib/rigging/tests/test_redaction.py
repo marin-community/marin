@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from rigging.redaction import REDACTED_VALUE, looks_like_key, redact_string, redact_value
+import json
+
+from rigging.redaction import REDACTED_VALUE, looks_like_key, redact_json_text, redact_string, redact_value
 
 
 def test_redact_value_redacts_sensitive_key_names():
@@ -73,3 +75,29 @@ def test_redact_value_redacts_secret_like_strings_under_benign_keys():
     value = {"cache_buster": "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ", "log_level": "info"}
 
     assert redact_value(value) == {"cache_buster": REDACTED_VALUE, "log_level": "info"}
+
+
+def test_redact_json_text_redacts_nested_sensitive_keys():
+    raw = json.dumps(
+        {
+            "name": "train-job",
+            "environment": {"env_vars": {"HF_TOKEN": "hf_xyz", "LOG_LEVEL": "info"}},
+            "metadata": [{"api_key": "sk-abc"}, {"benign": "ok"}],
+        }
+    )
+
+    out = json.loads(redact_json_text(raw))
+
+    assert out["environment"]["env_vars"]["HF_TOKEN"] == REDACTED_VALUE
+    assert out["environment"]["env_vars"]["LOG_LEVEL"] == "info"
+    assert out["metadata"][0]["api_key"] == REDACTED_VALUE
+    assert out["metadata"][1]["benign"] == "ok"
+    assert out["name"] == "train-job"
+
+
+def test_redact_json_text_falls_back_to_string_redaction_on_invalid_json():
+    # Not valid JSON, but contains a prefixed token — caller still gets protection.
+    leaky = "not json{{{ ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ"
+    assert redact_json_text(leaky) == "not json{{{ " + REDACTED_VALUE
+    assert redact_json_text("plain not json") == "plain not json"
+    assert redact_json_text("") == ""
