@@ -89,8 +89,10 @@ class DownloadConfig:
         # spaces/ for spaces, and models do not need a prefix in the URL.
     )
 
-    zephyr_max_parallelism: int = 8
-    """Maximum parallelism of the Zephyr download job"""
+    zephyr_max_workers: int = 64
+    """Maximum number of zephyr workers for the HF download. Bumped from the
+    original 8 default — at 8, large multi-shard sources are bottlenecked on
+    download throughput long before HF's per-host rate limits."""
 
     read_timeout_seconds: float = 120.0
     """Socket read timeout while streaming each HF file. Timeout failures trigger retries."""
@@ -380,7 +382,7 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    ctx_kwargs: dict = {"name": "download-hf", "max_workers": cfg.zephyr_max_parallelism}
+    ctx_kwargs: dict = {"name": "download-hf", "max_workers": cfg.zephyr_max_workers}
     if cfg.worker_resources is not None:
         ctx_kwargs["resources"] = cfg.worker_resources
     ctx = ZephyrContext(**ctx_kwargs)
@@ -402,7 +404,7 @@ def download_hf_step(
     revision: str,
     hf_urls_glob: list[str] | None = None,
     append_sha_to_path: bool = False,
-    zephyr_max_parallelism: int = 8,
+    zephyr_max_workers: int = 64,
     deps: list[StepSpec] | None = None,
     override_output_path: str | None = None,
     worker_resources: ResourceConfig | None = None,
@@ -417,7 +419,7 @@ def download_hf_step(
         revision: Commit hash from the HF dataset repo.
         hf_urls_glob: Glob patterns to select specific files. Empty means all files.
         append_sha_to_path: If True, write outputs under ``output_path/<revision>``.
-        zephyr_max_parallelism: Maximum download parallelism.
+        zephyr_max_workers: Maximum number of zephyr workers for the download.
         deps: Optional upstream dependencies.
         override_output_path: Override the computed output path entirely.
 
@@ -434,7 +436,7 @@ def download_hf_step(
                 hf_urls_glob=resolved_glob,
                 gcs_output_path=output_path,
                 append_sha_to_path=append_sha_to_path,
-                zephyr_max_parallelism=zephyr_max_parallelism,
+                zephyr_max_workers=zephyr_max_workers,
                 worker_resources=worker_resources,
             )
         )

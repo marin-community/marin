@@ -48,7 +48,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision="87f0914",
         hf_urls_glob=["sample/10BT/*.parquet"],
-        zephyr_max_parallelism=14,  # fineweb-edu sample/10BT has 14 parquet shards
+        zephyr_max_workers=14,  # fineweb-edu sample/10BT has 14 parquet shards
         override_output_path=f"{base}/download",
     )
 
