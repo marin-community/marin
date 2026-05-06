@@ -53,7 +53,7 @@ from iris.cluster.runtime.types import (
     RuntimeLogReader,
 )
 from iris.cluster.worker.worker_types import LogLine
-from iris.managed_thread import ManagedThread, get_thread_container
+from iris.managed_thread import get_thread_container
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,6 @@ class ProcessContainer:
     config: ContainerConfig
     command: list[str]  # Pre-computed command with remapped paths
     _process: subprocess.Popen | None = field(default=None, repr=False)
-    _log_thread: ManagedThread | None = field(default=None, repr=False)
     _running: bool = False
     _exit_code: int | None = None
     _error: str | None = None
@@ -165,7 +164,7 @@ class ProcessContainer:
 
             # Spawn thread to stream logs asynchronously
             name_suffix = self.config.task_id or self.config.job_id or "unnamed"
-            self._log_thread = get_thread_container().spawn(
+            get_thread_container().spawn(
                 target=self._stream_logs,
                 name=f"logs-{name_suffix}",
             )

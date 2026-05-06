@@ -20,6 +20,7 @@ from enum import Enum, StrEnum
 
 from rigging.timing import Deadline, Duration, Timestamp, TokenBucket
 
+from iris.chaos import chaos_raise
 from iris.cluster.constraints import (
     CONSTRAINT_REGISTRY,
     AttributeValue,
@@ -594,8 +595,6 @@ class ScalingGroup:
         Returns:
             The newly created SliceHandle
         """
-        from iris.chaos import chaos_raise
-
         chaos_raise("vm.create")
         slice_config = prepare_slice_config(
             self._config.slice_template,
