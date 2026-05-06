@@ -66,8 +66,7 @@ jobs:
         shell: bash -l {0}
         run: |
           # TODO: drop --memory=4G and --no-preemptible once the tokenize
-          # job's coordinator-side memory accumulation is fixed; iris defaults
-          # should suffice once the leak/over-retention is gone.
+          # job is fixed.
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
             --region=europe-west4 \
