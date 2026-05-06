@@ -37,6 +37,38 @@ override-dependencies = [
     "datasets>=3.1.0,<5.0.0",
     "equinox>=0.11.10",  # Override vizier's pin for modern JAX compatibility
 ]
+dependency-metadata = [
+    # lm-eval only imports sqlitedict when request caching is enabled. Marin
+    # does not use that cache path, and sqlitedict has no fixed release for
+    # CVE-2024-35515, so keep the harness without installing sqlitedict.
+    { name = "lm-eval", version = "0.4.9.1", requires-dist = [
+        "evaluate",
+        "datasets>=2.16.0",
+        "evaluate>=0.4.0",
+        "jinja2",
+        "jsonlines",
+        "numexpr",
+        "pybind11>=2.6.2",
+        "pytablewriter",
+        "rouge-score>=0.0.4",
+        "sacrebleu>=1.5.0",
+        "scikit-learn>=0.24.1",
+        "tqdm-multiprocess",
+        "transformers>=4.1",
+        "zstandard",
+        "dill",
+        "word2number",
+        "more-itertools",
+        "requests; extra == 'api'",
+        "aiohttp; extra == 'api'",
+        "tenacity; extra == 'api'",
+        "tqdm; extra == 'api'",
+        "tiktoken; extra == 'api'",
+        "sympy>=1.12; extra == 'math'",
+        "antlr4-python3-runtime==4.11; extra == 'math'",
+        "math-verify[antlr4-11-0]; extra == 'math'",
+    ], provides-extras = ["api", "math"] },
+]
 conflicts = [
     # Temporary cross-package conflicts for the GPU JAX 0.10 / non-GPU JAX 0.9 split.
     # Remove these once CPU, TPU, vLLM, and Fray TPU test paths can share the GPU JAX line.
