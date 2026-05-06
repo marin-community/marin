@@ -72,6 +72,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    router_z_loss_mode: str = "all"  # "all", "selected", "non_selected"
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -241,6 +242,7 @@ def _routing_stats(
     *,
     num_experts: int,
     num_experts_per_token: int,
+    router_z_loss_mode: str = "all",
 ) -> dict[str, jax.Array]:
     router_probs_f = router_probs.astype(jnp.float32)
     router_logits_f = router_logits.astype(jnp.float32)
@@ -251,8 +253,24 @@ def _routing_stats(
     token_fraction = assignment_fraction * num_experts_per_token
     p = jnp.mean(router_probs_f, axis=0)
     load_balancing_loss = num_experts * jnp.sum(token_fraction * p)
-    z = jsp.special.logsumexp(router_logits_f, axis=-1)
-    router_z_loss = jnp.mean(z**2)
+
+    if router_z_loss_mode == "all":
+        z = jsp.special.logsumexp(router_logits_f, axis=-1)
+        router_z_loss = jnp.mean(z**2)
+    elif router_z_loss_mode == "selected":
+        # Z-loss only on the logits of the selected (top-k) experts.
+        selected_logits = jnp.take_along_axis(router_logits_f, selected_experts, axis=-1)
+        z = jsp.special.logsumexp(selected_logits, axis=-1)
+        router_z_loss = jnp.mean(z**2)
+    elif router_z_loss_mode == "non_selected":
+        # Z-loss only on the logits of the non-selected experts.
+        # Mask selected experts to -inf so logsumexp ignores them.
+        sel_mask = jnp.sum(jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32), axis=1)
+        masked_logits = jnp.where(sel_mask > 0, -1e30, router_logits_f)
+        z = jsp.special.logsumexp(masked_logits, axis=-1)
+        router_z_loss = jnp.mean(z**2)
+    else:
+        raise ValueError(f"Unknown router_z_loss_mode: {router_z_loss_mode}")
 
     return {
         "routing_counts": expert_counts,
@@ -366,6 +384,7 @@ class MoEMLP(eqx.Module):
             router_logits,
             num_experts=self.cfg.num_experts,
             num_experts_per_token=self.cfg.num_experts_per_token,
+            router_z_loss_mode=self.cfg.router_z_loss_mode,
         )
         # Sharded QB: compute beta locally per device, then average.
         s_minus_alpha = router_logits - qb_alpha
