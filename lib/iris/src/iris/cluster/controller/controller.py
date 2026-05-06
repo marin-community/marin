@@ -2447,36 +2447,44 @@ class Controller:
                     )
                 )
 
+    def _process_heartbeat_updates(self, requests: list[HeartbeatApplyRequest]) -> None:
+        """Apply heartbeat-driven transitions and send kill RPCs.
+
+        The pending-kill set is populated inside the decommit transaction so that
+        the scheduling thread cannot observe freed capacity without also seeing
+        the pending-kill marker.
+        """
+        workers_to_kill: set[WorkerId] = set()
+        with self._store.transaction() as cur:
+            results = self._transitions.apply_heartbeats_batch(cur, requests)
+            all_tasks_to_kill: set[JobName] = set()
+            all_task_kill_workers: dict[JobName, WorkerId] = {}
+            for result in results:
+                all_tasks_to_kill.update(result.tasks_to_kill)
+                all_task_kill_workers.update(result.task_kill_workers)
+            if all_tasks_to_kill:
+                workers_to_kill = set(all_task_kill_workers.values())
+                with self._workers_pending_kill_lock:
+                    self._workers_pending_kill |= workers_to_kill
+        if workers_to_kill:
+            try:
+                self._stop_tasks_direct(all_tasks_to_kill, all_task_kill_workers)
+            finally:
+                with self._workers_pending_kill_lock:
+                    self._workers_pending_kill -= workers_to_kill
+
     def _run_task_updater_loop(self, stop_event: threading.Event) -> None:
         """Batched task state updater.
 
         Drains the task-update queue every 1s and applies transitions in a
-        single batch. Kill requests resulting from transitions are sent directly.
-
-        Workers targeted by StopTasks RPCs are held in _workers_pending_kill so
-        the scheduling thread won't reassign them until the kills complete.
+        single batch via _process_heartbeat_updates.
         """
         while not stop_event.is_set():
             requests = _drain_queue(self._task_update_queue, timeout=1.0)
             if not requests or stop_event.is_set():
                 continue
             try:
-                with self._store.transaction() as cur:
-                    results = self._transitions.apply_heartbeats_batch(cur, requests)
-                all_tasks_to_kill: set[JobName] = set()
-                all_task_kill_workers: dict[JobName, WorkerId] = {}
-                for result in results:
-                    all_tasks_to_kill.update(result.tasks_to_kill)
-                    all_task_kill_workers.update(result.task_kill_workers)
-                if all_tasks_to_kill:
-                    workers_to_kill = set(all_task_kill_workers.values())
-                    with self._workers_pending_kill_lock:
-                        self._workers_pending_kill |= workers_to_kill
-                    try:
-                        self._stop_tasks_direct(all_tasks_to_kill, all_task_kill_workers)
-                    finally:
-                        with self._workers_pending_kill_lock:
-                            self._workers_pending_kill -= workers_to_kill
+                self._process_heartbeat_updates(requests)
             except Exception:
                 logger.exception("Task updater loop iteration failed")
 
