@@ -22,6 +22,15 @@ dependencies = [
     "zstandard>=0.22",
 ]
 
+# Extras installed in the Docker image but split out so the dep-install layer
+# (--no-install-project) is cached on pyproject.toml changes, not source edits.
+[project.optional-dependencies]
+server = [
+    "gcsfs>=2024.0.0",
+    "py-spy",
+    "memray",
+]
+
 [project.scripts]
 finelog-server = "finelog.server.main:main"
 finelog = "finelog.deploy.cli:cli"
@@ -32,7 +41,7 @@ dev = [
     "pytest-asyncio",
     "pytest-timeout",
     "pytest-xdist",
-    "gcsfs>=2024.0.0",
+    "marin-finelog[server]",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -71,7 +71,7 @@ sudo docker pull {{ docker_image }}
 
 # Gracefully stop any existing container so the server can flush RAM
 # buffers to L0 on disk, then remove it.
-sudo docker stop --time 5 {{ container_name }} 2>/dev/null || true
+sudo docker stop --timeout 5 {{ container_name }} 2>/dev/null || true
 sudo docker rm -f {{ container_name }} 2>/dev/null || true
 
 # Reserve 0.5 vCPU and 512 MiB for the host VM (sshd, docker daemon, ops
