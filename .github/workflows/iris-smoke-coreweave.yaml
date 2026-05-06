@@ -5,6 +5,8 @@ on:
     types: [opened, synchronize]
     paths:
       - "lib/iris/**"
+      - ".github/workflows/iris-smoke-coreweave.yaml"
+      - "scripts/workflows/iris_monitor.py"
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -51,7 +53,7 @@ jobs:
           ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
 
       - name: Set commit status to pending
-        if: github.event_name == 'issue_comment'
+        if: github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -268,7 +270,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Set commit status to result
-        if: always() && github.event_name == 'issue_comment'
+        if: always() && (github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
