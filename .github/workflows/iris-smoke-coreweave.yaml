@@ -111,7 +111,10 @@ jobs:
       - name: Port-forward to iris-ci controller
         run: |
           uv run python scripts/workflows/iris_monitor.py port-forward \
-            --iris-config lib/iris/examples/coreweave-ci.yaml
+            --iris-config lib/iris/examples/coreweave-ci.yaml \
+            --namespace "$IRIS_NAMESPACE" \
+            --kubeconfig "$HOME/.kube/coreweave-iris" \
+            --log-path "$RUNNER_TEMP/iris-cw-port-forward.log"
 
       - name: Run integration tests
         env:
@@ -150,8 +153,8 @@ jobs:
       - name: Stop port-forward
         if: always()
         run: |
-          [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true
-          pkill -f "kubectl port-forward.*$IRIS_NAMESPACE" 2>/dev/null || true
+          [ -n "${PF_PID:-}" ] && kill "$PF_PID" 2>/dev/null || true
+          pkill -f "kubectl.*port-forward.*$IRIS_NAMESPACE" 2>/dev/null || true
 
       - name: Capture failure diagnostics
         if: failure()
@@ -159,6 +162,10 @@ jobs:
         env:
           LOG_DIR: ${{ github.workspace }}/iris-cw-logs
         run: |
+          mkdir -p "$LOG_DIR"
+          if [ -n "${PF_LOG:-}" ] && [ -f "$PF_LOG" ]; then
+            cp "$PF_LOG" "$LOG_DIR/port-forward.log"
+          fi
           # No job submitted in this lane, so the iris.job_id selector matches
           # nothing — continue-on-error tolerates the empty kubernetes-pods.json.
           uv run python scripts/workflows/iris_monitor.py collect \

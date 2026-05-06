@@ -6,6 +6,7 @@
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 import click
+from iris.cluster.config import IrisConfig
 from iris.cluster.providers.k8s.tasks import _sanitize_label_value
 from iris.cluster.types import is_job_finished
 from iris.rpc import job_pb2
@@ -44,6 +46,15 @@ class IrisJobStatus:
     job_id: str
     state: str  # iris proto state name, e.g. "JOB_STATE_RUNNING"
     error: str | None
+
+
+@dataclass(frozen=True)
+class KubectlPortForwardSpec:
+    namespace: str
+    service_name: str
+    kubeconfig: Path | None
+    local_port: int
+    remote_port: int
 
 
 def iris_command(repo_root: Path) -> list[str]:
@@ -443,6 +454,213 @@ def _write_summary(
 
 
 _DASHBOARD_URL_RE = re.compile(r"Dashboard:\s+(http://\S+)")
+_DEFAULT_CONTROLLER_PORT = 10000
+_DEFAULT_PORT_FORWARD_LOG = "iris-controller-port-forward.log"
+
+
+def _default_port_forward_log_path() -> Path:
+    base = Path(os.environ.get("RUNNER_TEMP") or "/tmp")
+    return base / _DEFAULT_PORT_FORWARD_LOG
+
+
+def _tail_text(path: Path, max_chars: int = 4000) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(errors="replace")
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
+
+
+def terminate_pid(pid: int, timeout: float = 5.0) -> None:
+    """Terminate a child process by PID and reap it when this process owns it."""
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            waited_pid, _ = os.waitpid(pid, os.WNOHANG)
+            if waited_pid == pid:
+                return
+        except ChildProcessError:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+        time.sleep(0.05)
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    try:
+        os.waitpid(pid, 0)
+    except ChildProcessError:
+        pass
+
+
+def _terminate_process(proc: subprocess.Popen, timeout: float = 5.0) -> None:
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+def _supervise_process(command: list[str], log_path: Path, restart_interval: float) -> None:
+    child: subprocess.Popen | None = None
+    stopping = False
+
+    def stop_child() -> None:
+        if child is None or child.poll() is not None:
+            return
+        _terminate_process(child)
+
+    def handle_signal(signum: int, frame: object) -> None:
+        nonlocal stopping
+        stopping = True
+        stop_child()
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", buffering=1) as log:
+        while not stopping:
+            log.write(f"\n[iris_monitor] starting: {' '.join(command)}\n")
+            child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, text=True)
+            returncode = child.wait()
+            if stopping:
+                break
+            log.write(f"\n[iris_monitor] command exited with {returncode}; restarting in {restart_interval}s\n")
+            time.sleep(restart_interval)
+
+
+def open_supervised_tunnel(
+    command: list[str],
+    *,
+    url: str,
+    health_path: str,
+    timeout: float,
+    poll_interval: float,
+    log_path: Path,
+    restart_interval: float,
+) -> tuple[str, int]:
+    """Start a detached supervisor for a tunnel command and wait for controller health."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    supervisor_cmd = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "_supervise-port-forward",
+        "--log-path",
+        str(log_path),
+        "--restart-interval",
+        str(restart_interval),
+        "--",
+        *command,
+    ]
+    proc = subprocess.Popen(
+        supervisor_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        start_new_session=True,
+    )
+
+    health_url = url + health_path
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            tail = _tail_text(log_path)
+            raise RuntimeError(f"port-forward supervisor exited with code {proc.returncode} before health check\n{tail}")
+        try:
+            with urllib.request.urlopen(health_url, timeout=poll_interval) as resp:
+                if 200 <= resp.status < 300:
+                    return url, proc.pid
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+            pass
+        time.sleep(poll_interval)
+
+    _terminate_process(proc)
+    tail = _tail_text(log_path)
+    raise TimeoutError(f"controller {health_url} never became healthy within {timeout}s\n{tail}")
+
+
+def _coreweave_port_forward_spec(
+    iris_config: Path,
+    *,
+    namespace: str | None,
+    kubeconfig: Path | None,
+    local_port: int,
+) -> KubectlPortForwardSpec | None:
+    config = IrisConfig.load(iris_config).proto
+    if config.controller.WhichOneof("controller") != "coreweave":
+        return None
+    if config.platform.WhichOneof("platform") != "coreweave":
+        raise click.UsageError("CoreWeave controller config requires platform.coreweave")
+
+    controller = config.controller.coreweave
+    platform = config.platform.coreweave
+    resolved_namespace = namespace or platform.namespace
+    if not resolved_namespace:
+        raise click.UsageError("CoreWeave port-forward requires a namespace")
+
+    resolved_kubeconfig = kubeconfig
+    if resolved_kubeconfig is None and platform.kubeconfig_path:
+        resolved_kubeconfig = Path(platform.kubeconfig_path)
+    if resolved_kubeconfig is not None:
+        resolved_kubeconfig = resolved_kubeconfig.expanduser()
+
+    return KubectlPortForwardSpec(
+        namespace=resolved_namespace,
+        service_name=controller.service_name or "iris-controller-svc",
+        kubeconfig=resolved_kubeconfig,
+        local_port=local_port,
+        remote_port=controller.port or _DEFAULT_CONTROLLER_PORT,
+    )
+
+
+def _kubectl_port_forward_command(spec: KubectlPortForwardSpec) -> list[str]:
+    command = ["kubectl"]
+    if spec.kubeconfig is not None:
+        command.append(f"--kubeconfig={spec.kubeconfig}")
+    command.extend(
+        [
+            "port-forward",
+            "-n",
+            spec.namespace,
+            f"svc/{spec.service_name}",
+            f"{spec.local_port}:{spec.remote_port}",
+        ]
+    )
+    return command
+
+
+def open_coreweave_port_forward(
+    spec: KubectlPortForwardSpec,
+    *,
+    health_path: str,
+    timeout: float,
+    poll_interval: float,
+    log_path: Path,
+    restart_interval: float,
+) -> tuple[str, int]:
+    url = f"http://127.0.0.1:{spec.local_port}"
+    return open_supervised_tunnel(
+        _kubectl_port_forward_command(spec),
+        url=url,
+        health_path=health_path,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        log_path=log_path,
+        restart_interval=restart_interval,
+    )
 
 
 def open_controller_tunnel(
@@ -658,30 +876,88 @@ def collect(
     show_default=True,
     help="$GITHUB_ENV variable name to write the controller URL under.",
 )
+@click.option("--local-port", default=_DEFAULT_CONTROLLER_PORT, show_default=True, type=int, help="Local tunnel port.")
+@click.option(
+    "--log-path",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="File for detached port-forward logs. Defaults under $RUNNER_TEMP.",
+)
+@click.option("--namespace", default=None, help="Override Kubernetes namespace for CoreWeave configs.")
+@click.option(
+    "--kubeconfig",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Override kubeconfig path for CoreWeave configs.",
+)
+@click.option(
+    "--restart-interval",
+    default=2.0,
+    show_default=True,
+    type=float,
+    help="Seconds before restarting a dropped CoreWeave port-forward.",
+)
 def port_forward(
     iris_config: Path,
     timeout: float,
     poll_interval: float,
     health_path: str,
     url_var: str,
+    local_port: int,
+    log_path: Path | None,
+    namespace: str | None,
+    kubeconfig: Path | None,
+    restart_interval: float,
 ) -> None:
     """Open a tunnel to the iris controller via ``iris cluster dashboard`` and probe ``/health``.
 
     Writes the controller URL and tunnel PID to $GITHUB_ENV so a later
     ``Stop port-forward`` step can ``kill $PF_PID`` to tear it down.
     """
-    url, pf_pid = open_controller_tunnel(
+    resolved_log_path = log_path or _default_port_forward_log_path()
+    spec = _coreweave_port_forward_spec(
         iris_config,
-        health_path=health_path,
-        timeout=timeout,
-        poll_interval=poll_interval,
-        repo_root=_REPO_ROOT,
+        namespace=namespace,
+        kubeconfig=kubeconfig,
+        local_port=local_port,
     )
-    click.echo(f"Controller healthy on {url} (pid={pf_pid})", err=True)
+    if spec is None:
+        url, pf_pid = open_controller_tunnel(
+            iris_config,
+            health_path=health_path,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            repo_root=_REPO_ROOT,
+        )
+        click.echo(f"Controller healthy on {url} (pid={pf_pid})", err=True)
+    else:
+        url, pf_pid = open_coreweave_port_forward(
+            spec,
+            health_path=health_path,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            log_path=resolved_log_path,
+            restart_interval=restart_interval,
+        )
+        click.echo(f"Controller healthy on {url} (supervisor pid={pf_pid}, log={resolved_log_path})", err=True)
 
     if path := os.environ.get("GITHUB_ENV"):
         with open(path, "a") as fh:
-            fh.write(f"{url_var}={url}\nPF_PID={pf_pid}\n")
+            fh.write(f"{url_var}={url}\nPF_PID={pf_pid}\nPF_LOG={resolved_log_path}\n")
+
+
+@cli.command(
+    name="_supervise-port-forward",
+    hidden=True,
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+)
+@click.option("--log-path", required=True, type=click.Path(path_type=Path))
+@click.option("--restart-interval", required=True, type=float)
+@click.argument("command", nargs=-1, type=click.UNPROCESSED)
+def supervise_port_forward(log_path: Path, restart_interval: float, command: tuple[str, ...]) -> None:
+    if not command:
+        raise click.UsageError("supervisor requires a command after --")
+    _supervise_process(list(command), log_path=log_path, restart_interval=restart_interval)
 
 
 if __name__ == "__main__":
