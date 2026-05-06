@@ -18,11 +18,13 @@ The Delphi blogpost work is the likely model-science anchor if the final figures
 6. CoreWeave and GPU path.
 7. Finelog and observability.
 8. Datakit and Zephyr.
-9. Evals and perplexity gap.
-10. MoE and training mechanics.
-11. Delphi scaling + blog work.
-12. Decisions for tomorrow.
-13. What should be true by next review.
+9. Eval story: data gaps, not one score.
+10. Agent traces: patch and observation gaps.
+11. Perplexity gap: long-tail data.
+12. MoE and training mechanics.
+13. Delphi scaling + blog work.
+14. Decisions for tomorrow.
+15. What should be true by next review.
 
 ## High-Impact Landed Changes
 
@@ -113,21 +115,36 @@ Evidence to fill in tomorrow:
 - Ferry pass/fail history.
 - Any cost or throughput improvement from Zephyr changes.
 
-### 6. Eval Coverage Expanded Into A Diagnostic Matrix
+### 6. Eval Work Turned Into A Data Gap Map
 
-This should be condensed in the live deck. The raw list is long; pick examples that changed a decision.
+The deck should avoid reciting every new slice. The story is that evals are now concrete enough to say what data Marin is missing.
 
-- FineWeb2 multilingual and long-tail reruns: `#5008`, `#5074`, `#5075`.
-- Raw/web slices: npm registry, UWF Zeek, game/music, Common Crawl WARC/WAT, GH Archive, public diagnostic logs, LM-eval bridge: `#5124`, `#5126`, `#5193`, `#5192`, `#5119`, `#5121`, `#5196`.
-- Noisy/specialized slices: ASR/OCR, bio/chem notation, structured text, formal methods, RTL: `#5118`, `#5127`, `#5129`, `#5128`.
-- Per-model perplexity-score caching: `#5169`.
-- Raw pairwise perplexity-gap reports in Levanter: `#4962`.
-- Served LM eval handoff and review nits: `#5285`, `#5322`, `#5325`.
+#### Agent-trace PPL work (`#4963`)
 
-Evidence to fill in tomorrow:
+- Motivation: make base-model pretraining more "agentic RL ready" without waiting for a full pretrain -> posttrain -> downstream benchmark loop on every candidate.
+- Method: score coding-agent traces by span type: assistant text, final assistant text, patch, tool call, and observation. For text spans, report BPB. For patches, report patch gain: how much trace context helps the model predict the final patch.
+- Main finding: Marin is not broadly broken on trace prose. It is roughly comparable on assistant text and unusually strong on tool-call spans, but weak on observations and very weak on patches.
+- The sharpest number: peer models have patch BPB around `0.22-0.25` and positive patch gain around `+0.16` to `+0.20`; Marin 8B has patch BPB around `1.87-1.93` and patch gain around `-1.43`.
+- Interpretation: Marin can emit the shape of tool calls, but does not yet model tool results or patch consequences well. That is exactly the kind of pretraining gap that will make posttraining for coding agents harder.
+- Status: `#5248` packages the trace-masked agent probe into a repeatable eval suite.
 
-- Which slices are green and where outputs live.
-- One slice where Marin differs from Llama/Qwen in a way that affects data sourcing.
+#### Perplexity-gap portfolio (`#5005`)
+
+- Motivation: broaden checkpoint confidence from Paloma-style held-out loss into a portfolio of places where the model might fail: raw technical text, multilingual text, code-adjacent artifacts, structured text, scientific notation, and agent traces.
+- Method: compare Marin against peer models in BPB, including cross-tokenizer realignment so the report can drill below doc-level summaries.
+- Main finding: Marin looks good on edited English prose but has clear gaps on non-English text, messy web artifacts, package metadata, structured tables, code-ish surfaces, and scientific notation.
+- Concrete numbers from the public report:
+  - Marin 8B vs Qwen3 8B: Paloma `-0.0272` BPB, Uncheatable `+0.0074`, FineWeb2 multilingual `+0.2431`, runnable long tail `+0.0911`, package metadata `+0.0823`.
+  - Marin 32B vs Qwen3 32B: Paloma `-0.0878`, Uncheatable `-0.0260`, FineWeb2 multilingual `+0.184`, runnable long tail `+0.1017`, bio/chem `+0.0824`, game/music `-0.1998`.
+- Interpretation: this is not a single quality score. It is a source-selection tool. The next data mix should explicitly buy back long-tail structured and technical surfaces, not just add more clean English web text.
+- Caveat: no decontamination has been attempted, and we cannot decontaminate peer models. Use these as directional source diagnostics, then validate with hard evals.
+
+Figures wanted:
+
+- Agent trace span heatmap/table from `#4963` or `#5248`: rows for Qwen/Llama/Marin base/instruct, columns for assistant text, tool, observation, patch, and patch gain. Highlight lower BPB and positive patch gain.
+- Patch gain bar chart sorted by model. This is the cleanest one-slide visual because Marin is negative while peers are positive.
+- Perplexity-gap family bar chart from <https://marin.community/analysis/perplexity-gap/> with Paloma, Uncheatable, FineWeb2 multilingual, runnable long tail, package metadata, structured text, bio/chem, and game/music.
+- Optional if there is time: a 32B drilldown chart for GH/log/API/URL/diff/patch surfaces or worst pattern buckets, since this connects directly to coding-agent data needs.
 
 ### 7. MoE Work Continued Across Recipe And Kernels
 
@@ -177,5 +194,6 @@ Marin's main progress since late March is operational. Ray is gone from Marin, I
 - Iris production job count, failure count, and top incident classes since March 26.
 - CoreWeave canary status and latest multi-host GPU run status.
 - Datakit/Zephyr throughput for the main smoke ferry and any large production data run.
-- Current perplexity-gap dashboard or summary paths for the new raw slices.
+- Source table or W&B report for the agent-trace span losses in `#4963` / `#5248`.
+- Current perplexity-gap dashboard exports or summary paths for the new raw slices.
 - Delphi final figures and blogpost draft location.

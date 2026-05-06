@@ -135,17 +135,58 @@ layout: default
 layout: default
 ---
 
-# ![](/icons/chart.svg) Evals and Perplexity Gap
+# ![](/icons/chart.svg) Eval Story: Data Gaps, Not One Score
 
-- The raw/perplexity-gap matrix grew across FineWeb2 multilingual, long-tail reruns, npm metadata, UWF Zeek, game/music, Common Crawl WARC/WAT, GH Archive, ASR/OCR noisy text, bio/chem notation, structured text, formal methods, RTL, and raw LM-eval bridge slices (`#5008`, `#5074`, `#5075`, `#5124`, `#5126`, `#5193`, `#5192`, `#5119`, `#5118`, `#5127`, `#5129`, `#5128`, `#5196`).
-- Per-model scores are cached before gap diffs (`#5169`), and raw perplexity-gap reports for pairwise LM comparisons landed in Levanter (`#4962`).
-- Served LM eval moved toward a cleaner native handoff (`#5285`, `#5322`, `#5325`), and several eval paths migrated off Ray / Fray v1.
+- `#5005` reframed checkpoint confidence as a portfolio of evidence: broad held-out loss, raw technical text, chat, agent traces, reasoning probes, and hard downstream evals.
+- The broad English story is not the problem. Marin 8B is roughly flat with Llama 3.1 8B on Paloma / Uncheatable (`+0.0029` / `+0.0049` BPB) and beats Qwen3 8B on Paloma while staying close on Uncheatable (`-0.0272` / `+0.0074` BPB).
+- The actionable failures are narrower and more useful: code-heavy slices, tool observations, patches, multilingual text, messy web artifacts, package metadata, tables, and scientific notation.
+- Caveat: these are pretraining proxies. They are useful because they point to data gaps, not because they replace downstream agent benchmarks.
 
-<Box>
+---
+layout: default
+---
 
-TODO: Choose the one or two eval findings that changed data or model decisions. Avoid listing every slice in the live deck.
+# ![](/icons/code.svg) Agent Traces: Patch And Observation Gaps
 
-</Box>
+<div style="font-size: 0.72em; line-height: 1.15">
+
+| Model | Assistant | Tool | Observation | Patch | Patch gain |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Qwen3-8B base | 0.482 | 0.796 | 0.428 | 0.220 | +0.161 |
+| Llama3.1-8B base | 0.532 | 0.619 | 0.459 | 0.237 | +0.183 |
+| Marin-8B base | 0.543 | 0.435 | 0.752 | 1.867 | -1.432 |
+| Marin-8B instruct | 0.564 | 0.477 | 0.902 | 1.934 | -1.429 |
+
+</div>
+
+- BPB: lower is better. Patch gain: how much the trace helps predict the final patch; positive means the trace helped.
+- Marin looks basically fine on prose/chat and surprisingly good on tool-call spans.
+- The failures are in understanding tool results and producing patches. More trace context helps peer models predict patches, but hurts Marin.
+- This is now a repeatable agent-trace PPL suite (`#4963`, `#5248`) and should directly inform the next data mix.
+
+---
+layout: default
+---
+
+# ![](/icons/chart.svg) Perplexity Gap: Long-Tail Data
+
+<div style="font-size: 0.72em; line-height: 1.15">
+
+| Slice family | 8B gap vs Qwen3 | 32B gap vs Qwen3 | Read |
+| --- | ---: | ---: | --- |
+| Paloma | -0.027 | -0.088 | Edited English is not the main gap |
+| Uncheatable Eval | +0.007 | -0.026 | Prose-heavy held-out slices mostly hold up |
+| FineWeb2 multilingual | +0.243 | +0.184 | English-only training shows up immediately |
+| Runnable long tail | +0.091 | +0.102 | Raw technical surfaces are weak |
+| Package metadata | +0.082 | +0.038 | Repo-adjacent structured text is undercovered |
+| Bio / chem notation | TODO | +0.082 | Science notation is a clear blind spot |
+| Game / music notation | TODO | -0.200 | Not every weird slice is bad |
+
+</div>
+
+- The useful finding is not "Marin is worse everywhere." It is a map of where to buy back capability with data.
+- The recurring weak families are messy web artifacts, structured text, code-adjacent metadata, tables, multilingual prose, and scientific notation.
+- The dashboard is live at [marin.community/analysis/perplexity-gap](https://marin.community/analysis/perplexity-gap/); use it tomorrow for the exact family-level figure.
 
 ---
 layout: section
@@ -211,4 +252,3 @@ layout: default
 - TODO: Data target, with tokens staged and a cost/throughput constraint.
 - TODO: Eval target, with a published diagnostic matrix and one action taken from it.
 - TODO: Training target, with the next MoE/Delphi milestone and the evidence needed to stop debating it.
-
