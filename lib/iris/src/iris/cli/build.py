@@ -250,6 +250,13 @@ def build_image(
     else:
         all_tags = dict.fromkeys([tag, sha_tag, latest_tag])
 
+    if "," in platform:
+        subprocess.run(
+            ["docker", "run", "--privileged", "--rm", "tonistiigi/binfmt", "--install", "all"],
+            check=True,
+            capture_output=not verbose,
+        )
+
     cmd = ["docker", "buildx", "build", "--platform", platform]
     cmd.extend(["--target", image_type])
     cmd.extend(["--build-arg", f"IRIS_GIT_HASH={git_sha}"])
