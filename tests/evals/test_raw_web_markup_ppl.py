@@ -3,8 +3,8 @@
 
 import posixpath
 
-from marin.execution.step_spec import StepSpec
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset
+from marin.execution.step_spec import StepSpec
 
 from experiments.evals import raw_web_markup_ppl as raw_web_markup
 
