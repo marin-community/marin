@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""#4963: Repeatable 8B trace-masked head-to-head with compiled summaries.
-
-nodryrun: this experiment intentionally wires full 8B checkpoint download steps,
-which exceed the generic dry-run test budget.
-"""
+"""#4963: Repeatable 8B trace-masked head-to-head with compiled summaries."""
 
 from typing import Literal
 
@@ -20,7 +16,7 @@ from marin.evaluation.trace_masked_results import (
     TraceMaskedResultInput,
     compile_trace_masked_results,
 )
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, output_path_of
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of
 
 from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
 from experiments.chat_templates.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
@@ -373,7 +369,6 @@ compiled_results = compile_trace_masked_results(
 
 if __name__ == "__main__":
     executor_main(
-        ExecutorMainConfig(),
         steps=[
             qwen2_5_7b_hf,
             qwen2_5_7b_instruct_hf,
