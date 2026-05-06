@@ -54,7 +54,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Build wheels
-        run: python scripts/rust_package.py --skip-publish --targets ${{ matrix.targets }}
+        run: python scripts/rust_package.py --bump --build-wheels --targets ${{ matrix.targets }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -74,20 +74,28 @@ jobs:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
 
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      # Build the sdist exactly once here (not per matrix leg) so the upload
+      # to PyPI gets one canonical sdist tarball at the bumped version. The
+      # bump must match what the matrix legs computed - both read the same
+      # Cargo.toml from $GITHUB_SHA and bump patch by 1, so they agree.
+      - name: Bump version and build sdist
+        run: python scripts/rust_package.py --bump --sdist-only
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@v1.12.4
         with:
           packages-dir: dist/
 
-      # Branch setup must happen BEFORE rust_package.py so the wheel-pin
-      # modifications land on the PR branch's tree, not get clobbered by a
-      # later checkout. Resetting to $GITHUB_SHA gives rust_package a clean
-      # baseline to write on top of, regardless of what the existing PR
+      # Branch setup happens AFTER the PyPI publish so a publish failure does
+      # not poison the auto-PR. Resetting to $GITHUB_SHA gives rust_package a
+      # clean baseline to write on top of, regardless of what the existing PR
       # branch contained.
       - name: Set up release branch
         env:
@@ -104,10 +112,10 @@ jobs:
             git checkout -B "$BRANCH"
           fi
 
-      - name: Publish release and update pyproject
+      - name: Bump version and update pyproject
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python scripts/rust_package.py --skip-build
+        run: python scripts/rust_package.py --bump --update-pyproject
 
       - name: Open or update PR
         env:
