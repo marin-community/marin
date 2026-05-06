@@ -1236,6 +1236,15 @@ class Controller:
         self._ping_thread: ManagedThread | None = None
         self._task_update_queue: queue_mod.Queue[HeartbeatApplyRequest] = queue_mod.Queue()
 
+        # Workers with outstanding StopTasks RPCs from the task-updater thread.
+        # The scheduling thread excludes these workers so it won't reassign a
+        # TPU slice while stale processes are still being killed on the workers.
+        # See issue #5470: without this, a coscheduled gang requeue decommits
+        # resources instantly but kill RPCs arrive later, allowing a second gang
+        # to be dispatched to workers that still have running processes.
+        self._workers_pending_kill: set[WorkerId] = set()
+        self._workers_pending_kill_lock = threading.Lock()
+
         self._autoscaler: Autoscaler | None = autoscaler
 
         self._last_timeout_check_ms: int = 0
@@ -2037,6 +2046,23 @@ class Controller:
         modified_workers = _inject_reservation_taints(state.workers, claims)
         modified_jobs = _inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
 
+        # Exclude workers with outstanding StopTasks RPCs from the task-updater
+        # thread. This prevents the scheduler from assigning new tasks to workers
+        # that still have stale processes being killed. Without this, a
+        # coscheduled gang requeue frees committed resources in the DB before the
+        # kill RPCs complete, and the scheduler can place a second gang on workers
+        # that are still running the first gang's processes (#5470).
+        with self._workers_pending_kill_lock:
+            pending_kill = set(self._workers_pending_kill)
+        if pending_kill:
+            pre_filter = len(modified_workers)
+            modified_workers = [w for w in modified_workers if w.worker_id not in pending_kill]
+            if len(modified_workers) < pre_filter:
+                logger.info(
+                    "Excluded %d workers with pending kills from scheduling",
+                    pre_filter - len(modified_workers),
+                )
+
         with slow_log(logger, "building_counts", threshold_ms=50):
             building_counts = _building_counts(self._db, workers=state.workers)
         context = self._scheduler.create_scheduling_context(
@@ -2426,6 +2452,9 @@ class Controller:
 
         Drains the task-update queue every 1s and applies transitions in a
         single batch. Kill requests resulting from transitions are sent directly.
+
+        Workers targeted by StopTasks RPCs are held in _workers_pending_kill so
+        the scheduling thread won't reassign them until the kills complete.
         """
         while not stop_event.is_set():
             requests = _drain_queue(self._task_update_queue, timeout=1.0)
@@ -2440,7 +2469,14 @@ class Controller:
                     all_tasks_to_kill.update(result.tasks_to_kill)
                     all_task_kill_workers.update(result.task_kill_workers)
                 if all_tasks_to_kill:
-                    self._stop_tasks_direct(all_tasks_to_kill, all_task_kill_workers)
+                    workers_to_kill = set(all_task_kill_workers.values())
+                    with self._workers_pending_kill_lock:
+                        self._workers_pending_kill |= workers_to_kill
+                    try:
+                        self._stop_tasks_direct(all_tasks_to_kill, all_task_kill_workers)
+                    finally:
+                        with self._workers_pending_kill_lock:
+                            self._workers_pending_kill -= workers_to_kill
             except Exception:
                 logger.exception("Task updater loop iteration failed")
 
