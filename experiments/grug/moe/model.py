@@ -72,6 +72,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    router_ortho_loss_coef: float = 0.0
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -267,12 +268,14 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     routing_counts = router_metrics["routing_counts_per_layer"]
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
+    router_ortho_loss = router_metrics["router_ortho_loss_per_layer"]
     num_layers = int(routing_entropy.shape[0])
 
     out: dict[str, jax.Array | Histogram] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
         "train/router/load_balancing_loss": jnp.mean(load_balancing_loss),
         "train/router/router_z_loss": jnp.mean(router_z_loss),
+        "train/router/router_ortho_loss": jnp.mean(router_ortho_loss),
         "train/router/routing_counts_per_layer": routing_counts,
         "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
     }
@@ -280,6 +283,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
         out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
         out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
+        out[f"train/router/layer_{i}/router_ortho_loss"] = router_ortho_loss[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
     return out
 
@@ -367,6 +371,15 @@ class MoEMLP(eqx.Module):
             num_experts=self.cfg.num_experts,
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
+        # Gram matrix orthogonality loss on normalized router columns.
+        # router shape: (D, E). Normalize each column, compute G = W_norm^T @ W_norm,
+        # then ||G - I||_F^2 / (E*(E-1)) to penalize off-diagonal cosine similarity.
+        w = self.router.astype(jnp.float32)
+        w_norm = w / (jnp.linalg.norm(w, axis=0, keepdims=True) + 1e-8)
+        gram = w_norm.T @ w_norm  # (E, E)
+        e = self.cfg.num_experts
+        off_diag = gram - jnp.eye(e)
+        router_stats["router_ortho_loss"] = jnp.sum(off_diag**2) / (e * (e - 1))
         # Sharded QB: compute beta locally per device, then average.
         s_minus_alpha = router_logits - qb_alpha
         mesh = get_abstract_mesh()
@@ -507,6 +520,7 @@ class Transformer(eqx.Module):
             "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
             "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
             "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
+            "router_ortho_loss_per_layer": jnp.stack([s["router_ortho_loss"] for s in moe_router_stats], axis=0),
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
@@ -546,10 +560,10 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
         )
-        # No load-balancing loss; router z-loss only.
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
         rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
-        aux_loss = self.config.router_z_loss_coef * rzl
+        ortho = jnp.sum(router_metrics["router_ortho_loss_per_layer"]) / num_moe_layers
+        aux_loss = self.config.router_z_loss_coef * rzl + self.config.router_ortho_loss_coef * ortho
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
