@@ -4,6 +4,8 @@
 import json
 import subprocess
 
+from rigging.redaction import REDACTED_VALUE
+
 from scripts.workflows import iris_monitor
 
 
@@ -46,6 +48,7 @@ def test_settled_coreweave_controller_requires_exactly_one_ready_pod() -> None:
 
 
 def test_collect_coreweave_redacts_sensitive_env_values(monkeypatch, tmp_path):
+    slack_token = "xox" + "b-1234567890-abcdefghijklmnopqrstuvwxyz"
     pod_json = {
         "items": [
             {
@@ -60,12 +63,17 @@ def test_collect_coreweave_redacts_sensitive_env_values(monkeypatch, tmp_path):
                                 {"name": "AWS_ACCESS_KEY_ID", "value": "AKIA_TEST_ACCESS"},
                                 {"name": "WANDB_API_KEY", "value": "wandb-test-secret"},
                                 {
+                                    "name": "CACHE_BUSTER",
+                                    "value": "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ",
+                                },
+                                {
                                     "name": "IRIS_JOB_ENV",
                                     "value": json.dumps(
                                         {
                                             "AWS_SECRET_ACCESS_KEY": "nested-secret-key",
                                             "HF_TOKEN": "nested-hf-token",
                                             "WANDB_API_KEY": "nested-wandb-key",
+                                            "LOG_LEVEL": "debug",
                                         }
                                     ),
                                 },
@@ -118,6 +126,7 @@ def test_collect_coreweave_redacts_sensitive_env_values(monkeypatch, tmp_path):
                         {"name": "AWS_SECRET_ACCESS_KEY", "value": "worker-secret-key"},
                         {"name": "AWS_SESSION_TOKEN", "value": "worker-session-token"},
                         {"name": "HF_TOKEN", "value": "hf-literal-token"},
+                        {"name": "CACHE_BUSTER", "value": slack_token},
                         {
                             "name": "AWS_ACCESS_KEY_ID",
                             "valueFrom": {
@@ -203,18 +212,21 @@ def test_collect_coreweave_redacts_sensitive_env_values(monkeypatch, tmp_path):
     for secret in [
         "AKIA_TEST_ACCESS",
         "wandb-test-secret",
+        "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ",
         "nested-secret-key",
         "nested-hf-token",
         "nested-wandb-key",
-        "normal-env-value",
         "controller-secret-token",
-        "controller-context",
         "worker-secret-key",
         "worker-session-token",
         "hf-literal-token",
+        slack_token,
     ]:
         assert secret not in artifact_text
 
+    assert "normal-env-value" in artifact_text
+    assert "controller-context" in artifact_text
+    assert "debug" in artifact_text
     assert "registry.example/iris-runner:sha" in artifact_text
     assert "nvidia.com/gpu" in artifact_text
     assert "FailedScheduling" in artifact_text
@@ -223,21 +235,29 @@ def test_collect_coreweave_redacts_sensitive_env_values(monkeypatch, tmp_path):
     pods = json.loads((tmp_path / "kubernetes-pods.json").read_text())
     env = pods["items"][0]["spec"]["containers"][0]["env"]
     env_by_name = {entry["name"]: entry for entry in env}
-    assert env_by_name["AWS_ACCESS_KEY_ID"]["value"] == iris_monitor._REDACTED_VALUE
-    assert env_by_name["WANDB_API_KEY"]["value"] == iris_monitor._REDACTED_VALUE
-    assert env_by_name["IRIS_JOB_ENV"]["value"] == iris_monitor._REDACTED_VALUE
-    assert env_by_name["NORMAL_ENV"]["value"] == iris_monitor._REDACTED_VALUE
+    assert env_by_name["AWS_ACCESS_KEY_ID"]["value"] == REDACTED_VALUE
+    assert env_by_name["WANDB_API_KEY"]["value"] == REDACTED_VALUE
+    assert env_by_name["CACHE_BUSTER"]["value"] == REDACTED_VALUE
+    assert env_by_name["NORMAL_ENV"]["value"] == "normal-env-value"
+    iris_job_env = json.loads(env_by_name["IRIS_JOB_ENV"]["value"])
+    assert iris_job_env["AWS_SECRET_ACCESS_KEY"] == REDACTED_VALUE
+    assert iris_job_env["HF_TOKEN"] == REDACTED_VALUE
+    assert iris_job_env["WANDB_API_KEY"] == REDACTED_VALUE
+    assert iris_job_env["LOG_LEVEL"] == "debug"
     assert env_by_name["HF_TOKEN"]["valueFrom"]["secretKeyRef"]["name"] == "hf-token"
     assert "value" not in env_by_name["HF_TOKEN"]
 
     controller_pods = json.loads((tmp_path / "controller-pods.json").read_text())
     controller_env = controller_pods["items"][0]["spec"]["containers"][0]["env"]
-    assert {entry["value"] for entry in controller_env} == {iris_monitor._REDACTED_VALUE}
+    controller_env_by_name = {entry["name"]: entry for entry in controller_env}
+    assert controller_env_by_name["GITHUB_TOKEN"]["value"] == REDACTED_VALUE
+    assert controller_env_by_name["NORMAL_ENV"]["value"] == "controller-context"
 
     worker_pod = json.loads((tmp_path / "pod-worker-0.json").read_text())
     worker_env = {entry["name"]: entry for entry in worker_pod["spec"]["containers"][0]["env"]}
-    assert worker_env["AWS_SECRET_ACCESS_KEY"]["value"] == iris_monitor._REDACTED_VALUE
-    assert worker_env["AWS_SESSION_TOKEN"]["value"] == iris_monitor._REDACTED_VALUE
-    assert worker_env["HF_TOKEN"]["value"] == iris_monitor._REDACTED_VALUE
+    assert worker_env["AWS_SECRET_ACCESS_KEY"]["value"] == REDACTED_VALUE
+    assert worker_env["AWS_SESSION_TOKEN"]["value"] == REDACTED_VALUE
+    assert worker_env["HF_TOKEN"]["value"] == REDACTED_VALUE
+    assert worker_env["CACHE_BUSTER"]["value"] == REDACTED_VALUE
     assert worker_env["AWS_ACCESS_KEY_ID"]["valueFrom"]["secretKeyRef"]["name"] == "r2-creds"
     assert "value" not in worker_env["AWS_ACCESS_KEY_ID"]

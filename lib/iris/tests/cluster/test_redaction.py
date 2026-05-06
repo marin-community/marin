@@ -74,6 +74,24 @@ def test_redact_submit_argv_leaves_benign_env_alone():
     assert redact_submit_argv(argv) == argv
 
 
+def test_redact_submit_argv_redacts_secret_like_value_under_benign_key():
+    argv = [
+        "iris",
+        "job",
+        "run",
+        "-e",
+        "CACHE_BUSTER",
+        "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ",
+        "--",
+        "python",
+        "t.py",
+    ]
+
+    out = redact_submit_argv(argv)
+
+    assert out[5] == REDACTED_VALUE
+
+
 def test_redact_submit_argv_passthrough_without_env_flag():
     argv = ["iris", "job", "run", "--", "python", "-m", "foo"]
     assert redact_submit_argv(argv) == argv

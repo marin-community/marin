@@ -19,6 +19,7 @@ import click
 from iris.cluster.providers.k8s.tasks import _sanitize_label_value
 from iris.cluster.types import is_job_finished
 from iris.rpc import job_pb2
+from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
 _REPO_ROOT = Path(__file__).parents[2]
 
@@ -37,8 +38,6 @@ sudo journalctl -u google-startup-scripts.service --no-pager 2>&1 | tail -n 2000
 echo '=== cloud-final journal ==='
 sudo journalctl -u cloud-final.service --no-pager 2>&1 | tail -n 500
 """
-
-_REDACTED_VALUE = "[REDACTED]"
 
 
 @dataclass(frozen=True)
@@ -225,13 +224,35 @@ def _kubectl(kubeconfig: Path | None) -> list[str]:
     return cmd
 
 
+def _redact_kubernetes_env_literal(name: object, value: object) -> object:
+    if not isinstance(value, str):
+        return redact_value(value)
+    if isinstance(name, str) and is_sensitive_key_name(name):
+        return REDACTED_VALUE
+
+    stripped = value.lstrip()
+    if not stripped.startswith(("{", "[")):
+        return redact_string(value)
+
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return redact_string(value)
+
+    return json.dumps(redact_value(parsed), separators=(",", ":"))
+
+
 def _redact_kubernetes_env_entry(entry: object) -> object:
     if not isinstance(entry, dict):
         return _redact_kubernetes_env_values(entry)
 
-    redacted = {key: _redact_kubernetes_env_values(value) for key, value in entry.items()}
-    if "value" in redacted:
-        redacted["value"] = _REDACTED_VALUE
+    redacted = {}
+    name = entry.get("name")
+    for key, value in entry.items():
+        if key == "value":
+            redacted[key] = _redact_kubernetes_env_literal(name, value)
+        else:
+            redacted[key] = _redact_kubernetes_env_values(value)
     return redacted
 
 
