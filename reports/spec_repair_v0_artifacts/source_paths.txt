@@ -1,0 +1,13 @@
+.agents/logbooks/executable_specs_claude.md
+experiments/posttrain/disagreement_primitive/e8_rubrics_v1.jsonl
+experiments/posttrain/disagreement_primitive/grounding
+experiments/posttrain/disagreement_primitive/repair_v0
+results/raw/e9_compile_edit_round_1
+results/raw/e9_compile_edit_round_2
+results/raw/e9_qualifier_rubrics_round_1
+results/raw/e9_verify_edit_round_1
+results/raw/e9_verify_edit_round_2
+claude_subagents/lm_judge_full_spec
+claude_subagents/lm_judge_rubric
+claude_subagents/lm_judge_rubric_plus_spec
+claude_subagents/lm_judge_single_statement
