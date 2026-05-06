@@ -123,6 +123,26 @@ def _level_histogram(segments: Iterable[LocalSegment]) -> dict[int, int]:
     return dict(sorted(counts.items()))
 
 
+def _level_bytes_summary(segments: Iterable[LocalSegment], level_targets: tuple[int, ...]) -> str:
+    """Render ``L<n>=<bytes>/<target>`` per occupied level for the heartbeat.
+
+    ``level_targets[n]`` is the byte threshold for promoting L_n → L_{n+1};
+    the terminal level (``len(level_targets)``) has no target and prints
+    just the raw byte count. Empty levels are omitted.
+    """
+    bytes_per_level: dict[int, int] = {}
+    for s in segments:
+        bytes_per_level[s.level] = bytes_per_level.get(s.level, 0) + s.size_bytes
+    parts: list[str] = []
+    for level in sorted(bytes_per_level):
+        size = bytes_per_level[level]
+        if level < len(level_targets):
+            parts.append(f"L{level}={size}/{level_targets[level]}")
+        else:
+            parts.append(f"L{level}={size}")
+    return "{" + ", ".join(parts) + "}"
+
+
 def _key_bounds_from_parquet(metadata: pq.FileMetaData, key_column: str | None) -> tuple[object | None, object | None]:
     """Extract ``(min, max)`` for ``key_column`` across all row groups.
 
@@ -683,16 +703,19 @@ class DiskLogNamespace:
                 chunk_count = self._buffers.chunk_count()
                 next_seq = self._buffers.next_seq
                 level_counts = _level_histogram(self._local_segments)
+                level_bytes = _level_bytes_summary(self._local_segments, self._compactor.config.level_targets)
             force_drain = ram_bytes >= self._segment_target_bytes
 
             now = time.monotonic()
             if now - last_heartbeat >= _BG_HEARTBEAT_INTERVAL_SEC:
                 logger.info(
-                    "bg-loop tick: chunks=%d ram_bytes=%d levels=%s next_seq=%d "
-                    "since_flush_ms=%d since_compact_ms=%d",
+                    "bg-loop tick ns=%s: chunks=%d ram_bytes=%d levels=%s level_bytes=%s "
+                    "next_seq=%d since_flush_ms=%d since_compact_ms=%d",
+                    self.name,
                     chunk_count,
                     ram_bytes,
                     level_counts,
+                    level_bytes,
                     next_seq,
                     int((now - last_flush_at) * 1000),
                     int((now - last_compact_at) * 1000),
