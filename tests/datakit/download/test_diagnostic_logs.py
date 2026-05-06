@@ -8,22 +8,29 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from marin.datakit.download.diagnostic_logs import (
+    GHALOGS_ROUGH_TOKENS_B,
     SOURCE_INVENTORY,
     DiagnosticPartition,
     ExtractedDiagnosticLogs,
     ExtractedPartitionedDiagnosticLogs,
     MaterializedDiagnosticLogParquet,
+    assign_partition,
     extract_diagnostic_logs,
     extract_ghalogs_step,
     ghalogs_member_to_record,
+    ghalogs_public_normalize_steps,
     logchunks_example_to_record,
     loghub_file_to_record,
     materialize_ghalogs_partition_to_parquet,
     materialize_ghalogs_to_parquet,
     sanitize_diagnostic_log_text,
 )
+from marin.datakit.normalize import NormalizedData
+from marin.datakit.sources import all_sources
 from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
+
+from experiments.pretraining_datasets.diagnostic_logs import ghalogs_normalized, tokenize_ghalogs
 
 
 def _read_jsonl(path: str) -> list[dict[str, object]]:
@@ -36,6 +43,14 @@ def _read_parquet_rows(directory: Path) -> list[dict[str, object]]:
     for path in sorted(directory.glob("*.parquet")):
         rows.extend(pq.read_table(path).to_pylist())
     return rows
+
+
+def _member_path_for_partition(partition: DiagnosticPartition) -> str:
+    for index in range(10_000):
+        member_path = f"repo-{partition.value}/run-{index}/job.log"
+        if assign_partition(f"ghalogs:{member_path}") == partition:
+            return member_path
+    raise AssertionError(f"Could not find member path for {partition}")
 
 
 def test_sanitize_diagnostic_log_text_redacts_secrets_and_identifiers():
@@ -109,8 +124,29 @@ def test_source_inventory_uses_shared_manifest_policy_metadata():
 
     assert inventory["ghalogs"].policy.training_allowed is True
     assert inventory["ghalogs"].policy.requires_sanitization is True
+    assert inventory["ghalogs"].rough_tokens_b == GHALOGS_ROUGH_TOKENS_B
     assert inventory["logchunks"].policy.eval_only is True
     assert inventory["loghub"].compressed_size_bytes == 7_513_088
+
+
+def test_all_sources_includes_normalized_ghalogs_public():
+    source = all_sources()["ghalogs/public"]
+
+    assert source.rough_token_count_b == GHALOGS_ROUGH_TOKENS_B
+    assert [step.name for step in source.normalize_steps] == [
+        "processed/diagnostic_logs/ghalogs_public_parquet",
+        "processed/diagnostic_logs/ghalogs_public_train_parquet",
+        "normalized/ghalogs/public",
+    ]
+    assert source.normalized.deps == [source.normalize_steps[1]]
+
+
+def test_tokenize_ghalogs_reads_datakit_normalized_output():
+    step = tokenize_ghalogs(tokenizer="test-tokenizer")
+
+    assert ghalogs_normalized.name == "normalized/ghalogs/public"
+    assert step.config.train_paths == [ghalogs_normalized.as_input_name() / "outputs/main/*.parquet"]
+    assert step.config.validation_paths.value == []
 
 
 def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
@@ -336,3 +372,34 @@ def test_materialize_ghalogs_partition_to_parquet_filters_one_partition(tmp_path
     assert train_partition.source_label == "ghalogs"
     assert train_partition.record_count == len(train_rows)
     assert all(row["partition"] == DiagnosticPartition.TRAIN.value for row in train_rows)
+
+
+def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition(tmp_path):
+    input_dir = tmp_path / "input" / "ghalogs" / "zenodo-14796970"
+    archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
+    archive_dir.mkdir(parents=True)
+
+    train_member = _member_path_for_partition(DiagnosticPartition.TRAIN)
+    dev_member = _member_path_for_partition(DiagnosticPartition.DEV)
+    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
+        archive.writestr(train_member, "ERROR token=abc123456789 traceback")
+        archive.writestr(dev_member, "FAILED validation-only log")
+
+    steps = ghalogs_public_normalize_steps(
+        source_path=str(input_dir),
+        max_members=2,
+        num_materialize_shards=1,
+        num_partition_shards=1,
+        output_path_prefix=str(tmp_path / "steps"),
+    )
+    StepRunner().run(list(steps))
+
+    normalized = Artifact.load(steps[-1], NormalizedData)
+    rows = _read_parquet_rows(Path(normalized.main_output_dir))
+
+    assert len(rows) == 1
+    assert rows[0]["source"] == "ghalogs"
+    assert rows[0]["archive_path"] == train_member
+    assert rows[0]["partition"] == DiagnosticPartition.TRAIN.value
+    assert "abc123456789" not in rows[0]["text"]
+    assert rows[0]["source_id"] != rows[0]["id"]

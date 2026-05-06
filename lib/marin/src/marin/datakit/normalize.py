@@ -429,6 +429,7 @@ def normalize_step(
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    output_path_prefix: str | None = None,
     override_output_path: str | None = None,
     relative_input_path: str | None = None,
     file_extensions: tuple[str, ...] | None = None,
@@ -446,6 +447,7 @@ def normalize_step(
             See :func:`normalize_to_parquet` for the default.
         max_workers: Maximum number of Zephyr workers. Defaults to Zephyr's
             own default (128 for distributed backends).
+        output_path_prefix: Optional prefix for the normalized step output.
         override_output_path: Override the computed output path.
         relative_input_path: Override the input path relative to the download output.
             Useful when normalizing a subdirectory of the download output.
@@ -488,5 +490,6 @@ def normalize_step(
             "file_extensions": file_extensions,
             "dedup_mode": dedup_mode,
         },
+        output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
     )

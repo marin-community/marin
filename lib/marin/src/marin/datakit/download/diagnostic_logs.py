@@ -38,6 +38,7 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
     write_ingestion_metadata_json,
 )
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_mkdirs
 
@@ -65,6 +66,7 @@ GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH = os.path.join(
 GHALOGS_TOTAL_BYTES = 143_425_404_506
 LOGCHUNKS_TOTAL_BYTES = 24_108_826
 LOGHUB_REPO_SIZE_BYTES = 7_513_088
+GHALOGS_ROUGH_TOKENS_B = 150.0
 DEFAULT_GHALOGS_MAX_MEMBERS = 10_000
 DEFAULT_LOGCHUNKS_MAX_EXAMPLES = 10_000
 DEFAULT_LOGHUB_MAX_FILES = 100
@@ -229,7 +231,7 @@ SOURCE_INVENTORY: tuple[IngestionSourceManifest, ...] = (
         issue_numbers=(PUBLIC_DIAGNOSTIC_LOGS_ISSUE,),
         sample_caps=SampleCapConfig(max_members=DEFAULT_GHALOGS_MAX_MEMBERS),
         compressed_size_bytes=GHALOGS_TOTAL_BYTES,
-        rough_tokens_b=None,
+        rough_tokens_b=GHALOGS_ROUGH_TOKENS_B,
         source_metadata={"archive_filename": GHALOGS_ZIP_FILENAME},
     ),
     IngestionSourceManifest(
@@ -635,7 +637,7 @@ def materialize_ghalogs_to_parquet(
         skip_existing=True,
     )
 
-    resources = worker_resources or ResourceConfig(cpu=1, ram="32g", disk="20g")
+    resources = worker_resources or ResourceConfig(cpu=1, ram="16g", disk="20g")
     ctx_kwargs: dict[str, object] = {"name": "materialize-ghalogs", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
@@ -1003,6 +1005,38 @@ def materialize_ghalogs_partition_step(
             "source_content_fingerprint": source.fingerprint(),
         },
     )
+
+
+def ghalogs_public_normalize_steps(
+    *,
+    source_path: str = GHALOGS_STAGED_PREFIX,
+    max_members: int | None = None,
+    num_materialize_shards: int = DEFAULT_GHALOGS_MATERIALIZE_SHARDS,
+    num_partition_shards: int = DEFAULT_GHALOGS_PARTITION_SHARDS,
+    output_path_prefix: str | None = None,
+) -> tuple[StepSpec, StepSpec, StepSpec]:
+    """Return the Datakit ``(materialize, train-partition, normalize)`` chain for GHALogs."""
+    materialized = materialize_ghalogs_step(
+        source_path=source_path,
+        max_members=max_members,
+        num_shards=num_materialize_shards,
+        output_path_prefix=output_path_prefix,
+    )
+    train_partition = materialize_ghalogs_partition_step(
+        materialized=materialized,
+        partition=DiagnosticPartition.TRAIN,
+        num_shards=num_partition_shards,
+        output_path_prefix=output_path_prefix,
+    )
+    normalized = normalize_step(
+        name="normalized/ghalogs/public",
+        download=train_partition,
+        text_field="text",
+        id_field="id",
+        file_extensions=(".parquet",),
+        output_path_prefix=output_path_prefix,
+    )
+    return (materialized, train_partition, normalized)
 
 
 def extract_logchunks_step(
