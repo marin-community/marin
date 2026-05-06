@@ -295,10 +295,19 @@ def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
         return 0
 
     max_size = 500 * 1024
+    # Research logbooks and project design docs grow linearly with experiments
+    # and routinely exceed 500 KB. Code and data remain capped.
+    allowlist_prefixes = (
+        ".agents/logbooks/",
+        ".agents/projects/",
+    )
     buf = io.StringIO()
 
     large_files = []
     for file_path in files:
+        rel = str(file_path.relative_to(ROOT_DIR))
+        if any(rel.startswith(p) for p in allowlist_prefixes):
+            continue
         if file_path.stat().st_size > max_size:
             large_files.append((file_path, file_path.stat().st_size))
 

@@ -1,5 +1,81 @@
 # Executable Specifications - Claude distilled logbook
 
+> # 🟢 NEXT AGENT — START HERE (last updated 2026-05-06)
+>
+> This logbook is ~11,000 lines and chronological. **Don't read top-to-bottom.** The current state of the project is captured in two places:
+>
+> 1. **The canonical design**: `.agents/projects/spec_repair_loop.md` (read its top "NEXT AGENT" block first, then §0.5).
+> 2. **The latest empirical work**: this logbook, the section starting **"## 2026-05-06 (post-Codex round) — Per-statement κ-by-condition table; Q1 answered; dual-condition (var_A + phase_4) loop justified"** — search for that header. It has the full 46-statement κ table + Δ-attribution signal vocabulary + loop-entry triage. Followed by **"## 2026-05-06 (later) — GLM-5.1 phase_4 JSON-repair pass: designed, tested, awaiting raw dumps"** which is the most recent entry.
+>
+> ## Where the project stands (2026-05-06)
+>
+> - **Disagreement primitive validated** across 4 LM-as-judge conditions × 3 judges × 32,638 judgments. The 3 disagreement flavors per the framework: within-statement ambiguity (#3), cross-statement tension (#2), behavioral non-compliance (#1). Within-statement diagnostic is fully built; cross-statement tension primitive is designed but NOT built (see §4.1b of `spec_repair_loop.md`).
+> - **Dual-condition loop design locked in 2026-05-06**: each iteration runs both `var_A` (single statement + examples) and `phase_4` (single statement + examples + rubric). The per-statement Δ(var_A → phase_4) is the operator-attribution signal. Replaces the earlier 3-tuple/4-tuple multi-condition dispatch. Cost per iter ~$1/statement marginal.
+> - **Codex E9 spec-edit loop ran**: 7 targets × 8 candidates × 2 rounds, 0/56 passed gate. Analyzed as operator/gate mismatch (gate was var_A-only; operator was spec-only; many target statements need rubric edits, not spec edits). Codex artifacts (`e9_*.py` scripts + `e8_rubrics_v1.jsonl`) are reusable in the v2 design.
+> - **Codex E2 qualifier-preserving rubric regen ran**: 16 statements regenerated, 13/16 passed local check. **`e8_rubrics_v1.jsonl` exists on disk and awaits validation** (re-judge under both var_A and phase_4 to confirm the rubric improvements move the needle).
+> - **GLM JSON-repair pass designed + tested 2026-05-06**: 18/18 tests pass, ~80% expected recovery on 315 missing GLM phase_4 rows. Production code unchanged (opt-in only). Files: `experiments/posttrain/disagreement_primitive/{e9_glm_json_repair.py, test_glm_json_repair.py, e9_repair_glm_phase4.py, glm_json_repair_report.md}`.
+>
+> ## Top open blockers
+>
+> 1. **Validate `e8_rubrics_v1.jsonl`** by re-judging under both var_A and phase_4 with the qualifier-preserving rubrics. Cheapest path to a real spec_v0 → spec_v1 win. **~$25 OpenAI, ~30 min wall.** Awaits user approval to spend.
+> 2. **Locate raw GLM phase_4 SDK dumps** so the JSON-repair retry can run. Likely at `results/raw/e8_phase4_glm/<UTC-ts>/judge_phase4_glm/` on the original run host or in cold storage. Bundle didn't restore them. $0 cost; needs human action.
+> 3. **Build `e9_compile_edit_v2.py` + `e9_verify_edit_v2.py`** — dual-condition compiler that reads phase_4 structured outputs and dispatches operator class natively. Pure code, no API calls.
+> 4. **Extend Codex E2 to `no_agenda` + `support_programmatic_use`** (the κ-by-condition table flagged these as |Δ| ≥ 0.20 rubric distortion not in original E2 set). ~$5 OpenAI.
+> 5. **MVPs on the canonical extreme cases**: `do_not_make_unprompted_personal_comments` (Δ=+0.81, force-pick → spec edit) and `be_rationally_optimistic` (Δ=−0.56, distortion → rubric edit). ~$50 each. Gated on v2 compiler/verifier built.
+> 6. **Cross-statement tension primitive** (sibling subsystem). Designed but not built. ~$70 to build, ~$50/run on 5-pair pilot.
+>
+> ## Hard rules (project-wide, in memory)
+>
+> 1. No paid API calls without explicit user approval. Together + Gemini are free per Ahmed's standing auth.
+> 2. Don't modify production scripts in ways that change default behavior. Add new code; gate behind opt-in flags. The GLM repair is the model.
+> 3. Always Spearman, not Pearson, for paired ordinal-score correlations.
+> 4. All LM API calls route through `RawAPILogger`. Never truncate saved content.
+> 5. GPT-5.1 always with `reasoning_effort="none"`. Gemini `thinking_budget=0`. GLM no toggle.
+> 6. 3-judge ensemble (GPT-5.1 + Gemini-3-Flash + GLM-5.1) required for any primary metric — never single-judge.
+> 7. Reuse the same 60 scenarios per statement forever. Never regenerate. Existing at `e8_scenarios.jsonl`.
+> 8. Never read `.env` contents — only `source .env && <command>` in same Bash invocation.
+> 9. `./infra/pre-commit.py --fix` is the lint entry point, not `uv run pre-commit`.
+>
+> ## Where the data lives
+>
+> All under `experiments/posttrain/disagreement_primitive/`:
+> - `grounding/per_judgment.jsonl` — 32,638 judgments × 4 conditions × 3 judges (the canonical processed corpus)
+> - `grounding/report.md` — H1-H6 rationale-grounding hypothesis tests
+> - `per_statement_kappa_by_condition.jsonl` — 46-statement κ table (var_A + var_B + phase_4 + full_spec + Δ)
+> - `e8_rubrics.jsonl` — baseline rubrics
+> - `e8_rubrics_v1.jsonl` — Codex E2 qualifier-preserving regen (awaits validation)
+> - `e8_scenarios.jsonl` + `e8_responses.jsonl` — fixed scenario+response set, never regen
+> - `repair_v0/round_{1,2}/verdicts.jsonl` — Codex E9 per-candidate verdicts
+> - `claude_subagents/lm_judge_{full_spec,rubric,rubric_plus_spec,single_statement}/{gpt,gemini,glm}.md` — ~6,200 qualitative per-judge rationale summaries (the source for the GPT self-leniency, Gemini bimodal, GLM meta-framing findings)
+>
+> ## How to reproduce the κ-by-condition table
+>
+> ```bash
+> .venv/bin/python experiments/posttrain/disagreement_primitive/e9_kappa_diagnostic.py
+> ```
+>
+> Pure stdlib, ~1 s wall, deterministic. Re-running after any judging update refreshes the canonical diagnostic.
+>
+> ---
+>
+> **Below is the full chronological logbook (10,000+ lines).** Major section markers (search for these to jump to the right era):
+>
+> - "## 2026-04-29" — advisor share-out + 2-layer architecture decision
+> - "## 2026-04-30 - Experiment plan for disagreement primitive and refinement loop" — the Codex 7-phase plan that drove the disagreement-primitive work
+> - "## SPEC AMBIGUITY EPIC" — the within-statement ambiguity diagnostic methodology (Methods A-G across 4 tiers)
+> - "## VALIDATION PASS 2 — full plan" — E1-E8 design and execution
+> - "## E8 PLAN — paired indirection test" — the rubric-vs-spec faithfulness test
+> - "## SYNTHESIS — LM-as-judge for spec ambiguity (2026-05-04)" — comprehensive recap
+> - "## HANDOFF (2026-05-06)" — Codex's overnight spec-repair plan
+> - "## 2026-05-06 (post-Codex round)" — **the κ-by-condition diagnostic + dual-condition design (READ THIS FIRST among the recent entries)**
+> - "## 2026-05-06 (later)" — **the GLM JSON-repair sub-agent results (most recent)**
+>
+> ---
+
+> **NEXT-PHASE PLAN (2026-05-05): see `.agents/projects/spec_repair_loop.md`**
+>
+> Closed-loop spec-coherence pipeline using LM-judge diagnostics + LM-compiler repair, iterating until convergence. Builds directly on the E1–E8 measurement primitives validated in this logbook. Start with the MVP in §9 of that doc (single-statement repair on `avoid_abuse`) before committing to the full architecture.
+
 > **PROJECT-WIDE RULE — for ALL spec-driven alignment / auto-alignment work:**
 >
 > **NEVER use reasoning, or use the LOWEST reasoning tier. Applies to ALL model calls — rubric writers, judges, oracles, chosen/rejected generators, scorers, atlas generation, everything.**
@@ -9403,15 +9479,16 @@ reintroducing the bug.
 
 This section unifies E1–E8 into one coherent narrative. The user asked for a "fully updated logbook capturing everything we did" — this is the index.
 
-### The three framings, at a glance
+### The four framings, at a glance
 
 | framing | scripts | what varies | what's fixed | question |
 |---|---|---|---|---|
 | **Phase 1+2** | `e8_paired_indirection.py` + `e8_phase2_cross_model.py` | (variant A: spec, variant B: rubric) within one judge | judge model | does the rubric translation match the spec for *this* judge? |
 | **Cross-judge analysis** | `e8_cross_judge_disagreement.py` | judge model | criterion (spec or rubric) | how much do different judges disagree on the same fixed criterion? |
-| **Phase 3** | `e8_phase3_whole_spec.py` + `e8_phase3_analysis.py` | judge model on full spec | scenario + response | direct replication of the paper's Stage 6 |
+| **Phase 3** | `e8_phase3_whole_spec.py` + `e8_phase3_analysis.py` | judge model on full spec | scenario + response | direct replication of the paper's Stage 6 (3-way decision) |
+| **κ-by-condition** | `e8_kappa_by_condition.py` | what's in the prompt (full spec / single stmt / rubric) | 3 judges, same scenarios, same responses | how does cross-judge agreement vary with input narrowness? |
 
-All three use the same shared inputs: 46 statements, 920 borderline scenarios, 2,760 (response, generator) outputs from GPT-5.1 / Qwen2.5-7B / Gemini-3-Flash at temp=1. Every API call routes through `RawAPILogger`; every saved record preserves full content.
+All four use the same shared inputs: 46 statements, 920 borderline scenarios, 2,760 (response, generator) outputs from GPT-5.1 / Qwen2.5-7B / Gemini-3-Flash at temp=1. Every API call routes through `RawAPILogger`; every saved record preserves full content.
 
 ### Phase 1+2 results (per-judge faithfulness, Spearman)
 
@@ -9446,24 +9523,41 @@ Population: rubrics very slightly resolve ambiguity overall. Per-statement extre
 - **Rubric resolves ambiguity (5 statements):** `do_not_lie` (−0.33), `formatting` (−0.30), `highlight_misalignments` (−0.29), `refusal_style` (−0.26), `assume_objective_pov` (−0.26). Could be good crispening or bad over-specification.
 - **Most spec-ambiguous (high baseline):** `be_empathetic` (σ=1.20), `avoid_abuse` (σ=1.16), `assume_objective_pov` (1.08), `do_not_lie` (1.06), `formatting` (0.99).
 
-### Phase 3 results (paper replication, Cohen's κ for now; Fleiss when GLM lands)
+### Phase 3 results (paper replication, Fleiss' κ on 3 judges)
 
-Replication scorecard (2 judges so far):
+Replication scorecard (final 3-judge data — GLM landed):
 
 | metric | paper | ours | reading |
 |---|--:|--:|---|
-| Pairwise judge agreement | 72.4% (Claude↔Gemini) | **72.5%** | ✅ near-exact |
-| Gemini flag rate | 36.5% | **36.9%** | ✅ near-exact |
-| Cohen's κ binary | 0.42 (Fleiss-3) | 0.377 (Cohen-2) | ✅ comparable |
+| Pairwise judge agreement | 72.4% (Claude↔Gemini) | **72.5%** (GPT↔Gemini) | ✅ near-exact |
+| Gemini judge flag rate | 36.5% | **36.9%** | ✅ near-exact |
+| **Fleiss' κ binary (3 judges)** | **0.42** | **0.510** | exceeds — our judges (GPT/Gemini/GLM) are more agreeable than paper's (Claude/o3/Gemini 2.5 Pro) |
 | Bin multiplier | 13.9× | 3.7× | weaker (smaller scale, 3 vs 12 generators) |
 
-Per-statement Cohen's κ (paper does NOT compute this):
-- median 0.294 (fair)
-- 5 statements with κ < 0 (judges anti-agree): `assume_objective_pov` (−0.13), `avoid_abuse` (−0.10), `sexual_content_involving_minors` (−0.04), `comply_with_laws` (−0.03), `refusal_style` (−0.01)
+Per-statement Fleiss' κ (paper does NOT compute this):
+- median 0.429 (moderate)
+- 0 statements with κ < 0 in 3-judge data (8 with 2-judge Cohen's κ — Cohen is brittle to flag-rate mismatches)
+- per-statement κ < 0 *only* shows up under the SINGLE STATEMENT condition (4 statements: `avoid_abuse`, `assume_objective_pov`, `comply_with_laws`, `refusal_style`)
+
+### Cross-judge κ by input condition — the cleanest signal we have
+
+(Added 2026-05-04 after Ahmed asked: "do we have numbers for how agreement between the judges changes as we change what we give them?")
+
+| input condition | judges | n keys | **Fleiss κ binary** | per-stmt median κ | κ<0 count |
+|---|--:|--:|--:|--:|--:|
+| **Full spec** (phase 3) | 3 | 2,667 | **0.510** | 0.429 | **0/46** |
+| **Single statement + examples** (var A) | 3 | 2,746 | **0.618** | 0.498 | **4/46** |
+| **Rubric only** (var B) | 3 | 2,737 | **0.671** | 0.589 | 0/45 |
+
+**The κ swing is 0.16 across input conditions — substantial.** Activation cost (full→single, ~0.10) and rubric crispening (single→rubric, ~0.05) are both meaningful, neither dominates.
+
+**The 4 statements with κ<0 in the SINGLE STATEMENT condition are the cleanest spec-text-rewrite candidates:** `avoid_abuse`, `assume_objective_pov`, `comply_with_laws`, `refusal_style`. Judges anti-agree when given the statement text + examples, but rubric judging recovers κ — meaning the rubric is *hiding* the spec ambiguity by force-picking one reading.
+
+For 1-5 ordinal scores in conditions 2 and 3, collapsed to 3-way `{1,2}=non-compliant`, `{3}=ambiguous`, `{4,5}=compliant` for comparability with phase 3. Fleiss' κ assumes nominal categories; principled n-rater ordinal alternative is Krippendorff's α with ordinal weighting (not implemented).
 
 ### `avoid_abuse` — the cross-method survivor
 
-Six independent analyses converge on the same statement:
+Seven independent analyses converge on the same statement:
 
 | analysis | result for `avoid_abuse` |
 |---|---|
@@ -9473,7 +9567,7 @@ Six independent analyses converge on the same statement:
 | Phase-2 GLM judge | ρ = **−0.32**, bias = +0.63 (direction flipped!) |
 | Cross-judge spec ambiguity (σ across judges on spec) | 1.16 (2nd highest) |
 | Cross-judge rubric ambiguity | 1.16 (rubric preserves the ambiguity, +0.008) |
-| Phase-3 whole-spec Cohen's κ | **−0.10** (judges anti-agree) |
+| Per-statement κ on SINGLE STATEMENT condition (3 judges) | **κ < 0** (anti-agree) |
 
 The spec text has genuinely operationally-ambiguous language localized to the word "negativity," no rubric translation has resolved it, and judges anti-agree on its application.
 
@@ -9508,6 +9602,7 @@ These are loaded into every future Claude conversation in this directory:
 - `e8_cross_judge_disagreement.py` — pure analysis: cross-judge stdev on spec & rubric
 - `e8_phase3_whole_spec.py` — phase-3 pure replication of paper's Stage 6 (full spec inline)
 - `e8_phase3_analysis.py` — phase-3 analysis (Cohen's κ for 2-judge, Fleiss for 3-judge auto-detect)
+- `e8_kappa_by_condition.py` — pure analysis: Fleiss' κ across 3 input conditions (full spec / single stmt / rubric)
 
 **Structured outputs:**
 - `e8_rubrics.jsonl` — 46 anchored 1-5 rubrics
@@ -9519,9 +9614,9 @@ These are loaded into every future Claude conversation in this directory:
 - `e8_per_statement.jsonl` — phase-1 GPT per-statement Spearman + bias
 - `phase2_{gemini,glm}/per_statement.jsonl` — phase-2 per-statement
 - `e8_cross_judge.jsonl` + `e8_cross_judge.md` — cross-judge analysis output
-- `phase3_gpt/judgments.jsonl` + `phase3_gemini/judgments.jsonl` — phase-3 (whole-spec)
-- `phase3_glm/judgments.jsonl` — pending (GLM running, ~7h ETA)
+- `phase3_gpt/judgments.jsonl` + `phase3_gemini/judgments.jsonl` + `phase3_glm/judgments.jsonl` — phase-3 (whole-spec, 3 judges complete)
 - `phase3_per_statement_kappa.jsonl` — phase-3 per-statement κ
+- `e8_kappa_by_condition.jsonl` — Fleiss' κ across 3 input conditions
 
 **Markdown reports:**
 - `e8_decomposition.md` — phase-1 per-statement summary + top-30 disagreement audit
@@ -9553,33 +9648,1435 @@ These are loaded into every future Claude conversation in this directory:
 
 ### Action queue from all of this for spec authors
 
-**Spec-text fixes (high spec ambiguity that rubric can't resolve):**
-- `avoid_abuse` — fix the word "negativity" (E5 already localized)
-- `be_empathetic` — operationalize "empathetic" (cross-judge σ=1.20, highest in spec)
-- `protect_privileged_messages` — judges disagree on what counts as "privileged"
+**Spec-text fixes (κ<0 in single-statement condition — judges anti-agree even with examples):**
+- `avoid_abuse` (cross-method survivor across 7 analyses; E5 localized to word "negativity")
+- `assume_objective_pov`
+- `comply_with_laws`
+- `refusal_style`
 
-**Rubric fixes (rubric introduces ambiguity over a clean spec):**
+**Rubric fixes (rubric introduces ambiguity over a clean spec — cross-judge analysis):**
 - `no_agenda` — spec σ=0.18, rubric σ=0.68. Rewrite the rubric.
 - `do_not_make_unprompted_personal_comments` — spec σ=0.06, rubric σ=0.34
-- `comply_with_laws` — spec σ=0.64, rubric σ=1.10
+- `comply_with_laws` — spec σ=0.64, rubric σ=1.10 (also flagged in spec-text bucket above; both fixes needed)
 
-**Investigate further (rubric "resolves" ambiguity — verify faithful, not over-specified):**
-- `do_not_lie`, `formatting`, `assume_objective_pov`, `highlight_misalignments`, `be_clear`
+**Spec-text genuinely hard but rubric translates faithfully:**
+- `be_empathetic` — cross-judge spec σ=1.20 (highest in spec); needs operationalization
+- `protect_privileged_messages`
 
-**Cross-method anti-agreement on whole-spec phase 3 (κ < 0):**
-- `assume_objective_pov`, `avoid_abuse`, `sexual_content_involving_minors`, `comply_with_laws`, `refusal_style`
+**Investigate further (rubric resolves ambiguity — could be good crispening or over-specification):**
+- `do_not_lie`, `formatting`, `highlight_misalignments`, `be_clear`
 
-### Status as of synthesis time (2026-05-04 ~17:45 local / 00:45 UTC May 5)
+**Universally clean (high κ across all 3 conditions):**
+- Bright-line rules: `prevent_imminent_harm`, `do_not_facilitate_illicit_behavior`, `ignore_untrusted_data`, `be_engaging`, `support_programmatic_use`, `avoid_regulated_advice`, `be_creative` — leave alone
+
+### Status as of synthesis time (updated 2026-05-04 evening / 2026-05-05 UTC)
 
 - Phase 1 + Phase 2 + Cross-judge analysis: COMPLETE
-- Phase 3: 2 of 3 judges DONE (GPT, Gemini); GLM running ~11% done with ~7h more ETA
-- Pending decision: wait for GLM (Fleiss' κ replication), or accept 2-judge phase-3 as headline (Cohen's κ already replicates paper's metrics)
-
-If GLM lands, re-running `e8_phase3_analysis.py` auto-promotes Cohen's κ → Fleiss' κ + adds 3-judge pairwise table without code change. Otherwise the 2-judge replication scorecard already hits the paper's published 72% pairwise and 36% Gemini flag rate near-exactly.
+- Phase 3: **all 3 judges COMPLETE** (GPT, Gemini, GLM landed; 89/2,758 = 3.2% errors on GLM, acceptable)
+- κ-by-condition analysis: COMPLETE with full 3-judge data
+- Initial commit + push to `origin/alignment_function`: DONE (commit `9366471de`, 26K files, 1.7M insertions)
+- Pending: commit phase-3 GLM outputs + κ-by-condition script + this synthesis update
 
 ### Open scientific questions left for future work
 
 1. **Activation disagreement** — paper's most striking qualitative finding (Holocaust example) but never quantified by them. Adding `invoked_statement_ids` to the phase-3 prompt would give us per-statement activation rates. Deferred per "pure replication" but worth picking up later.
-2. **Phase-3 GLM**: when it finishes, does it also rank `avoid_abuse` low? If yes, that's 7-of-7 cross-method confirmation.
-3. **Spec edits**: actually rewriting `avoid_abuse` and re-running the diagnostic to see if the cross-method signal collapses. Closes the loop from "diagnose ambiguity" to "fix it and verify the fix."
-4. **Behavioral disagreement on paper-style scenarios**: our scenarios are spec-edge, paper's are value-tradeoff. Generating value-tradeoff scenarios on the OpenAI spec might give a cleaner bin multiplier closer to the paper's 13.9×.
+2. **Spec edits**: actually rewriting `avoid_abuse` and re-running the diagnostic to see if the cross-method signal collapses. Closes the loop from "diagnose ambiguity" to "fix it and verify the fix." → **NOW DESIGNED**: see `.agents/projects/spec_repair_loop.md` §9 (the MVP).
+3. **Behavioral disagreement on paper-style scenarios**: our scenarios are spec-edge, paper's are value-tradeoff. Generating value-tradeoff scenarios on the OpenAI spec might give a cleaner bin multiplier closer to the paper's 13.9×.
+4. **GLM phase-3 retry**: 89 errors (3.2%) — likely max_tokens=1500 hitting GLM's hidden-reasoning consumption again. Bumping to 4000 and retrying should recover most.
+5. **Krippendorff's α with ordinal weighting** for 1-5 scale data — more principled than 3-way Fleiss' collapse. Would refine the κ-by-condition gap estimate.
+
+### Next phase: closed-loop spec repair (2026-05-05)
+
+Full plan documented at **`.agents/projects/spec_repair_loop.md`**. TL;DR:
+
+- Iterative loop: DIAGNOSE → REPAIR → APPLY → VERIFY → re-diagnose
+- DIAGNOSE uses the validated tools from this logbook (cross-judge κ + Method F + new tension primitive)
+- REPAIR is an LM compiler that proposes statement rewrites + precedence rules
+- VERIFY auto-reverts edits that don't improve the metric or that regress other statements
+- Termination when median κ ≥ 0.5 across all 46 statements AND every tension pair has explicit precedence
+- Estimated cost: ~$1000–2000 to converge over 5–10 iterations (~2 weeks of build + runtime)
+- **Start with the MVP** in §9 (single-statement repair on `avoid_abuse`, ~$50, ~2h) before committing to the full build
+
+Major builds still needed:
+- LM-judges-pairs-for-tension (cross-tension primitive Phase 1)
+- Tension-activating scenario generation + per-pair Spearman ρ
+- Ambiguity-repair compiler prompt + script
+- Tension-repair compiler prompt + script
+- Spec-edit application + versioning
+- Auto-revert verification stage
+
+---
+
+### MAJOR FINDING: Cross-judge κ by input condition (2026-05-04)
+
+Ahmed asked: "do we have numbers for how agreement between the judges changes as we change what we give them?" Computed `e8_kappa_by_condition.py`. Pure analysis on existing data, $0 cost. Compares Fleiss' κ across the three input conditions:
+
+| condition | what judge sees | judges | n keys | **Fleiss κ binary** | Fleiss κ 3-way | all-3-agree exact |
+|---|---|--:|--:|--:|--:|--:|
+| **Full spec** (phase 3) | whole 46-statement spec + scenario + response | 2 (GLM still running) | 2,755 | **0.371** | 0.371 | 72.4% |
+| **Single statement + examples** (phase 1+2 var A) | one statement text + its examples + scenario + response | 3 | 2,746 | **0.618** | 0.583 | 71.6% |
+| **Rubric only** (phase 1+2 var B) | one rubric (anchored 1-5) + scenario + response | 3 | 2,737 | **0.671** | 0.627 | 73.8% |
+
+Per-statement κ_binary medians: full spec **0.267** (8/46 with κ<0), single statement **0.498** (4/46 κ<0), rubric only **0.589** (**0/45** κ<0).
+
+For the 1-5 ordinal scores in conditions 2 and 3, collapsed to 3-way categorical for comparability with phase 3: `{1,2}=non-compliant`, `{3}=ambiguous`, `{4,5}=compliant`. Fleiss' κ assumes nominal categories so 5-way Fleiss' κ on raw 1-5 would mistreat ordinal structure (Krippendorff's α with ordinal weighting would be the principled n-rater alternative; not implemented).
+
+#### What this means — disentangling the three flavors of disagreement
+
+The κ swing is **0.30 across input conditions**. That's massive. The three conditions vary how much the prompt does for the judge:
+
+| condition | judge has to do | drives disagreement when |
+|---|---|---|
+| **Full spec** (lowest κ) | activation discovery (which clauses fire?) + clause interpretation + score commitment | judges fire different clauses on the same response (paper's "activation disagreement") |
+| **Single statement + examples** (mid κ) | clause interpretation + score commitment (activation pre-decided by us) | judges read the same clause differently (paper's "compliance disagreement") |
+| **Rubric only** (highest κ) | score-anchor matching only (interpretation pre-decided by the GPT-compiled rubric) | judges differ on which anchor a response best matches (rubric ambiguity, narrower) |
+
+**Interpretation #1 — most of the paper's published κ ≈ 0.42 is activation cost, not language ambiguity.** Going from "judges figure out activation" (κ=0.37) to "we tell them the statement" (κ=0.62) recovers ~0.25 of κ. Going further to "we give them a rubric" (κ=0.67) only adds another ~0.05. **Activation discovery is the dominant source of judge disagreement; spec language ambiguity is secondary.**
+
+**Interpretation #2 — high κ on rubric ≠ rubric is faithful to spec.** Rubric-only has zero anti-agreeing statements (κ<0), but the cross-judge analysis already showed several statements where the rubric *introduces* ambiguity that wasn't in the spec (`no_agenda` spec σ=0.18, rubric σ=0.68). So rubric κ is high because *judges apply the rubric consistently*, not because *the rubric is the right answer*. This caveat goes in any reporting that quotes "rubric-judging κ = 0.67."
+
+**Interpretation #3 — paper's headline κ=0.42 conflates two things.** "Judges with full spec achieve κ=0.42" is presented as the spec-ambiguity diagnostic, but our decomposition shows it's *activation cost + language cost combined*. Splitting them lets a spec author triage:
+- Activation problems (multiple clauses fire on the same response, no precedence rule): require explicit clause precedence rules in the spec
+- Language problems (clause text reads differently to different judges): require clause-text rewriting
+
+#### Per-statement triage criterion (now actually cleanly defined)
+
+Per (statement), we have 3 κ values. The combination tells us which fix is needed:
+
+| pattern | reading | example candidate |
+|---|---|---|
+| high κ_full_spec, high κ_single, high κ_rubric | spec is clean, judges agree under all conditions | clear bright-line rules: `do_not_facilitate_illicit_behavior`, `prevent_imminent_harm` |
+| low κ_full_spec, high κ_single, high κ_rubric | judges disagree on which clauses apply but agree once we fix activation | activation problem — needs precedence rules |
+| low κ_full_spec, low κ_single, high κ_rubric | judges disagree on the spec text but agree on the rubric translation | language problem — rubric crispens it (could be over-specifying) |
+| low across all three | genuine spec-text ambiguity that no rubric translation has resolved | `avoid_abuse` (the cross-method survivor) |
+| low κ_rubric, high others | rubric distortion (rare) | spec is fine, rubric is bad — rewrite the rubric |
+
+Reading the table: **the κ profile across the three input conditions is the cleanest spec-author triage signal we have**. It's a 3-tuple per statement that maps directly to a fix type (activation rules vs language rewrite vs rubric rewrite).
+
+#### Per-judge flag rate by condition (Gemini stays consistent, GLM is the strict one)
+
+| condition | GPT flag rate | Gemini flag rate | GLM flag rate |
+|---|--:|--:|--:|
+| Full spec | 28.0% | 36.9% | (running) |
+| Single statement + examples | 32.4% | 28.4% | 43.1% |
+| Rubric only | 37.4% | 30.1% | 39.7% |
+
+Gemini's flag rate is stable across conditions (~28–37%). GLM is the strictest judge under any condition. GPT is most lenient under full-spec (28%) but becomes more strict (37%) when given just a rubric — possibly because the rubric anchors at score=1/2 are crisply defined and easier for GPT to fire.
+
+#### Update to file index
+
+- `e8_kappa_by_condition.py` (new) — pure analysis, $0
+- `e8_kappa_by_condition.jsonl` — structured per-condition Fleiss κ + pairwise
+
+#### When GLM phase 3 lands
+
+Re-running this script will swap phase-3 row from 2-judge Cohen's κ to 3-judge Fleiss' κ (true paper-comparable). Expected: phase-3 κ may rise slightly (3-judge is less noisy) but the **>0.20 gap to single-statement and rubric conditions** is unlikely to close. The activation-cost-dominates conclusion should hold.
+
+#### UPDATE — GLM phase 3 landed; 3-judge result revises the conclusion
+
+GLM phase 3 finished with 89 errors out of 2,758 (3.2% — could retry but acceptable). Re-ran `e8_kappa_by_condition.py`. **3-judge phase 3 Fleiss κ = 0.510** (was 0.371 with 2 judges).
+
+Updated table with 3 judges in all conditions:
+
+| condition | judges | n_keys | **Fleiss κ binary** | Fleiss κ 3-way | per-stmt median κ | κ<0 count |
+|---|--:|--:|--:|--:|--:|--:|
+| Full spec (phase 3) | 3 | 2,667 | **0.510** | 0.508 | 0.429 | 0/46 |
+| Single statement + examples | 3 | 2,746 | **0.618** | 0.583 | 0.498 | 4/46 |
+| Rubric only | 3 | 2,737 | **0.671** | 0.627 | 0.589 | 0/45 |
+
+**Updated κ swing across conditions: 0.16 (full → rubric)**, not the 0.30 the 2-judge data suggested. Activation cost is real but secondary; rubric crispening also matters. The 0.10 gap from full-spec to single-statement (activation cost) and 0.05 gap from single-statement to rubric (language-collapse cost) are both meaningful.
+
+**Striking shift: 8 → 0 anti-agreeing statements in full spec.** Adding GLM as the 3rd judge to phase 3 resolved every κ<0 case. The 2-judge data was noisier than I assumed; Cohen's κ binary is brittle to flag-rate mismatches (GPT 28% vs Gemini 37%) which Fleiss' across 3 judges smooths out.
+
+**vs paper's published Fleiss κ = 0.42**: our 3-judge full-spec κ = 0.510 is *higher*. Reasons:
+- Paper's judges (Claude 4 Sonnet, o3, Gemini 2.5 Pro) are 3 different model families with high between-model variance
+- Our judges (GPT-5.1, Gemini-3-Flash, GLM-5.1) agree more structurally
+- Smaller scale (2,667 vs paper's 5,000) → narrower variance bands
+
+**Per-statement triage criterion now (cleaner with 3 judges):**
+
+| pattern | reading | example |
+|---|---|---|
+| All three κ ≥ 0.6 | spec is clean across all framings | bright-line rules: `prevent_imminent_harm`, `do_not_facilitate_illicit_behavior` |
+| κ_full_spec low, κ_single high, κ_rubric high | activation problem | (varies — investigate Δ between full-spec and single-stmt per statement) |
+| κ_full_spec OK, κ_single low (κ<0), κ_rubric high | language ambiguity that rubric resolves | `avoid_abuse`, `assume_objective_pov`, `comply_with_laws`, `refusal_style` (all κ<0 on single-stmt; rubric crispens) |
+| κ_full_spec low, κ_single low, κ_rubric high | maximum spec-text ambiguity, judge consensus only via rubric | none in our data hit all three thresholds |
+
+**Specifically: 4 statements with single-stmt κ<0 = the actual spec-text-rewrite candidates** — `avoid_abuse`, `assume_objective_pov`, `comply_with_laws`, `refusal_style`. These are the statements where judges anti-agree even when given the statement text + examples, but rubric judging recovers κ. The rubric is "hiding" the ambiguity — and re-introducing it is exactly what `avoid_abuse` does in the cross-judge analysis (rubric σ=1.16 mirrors spec σ=1.16).
+
+### Spec-repair-loop diagnostic revised: profile-based triage, not single-statement κ (2026-05-05)
+
+**Trigger.** Ahmed pushed back on the `spec_repair_loop.md` design doc which used "single-statement κ as THE metric" for ambiguity:
+> "I'm not fully convinced. Where are you getting this phase-3 single-statement Fleiss score? How can you be sure that's the right one to choose vs the others? Could we use the others in some combination?"
+
+He was right. I'd waved at the 3-tuple comparison from the κ-by-condition analysis but then committed to a single condition in the design doc. That was sloppy. Two terminology bugs in the original doc: (1) "phase-3 single-statement κ" doesn't exist — phase 3 is whole-spec, single-statement is phase 1+2 var A; (2) presenting single-statement as "the cleanest signal" without justifying it against the alternatives.
+
+**Revised diagnostic.** Per-statement profile = `(κ_full_spec(S), κ_single(S), κ_rubric(S))` — a 3-tuple, not a scalar. Each entry comes from a distinct input condition:
+
+| condition | source file | what it measures |
+|---|---|---|
+| `κ_full_spec` | `phase3_*/judgments.jsonl` | judge-applied compliance under deployment-realistic full-spec context |
+| `κ_single` | `e8_va_judgments.jsonl` + `phase2_*/va_judgments.jsonl` | language clarity of THIS statement in isolation |
+| `κ_rubric` | `e8_vb_judgments.jsonl` + `phase2_*/vb_judgments.jsonl` | rubric-translation faithfulness for THIS statement |
+
+**Why the 3-tuple is the right choice (and why no single condition is).**
+
+- **κ_single alone**: localizes per-statement (good) but strips context the spec normally provides (bad). A statement might score κ_single < 0 because in isolation judges read "negativity" in 3 different ways — but the surrounding spec text might disambiguate that. Single-statement κ overcounts spec problems by treating contextually-resolvable ambiguity as language ambiguity.
+- **κ_full_spec alone**: deployment-realistic (good) but conflates language ambiguity with activation cost (bad). A statement with κ_full_spec < 0 could be ambiguous OR could be one of two clauses both arguably firing on the same response (paper's "activation disagreement"). Full-spec κ undercounts where the problem is *and* doesn't tell us how to fix it.
+- **κ_rubric alone**: clean per-statement signal (good) but measures a derivative artifact (rubric quality), not spec quality (bad). High rubric κ doesn't mean the spec is good — could mean the rubric force-picked one reading and judges all applied that reading consistently.
+
+**Each condition strips a different kind of context.** The TRIPLE is what tells us which kind of stripping changes judge behavior. A statement is genuinely ambiguous only if multiple conditions agree it's bad — exactly the cross-method triangulation principle that surfaced `avoid_abuse` as the strongest finding in the entire epic.
+
+**Pattern-to-fix dispatch table** (per the §4.0 of the design doc):
+
+| pattern (high/low for each κ) | reading | fix type |
+|---|---|---|
+| (high, high, high) | clean | NO ACTION |
+| (low, high, high) | activation problem (clauses fire indeterminately under full spec but each is locally clean) | PRECEDENCE / SCOPE RULE |
+| (high, low, high) | isolation-only ambiguity (full context resolves it; deployed model is fine) | DEFER |
+| (low, low, low) | genuine language-level ambiguity (no context resolves it) | SPEC TEXT REWRITE via Method F |
+| (low, low, high) | rubric is *hiding* spec ambiguity by force-picking one reading | SPEC REWRITE OR rubric-truthing alternative |
+| (high, high, low) | rubric distortion (spec is fine, rubric is bad) | NO SPEC ACTION (rubric will be re-compiled) |
+
+**Why this dispatching is load-bearing.** Different patterns require *different* fixes. Running a `spec_text_rewrite` compiler on a statement that has an `activation_problem` would rewrite text that wasn't the issue — likely making the statement narrower or more specific in ways that introduce *new* problems while not fixing the actual one (cross-clause precedence). The pattern → fix-type → operator chain is a hard constraint.
+
+**Convergence criterion revised.** Was "every statement has κ_single ≥ 0.5." Now: "every statement has min(3-tuple) ≥ 0.4." Operationally: no plausible deployment-time judging context surfaces material disagreement on this statement.
+
+**Cost implication.** Diagnose stage now runs all 3 conditions every iteration. ~$140/iter more than single-condition diagnose ($330/iter total vs $190). Worth it because pattern dispatch eliminates the wrong-fix-type failure mode, which would waste edits AND introduce regressions.
+
+**MVP design implication.** The MVP for `avoid_abuse` was originally "rewrite the statement, see if κ goes up." Now it's:
+- Step 0 (free): verify `avoid_abuse` is in `language_ambiguity` pattern by computing the 3-tuple from data already on disk. We have κ_single = −0.097 already; need to extract per-statement κ_full_spec from `phase3_*/judgments.jsonl` (restrict to scenarios where seed_statement_id == avoid_abuse) and per-statement κ_rubric from variant B files.
+- If pattern is (low, low, low): proceed with spec-text-rewrite MVP.
+- If pattern is something else: pick a different statement that IS in language_ambiguity, OR redesign the MVP around the actual pattern.
+
+**Honest acknowledgment of unfinished work.** I have not:
+- Computed per-statement κ_full_spec (only computed it globally and over the binary problematic collapse for the κ-by-condition table)
+- Computed per-statement κ_rubric
+- Looked at any judge rationales for high-disagreement (scenario, response) cases on `avoid_abuse` to verify Method F's "negativity" localization actually matches the failure mode in deployed judging
+
+The first two are ~30 min of analysis on existing data. The third requires reading rationales (~1 hour of qualitative work) and is the next thing Ahmed asked me to do but then deferred ("only do #1 for now"). Both should happen before the MVP API calls are spent.
+
+**File index update.** `e8_kappa_by_condition.py` already computes per-statement κ for each condition — just hasn't been pulled out into a "3-tuple table per statement" view. Building that view is one morning's work and a precondition for any sensible MVP.
+
+**Reference**: full revised plan is in `.agents/projects/spec_repair_loop.md` §4.0 (the pattern table) and §9 (revised MVP).
+
+---
+
+## Qualitative rationale analysis — 3 Sonnet subagents, 9 files, ~6,200 summaries (2026-05-05)
+
+After Ahmed pushed back on the κ-only narrative ("have you actually read the rationales?"), spawned 3 Sonnet subagents in parallel — one per input condition — to read judge rationales on the highest-disagreement scenarios and write per-judge markdown reports.
+
+### Subagent design
+
+Each subagent processed ALL 3 judges' data for one condition. For each of 46 statements, picked the 5 highest-disagreement scenarios (max-min spread for 1-5 scale; distinct-decision count for full-spec 3-way). For each (5 scenarios × 3 generators = 15 tuples per statement = 690 tuples per judge file), wrote a per-judge summary including:
+- Score / decision
+- Full user_query + response head
+- 2-4 sentence rationale summary capturing nuance
+- Verbatim spec_quotes / rubric_quotes the judge cited
+- Activation flag (which OTHER spec statements the judge invoked beyond the seed)
+- Mental-model flag (score↔reasoning mismatches)
+
+Plus a top-of-file "Themes & patterns" section synthesizing across all 690 summaries.
+
+### Files written
+
+All in `claude_subagents/lm_judge_<condition>/<judge>.md`. Total ~6,200 active summaries, 29 skipped due to known data gaps (GLM token-budget failures + Gemini safety blocks already documented in failure-investigation entries).
+
+| condition | files | active summaries |
+|---|---|--:|
+| Full spec (phase 3) | [`gpt`](../../claude_subagents/lm_judge_full_spec/gpt.md), [`gemini`](../../claude_subagents/lm_judge_full_spec/gemini.md), [`glm`](../../claude_subagents/lm_judge_full_spec/glm.md) | 689 + 689 + 663 = **2,041** |
+| Single statement (var A) | [`gpt`](../../claude_subagents/lm_judge_single_statement/gpt.md), [`gemini`](../../claude_subagents/lm_judge_single_statement/gemini.md), [`glm`](../../claude_subagents/lm_judge_single_statement/glm.md) | 690 + 686 + 690 = **2,066** |
+| Rubric only (var B) | [`gpt`](../../claude_subagents/lm_judge_rubric/gpt.md), [`gemini`](../../claude_subagents/lm_judge_rubric/gemini.md), [`glm`](../../claude_subagents/lm_judge_rubric/glm.md) | 690 + 688 + 689 = **2,067** |
+
+(Paths above are relative to this logbook file. Absolute root: `/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/claude_subagents/`.)
+
+### Per-judge cross-condition profiles
+
+Each judge has a *systematic* signature that recurs across the conditions. Disagreement is principled, not noise.
+
+#### GPT-5.1 as judge
+
+- **Single-statement**: spec-authority-strict reading of "unless otherwise specified" in `formatting` and `avoid_abuse` — treats as non-overridable by user. Drives 4-pt score gaps with Gemini and GLM, who treat it as user-overridable.
+- **Full-spec**: **self-lenient on GPT-generator content** — marks GPT-generator as non-compliant only **17%** of the time vs Qwen-generator **49%** and Gemini-generator **39%**. 52 cases where GPT-judge alone says compliant while both Gemini and GLM say non-compliant on GPT-generated responses. Mechanism: GPT-judge shares the GPT-generator's over-refusal calibration. **This is a methodological confound for any same-family judge+generator alignment evaluation.**
+- **Rubric**: splits the difference (e.g., scores 2-4 on the formatting bug); less idiosyncratic than the others under rubric.
+
+#### Gemini-3-Flash as judge
+
+- **Single-statement**: aggressive creative-exception trigger. 65 unique cases of Gemini=5 vs GPT/GLM=1-2, almost all on `assume_objective_pov`. Liberally invokes "if user asked for roleplay or creative endeavor, comply without imposing objective POV" sub-clause for any fictional or persuasive framing — including historically contested moral ground.
+- **Full-spec**: **never returns "ambiguous"** in 689 judgments, despite cases where GLM and GPT both call it ambiguous. Forces binary certainty. Plus heavy `[formatting]` co-firing (140 cases) — over-weights presentation as compliance signal. Inflates Gemini's NC rate (42.4%).
+- **Rubric**: extreme bimodal (82% of scores are 1 or 5; almost never uses anchors 2 or 3). On `formatting`: mechanically applies the rubric (which drops "unless otherwise specified") → scores compliant responses as 1. On `assume_objective_pov`: **reasons beyond the rubric** to recover the spec's roleplay exception — sometimes spec-accurate, sometimes false-positive.
+
+#### GLM-5.1 as judge
+
+- **Single-statement**: unique meta-framing principle ("demonstrating bad behavior on request" ≠ "actually doing bad behavior"). Score-5 on a "preachy refusal" produced as a requested illustrative example. Score-5 on XML-escaping that preserves semantic equivalence on `avoid_overstepping`. Both cases: GPT and Gemini score 1 with literal surface-behavior reads.
+- **Full-spec**: invokes `[highlight_misalignments]` in ~14% of judgments **regardless of seed statement** — using it as a catch-all NC trigger. 7 GLM-unique-NC cases on `letter_and_spirit`. High false-positive rate where user misalignment is subtle.
+- **Rubric**: most rubric-faithful for `formatting` (correctly applies user override → score 5; only judge that gets this right). BUT systematic over-extension of anchor 1 on harm-adjacent content — scores therapeutic/educational roleplay about CSAM disclosure as anchor 1 ("sexualizes minors") even when context is clearly educational. Across 4 safety-related statements, GLM is consistently harsher.
+
+### The single most actionable cross-method finding
+
+**The `formatting` rubric is a confirmed concrete spec-distortion case.**
+
+The spec text says: *"Use markdown/LaTeX **unless otherwise specified**"* — i.e., the formatting choice is user-overridable.
+
+The auto-compiled rubric **drops the qualifier**, encoding markdown+LaTeX as unconditional.
+
+When users explicitly request "no LaTeX":
+- **Gemini (rubric-only)**: applies rubric mechanically → scores compliant responses as 1 ("blatantly ignores conventions"). Spec-distorted by the rubric.
+- **GLM (rubric-only)**: respects user override → score 5. Reasons beyond the rubric using spec knowledge.
+- **GPT (rubric-only)**: splits the difference (2-4).
+
+Result: **4-point cross-judge disagreements on scenarios where the response is factually correct.**
+
+This is exactly the failure mode the spec-repair-loop's `(low, low, high)` pattern was designed to catch in §4.0 of the design doc — *the rubric "hiding" spec ambiguity by force-picking one reading*. The qualitative analysis confirms the *mechanism* the κ tables only hinted at: a literal qualifier was dropped during spec → rubric translation.
+
+**Repair implication.** The fix here is *not* to rewrite the spec text — the spec text was correct. The fix is to (a) regenerate the rubric with stricter "preserve all qualifiers" instruction in the compiler prompt, and (b) auto-detect dropped qualifiers via NLI-style entailment between rubric anchor text and spec statement text. Worth adding to the repair compiler design.
+
+### Methodological findings beyond per-judge profiles
+
+1. **Same-family judge+generator inflates compliance.** GPT-on-GPT undercounts non-compliance by ~30 percentage points vs cross-family pairs. Methodological lesson: *never* use same-family judge+generator pairs as a primary metric in alignment evaluation.
+
+2. **"Ambiguous" as a category is judge-dependent.** Gemini refuses to use it (0/689); GPT and GLM use it sparingly. Binary collapse is robust across judges; 3-way breakdown isn't.
+
+3. **Some judges reason beyond their input.** Gemini-on-rubric recovered the `assume_objective_pov` roleplay exception that the rubric had dropped. GLM-on-rubric recovered the `formatting` user-override. These are cases where judges' own priors compensated for bad rubrics — masking the rubric quality issue. **This is a confounder for using rubric-only judging as a rubric quality metric.**
+
+4. **Each judge has a "secret signature."** GLM's `[highlight_misalignments]` catch-all, Gemini's never-ambiguous + creative-exception, GPT's authority-strict + self-leniency. Systematic enough that they bias entire datasets in predictable ways.
+
+### Methodological gap: missing condition (rubric + spec)
+
+After Ahmed asked: *"for the rubric-based approach do we not also include the language from the spec for that statement?"* — the answer is NO, we did not. The variant-B prompt was rubric-only (no spec text, no examples).
+
+The reasoning: variant B was designed as an *isolation test* of the rubric. If rubrics are faithful translations, rubric-only judging should match spec-only judging. Spearman ρ between var A and var B was the indirection metric.
+
+**But** in deployment, judges would typically have BOTH the rubric AND the spec text. Our rubric-only condition is a stress test, not a deployment-realistic measurement. Particularly relevant for the formatting bug: if Gemini had been shown the spec text alongside the rubric, would it have caught that the rubric was incomplete? GLM did even rubric-only, but it was the only one.
+
+**The 4-condition view we'd need.** Adding a 4th input condition `rubric + spec` would let us answer: *does the rubric add signal on top of the spec, or just force-pick readings the spec leaves open?*
+
+| condition | judge sees | what it tests |
+|---|---|---|
+| Single statement (var A) | spec text + examples | spec-text language clarity |
+| Rubric only (var B) | rubric anchors only | rubric self-containment / translation faithfulness |
+| **Rubric + spec (NEW)** | rubric AND statement + examples | does the rubric improve agreement when judge has spec? |
+| Full spec (phase 3) | whole 46-statement spec | deployment-realistic activation + clause interpretation |
+
+Three patterns to look for:
+- κ_rubric+spec > κ_rubric-only → rubric incomplete; spec context fills gaps (Gemini-on-formatting case)
+- κ_rubric+spec < κ_rubric-only → rubric *forces* readings that contradict the spec (rare, would be very informative)
+- κ_rubric+spec ≈ κ_rubric-only → rubric is self-contained
+
+**Cost to add this condition.** ~$30-45 OpenAI for 8,280 judge calls; rubric+spec prompt is ~3K tokens, smaller than full-spec. Wall ~30-60 min. Pure additive on existing scenarios + responses; no regen.
+
+**Recommended.** Worth running before launching the spec-repair-loop MVP. Adds the 4th column to the per-statement diagnostic profile (4-tuple instead of 3-tuple) and would specifically tell us whether the rubric layer is *additive* on top of spec context or *distorts* it. The formatting case is a strong prior that this condition will surface real signal.
+
+### Implications for the spec-repair-loop design
+
+The findings above feed directly into the loop:
+
+1. **Per-statement profile becomes a 4-tuple** (κ_full_spec, κ_single, κ_rubric, κ_rubric_plus_spec) once the 4th condition is run. Update §4.0 of `spec_repair_loop.md` with the additional patterns this enables.
+
+2. **Repair compiler must use cross-family judges to avoid GPT-on-GPT confound.** When verifying that an edit improved κ, the verification judges should NOT be same-family with the compiler. This is a hard constraint to bake in.
+
+3. **Rubric-distortion detection**: when κ_rubric is high but κ_rubric_plus_spec drops (judges find conflicts when given both), the rubric is force-picking. Add this as a `fix_type = rubric_force_pick` pattern in the dispatch table.
+
+4. **Judge ensemble must include diverse priors.** GLM's harm-aversion, Gemini's binary-certainty, GPT's authority-strictness — each catches things the others miss. The 3-judge ensemble is doing real work; cutting to 2 (or worse, single-judge) loses material signal.
+
+5. **`avoid_abuse` MVP target reconfirmed.** The single-statement file shows 4-pt GPT/Gemini/GLM gaps on the authority-hierarchy axis — this is genuine spec-text language ambiguity that no rubric translation has resolved. `avoid_abuse` is in the `language_ambiguity` pattern as expected, and Method F's "negativity" localization is the right starting point for the repair compiler.
+
+### File index for this analysis
+
+The 9 files are intended for direct human inspection (each ~7K-13K lines, 850KB-1.1MB). Future agents looking for "what did each judge actually say" should grep these files first before re-running any analysis on the underlying JSONLs.
+
+- `claude_subagents/lm_judge_full_spec/{gpt,gemini,glm}.md` — phase 3 rationales, 689 summaries each
+- `claude_subagents/lm_judge_single_statement/{gpt,gemini,glm}.md` — variant A rationales, ~688 summaries each
+- `claude_subagents/lm_judge_rubric/{gpt,gemini,glm}.md` — variant B rationales, ~689 summaries each
+- `claude_subagents/lm_judge_rubric_plus_spec/{gpt,gemini}.md` — phase 4 rationales, 690 summaries each (GLM pending)
+
+Each file's "## Themes & patterns" section at the top is the per-judge-per-condition synthesis. The per-statement sections beneath are the raw data each summary was drawn from.
+
+---
+
+## Empirical rationale-grounding analysis (2026-05-05)
+
+### Motivation
+
+Ahmed pushback after the four sub-agent qualitative passes:
+
+> "Ok, given that what you're suggesting is just giving the judge the statement
+> from the specification and asking it to make a 1-5 rating, do you have any
+> real evidence? Like not just you reading. Some sort of script that goes
+> through the rationales for each LM as a judge and does some sort of regex
+> or grep match to prove that when you include the statement we see more
+> hits here. Maybe match between the rationale text and the spec/rubric text
+> for all variants. Be as broad as possible with the metrics as long as they
+> are reproducible."
+
+The 4 sub-agent passes (`claude_subagents/lm_judge_*`) produced LM-summarized
+claims about what judges grounded their reasoning in. Those summaries are
+unverifiable by anyone other than another LM reader. We need a deterministic,
+reproducible script whose output a non-Claude reader can audit.
+
+This section is the **plan**. The sections following it record the run and
+findings.
+
+### What we're testing
+
+Six concrete hypotheses about *what judge reasoning is grounded in*. Each is a
+prediction with a directional sign. If the script's numbers go the other way,
+the corresponding qualitative claim is wrong.
+
+| # | Hypothesis | Prediction (passes if) |
+|---|---|---|
+| H1 | Variant-A rationales ground in spec text more tightly than full-spec rationales (single statement → cleaner citation) | spec-distinctive-token hit rate: variant_A > full_spec, both judges |
+| H2 | Rubric-only judges genuinely cannot reason from spec text; no leakage from training-data memory of the OpenAI Model Spec | spec-distinctive-token hit rate: rubric_only ≈ 0 |
+| H3 | Phase-4 GPT, when it flags `rubric_spec_tension=true`, is grounding more in rubric than in spec (resolving toward rubric) | conditional on tension=true: rubric-distinctive ≥ spec-distinctive |
+| H4 | The qualifier-drop bug is real and detectable: phrases like "by default", "unless otherwise specified", "appropriately" appear in spec/variant-A/phase-4 rationales but not rubric-only rationales | qualifier hit rate: variant_A ≈ phase_4 ≫ rubric_only ≈ 0 |
+| H5 | Judges follow the verbatim-quote instruction: provided `spec_quotes` are actually substrings of the spec text (not paraphrased) | spec_quote_verify_rate ≥ 0.9 across judges |
+| H6 | Gemini's "binary scorer" pattern visible in reasoning length: shorter rationales than GPT/GLM | reasoning_token_count: Gemini < GPT, Gemini < GLM |
+
+### Inputs (deterministic, all checked into the repo)
+
+- `experiments/posttrain/specs/openai_model_spec.jsonl` — 46 statements, each with `text` and `metadata.examples`
+- `experiments/posttrain/disagreement_primitive/e8_rubrics.jsonl` — 46 rubrics (5 anchored criteria each)
+- 11 judgment files spanning 4 conditions × 3 judges (phase-4 GLM is in progress; analysis is run on what is available, with phase-4 GLM joining a re-run later):
+
+| condition | judge sees | gpt | gemini | glm |
+|---|---|---|---|---|
+| variant_A (single-statement) | one statement + examples | `e8_va_judgments.jsonl` | `phase2_gemini/va_judgments.jsonl` | `phase2_glm/va_judgments.jsonl` |
+| variant_B (rubric-only) | one rubric (5 anchors) | `e8_vb_judgments.jsonl` | `phase2_gemini/vb_judgments.jsonl` | `phase2_glm/vb_judgments.jsonl` |
+| full_spec (phase 3) | whole 46-statement spec | `phase3_gpt/judgments.jsonl` | `phase3_gemini/judgments.jsonl` | `phase3_glm/judgments.jsonl` |
+| rubric_plus_spec (phase 4) | one statement + examples + rubric | `phase4_gpt/judgments.jsonl` | `phase4_gemini/judgments.jsonl` | (pending) |
+
+Each judgment file has 2,758 rows. variant_A and phase_4 supply `spec_quotes`;
+variant_B and phase_4 supply `rubric_quotes`. Phase 3 supplies `decision`
+(compliant/non-compliant/ambiguous), not 1-5. Phase 4 alone supplies
+`rubric_spec_tension` (boolean).
+
+### Per-judgment metrics (broad menu, all reproducible)
+
+For each individual judgment, the script computes:
+
+**Length / verbosity**
+1. `reasoning_char_count`
+2. `reasoning_token_count` — words via `\w+` regex
+
+**Quote-field discipline (only where applicable)**
+3. `n_spec_quotes_provided` — judge-output count
+4. `n_spec_quotes_verified` — count actually substrings of `spec_text`
+5. `spec_quote_verify_rate` — verified / provided
+6. `n_rubric_quotes_provided`
+7. `n_rubric_quotes_verified` — substring of `rubric_text`
+8. `rubric_quote_verify_rate`
+
+Verbatim match uses normalized substring search (lowercase, collapse internal
+whitespace, strip outer punctuation) — strict equality is too brittle for
+copy-paste from JSON.
+
+**N-gram overlap (rationale ↔ source)**
+9. `reasoning_5gram_total` — unique 5-grams in reasoning (denominator)
+10. `reasoning_5gram_in_spec` — count of 5-grams shared with the target statement's spec text+examples
+11. `reasoning_5gram_in_rubric` — count of 5-grams shared with the target statement's rubric criteria
+12. `reasoning_3gram_total`, `reasoning_3gram_in_spec`, `reasoning_3gram_in_rubric` — looser version
+13. `reasoning_5gram_in_other_specs` — n-grams shared with the spec text of OTHER statements (sanity check; should be low except in phase 3 where judges have access to the whole spec)
+
+**Distinctive-token signal (the cleanest grounding measure)**
+14. `spec_distinctive_token_total` — |tokens(spec_text) − tokens(rubric_text)| for this statement
+15. `rubric_distinctive_token_total` — |tokens(rubric_text) − tokens(spec_text)|
+16. `spec_distinctive_hits` — distinctive spec tokens present in reasoning
+17. `rubric_distinctive_hits` — distinctive rubric tokens present in reasoning
+18. `spec_distinctive_hit_rate` — hits / total (per-statement-normalized)
+19. `rubric_distinctive_hit_rate` — same
+
+This pair (16-19) is the most robust comparator: spec and rubric overlap heavily
+in shared vocabulary, so straight overlap is base-rate dominated. Distinctive
+tokens isolate the marginal signal each document contributes.
+
+**Targeted phrase audit (qualifier-drop)**
+20. `qualifier_hits` — number of curated qualifier phrases present in reasoning
+21. `qualifier_in_spec` — bool, is at least one in this statement's spec text?
+22. `qualifier_in_rubric` — bool, is at least one in this statement's rubric text?
+23. `qualifier_dropped` — `qualifier_in_spec AND NOT qualifier_in_rubric` (per-statement label)
+
+Curated qualifier list:
+
+```
+"by default", "unless otherwise specified", "unless explicitly",
+"appropriately", "absent specific", "in general", "as a default",
+"where applicable", "to the extent", "all else equal", "ordinarily",
+"in most cases", "typically", "by default,", "as appropriate",
+"if reasonable", "where possible", "unless the user", "without further"
+```
+
+These are universal qualifier patterns in normative writing. The list is
+hand-curated; results are reported per-pattern so anyone can substitute their
+own list and re-run.
+
+**Rubric-style language indicator (sanity check on which artifact dominates)**
+24. `score_n_in_reasoning` — does reasoning contain the literal pattern `\bscore [1-5]\b` or `\b[1-5] =` (rubric-anchor citation pattern)? Bool.
+25. `anchor_word_count` — count of words {"anchor", "criterion", "minimally", "leans", "exemplifies"} that are rubric-formulaic and uncommon in spec prose
+
+**Phase-4 only**
+26. `tension_flag` — bool (passed through from the phase-4 schema)
+27. `tension_description_token_count` — verbosity of the tension-resolution explanation
+
+### Aggregations
+
+Three output tables:
+
+**(a) `summary.csv` — one row per (condition × judge), means + medians of every metric.** This is the headline table.
+
+**(b) `per_statement.csv` — one row per (condition × judge × statement_id), means.** For statement-level drilldown.
+
+**(c) `qualifier_drop.csv` — one row per (condition × judge × qualifier × statement_id), with hit-count and per-mil hit rate.** For the H4 audit.
+
+Plus `per_judgment.jsonl` — every metric per row, for downstream re-aggregation
+without re-running.
+
+### Comparative tests run automatically
+
+After computing aggregates, the script prints six explicit hypothesis-test
+tables:
+
+- **H1 test**: variant_A vs full_spec mean spec_distinctive_hit_rate, per judge. Direction: variant_A > full_spec.
+- **H2 test**: rubric_only mean spec_distinctive_hit_rate, per judge. Compare to a 0-baseline (and report the 95% bootstrap CI).
+- **H3 test**: phase-4 GPT mean rubric_distinctive_hits split by tension flag (true vs false). Direction: tension=true → higher rubric grounding.
+- **H4 test**: per-judge qualifier hit rate, per condition, restricted to statements where `qualifier_dropped=true`. Direction: rubric_only ≪ others.
+- **H5 test**: spec_quote_verify_rate distribution per judge × condition.
+- **H6 test**: median reasoning_token_count per (condition × judge), with bootstrap CI.
+
+Each table shows: n, mean, median, 95% bootstrap CI (1000 resamples). Effect
+size as Cohen's d for two-condition comparisons, or rank delta when scoring
+ordinal.
+
+### What the script does NOT prove
+
+- It measures *grounding*, not *correctness*. A judge can ground in spec text
+  and still misread it. Grounding evidence supports "the rationale cites
+  editable spec text" but not "the rationale is right."
+- N-gram overlap can be inflated by the judge re-quoting the response or the
+  user query, which themselves may include spec language. We try to control
+  this by using *distinctive* tokens (those that only appear in spec or only
+  in rubric for this specific statement, not in shared vocabulary).
+- Phase 3 (full-spec) judges read 46 statements. Their "off-target" overlap
+  (5-grams shared with non-target statements) is expected to be nonzero and
+  is reported separately.
+- The qualifier list is hand-curated; we report per-pattern hits so substitution
+  is trivial.
+
+### Where it lives
+
+- Script: `experiments/posttrain/disagreement_primitive/e8_rationale_grounding.py`
+- Outputs: `experiments/posttrain/disagreement_primitive/grounding/`
+  - `summary.csv`
+  - `per_statement.csv`
+  - `qualifier_drop.csv`
+  - `per_judgment.jsonl`
+  - `report.md` (auto-generated text summary of the H1-H6 tests)
+
+### Reproducibility commitments
+
+- Pure-Python script, only stdlib (`json`, `re`, `csv`, `random`, `statistics`,
+  `pathlib`, `collections`). No LM calls. No external dependencies.
+- Single-pass: `python e8_rationale_grounding.py` reads all 11 jsonls and
+  writes all outputs.
+- Deterministic: bootstrap RNG seeded at 0.
+- All thresholds (n-gram size, qualifier list, normalization rules) live as
+  top-of-file constants; non-Claude readers can change one value and re-run.
+- No `--judge` filter; the script runs over all conditions × judges available
+  in the directory.
+
+### Phase-4 GLM caveat
+
+GLM phase-4 sweep is still running (estimated ~01:00 local). The script
+gracefully handles missing files: any (condition × judge) absent at run time
+appears as `n=0` in summary tables. Once GLM completes, re-run the script
+verbatim — it overwrites outputs.
+
+### Run results (2026-05-05, 30,195 rows analyzed in 13.9s)
+
+The script ran on 11 of 12 condition×judge combinations (phase-4 GLM still
+pending). Outputs landed in `experiments/posttrain/disagreement_primitive/grounding/`.
+
+#### Headline empirical finding — qualifier-drop is real and detectable
+
+**16 of 46 spec statements have a qualifier present in the spec text but
+absent from the auto-compiled rubric**, by deterministic regex match against
+the curated qualifier list:
+
+```
+ask_clarifying_questions, assume_objective_pov, avoid_abuse,
+avoid_extremist_content, avoid_regulated_advice,
+avoid_targeted_political_manipulation, be_clear,
+do_not_facilitate_illicit_behavior, do_not_lie,
+follow_all_applicable_instructions, highlight_misalignments,
+ignore_untrusted_data, letter_and_spirit, protect_privileged_messages,
+refusal_style, transformation_exception
+```
+
+That is **35% of the spec** is affected by the qualifier-drop bug. Not just
+the formatting case Ahmed flagged — it's a class-level problem in the
+rubric compiler.
+
+On these 16 statements, the rate at which the rationale contains ANY of the
+curated qualifier phrases (per condition × judge):
+
+| judge | variant_A | variant_B (rubric-only) | full_spec | rubric+spec (phase 4) |
+|---|---:|---:|---:|---:|
+| gpt | 4.3% | **0.6%** | 33.3% | 15.6% |
+| gemini | 0.9% | **0.9%** | 19.9% | 7.7% |
+| glm | 14.9% | **2.9%** | 46.7% | (pending) |
+
+**Rubric-only judges essentially never cite the qualifier (0.6%-2.9%, all near
+baseline noise).** Judges with spec text in context cite it 20-60× more often.
+This is the empirical proof that:
+1. The rubric *systematically drops* qualifier phrases on a third of the spec.
+2. Judges *cannot recover* the dropped qualifier from training-data memory of
+   the OpenAI Model Spec — when they don't see the qualifier in their prompt,
+   they don't reason about it.
+
+Top dropped-qualifier patterns judges explicitly cite under full_spec:
+
+| qualifier | gpt full_spec hits | gemini full_spec hits | glm full_spec hits |
+|---|---:|---:|---:|
+| appropriately | 75 | – | **180** |
+| typically | 74 | **116** | 134 |
+| unless explicitly | **94** | 21 | 59 |
+| ordinarily | – | 30 | – |
+| by default | (in phase 4: 48) | – | – |
+
+GLM's "appropriately" hit-rate of 180/923 = 19.5% on full_spec qualifier-drop
+statements is the single strongest piece of evidence that this word matters
+for judge reasoning.
+
+#### Hypothesis test outcomes
+
+| H | Claim | Result | Notes |
+|---|---|---|---|
+| H1 | Variant_A grounds in spec more than full_spec | **PASS in density**, FAIL in coverage | Original metric (`hits / total_distinctive`) was confounded by reasoning length. Density (`hits / reasoning_tokens`): variant_A = 7.5-10.3% spec-distinctive, full_spec = 4.5-7.1%. Variant_A is **1.4-1.7× denser** in spec citation per word. |
+| H2 | Rubric-only judges can't ground in spec | **PASS** | spec_distinctive_hit_rate ≈ 0.018-0.019 across all judges (noise floor from shared English vocab). H4 evidence is stronger (50-60× gap on qualifiers). |
+| H3 | When tension flag fires, GPT grounds more in rubric | **WEAK PASS** | GPT phase-4: tension=true delta(rub-spec) = +6.80, tension=false = +6.66. GPT defers to rubric *regardless* of the tension flag — flag is metadata, not behavior signal. |
+| H4 | Qualifier hits: rubric-only ≪ others | **STRONG PASS** | 50-60× gap. See table above. |
+| H5 | Judges follow verbatim instruction | **PASS** | spec_quote_verify_rate: 0.91-1.00 across all conditions. GLM rubric_quote_verify is 0.83 (slightly paraphrases). |
+| H6 | Gemini reasoning is shortest | **STRONG PASS** | Per-condition mean tokens — GPT/Gemini/GLM: variant_A 45/42/50, variant_B 37/35/45, full_spec **507/145/254**, phase-4 126/67. Gemini consistently 0.5-0.3× the length. |
+
+#### Spec-citation density (per-word grounding rate)
+
+Computed post-script from `per_judgment.jsonl`. This is the metric H1
+*should* have used originally — it normalizes by reasoning length, so it
+isn't dominated by full_spec's much longer rationales.
+
+`spec_density = spec_distinctive_hits / reasoning_token_count` =
+fraction of rationale tokens that are spec-distinctive (= present in this
+statement's spec text but absent from its rubric).
+
+| condition | judge | n | spec_density | rub_density |
+|---|---|---:|---:|---:|
+| variant_A | gpt | 2758 | **0.0746** | 0.1423 |
+| variant_A | gemini | 2748 | **0.1026** | 0.1018 |
+| variant_A | glm | 2756 | **0.1002** | 0.1034 |
+| variant_B | gpt | 2758 | 0.0527 | 0.2036 |
+| variant_B | gemini | 2743 | 0.0551 | 0.1925 |
+| variant_B | glm | 2752 | 0.0484 | 0.2130 |
+| full_spec | gpt | 2756 | 0.0446 | 0.0573 |
+| full_spec | gemini | 2757 | 0.0684 | 0.0718 |
+| full_spec | glm | 2668 | 0.0708 | 0.0656 |
+| rubric+spec | gpt | 2758 | 0.0858 | 0.1434 |
+| rubric+spec | gemini | 2741 | 0.0995 | 0.1251 |
+
+Reading by axis:
+
+- **Variant_A is densest in spec citation per word** (7.5-10.3%). Even with
+  rubric-only (variant_B) judges showing ~5%, variant_A's spec-grounding
+  density is 1.4-1.9× higher. That's the cleanest H1 evidence.
+- **Variant_B is densest in rubric citation per word** (19-21%). Without
+  spec text, judges fill rationales with rubric/anchor language.
+- **Full_spec is least dense in either** (4-7%) — its rationales contain
+  long contextual prose that isn't tightly anchored to the target statement.
+  Useful for *locating* a phrase (long verbatim chunks; see SeqMatcher),
+  not for *measuring* grounding intensity.
+- **Rubric+spec (phase 4)** sits between variant_A and variant_B in density.
+  GPT phase-4 has the highest combined grounding (8.6% spec + 14.3% rubric =
+  23% of words come from one of the two sources).
+
+This density view confirms variant_A as the right per-word controlled
+edit-and-measure surface, and full_spec as the right localizer (longer
+rationales → more chance of explicitly citing the disputed phrase even at
+lower density).
+
+#### Per-statement qualifier hit rates (drilldown)
+
+Restricted to the 16 qualifier-dropped statements. Sorted by `full_spec/gpt`
+hit rate, descending. Numbers are fraction of judgments where the rationale
+contains ANY of the curated qualifier phrases.
+
+| statement_id | va_gpt | va_gem | va_glm | fs_gpt | fs_gem | fs_glm | p4_gpt | p4_gem |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| avoid_abuse | 0.133 | 0.034 | 0.433 | **1.000** | 0.450 | 0.967 | 0.133 | 0.164 |
+| ignore_untrusted_data | 0.067 | 0.017 | 0.117 | 0.783 | 0.183 | 0.783 | 0.550 | 0.200 |
+| refusal_style | 0.000 | 0.000 | 0.017 | 0.633 | 0.717 | 0.765 | 0.433 | 0.417 |
+| avoid_regulated_advice | 0.000 | 0.000 | 0.250 | 0.433 | 0.033 | 0.542 | 0.067 | 0.000 |
+| follow_all_applicable_instructions | 0.017 | 0.000 | 0.085 | 0.433 | 0.150 | 0.321 | 0.000 | 0.000 |
+| highlight_misalignments | 0.250 | 0.000 | 0.250 | 0.383 | 0.350 | 0.448 | 0.017 | 0.017 |
+| protect_privileged_messages | 0.033 | 0.000 | 0.000 | 0.283 | 0.100 | 0.100 | 0.033 | 0.000 |
+| do_not_facilitate_illicit_behavior | 0.000 | 0.000 | 0.200 | 0.217 | 0.217 | 0.417 | 0.017 | 0.000 |
+| letter_and_spirit | 0.033 | 0.017 | 0.100 | 0.217 | 0.050 | 0.322 | 0.050 | 0.067 |
+| assume_objective_pov | 0.000 | 0.000 | 0.117 | 0.200 | 0.033 | 0.255 | 0.017 | 0.000 |
+| be_clear | 0.083 | 0.000 | 0.200 | 0.183 | 0.083 | 0.317 | 0.267 | 0.150 |
+| do_not_lie | 0.017 | 0.000 | 0.051 | 0.183 | 0.117 | 0.228 | 0.017 | 0.017 |
+| avoid_extremist_content | 0.000 | 0.000 | 0.033 | 0.133 | 0.067 | 0.379 | 0.000 | 0.017 |
+| transformation_exception | 0.000 | 0.017 | 0.117 | 0.133 | 0.500 | 0.830 | 0.000 | 0.167 |
+| ask_clarifying_questions | 0.050 | 0.000 | 0.400 | 0.083 | 0.033 | 0.767 | **0.900** | 0.017 |
+| avoid_targeted_political_manipulation | 0.000 | 0.067 | 0.017 | 0.033 | 0.100 | 0.053 | 0.000 | 0.000 |
+
+Notable rows:
+
+- **`avoid_abuse`**: GPT full_spec qualifier hit rate is **100%** (every
+  judgment cites a qualifier). GLM full_spec is 96.7%. This statement is the
+  most qualifier-laden — its spec text repeatedly hedges with "appropriately",
+  "by default", "unless explicitly". With the rubric-only condition, those
+  qualifiers DON'T appear in the rationale (variant_B wasn't included in
+  this table; rates are 0.000 across the board). **`avoid_abuse` is the MVP
+  target for the spec-repair-loop and remains correct after this analysis.**
+
+- **`ask_clarifying_questions`**: phase-4 GPT hit rate **90.0%** is the
+  outlier — much higher than full_spec GPT (8.3%). Likely because the spec
+  statement explicitly contains "trivial questions" / "weigh the costs" /
+  "by default" language that is preserved in the spec text shown to phase-4
+  GPT, but partially absorbed into the rubric so full_spec GPT can pick a
+  different statement entirely. Worth investigating as a potential
+  forensics-condition advantage of phase 4.
+
+- **`avoid_targeted_political_manipulation`**: lowest hit rates everywhere.
+  Its dropped qualifier is probably a less-cited word like "ordinarily"
+  that judges naturally don't reach for. False positive on the qualifier list?
+  Worth re-examining the curated list against this statement.
+
+#### Per-condition grounding profile (BONUS A)
+
+Mean per-judgment counts across all judgments (not just qualifier-dropped):
+
+| condition | judge | spec_dist | rub_dist | 5g_spec | 5g_rub | 5g_other |
+|---|---|---:|---:|---:|---:|---:|
+| variant_A | gpt | 3.54 | 6.28 | 0.74 | 0.42 | 0.02 |
+| variant_A | gemini | 4.43 | 4.05 | 0.74 | 0.26 | 0.02 |
+| variant_A | glm | 5.11 | 4.88 | 1.68 | 0.44 | 0.02 |
+| variant_B | gpt | 1.98 | 7.43 | 0.06 | 0.40 | 0.02 |
+| variant_B | gemini | 1.94 | 6.61 | 0.06 | 0.56 | 0.01 |
+| variant_B | glm | 2.23 | 9.22 | 0.10 | 1.99 | 0.02 |
+| full_spec | gpt | 22.21 | 27.59 | 5.52 | 0.62 | 3.49 |
+| full_spec | gemini | 10.20 | 10.07 | 4.04 | 0.30 | 2.68 |
+| full_spec | glm | 17.53 | 16.24 | 12.93 | 0.70 | 11.63 |
+| rubric+spec | gpt | 11.04 | 17.71 | 11.23 | 7.19 | 0.06 |
+| rubric+spec | gemini | 6.75 | 8.13 | 4.14 | 2.28 | 0.03 |
+
+The `5g_other` column (5-grams matching OTHER statements' spec text) is
+informative: in full_spec, GLM has `5g_other=11.63` ≈ `5g_spec=12.93`, so GLM
+in full-spec mode reasons across MULTIPLE statements per judgment, not just
+the target. GPT has `5g_other=3.49` vs `5g_spec=5.52` — a target/(target+other)
+ratio of 0.61, more focused. Gemini in between (0.60). This explains GLM's
+[highlight_misalignments] catch-all behavior — it's structurally cross-citing
+in the rationale.
+
+#### SequenceMatcher longest contiguous match (BONUS D)
+
+Token-level longest contiguous substring shared between rationale and source.
+Robust to paraphrase (catches verbatim chunks even when surrounding text differs).
+
+| condition | judge | longest_spec_tok | longest_rub_tok | spec_% of reasoning | rub_% |
+|---|---|---:|---:|---:|---:|
+| variant_A | gpt | 3.61 | 3.48 | 8.3% | 8.4% |
+| variant_A | gemini | 3.74 | 3.20 | 9.3% | 8.3% |
+| variant_A | glm | 4.73 | 3.47 | 9.7% | 7.5% |
+| variant_B | gpt | 2.39 | 3.50 | 6.8% | 10.0% |
+| variant_B | glm | 2.54 | 5.18 | 6.1% | 12.2% |
+| full_spec | gpt | 7.81 | 4.08 | 1.6% | 0.9% |
+| full_spec | glm | **13.30** | 4.04 | 5.7% | 1.7% |
+| rubric+spec | gpt | **12.94** | 9.74 | 10.3% | 7.8% |
+| rubric+spec | gemini | 7.04 | 5.51 | 10.6% | 8.4% |
+
+**Phase-4 GPT and full-spec GLM paste long verbatim spec chunks** (~13 tokens
+each = roughly a full clause). This is direct verbatim grounding. Variant_A
+shorter chunks (~4 tokens) but those chunks are 9-10% of reasoning length —
+also tightly grounded, just less to copy.
+
+#### Quote-fidelity (BONUS D2)
+
+Per provided spec_quote / rubric_quote, max contiguous token-match pct vs source:
+
+| condition | judge | spec_q max % | rub_q max % |
+|---|---|---:|---:|
+| variant_A | gpt | 99.99% | – |
+| variant_A | gemini | 99.69% | – |
+| variant_A | glm | 99.53% | – |
+| variant_B | gpt | – | 99.81% |
+| variant_B | glm | – | 99.69% |
+| rubric+spec | gpt | **100.00%** | **100.00%** |
+| rubric+spec | gemini | 99.72% | 99.70% |
+
+When judges produce a quote field, **the quote is essentially always a
+verbatim match in the source.** The verbatim-quote instruction works.
+
+#### What the empirical results change about the recommendation
+
+The four-condition recommendation I made on the previous turn was based on
+qualitative summaries from sub-agents. The script tests it. Updates:
+
+1. **Variant_A is denser in spec citation per word** (H1 density variant
+   passes), so it remains the best controlled-edit-and-measure surface.
+   But the absolute spec-distinctive count is much lower than full_spec —
+   so for *locating* an ambiguous phrase, full_spec rationales are richer.
+
+2. **Full_spec has the strongest qualifier-citation signal** (33-47% hit rate
+   on dropped-qualifier statements). For surfacing *which* spec phrase is
+   being read divergently, full_spec is the best diagnostic.
+
+3. **Phase-4 GPT pastes long verbatim spec chunks** (~13 tokens contiguous,
+   10% of rationale). When phase-4 GLM lands, it likely will too. This makes
+   phase-4 a *forensic* condition — you can read what specific clause the
+   judge keyed on.
+
+4. **The qualifier-drop bug is class-level (35% of spec).** This is a
+   compiler-level fix, not a per-statement repair. Worth surfacing to the
+   spec-repair-loop as a global pre-pass before per-statement repair starts.
+
+5. **GPT tension flag is not very informative** — GPT defers to rubric
+   regardless. The flag is *metadata that tracks GPT's awareness*, but
+   GPT's grounding behavior doesn't shift. Update spec_repair_loop.md to
+   stop weighting tension-flag rate as a primary signal.
+
+6. **Updated repair loop**: locate via full_spec rationales (read the actual
+   text the judges pasted), measure via variant_A re-runs (clean A/B), use
+   phase-4 spec_quotes / rubric_quotes as forensics for what each judge keyed
+   on. Drop H3-style tension-flag weighting.
+
+#### Final synthesis (2026-05-06): refined recommendation after careful metric reading
+
+After Ahmed pushed: *"What's the takeaway here? Synthesize across these
+concrete recall metrics being very careful as to what each one actually says
+and what the sub-agents said when they saw the data. Which way of using LM
+as a judge seems the best for allowing the compiler to make pointed edits?
+Is it still the one where we just give each LM judge the full text of the
+spec?"*
+
+Re-reading every metric carefully against the sub-agent qualitative reads
+shifted the answer. The previous bullet 6 above ("locate via full_spec")
+**is superseded by this section.**
+
+##### What each metric actually says (and does NOT say)
+
+| metric | what it measures | what it does NOT measure |
+|---|---|---|
+| `spec_density` (hits/reasoning_tokens) | per-word rate of using spec-distinctive vocab | whether the cited word is the *contested* one |
+| `5g_in_spec` | absolute count of verbatim 5-grams from spec | density (length-confounded) |
+| `longest_spec_match_tokens` | the single longest verbatim chunk | whether multiple chunks were cited |
+| `qualifier_hit_rate` | did rationale contain a hedge phrase | which statement the hedge belongs to (full_spec only) |
+| `spec_quote_max_match_pct` | are claimed quotes real | whether quotes were of the contested phrase |
+| `5g_other_specs` | citation drift to OTHER statements (full_spec only) | n/a |
+
+Density and qualifier-hit answer different questions. Don't conflate them.
+
+##### Cross-reference: script numbers ↔ sub-agent qualitative reads
+
+| condition | script says | sub-agent read says |
+|---|---|---|
+| variant_A | densest spec-grounding per word; short rationales (~45 tok); small ~4-tok chunks | each judge has a "secret reading" prior (GPT authority-strict, Gemini creative-exception, GLM meta-framing); disagreement is principled per-phrase |
+| variant_B | rubric-only judges have ~0% qualifier hits; ~5% spec-density (English noise floor); 100% rubric-quote fidelity | judges fully accept rubric framing; lose the spec ambiguity entirely |
+| full_spec | highest qualifier-hit rate (20-47%); cross-statement contamination (GLM 5g_other ≈ 5g_target); long rationales (145-507 tok); long ~13-tok chunks | rationales structured "Relevant parts: 1. <stmt>: ..."; judges *discover* applicable statements; GLM cites multiple statements per judgment |
+| rubric+spec (phase 4) | structured spec_quotes + rubric_quotes (100% verify); tension flag fires for GPT in 11%, Gemini 0.6%; long ~13-tok verbatim chunks | GPT explicitly narrates conflict & resolution; Gemini implicitly resolves toward spec without flagging; quote fields are parsable verbatim |
+
+##### What a compiler making pointed edits actually needs (3 distinct things)
+
+**(1) LOCATE the contested phrase.**
+Best raw rate: full_spec (33-47% qualifier-hit on dropped-qualifier statements).
+**BUT** full_spec rationales cite multiple statements per judgment, so a
+"by default" hit might belong to a different statement than the target
+(GLM 5g_other ≈ 5g_target = 50/50 split, GPT/Gemini 60/40). Phase-4
+hit rate is lower (8-16%) but unambiguously per-statement.
+
+**(2) EXTRACT structured per-judge citations.**
+Phase 4 is the only condition that gives the compiler:
+- `spec_quotes`: verbatim chunks each judge keyed on, **100% verify rate**
+- `rubric_quotes`: verbatim rubric anchors, **100% verify rate**
+- `rubric_spec_tension`: explicit boolean conflict flag
+- `tension_description`: judge's natural-language resolution narrative
+
+Variant_A only has spec_quotes (no rubric side; structurally cannot have
+rubric quotes since rubric isn't in the prompt). Full_spec has neither —
+just freeform prose that the compiler would have to LM-parse.
+
+**(3) MEASURE convergence after a proposed edit.**
+Variant_A is cleanest because:
+- Only the edited statement is in the prompt — no attention shift to neighbors
+- No rubric in the prompt — the test isolates the spec edit's effect
+- Densest spec-grounding per word (1.4-1.7× variant_A vs full_spec)
+
+Phase 4 confounds spec edit with rubric interaction. Full_spec confounds
+with cross-statement attention drift.
+
+##### So is full_spec still the right answer? — No, refined.
+
+| stage | previous reco (bullet 6 above) | refined reco | why it changed |
+|---|---|---|---|
+| LOCATE / detect | full_spec | **phase 4 primary, full_spec as sensitivity backup** | phase 4's structured `spec_quotes` / `rubric_quotes` fields are 100% verbatim and parsable; full_spec has a higher raw qualifier-hit rate but its prose suffers from cross-statement attention drift |
+| DIAGNOSE | full_spec | **phase 4** | tension flag (GPT 11%) + tension_description give a structured "I noticed conflict" signal that full_spec doesn't produce; phase 4's per-statement scope means the spec_quotes are unambiguously about THIS statement |
+| EDIT (compiler input) | full_spec | **phase 4 spec_quotes + variant_A judges' "secret readings"** | the compiler should see (a) the verbatim phrases each judge keyed on (phase 4) and (b) the principled disagreement direction (sub-agent reads of variant_A: GPT-strict vs Gemini-creative-exception vs GLM-meta-framing) |
+| MEASURE convergence | variant_A | **variant_A** (unchanged) | cleanest A/B |
+| VALIDATE deployment-realism | full_spec | **full_spec** (unchanged) | final check the edit doesn't break cross-statement behavior |
+
+##### Headline takeaway in one sentence
+
+**Phase 4 is the best compiler-input condition because the script proves its
+`spec_quotes` and `rubric_quotes` fields are 100% verbatim** — the compiler
+reads structured per-judge citations directly, no LM-parsing of freeform
+prose. Full_spec is a *richer* condition for human reading (highest
+qualifier-hit rate, longest verbatim chunks) but a *worse* condition for
+*machine* reading (cross-statement attention drift, no structured quote
+fields).
+
+##### One concrete consequence: the compiler input format becomes deterministic
+
+```
+For statement S, given top-k high-disagreement scenarios from phase 4:
+
+  judges_quotes_S = [
+    {judge: "gpt-5.1",        spec_quote: "...", rubric_quote: "...",
+     tension: true,  tension_desc: "...", score: 1},
+    {judge: "gemini-3-flash", spec_quote: "...", rubric_quote: "...",
+     tension: false, score: 5},
+    {judge: "glm-5.1",        spec_quote: "...", rubric_quote: "...",
+     tension: true, score: 5},
+  ]
+```
+
+The compiler can directly diff judges' `spec_quote` fields:
+- **Same phrase, different scores → spec phrase is ambiguous (edit it)**
+- **Different phrases → judges disagree on what's relevant (also edit, but a different kind — discoverability/scope rather than wording)**
+- **Same phrase, same score → no edit needed**
+
+This kind of structured comparison was *not* possible with full_spec freeform
+rationales. It IS possible with phase 4. That alone makes phase 4 the right
+primary input for the compiler.
+
+##### Caveats being tracked
+
+1. **Phase-4 GLM still pending** (sweep ~62% complete at last check). GPT
+   pastes 13-token verbatim chunks; Gemini 7-token. GLM almost certainly
+   will too based on cross-condition pattern, but unconfirmed until it lands.
+   Re-run the grounding script after GLM completes to refresh tables 4-1.
+
+2. **Phase 4's qualifier-hit rate is lower than full_spec's.** This is real:
+   judges with rubric in context do under-cite the qualifier compared to
+   judges with whole-spec context. So full_spec remains useful as a
+   *sensitivity backup* ("does the qualifier-drop bug exist on this
+   statement?") even after we move primary input to phase 4. Concretely: the
+   compiler should run a precondition check on full_spec qualifier-hit rate
+   for each candidate statement before trusting phase 4 as the primary input.
+
+3. **GPT-tension-flag is metadata, not behavior** (H3 was a weak pass). When
+   the compiler reads `tension=true`, it's noting "GPT was aware of conflict"
+   — not a different grounding pattern. Useful as a signal but not a behavior
+   shift.
+
+4. **Sub-agents emphasized variant_A's per-judge "secret readings"** as the
+   cleanest evidence of principled disagreement. This is qualitative — the
+   script doesn't directly measure it. The compiler should still ingest
+   variant_A rationales as a *secondary* input to understand each judge's
+   reading bias.
+
+##### What this means for `spec_repair_loop.md`
+
+Update §4 (the dispatch table) to make phase 4 the primary judging condition
+for the LOCATE and DIAGNOSE stages, demoting full_spec to sensitivity-backup
+status. Keep variant_A as the convergence-measurement surface and full_spec
+as the final deployment-realism check. Drop the tension-flag weighting from
+the per-pattern dispatch (H3 was weak) but preserve `tension=true` rows as
+*information for the compiler* — they tell the compiler "GPT spotted this
+conflict and resolved it toward X" which is useful but should not be a
+metric the loop optimizes.
+
+#### Reproducibility
+
+Anyone can rerun:
+
+```bash
+.venv/bin/python experiments/posttrain/disagreement_primitive/e8_rationale_grounding.py
+```
+
+Outputs deterministic; bootstrap RNG seeded; qualifier list and n-gram size
+at top of file as constants. The script is pure stdlib (no LM calls).
+
+Outputs:
+- `experiments/posttrain/disagreement_primitive/grounding/per_judgment.jsonl` (61 MB, 30,195 rows)
+- `experiments/posttrain/disagreement_primitive/grounding/summary.csv` (12 rows)
+- `experiments/posttrain/disagreement_primitive/grounding/per_statement.csv` (~500 rows)
+- `experiments/posttrain/disagreement_primitive/grounding/qualifier_drop.csv` (qualifier × condition × judge × scope)
+- `experiments/posttrain/disagreement_primitive/grounding/report.md` (printed hypothesis tests)
+
+## HANDOFF (2026-05-06) — overnight spec-repair plan, ready to execute
+
+### Status at handoff
+
+- **Phase-4 GLM sweep completed** (poller `bqgqtpyzq` returned exit-0 just now). All 12 (condition × judge) judgment files now exist. The grounding script has NOT yet been re-run with the GLM phase-4 data — that's the first thing the next agent should do.
+- Plan is approved by Ahmed; no actual repair work has started yet. Compiler/apply/verify scripts are NOT written.
+- Ahmed's instructions: work non-stop, auto-apply gate, no human review checkpoints, log every round, update this logbook continuously.
+
+### Locked decisions (from Ahmed in this session)
+
+1. **Compiler**: GPT-5.1 only, `reasoning_effort="none"`, JSON-mode.
+2. **Verification judges**: GPT-5.1 + Gemini-3-Flash drive every gate decision. **GLM-5.1 fires in background and folds in post-hoc; never block on GLM.**
+3. **Tier-C statements**: top-2 by phase-4 GPT tension-flag count, picked from `phase4_gpt/judgments.jsonl` after re-running grounding script.
+4. **Versioning**: rolling `experiments/posttrain/specs/openai_model_spec_v{N}.jsonl` per round; phantom-full-spec built per candidate for cross-condition gate (no inter-candidate coupling because var_A/var_B/phase_4 prompts are per-statement).
+5. **Auto-apply gate** (round 1-3 default):
+   - `Δκ_held_out_var_A ≥ +0.15` (50 of 60 scenarios held out from compiler input)
+   - `Δκ_full_spec ≥ -0.05`
+   - `Δκ_phase_4 ≥ -0.05`
+   - per-judge Spearman ρ improves on ≥ 2/3 judges
+   - `|Δκ_held_out − Δκ_compiler_input| ≤ 0.10` (overfitting check)
+6. **Gate sweep**: rounds 4-6 vary one axis at a time —
+   - round 4: var_A threshold → +0.10 (looser); other axes unchanged
+   - round 5: var_A threshold → +0.20 (stricter); other axes unchanged
+   - round 6: cross-cond threshold → -0.10 (looser); other axes unchanged
+7. **No regeneration** of scenarios or responses ever — only judge prompts change as we edit spec/rubric. Same 60 scenarios per statement forever.
+8. **No human review** — gate decisions are purely numeric. Anything ambiguous gets logged as flagged in the report and the loop continues.
+
+### Targets
+
+| tier | sids | track |
+|---|---|---|
+| A | `avoid_abuse`, `assume_objective_pov`, `comply_with_laws`, `refusal_style` | E1 spec edit |
+| B | `formatting` | E1 + E2 |
+| C | top-2 phase-4 GPT tension count (TBD; pull from phase4_gpt/judgments.jsonl) | E1 spec edit |
+| D | 16 sids in `qualifier_drop.csv` | E2 rubric regen |
+
+### Hypothesis-framed experiment tree (full plan, 18 experiments across 8 streams)
+
+The full plan tree is captured in conversation history (see preceding messages); below is the executable summary. Each Ex below is a hypothesis with a falsifiable predicted direction; outcomes branch to follow-up experiments.
+
+**Stream A — Core repair loop (must run)**
+- **E1.** 7 stmts × 8 candidates × 6 rounds spec-edit repair. Hypothesis: ≥ 4/7 statements pass auto-apply gate. Verify via var_A re-judging on existing 60 scenarios (10 compiler-input, 50 held-out).
+- **E1-followup-A.** Per-failure attribution if 1-3/7 pass.
+- **E1-followup-B.** Compiler-failure mode probe if 0/7 pass.
+- **E1-followup-C.** Multi-round compounding on APPLIED statements.
+- **E1-followup-D.** Candidate budget expansion (16-32 candidates) on stuck statements.
+
+**Stream B — Rubric regeneration (parallel to E1)**
+- **E2.** Strict-qualifier-preserve rubric prompt on 16 qualifier-drop sids. Hypothesis: ≥ 12/16 flip `qualifier_in_rubric` to true. Verify via re-judging var_B + phase_4.
+- **E2-followup-A.** Full 46-rubric regen if E2 succeeds.
+- **E2-followup-B.** Per-statement few-shot scaffolding if partial success.
+- **E2-followup-C.** Two-step compile (extract qualifiers first) if total failure.
+
+**Stream C — Compiler input ablation (run during round 1)**
+- **E3.** Rich (phase-4 quotes + var_A rationales + tension flag) vs minimal (statement + κ + scenarios) compiler. Hypothesis: rich beats minimal by ≥ 0.05 mean Δκ.
+- **E3-followup-A.** Input-set bisection if rich ≈ minimal.
+- **E3-followup-B.** Single-signal compiler (phase-4 quotes only) if minimal beats rich.
+
+**Stream D — Gate sensitivity (rounds 4-6)**
+- **E4.** Three single-axis gate variants. Hypothesis: round 4 catches missed wins; round 5 confirms round 1-3 wins are real; round 6 identifies whether cross-cond is binding.
+
+**Stream E — Post-loop validation**
+- **E5.** Build aggregated `openai_model_spec_v1.jsonl` with all applied edits; re-judge full 2,760 scenarios under all 4 conditions; compute Fleiss κ. Hypothesis: v1 > v0 by ≥ +0.05 on var_A.
+- **E5-followup-A.** Win attribution via per-statement paired bootstrap.
+- **E5-followup-B.** Cross-statement interaction probe if v1 < v0.
+
+**Stream F — Cross-statement (if Stream A finishes early)**
+- **E6.** Pairwise tension primitive on 5 known-tense pairs. Hypothesis: pairwise tension rate correlates with phase-4 GPT tension rate.
+- **E6-followup.** Pair repair via precedence rules.
+- **E7.** Ensemble compiler (GPT + Gemini-3-Pro intersection vs union).
+- **E8.** Bootstrap-CI on Δκ to identify gate-noise-floor.
+
+**Stream G — Exploration backlog (if you run out of work)**
+- **E9.** Examples-only edit (modify `metadata.examples`, not statement text).
+- **E10.** Comparative-spec generation (force compiler to propose 2 competing rewrites).
+- **E11.** GLM-5.1 as compiler (background; don't wait).
+- **E12.** Self-spec audit via `5g_in_other_specs` ranking → top 5 activation-confused statements outside Tier A/B/C.
+- **E13.** Disagreement-stratified scenario sampling (3 per disagreement bucket instead of top-10).
+- **E14.** Edited-statement rubric regen (chain E1 outputs into E2-style regeneration).
+- **E15.** Cross-judge confound check (recompute gate excluding GPT judge).
+- **E16.** Single-edit precision-recall curve via gate-threshold sweep.
+
+**Stream H — Continuous logbook + reporting**
+- **E17.** After EACH round, append a section to this logbook with: round-N gate params, candidates per statement, gate verdict per candidate, applied set, Δκ medians.
+- **E18.** Final `reports/spec_repair_v0.md` aggregating E1-E16.
+
+### Stop conditions for autonomous work
+
+- All 6 E1 rounds complete AND E5 done.
+- OR: gate accepts no new edits for 2 consecutive rounds.
+- OR: total LM calls reach 1M (sanity cap).
+- OR: Ahmed manually interrupts.
+
+### Immediate next steps for the receiving agent
+
+In this order:
+
+1. **Re-run grounding script** with full 12-cell coverage (GLM phase-4 just finished):
+   ```bash
+   source .env && .venv/bin/python -u experiments/posttrain/disagreement_primitive/e8_rationale_grounding.py 2>&1 | tee /tmp/grounding_run_v2.log
+   ```
+   Read the new `grounding/summary.csv` and `qualifier_drop.csv`. Confirm phase-4 GLM rows now present.
+
+2. **Pull Tier-C statements**: rank statements by `rubric_spec_tension=true` rate in `phase4_gpt/judgments.jsonl`; pick top-2 not already in Tier A or B.
+
+3. **Spawn GLM phase-4 sub-agent** in background to round out the 9 → 12 qualitative-rationale grid. Don't block on it. (See `claude_subagents/lm_judge_rubric_plus_spec/{gpt,gemini}.md` for the format; need `glm.md`.)
+
+4. **Build the repair compiler** (`experiments/posttrain/disagreement_primitive/e9_compile_edit.py`):
+   - Reads spec, rubrics, phase-4 (all 3 judges), var_A (all 3 judges), per-statement κ profile
+   - Builds the input bundle per statement (top-10 highest-disagreement scenarios = compiler input; 50 held out)
+   - Calls GPT-5.1 with the compiler prompt; gets 4 candidates back as JSON
+   - Writes each candidate to `repair_v0/round_{N}/{sid}/cand_{n}.jsonl` (single-statement spec file)
+   - Compiler prompt template MUST forbid meaning-changing edits and require `predicted_delta_kappa` per candidate
+
+5. **Build the verifier** (`experiments/posttrain/disagreement_primitive/e9_verify_edit.py`):
+   - Takes a candidate spec file + sid + scenarios path
+   - Builds the same var_A judge prompt as `e8_paired_indirection.py` but with edited statement substituted
+   - Runs all 3 judges on the 60 scenarios × 3 generators
+   - Writes `repair_v0/round_{N}/{sid}/cand_{n}/var_A_judgments.jsonl`
+   - For survivors only: builds phantom-full-spec (45 baseline + 1 edited) and runs phase-3 judges; runs phase-4 judges on edited stmt + original rubric
+   - Computes per-condition Fleiss κ (binary, on the 50 held-out scenarios) → emits gate verdict
+   - **GLM is fired in background; gate uses GPT+Gemini for the immediate decision; recompute post-hoc when GLM lands**
+
+6. **Build the apply stage** (`experiments/posttrain/disagreement_primitive/e9_apply_edit.py`):
+   - Reads round-N candidate files + verdicts
+   - Constructs `openai_model_spec_v{N}.jsonl` from baseline + every applied edit
+   - Logs apply decisions to `repair_v0/round_{N}/apply_log.jsonl`
+
+7. **Run round 1.** Spawn E1 + E2 + E3 in parallel. Keep streaming progress to `/tmp/repair_round1.log` so the user can tail it.
+
+8. **After round 1 lands**, append to this logbook (Stream H / E17):
+   - Section heading: `### Round 1 results (2026-05-06)`
+   - Per-statement gate verdicts (table)
+   - Round-1 applied set; Δκ medians; failure-mode breakdown
+   - Decision: continue to round 2 OR diverge to E1-followup-A/B based on outcome
+
+9. **Continue rounds 2-6** per the gate-sweep schedule. Same logbook update after each.
+
+10. **Run E5 final validation** after round 6. Append a final synthesis section.
+
+11. **If everything finishes and Ahmed hasn't interrupted**, drop into Stream G in order (E9 → E10 → E12 → E13 → ...). Each generates its own report appendix.
+
+### Files / paths
+
+- Spec: `experiments/posttrain/specs/openai_model_spec.jsonl` (baseline; never modified)
+- Spec versions: `experiments/posttrain/specs/openai_model_spec_v{N}.jsonl` (rolling, applied edits only)
+- Rubrics baseline: `experiments/posttrain/disagreement_primitive/e8_rubrics.jsonl`
+- Rubrics v1: `experiments/posttrain/disagreement_primitive/e8_rubrics_v1.jsonl` (after E2)
+- Per-round artifacts: `experiments/posttrain/disagreement_primitive/repair_v0/round_{N}/{sid}/cand_{n}/...`
+- Apply log: `experiments/posttrain/disagreement_primitive/repair_v0/round_{N}/apply_log.jsonl`
+- Final report: `reports/spec_repair_v0.md`
+- Existing scenarios + responses: `experiments/posttrain/disagreement_primitive/e8_responses.jsonl` (NEVER regenerate; reuse forever)
+- Existing var_A baseline judgments: `e8_va_judgments.jsonl`, `phase2_gemini/va_judgments.jsonl`, `phase2_glm/va_judgments.jsonl`
+- Existing phase-4 (now complete): `phase4_{gpt,gemini,glm}/judgments.jsonl`
+- Grounding outputs (re-run after T0): `experiments/posttrain/disagreement_primitive/grounding/`
+
+### Project rules to remember
+
+- `reasoning_effort="none"` on every gpt-5.x call (hard rule, see memory)
+- Route every LM call through `RawAPILogger`; never truncate (hard rule, see memory)
+- Spearman not Pearson for paired ordinal correlations (hard rule, see memory)
+- TPU runs are free, OpenAI calls are not — but Ahmed has explicitly said to ignore cost for this overnight run
+- Never read `.env` contents — only `source .env && <command>` in same Bash invocation
+- Use the e8 paired-indirection convention: same scenarios across all conditions; only judge prompt varies
+- Never use `git add -A`; always specific files
+
+---
+
+## 2026-05-06 (post-Codex round) — Per-statement κ-by-condition table; Q1 answered; dual-condition (var_A + phase_4) loop justified
+
+### Motivation
+
+Ahmed pushed back on my earlier 4-condition-per-iteration loop proposal as wasteful and pointed at the obvious simplification: pick **one** canonical condition (phase_4 = single statement + rubric) and run it. I worried in turn that phase_4 alone might mask the spec-text ambiguity that var_A surfaces (the `(low_var_A, low_var_B, high_phase_4)` "rubric force-picks" pattern from §4.0 of `spec_repair_loop.md`) — call it Q1: *"does phase 4 hide ambiguity that var_A would catch?"*
+
+Then Ahmed sharpened the question: *"if disagreement really drops [from var_A to phase_4], that's a sign the language is ambiguous, no? — should we do both?"*
+
+This entry computes the per-statement κ table for all 4 conditions to answer Q1 directly and to test Ahmed's intuition about the var_A → phase_4 delta as the primary diagnostic signal.
+
+### Method
+
+Pure-stdlib script: `experiments/posttrain/disagreement_primitive/e9_kappa_diagnostic.py`. Reads `grounding/per_judgment.jsonl` (the deterministic output of `e8_rationale_grounding.py`, regenerable in 14 s). For each (statement, condition):
+
+- Restrict to (scenario, response) cases with all-3-judge coverage (n typically 46–60 per cell).
+- Collapse scores to binary problematic: score ∈ {1,2} → 1, score ∈ {3,4,5} → 0; for full_spec, decision ∈ {non-compliant, ambiguous} → 1.
+- Compute Fleiss' κ across the 3 judges on the 2-category collapse.
+
+Outputs:
+- `experiments/posttrain/disagreement_primitive/per_statement_kappa_by_condition.jsonl` — one record per statement with all 4 κ values, the case counts, and `delta_var_A_to_phase_4`.
+- Stdout: human-readable table sorted by var_A κ ascending, plus population summary and top-5 in each Δ direction.
+
+Total: 32,638 judgments processed, 0 skipped, 46/46 statements with var_A and phase_4 coverage.
+
+### Population summary across 46 statements
+
+| condition | n | median | p25 | p75 | κ<0 | κ<0.4 |
+|---|--:|--:|--:|--:|--:|--:|
+| **var_A** (single-stmt + examples) | 46 | +0.516 | +0.241 | +0.699 | 5/46 | 17/46 |
+| **var_B** (rubric only) | 45 | +0.566 | +0.270 | +0.692 | 5/45 | 15/45 |
+| **phase_4** (rubric + spec) | 46 | +0.480 | +0.312 | **+0.760** | **3/46** | 17/46 |
+| **full_spec** (whole spec) | 46 | +0.412 | +0.273 | +0.605 | 0/46 | **23/46** |
+
+**Reading**:
+- Phase_4 has the cleanest upper tail (p75 = +0.760) and the fewest κ<0 statements (3/46) — judges agree most strongly on the easy cases when given both spec and rubric.
+- Full_spec is the worst condition for per-statement diagnosis (23/46 with κ < 0.4 — half the spec). Activation cost is real and large.
+- Var_A and var_B are populationally similar (medians ~+0.52 and ~+0.57). Var_B's edge in median is the rubric-force-picking on a handful of statements.
+
+**Note on data freshness vs prior logbook claims**: an earlier entry (2026-05-04 κ-by-condition section) cited *"4 statements with κ_var_A<0: avoid_abuse, assume_objective_pov, comply_with_laws, refusal_style"*. The current 3-judge data does not support that — those 4 statements have κ_var_A of +0.038, +0.199, +0.245, +0.744 respectively. Either the earlier numbers were computed before GLM phase-2 retries landed (the retry bumped GLM judge max_tokens 1500 → 4000) or used a different aggregation. **The fresh table here is ground truth going forward.**
+
+### Q1 diagnostic — does phase_4 hide spec-text ambiguity that var_A surfaces?
+
+The 5 statements where κ_var_A < 0 (judges actively anti-agree on the bare spec text):
+
+| statement | κ_var_A | κ_var_B | κ_phase_4 | κ_full_spec | Δ(A→P4) | reading |
+|---|--:|--:|--:|--:|--:|---|
+| `be_empathetic` | −0.044 | +0.270 | +0.043 | +0.223 | +0.088 | phase_4 surfaces ambiguity |
+| `protect_privileged_messages` | −0.026 | +0.244 | +0.080 | +0.198 | +0.107 | phase_4 surfaces ambiguity |
+| `sexual_content_involving_minors` | −0.020 | −0.027 | −0.033 | +0.137 | −0.013 | every condition agrees: broken |
+| `do_not_make_unprompted_personal_comments` | **−0.011** | +0.322 | **+0.794** | +0.383 | **+0.805** | **🚨 RUBRIC FORCE-PICKS — phase_4 hides ambiguity** |
+| `no_erotica_or_gore` | −0.011 | +0.230 | +0.347 | +0.254 | +0.358 | partial rubric recovery |
+
+**Q1 verdict**: phase_4 mostly does NOT hide var_A ambiguity. 3 of 5 κ_var_A<0 statements have κ_phase_4 also low (≤ +0.10); judges still disagree under the rubric+spec condition. Only **1 statement** (`do_not_make_unprompted_personal_comments`) shows the strict force-pick pattern (Δ = +0.81). One more (`no_erotica_or_gore`) is borderline (Δ = +0.36).
+
+### Ahmed's δ-as-diagnostic intuition: validated
+
+The Δ(var_A → phase_4) is the right primary signal. It carries operator-attribution information that neither κ alone provides:
+
+- **Δ much positive (rubric raises κ)**: rubric force-picks an interpretation; bare spec text is ambiguous. **Fix the spec to say what the rubric implies, or surface the alternative readings** so the spec author can choose.
+- **Δ ≈ 0**: spec text and rubric give judges the same disambiguation. If both κ are low, edit either; if both high, no action.
+- **Δ much negative (rubric lowers κ)**: rubric introduces conflict the spec text doesn't carry. **Fix the rubric, not the spec.**
+
+#### Top 5 rubric-force-pick (Δ ≥ +0.20, "the rubric is doing the work the spec doesn't")
+
+| statement | κ_var_A | κ_phase_4 | Δ | implication |
+|---|--:|--:|--:|---|
+| `do_not_make_unprompted_personal_comments` | −0.011 | +0.794 | **+0.805** | spec is genuinely ambiguous; rubric crisped a reading |
+| `be_professional` | +0.259 | +0.736 | +0.477 | rubric anchors what "professional" means more crisply than spec |
+| `no_erotica_or_gore` | −0.011 | +0.347 | +0.358 | rubric helps but doesn't fully resolve |
+| `be_thorough_but_efficient` | +0.339 | +0.646 | +0.307 | rubric pins the thoroughness-vs-efficiency trade-off |
+| `present_perspectives` | +0.657 | +0.916 | +0.259 | rubric crisps "balance" |
+
+**These need spec-author triage**: read the rubric's force-picked reading, decide if it's correct, edit the spec text to make it explicit (or widen the spec to surface alternatives if the force-pick is wrong).
+
+#### Top 5 rubric-introduces-conflict (Δ ≤ −0.20, "rubric distorts what the spec says cleanly")
+
+| statement | κ_var_A | κ_phase_4 | Δ | implication |
+|---|--:|--:|--:|---|
+| `be_rationally_optimistic` | +0.691 | +0.135 | **−0.556** | spec is fine alone; rubric is genuinely bad |
+| `avoid_being_condescending` | +0.663 | +0.312 | −0.350 | rubric pulls judges into conflict |
+| `refusal_style` | +0.744 | +0.494 | −0.250 | rubric drops "unless otherwise specified" qualifier |
+| `no_agenda` | +0.884 | +0.654 | −0.230 | rubric over-specifies |
+| `transformation_exception` | +1.000 | +0.781 | −0.219 | rubric narrows perfectly-clear spec |
+
+**These need rubric regen, not spec edits.** The qualifier-drop class-level bug (35% of spec) is implicated in several of these (`refusal_style`, `transformation_exception`). Codex's E2 already produced a qualifier-preserving rubric set (`e8_rubrics_v1.jsonl`, 13/16 passed local check) — re-judging under phase_4 with v1 rubrics should collapse most of these negative deltas.
+
+#### Wild swings worth flagging
+
+- `prevent_imminent_harm`: var_A +0.103, var_B **+0.816**, phase_4 −0.068, full_spec +0.688. The rubric *alone* gives near-perfect agreement, but adding the spec text back drops to anti-agreement. The spec text introduces conflict that the rubric had successfully eliminated. Hard to characterize cleanly under the §4.0 dispatch table — fits closest to "rubric distorts but in a different direction." Worth a manual read.
+- `assume_objective_pov`: var_A +0.199, var_B +0.570, phase_4 +0.211, full_spec +0.014. Rubric alone resolves it; phase_4 reverts to var_A's level; full_spec collapses entirely. Activation cost on this one is severe.
+- `be_rationally_optimistic`: var_A +0.691, var_B **−0.023**, phase_4 +0.135, full_spec +0.359. Spec text alone gives moderate agreement; the rubric drops κ to anti-agreement; phase_4 partially recovers. Δ_var_A→var_B = **−0.71** — the rubric is the worst version of this concept across all conditions. Earlier the Method-C / SPEC AMBIGUITY EPIC iteration tagged this as "language_ambiguous"; the κ-by-condition data instead points to a genuinely bad rubric. Reframe and re-tag.
+- `ignore_untrusted_data` and `transformation_exception`: var_A and var_B both at +1.000 (perfectly agreeing under both single-stmt and rubric-only), but phase_4 drops to +0.79 / +0.78 and full_spec drops further. Combining the spec and rubric introduces small-but-real noise on otherwise-bright-line statements. Likely a soft signal that the rubric subtly narrows the cleanly-stated rule.
+
+#### Full per-statement table (all 46 statements, sorted by κ_var_A ascending)
+
+Bolded rows have |Δ(A→P4)| ≥ 0.20 — these are the actionable cases for the dispatcher.
+
+| statement | κ_var_A | κ_var_B | κ_phase_4 | κ_full_spec | Δ(A→P4) | n_A | n_B | n_P4 | n_F |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| be_empathetic | −0.044 | +0.270 | +0.043 | +0.223 | +0.088 | 60 | 60 | 53 | 55 |
+| protect_privileged_messages | −0.026 | +0.244 | +0.080 | +0.198 | +0.107 | 60 | 60 | 53 | 60 |
+| sexual_content_involving_minors | −0.020 | −0.027 | −0.033 | +0.137 | −0.013 | 50 | 51 | 52 | 58 |
+| **do_not_make_unprompted_personal_comments** | **−0.011** | +0.322 | **+0.794** | +0.383 | **+0.805** | 60 | 60 | 56 | 60 |
+| **no_erotica_or_gore** | −0.011 | +0.230 | +0.347 | +0.254 | **+0.358** | 60 | 57 | 41 | 60 |
+| avoid_abuse | +0.038 | +0.094 | −0.133 | +0.077 | −0.171 | 58 | 54 | 49 | 60 |
+| prevent_imminent_harm | +0.103 | +0.816 | −0.068 | +0.688 | −0.171 | 60 | 60 | 52 | 55 |
+| be_clear | +0.193 | +0.443 | +0.367 | +0.489 | +0.174 | 60 | 60 | 49 | 60 |
+| assume_objective_pov | +0.199 | +0.570 | +0.211 | +0.014 | +0.012 | 60 | 59 | 56 | 55 |
+| do_not_lie | +0.227 | +0.552 | +0.326 | +0.289 | +0.099 | 59 | 60 | 57 | 57 |
+| no_topic_off_limits | +0.233 | −0.023 | +0.173 | +0.345 | −0.060 | 60 | 60 | 51 | 60 |
+| letter_and_spirit | +0.241 | +0.374 | +0.141 | +0.390 | −0.100 | 60 | 60 | 46 | 59 |
+| comply_with_laws | +0.245 | +0.258 | +0.220 | +0.062 | −0.026 | 60 | 60 | 53 | 57 |
+| **be_professional** | +0.259 | +0.554 | **+0.736** | +0.554 | **+0.477** | 60 | 60 | 51 | 60 |
+| highlight_misalignments | +0.311 | +0.617 | +0.438 | +0.223 | +0.127 | 60 | 60 | 50 | 58 |
+| formatting | +0.326 | +0.532 | +0.310 | +0.605 | −0.016 | 60 | 59 | 56 | 59 |
+| **be_thorough_but_efficient** | +0.339 | +0.749 | +0.646 | +0.429 | **+0.307** | 60 | 60 | 51 | 59 |
+| ask_clarifying_questions | +0.415 | −0.034 | +0.407 | +0.430 | −0.008 | 60 | 60 | 48 | 60 |
+| avoid_hateful_content | +0.415 | +0.625 | +0.466 | +0.126 | +0.051 | 60 | 59 | 53 | 55 |
+| assume_best_intentions | +0.451 | +0.233 | +0.336 | +0.691 | −0.115 | 60 | 60 | 59 | 60 |
+| avoid_overstepping | +0.466 | +0.535 | +0.518 | +0.389 | +0.052 | 60 | 60 | 59 | 60 |
+| support_mental_health | +0.486 | +0.681 | +0.451 | +0.476 | −0.035 | 60 | 60 | 56 | 55 |
+| be_kind | +0.491 | −0.006 | +0.378 | +0.430 | −0.112 | 60 | 60 | 48 | 59 |
+| be_creative | +0.542 | +0.539 | +0.447 | +0.626 | −0.094 | 60 | 60 | 46 | 60 |
+| follow_all_applicable_instructions | +0.555 | +0.575 | +0.582 | +0.617 | +0.027 | 59 | 60 | 54 | 56 |
+| do_not_facilitate_illicit_behavior | +0.594 | +0.628 | +0.714 | +0.395 | +0.120 | 60 | 60 | 56 | 60 |
+| be_engaging | +0.608 | +0.285 | +0.417 | +0.788 | −0.190 | 60 | 60 | 47 | 59 |
+| avoid_sycophancy | +0.620 | +0.800 | +0.574 | +0.432 | −0.045 | 60 | 60 | 47 | 54 |
+| **present_perspectives** | +0.657 | +0.690 | **+0.916** | +0.327 | **+0.259** | 60 | 60 | 53 | 60 |
+| do_not_encourage_self_harm | +0.660 | +0.692 | +0.692 | +0.615 | +0.032 | 60 | 60 | 57 | 57 |
+| **avoid_being_condescending** | +0.663 | +0.257 | +0.312 | +0.381 | **−0.350** | 60 | 60 | 54 | 60 |
+| uphold_fairness | +0.684 | +0.819 | +0.767 | +0.551 | +0.083 | 60 | 60 | 49 | 57 |
+| **be_rationally_optimistic** | +0.691 | −0.023 | +0.135 | +0.359 | **−0.556** | 60 | 60 | 55 | 59 |
+| protect_privacy | +0.691 | +0.845 | +0.802 | +0.158 | +0.111 | 60 | 60 | 53 | 60 |
+| express_uncertainty | +0.699 | +0.729 | +0.792 | +0.461 | +0.093 | 60 | 60 | 56 | 57 |
+| avoid_errors | +0.709 | +0.687 | +0.760 | +0.614 | +0.051 | 60 | 60 | 50 | 56 |
+| avoid_info_hazards | +0.711 | +0.800 | +0.802 | +0.643 | +0.091 | 60 | 60 | 54 | 60 |
+| **refusal_style** | +0.744 | n/a | +0.494 | +0.006 | **−0.250** | 60 | 60 | 58 | 51 |
+| avoid_regulated_advice | +0.764 | +0.654 | +0.631 | +0.713 | −0.134 | 60 | 60 | 54 | 59 |
+| respect_creators | +0.770 | +0.792 | +0.789 | +0.297 | +0.019 | 60 | 60 | 52 | 56 |
+| avoid_extremist_content | +0.809 | +0.833 | +0.809 | +0.285 | +0.001 | 60 | 60 | 51 | 58 |
+| **no_agenda** | +0.884 | +0.566 | +0.654 | +0.486 | **−0.230** | 60 | 59 | 54 | 57 |
+| **support_programmatic_use** | +0.894 | +0.532 | +0.682 | +0.753 | **−0.212** | 60 | 59 | 60 | 59 |
+| avoid_targeted_political_manipulation | +0.943 | +0.921 | +1.000 | +0.507 | +0.057 | 60 | 60 | 56 | 57 |
+| ignore_untrusted_data | +1.000 | +1.000 | +0.794 | +0.869 | −0.206 | 60 | 60 | 55 | 60 |
+| **transformation_exception** | +1.000 | +0.675 | +0.781 | +0.273 | **−0.219** | 60 | 60 | 58 | 53 |
+
+#### Loop-entry triage from the table
+
+**Trigger rule**: a statement enters the iterative loop when `min(κ_var_A, κ_phase_4) < 0.5`. Verified that every statement with |Δ| ≥ 0.30 already satisfies this, so the |Δ| clause is redundant under this threshold.
+
+**The 28 statements that enter the loop**, grouped by Δ-attribution:
+
+*Genuine spec-text ambiguity (both κ low, Δ small or negative — operator: spec text edit / example add)*:
+- `be_empathetic`, `protect_privileged_messages`, `sexual_content_involving_minors`, `avoid_abuse`, `prevent_imminent_harm`, `be_clear`, `assume_objective_pov`, `do_not_lie`, `no_topic_off_limits`, `letter_and_spirit`, `comply_with_laws`, `highlight_misalignments`, `formatting`, `ask_clarifying_questions`, `avoid_hateful_content`, `assume_best_intentions`, `avoid_overstepping`, `support_mental_health`, `be_kind`, `be_creative`, `be_engaging`
+
+*Rubric force-pick (Δ much positive — rubric resolves what spec leaves ambiguous; operator: spec rewrite to match rubric reading, or widen spec to surface alternatives)*:
+- `do_not_make_unprompted_personal_comments` (Δ=+0.81), `no_erotica_or_gore` (Δ=+0.36), `be_professional` (Δ=+0.48), `be_thorough_but_efficient` (Δ=+0.31)
+
+*Rubric distortion (Δ much negative AND phase_4 < 0.5 — rubric introduces conflict; operator: rubric anchor edit / qualifier-preserve regen)*:
+- `avoid_being_condescending` (Δ=−0.35, phase_4=+0.31), `be_rationally_optimistic` (Δ=−0.56, phase_4=+0.14), `refusal_style` (Δ=−0.25, phase_4=+0.49)
+
+**The 18 statements that do NOT enter the loop**: `follow_all_applicable_instructions`, `do_not_facilitate_illicit_behavior`, `avoid_sycophancy`, `present_perspectives`, `do_not_encourage_self_harm`, `uphold_fairness`, `protect_privacy`, `express_uncertainty`, `avoid_errors`, `avoid_info_hazards`, `avoid_regulated_advice`, `respect_creators`, `avoid_extremist_content`, `no_agenda`, `support_programmatic_use`, `avoid_targeted_political_manipulation`, `ignore_untrusted_data`, `transformation_exception`.
+
+#### Parallel one-shot worklist: high-κ rubric distortion (NOT loop, but worth fixing)
+
+5 statements have both κ ≥ 0.5 but show |Δ| ≥ 0.20 with negative direction — the rubric subtly distorts an otherwise-clean statement. These **don't need iteration**; they need a single rubric regeneration pass with the qualifier-preserving prompt (Codex's E2 worklist already covers most of them):
+
+| statement | κ_var_A | κ_phase_4 | Δ | Codex E2 included? |
+|---|--:|--:|--:|---|
+| `no_agenda` | +0.884 | +0.654 | −0.23 | no |
+| `support_programmatic_use` | +0.894 | +0.682 | −0.21 | no |
+| `transformation_exception` | +1.000 | +0.781 | −0.22 | yes (passed local check) |
+| `ignore_untrusted_data` | +1.000 | +0.794 | −0.21 | yes (passed local check) |
+| `avoid_regulated_advice` | +0.764 | +0.631 | −0.13 | yes (failed local check) |
+
+Action: extend E2's qualifier-preservation regen to cover `no_agenda` and `support_programmatic_use`; re-judge all under phase_4 to confirm Δ shrinks toward 0.
+
+### Recommendation: dual-condition loop with delta as primary signal
+
+**The loop runs both var_A and phase_4 each iteration.** ~$60–80/iter combined, still 4–5× cheaper than the original 4-condition design. The delta is the diagnostic; the operator menu is dispatched off it; the gate validates the operator-appropriate condition.
+
+**Operator-conditioned gate**:
+
+| operator | required Δκ | other constraint |
+|---|---|---|
+| `spec_text_edit` (rewrite a phrase) | Δκ_var_A ≥ +0.10 | no κ_phase_4 regression worse than −0.05 |
+| `spec_example_add` | Δκ_var_A ≥ +0.05 | no κ_phase_4 regression worse than −0.05 |
+| `rubric_anchor_edit` | Δκ_phase_4 ≥ +0.10 | κ_var_A unchanged (spec text isn't the operand) |
+| `rubric_qualifier_preserve_regen` | Δκ_phase_4 ≥ +0.05 | no κ_var_A regression |
+| `add_precedence_rule` (cross-stmt; out of scope) | (separate subsystem) | — |
+
+**Rationale**: spec edits should improve the condition where the spec text is in the prompt (var_A). Rubric edits should improve the condition where the rubric is in the prompt (phase_4 or var_B). The cross-condition non-regression check prevents an edit from breaking the other axis.
+
+**Triggering criterion**: a statement enters the loop when `min(κ_var_A, κ_phase_4) < 0.5`. This produces 28 of 46 statements (see "Loop-entry triage from the table" above for the full listing and Δ-based attribution). Statements with both κ ≥ 0.5 but |Δ| ≥ 0.20 are routed to a parallel one-shot rubric-regen worklist (E2-style), not the iterative loop.
+
+**Cost per iteration** (revised after the per-statement table):
+- Per-statement marginal: var_A (~$0.30) + phase_4 (~$0.50) + compiler (~$0.10) = **~$1/statement/iter** with prompt caching.
+- Round 1 (all 28 entering statements): ~$30
+- Subsequent rounds shrink as statements converge and exit the loop: typical ~$15–25
+- 5–10 iterations to convergence: **~$150–300 total**, vs $3,300 in the rejected 4-condition × 10-iter design (~13× cheaper).
+- Parallel one-shot rubric-regen worklist (5 statements, no iteration): ~$10.
+
+### Reproducibility
+
+```bash
+.venv/bin/python experiments/posttrain/disagreement_primitive/e9_kappa_diagnostic.py
+```
+
+Outputs:
+- `experiments/posttrain/disagreement_primitive/per_statement_kappa_by_condition.jsonl`
+- Stdout: full table + population summary + top-5 each Δ direction
+
+Pure stdlib, deterministic, ~1 s wall.
+
+### Next steps locked by this analysis
+
+1. **Validate `e8_rubrics_v1.jsonl`** (Codex's E2 output) by re-judging the 16 qualifier-drop statements under both var_A *and* phase_4 with v1 rubrics, then computing the new κ-by-condition table. Compare to baseline. Hypothesis: median Δκ_phase_4 ≥ +0.05 on the qualifier-drop subset, and the negative-Δ rubric-distortion statements (`refusal_style` Δ=−0.25, `transformation_exception` Δ=−0.22, `ignore_untrusted_data` Δ=−0.21) collapse their negative deltas. Cost ~$25, ~30 min wall. **Cheapest path to a real spec_v1 win** — and re-running `e9_kappa_diagnostic.py` will quantify the gain immediately.
+
+2. **Extend E2's qualifier-preserving regen** to cover `no_agenda` and `support_programmatic_use` (Δ=−0.23 and −0.21, both NOT in Codex's original E2 worklist of 16 because their qualifier_drop status was edge-case). After E2 v2 lands, re-judge per #1.
+
+3. **Build the dual-condition compiler** (`e9_compile_edit_v2.py`) that emits operators dispatched by the Δ pattern read off the per-judge structured outputs from phase_4 (`spec_quote`, `rubric_quote`, `rubric_spec_tension`):
+   - same `spec_quote` across judges + score divergence → spec text edit
+   - different `spec_quote` across judges → spec scope/clarity edit
+   - same `rubric_quote` + score divergence → rubric anchor edit
+   - different `rubric_quote` across judges → rubric structure edit
+   - `rubric_spec_tension=true` flips → reconcile (read tension_description)
+
+   Replaces `e9_compile_edit.py`'s spec-only operator menu.
+
+4. **MVP on `do_not_make_unprompted_personal_comments`** (the strongest +Δ case, Δ=+0.81): inspect the rubric's force-picked reading; either edit the spec to match, or widen the spec to surface alternatives. ~$50 end-to-end. This is the cleanest test of "rubric force-pick → spec edit" operator.
+
+5. **Cross-statement tension primitive** as a sibling subsystem — unchanged, still ~$70 to build out, separate operators (precedence rule, scope split, resolution clause).
+
+6. **Phase 4 loop convergence target**: every entering statement reaches `min(κ_var_A, κ_phase_4) ≥ 0.5` AND `|Δ| < 0.20`. Hard cap at 10 iterations; auto-revert at the gate; bookkeeping per `spec_repair_loop.md`.
+
+---
+
+## 2026-05-06 (later) — GLM-5.1 phase_4 JSON-repair pass: designed, tested, awaiting raw dumps
+
+### Why
+
+Per the κ-by-condition coverage audit above, GLM phase_4 has 88.6% coverage (315/2758 rows missing from `grounding/per_judgment.jsonl`). Per-statement n_phase_4 falls as low as 41 (`no_erotica_or_gore`), with 10 statements below n=50. This weakens borderline Δ-attribution conclusions even though the high-|Δ| extremes are robust. Failure mode is mostly malformed JSON (mid-string delimiter breaks at columns up to 2,310 chars in), NOT max_tokens — so bumping the budget further won't help.
+
+### What landed (sub-agent run, ~10 min wall, 18/18 tests pass)
+
+Spawned a background sub-agent with the full failure-pattern context from `claude_subagents/lm_judge_rubric_plus_spec/glm.md` and instructions to design a conservative parser-repair pass that does NOT alter behavior on valid JSON from any other judge or condition. Constraints: no API calls, no commits, opt-in only.
+
+Sub-agent produced:
+- `experiments/posttrain/disagreement_primitive/e9_glm_json_repair.py` — `repair_glm_json(raw_text) -> RepairResult`. Five strategies, first-hit wins:
+  1. `valid` — `json.loads` direct, requires dict result. The load-bearing no-op for any other (judge, condition) cell.
+  2. `smart_quote_keys` — normalizes curly double-quotes adjacent to JSON structural punctuation. Targets ~3 of 79 documented "Expecting property name" failures.
+  3. `escape_unescaped_quote_at_error` — walks back from `JSONDecodeError.pos`, escapes one quote at a time, retries; up to 8 passes × 5 candidates per pass. Refuses to fire on non-delimiter error messages so unrelated failures aren't mis-repaired. Targets the 49 delimiter cases (62%).
+  4. `truncated_close` — closes any open string/array/object, sets `partial=True`. Targets the 12 unterminated-string cases plus ~5 long-column delimiter tail (≈22%).
+  5. `empty_body` — returns None cleanly for blank bodies. Cannot repair (these are GLM-finished-on-reasoning empty content), but returns gracefully. ~19% irreducible.
+- `experiments/posttrain/disagreement_primitive/test_glm_json_repair.py` — 18 tests:
+  - 3 regression tests (real valid `phase_4` records from `grounding/per_judgment.jsonl` parse unchanged; 60-row sample + 200-row spot check, no false positives)
+  - 4 repair tests (one per failure pattern from the sub-agent report)
+  - 4 negative tests (empty / garbled / wrong-shape return None)
+  - 3 ambiguity / non-delimiter rejection tests
+  - 3 wrapper enable / disable / partial-marker tests
+  - 1 coverage meta-check
+- `experiments/posttrain/disagreement_primitive/e9_repair_glm_phase4.py` — forward-looking CLI. Accepts `--raw-dir` (RawAPILogger `judge_*` directory layout) or `--raw-jsonl` (flat). Writes `repaired_judgments.jsonl` plus a `repair_summary.json` with per-strategy hit counts.
+- `experiments/posttrain/disagreement_primitive/glm_json_repair_report.md` — full design report with strategy explanations, before/after examples, test results, limitations, and execution checklist.
+
+**Production scripts unchanged**: `e8_paired_indirection.py:parse_json` and `e8_phase2_cross_model.py:call_glm_json` are not modified. The repair is opt-in only via direct import or `parse_json_with_glm_repair(raw_text, enabled=True)`. Existing behavior preserved.
+
+### Estimated recovery
+
+| strategy | targets | estimated success | recovered |
+|---|--:|--:|--:|
+| `escape_unescaped_quote_at_error` | 49 | 90% | 44 |
+| `truncated_close` | 17 | 95% | 16 |
+| `smart_quote_keys` | 3 | 100% | 3 |
+| `empty_body` (no recovery) | 15 | 0% | 0 |
+| **Total recovered** | 84 | | **63 / 79** (~80%) |
+
+Extrapolated to the full corpus: ≈ 250 of 315 missing rows recovered (≈ 9% κ-coverage gain). The 15 empty-body cases are the irreducible floor — those need a GLM re-run with `max_tokens=8000` to recover, parser repair can't help.
+
+### What's blocked
+
+The retry CLI needs the raw GLM phase_4 SDK dumps (the per-call `.json` files written by `RawAPILogger`). The bundle restore included `grounding/per_judgment.jsonl` (processed) but not the raw `phase4_glm/judgments.jsonl` or the `results/raw/e8_phase4_glm/<ts>/judge_phase4_glm/` directory. They likely live on the original run host or in cold storage on whichever machine ran phase 4. Once located:
+
+```bash
+.venv/bin/python experiments/posttrain/disagreement_primitive/e9_repair_glm_phase4.py \
+    --raw-dir <path-to-raw-dir> \
+    --out-dir experiments/posttrain/disagreement_primitive/phase4_glm_repaired/
+# inspect repair_summary.json
+# drop repaired_judgments.jsonl alongside the existing phase4_glm/judgments.jsonl
+.venv/bin/python experiments/posttrain/disagreement_primitive/e9_rationale_grounding.py  # regenerate per_judgment.jsonl
+.venv/bin/python experiments/posttrain/disagreement_primitive/e9_kappa_diagnostic.py     # refresh per-statement κ table
+```
+
+Expected effect on the κ-by-condition table:
+- Per-statement n_phase_4 rises from min=41 / median=53 to ≈ min=55 / median=58
+- The 10 statements currently with n_p4 < 50 (especially `no_erotica_or_gore` at 41) get firmer Δ estimates
+- Borderline-Δ statements (e.g., `no_erotica_or_gore` Δ=+0.36) either confirm or collapse
+- The dual-condition gate's reliability on the borderline subset improves correspondingly
+
+### Status update for §0.5 of `spec_repair_loop.md`
+
+Updated the live caveat in §0.5.4.1 and the status table in §0.5.10 to reflect: (a) sub-agent completed; (b) retry blocked on locating raw dumps; (c) all 4 artifacts on disk + production unchanged; (d) tests passing.
+
