@@ -65,6 +65,11 @@ jobs:
     if: needs.changes.outputs.should_run == 'true' && github.ref == 'refs/heads/main'
     needs: [changes, build]
     runs-on: ubuntu-latest
+    environment: pypi-publish
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -73,6 +78,11 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.12.4
+        with:
+          packages-dir: dist/
 
       # Branch setup must happen BEFORE rust_package.py so the wheel-pin
       # modifications land on the PR branch's tree, not get clobbered by a
