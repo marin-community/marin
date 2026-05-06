@@ -8,12 +8,14 @@ from __future__ import annotations
 import json
 import os
 import posixpath
-import string
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from functools import cache
+from importlib import resources
 from typing import Any
 
+import yaml
 from datasets import load_dataset
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
@@ -32,7 +34,10 @@ class LmEvalRawRenderer(StrEnum):
 
 MMLU_DEFAULT_NUM_FEWSHOT = 5
 MMLU_DEFAULT_FEWSHOT_SPLIT = "dev"
+MMLU_CHOICE_LABELS = ("A", "B", "C", "D")
+MMLU_DESCRIPTION_TEMPLATE = "The following are multiple choice questions (with answers) about {subject}."
 GSM8K_COT_DEFAULT_NUM_FEWSHOT = 8
+# Fallback for environments that do not install Marin's optional lm-eval extra.
 GSM8K_COT_FEWSHOT_EXAMPLES: tuple[tuple[str, str], ...] = (
     (
         "There are 15 trees in the grove. Grove workers will plant trees in the grove today. After they are done, "
@@ -79,6 +84,7 @@ GSM8K_COT_FEWSHOT_EXAMPLES: tuple[tuple[str, str], ...] = (
         "So she has 23 - 15 dollars left. 23 - 15 is 8. The answer is 8.",
     ),
 )
+GSM8K_COT_TASK_CONFIG_RESOURCE = "gsm8k-cot.yaml"
 
 
 @dataclass(frozen=True)
@@ -150,41 +156,32 @@ def _load_hf_iterable(input_path: str, split: str, subset: str | None) -> Iterab
     return dataset
 
 
-def _render_mmlu_question_block(example: dict[str, Any], *, include_answer: bool) -> str:
+def _mmlu_subject(example: dict[str, Any]) -> str:
+    return str(example.get("subject") or "").strip()
+
+
+def _render_mmlu_description(subject: str) -> str:
+    if not subject:
+        raise ValueError("MMLU examples must include a subject")
+    return MMLU_DESCRIPTION_TEMPLATE.format(subject=subject.replace("_", " "))
+
+
+def _render_mmlu_question_block(example: dict[str, Any]) -> str:
     question = str(example.get("question") or "").strip()
     if not question:
         return ""
-    choices = example.get("choices") or []
+    choices = list(example.get("choices") or [])
+    if len(choices) != len(MMLU_CHOICE_LABELS):
+        raise ValueError(f"MMLU examples must have {len(MMLU_CHOICE_LABELS)} choices; got {len(choices)}")
     answer_index = int(example["answer"])
-    subject = str(example.get("subject") or "").strip()
+    if answer_index < 0 or answer_index >= len(choices):
+        raise ValueError(f"MMLU answer index {answer_index} is out of range for {len(choices)} choices")
 
-    lines: list[str] = []
-    if subject:
-        lines.append(f"Subject: {subject}")
-        lines.append("")
-    lines.append(f"Question: {question}")
-    lines.append("")
-    lines.append("Choices:")
-    for label, choice in zip(string.ascii_uppercase, choices, strict=False):
+    lines = [f"Question: {question}"]
+    for label, choice in zip(MMLU_CHOICE_LABELS, choices, strict=True):
         lines.append(f"{label}. {choice}")
-    lines.append("")
-    lines.append("Answer:")
-    if include_answer:
-        lines.append(f"{string.ascii_uppercase[answer_index]}. {choices[answer_index]}")
+    lines.append(f"Answer: {MMLU_CHOICE_LABELS[answer_index]}")
     return "\n".join(lines)
-
-
-def _mmlu_signature(example: dict[str, Any]) -> str:
-    return json.dumps(
-        {
-            "question": example.get("question"),
-            "subject": example.get("subject"),
-            "choices": list(example.get("choices") or []),
-            "answer": example.get("answer"),
-        },
-        sort_keys=True,
-        ensure_ascii=False,
-    )
 
 
 def _build_mmlu_fewshot_index(
@@ -193,24 +190,21 @@ def _build_mmlu_fewshot_index(
     subset: str | None,
     *,
     num_fewshot: int,
-) -> dict[str, list[tuple[str, str]]]:
-    by_subject: dict[str, list[tuple[str, str]]] = {}
+) -> dict[str, list[str]]:
+    by_subject: dict[str, list[str]] = {}
     if num_fewshot <= 0:
         return by_subject
 
-    # Keep one extra example per subject so dev->dev rendering can usually exclude
-    # the query example and still remain close to the target shot count.
-    target_count = num_fewshot + 1
     for example in _load_hf_iterable(input_path, split, subset):
-        subject = str(example.get("subject") or "").strip()
+        subject = _mmlu_subject(example)
         if not subject:
             continue
-        rendered = _render_mmlu_question_block(example, include_answer=True)
+        rendered = _render_mmlu_question_block(example)
         if not rendered:
             continue
         supports = by_subject.setdefault(subject, [])
-        if len(supports) < target_count:
-            supports.append((_mmlu_signature(example), rendered))
+        if len(supports) < num_fewshot:
+            supports.append(rendered)
 
     return by_subject
 
@@ -218,49 +212,71 @@ def _build_mmlu_fewshot_index(
 def _render_mmlu_example(
     example: dict[str, Any],
     *,
-    fewshot_index: dict[str, list[tuple[str, str]]],
+    fewshot_index: dict[str, list[str]],
     num_fewshot: int,
 ) -> str:
-    query = _render_mmlu_question_block(example, include_answer=True)
+    query = _render_mmlu_question_block(example)
     if not query:
         return ""
-    if num_fewshot <= 0:
-        return query
 
-    subject = str(example.get("subject") or "").strip()
-    signature = _mmlu_signature(example)
-    supports = [
-        rendered for support_signature, rendered in fewshot_index.get(subject, []) if support_signature != signature
-    ][:num_fewshot]
-    if not supports:
-        return query
-    return "\n\n".join([*supports, query])
+    subject = _mmlu_subject(example)
+    blocks = [_render_mmlu_description(subject)]
+    if num_fewshot > 0:
+        supports = fewshot_index.get(subject, [])[:num_fewshot]
+        if len(supports) < num_fewshot:
+            message = f"Found {len(supports)} MMLU few-shot examples for subject {subject!r}; expected {num_fewshot}"
+            raise ValueError(message)
+        blocks.extend(supports)
+    blocks.append(query)
+    return "\n\n".join(blocks)
 
 
-def _render_gsm8k_question_block(example: dict[str, Any], *, include_answer: bool) -> str:
+def _gsm8k_target(example: dict[str, Any]) -> str:
+    if "answer" in example:
+        return str(example["answer"]).split("####")[-1].strip()
+    return str(example.get("target") or "").strip()
+
+
+def _render_gsm8k_question_block(example: dict[str, Any]) -> str:
     question = str(example.get("question") or "").strip()
-    answer = str(example.get("answer") or "").strip()
-    if not question or (include_answer and not answer):
+    target = _gsm8k_target(example)
+    if not question or not target:
         return ""
-    if include_answer:
-        return f"Q: {question}\nA: {answer}"
-    return f"Q: {question}\nA:"
+    return f"Q: {question}\nA: {target}"
+
+
+@cache
+def _gsm8k_cot_fewshot_examples() -> tuple[tuple[str, str], ...]:
+    try:
+        config_text = (
+            resources.files("lm_eval.tasks.gsm8k").joinpath(GSM8K_COT_TASK_CONFIG_RESOURCE).read_text(encoding="utf-8")
+        )
+    except ModuleNotFoundError:
+        return GSM8K_COT_FEWSHOT_EXAMPLES
+
+    config = yaml.safe_load(config_text)
+    samples = config["fewshot_config"]["samples"]
+    return tuple((str(sample["question"]), str(sample["target"])) for sample in samples)
 
 
 def _render_gsm8k_example(example: dict[str, Any], *, num_fewshot: int) -> str:
-    query = _render_gsm8k_question_block(example, include_answer=True)
+    query = _render_gsm8k_question_block(example)
     if not query:
         return ""
     if num_fewshot <= 0:
         return query
-    supports = [f"Q: {question}\nA: {answer}" for question, answer in GSM8K_COT_FEWSHOT_EXAMPLES[:num_fewshot]]
+    supports = [f"Q: {question}\nA: {answer}" for question, answer in _gsm8k_cot_fewshot_examples()[:num_fewshot]]
     return "\n\n".join([*supports, query])
 
 
-RENDERERS = {
-    LmEvalRawRenderer.MMLU: _render_mmlu_example,
-    LmEvalRawRenderer.GSM8K: _render_gsm8k_example,
-}
+def _validate_mmlu_fewshot_config(cfg: LmEvalRawStagingConfig) -> None:
+    if cfg.num_fewshot <= 0:
+        return
+    if not cfg.fewshot_split:
+        raise ValueError("MMLU num_fewshot requires an explicit fewshot_split")
+    if cfg.fewshot_split == cfg.split:
+        message = f"MMLU fewshot_split must differ from split for nonzero few-shot staging; got {cfg.split!r}"
+        raise ValueError(message)
 
 
 def stage_lm_eval_source(cfg: LmEvalRawStagingConfig) -> dict[str, int | str]:
@@ -272,16 +288,20 @@ def stage_lm_eval_source(cfg: LmEvalRawStagingConfig) -> dict[str, int | str]:
                 f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
             )
 
-    renderer = RENDERERS[cfg.renderer_name]
+    if cfg.renderer_name is LmEvalRawRenderer.MMLU:
+        _validate_mmlu_fewshot_config(cfg)
+
     fsspec_mkdirs(cfg.output_path, exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)
     compression = "gzip" if out_file.endswith(".gz") else None
 
-    mmlu_fewshot_index: dict[str, list[tuple[str, str]]] = {}
+    mmlu_fewshot_index: dict[str, list[str]] = {}
     if cfg.renderer_name is LmEvalRawRenderer.MMLU and cfg.num_fewshot > 0:
+        fewshot_split = cfg.fewshot_split
+        assert fewshot_split is not None
         mmlu_fewshot_index = _build_mmlu_fewshot_index(
             cfg.input_path,
-            cfg.fewshot_split or cfg.split,
+            fewshot_split,
             cfg.subset,
             num_fewshot=cfg.num_fewshot,
         )
@@ -291,11 +311,15 @@ def stage_lm_eval_source(cfg: LmEvalRawStagingConfig) -> dict[str, int | str]:
         with open_url(temp_path, "wt", encoding="utf-8", compression=compression) as outfile:
             for index, example in enumerate(_load_hf_iterable(cfg.input_path, cfg.split, cfg.subset)):
                 if cfg.renderer_name is LmEvalRawRenderer.MMLU:
-                    text = renderer(example, fewshot_index=mmlu_fewshot_index, num_fewshot=cfg.num_fewshot)
+                    text = _render_mmlu_example(
+                        example,
+                        fewshot_index=mmlu_fewshot_index,
+                        num_fewshot=cfg.num_fewshot,
+                    )
                 elif cfg.renderer_name is LmEvalRawRenderer.GSM8K:
-                    text = renderer(example, num_fewshot=cfg.num_fewshot)
+                    text = _render_gsm8k_example(example, num_fewshot=cfg.num_fewshot)
                 else:
-                    text = renderer(example)
+                    raise ValueError(f"Unsupported LM-eval raw renderer: {cfg.renderer_name}")
                 if not text:
                     continue
                 record = {

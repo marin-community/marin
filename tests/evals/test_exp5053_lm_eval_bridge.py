@@ -10,7 +10,6 @@ def test_lm_eval_bridge_raw_validation_sets_cover_selected_first_pass_slices() -
     assert set(datasets) == {
         "lm_eval/gsm8k_train",
         "lm_eval/mmlu_auxiliary_train",
-        "lm_eval/mmlu_dev",
     }
-    assert datasets["lm_eval/mmlu_dev"].text_key == "text"
+    assert datasets["lm_eval/mmlu_auxiliary_train"].text_key == "text"
     assert "issue:5053" in datasets["lm_eval/gsm8k_train"].tags

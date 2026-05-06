@@ -76,7 +76,7 @@ LM_EVAL_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
         source_urls=(f"https://huggingface.co/datasets/{MMLU_DATASET_ID}",),
         source_license="MIT",
         source_format="huggingface_parquet_multiple_choice",
-        surface_form="multiple_choice_prompt_plus_correct_answer",
+        surface_form="multiple_choice_prompt_plus_answer_letter",
         policy=_eval_only_policy("MMLU public dataset mirrored on Hugging Face; staged from a pinned revision."),
         staging=StagingMetadata(
             transform_name="stage_lm_eval_source",
@@ -90,27 +90,6 @@ LM_EVAL_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
         sample_caps=SampleCapConfig(max_examples=99_842),
         source_metadata={"hf_revision": MMLU_REVISION},
     ),
-    "lm_eval/mmlu_dev": IngestionSourceManifest(
-        dataset_key=MMLU_DATASET_ID,
-        slice_key="lm_eval/mmlu_dev",
-        source_label="mmlu:all:dev",
-        source_urls=(f"https://huggingface.co/datasets/{MMLU_DATASET_ID}",),
-        source_license="MIT",
-        source_format="huggingface_parquet_multiple_choice",
-        surface_form="multiple_choice_prompt_plus_correct_answer",
-        policy=_eval_only_policy("MMLU public dataset mirrored on Hugging Face; staged from a pinned revision."),
-        staging=StagingMetadata(
-            transform_name="stage_lm_eval_source",
-            serializer_name=LmEvalRawRenderer.MMLU.value,
-            split="dev",
-            subset="all",
-            metadata={"num_fewshot": MMLU_DEFAULT_NUM_FEWSHOT, "fewshot_split": MMLU_DEFAULT_FEWSHOT_SPLIT},
-        ),
-        epic_issue=LONG_TAIL_PPL_EPIC_ISSUE,
-        issue_numbers=(LM_EVAL_BRIDGE_ISSUE,),
-        sample_caps=SampleCapConfig(max_examples=285),
-        source_metadata={"hf_revision": MMLU_REVISION},
-    ),
     "lm_eval/gsm8k_train": IngestionSourceManifest(
         dataset_key=GSM8K_DATASET_ID,
         slice_key="lm_eval/gsm8k_train",
@@ -118,7 +97,7 @@ LM_EVAL_SOURCE_MANIFESTS: dict[str, IngestionSourceManifest] = {
         source_urls=(f"https://huggingface.co/datasets/{GSM8K_DATASET_ID}",),
         source_license="MIT",
         source_format="huggingface_parquet_math_qa",
-        surface_form="question_plus_worked_answer",
+        surface_form="cot_fewshot_prompt_plus_final_answer",
         policy=_eval_only_policy("GSM8K public dataset mirrored on Hugging Face; staged from a pinned revision."),
         staging=StagingMetadata(
             transform_name="stage_lm_eval_source",
@@ -175,11 +154,6 @@ LM_EVAL_STAGED: dict[str, StepSpec] = {
         "lm_eval/mmlu_auxiliary_train",
         mmlu_raw,
         LM_EVAL_SOURCE_MANIFESTS["lm_eval/mmlu_auxiliary_train"],
-    ),
-    "lm_eval/mmlu_dev": _stage_step(
-        "lm_eval/mmlu_dev",
-        mmlu_raw,
-        LM_EVAL_SOURCE_MANIFESTS["lm_eval/mmlu_dev"],
     ),
     "lm_eval/gsm8k_train": _stage_step(
         "lm_eval/gsm8k_train",

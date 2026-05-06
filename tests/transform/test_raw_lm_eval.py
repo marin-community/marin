@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from datasets import Dataset
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
@@ -76,13 +77,13 @@ def _manifest(
 
 
 def test_stage_lm_eval_source_renders_mmlu_with_choices_and_answer(tmp_path: Path):
-    manifest = _manifest(LmEvalRawRenderer.MMLU, source_label="mmlu:test", split="dev", subset="all")
+    manifest = _manifest(LmEvalRawRenderer.MMLU, source_label="mmlu:test", split="auxiliary_train", subset="all")
     cfg = LmEvalRawStagingConfig(
         input_path="fake://mmlu",
         output_path=str(tmp_path),
         source_label="mmlu:test",
         renderer_name=LmEvalRawRenderer.MMLU,
-        split="dev",
+        split="auxiliary_train",
         subset="all",
         num_fewshot=2,
         fewshot_split="dev",
@@ -104,20 +105,49 @@ def test_stage_lm_eval_source_renders_mmlu_with_choices_and_answer(tmp_path: Pat
                     },
                 ]
             ),
-            iter([_mmlu_fixture()]),
+            iter(
+                [
+                    {
+                        **_mmlu_fixture(),
+                        "question": "What is 4 + 4?",
+                        "choices": ["5", "6", "7", "8"],
+                        "answer": 3,
+                    }
+                ]
+            ),
         ],
     ):
         result = stage_lm_eval_source(cfg)
 
     assert result["record_count"] == 1
     records = _read_staged_records(tmp_path)
-    assert "Subject: elementary_mathematics" in records[0]["text"]
+    assert records[0]["text"].startswith(
+        "The following are multiple choice questions (with answers) about elementary mathematics."
+    )
     assert "A. 1" in records[0]["text"]
     assert "C. 4" in records[0]["text"]
-    assert records[0]["text"].count("Question:") == 2
+    assert records[0]["text"].count("Question:") == 3
     assert "What is 3 + 3?" in records[0]["text"]
+    assert "Answer: C. 4" not in records[0]["text"]
+    assert records[0]["text"].endswith("Answer: D")
     assert records[0]["provenance"]["num_fewshot"] == 2
     assert records[0]["provenance"]["renderer"] == LmEvalRawRenderer.MMLU.value
+
+
+def test_stage_lm_eval_source_rejects_mmlu_fewshot_from_query_split(tmp_path: Path):
+    cfg = LmEvalRawStagingConfig(
+        input_path="fake://mmlu",
+        output_path=str(tmp_path),
+        source_label="mmlu:test",
+        renderer_name=LmEvalRawRenderer.MMLU,
+        split="dev",
+        subset="all",
+        num_fewshot=5,
+        fewshot_split="dev",
+    )
+
+    with pytest.raises(ValueError, match="fewshot_split must differ from split"):
+        stage_lm_eval_source(cfg)
 
 
 def test_stage_lm_eval_source_renders_gsm8k_in_icl_format(tmp_path: Path):
@@ -144,8 +174,10 @@ def test_stage_lm_eval_source_renders_gsm8k_in_icl_format(tmp_path: Path):
     records = _read_staged_records(tmp_path)
     assert records[0]["text"].startswith("Q: There are 15 trees in the grove.")
     assert "\n\nQ: If there are 3 cars in the parking lot" in records[0]["text"]
-    assert "\n\nQ: Natalia sold 48 clips in April and half as many in May. How many in total?\nA:" in records[0]["text"]
-    assert "#### 72" in records[0]["text"]
+    assert records[0]["text"].endswith(
+        "\n\nQ: Natalia sold 48 clips in April and half as many in May. How many in total?\nA: 72"
+    )
+    assert "#### 72" not in records[0]["text"]
     metadata = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["source_manifest"]["source_label"] == "gsm8k:test"
     assert metadata["materialized_output"]["record_count"] == 1
