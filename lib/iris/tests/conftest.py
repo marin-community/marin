@@ -7,11 +7,11 @@ import logging
 import os
 import subprocess
 import sys
-from pathlib import Path
 import threading
 import time
 import traceback
 import warnings
+from pathlib import Path
 
 import pytest
 from iris.cluster.config import load_config, make_local_config

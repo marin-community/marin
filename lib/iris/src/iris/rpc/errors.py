@@ -6,17 +6,17 @@
 import logging
 import time
 import traceback
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import TypeVar
-from collections.abc import Callable, Generator
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from google.protobuf.any_pb2 import Any as AnyProto
+from rigging.timing import Deadline, ExponentialBackoff, Timestamp, retry_with_backoff
 
 from iris.rpc import errors_pb2
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Deadline, ExponentialBackoff, Timestamp, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 

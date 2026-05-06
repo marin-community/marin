@@ -176,6 +176,12 @@ def profile_local_process(duration_seconds: int, profile_type: job_pb2.ProfileTy
         raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
 
+# Workaround for https://github.com/benfred/py-spy/issues/846: py-spy dump --subprocesses
+# exits non-zero when it walks into a non-Python child (e.g. wandb-core, a Go binary), even
+# though the parent dump already went to stdout. Drop this once py-spy fixes the upstream bug.
+_PYSPY_NON_PYTHON_CHILD_ERROR = "Failed to find python version from target process"
+
+
 def run_pyspy_dump(
     pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False, subprocesses: bool = True
 ) -> bytes:
@@ -183,7 +189,9 @@ def run_pyspy_dump(
     cmd = build_pyspy_dump_cmd(pid, py_spy_bin, include_locals=include_locals, subprocesses=subprocesses)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
-        raise RuntimeError(f"py-spy dump failed: {result.stderr}")
+        partial_ok = subprocesses and bool(result.stdout.strip()) and _PYSPY_NON_PYTHON_CHILD_ERROR in result.stderr
+        if not partial_ok:
+            raise RuntimeError(f"py-spy dump failed: {result.stderr}")
     return result.stdout.encode("utf-8")
 
 

@@ -6,7 +6,6 @@
 from pathlib import Path
 
 import pytest
-
 from iris.cluster.controller.db import (
     ControllerDB,
     get_task_profiles,

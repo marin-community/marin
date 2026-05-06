@@ -9,6 +9,8 @@ import threading
 from dataclasses import dataclass
 from typing import Protocol
 
+from rigging.timing import Duration
+
 from iris.chaos import chaos
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.controller.transitions import (
@@ -17,10 +19,8 @@ from iris.cluster.controller.transitions import (
     task_updates_from_proto,
 )
 from iris.cluster.types import WorkerId
-from iris.rpc import job_pb2
-from iris.rpc import worker_pb2
+from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.worker_connect import WorkerServiceClient
-from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,6 @@ class PingResult:
 
     worker_id: WorkerId
     worker_address: str | None
-    resource_snapshot: job_pb2.WorkerResourceSnapshot | None = None
     healthy: bool = True
     health_error: str = ""
     error: str | None = None
@@ -161,9 +160,6 @@ class WorkerProvider:
                     return PingResult(
                         worker_id=wid,
                         worker_address=addr,
-                        resource_snapshot=(
-                            response.resource_snapshot if response.resource_snapshot.ByteSize() > 0 else None
-                        ),
                         healthy=response.healthy,
                         health_error=response.health_error,
                     )

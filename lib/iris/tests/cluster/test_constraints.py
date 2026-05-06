@@ -4,28 +4,26 @@
 """Tests for the ConstraintDescriptor registry and constraint evaluation."""
 
 import pytest
-
 from iris.cluster.constraints import (
+    INHERITED_CONSTRAINT_KEYS,
     AttributeValue,
     Constraint,
     ConstraintIndex,
     ConstraintOp,
     DeviceType,
-    INHERITED_CONSTRAINT_KEYS,
     PlacementRequirements,
     WellKnownAttribute,
     evaluate_constraint,
+    extract_placement_requirements,
     infer_preemptible_constraint,
     is_cpu_device_type_constraint,
     looks_like_executor,
     merge_constraints,
-    extract_placement_requirements,
     preemptible_constraint,
     routing_constraints,
     soft_constraint_score,
     split_hard_soft,
 )
-
 from iris.rpc import job_pb2
 
 from .conftest import eq_constraint, in_constraint

@@ -48,7 +48,6 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-
 from scripts.storage.constants import STORAGE_CLASS_PRICING, human_bytes
 from scripts.storage.report import _download_gcs_parquet
 

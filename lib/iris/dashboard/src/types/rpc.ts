@@ -87,6 +87,9 @@ export interface TaskStatus {
   startedAt?: ProtoTimestamp
   finishedAt?: ProtoTimestamp
   ports?: Record<string, number>
+  // Worker-resident in-memory snapshot (Worker.GetTaskStatus only). The
+  // controller-served TaskStatus carries no resourceUsage; query the
+  // iris.task stats namespace via useLogServerStatsRpc for time series.
   resourceUsage?: ResourceUsage
   buildMetrics?: BuildMetrics
   currentAttemptId?: number
@@ -94,7 +97,8 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
-  resourceHistory?: ResourceUsage[]
+  statusTextDetailMd?: string
+  statusTextSummaryMd?: string
 }
 
 // -- Jobs --
@@ -107,7 +111,6 @@ export interface JobStatus {
   startedAt?: ProtoTimestamp
   finishedAt?: ProtoTimestamp
   ports?: Record<string, number>
-  resourceUsage?: ResourceUsage
   statusMessage?: string
   buildMetrics?: BuildMetrics
   failureCount?: number
@@ -145,8 +148,6 @@ export interface ListJobsResponse {
 export interface GetJobStatusResponse {
   job: JobStatus
   request?: LaunchJobRequest
-  resourceMin?: ResourceUsage
-  resourceMax?: ResourceUsage
 }
 
 export interface CommandEntrypoint {
@@ -224,21 +225,23 @@ export interface WorkerHealthStatus {
   statusMessage?: string
 }
 
-export interface ListWorkersResponse {
-  workers: WorkerHealthStatus[]
+export interface WorkerQuery {
+  contains?: string
+  sortField?: string
+  sortDirection?: string
+  offset?: number
+  limit?: number
 }
 
-export interface WorkerResourceSnapshot {
-  timestamp?: ProtoTimestamp
-  hostCpuPercent?: number
-  memoryUsedBytes?: string
-  memoryTotalBytes?: string
-  diskUsedBytes?: string
-  diskTotalBytes?: string
-  runningTaskCount?: number
-  totalProcessCount?: number
-  netRecvBps?: string
-  netSentBps?: string
+export interface ListWorkersResponse {
+  workers: WorkerHealthStatus[]
+  totalCount: number
+  hasMore: boolean
+}
+
+export interface WorkerTaskAttempt {
+  taskId: string
+  attempt?: TaskAttempt
 }
 
 export interface GetWorkerStatusResponse {
@@ -246,10 +249,10 @@ export interface GetWorkerStatusResponse {
   scaleGroup?: string
   worker?: WorkerHealthStatus
   bootstrapLogs?: string
-  workerLogEntries?: LogEntry[]
-  recentTasks?: TaskStatus[]
-  currentResources?: WorkerResourceSnapshot
-  resourceHistory?: WorkerResourceSnapshot[]
+  // workerLogEntries removed from this response to avoid blocking the worker
+  // page render on a slow LogService proxy. Fetched separately via
+  // LogService.FetchLogs(source="/system/worker/<worker_id>").
+  recentAttempts?: WorkerTaskAttempt[]
 }
 
 // -- Endpoints --

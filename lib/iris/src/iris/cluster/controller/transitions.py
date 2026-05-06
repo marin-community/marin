@@ -6,13 +6,15 @@
 Read-only queries do NOT belong here — callers use db.read_snapshot() directly.
 """
 
-import threading
-import time
 import json
 import logging
+import threading
+import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from collections.abc import Iterable, Mapping
 from typing import NamedTuple
+
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
 from iris.cluster.controller.codec import (
@@ -35,28 +37,27 @@ from iris.cluster.controller.db import (
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
+from iris.cluster.controller.schema import (
+    EndpointRow,
+    JobDetailRow,
+    WorkerDetailRow,
+)
 from iris.cluster.controller.stores import (
     ActiveTaskRow,
     ControllerStore,
     EndpointStore,
     JobConfigInsertParams,
     JobInsertParams,
-    ResourceUsageInsertParams,
     JobStore,
     TaskAttemptStore,
     TaskAttemptUpdateParams,
+    TaskInsertParams,
     TaskScope,
     TaskStateUpdateParams,
-    TaskInsertParams,
     TaskStore,
     WorkerAttributeParams,
     WorkerStore,
     WorkerUpsertParams,
-)
-from iris.cluster.controller.schema import (
-    EndpointRow,
-    JobDetailRow,
-    WorkerDetailRow,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
@@ -67,10 +68,8 @@ from iris.cluster.types import (
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +191,6 @@ class TaskUpdate:
     new_state: int
     error: str | None = None
     exit_code: int | None = None
-    resource_usage: job_pb2.ResourceUsage | None = None
     container_id: str | None = None
 
 
@@ -213,7 +211,6 @@ def task_updates_from_proto(entries) -> list[TaskUpdate]:
                 new_state=entry.state,
                 error=entry.error or None,
                 exit_code=entry.exit_code if entry.HasField("exit_code") else None,
-                resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
                 container_id=entry.container_id or None,
             )
         )
@@ -225,7 +222,6 @@ class HeartbeatApplyRequest:
     """Batch of worker heartbeat updates applied atomically."""
 
     worker_id: WorkerId
-    worker_resource_snapshot: job_pb2.WorkerResourceSnapshot | None
     updates: list[TaskUpdate]
 
 
@@ -588,6 +584,59 @@ def _terminate_coscheduled_siblings(
         if sib.current_worker_id is not None:
             task_kill_workers[sib.task_id] = sib.current_worker_id
         tasks_to_kill.add(sib.task_id)
+
+    return tasks_to_kill, task_kill_workers
+
+
+def _requeue_coscheduled_siblings(
+    cur: TransactionCursor,
+    attempts: TaskAttemptStore,
+    tasks: TaskStore,
+    workers: WorkerStore,
+    registry,
+    siblings: Iterable[ActiveTaskRow],
+    failed_task_id: JobName,
+    resources: "job_pb2.ResourceSpecProto",
+    now_ms: int,
+) -> tuple[set[JobName], dict[JobName, WorkerId]]:
+    """Bounce coscheduled siblings to PENDING so the job re-coschedules atomically.
+
+    Used when one task of a coscheduled job hits a transient failure that will
+    retry. Without this, only the failed task returns to PENDING and the
+    scheduler may place its retry on a different slice from the still-RUNNING
+    siblings, splitting the coscheduled job. Sibling preemption_count and
+    failure_count are left untouched — they didn't actually fail, so only the
+    originally-failing task pays its retry budget.
+
+    Reservation-holder siblings are skipped; they never hold worker resources
+    and don't participate in the slice.
+    """
+    tasks_to_kill: set[JobName] = set()
+    task_kill_workers: dict[JobName, WorkerId] = {}
+    error = f"Coscheduled sibling {failed_task_id.to_wire()} bounced for atomic re-scheduling"
+
+    for sib in siblings:
+        if sib.is_reservation_holder:
+            continue
+        worker_id_str = str(sib.current_worker_id) if sib.current_worker_id is not None else None
+        _terminate_task(
+            cur,
+            attempts,
+            tasks,
+            workers,
+            registry,
+            sib.task_id.to_wire(),
+            sib.current_attempt_id,
+            job_pb2.TASK_STATE_PENDING,
+            error,
+            now_ms,
+            attempt_state=job_pb2.TASK_STATE_PREEMPTED,
+            worker_id=worker_id_str,
+            resources=resources if sib.current_worker_id is not None else None,
+        )
+        if sib.current_worker_id is not None:
+            task_kill_workers[sib.task_id] = sib.current_worker_id
+            tasks_to_kill.add(sib.task_id)
 
     return tasks_to_kill, task_kill_workers
 
@@ -1051,6 +1100,13 @@ class ControllerTransitions:
                 self._store.workers.decommit_resources(cur, row.current_worker_id, row.resources)
         now_ms = Timestamp.now().epoch_ms()
         self._store.tasks.bulk_kill_non_terminal(cur, subtree, reason, now_ms, TERMINAL_TASK_STATES)
+        # Without this, the current attempt row stays state=RUNNING forever
+        # (apply_heartbeat skips terminal tasks so the per-attempt finalize
+        # never fires). Dashboard queries that read task_attempts then report
+        # the killed task as still running on its old worker.
+        self._store.attempts.bulk_finalize_active(
+            cur, subtree, job_pb2.TASK_STATE_KILLED, reason, now_ms, set(ACTIVE_TASK_STATES)
+        )
         # Deliberately excludes JOB_STATE_WORKER_FAILED from the guard set:
         # worker-failed jobs should still be cancellable (transitioned to KILLED).
         cancel_guard_states = TERMINAL_JOB_STATES - {job_pb2.JOB_STATE_WORKER_FAILED}
@@ -1248,7 +1304,6 @@ class ControllerTransitions:
                 else:
                     self._store.dispatch.enqueue_run(cur, assignment.worker_id, run_request.SerializeToString(), now_ms)
                 has_real_dispatch = True
-            self._store.workers.record_task_assignment(cur, assignment.worker_id, assignment.task_id, now_ms)
             jobs_to_update.add(job_id_wire)
             accepted.append(assignment)
         for job_id_wire in jobs_to_update:
@@ -1273,7 +1328,7 @@ class ControllerTransitions:
             return False
         self._store.workers.apply_snapshots(
             cur,
-            [(req.worker_id, req.worker_resource_snapshot)],
+            [req.worker_id],
             now_ms,
             reset_health=True,
         )
@@ -1322,7 +1377,7 @@ class ControllerTransitions:
             prior_state = task.state
 
             # Fast path: task already in the reported state with no new data to apply.
-            has_new_data = update.error is not None or update.exit_code is not None or update.resource_usage is not None
+            has_new_data = update.error is not None or update.exit_code is not None
             if update.new_state == prior_state and not has_new_data:
                 continue
 
@@ -1343,20 +1398,6 @@ class ControllerTransitions:
                 )
                 continue
             worker_id = attempt.worker_id
-            if update.resource_usage is not None:
-                ru = update.resource_usage
-                self._store.tasks.insert_resource_usage(
-                    cur,
-                    ResourceUsageInsertParams(
-                        task_id=update.task_id,
-                        attempt_id=update.attempt_id,
-                        cpu_millicores=ru.cpu_millicores,
-                        memory_mb=ru.memory_mb,
-                        disk_mb=ru.disk_mb,
-                        memory_peak_mb=ru.memory_peak_mb,
-                        timestamp_ms=now_ms,
-                    ),
-                )
             terminal_ms: int | None = None
             started_ms: int | None = None
             task_state = prior_state
@@ -1469,27 +1510,43 @@ class ControllerTransitions:
             if update.new_state in TERMINAL_TASK_STATES:
                 delete_task_endpoints(cur, self._store.endpoints, update.task_id.to_wire())
 
-            # Coscheduled jobs: a terminal host failure should cascade to siblings.
-            if jc is not None and task_state in FAILURE_TASK_STATES:
-                has_cosched = bool(int(jc["has_coscheduling"]))
-                siblings = _find_coscheduled_siblings(cur, self._store.tasks, task.job_id, update.task_id, has_cosched)
+            # Coscheduled jobs: any failure of a sibling must clear the slice so
+            # the job re-coschedules atomically. Branch on whether this task is
+            # going terminal (kill siblings outright) or being downgraded to
+            # PENDING for retry (requeue siblings, preserving their budgets).
+            reported_failure = int(update.new_state) in FAILURE_TASK_STATES
+            if jc is not None and bool(int(jc["has_coscheduling"])) and reported_failure:
+                siblings = _find_coscheduled_siblings(cur, self._store.tasks, task.job_id, update.task_id, True)
                 resources = resource_spec_from_scalars(
                     int(jc["res_cpu_millicores"]),
                     int(jc["res_memory_bytes"]),
                     int(jc["res_disk_bytes"]),
                     jc["res_device_json"],
                 )
-                cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                    cur,
-                    self._store.attempts,
-                    self._store.tasks,
-                    self._store.workers,
-                    self._store.endpoints,
-                    siblings,
-                    update.task_id,
-                    resources,
-                    now_ms,
-                )
+                if task_state in FAILURE_TASK_STATES:
+                    cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
+                        cur,
+                        self._store.attempts,
+                        self._store.tasks,
+                        self._store.workers,
+                        self._store.endpoints,
+                        siblings,
+                        update.task_id,
+                        resources,
+                        now_ms,
+                    )
+                else:
+                    cascade_kill, cascade_workers = _requeue_coscheduled_siblings(
+                        cur,
+                        self._store.attempts,
+                        self._store.tasks,
+                        self._store.workers,
+                        self._store.endpoints,
+                        siblings,
+                        update.task_id,
+                        resources,
+                        now_ms,
+                    )
                 tasks_to_kill.update(cascade_kill)
                 task_kill_workers.update(cascade_workers)
 
@@ -1531,15 +1588,11 @@ class ControllerTransitions:
     def apply_heartbeats_batch(self, cur: TransactionCursor, requests: list[HeartbeatApplyRequest]) -> list[TxResult]:
         """Apply multiple heartbeats in a single transaction.
 
-        Two-pass architecture to minimise SQL round-trips:
-
-        1. Bulk-fetch all referenced task rows, classify each update as
-           *steady-state* (same state, no error/exit_code) or *transition*.
-        2a. Batch steady-state resource_usage writes via ``executemany``.
-        2b. Feed only transitions through ``_apply_task_transitions``, which
-            retains the full state machine (retry, cascade, decommit, etc.).
-
-        Worker health updates are also batched via ``executemany``.
+        Bulk-fetch all referenced task rows, drop steady-state updates whose
+        only payload would have been (now-vestigial) resource samples, and feed
+        the remaining state-changing or terminal updates through
+        ``_apply_task_transitions``. Worker health updates are batched via
+        ``executemany``.
         """
         _empty = TxResult(tasks_to_kill=set())
         results: list[TxResult] = [_empty] * len(requests)
@@ -1550,11 +1603,7 @@ class ControllerTransitions:
         existing_workers = self._store.workers.filter_existing(cur, [req.worker_id for req in requests])
         self._store.workers.apply_snapshots(
             cur,
-            [
-                (req.worker_id, req.worker_resource_snapshot)
-                for req in requests
-                if str(req.worker_id) in existing_workers
-            ],
+            [req.worker_id for req in requests if str(req.worker_id) in existing_workers],
             now_ms,
             reset_health=True,
         )
@@ -1574,7 +1623,6 @@ class ControllerTransitions:
         task_map = self._store.tasks.bulk_get_detail(cur, all_task_ids)
 
         # ── Classify and split ────────────────────────────────────────
-        task_history_params: list[ResourceUsageInsertParams] = []
         # (request_index, transition_request) pairs so results stay aligned.
         transition_entries: list[tuple[int, HeartbeatApplyRequest]] = []
 
@@ -1594,25 +1642,6 @@ class ControllerTransitions:
 
                 if is_state_change or has_terminal_data:
                     transition_updates.append(update)
-                else:
-                    # Steady-state: check finished / stale attempt before writing.
-                    if task_row_is_finished(task):
-                        continue
-                    if update.attempt_id != task.current_attempt_id:
-                        continue
-                    if update.resource_usage is not None:
-                        u = update.resource_usage
-                        task_history_params.append(
-                            ResourceUsageInsertParams(
-                                task_id=update.task_id,
-                                attempt_id=update.attempt_id,
-                                cpu_millicores=u.cpu_millicores,
-                                memory_mb=u.memory_mb,
-                                disk_mb=u.disk_mb,
-                                memory_peak_mb=u.memory_peak_mb,
-                                timestamp_ms=now_ms,
-                            )
-                        )
 
             if transition_updates:
                 transition_entries.append(
@@ -1620,19 +1649,14 @@ class ControllerTransitions:
                         req_idx,
                         HeartbeatApplyRequest(
                             worker_id=req.worker_id,
-                            worker_resource_snapshot=None,  # already handled above
                             updates=transition_updates,
                         ),
                     )
                 )
 
-        # ── Pass 2a: batch task resource history writes ─────────────────
-        self._store.tasks.insert_resource_usage_many(cur, task_history_params)
-
-        # ── Pass 2b: transitions via existing state machine ───────────
+        # ── Apply transitions via existing state machine ──────────────
         for req_idx, treq in transition_entries:
-            tx_result = self._apply_task_transitions(cur, treq, now_ms)
-            results[req_idx] = TxResult(tasks_to_kill=tx_result.tasks_to_kill)
+            results[req_idx] = self._apply_task_transitions(cur, treq, now_ms)
 
         return results
 
@@ -1706,6 +1730,38 @@ class ControllerTransitions:
                     task_kill_workers.update(child_task_kill_workers)
             if new_task_state == job_pb2.TASK_STATE_WORKER_FAILED:
                 tasks_to_kill.add(task_id)
+
+            # Coscheduled siblings on surviving slice workers must clear so the
+            # job re-coschedules atomically; otherwise the bounced task may
+            # land on a different slice from its still-RUNNING siblings.
+            if not is_reservation_holder and task_row.has_coscheduling:
+                siblings = _find_coscheduled_siblings(cur, self._store.tasks, parent_job_id, task_id, True)
+                if new_task_state in FAILURE_TASK_STATES:
+                    sib_kill, sib_workers = _terminate_coscheduled_siblings(
+                        cur,
+                        self._store.attempts,
+                        self._store.tasks,
+                        self._store.workers,
+                        self._store.endpoints,
+                        siblings,
+                        task_id,
+                        task_row.resources,
+                        now_ms,
+                    )
+                else:
+                    sib_kill, sib_workers = _requeue_coscheduled_siblings(
+                        cur,
+                        self._store.attempts,
+                        self._store.tasks,
+                        self._store.workers,
+                        self._store.endpoints,
+                        siblings,
+                        task_id,
+                        task_row.resources,
+                        now_ms,
+                    )
+                tasks_to_kill.update(sib_kill)
+                task_kill_workers.update(sib_workers)
         _remove_worker(cur, self._store.workers, worker_id)
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
@@ -1854,6 +1910,26 @@ class ControllerTransitions:
             preemption_count=preemption_count,
         )
 
+        # Coscheduled retry: bounce siblings back to PENDING so the job
+        # re-coschedules atomically. Without this, the lone preempted task's
+        # retry can land on a different slice from its still-RUNNING siblings,
+        # splitting the SPMD mesh across pods.
+        if new_state == job_pb2.TASK_STATE_PENDING and row.has_coscheduling:
+            siblings = _find_coscheduled_siblings(cur, self._store.tasks, row.job_id, task_id, True)
+            sibling_kills, sibling_workers = _requeue_coscheduled_siblings(
+                cur,
+                self._store.attempts,
+                self._store.tasks,
+                self._store.workers,
+                self._store.endpoints,
+                siblings,
+                task_id,
+                row.resources,
+                now_ms,
+            )
+            tasks_to_kill.update(sibling_kills)
+            task_kill_workers.update(sibling_workers)
+
         # Recompute job state and cascade if terminal
         job_id = row.job_id
         new_job_state = self._recompute_job_state(cur, job_id)
@@ -1875,8 +1951,14 @@ class ControllerTransitions:
                 tasks_to_kill.update(child_kills)
                 task_kill_workers.update(child_workers)
 
-        if new_state == job_pb2.TASK_STATE_PREEMPTED:
+        # Always send a StopTask RPC to the worker that was running this attempt:
+        # _terminate_task decommits the worker's resources but does not stop the
+        # remote process. Without the kill RPC the worker keeps running the old
+        # code while the scheduler reuses the freed slot for a new task,
+        # producing two concurrent processes on the same TPU.
+        if attempt_worker_id is not None:
             tasks_to_kill.add(task_id)
+            task_kill_workers[task_id] = WorkerId(attempt_worker_id)
 
         log_event("task_preempted", task_id.to_wire(), reason=reason)
 
@@ -2075,12 +2157,13 @@ class ControllerTransitions:
                 # Invalidate endpoint cache BEFORE the CASCADE so the cache
                 # drops rows SQLite is about to delete for us.
                 self._store.endpoints.remove_by_job_ids(cur, [job_name])
+                self._store.tasks.remove_status_text_by_job_ids([job_name])
                 self._store.jobs.delete(cur, job_name)
             log_event("job_pruned", job_name.to_wire())
             jobs_deleted += 1
             time.sleep(pause_between_s)
 
-        # 2. Workers: one at a time (CASCADE to attributes, task_history, resource_history)
+        # 2. Workers: one at a time (CASCADE to attributes)
         workers_deleted = 0
         while not _stopped():
             with self._store.read_snapshot() as snap:
@@ -2128,23 +2211,22 @@ class ControllerTransitions:
     def update_worker_pings(
         self,
         cur: TransactionCursor,
-        snapshots: Mapping[WorkerId, job_pb2.WorkerResourceSnapshot | None],
+        worker_ids: Iterable[WorkerId],
     ) -> None:
         """Apply a batch of Ping RPC results within the caller's transaction.
 
-        For each entry, bumps last_heartbeat_ms; if the value is a snapshot,
-        also rewrites the worker's snapshot_* columns and appends a row to
-        worker_resource_history. A None value means liveness-only — the ping
-        loop emits these on cycles where it skips the resource refresh.
+        Bumps ``last_heartbeat_ms`` for each successfully-pinged worker.
+        Per-tick host utilization is no longer persisted in the controller DB —
+        workers emit it directly to the ``iris.worker`` stats namespace.
         Does not touch healthy/active/consecutive_failures — the ping loop
-        tracks failures in-memory and uses fail_workers_batch to remove
+        tracks failures in-memory and uses ``fail_workers_batch`` to remove
         workers past threshold.
         """
-        if not snapshots:
+        ids = list(worker_ids)
+        if not ids:
             return
         now_ms = Timestamp.now().epoch_ms()
-        items = list(snapshots.items())
-        self._store.workers.apply_snapshots(cur, items, now_ms, reset_health=False)
+        self._store.workers.apply_snapshots(cur, ids, now_ms, reset_health=False)
 
     def get_running_tasks_for_poll(
         self,
@@ -2226,6 +2308,12 @@ class ControllerTransitions:
                     metadata=cfg.metadata,
                     ts=now,
                 )
+
+    # --- Task Status Text ---
+
+    def record_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
+        """Update the task's markdown status text for UI display (held in memory only)."""
+        self._store.tasks.set_status_text(task_id.to_wire(), detail_md, summary_md)
 
     # --- Endpoint Management ---
 
@@ -2401,20 +2489,6 @@ class ControllerTransitions:
                 )
                 continue
 
-            if update.resource_usage is not None:
-                ru = update.resource_usage
-                self._store.tasks.insert_resource_usage(
-                    cur,
-                    ResourceUsageInsertParams(
-                        task_id=update.task_id,
-                        attempt_id=update.attempt_id,
-                        cpu_millicores=ru.cpu_millicores,
-                        memory_mb=ru.memory_mb,
-                        disk_mb=ru.disk_mb,
-                        memory_peak_mb=ru.memory_peak_mb,
-                        timestamp_ms=now_ms,
-                    ),
-                )
             if update.container_id is not None:
                 self._store.tasks.update_container_id(cur, update.task_id, update.container_id)
 
@@ -2498,27 +2572,41 @@ class ControllerTransitions:
             if update.new_state in TERMINAL_TASK_STATES:
                 delete_task_endpoints(cur, self._store.endpoints, update.task_id.to_wire())
 
-            # Coscheduled sibling cascade.
-            if jc_row is not None and task_state in FAILURE_TASK_STATES:
-                has_cosched = bool(int(jc_row["has_coscheduling"]))
-                siblings = _find_coscheduled_siblings(cur, self._store.tasks, task.job_id, update.task_id, has_cosched)
+            # Coscheduled sibling cascade. Branch on terminal vs transient (see
+            # apply_state_updates above for the full rationale).
+            reported_failure = int(update.new_state) in FAILURE_TASK_STATES
+            if jc_row is not None and bool(int(jc_row["has_coscheduling"])) and reported_failure:
+                siblings = _find_coscheduled_siblings(cur, self._store.tasks, task.job_id, update.task_id, True)
                 job_resources = resource_spec_from_scalars(
                     int(jc_row["res_cpu_millicores"]),
                     int(jc_row["res_memory_bytes"]),
                     int(jc_row["res_disk_bytes"]),
                     jc_row["res_device_json"],
                 )
-                cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                    cur,
-                    self._store.attempts,
-                    self._store.tasks,
-                    self._store.workers,
-                    self._store.endpoints,
-                    siblings,
-                    update.task_id,
-                    job_resources,
-                    now_ms,
-                )
+                if task_state in FAILURE_TASK_STATES:
+                    cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
+                        cur,
+                        self._store.attempts,
+                        self._store.tasks,
+                        self._store.workers,
+                        self._store.endpoints,
+                        siblings,
+                        update.task_id,
+                        job_resources,
+                        now_ms,
+                    )
+                else:
+                    cascade_kill, cascade_workers = _requeue_coscheduled_siblings(
+                        cur,
+                        self._store.attempts,
+                        self._store.tasks,
+                        self._store.workers,
+                        self._store.endpoints,
+                        siblings,
+                        update.task_id,
+                        job_resources,
+                        now_ms,
+                    )
                 tasks_to_kill.update(cascade_kill)
                 task_kill_workers.update(cascade_workers)
 

@@ -17,6 +17,14 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import uvicorn
+from finelog.client import LogClient, RemoteLogHandler
+from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
+from finelog.server import LogServiceImpl
+from finelog.server.asgi import build_log_server_asgi
+from finelog.server.stats_service import StatsServiceImpl
+from finelog.store.duckdb_store import EMBEDDED_DUCKDB_MEMORY_LIMIT, EMBEDDED_DUCKDB_THREADS, DuckDBLogStore
+from rigging.log_setup import slow_log
+from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp, TokenBucket
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
@@ -28,22 +36,35 @@ from iris.cluster.constraints import (
     constraints_from_resources,
     evaluate_constraint,
     extract_placement_requirements,
+    get_device_variant,
     merge_constraints,
+)
+from iris.cluster.constraints import (
     region_constraint as make_region_constraint,
 )
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.codec import (
-    constraints_from_json,
-    reservation_entries_from_json,
-    resource_spec_from_scalars,
-)
 from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.budget import (
+    UserBudgetDefaults,
+    UserTask,
+    compute_effective_band,
+    compute_user_spend,
+    interleave_by_user,
+    resource_value,
+)
 from iris.cluster.controller.checkpoint import (
     CheckpointResult,
     backup_databases,
     upload_checkpoint,
     write_checkpoint,
 )
+from iris.cluster.controller.codec import (
+    constraints_from_json,
+    reservation_entries_from_json,
+    resource_spec_from_scalars,
+)
+from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
     ControllerDB,
     healthy_active_workers_with_attributes,
@@ -52,6 +73,14 @@ from iris.cluster.controller.db import (
     running_tasks_by_worker,
     task_row_can_be_scheduled,
     timed_out_executing_tasks,
+)
+from iris.cluster.controller.provider import TaskProvider
+from iris.cluster.controller.scheduler import (
+    JobRequirements,
+    Scheduler,
+    SchedulingContext,
+    WorkerCapacity,
+    WorkerSnapshot,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
@@ -71,33 +100,14 @@ from iris.cluster.controller.schema import (
     proto_decoder,
     tasks_with_attempts,
 )
-from iris.cluster.controller.budget import (
-    UserBudgetDefaults,
-    UserTask,
-    compute_effective_band,
-    compute_user_spend,
-    interleave_by_user,
-    resource_value,
-)
-from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-from iris.cluster.controller.provider import TaskProvider
-from iris.cluster.controller.scheduler import (
-    JobRequirements,
-    Scheduler,
-    SchedulingContext,
-    WorkerCapacity,
-    WorkerSnapshot,
-)
-from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
+    DIRECT_PROVIDER_PROMOTION_RATE,
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
     ClusterCapacity,
     ControllerTransitions,
-    DIRECT_PROVIDER_PROMOTION_RATE,
     HeartbeatApplyRequest,
     ReservationClaim,
     SchedulingEvent,
@@ -105,29 +115,22 @@ from iris.cluster.controller.transitions import (
     log_event,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.log_store import CONTROLLER_LOG_KEY
+from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
+from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.types import find_free_port, resolve_external_host
-from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
-from iris.log_server.main import build_log_server_asgi
-from iris.log_server.server import LogServiceImpl
-from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
-from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS
-from iris.rpc.stats import RpcStatsCollector
 from iris.cluster.types import (
     JobName,
+    WorkerId,
     WorkerStatus,
     WorkerStatusMap,
-    WorkerId,
     get_gpu_count,
     get_tpu_count,
     is_job_finished,
 )
-from rigging.log_setup import slow_log
+from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
-from iris.rpc.auth import TokenVerifier
-from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp, TokenBucket
+from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider, TokenVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -135,10 +138,6 @@ _RESOURCE_SPEC_DECODER = proto_decoder(job_pb2.ResourceSpecProto)
 
 # Sentinel for dry-run scheduling with per-worker limits disabled.
 _UNLIMITED = sys.maxsize
-
-# How often the prune loop trims worker_task_history (independent of the
-# full data-prune interval, which is typically 1 hour).
-_HISTORY_CLEANUP_INTERVAL_S = 60.0
 
 
 class SchedulingOutcome(enum.Enum):
@@ -181,6 +180,10 @@ class RunningTaskInfo:
     resource_value: int
     is_coscheduled: bool
     resources: job_pb2.ResourceSpecProto
+    # Device variant (e.g. "v5p-64") the task is running on, derived from the
+    # task's own resource spec. Used to gate preemption to same-variant victims
+    # so a v5p-64 request can never reclaim a v5p-256 slice and vice versa.
+    device_variant: str | None = None
     already_preempted: bool = False
 
 
@@ -493,9 +496,95 @@ def _get_running_tasks_with_band_and_value(
                 ),
                 is_coscheduled=bool(int(row.has_coscheduling)),
                 resources=resources,
+                device_variant=get_device_variant(resources.device),
             )
         )
     return result
+
+
+def _preempt_solo(
+    candidate: PreemptionCandidate,
+    wanted_variant: str | None,
+    solo_victims: list[RunningTaskInfo],
+    context: SchedulingContext,
+) -> tuple[JobName, JobName] | None:
+    """Find a single solo victim whose eviction would free enough capacity for
+    a non-coscheduled preemptor. Mutates the chosen victim's already_preempted
+    flag so subsequent candidates skip it. Returns the (preemptor, victim) pair
+    or None if no victim qualifies.
+
+    The same-variant gate ensures the freed slot shape matches the preemptor;
+    the hypothetical-capacity check covers partial-worker tenancy (e.g. a
+    victim using only some of a worker's CPUs or TPUs).
+    """
+    req = candidate.requirements
+    for victim in solo_victims:
+        if victim.already_preempted:
+            continue
+        if victim.device_variant != wanted_variant:
+            continue
+        # Can only preempt strictly lower priority (higher band_sort_key)
+        if victim.band_sort_key <= candidate.band:
+            continue
+
+        cap = context.capacities.get(victim.worker_id)
+        if cap is None:
+            continue
+        if not cap.matches_constraints(req.constraints):
+            continue
+        # If current capacity already fits, no preemption needed
+        if cap.can_fit(req) is None:
+            continue
+
+        # Would freeing this victim's resources create enough capacity?
+        hypothetical = WorkerCapacity(
+            worker_id=cap.worker_id,
+            available_cpu_millicores=cap.available_cpu_millicores + victim.resources.cpu_millicores,
+            available_memory=cap.available_memory + victim.resources.memory_bytes,
+            available_gpus=cap.available_gpus + get_gpu_count(victim.resources.device),
+            available_tpus=cap.available_tpus + get_tpu_count(victim.resources.device),
+            attributes=cap.attributes,
+            building_task_count=max(0, cap.building_task_count - 1),
+            max_building_tasks=cap.max_building_tasks,
+        )
+        if hypothetical.can_fit(req) is None:
+            victim.already_preempted = True
+            return (candidate.job_name, victim.task_id)
+    return None
+
+
+def _preempt_coscheduled(
+    candidate: PreemptionCandidate,
+    wanted_variant: str | None,
+    n_required: int,
+    sorted_groups: list[tuple[JobName, list[RunningTaskInfo]]],
+) -> list[tuple[JobName, JobName]]:
+    """Find a victim slice (all running tasks of one coscheduled job) whose
+    eviction satisfies a coscheduled preemptor. Returns one (preemptor, victim)
+    pair per slice member, or [] if no slice qualifies. Mutates already_preempted
+    on every member of the chosen slice.
+
+    Coscheduled tasks own their workers whole, so once variant matches and the
+    slice is at least as large as the preemptor, freeing it yields exactly the
+    shape the preemptor needs — no per-worker capacity arithmetic required.
+    """
+    if wanted_variant is None:
+        return []
+    for _victim_job, members in sorted_groups:
+        if any(m.already_preempted for m in members):
+            continue
+        if members[0].device_variant != wanted_variant:
+            continue
+        # Strict band: every sibling must be lower priority than the preemptor.
+        if any(m.band_sort_key <= candidate.band for m in members):
+            continue
+        if len(members) < n_required:
+            continue
+        pairs = [(candidate.job_name, m.task_id) for m in members]
+        for m in members:
+            m.already_preempted = True
+        return pairs
+    return []
 
 
 def _run_preemption_pass(
@@ -510,54 +599,73 @@ def _run_preemption_pass(
     - INTERACTIVE preempts BATCH only.
     - BATCH never preempts.
     - Within same band, no preemption (compete via scheduling order only).
-    - Coscheduled tasks are not preemptible (v1).
+    - Solo (non-coscheduled) preemptors only evict solo victims of the same
+      device-variant.
+    - Coscheduled preemptors evict an entire victim *slice* (all running tasks
+      of one coscheduled job) of the same device-variant and at least the
+      preemptor's task count. A non-coscheduled preemptor never tears down a
+      slice. Same-variant + slice-shaped guarantees the freed capacity matches
+      the request, which avoids large/small thrashing.
     """
     preemptions: list[tuple[JobName, JobName]] = []
 
-    # Sort victims: lowest priority first (highest band_sort_key), then cheapest
-    victims = sorted(running_tasks_info, key=lambda t: (-t.band_sort_key, t.resource_value))
+    # Solo victims: existing per-worker preemption path (same-variant gated).
+    solo_victims = sorted(
+        (v for v in running_tasks_info if not v.is_coscheduled),
+        key=lambda t: (-t.band_sort_key, t.resource_value),
+    )
+
+    # Lazy: only build coscheduled-victim slice index if some preemptor needs
+    # one. The common case (no coscheduled preemptors) skips the bucketing.
+    sorted_groups: list[tuple[JobName, list[RunningTaskInfo]]] = []
+    if any(c.requirements.is_coscheduled for c in unscheduled_tasks):
+        grouped: dict[JobName, list[RunningTaskInfo]] = {}
+        for v in running_tasks_info:
+            if not v.is_coscheduled or v.device_variant is None:
+                continue
+            vparent = v.task_id.parent
+            if vparent is None:
+                continue
+            grouped.setdefault(vparent, []).append(v)
+        sorted_groups = sorted(
+            grouped.items(),
+            key=lambda kv: (
+                -max(t.band_sort_key for t in kv[1]),
+                sum(t.resource_value for t in kv[1]),
+            ),
+        )
+
+    # Preemptor jobs whose siblings have already been satisfied by a slice
+    # eviction this pass; the remaining N-1 siblings short-circuit.
+    satisfied_preemptor_jobs: set[JobName] = set()
+    sibling_count: dict[JobName, int] = defaultdict(int)
+    for c in unscheduled_tasks:
+        if c.job_name.parent is not None:
+            sibling_count[c.job_name.parent] += 1
 
     for candidate in unscheduled_tasks:
-        task_id, req, task_band_key = candidate.job_name, candidate.requirements, candidate.band
         # Batch never preempts
-        if task_band_key >= job_pb2.PRIORITY_BAND_BATCH:
+        if candidate.band >= job_pb2.PRIORITY_BAND_BATCH:
             continue
 
-        for victim in victims:
-            if victim.already_preempted:
-                continue
-            if victim.is_coscheduled:
-                continue
-            # Can only preempt strictly lower priority (higher band_sort_key)
-            if victim.band_sort_key <= task_band_key:
-                continue
+        parent = candidate.job_name.parent
+        if parent is not None and parent in satisfied_preemptor_jobs:
+            continue
 
-            cap = context.capacities.get(victim.worker_id)
-            if cap is None:
-                continue
+        wanted_variant = get_device_variant(candidate.requirements.resources.device)
 
-            if not cap.matches_constraints(req.constraints):
-                continue
+        if not candidate.requirements.is_coscheduled:
+            pair = _preempt_solo(candidate, wanted_variant, solo_victims, context)
+            if pair is not None:
+                preemptions.append(pair)
+            continue
 
-            # If current capacity already fits, no preemption needed
-            if cap.can_fit(req) is None:
-                continue
-
-            # Check if freeing the victim's resources would create enough capacity
-            hypothetical = WorkerCapacity(
-                worker_id=cap.worker_id,
-                available_cpu_millicores=cap.available_cpu_millicores + victim.resources.cpu_millicores,
-                available_memory=cap.available_memory + victim.resources.memory_bytes,
-                available_gpus=cap.available_gpus + get_gpu_count(victim.resources.device),
-                available_tpus=cap.available_tpus + get_tpu_count(victim.resources.device),
-                attributes=cap.attributes,
-                building_task_count=max(0, cap.building_task_count - 1),
-                max_building_tasks=cap.max_building_tasks,
-            )
-            if hypothetical.can_fit(req) is None:
-                preemptions.append((task_id, victim.task_id))
-                victim.already_preempted = True
-                break
+        n_required = sibling_count.get(parent, 1) if parent is not None else 1
+        pairs = _preempt_coscheduled(candidate, wanted_variant, n_required, sorted_groups)
+        if pairs:
+            preemptions.extend(pairs)
+            if parent is not None:
+                satisfied_preemptor_jobs.add(parent)
 
     return preemptions
 
@@ -959,8 +1067,14 @@ class ControllerConfig:
     log_service_address: str | None = None
     """Address of an externally-hosted log server (e.g. http://localhost:10001).
     When set, the controller connects to the existing server. When None,
-    the Controller starts an in-process LogServiceImpl on a free port.
-    Either way, all controller code accesses the log server via RPC clients."""
+    the Controller starts an in-process LogServiceImpl on a free port (used by
+    tests and local-mode runs). In production this address is sourced from
+    `endpoints["/system/log-server"]` and passed in here by the daemon entrypoint."""
+
+    endpoints: dict[str, str] = field(default_factory=dict)
+    """Resolved cluster endpoints: logical name -> concrete URL. Built from
+    cluster_config.endpoints by the daemon entrypoint. Registered into the
+    controller service's _system_endpoints during start()."""
 
 
 def _log_client_interceptors(config: "ControllerConfig") -> tuple:
@@ -1061,15 +1175,20 @@ class Controller:
 
         log_client_interceptors = _log_client_interceptors(config)
         self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
+        self._remote_stats_service = StatsServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
 
         # Providers that collect logs outside the worker process push directly
-        # to the log server via RPC.
+        # to the log server via RPC. K8s pods have no worker daemon, so the
+        # provider also writes per-pod resource samples to iris.task itself —
+        # mirroring what the worker daemon does on the GCE/TPU path.
         if isinstance(self._provider, K8sTaskProvider):
-            self._provider.log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
+            k8s_log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
+            self._provider.log_client = k8s_log_client
+            self._provider.task_stats_table = k8s_log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
 
         # Controller process logs ship to the log server via RemoteLogHandler.
-        self._log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
-        self._log_handler = RemoteLogHandler(self._log_pusher, key=CONTROLLER_LOG_KEY)
+        self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
+        self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)
 
         self._log_handler.setLevel(logging.DEBUG)
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
@@ -1089,7 +1208,7 @@ class Controller:
             self._store,
             controller=self,
             bundle_store=self._bundle_store,
-            log_service=self._remote_log_service,
+            log_client=self._log_client,
             auth=config.auth,
             system_endpoints={},
             user_budget_defaults=config.user_budget_defaults,
@@ -1102,6 +1221,7 @@ class Controller:
             auth_verifier=config.auth_verifier,
             auth_provider=config.auth_provider,
             auth_optional=config.auth.optional if config.auth else False,
+            finelog_stats_service=self._remote_stats_service,
         )
 
         # Background loop state
@@ -1160,28 +1280,32 @@ class Controller:
         return self._started
 
     def _start_local_log_server(self) -> str:
-        """Start an in-process log server on a free port and return its address.
+        """Start a bundled in-process DuckDB-backed log + stats server and return its address.
 
-        Used in local/test mode when no external log server is configured.
-        The server runs in a background thread managed by the ThreadContainer.
+        Used as a fallback when ``cluster_config.endpoints`` does not declare
+        ``/system/log-server`` (and in tests). Backed by a ``DuckDBLogStore``
+        rooted under ``local_state_dir`` so logs survive controller restarts
+        within a single deployment and the stats RPC surface (RegisterTable /
+        WriteRows / Query / DropTable) is available — required for the
+        worker-pane cutover. For production-scale deployments, run
+        finelog-server out-of-band and point the endpoints config at it.
         """
         log_server_port = find_free_port()
-        self._log_service = LogServiceImpl(
-            log_dir=self._config.local_state_dir / "logs",
-            remote_log_dir=f"{self._config.remote_state_dir.rstrip('/')}/logs",
+        log_store_dir = self._config.local_state_dir / "embedded_log_store"
+        log_store_dir.mkdir(parents=True, exist_ok=True)
+        log_store = DuckDBLogStore(
+            log_dir=log_store_dir,
+            duckdb_memory_limit=EMBEDDED_DUCKDB_MEMORY_LIMIT,
+            duckdb_threads=EMBEDDED_DUCKDB_THREADS,
         )
+        self._log_service = LogServiceImpl(log_store=log_store)
+        stats_service = StatsServiceImpl(log_store=log_store)
 
-        # Wrap the verifier in NullAuthInterceptor so anonymous calls are
-        # still accepted in null-auth/test mode, matching the dashboard's
-        # behaviour. Real workers attach JWTs that the verifier validates.
         interceptors = (NullAuthInterceptor(verifier=self._config.auth_verifier),)
-        # Stats collector for the in-process log server. Snapshot is reachable
-        # via /iris.stats.StatsService/GetRpcStats on the log-server port.
-        self._log_stats_collector = RpcStatsCollector(slow_threshold_ms=SLOW_RPC_THRESHOLD_MS)
         app = build_log_server_asgi(
             self._log_service,
             interceptors=interceptors,
-            stats_collector=self._log_stats_collector,
+            stats_service=stats_service,
         )
         log_server_config = uvicorn.Config(
             app,
@@ -1223,6 +1347,14 @@ class Controller:
         # timeout_keep_alive: uvicorn defaults to 5s, which races with client polling
         # intervals of the same length, causing TCP resets on idle connections. Use 120s
         # to safely cover long polling gaps during job waits.
+        # proxy_headers / forwarded_allow_ips: production traffic arrives via
+        # GCP IAP + an HTTPS load balancer. Without trusting their forwarded
+        # headers, ``scope["server"]`` is the controller's bind address, so
+        # any absolute URL built by Starlette (notably the trailing-slash
+        # redirect on routes like ``/proxy/<name>``) leaks the internal IP
+        # back to the browser as ``http://10.x.x.x:10000/...`` — unreachable
+        # outside the VPC. Trusting all upstream IPs is safe because the
+        # controller's only ingress is the LB.
         server_config = uvicorn.Config(
             self._dashboard.app,
             host=self._config.host,
@@ -1230,9 +1362,21 @@ class Controller:
             log_level="warning",
             log_config=None,
             timeout_keep_alive=120,
+            proxy_headers=True,
+            forwarded_allow_ips="*",
         )
         self._server = uvicorn.Server(server_config)
         self._threads.spawn_server(self._server, name="controller-server")
+
+        # Register cluster endpoints BEFORE spawning the autoscaler. Otherwise the
+        # autoscaler's first tick can create buffer slices whose workers query the
+        # controller for /system/log-server before this dict is populated, returning
+        # an empty result. The slice creation fails, the group enters backoff, and
+        # any task constrained to that group hangs until the backoff expires.
+        for name, url in self._config.endpoints.items():
+            self._service._system_endpoints[name] = url
+            logger.info("Registered system endpoint %s -> %s", name, url)
+        self._service._system_endpoints["/system/log-server"] = self._log_service_address
 
         if self._autoscaler:
             logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
@@ -1251,10 +1395,6 @@ class Controller:
             lambda: self._server is not None and self._server.started,
             timeout=Duration.from_seconds(5.0),
         )
-
-        # Register log server endpoint so workers can resolve it via ListEndpoints.
-        self._service._system_endpoints["/system/log-server"] = self._log_service_address
-        logger.info("Registered system endpoint /system/log-server -> %s", self._log_service_address)
 
     def stop(self) -> None:
         """Stop all background components gracefully. Idempotent.
@@ -1303,8 +1443,9 @@ class Controller:
         # from late log records hitting a closed store or connection.
         logging.getLogger("iris").removeHandler(self._log_handler)
         self._log_handler.close()
-        self._log_pusher.close()
+        self._log_client.close()
         self._remote_log_service.close()
+        self._remote_stats_service.close()
         if self._log_service:
             self._log_service.close()
         self._db.close()
@@ -1363,43 +1504,26 @@ class Controller:
                     logger.exception("Inline poll reconciliation failed")
 
     def _run_prune_loop(self, stop_event: threading.Event) -> None:
-        """Background pruning loop: history cleanup every 60s, full data prune on the configured interval."""
+        """Background maintenance: WAL checkpoint every 10 min, full data prune on the configured interval."""
+        wal_checkpoint_interval = 600.0
         last_full_prune = 0.0
-        resource_history_limiter = RateLimiter(interval_seconds=600.0)
-        wal_checkpoint_limiter = RateLimiter(interval_seconds=600.0)
         full_prune_interval = self._config.prune_interval.to_seconds()
 
         while not stop_event.is_set():
-            stop_event.wait(timeout=_HISTORY_CLEANUP_INTERVAL_S)
+            stop_event.wait(timeout=wal_checkpoint_interval)
             if stop_event.is_set():
                 break
 
             try:
-                self._store.workers.prune_task_history()
+                busy, log_frames, checkpointed = self._db.wal_checkpoint()
+                logger.info(
+                    "wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
+                    busy,
+                    log_frames,
+                    checkpointed,
+                )
             except Exception:
-                logger.exception("Worker task history cleanup failed")
-
-            if resource_history_limiter.should_run():
-                try:
-                    self._store.workers.prune_resource_history()
-                except Exception:
-                    logger.exception("Worker resource history cleanup failed")
-                try:
-                    self._store.tasks.prune_resource_history()
-                except Exception:
-                    logger.exception("Task resource history cleanup failed")
-
-            if wal_checkpoint_limiter.should_run():
-                try:
-                    busy, log_frames, checkpointed = self._db.wal_checkpoint()
-                    logger.info(
-                        "wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
-                        busy,
-                        log_frames,
-                        checkpointed,
-                    )
-                except Exception:
-                    logger.exception("WAL checkpoint failed")
+                logger.exception("WAL checkpoint failed")
 
             now = time.monotonic()
             if now - last_full_prune >= full_prune_interval:
@@ -1987,13 +2111,17 @@ class Controller:
                 user_budget_defaults=self._config.user_budget_defaults,
             )
             preemptions = _run_preemption_pass(unscheduled, running_info, context)
-            for preemptor_name, victim_id in preemptions:
-                with self._store.transaction() as cur:
-                    preempt_result = self._transitions.preempt_task(
-                        cur, victim_id, reason=f"Preempted by {preemptor_name}"
-                    )
-                self.kill_tasks_on_workers(preempt_result.tasks_to_kill)
+            # Apply all preemptions in one transaction so slice evictions
+            # (N siblings of a coscheduled preemptor) are all-or-nothing.
+            kills: set[JobName] = set()
             if preemptions:
+                with self._store.transaction() as cur:
+                    for preemptor_name, victim_id in preemptions:
+                        preempt_result = self._transitions.preempt_task(
+                            cur, victim_id, reason=f"Preempted by {preemptor_name}"
+                        )
+                        kills |= preempt_result.tasks_to_kill
+                self.kill_tasks_on_workers(kills)
                 logger.info("Preemption pass: %d tasks preempted", len(preemptions))
         return preemptions
 
@@ -2162,7 +2290,6 @@ class Controller:
                 self._task_update_queue.put(
                     HeartbeatApplyRequest(
                         worker_id=worker_id,
-                        worker_resource_snapshot=None,
                         updates=[
                             TaskUpdate(
                                 task_id=JobName.from_wire(t.task_id),
@@ -2188,7 +2315,6 @@ class Controller:
                     self._task_update_queue.put(
                         HeartbeatApplyRequest(
                             worker_id=worker_id,
-                            worker_resource_snapshot=None,
                             updates=[
                                 TaskUpdate(
                                     task_id=JobName.from_wire(ack.task_id),
@@ -2238,9 +2364,6 @@ class Controller:
         """
         ping_interval_s = self._config.heartbeat_interval.to_seconds()
         limiter = RateLimiter(interval_seconds=ping_interval_s)
-        # Refresh resource snapshots every ~60s; other cycles just note liveness.
-        resource_update_every = max(1, round(60.0 / ping_interval_s))
-        cycle = 0
 
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
@@ -2248,19 +2371,17 @@ class Controller:
             try:
                 workers = self._get_active_worker_addresses()
                 results = self._provider.ping_workers(workers)
-                update_resources = cycle % resource_update_every == 0
-                cycle += 1
 
-                ping_snapshots: dict[WorkerId, job_pb2.WorkerResourceSnapshot | None] = {}
+                live_worker_ids: list[WorkerId] = []
                 for result in results:
                     if result.error is not None:
                         self._health.ping(result.worker_id, healthy=False)
                     else:
                         self._health.ping(result.worker_id, healthy=True)
-                        ping_snapshots[result.worker_id] = result.resource_snapshot if update_resources else None
+                        live_worker_ids.append(result.worker_id)
 
                 with self._store.transaction() as cur:
-                    self._transitions.update_worker_pings(cur, ping_snapshots)
+                    self._transitions.update_worker_pings(cur, live_worker_ids)
 
                 unhealthy = self._health.workers_over_threshold()
                 if unhealthy:
@@ -2296,7 +2417,6 @@ class Controller:
                 self._task_update_queue.put(
                     HeartbeatApplyRequest(
                         worker_id=worker_id,
-                        worker_resource_snapshot=None,
                         updates=updates,
                     )
                 )

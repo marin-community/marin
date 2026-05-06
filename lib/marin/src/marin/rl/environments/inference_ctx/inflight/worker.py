@@ -5,8 +5,8 @@ import logging
 
 import numpy as np
 from marin.rl.environments.inference_ctx.inflight.async_bridge import AsyncBridge
-from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +34,11 @@ def _apply_worker_extension_mro_fix():
     See: https://github.com/vllm-project/vllm/issues/XXXX (TODO: file upstream issue)
     """
     try:
-        from vllm.v1.worker.worker_base import WorkerWrapperBase
         from vllm.config import set_current_vllm_config
-        from vllm.utils.import_utils import resolve_obj_by_qualname
         from vllm.multimodal import MULTIMODAL_REGISTRY
         from vllm.multimodal.cache import worker_receiver_cache_from_config
+        from vllm.utils.import_utils import resolve_obj_by_qualname
+        from vllm.v1.worker.worker_base import WorkerWrapperBase
     except ImportError:
         logger.warning("Could not import vLLM V1 worker modules for MRO fix")
         return
@@ -185,6 +185,7 @@ class SyncVLLMWrapper:
         load_format: str = "auto",
         enforce_eager: bool = True,
         kv_cache_metrics: bool = False,
+        seed: int = 0,
     ):
         if AsyncEngineArgs is None:
             raise RuntimeError("vLLM async engine is not available. Please install vLLM v1 with: pip install vllm")
@@ -193,16 +194,18 @@ class SyncVLLMWrapper:
         self.bridge.start()
 
         # Initialize async engine from sync code
-        engine_args = AsyncEngineArgs(
-            model=model,
-            max_model_len=max_model_len,
-            worker_extension_cls="marin.rl.environments.inference_ctx.inflight.worker.WorkerExtension",
-            tensor_parallel_size=tensor_parallel_size,
-            gpu_memory_utilization=gpu_memory_utilization,
-            load_format=load_format,
-            enforce_eager=enforce_eager,
-            kv_cache_metrics=kv_cache_metrics,
-        )
+        engine_kwargs = {
+            "model": model,
+            "max_model_len": max_model_len,
+            "worker_extension_cls": "marin.rl.environments.inference_ctx.inflight.worker.WorkerExtension",
+            "tensor_parallel_size": tensor_parallel_size,
+            "gpu_memory_utilization": gpu_memory_utilization,
+            "load_format": load_format,
+            "enforce_eager": enforce_eager,
+            "kv_cache_metrics": kv_cache_metrics,
+            "seed": seed,
+        }
+        engine_args = AsyncEngineArgs(**engine_kwargs)
 
         self.engine = self.bridge.run(self._init_engine(engine_args))
 

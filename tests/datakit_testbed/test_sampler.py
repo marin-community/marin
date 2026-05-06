@@ -9,14 +9,13 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-
 from marin.datakit.normalize import NormalizedData
+from marin.datakit.sources import DatakitSource
 
 from experiments.datakit_testbed.sampler import (
     proportional_sample_fractions,
     sample_normalized_shards,
 )
-from marin.datakit.sources import DatakitSource
 
 
 def _write_normalized_shard(path: Path, ids: list[str]) -> None:

@@ -12,13 +12,13 @@ from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
 import cloudpickle
+from rigging.timing import ExponentialBackoff
 
 from iris.actor.client import unwrap_actor_response
-from iris.actor.resolver import ResolvedEndpoint, ResolveResult, Resolver
+from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
 from iris.rpc.errors import call_with_retry
-from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 

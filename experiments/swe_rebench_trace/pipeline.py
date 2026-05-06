@@ -122,7 +122,7 @@ def main() -> None:
         args.task_image,
     )
 
-    output_files = list(ctx.execute(pipeline))
+    output_files = ctx.execute(pipeline).results
     logger.info("Pipeline complete: wrote %d shard files", len(output_files))
     for f in output_files:
         print(f)

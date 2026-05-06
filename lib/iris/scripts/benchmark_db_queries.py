@@ -27,12 +27,11 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 import click
-
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     _building_counts,
@@ -53,6 +52,7 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
+    EndpointRow,
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
@@ -71,7 +71,6 @@ from iris.cluster.controller.service import (
     _worker_addresses_for_tasks,
     _worker_roster,
 )
-from iris.cluster.controller.schema import EndpointRow
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -81,8 +80,7 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
 )
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, WorkerId
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
 _results: list[tuple[str, float, float, int]] = []
@@ -97,9 +95,6 @@ _CLONE_TABLES = [
     "workers",
     "worker_attributes",
     "dispatch_queue",
-    "worker_task_history",
-    "worker_resource_history",
-    "task_resource_history",
     "endpoints",
     "reservation_claims",
     "meta",
@@ -400,36 +395,36 @@ def benchmark_dashboard(db: ControllerDB) -> None:
     jobs = _bench_jobs_in_states(db)
     job_ids = {j.job_id for j in jobs}
 
-    bench("_task_summaries_for_jobs (all)", lambda: _task_summaries_for_jobs(db, job_ids))
+    def _bench_task_summaries():
+        with db.read_snapshot() as q:
+            return _task_summaries_for_jobs(q, job_ids)
+
+    bench("_task_summaries_for_jobs (all)", _bench_task_summaries)
 
     roots_by_date = controller_pb2.Controller.JobQuery(
         scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
         limit=50,
     )
-    bench(
-        "_query_jobs (roots, by date)",
-        lambda: _query_jobs(db, roots_by_date, USER_JOB_STATES),
-    )
+
+    def _bench_query(query):
+        with db.read_snapshot() as q:
+            return _query_jobs(q, query, USER_JOB_STATES)
+
+    bench("_query_jobs (roots, by date)", lambda: _bench_query(roots_by_date))
 
     roots_by_name = controller_pb2.Controller.JobQuery(
         scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
         name_filter="test",
         limit=50,
     )
-    bench(
-        "_query_jobs (roots, name filter)",
-        lambda: _query_jobs(db, roots_by_name, USER_JOB_STATES),
-    )
+    bench("_query_jobs (roots, name filter)", lambda: _bench_query(roots_by_name))
 
     roots_by_failures = controller_pb2.Controller.JobQuery(
         scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
         sort_field=controller_pb2.Controller.JOB_SORT_FIELD_FAILURES,
         limit=50,
     )
-    bench(
-        "_query_jobs (roots, sort failures)",
-        lambda: _query_jobs(db, roots_by_failures, USER_JOB_STATES),
-    )
+    bench("_query_jobs (roots, sort failures)", lambda: _bench_query(roots_by_failures))
 
     sample_job = jobs[0] if jobs else None
     if sample_job:
@@ -465,13 +460,16 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
         limit=50,
     )
-    paginated_jobs, _ = _query_jobs(db, roots_query, USER_JOB_STATES)
+    with db.read_snapshot() as q:
+        paginated_jobs, _ = _query_jobs(q, roots_query, USER_JOB_STATES)
     root_job_ids = [j.job_id for j in paginated_jobs]
     if root_job_ids:
-        bench(
-            f"_parent_ids_with_children ({len(root_job_ids)} roots)",
-            lambda: _parent_ids_with_children(db, root_job_ids),
-        )
+
+        def _bench_parents():
+            with db.read_snapshot() as q:
+                return _parent_ids_with_children(q, root_job_ids)
+
+        bench(f"_parent_ids_with_children ({len(root_job_ids)} roots)", _bench_parents)
     else:
         print("  _parent_ids_with_children                         (skipped, no jobs)")
 
@@ -498,10 +496,11 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         bench("_tasks_for_worker", lambda: _tasks_for_worker(db, sample_worker_id))
 
     def _list_jobs_full(db):
-        paginated_jobs, _total = _query_jobs(db, roots_query, USER_JOB_STATES)
-        root_ids = [j.job_id for j in paginated_jobs]
-        _task_summaries_for_jobs(db, {j.job_id for j in paginated_jobs})
-        _parent_ids_with_children(db, root_ids)
+        with db.read_snapshot() as q:
+            paginated_jobs, _total = _query_jobs(q, roots_query, USER_JOB_STATES)
+            root_ids = [j.job_id for j in paginated_jobs]
+            _task_summaries_for_jobs(q, {j.job_id for j in paginated_jobs})
+            _parent_ids_with_children(q, root_ids)
 
     bench("list_jobs_full (composite)", lambda: _list_jobs_full(db))
 
@@ -603,25 +602,6 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
             f"apply_heartbeats_batch ({len(heartbeat_requests)}w, {total_tasks}t)",
             lambda: hb_transitions.apply_heartbeats_batch(heartbeat_requests),
         )
-
-        # prune_worker_resource_history runs in the background prune loop every
-        # 10 minutes. It was previously inlined into apply_heartbeats_batch as
-        # a per-worker SELECT+DELETE pair, adding ~N*2 queries to each sync
-        # cycle's write transaction. Benchmark it here so we can track its cost
-        # as a background operation.
-        workers_over_limit = hb_db.fetchall(
-            "SELECT COUNT(DISTINCT worker_id) as cnt FROM worker_resource_history "
-            "GROUP BY worker_id HAVING COUNT(*) >= ?",
-            (500,),
-        )
-        n_over = len(workers_over_limit)
-        if n_over:
-            bench(
-                f"prune_worker_resource_history ({n_over} workers over limit)",
-                lambda: hb_transitions.prune_worker_resource_history(),
-            )
-        else:
-            print("  prune_worker_resource_history                     (skipped, no workers over limit)")
     finally:
         hb_db.close()
         shutil.rmtree(hb_db._db_dir, ignore_errors=True)

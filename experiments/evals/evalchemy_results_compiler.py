@@ -17,10 +17,9 @@ import traceback
 
 import fsspec
 import pandas as pd
+from marin.evaluation.evaluation_config import WANDB_PROJECT
 from rigging.filesystem import filesystem as marin_filesystem
 from rigging.filesystem import open_url
-
-from marin.evaluation.evaluation_config import WANDB_PROJECT
 
 logger = logging.getLogger(__name__)
 

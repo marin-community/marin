@@ -241,7 +241,7 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -
 
 
 class ArrowFlightCoordinator:
-    """Ray actor for coordinating Arrow Flight weight transfers."""
+    """Actor for coordinating Arrow Flight weight transfers."""
 
     _server_info: ServerInfo | None
 

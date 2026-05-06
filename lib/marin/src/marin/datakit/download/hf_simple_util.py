@@ -76,13 +76,12 @@ def hf_normalize_steps(
         override_output_path=staged_path,
     )
 
-    input_path = f"{download.output_path}/{data_subdir}" if data_subdir else download.output_path
     normalize = _normalize_step(
         name=f"normalized/{marin_name}",
         download=download,
         text_field=text_field,
         id_field=id_field,
-        input_path=input_path,
+        relative_input_path=data_subdir or None,
         file_extensions=file_extensions,
     )
     return (download, normalize)

@@ -3,7 +3,6 @@
 
 from iris.cli.token_store import store_token
 from iris.rpc import controller_pb2, job_pb2, time_pb2
-
 from marin.mcp.babysitter import (
     IrisBabysitter,
     IrisConnectionConfig,
@@ -109,6 +108,7 @@ def test_job_summary_payload_preserves_summary_task_fields():
 
     assert payload["tasks"][0]["index"] == "0"
     assert payload["tasks"][0]["exit_code"] is None
+    assert "resource_usage" not in payload
     assert "resource_requests" in payload
 
 

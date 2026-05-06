@@ -21,11 +21,10 @@ import time
 
 import pytest
 from iris.chaos import enable_chaos, reset_chaos
-from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
 from iris.cluster.types import CoschedulingConfig
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.test_util import SentinelFile
 from rigging.timing import Duration
 

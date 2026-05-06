@@ -9,14 +9,13 @@ from typing import Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
+from rigging.timing import Timer
 
 from iris.cluster.process_status import get_process_status as _get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.worker.worker_types import TaskInfo
-from iris.rpc import job_pb2
-from iris.rpc import worker_pb2
+from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import rpc_error_handler
-from rigging.timing import Timer
 
 logger = logging.getLogger(__name__)
 

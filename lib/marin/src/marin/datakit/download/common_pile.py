@@ -30,12 +30,9 @@ _COMMON_PILE_ENTRIES: tuple[tuple[str, str, str, str], ...] = (
         "raw/common_pile/arxiv_abstracts_filtered-f1d7a9a",
     ),
     ("cp/arxiv_papers", "common-pile/arxiv_papers_filtered", "033cf7f", "raw/common_pile/arxiv_papers_filtered-033cf7f"),
-    (
-        "cp/biodiversity",
-        "common-pile/biodiversity_heritage_library_filtered",
-        "0486ed6",
-        "raw/common_pile/biodiversity_heritage_library_filtered-0486ed6",
-    ),
+    # Note: cp/biodiversity is carved out into its own module
+    # (``marin.datakit.download.biodiversity``) because BHL ships one row per
+    # scanned page; we stitch pages into per-item documents before normalize.
     (
         "cp/caselaw",
         "common-pile/caselaw_access_project_filtered",

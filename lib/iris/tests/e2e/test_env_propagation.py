@@ -13,7 +13,6 @@ import json
 from unittest.mock import patch
 
 import pytest
-
 from iris.client import IrisContext, iris_ctx_scope
 from iris.client.client import IrisClient, LocalClientConfig
 from iris.cluster.client.job_info import JobInfo

@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from typing import TypeVar, overload, Any
 from dataclasses import asdict, dataclass, is_dataclass
-from marin.execution.step_spec import StepSpec
+from typing import Any, TypeVar, overload
 
-from rigging.filesystem import open_url
 from pydantic import BaseModel
+from rigging.filesystem import open_url
+
+from marin.execution.step_spec import StepSpec
 
 T = TypeVar("T")
 

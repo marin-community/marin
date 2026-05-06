@@ -11,7 +11,6 @@ import pickle
 from unittest.mock import MagicMock
 
 import pytest
-
 from fray.iris_backend import (
     FrayIrisClient,
     IrisActorHandle,

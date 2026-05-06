@@ -9,8 +9,7 @@ from iris.cluster.controller.budget import UserBudgetDefaults, UserTask, compute
 from iris.cluster.controller.controller import SchedulingOutcome, _schedulable_tasks
 from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
 from .conftest import (

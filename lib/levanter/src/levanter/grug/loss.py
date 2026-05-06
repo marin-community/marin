@@ -9,7 +9,7 @@ reference implementation on non-TPU backends.
 
 import jax
 import jax.numpy as jnp
-from jax.sharding import PartitionSpec as P
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh, get_mesh, reshard
 
 from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
@@ -21,11 +21,11 @@ def _batch_axis_spec(x: jax.Array):
     x_type = jax.typeof(x)
     sharding = getattr(x_type, "sharding", None)
     spec = getattr(sharding, "spec", None)
-    if spec is not None and len(spec) > 0:
+    if spec is not None and len(spec) > 0 and spec[0] is not None:
         return spec[0]
     sharding = getattr(x, "sharding", None)
     spec = getattr(sharding, "spec", None)
-    if spec is not None and len(spec) > 0:
+    if spec is not None and len(spec) > 0 and spec[0] is not None:
         return spec[0]
     return ("data",)
 
@@ -44,6 +44,26 @@ def _psum_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
     if len(axis_names) == 1:
         return jax.lax.psum(x, axis_names[0])
     return jax.lax.psum(x, axis_names)
+
+
+def _current_mesh() -> Mesh | jax.sharding.AbstractMesh:
+    try:
+        mesh = get_mesh()
+    except ValueError:
+        mesh = None
+    if mesh is not None and not mesh.empty:
+        return mesh
+    return get_abstract_mesh()
+
+
+def _reshard_for_shard_map(
+    x: jax.Array,
+    mesh: Mesh | jax.sharding.AbstractMesh | None,
+    spec: P,
+) -> jax.Array:
+    if mesh is not None and not mesh.empty:
+        return reshard(x, NamedSharding(mesh, spec))
+    return x
 
 
 @named_call
@@ -90,9 +110,11 @@ def fused_linear_softmax_cross_entropy_loss(
     else:
         raise ValueError(f"Unknown reduction: {reduction}")
 
+    mesh = _current_mesh()
+    has_mesh = mesh is not None and not mesh.empty
     weight_array = weight if weight is not None else jnp.ones_like(labels, dtype=dtype)
-    batch_axis_spec = _batch_axis_spec(hidden)
-    batch_axis_names = _axis_names_from_spec(batch_axis_spec)
+    batch_axis_spec = _batch_axis_spec(hidden) if has_mesh else None
+    batch_axis_names = _axis_names_from_spec(batch_axis_spec) if has_mesh else ()
 
     def _loss_shard(
         shard_hidden: jax.Array,
@@ -128,10 +150,22 @@ def fused_linear_softmax_cross_entropy_loss(
         total_denom = _psum_over_axes(local_denom, batch_axis_names)
         return jnp.where(total_denom != 0, total_sum / total_denom, jnp.zeros_like(total_denom))
 
-    out_specs = P(batch_axis_spec) if reduction_mode is None else P()
+    if not has_mesh:
+        return _loss_shard(hidden, lm_head, labels, weight_array)
+
+    hidden_spec = P(batch_axis_spec)
+    lm_head_spec = P(None, None)
+    label_spec = P(batch_axis_spec)
+    hidden = _reshard_for_shard_map(hidden, mesh, hidden_spec)
+    lm_head = _reshard_for_shard_map(lm_head, mesh, lm_head_spec)
+    labels = _reshard_for_shard_map(labels, mesh, label_spec)
+    weight_array = _reshard_for_shard_map(weight_array, mesh, label_spec)
+
+    out_specs = hidden_spec if reduction_mode is None else P()
     return jax.shard_map(
         _loss_shard,
-        in_specs=(P(batch_axis_spec), P(None, None), P(batch_axis_spec), P(batch_axis_spec)),
+        mesh=mesh,
+        in_specs=(hidden_spec, lm_head_spec, label_spec, label_spec),
         out_specs=out_specs,
         check_vma=False,
     )(hidden, lm_head, labels, weight_array)

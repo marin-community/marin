@@ -9,9 +9,9 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import pytest
+from levanter.checkpoint import Checkpointer, CheckpointInterval
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
-from levanter.checkpoint import CheckpointInterval, Checkpointer
 
 
 def _write_checkpoint_metadata(checkpoint_dir: Path, *, step: int, timestamp: str) -> None:

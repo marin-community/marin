@@ -192,7 +192,7 @@ def normalize_nemotron_v2_step(download: StepSpec, *, family: str, subset: str) 
         text_field=info.subset_text_fields.get(subset, "text"),
         id_field="id",
         file_extensions=(".parquet",),
-        input_path=f"{download.output_path}/{subset_dir}",
+        relative_input_path=subset_dir,
         worker_resources=info.subset_normalize_worker_resources.get(subset),
     )
 

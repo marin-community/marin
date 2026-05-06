@@ -9,9 +9,10 @@ Llama-3 tokenizer (gated repo) via ``default_validation_sets``, so its
 end-to-end shape is validated by a live smoke run rather than unit tests.
 """
 
+from marin.datakit.sources import all_sources
+
 from experiments.datakit_testbed.sampler import build_testbed_steps
 from experiments.datakit_testbed.train import testbed_tokenize as _testbed_tokenize
-from marin.datakit.sources import all_sources
 
 _SMOKE_SOURCE = all_sources()["nemotron_cc_code_v1/all"]
 

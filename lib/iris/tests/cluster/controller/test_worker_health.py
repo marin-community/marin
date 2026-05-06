@@ -9,7 +9,6 @@ Exercises the two independent termination paths:
 """
 
 import pytest
-
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import WorkerId
 

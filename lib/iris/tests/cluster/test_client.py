@@ -9,10 +9,8 @@ both GCP and K8s providers via the ServiceTestHarness.
 
 import pytest
 from connectrpc.errors import ConnectError
-
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 
 from .conftest import ServiceTestHarness
 
