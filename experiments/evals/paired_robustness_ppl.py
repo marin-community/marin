@@ -8,7 +8,9 @@ from __future__ import annotations
 import logging
 import os
 import posixpath
-from collections.abc import Mapping, Sequence
+import tarfile
+import urllib.request
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -26,11 +28,18 @@ EPIC_5005 = 5005
 PAIR_ROBUSTNESS_ISSUE = 5096
 DEFAULT_SAMPLE_CAP = 1_024
 DEFAULT_SHARD_SIZE = 512
+FLORES200_ARCHIVE_URL = "https://dl.fbaipublicfiles.com/nllb/flores200_dataset.tar.gz"
+FLORES200_DOWNLOAD_TIMEOUT = 300
 
 
 class PairedRobustnessFamily(StrEnum):
     PARAPHRASE = "paraphrase"
     TRANSLATION = "translation"
+
+
+class PairedRobustnessSourceType(StrEnum):
+    HUGGING_FACE = "hugging_face"
+    FLORES200_ARCHIVE = "flores200_archive"
 
 
 class PairedTextView(StrEnum):
@@ -61,6 +70,8 @@ class PairedRobustnessSlice:
     source_label: str
     target_label: str
     max_pairs: int
+    source_type: PairedRobustnessSourceType = PairedRobustnessSourceType.HUGGING_FACE
+    data_url: str | None = None
     trust_remote_code: bool = False
     label_field: str | None = None
     required_label: int | None = None
@@ -73,6 +84,8 @@ class PairedRobustnessSlice:
             raise ValueError("source_field and target_field must differ for paired eval slices.")
         if self.max_pairs <= 0:
             raise ValueError(f"max_pairs must be positive, got {self.max_pairs}.")
+        if self.source_type == PairedRobustnessSourceType.FLORES200_ARCHIVE and self.data_url is None:
+            raise ValueError("data_url must be set for FLORES-200 archive slices.")
 
     @property
     def raw_step_key(self) -> str:
@@ -141,8 +154,9 @@ PAIRED_ROBUSTNESS_SLICES: tuple[PairedRobustnessSlice, ...] = (
         target_field="sentence_deu_Latn",
         source_label="English",
         target_label="German",
-        trust_remote_code=True,
         max_pairs=512,
+        source_type=PairedRobustnessSourceType.FLORES200_ARCHIVE,
+        data_url=FLORES200_ARCHIVE_URL,
         notes="FLORES-200 held-out dev translation pairs (en->de), capped sample.",
     ),
     PairedRobustnessSlice(
@@ -156,8 +170,9 @@ PAIRED_ROBUSTNESS_SLICES: tuple[PairedRobustnessSlice, ...] = (
         target_field="sentence_deu_Latn",
         source_label="English",
         target_label="German",
-        trust_remote_code=True,
         max_pairs=512,
+        source_type=PairedRobustnessSourceType.FLORES200_ARCHIVE,
+        data_url=FLORES200_ARCHIVE_URL,
         notes="FLORES-200 held-out devtest translation pairs (en->de), capped sample.",
     ),
 )
@@ -182,6 +197,8 @@ class PairedRobustnessMaterializeConfig:
     source_label: str
     target_label: str
     max_pairs: int
+    source_type: PairedRobustnessSourceType = PairedRobustnessSourceType.HUGGING_FACE
+    data_url: str | None = None
     trust_remote_code: bool = False
     label_field: str | None = None
     required_label: int | None = None
@@ -218,13 +235,7 @@ def linearized_text_views_for_example(
 
 def materialize_paired_robustness_slice(config: PairedRobustnessMaterializeConfig) -> None:
     slice_ = _slice_from_config(config)
-    dataset = datasets.load_dataset(
-        path=config.hf_dataset_id,
-        name=config.hf_dataset_name,
-        split=config.split,
-        streaming=True,
-        trust_remote_code=config.trust_remote_code,
-    )
+    dataset = _source_examples(config)
 
     buffers = {view: [] for view in ALL_PAIRED_TEXT_VIEWS}
     shard_index = {view: 0 for view in ALL_PAIRED_TEXT_VIEWS}
@@ -289,6 +300,8 @@ def paired_robustness_raw_steps(
                 "source_label": slice_.source_label,
                 "target_label": slice_.target_label,
                 "max_pairs": slice_.max_pairs,
+                "source_type": slice_.source_type.value,
+                "data_url": slice_.data_url,
                 "trust_remote_code": slice_.trust_remote_code,
                 "label_field": slice_.label_field,
                 "required_label": slice_.required_label,
@@ -335,6 +348,8 @@ def _materialize_config(
         source_label=slice_.source_label,
         target_label=slice_.target_label,
         max_pairs=slice_.max_pairs,
+        source_type=slice_.source_type,
+        data_url=slice_.data_url,
         trust_remote_code=slice_.trust_remote_code,
         label_field=slice_.label_field,
         required_label=slice_.required_label,
@@ -356,11 +371,113 @@ def _slice_from_config(config: PairedRobustnessMaterializeConfig) -> PairedRobus
         source_label=config.source_label,
         target_label=config.target_label,
         max_pairs=config.max_pairs,
+        source_type=config.source_type,
+        data_url=config.data_url,
         trust_remote_code=config.trust_remote_code,
         label_field=config.label_field,
         required_label=config.required_label,
         notes=config.notes,
     )
+
+
+def _source_examples(config: PairedRobustnessMaterializeConfig) -> Iterable[Mapping[str, object]]:
+    if config.source_type == PairedRobustnessSourceType.HUGGING_FACE:
+        return datasets.load_dataset(
+            path=config.hf_dataset_id,
+            name=config.hf_dataset_name,
+            split=config.split,
+            streaming=True,
+            trust_remote_code=config.trust_remote_code,
+        )
+    if config.source_type == PairedRobustnessSourceType.FLORES200_ARCHIVE:
+        return _flores200_archive_examples(config)
+    raise ValueError(f"Unsupported paired robustness source type: {config.source_type}.")
+
+
+def _flores200_archive_examples(config: PairedRobustnessMaterializeConfig) -> Iterable[Mapping[str, object]]:
+    if config.data_url is None:
+        raise ValueError("data_url must be set for FLORES-200 archive slices.")
+
+    source_language = _flores200_language_from_sentence_field(config.source_field)
+    target_language = _flores200_language_from_sentence_field(config.target_field)
+    required_members = {
+        f"flores200_dataset/{config.split}/{source_language}.{config.split}": "source",
+        f"flores200_dataset/{config.split}/{target_language}.{config.split}": "target",
+        f"flores200_dataset/metadata_{config.split}.tsv": "metadata",
+    }
+    extracted_text: dict[str, str] = {}
+
+    with urllib.request.urlopen(config.data_url, timeout=FLORES200_DOWNLOAD_TIMEOUT) as response:
+        with tarfile.open(fileobj=response, mode="r|gz") as archive:
+            for member in archive:
+                normalized_name = member.name.lstrip("./")
+                file_key = required_members.get(normalized_name)
+                if file_key is None:
+                    continue
+
+                extracted_file = archive.extractfile(member)
+                if extracted_file is None:
+                    raise ValueError(f"Expected FLORES-200 archive member {member.name!r} to be a file.")
+                extracted_text[file_key] = extracted_file.read().decode("utf-8")
+                if len(extracted_text) == len(required_members):
+                    break
+
+    missing_members = set(required_members.values()) - set(extracted_text)
+    if missing_members:
+        raise ValueError(f"FLORES-200 archive {config.data_url} is missing required files: {sorted(missing_members)}.")
+
+    source_sentences = extracted_text["source"].splitlines()
+    target_sentences = extracted_text["target"].splitlines()
+    metadata_rows = _flores200_metadata_rows(extracted_text["metadata"])
+    if len(source_sentences) != len(target_sentences) or len(source_sentences) != len(metadata_rows):
+        raise ValueError(
+            "FLORES-200 archive has mismatched source, target, and metadata row counts: "
+            f"{len(source_sentences)}, {len(target_sentences)}, {len(metadata_rows)}."
+        )
+
+    for id_, (source_text, target_text, metadata) in enumerate(
+        zip(source_sentences, target_sentences, metadata_rows, strict=True), start=1
+    ):
+        yield {
+            "id": id_,
+            "URL": metadata["URL"],
+            "domain": metadata["domain"],
+            "topic": metadata["topic"],
+            "has_image": _yes_no_as_int(metadata["has_image"]),
+            "has_hyperlink": _yes_no_as_int(metadata["has_hyperlink"]),
+            config.source_field: source_text,
+            config.target_field: target_text,
+        }
+
+
+def _flores200_language_from_sentence_field(field_name: str) -> str:
+    field_prefix = "sentence_"
+    if not field_name.startswith(field_prefix):
+        raise ValueError(f"FLORES-200 sentence field must start with {field_prefix!r}, got {field_name!r}.")
+    return field_name.removeprefix(field_prefix)
+
+
+def _flores200_metadata_rows(metadata_tsv: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    lines = metadata_tsv.splitlines()
+    if not lines:
+        raise ValueError("FLORES-200 metadata file is empty.")
+
+    header = lines[0].split("\t")
+    for line in lines[1:]:
+        values = line.split("\t")
+        if len(values) != len(header):
+            raise ValueError(f"Malformed FLORES-200 metadata row: {line!r}.")
+        rows.append(dict(zip(header, values, strict=True)))
+    return rows
+
+
+def _yes_no_as_int(value: str) -> int:
+    if value == "yes":
+        return 1
+    if value == "no":
+        return 0
+    raise ValueError(f"Expected yes/no metadata value, got {value!r}.")
 
 
 def _field_as_text(example: Mapping[str, object], field_name: str) -> str:
