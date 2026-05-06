@@ -18,6 +18,14 @@ This logbook is the CODEX handoff for the executable-specifications thread.
 It records what I think has been established, what is stale in the design
 doc, and where I would resume work.
 
+**Update copied from Claude logbook on 2026-05-06:** this file's original
+`Current state` section below is historical. Later Claude-side work through
+2026-05-06 is summarized in
+[`Claude distilled updates copied into Codex - 2026-05-06`](#claude-distilled-updates-copied-into-codex---2026-05-06)
+near the end of this file. That section supersedes the early "do not train
+M3 yet" state and captures the later spec-pipeline, E8, and spec-repair-loop
+findings.
+
 ---
 
 ## Current state
@@ -5800,3 +5808,612 @@ Current handoff summary:
 - Resume from clean DPO worktree: `/Users/ahmed/code/marin/.claude/worktrees/dpo-lora-clean-merge`.
 - W&B: `https://wandb.ai/marin-community/dpo/runs/lora_m3_from_sft_bloomv2_m3_lr1e5_seed0_b64_v5p8-c36d70`
 - User policy remains: no intermediate evals/comparisons; final eval only after final checkpoint and final HF export complete.
+
+---
+
+## Claude distilled updates copied into Codex - 2026-05-06
+
+Source: `.agents/logbooks/executable_specs_claude.md`, especially the final
+section `HANDOFF (2026-05-06) — overnight spec-repair plan, ready to execute`.
+This section supersedes the older April 27 handoff above for the current
+spec-repair work.
+
+### Immediate status
+
+- Phase-4 GLM sweep is complete. All 12 `(condition x judge)` judgment files
+  now exist.
+- The grounding script has **not** yet been re-run with the GLM phase-4 data.
+  That is the first required action.
+- Plan is approved by Ahmed. No repair compiler, apply stage, or verifier has
+  been written yet.
+- Ahmed's operating instructions: work non-stop, auto-apply gate, no human
+  review checkpoints, log every round, and update this logbook continuously.
+
+### Locked decisions
+
+1. Compiler is GPT-5.1 only, with `reasoning_effort="none"` and JSON mode.
+2. Gate decisions use GPT-5.1 + Gemini-3-Flash. GLM-5.1 runs in the
+   background and is folded in post-hoc; never block gate decisions on GLM.
+3. Tier-C statements are the top-2 by phase-4 GPT `rubric_spec_tension=true`
+   count, selected from `phase4_gpt/judgments.jsonl` after re-running the
+   grounding script.
+4. Version specs as rolling
+   `experiments/posttrain/specs/openai_model_spec_v{N}.jsonl` per round.
+   Use phantom full specs per candidate for cross-condition gates; no
+   inter-candidate coupling because var_A, var_B, and phase-4 prompts are
+   per-statement.
+5. Auto-apply gate for rounds 1-3:
+   `Delta kappa_held_out_var_A >= +0.15`,
+   `Delta kappa_full_spec >= -0.05`,
+   `Delta kappa_phase_4 >= -0.05`,
+   per-judge Spearman rho improves on at least 2 of 3 judges, and
+   `abs(Delta kappa_held_out - Delta kappa_compiler_input) <= 0.10`.
+6. Gate sweep for rounds 4-6 varies one axis at a time:
+   round 4 lowers var_A threshold to `+0.10`; round 5 raises var_A threshold
+   to `+0.20`; round 6 lowers cross-condition threshold to `-0.10`.
+7. Never regenerate scenarios or responses. Reuse the same 60 scenarios per
+   statement forever; only judge prompts change as spec/rubric edits are
+   tested.
+8. No human review checkpoints. Numeric gate decisions control; ambiguous
+   cases are logged and the loop continues.
+
+### Targets
+
+| tier | statements | track |
+|---|---|---|
+| A | `avoid_abuse`, `assume_objective_pov`, `comply_with_laws`, `refusal_style` | E1 spec edit |
+| B | `formatting` | E1 + E2 |
+| C | top-2 phase-4 GPT tension-count statements, TBD after grounding rerun | E1 spec edit |
+| D | 16 statements in `grounding/qualifier_drop.csv` | E2 rubric regen |
+
+### Experiment tree
+
+Stream A: core repair loop.
+E1 runs 7 statements x 8 candidates x 6 rounds. Hypothesis: at least 4/7
+statements pass the auto-apply gate. Follow-ups attribute failure, probe
+compiler failure modes, test multi-round compounding, and expand candidate
+budget on stuck statements.
+
+Stream B: rubric regeneration.
+E2 applies a strict qualifier-preserve rubric prompt to the 16 qualifier-drop
+statements. Hypothesis: at least 12/16 flip `qualifier_in_rubric` to true.
+Follow-ups are full 46-rubric regen, per-statement few-shot scaffolding, or
+two-step compile if the first pass fails.
+
+Stream C: compiler input ablation.
+E3 compares rich compiler input (phase-4 quotes + var_A rationales + tension
+flag) against minimal input (statement + kappa + scenarios). Hypothesis: rich
+beats minimal by at least `+0.05` mean delta-kappa.
+
+Stream D: gate sensitivity.
+E4 runs the round 4-6 threshold sweep to find missed wins and identify whether
+cross-condition protection is binding.
+
+Stream E: post-loop validation.
+E5 builds aggregate `openai_model_spec_v1.jsonl`, re-judges the full 2,760
+scenarios under all 4 conditions, and computes Fleiss kappa. Hypothesis:
+v1 beats v0 by at least `+0.05` on var_A.
+
+Stream F: cross-statement work if Stream A finishes early.
+E6 tests the pairwise tension primitive on 5 known-tense pairs. E7 tests an
+ensemble compiler. E8 estimates bootstrap confidence intervals on delta-kappa.
+
+Stream G: exploration backlog after required work.
+E9 examples-only edit, E10 comparative-spec generation, E11 GLM compiler,
+E12 activation-confused statement audit via `5g_in_other_specs`, E13
+disagreement-stratified scenario sampling, E14 edited-statement rubric regen,
+E15 cross-judge confound check excluding GPT, E16 precision-recall threshold
+sweep.
+
+Stream H: logging and reporting.
+E17 appends a logbook section after every round with gate parameters,
+candidates, verdicts, applied edits, and delta-kappa medians. E18 writes final
+`reports/spec_repair_v0.md`.
+
+### Stop conditions
+
+- All 6 E1 rounds complete and E5 is done.
+- Or the gate accepts no new edits for 2 consecutive rounds.
+- Or total LM calls reach 1M.
+- Or Ahmed interrupts manually.
+
+### Ordered next actions
+
+1. Re-run grounding script with full 12-cell coverage:
+   ```bash
+   source .env && .venv/bin/python -u experiments/posttrain/disagreement_primitive/e8_rationale_grounding.py 2>&1 | tee /tmp/grounding_run_v2.log
+   ```
+   Then read `grounding/summary.csv` and `grounding/qualifier_drop.csv`.
+
+2. Pull Tier-C statements by ranking `rubric_spec_tension=true` rate in
+   `phase4_gpt/judgments.jsonl`, excluding Tier A/B.
+
+3. Spawn background GLM phase-4 qualitative-rationale pass to complete
+   `claude_subagents/lm_judge_rubric_plus_spec/glm.md`; do not block on it.
+
+4. Build `experiments/posttrain/disagreement_primitive/e9_compile_edit.py`.
+   It reads the spec, rubrics, phase-4 all-judge data, var_A all-judge data,
+   and per-statement kappa profile; builds top-10 compiler-input scenarios
+   with 50 held out; calls GPT-5.1; writes 4 candidates per statement under
+   `repair_v0/round_{N}/{sid}/cand_{n}.jsonl`. The compiler prompt must
+   forbid meaning-changing edits and require `predicted_delta_kappa`.
+
+5. Build `experiments/posttrain/disagreement_primitive/e9_verify_edit.py`.
+   It runs var_A judging on 60 scenarios x 3 generators for each candidate;
+   for survivors, runs phantom-full-spec phase-3 judges and phase-4 judges
+   on edited statement + original rubric; computes binary Fleiss kappa on the
+   50 held-out scenarios and emits the gate verdict. GLM runs in background;
+   GPT+Gemini decide immediately.
+
+6. Build `experiments/posttrain/disagreement_primitive/e9_apply_edit.py`.
+   It creates `openai_model_spec_v{N}.jsonl` from baseline + applied edits
+   and logs decisions to `repair_v0/round_{N}/apply_log.jsonl`.
+
+7. Run round 1 with E1 + E2 + E3 in parallel. Stream progress to
+   `/tmp/repair_round1.log`.
+
+8. After round 1, append `### Round 1 results (2026-05-06)` to this logbook
+   with gate verdicts, applied set, delta-kappa medians, failure breakdown,
+   and continue/diverge decision.
+
+9. Continue rounds 2-6 on the gate-sweep schedule.
+
+10. Run E5 final validation after round 6 and append final synthesis.
+
+11. If all required work finishes without interruption, proceed through
+    Stream G in order.
+
+### Files and conventions
+
+- Baseline spec: `experiments/posttrain/specs/openai_model_spec.jsonl`.
+  Never modify it in place.
+- Spec versions:
+  `experiments/posttrain/specs/openai_model_spec_v{N}.jsonl`.
+- Baseline rubrics:
+  `experiments/posttrain/disagreement_primitive/e8_rubrics.jsonl`.
+- Post-E2 rubrics:
+  `experiments/posttrain/disagreement_primitive/e8_rubrics_v1.jsonl`.
+- Per-round artifacts:
+  `experiments/posttrain/disagreement_primitive/repair_v0/round_{N}/{sid}/cand_{n}/...`.
+- Final report: `reports/spec_repair_v0.md`.
+- Existing responses:
+  `experiments/posttrain/disagreement_primitive/e8_responses.jsonl`.
+  Never regenerate.
+- Existing var_A baselines:
+  `e8_va_judgments.jsonl`,
+  `phase2_gemini/va_judgments.jsonl`,
+  `phase2_glm/va_judgments.jsonl`.
+- Existing phase-4 judgments:
+  `phase4_{gpt,gemini,glm}/judgments.jsonl`.
+- Grounding outputs:
+  `experiments/posttrain/disagreement_primitive/grounding/`.
+
+Project rules:
+
+- Use `reasoning_effort="none"` on every GPT-5.x call.
+- Route every LM call through `RawAPILogger`; never truncate saved content.
+- Use Spearman, not Pearson, for paired ordinal correlations.
+- Never read `.env`; only `source .env && <command>` in the same shell
+  invocation.
+- Use the E8 paired-indirection convention: same scenarios across all
+  conditions, only judge prompt varies.
+- Never use `git add -A`; stage specific files only.
+
+### 2026-05-06 08:20:53 UTC - Research continuation started
+
+User explicitly asked to continue non-stop using the research-continuation
+workflow. `research-continue` is not an installed skill in this environment;
+using the available `agent-research` skill as the closest matching long-running
+research workflow.
+
+State check:
+
+- No `e8_rationale_grounding.py` process is currently running.
+- The previous grounding rerun was interrupted before completion.
+- Next action is still handoff step 1: rerun
+  `experiments/posttrain/disagreement_primitive/e8_rationale_grounding.py`
+  with the now-complete 12-cell phase-4 coverage, then inspect
+  `grounding/summary.csv` and `grounding/qualifier_drop.csv`.
+
+Command to run:
+
+```bash
+source .env && .venv/bin/python -u experiments/posttrain/disagreement_primitive/e8_rationale_grounding.py 2>&1 | tee /tmp/grounding_run_v2.log
+```
+
+### 2026-05-06 08:22:00 UTC - Grounding rerun complete; Tier-C selected
+
+Command completed:
+
+```bash
+source .env && .venv/bin/python -u experiments/posttrain/disagreement_primitive/e8_rationale_grounding.py 2>&1 | tee /tmp/grounding_run_v2.log
+```
+
+Outputs refreshed:
+
+- `experiments/posttrain/disagreement_primitive/grounding/per_judgment.jsonl`
+- `experiments/posttrain/disagreement_primitive/grounding/summary.csv`
+- `experiments/posttrain/disagreement_primitive/grounding/per_statement.csv`
+- `experiments/posttrain/disagreement_primitive/grounding/qualifier_drop.csv`
+- `experiments/posttrain/disagreement_primitive/grounding/report.md`
+
+Key status:
+
+- Total rows: 32,638.
+- `rubric_plus_spec/glm` now present with 2,443 kept rows.
+- Phase-4 tension-flag rates:
+  - GPT: 303/2,758 = 0.1099
+  - Gemini: 17/2,741 = 0.0062
+  - GLM: 168/2,443 = 0.0688
+- Qualifier-dropped statements remain the same 16:
+  `ask_clarifying_questions`, `assume_objective_pov`, `avoid_abuse`,
+  `avoid_extremist_content`, `avoid_regulated_advice`,
+  `avoid_targeted_political_manipulation`, `be_clear`,
+  `do_not_facilitate_illicit_behavior`, `do_not_lie`,
+  `follow_all_applicable_instructions`, `highlight_misalignments`,
+  `ignore_untrusted_data`, `letter_and_spirit`,
+  `protect_privileged_messages`, `refusal_style`,
+  `transformation_exception`.
+
+Tier-C selection from `phase4_gpt/judgments.jsonl`, ranked by
+`rubric_spec_tension=true` count and excluding Tier A/B:
+
+| rank | statement | tension count | rate |
+|---:|---|---:|---:|
+| 1 | `do_not_encourage_self_harm` | 28/60 | 0.4667 |
+| 2 | `be_clear` | 25/60 | 0.4167 |
+
+Updated E1 target set:
+
+- Tier A: `avoid_abuse`, `assume_objective_pov`, `comply_with_laws`,
+  `refusal_style`
+- Tier B: `formatting`
+- Tier C: `do_not_encourage_self_harm`, `be_clear`
+
+Next actions:
+
+1. Start the GLM phase-4 qualitative-rationale report in background.
+2. Inspect E8 data schema and existing analysis helpers.
+3. Implement `e9_compile_edit.py`, `e9_verify_edit.py`, and
+   `e9_apply_edit.py`.
+
+### 2026-05-06 08:24 UTC - GLM phase-4 qualitative report completed
+
+Background worker completed the missing phase-4 GLM qualitative-rationale
+report without paid API calls.
+
+Output:
+
+- `claude_subagents/lm_judge_rubric_plus_spec/glm.md`
+
+Worker verification:
+
+- 46 statement sections
+- 690 case slots
+- 611 valid GLM summaries
+- 79 `N/A` slots from raw `JSONDecodeError` records
+- 22 valid records with missing parsed quote/tension fields
+- 64 valid records with rationale text that appears truncated mid-sentence
+
+Interpretation:
+
+- The 12-cell quantitative grounding rerun already includes GLM phase-4.
+- This qualitative report fills the human-inspection grid but has known GLM
+  parse/truncation gaps. Treat it as qualitative context, not as a complete
+  numeric source.
+
+Local implementation status:
+
+- Added `experiments/posttrain/disagreement_primitive/e9_repair_common.py`
+  for shared paths, case splits, baseline profiles, and kappa/Spearman helpers.
+- Added `experiments/posttrain/disagreement_primitive/e9_compile_edit.py`
+  for GPT-5.1 repair-candidate generation. It resolves the handoff's
+  "8 candidates vs 4 candidates" ambiguity as 4 rich-input + 4 minimal-input
+  candidates per statement, which also implements E3's input ablation.
+- Added `experiments/posttrain/disagreement_primitive/e9_verify_edit.py`
+  for candidate verification. It runs var_A first, short-circuits failed
+  candidates before cross-condition spend, then runs phase-4 and phantom
+  full-spec checks for survivors.
+
+Next action: implement `e9_apply_edit.py`, then syntax-check the new scripts.
+
+### 2026-05-06 08:30:33 UTC - E9 core scripts added and syntax-check clean
+
+Added:
+
+- `experiments/posttrain/disagreement_primitive/e9_repair_common.py`
+- `experiments/posttrain/disagreement_primitive/e9_compile_edit.py`
+- `experiments/posttrain/disagreement_primitive/e9_verify_edit.py`
+- `experiments/posttrain/disagreement_primitive/e9_apply_edit.py`
+
+Design notes:
+
+- E1 target set is hard-coded from the approved handoff:
+  `avoid_abuse`, `assume_objective_pov`, `comply_with_laws`,
+  `refusal_style`, `formatting`, `do_not_encourage_self_harm`, `be_clear`.
+- The handoff had a small count mismatch: Stream A says 8 candidates, while
+  the compile step says "4 candidates back as JSON." Resolved as 4 rich-input
+  candidates + 4 minimal-input candidates per statement. This also implements
+  Stream C / E3's compiler-input ablation in round 1.
+- `e9_verify_edit.py` runs var_A first and skips phase-4/full-spec spending for
+  candidates that fail the held-out var_A + overfit-gap pre-gate.
+- Default gate judges are GPT-5.1 + Gemini-3-Flash; GLM remains optional via
+  `--judges gpt gemini glm` for post-hoc recomputation.
+
+Verification:
+
+```bash
+python -m py_compile \
+  experiments/posttrain/disagreement_primitive/e9_repair_common.py \
+  experiments/posttrain/disagreement_primitive/e9_compile_edit.py \
+  experiments/posttrain/disagreement_primitive/e9_verify_edit.py \
+  experiments/posttrain/disagreement_primitive/e9_apply_edit.py
+```
+
+Result: passed.
+
+Next action: implement the E2 qualifier-preserving rubric regeneration script,
+then launch round 1 candidate generation.
+
+### 2026-05-06 08:35:03 UTC - Round 1 candidate generation complete
+
+Command:
+
+```bash
+source .env && .venv/bin/python -u experiments/posttrain/disagreement_primitive/e9_compile_edit.py --round 1 2>&1 | tee /tmp/repair_round1_compile.log
+```
+
+Result:
+
+- 56 candidate directories written.
+- Every E1 statement has 8 candidates: 4 `rich_*` and 4 `minimal_*`.
+- Raw API log:
+  `results/raw/e9_compile_edit_round_1/2026-05-06T08-30-54/`
+
+Per-statement counts:
+
+| statement | candidates |
+|---|---:|
+| `assume_objective_pov` | 8 |
+| `avoid_abuse` | 8 |
+| `be_clear` | 8 |
+| `comply_with_laws` | 8 |
+| `do_not_encourage_self_harm` | 8 |
+| `formatting` | 8 |
+| `refusal_style` | 8 |
+
+Next action: implement E2 rubric regeneration before launching the expensive
+verification sweep, so round 1 has all required code paths available.
+
+### 2026-05-06 08:45:45 UTC - E2 qualifier-preserving rubric regeneration complete
+
+Added:
+
+- `experiments/posttrain/disagreement_primitive/e9_regen_qualifier_rubrics.py`
+
+Syntax check:
+
+```bash
+python -m py_compile \
+  experiments/posttrain/disagreement_primitive/e9_repair_common.py \
+  experiments/posttrain/disagreement_primitive/e9_compile_edit.py \
+  experiments/posttrain/disagreement_primitive/e9_verify_edit.py \
+  experiments/posttrain/disagreement_primitive/e9_apply_edit.py \
+  experiments/posttrain/disagreement_primitive/e9_regen_qualifier_rubrics.py
+```
+
+Result: passed.
+
+Command:
+
+```bash
+source .env && .venv/bin/python -u experiments/posttrain/disagreement_primitive/e9_regen_qualifier_rubrics.py --round 1 --force 2>&1 | tee /tmp/repair_round1_e2_rubrics.log
+```
+
+Outputs:
+
+- `experiments/posttrain/disagreement_primitive/e8_rubrics_v1.jsonl`
+- `experiments/posttrain/disagreement_primitive/repair_v0/round_1/e2_qualifier_rubric_report.json`
+- Raw API log:
+  `results/raw/e9_qualifier_rubrics_round_1/2026-05-06T08-42-28/`
+
+Report:
+
+- 16 target statements regenerated.
+- 13/16 pass the script's conservative qualifier-preservation check.
+- The three misses are `avoid_extremist_content`, `avoid_regulated_advice`,
+  and `avoid_targeted_political_manipulation`. For the first two the local
+  qualifier list matched no qualifier in the statement text; this likely
+  reflects a mismatch between this lightweight script's phrase list and the
+  broader grounding script's `qualifier_drop.csv` logic, not necessarily a
+  real failed regeneration.
+- Notable fixed row: `letter_and_spirit` now includes both `unless explicitly`
+  and `as appropriate`; baseline only had `as appropriate`.
+
+Next action: launch round-1 verifier on GPT+Gemini gate judges.
+
+### 2026-05-06 09:04:22 UTC - Round 1 verification checkpoint
+
+The full `e9_verify_edit.py --round 1` run is still active against GPT+Gemini using `.env2`. All `assume_objective_pov` and `be_clear` candidates failed the early held-out `var_A` gate; `avoid_abuse/minimal_03` survived into phase4/full-spec checks but failed the full gate on full-spec delta and Spearman improvement. The verifier has moved on to `comply_with_laws`.
+
+### 2026-05-06 09:08:48 UTC - Round 1 verification checkpoint
+
+`comply_with_laws` completed with no candidate surviving the early `var_A` gate. Partial verdict inspection shows repeated overfit: rich edits often improve the 10 compiler-selected cases but miss or regress on the 50 held-out cases. `avoid_abuse/minimal_03` remains the only cross-condition near-miss so far.
+
+### 2026-05-06 09:13:56 UTC - Round 1 verification checkpoint
+
+`do_not_encourage_self_harm` completed with no candidate surviving the early `var_A` gate. The verifier has started `formatting`; no apply step is available yet because no candidate has passed the full gate.
+
+### 2026-05-06 09:18:36 UTC - Round 1 verification checkpoint
+
+`formatting` completed with no cross-condition spend. Several candidates reached the held-out `var_A` delta threshold but failed only the overfit-gap rule, which suggests the compiler-case selection is producing edits that fit the 10 shown cases too strongly. The verifier has started the final target, `refusal_style`.
+
+### 2026-05-06 09:23:03 UTC - Round 1 results
+
+Command completed:
+
+```bash
+source .env2 && .venv/bin/python -u experiments/posttrain/disagreement_primitive/e9_verify_edit.py --round 1 2>&1 | tee /tmp/repair_round1_verify.log
+```
+
+Verifier output:
+
+- `experiments/posttrain/disagreement_primitive/repair_v0/round_1/verdicts.jsonl`
+- Raw API log: `results/raw/e9_verify_edit_round_1/2026-05-06T08-47-30/`
+
+Gate result:
+
+- 56/56 candidates failed; 0 passed.
+- No `openai_model_spec_v1.jsonl` apply step should run for round 1.
+- Per statement: `assume_objective_pov`, `avoid_abuse`, `be_clear`, `comply_with_laws`, `do_not_encourage_self_harm`, `formatting`, and `refusal_style` each had 0/8 passing candidates.
+
+Failure breakdown:
+
+- 55 `cross_condition_not_run` because early `var_A`/overfit pre-gate failed.
+- 48 `held_out_var_A_delta_below_threshold`.
+- 48 `overfit_gap_failed`.
+- 1 `full_spec_delta_below_threshold`.
+- 1 `spearman_improved_count_below_threshold`.
+
+Median deltas:
+
+- Held-out `var_A`: -0.0134.
+- Compiler-input `var_A`: +0.0952.
+- Phase-4: +0.6982, but only one candidate reached phase-4.
+- Full-spec: -0.1188, only the same candidate reached full-spec.
+
+Near misses:
+
+- `avoid_abuse/minimal_03`: held-out `var_A` +0.6767 and phase-4 +0.6982, but full-spec -0.1188 and only GPT improved Spearman.
+- `formatting/minimal_02`, `formatting/rich_01`, `formatting/rich_02`, `formatting/rich_03`, plus three `avoid_abuse` rich candidates cleared held-out `var_A` but failed overfit-gap.
+
+Continue/diverge decision: do not run a deterministic round 2 with the same compile prompt, because round 1 used `temperature=0` and no edits were applied. Next action is to modify the compiler input strategy for round 2 so candidates must optimize held-out generalization rather than the 10 highest-disagreement shown cases.
+
+### 2026-05-06 09:26:11 UTC - Round 2 compiler divergence implemented
+
+Updated E9 compiler selection to avoid deterministic duplicate round-2 spend:
+
+- `select_compiler_cases(..., strategy=...)` now supports `top_disagreement`, `stratified`, and `rotated_top`.
+- Round 1 defaults to `top_disagreement`, round 2 defaults to `stratified`, round 3 defaults to `rotated_top`, and later rounds default back to `stratified` unless explicitly overridden.
+- Round 2+ prompts include previous-round failure summaries and explicit anti-overfit guidance: optimize held-out generalization, not shown-case delta-kappa.
+
+Syntax check passed:
+
+```bash
+python -m py_compile experiments/posttrain/disagreement_primitive/e9_repair_common.py experiments/posttrain/disagreement_primitive/e9_compile_edit.py experiments/posttrain/disagreement_primitive/e9_verify_edit.py experiments/posttrain/disagreement_primitive/e9_apply_edit.py experiments/posttrain/disagreement_primitive/e9_regen_qualifier_rubrics.py
+```
+
+Next action: run round 2 candidate generation with the default `stratified` split.
+
+### 2026-05-06 09:30:15 UTC - Round 2 candidate generation complete
+
+Command completed:
+
+```bash
+source .env2 && .venv/bin/python -u experiments/posttrain/disagreement_primitive/e9_compile_edit.py --round 2 2>&1 | tee /tmp/repair_round2_compile.log
+```
+
+Result:
+
+- 56 candidate directories written.
+- Every E1 statement has 8 candidates.
+- All 7 `case_split.json` files use `case_strategy=stratified`.
+- Raw API log: `results/raw/e9_compile_edit_round_2/2026-05-06T09-26-26/`.
+
+Next action: launch round-2 verifier on GPT+Gemini gate judges.
+
+### 2026-05-06 09:35:31 UTC - Round 2 verification checkpoint
+
+Round-2 verifier is active:
+
+```bash
+source .env2 && .venv/bin/python -u experiments/posttrain/disagreement_primitive/e9_verify_edit.py --round 2 2>&1 | tee /tmp/repair_round2_verify.log
+```
+
+`assume_objective_pov` completed with 0/8 survivors. The stratified split changed the result: 6/8 candidates cleared the held-out `var_A` threshold, including all four minimal candidates, but all 8 failed the overfit-gap rule because compiler-input deltas remained much larger than held-out deltas. The verifier has moved on to `avoid_abuse`.
+
+### 2026-05-06 09:39:39 UTC - Round 2 verification checkpoint
+
+`avoid_abuse` completed with 0/8 survivors. Rich candidates were strong on held-out `var_A` (`rich_00` +0.6313, `rich_02` +0.5577) but still failed overfit-gap because compiler-input deltas were +1.3333. Minimal candidates regressed held-out `var_A`. The verifier has moved on to `be_clear`.
+
+### 2026-05-06 09:44:55 UTC - Round 2 verification checkpoint
+
+`be_clear` completed with 0/8 survivors. Minimal candidates mostly had no compiler-input movement and no held-out gain; rich candidates reached at most held-out `var_A` +0.1028, below the +0.15 gate, and also overfit. The verifier has moved on to `comply_with_laws`.
+
+### 2026-05-06 09:49:12 UTC - Round 2 verification checkpoint
+
+`comply_with_laws` completed with 0/8 survivors. This was not primarily an overfit problem: all candidates had held-out `var_A` deltas between 0.0000 and +0.0253, well below the +0.15 threshold. The verifier has moved on to `do_not_encourage_self_harm`.
+
+### 2026-05-06 09:53:56 UTC - Round 2 verification checkpoint
+
+`do_not_encourage_self_harm` completed with 0/8 survivors. Best held-out `var_A` was `rich_03` at +0.0927 and `minimal_01` at +0.0841, below the +0.15 threshold. This target is weak-edit rather than near-pass. The verifier has moved on to `formatting`.
+
+### 2026-05-06 10:08:13 UTC - Round 2 verification checkpoint
+
+`formatting` completed with 0/8 passing candidates, but 4/8 survived the var_A pre-gate and ran cross-condition checks. Strongest near-misses:
+
+- `formatting/rich_01`: held-out `var_A` +0.4121, phase4 +0.1169, full-spec +0.0792; failed only Spearman improved count (1/2).
+- `formatting/rich_02`: held-out `var_A` +0.4260, phase4 +0.2600, full-spec -0.0143; failed only Spearman improved count (1/2).
+
+No apply because the locked numeric gate still failed. The verifier has moved on to `refusal_style`.
+
+### 2026-05-06 10:13:46 UTC - Round 2 results; stop condition reached
+
+Command completed:
+
+```bash
+source .env2 && .venv/bin/python -u experiments/posttrain/disagreement_primitive/e9_verify_edit.py --round 2 2>&1 | tee /tmp/repair_round2_verify.log
+```
+
+Verifier output:
+
+- `experiments/posttrain/disagreement_primitive/repair_v0/round_2/verdicts.jsonl`
+- Raw API log: `results/raw/e9_verify_edit_round_2/2026-05-06T09-30-28/`
+
+Gate result:
+
+- 56/56 candidates failed; 0 passed.
+- No round-2 apply step should run.
+- Per statement: `assume_objective_pov`, `avoid_abuse`, `be_clear`, `comply_with_laws`, `do_not_encourage_self_harm`, `formatting`, and `refusal_style` each had 0/8 passing candidates.
+
+Failure breakdown:
+
+- 52 `cross_condition_not_run`.
+- 40 `held_out_var_A_delta_below_threshold`.
+- 38 `overfit_gap_failed`.
+- 4 `spearman_improved_count_below_threshold`.
+- 2 `phase_4_delta_below_threshold`.
+- 1 `full_spec_delta_below_threshold`.
+
+Median deltas:
+
+- Held-out `var_A`: +0.0320.
+- Compiler-input `var_A`: 0.0000.
+- Phase-4 among cross-condition candidates: +0.0238.
+- Full-spec among cross-condition candidates: -0.0192.
+
+Best evidence:
+
+- `formatting/rich_01`: held-out `var_A` +0.4121, phase4 +0.1169, full-spec +0.0792; failed only Spearman improved count (1/2).
+- `formatting/rich_02`: held-out `var_A` +0.4260, phase4 +0.2600, full-spec -0.0143; failed only Spearman improved count (1/2).
+- `avoid_abuse/rich_00` and `avoid_abuse/rich_02` had large held-out `var_A` gains but still overfit compiler-input deltas.
+
+Stop condition reached: the locked plan says to stop when the gate accepts no new edits for 2 consecutive rounds. Rounds 1 and 2 accepted 0 edits, so the E1 repair loop should halt here. Next action is to write the final report/synthesis and leave no-op apply/E5 decisions explicit.
+
+### 2026-05-06 10:15:25 UTC - Final report written
+
+Wrote `reports/spec_repair_v0.md`.
+
+Final decisions:
+
+- No candidate passed the locked gate in rounds 1 or 2.
+- No apply command was run.
+- No `openai_model_spec_v1.jsonl` was written.
+- E5 final validation was skipped because there is no changed spec to validate.
+- The round-3 code path exists and defaults to `rotated_top`, but should be run only if the two-empty-round stop condition is intentionally overridden.
+
+Final syntax check passed for the E9 scripts:
+
+```bash
+python -m py_compile experiments/posttrain/disagreement_primitive/e9_repair_common.py experiments/posttrain/disagreement_primitive/e9_compile_edit.py experiments/posttrain/disagreement_primitive/e9_verify_edit.py experiments/posttrain/disagreement_primitive/e9_apply_edit.py experiments/posttrain/disagreement_primitive/e9_regen_qualifier_rubrics.py
+```
