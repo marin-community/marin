@@ -72,11 +72,28 @@ sudo docker pull {{ docker_image }}
 # Force-remove any existing finelog container so re-runs replace it.
 sudo docker rm -f {{ container_name }} 2>/dev/null || true
 
+# Reserve 0.5 vCPU and 512 MiB for the host VM (sshd, docker daemon, ops
+# agents). Without these caps a runaway finelog can starve the host and lock
+# us out of the box. Floors guard tiny machines: container gets at least
+# 0.5 CPU and 256 MiB even if the math would otherwise go non-positive.
+# CPU is computed in milli-units so the 0.5 reservation is exact.
+host_cpus=$(nproc)
+container_milli_cpus=$(( host_cpus * 1000 - 500 ))
+if [ "$container_milli_cpus" -lt 500 ]; then container_milli_cpus=500; fi
+container_cpus=$(awk -v m="$container_milli_cpus" 'BEGIN{printf "%.3f", m/1000}')
+host_mem_mib=$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo)
+container_mem_mib=$(( host_mem_mib - 512 ))
+if [ "$container_mem_mib" -lt 256 ]; then container_mem_mib=256; fi
+echo "[finelog-init] host=${host_cpus}cpu/${host_mem_mib}MiB" \\
+    "container=${container_cpus}cpu/${container_mem_mib}MiB"
+
 sudo docker run -d --name {{ container_name }} \\
     --network=host \\
     --restart=unless-stopped \\
     --ulimit core=0:0 \\
     --cap-add SYS_PTRACE \\
+    --cpus="${container_cpus}" \\
+    --memory="${container_mem_mib}m" \\
     -e FINELOG_PORT={{ port }} \\
     -e FINELOG_REMOTE_DIR={{ remote_log_dir }} \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
