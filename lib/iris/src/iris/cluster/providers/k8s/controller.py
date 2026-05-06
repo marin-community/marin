@@ -23,7 +23,8 @@ from urllib.parse import urlparse
 from rigging.timing import Deadline
 
 from iris.cluster.config import config_to_dict
-from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
+from iris.cluster.constraints import WellKnownAttribute, accelerator_type_to_string
+from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION, node_attribute_label
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.types import InfraError, Labels
@@ -566,6 +567,7 @@ class K8sControllerProvider:
                     pool_name,
                     cw.instance_type,
                     name,
+                    sg,
                     min_nodes=min_nodes,
                     max_nodes=max_nodes,
                     warm_nodes=num_vms,
@@ -597,6 +599,7 @@ class K8sControllerProvider:
         pool_name: str,
         instance_type: str,
         scale_group_name: str,
+        scale_group: config_pb2.ScaleGroupConfig,
         *,
         min_nodes: int,
         max_nodes: int,
@@ -614,6 +617,27 @@ class K8sControllerProvider:
         if existing is not None:
             target_nodes = max(min_nodes, min(max_nodes, warm_nodes))
 
+        node_labels = {
+            self._iris_labels.iris_managed: "true",
+            self._iris_labels.iris_scale_group: scale_group_name,
+            node_attribute_label("pool"): scale_group_name.lower(),
+        }
+        cw = scale_group.slice_template.coreweave
+        if cw.region:
+            node_labels[node_attribute_label(WellKnownAttribute.REGION)] = cw.region.lower()
+        if scale_group.HasField("resources"):
+            node_labels[node_attribute_label(WellKnownAttribute.DEVICE_TYPE)] = accelerator_type_to_string(
+                scale_group.resources.device_type
+            )
+            if scale_group.resources.device_variant:
+                node_labels[node_attribute_label(WellKnownAttribute.DEVICE_VARIANT)] = (
+                    scale_group.resources.device_variant.lower()
+                )
+        if min_nodes > 0:
+            # Pin Konnectivity agents and monitoring pods to always-on nodes so
+            # GPU NodePools can safely scale to zero.
+            node_labels["cks.coreweave.cloud/system-critical"] = "true"
+
         manifest = {
             "apiVersion": "compute.coreweave.com/v1alpha1",
             "kind": "NodePool",
@@ -628,13 +652,7 @@ class K8sControllerProvider:
                 "minNodes": min_nodes,
                 "maxNodes": max_nodes,
                 "targetNodes": target_nodes,
-                "nodeLabels": {
-                    self._iris_labels.iris_managed: "true",
-                    self._iris_labels.iris_scale_group: scale_group_name,
-                    # Pin Konnectivity agents and monitoring pods to always-on nodes
-                    # so GPU NodePools can safely scale to zero.
-                    **({"cks.coreweave.cloud/system-critical": "true"} if min_nodes > 0 else {}),
-                },
+                "nodeLabels": node_labels,
             },
         }
         self._kubectl.apply_json(manifest)

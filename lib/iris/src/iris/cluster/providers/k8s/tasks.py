@@ -29,6 +29,7 @@ from finelog.types import LogWriterProtocol, str_to_log_level
 from rigging.log_setup import parse_log_level
 from rigging.timing import Timestamp
 
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.transitions import (
     ClusterCapacity,
     DirectProviderBatch,
@@ -38,7 +39,7 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
 )
 from iris.cluster.log_store_helpers import task_log_key
-from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
+from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION, node_attribute_label
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
@@ -64,12 +65,12 @@ _RUNTIME_LABEL_VALUE = "iris-kubernetes"
 # Max pod name length is 253 chars in k8s. We stay well under it.
 _MAX_POD_NAME_LEN = 63
 
-# CoreWeave nodes are labeled with {label_prefix}.{attribute_key} by the NodePool.
-# Map well-known Iris constraint keys to their k8s node label keys.
-# The "iris." prefix matches platform.label_prefix in coreweave.yaml.
+# Map Iris constraint keys to their k8s node label keys.
 _CONSTRAINT_KEY_TO_NODE_LABEL: dict[str, str] = {
-    "pool": "iris.pool",
-    "region": "iris.region",
+    "pool": node_attribute_label("pool"),
+    WellKnownAttribute.REGION: node_attribute_label(WellKnownAttribute.REGION),
+    WellKnownAttribute.DEVICE_TYPE: node_attribute_label(WellKnownAttribute.DEVICE_TYPE),
+    WellKnownAttribute.DEVICE_VARIANT: node_attribute_label(WellKnownAttribute.DEVICE_VARIANT),
 }
 
 # Kubernetes label values: max 63 chars, alphanumeric plus [-_.], must start/end alphanumeric.

@@ -639,6 +639,46 @@ def test_ensure_nodepools_scales_multihost_groups_by_num_vms():
     provider.shutdown()
 
 
+def test_ensure_nodepools_labels_nodes_for_iris_constraints():
+    """NodePool node labels match the nodeSelectors generated from Iris constraints."""
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    sg = cluster_config.scale_groups["h100-8x"]
+    sg.resources.cpu_millicores = 128_000
+    sg.resources.memory_bytes = 2048 * 1024**3
+    sg.resources.disk_bytes = 1024**4
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_GPU
+    sg.resources.device_variant = "H100"
+    sg.resources.device_count = 8
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
+    sg.buffer_slices = 0
+    sg.max_slices = 2
+    sg.slice_template.CopyFrom(
+        config_pb2.SliceConfig(
+            name_prefix="h100-8x",
+            num_vms=1,
+            coreweave=config_pb2.CoreweaveSliceConfig(
+                region="US-WEST-04A",
+                instance_type="gd-8xh100ib-i128",
+            ),
+        )
+    )
+
+    provider.ensure_nodepools(cluster_config)
+
+    h100_pool = k8s.get_json(K8sResource.NODE_POOLS, "iris-h100-8x")
+    assert h100_pool is not None
+    assert h100_pool["spec"]["nodeLabels"] == {
+        "iris-iris-managed": "true",
+        "iris-iris-scale-group": "h100-8x",
+        "iris.pool": "h100-8x",
+        "iris.region": "us-west-04a",
+        "iris.device-type": "gpu",
+        "iris.device-variant": "h100",
+    }
+    provider.shutdown()
+
+
 def test_ensure_nodepools_keeps_one_multihost_slice_warm():
     """Existing multihost pools keep one full slice worth of desired nodes."""
     provider, k8s = _make_provider()

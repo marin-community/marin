@@ -10,3 +10,9 @@ NVIDIA_GPU_TOLERATION: dict = {
     "operator": "Exists",
     "effect": "NoSchedule",
 }
+
+NODE_ATTRIBUTE_LABEL_PREFIX = "iris"
+
+
+def node_attribute_label(attribute_key: str) -> str:
+    return f"{NODE_ATTRIBUTE_LABEL_PREFIX}.{attribute_key}"

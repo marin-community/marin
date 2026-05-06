@@ -3,8 +3,8 @@
 
 """JAX distributed initialization via Iris endpoint registry.
 
-Task 0 registers its coordinator address; tasks 1..N-1 poll for it.
-Single-task jobs skip distributed init entirely — JAX defaults suffice.
+For multi-task jobs, each task first registers readiness in Iris, then task 0
+registers its coordinator address and tasks 1..N-1 poll for it.
 
 JAX is imported at call time — iris does not depend on jax.
 """
@@ -97,10 +97,59 @@ def _poll_for_coordinator(
     return result[0]
 
 
+def _ready_endpoint_name(endpoint_name: str, task_index: int) -> str:
+    return f"{endpoint_name}_ready_{task_index}"
+
+
+def _poll_for_all_ready(
+    resolver: Resolver,
+    endpoint_name: str,
+    num_tasks: int,
+    timeout: float,
+    poll_interval: float,
+) -> None:
+    """Poll the endpoint registry until every task has reached user code."""
+
+    missing: set[int] = set(range(num_tasks))
+
+    def _check() -> bool:
+        missing.clear()
+        for task_index in range(num_tasks):
+            resolved = resolver.resolve(_ready_endpoint_name(endpoint_name, task_index))
+            if resolved.is_empty:
+                missing.add(task_index)
+        return not missing
+
+    backoff = ExponentialBackoff(initial=poll_interval, maximum=max(poll_interval, 30.0))
+    backoff.wait_until_or_raise(
+        _check,
+        timeout=Duration.from_seconds(timeout),
+        error_message=(
+            f"Timed out after {timeout}s waiting for all {num_tasks} JAX tasks to reach "
+            f"the pre-initialize barrier; missing task indexes: {sorted(missing)}"
+        ),
+    )
+
+
+def _initialize_jax_distributed(
+    jax_module,
+    coordinator: str,
+    num_processes: int,
+    process_id: int,
+    initialization_timeout: int,
+) -> None:
+    jax_module.distributed.initialize(
+        coordinator,
+        num_processes,
+        process_id,
+        initialization_timeout=initialization_timeout,
+    )
+
+
 def initialize_jax(
     port: int = 8476,
     endpoint_name: str = "jax_coordinator",
-    poll_timeout: float = 300.0,
+    poll_timeout: float = 1800.0,
     poll_interval: float = 2.0,
 ) -> None:
     """Initialize JAX distributed runtime using Iris endpoint discovery.
@@ -109,9 +158,9 @@ def initialize_jax(
     Iris endpoint registry, and tasks 1..N-1 poll until they discover it. All
     tasks then call jax.distributed.initialize with the coordinator address.
 
-    For single-task jobs (or when not running inside an Iris job),
-    initialization is skipped — JAX works correctly without distributed
-    init when there is only one process.
+    For single-task Iris jobs, JAX distributed initialization is called with one
+    process so explicit JAX coordinator environment remains consistent. When
+    not running inside an Iris job, initialization is skipped.
 
     On TPU, JAX handles distributed init natively via the TPU runtime —
     calling jax.distributed.initialize would conflict, so this is a no-op.
@@ -121,7 +170,8 @@ def initialize_jax(
             An explicit port is required because JAX's gRPC coordinator binds
             internally and does not expose the actual bound port.
         endpoint_name: Name under which the coordinator registers.
-        poll_timeout: Maximum seconds for non-coordinator tasks to wait.
+        poll_timeout: Maximum seconds to wait for readiness and coordinator
+            discovery. Also passed to JAX as initialization_timeout.
         poll_interval: Initial backoff delay for polling (seconds).
     """
     import jax
@@ -137,14 +187,29 @@ def initialize_jax(
     if job_info is None:
         return
 
+    initialization_timeout = max(1, int(poll_timeout))
+
     if job_info.num_tasks <= 1:
         bound_port = job_info.ports.get("jax", port)
         coordinator = f"{job_info.advertise_host}:{bound_port}"
-        jax.distributed.initialize(coordinator, num_processes=1, process_id=0)
+        _initialize_jax_distributed(jax, coordinator, 1, 0, initialization_timeout)
         return
 
     ctx = iris_ctx()
     task_index = job_info.task_index
+    ready_endpoint_id = ctx.registry.register(
+        _ready_endpoint_name(endpoint_name, task_index),
+        f"{job_info.advertise_host}:0",
+        {"task_index": str(task_index), "num_tasks": str(job_info.num_tasks)},
+    )
+    atexit.register(ctx.registry.unregister, ready_endpoint_id)
+    logger.info(
+        "initialize_jax task %s/%s reached pre-initialize barrier",
+        task_index,
+        job_info.num_tasks,
+    )
+    _poll_for_all_ready(ctx.resolver, endpoint_name, job_info.num_tasks, poll_timeout, poll_interval)
+    logger.info("initialize_jax all %s tasks reached pre-initialize barrier", job_info.num_tasks)
 
     if task_index == 0:
         bound_port = job_info.ports.get("jax", port)
@@ -158,7 +223,7 @@ def initialize_jax(
         # Best-effort cleanup: if the process crashes, the controller's
         # cascade delete on task cleanup handles endpoint removal.
         atexit.register(ctx.registry.unregister, endpoint_id)
-        jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
+        _initialize_jax_distributed(jax, coordinator, job_info.num_tasks, task_index, initialization_timeout)
     else:
         coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
-        jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
+        _initialize_jax_distributed(jax, coordinator, job_info.num_tasks, task_index, initialization_timeout)

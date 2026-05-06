@@ -161,7 +161,10 @@ def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
     k8s.add_node_pool(
         "cpu-erapids",
         node_count=1,
-        labels={"iris.pool": "cpu-erapids"},
+        labels={
+            "iris.pool": "cpu-erapids",
+            "iris.device-type": "cpu",
+        },
         resources=FakeNodeResources(
             cpu_millicores=64_000,
             memory_bytes=256 * 1024**3,
@@ -171,7 +174,11 @@ def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
     k8s.add_node_pool(
         "h100-8x",
         node_count=1,
-        labels={"iris.pool": "h100-8x"},
+        labels={
+            "iris.pool": "h100-8x",
+            "iris.device-type": "gpu",
+            "iris.device-variant": "h100",
+        },
         taints=[
             {"key": "nvidia.com/gpu", "effect": "NoSchedule", "operator": "Exists"},
         ],
@@ -374,10 +381,13 @@ def test_gpu_pod_attributes_with_in_memory_k8s(tmp_path: Path) -> None:
         assert len(cpu_pods) == 1
 
         gpu_limits = gpu_pods[0]["spec"]["containers"][0]["resources"]["limits"]
+        gpu_node_selector = gpu_pods[0]["spec"].get("nodeSelector", {})
         gpu_toleration_keys = {t.get("key") for t in gpu_pods[0]["spec"].get("tolerations", [])}
 
         assert gpu_limits["nvidia.com/gpu"] == "8"
         assert gpu_limits["rdma/ib"] == "8"
+        assert gpu_node_selector["iris.device-type"] == "gpu"
+        assert gpu_node_selector["iris.device-variant"] == "h100"
         assert "nvidia.com/gpu" in gpu_toleration_keys
         assert "qos.coreweave.cloud/interruptable" not in gpu_toleration_keys
         assert "h100-8x" in gpu_pods[0]["spec"].get("nodeName", "")
