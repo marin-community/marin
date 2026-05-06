@@ -116,6 +116,19 @@ def _get_stable_local_workdir(job_name: str) -> Path:
     return workdir
 
 
+def _fix_docker_permissions(path: Path) -> None:
+    """Best-effort chmod so the current user can read Docker-created files."""
+    try:
+        subprocess.run(
+            ["sudo", "chmod", "-R", "755", str(path)],
+            check=False,
+            capture_output=True,
+        )
+    except OSError as e:
+        # sudo not on PATH or can't be spawned (e.g. non-Linux dev environment).
+        logger.debug("chmod via sudo failed for %s: %s", path, e)
+
+
 def _restore_trials_from_gcs(gcs_output_path: str, local_job_dir: Path) -> int:
     """Restore completed trials from GCS to enable Harbor resume.
 
@@ -168,15 +181,7 @@ def _create_trial_upload_hook(gcs_output_path: str, local_job_dir: Path):
             logger.warning(f"Trial directory not found for upload: {local_trial_dir}")
             return
 
-        # Fix Docker file permissions so we can read them
-        try:
-            subprocess.run(
-                ["sudo", "chmod", "-R", "755", str(local_trial_dir)],
-                check=False,
-                capture_output=True,
-            )
-        except Exception:
-            pass
+        _fix_docker_permissions(local_trial_dir)
 
         # Upload to GCS: {output_path}/harbor_trials/{trial_name}/
         trial_gcs_path = os.path.join(gcs_output_path, "harbor_trials", trial_name)
@@ -458,15 +463,7 @@ class HarborEvaluator(Evaluator):
 
         logger.info("Harbor execution completed")
 
-        # Fix permissions on Docker-created files so we can read them
-        try:
-            subprocess.run(
-                ["sudo", "chmod", "-R", "755", str(job.job_dir)],
-                check=False,
-                capture_output=True,
-            )
-        except Exception:
-            pass  # Continue even if chmod fails
+        _fix_docker_permissions(job.job_dir)
 
         # Read trial results from Harbor's result.json files
         results = {"trials": {}}
