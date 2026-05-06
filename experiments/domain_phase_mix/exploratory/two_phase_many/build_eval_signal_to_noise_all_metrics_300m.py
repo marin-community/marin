@@ -61,6 +61,7 @@ DEFAULT_EXTRA_RESULTS_CSVS = (
     / "metric_registry"
     / "300m_noise_parity_completion"
     / "300m_noise_parity_eval_results_variable_subset_mmlupro_only.csv",
+    SCRIPT_DIR / "metric_registry" / "300m_agentic_coding_bpb" / "300m_agentic_coding_bpb_results.csv",
 )
 RUN00097_300M_FIXED_SUBSET_RESULTS_URI = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"

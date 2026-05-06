@@ -1,0 +1,38 @@
+{
+  "agreement": {
+    "l1_total_weight": 1.367020546686424,
+    "pearson_phase0_weight": 0.07413529427753406,
+    "pearson_phase1_weight": 0.39681247219562776,
+    "pearson_total_epochs": 0.2564421544731986,
+    "pearson_total_weight": 0.6486948376550439
+  },
+  "grp": {
+    "in_sample_r2_on_negative_irt": 0.7675500736278966
+  },
+  "irt": {
+    "aggregate_mean": -6.291263806209221e-16,
+    "aggregate_std": 0.3974049716234677,
+    "k_horn": 5,
+    "task_metric_count": 27
+  },
+  "p3": {
+    "a": 0.5,
+    "eta": 10.0,
+    "in_sample_r2": 0.8632553686754952,
+    "nested_cv_r2": 0.7784578802647761,
+    "p": 1.5,
+    "ridge_alpha": 1.0
+  },
+  "row_audit": {
+    "common_rows": 240,
+    "grp_only": [
+      "baseline_olmix_loglinear"
+    ],
+    "grp_packet_rows": 241,
+    "raw_only": [
+      "baseline_olmix_loglinear_uncheatable_bpb",
+      "baseline_stratified"
+    ],
+    "raw_rows": 242
+  }
+}

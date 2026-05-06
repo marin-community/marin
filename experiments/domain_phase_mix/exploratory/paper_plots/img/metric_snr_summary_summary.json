@@ -1,0 +1,208 @@
+{
+  "family_counts": {
+    "Agentic coding BPB": 12,
+    "English MCQ/cloze": 20,
+    "Generation proxies": 3,
+    "Generic eval BPB": 2,
+    "MMLU": 58,
+    "MMLU SL-Verb": 54,
+    "MMLU-Pro": 9,
+    "Other lm-eval": 2,
+    "Paloma BPB": 19,
+    "Uncheatable BPB": 10
+  },
+  "num_ranked_items": 189,
+  "source_class_counts": {
+    "custom task proxy": 8,
+    "eval BPB/loss": 43,
+    "lm-eval task": 138
+  },
+  "threshold_counts": {
+    "snr_ge_1": 178,
+    "snr_ge_10": 24,
+    "snr_ge_2": 73,
+    "snr_ge_5": 41
+  },
+  "top_20": [
+    {
+      "family": "Uncheatable BPB",
+      "item_label": "uncheatable_eval/arxiv_physics",
+      "metric": "eval/uncheatable_eval/arxiv_physics/bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 1,
+      "signal_to_noise": 44.63518974252177,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Uncheatable BPB",
+      "item_label": "uncheatable_eval/github_python",
+      "metric": "eval/uncheatable_eval/github_python/bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 2,
+      "signal_to_noise": 26.800053604162947,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Paloma BPB",
+      "item_label": "paloma/falcon-refinedweb",
+      "metric": "eval/paloma/falcon-refinedweb/loss",
+      "primary_metric_kind": "loss",
+      "rank": 3,
+      "signal_to_noise": 25.585571213647324,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Uncheatable BPB",
+      "item_label": "uncheatable_eval",
+      "metric": "eval/uncheatable_eval/bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 4,
+      "signal_to_noise": 25.038569510784804,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Paloma BPB",
+      "item_label": "paloma/dolma_100_programing_languages",
+      "metric": "eval/paloma/dolma_100_programing_languages/bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 5,
+      "signal_to_noise": 24.994451391707653,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Uncheatable BPB",
+      "item_label": "uncheatable_eval/micro",
+      "metric": "eval/uncheatable_eval/micro_loss",
+      "primary_metric_kind": "loss",
+      "rank": 6,
+      "signal_to_noise": 24.784834957214372,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Paloma BPB",
+      "item_label": "paloma/m2d2_s2orc_unsplit",
+      "metric": "eval/paloma/m2d2_s2orc_unsplit/bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 7,
+      "signal_to_noise": 24.11637676210972,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Uncheatable BPB",
+      "item_label": "uncheatable_eval/macro",
+      "metric": "eval/uncheatable_eval/macro_bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 8,
+      "signal_to_noise": 23.66378973088779,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Paloma BPB",
+      "item_label": "paloma/c4_100_domains",
+      "metric": "eval/paloma/c4_100_domains/loss",
+      "primary_metric_kind": "loss",
+      "rank": 9,
+      "signal_to_noise": 22.876904125110425,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Paloma BPB",
+      "item_label": "paloma/c4_en",
+      "metric": "eval/paloma/c4_en/loss",
+      "primary_metric_kind": "loss",
+      "rank": 10,
+      "signal_to_noise": 19.106652053518417,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Uncheatable BPB",
+      "item_label": "uncheatable_eval/github_cpp",
+      "metric": "eval/uncheatable_eval/github_cpp/bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 11,
+      "signal_to_noise": 18.664108503904007,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Paloma BPB",
+      "item_label": "paloma/redpajama",
+      "metric": "eval/paloma/redpajama/bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 12,
+      "signal_to_noise": 17.489064127315242,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Uncheatable BPB",
+      "item_label": "uncheatable_eval/ao3_english",
+      "metric": "eval/uncheatable_eval/ao3_english/bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 13,
+      "signal_to_noise": 15.759693672607732,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Uncheatable BPB",
+      "item_label": "uncheatable_eval/arxiv_computer_science",
+      "metric": "eval/uncheatable_eval/arxiv_computer_science/loss",
+      "primary_metric_kind": "loss",
+      "rank": 14,
+      "signal_to_noise": 15.589494130506662,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Uncheatable BPB",
+      "item_label": "uncheatable_eval/bbc_news",
+      "metric": "eval/uncheatable_eval/bbc_news/bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 15,
+      "signal_to_noise": 15.532968572403547,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Generic eval BPB",
+      "item_label": "macro",
+      "metric": "eval/macro_bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 16,
+      "signal_to_noise": 15.426914378865598,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Uncheatable BPB",
+      "item_label": "uncheatable_eval/wikipedia_english",
+      "metric": "eval/uncheatable_eval/wikipedia_english/loss",
+      "primary_metric_kind": "loss",
+      "rank": 17,
+      "signal_to_noise": 15.401632363514423,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Paloma BPB",
+      "item_label": "paloma/dolma-v1_5",
+      "metric": "eval/paloma/dolma-v1_5/bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 18,
+      "signal_to_noise": 13.935304410001343,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Paloma BPB",
+      "item_label": "paloma/macro",
+      "metric": "eval/paloma/macro_bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 19,
+      "signal_to_noise": 13.507776244155696,
+      "source_class": "eval BPB/loss"
+    },
+    {
+      "family": "Generic eval BPB",
+      "item_label": "eval",
+      "metric": "eval/bpb",
+      "primary_metric_kind": "bpb",
+      "rank": 20,
+      "signal_to_noise": 12.745365041628904,
+      "source_class": "eval BPB/loss"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "canonical_metric_count": 965,
+  "conflict_count": 99423,
+  "generated_at_utc": "2026-04-30T22:57:16.816113+00:00",
+  "include_gcs": true,
+  "manual_backfill_count": 0,
+  "metric_fact_count_all_sources": 1159729,
+  "metric_fact_count_canonical": 744365,
+  "outputs": {
+    "backfills": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/backfills.csv",
+    "coverage": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/coverage.csv",
+    "eval_artifacts": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/eval_artifacts.csv",
+    "metric_conflicts": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/metric_conflicts.csv.gz",
+    "metrics_all_sources_long": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/metrics_all_sources_long.csv.gz",
+    "metrics_long": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/metrics_long.csv.gz",
+    "metrics_wide": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/metrics_wide.csv",
+    "runs": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/runs.csv"
+  },
+  "run_count": 1217,
+  "source_count": 22
+}

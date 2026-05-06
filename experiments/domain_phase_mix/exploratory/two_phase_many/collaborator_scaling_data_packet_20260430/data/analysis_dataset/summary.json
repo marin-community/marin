@@ -1,0 +1,112 @@
+{
+  "by_label_source": {
+    "packet_historical_metric": 522,
+    "run_registry_objective_metric": 2,
+    "run_registry_target_eval": 117
+  },
+  "by_scale": {
+    "130m_2p6b": 39,
+    "1_2b_24b": 4,
+    "300m_6b": 268,
+    "520m_10p4b": 37,
+    "60m_1p2b": 293
+  },
+  "generated_at_utc": "2026-04-30T22:57:33.352880+00:00",
+  "inputs": {
+    "metric_registry_metrics_wide_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/metrics_wide.csv",
+    "metric_registry_metrics_wide_csv_mtime": "2026-04-30T22:57:15.728084+00:00",
+    "run_registry_logical_runs_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/run_registry/logical_runs.csv",
+    "run_registry_logical_runs_csv_mtime": "2026-04-30T22:39:38.810620+00:00",
+    "source_packet_npz": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v28/data/nd_scale_packet.npz",
+    "source_packet_npz_mtime": "2026-04-24T01:34:44.696617+00:00",
+    "source_runs_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v28/data/nd_scale_runs.csv",
+    "source_runs_csv_mtime": "2026-04-23T19:54:18.858940+00:00",
+    "strong_ready_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/run_registry/strong_tier_perplexity_ready.csv",
+    "strong_ready_csv_mtime": "2026-04-30T22:39:38.821642+00:00"
+  },
+  "outputs": {
+    "nd_scale_packet_npz": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/analysis_dataset/nd_scale_packet.npz",
+    "nd_scale_runs_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/analysis_dataset/nd_scale_runs.csv",
+    "summary_json": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/analysis_dataset/summary.json"
+  },
+  "overlay": {
+    "stale_or_unready_strong_tier_rows": 4,
+    "strong_ready_existing_labels_updated": 0,
+    "strong_ready_max_abs_existing_label_delta": 0.0,
+    "strong_ready_new_labels_enabled": 13,
+    "strong_ready_rows": 117,
+    "strong_ready_rows_matched": 117
+  },
+  "registry_appends": {
+    "raw_optimum_rows_appended": 2,
+    "raw_optimum_skipped_existing": 0,
+    "raw_optimum_skipped_incomplete": 3,
+    "raw_optimum_skipped_missing_epoch_template": 0,
+    "raw_optimum_skipped_unlabeled": 0
+  },
+  "rows": {
+    "dropped_stale_or_unready_strong_tier_rows": 4,
+    "dropped_total_rows": 4,
+    "dropped_unlabeled_rows": 3,
+    "output_rows": 641,
+    "source_rows": 645
+  },
+  "scale_metadata": [
+    {
+      "input_embedding_params": 65667072,
+      "nominal_model_size": 130000000,
+      "non_embedding_params": 22813184,
+      "output_head_params": 0,
+      "scale": "130m_2p6b",
+      "scale_display_label": "20M/2.6B",
+      "tie_word_embeddings": true,
+      "tied_total_params": 88480256
+    },
+    {
+      "input_embedding_params": 98500608,
+      "nominal_model_size": 60000000,
+      "non_embedding_params": 58998528,
+      "output_head_params": 0,
+      "scale": "60m_1p2b",
+      "scale_display_label": "60M/1.2B",
+      "tie_word_embeddings": true,
+      "tied_total_params": 157499136
+    },
+    {
+      "input_embedding_params": 98500608,
+      "nominal_model_size": 300000000,
+      "non_embedding_params": 102648576,
+      "output_head_params": 0,
+      "scale": "300m_6b",
+      "scale_display_label": "100M/6B",
+      "tie_word_embeddings": true,
+      "tied_total_params": 201149184
+    },
+    {
+      "input_embedding_params": 131334144,
+      "nominal_model_size": 520000000,
+      "non_embedding_params": 339788800,
+      "output_head_params": 0,
+      "scale": "520m_10p4b",
+      "scale_display_label": "340M/10.4B",
+      "tie_word_embeddings": true,
+      "tied_total_params": 471122944
+    },
+    {
+      "input_embedding_params": 262668288,
+      "nominal_model_size": 1200000000,
+      "non_embedding_params": 906037248,
+      "output_head_params": 0,
+      "scale": "1_2b_24b",
+      "scale_display_label": "900M/24B",
+      "tie_word_embeddings": true,
+      "tied_total_params": 1168705536
+    }
+  ],
+  "validation": {
+    "duplicate_canonical_modeling_keys": 0,
+    "max_phase_sum_error": 8.881784197001252e-16,
+    "model_size_equals_non_embedding_params": true,
+    "primary_missing_rows": 0
+  }
+}
