@@ -1,0 +1,33 @@
+entity_project: marin-community/dial_moe
+metric: eval/paloma/c4_en/bpb
+compute_band_flops: 2.500000e+18..4.000000e+18
+source_csv: dial_moe_runs.csv
+generated_at_utc: 2026-05-06T19:57:54.180069+00:00
+runs_in_band: 57
+first_created_at: 2026-04-07T20:15:05+00:00
+last_created_at: 2026-05-05T01:14:55+00:00
+march_reference_bpb: 1.040673
+dense_reference_bpb: 1.156400
+best_bpb: 0.988889
+best_run_name: isoflop-k5e256-d768-3e+18
+best_group: may-arch-isoflop
+best_created_at: 2026-05-02T10:34:22Z
+best_compute_flops: 3.000000e+18
+improvement_vs_march_reference_bpb: 0.051784
+frontier_updates:
+  2026-04-07T20:15:05Z  1.043723  3.691606e+18  cbs-d768-2e+18-bs384  cbs-sweep
+  2026-04-09T07:37:14Z  1.036950  3.885095e+18  beta2-d768-2e18-bs64-b2_0.95  beta2-sweep
+  2026-04-09T07:37:14Z  1.029837  3.885095e+18  beta2-d768-2e18-bs64-b2_0.99  beta2-sweep
+  2026-04-09T11:29:58Z  1.029270  3.885095e+18  beta2-d768-2e18-bs64-b2_0.999  beta2-sweep
+  2026-04-09T11:40:57Z  1.028644  3.885095e+18  beta2-d768-2e18-bs64-b2_0.995  beta2-sweep
+  2026-05-02T02:45:42Z  0.989637  3.000000e+18  isoflop-k4e256-d768-3e+18  may-arch-isoflop
+  2026-05-02T10:34:22Z  0.988889  3.000000e+18  isoflop-k5e256-d768-3e+18  may-arch-isoflop
+groups:
+    15  beta2-sweep
+    12  may-arch-isoflop
+    10  embed-norm
+    10  attn-gate-sweep
+     5  cbs-sweep
+     3  deep-network
+     1  embed_check
+     1  no-qb

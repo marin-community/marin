@@ -200,20 +200,20 @@ MoE, Delphi, and open questions
 layout: split-left-green
 ---
 
-# ![](/icons/chart.svg) MoE Frontier Moved Down
+# ![](/icons/chart.svg) 3e18 MoE Progress Over Time
 
-<img src="/charts/moe-progress-frontier/dial_moe_frontier.png" alt="dial_moe finished run frontier" style="width:620px;"/>
+<img src="/charts/moe-progress-frontier/dial_moe_3e18_progress.png" alt="3e18-scale dial_moe finished run progress over time" style="width:620px;"/>
 
 ::right::
 
-- Pulled **683** finished runs from `marin-community/dial_moe` since **April 6**.
-- Same metric as March: `eval/paloma/c4_en/bpb`; lower is better. Compute comes from the run-name suffix when present.
-- Around the old **3e18** scale, the current best is **0.9889** BPB (`isoflop-k5e256-d768-3e+18`), down from the March frontier point at **1.0407**.
-- The cross-scale frontier now reaches **0.7423** BPB at **1.08e22** FLOPs (`moe-v7-1e22-d3200-v3`).
+- Pulled **57** finished `dial_moe` runs in the **2.5e18-4.0e18** FLOP band.
+- Same metric as March: `eval/paloma/c4_en/bpb`; lower is better. Orange is the cumulative best achieved so far.
+- The March 24 reference was **1.0407** BPB. The current best is **0.9889** BPB, a **0.0518** BPB drop.
+- The best point is an exact **3e18** run: `isoflop-k5e256-d768-3e+18`, finished **May 2**.
 
 <Box bold>
 
-The MoE story moved from single-scale recipe search to a real cross-scale frontier.
+This is the March-style read: recipe quality at a fixed compute budget moved down.
 </Box>
 
 ---

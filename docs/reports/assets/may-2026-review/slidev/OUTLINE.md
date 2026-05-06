@@ -21,7 +21,7 @@ The Delphi blogpost work is the likely model-science anchor if the final figures
 9. Eval story: data gaps, not one score.
 10. Agent traces: patch and observation gaps.
 11. Perplexity gap: long-tail data.
-12. MoE frontier moved down.
+12. 3e18 MoE progress over time.
 13. MoE and training mechanics.
 14. Delphi scaling + blog work.
 15. Decisions for tomorrow.
@@ -151,10 +151,10 @@ Figures wanted:
 
 This is the training-performance section.
 
-- New frontier figure uses finished `marin-community/dial_moe` runs from April 6 through May 6.
-- Pull result: 683 finished runs with `eval/paloma/c4_en/bpb` and compute, across 59 compute scales.
-- Around the March slide's 3e18 scale, the best current run is `isoflop-k5e256-d768-3e+18` at `0.988889` BPB. The March chart's best-so-far point was `1.040673` BPB at March 24.
-- The best overall finished run in this pull is `moe-v7-1e22-d3200-v3` at `0.742252` BPB and `1.079835e22` configured train FLOPs.
+- New progress figure uses finished `marin-community/dial_moe` runs in the 3e18-scale band from April 7 through May 5.
+- The band is `2.5e18-4.0e18` FLOPs. Exact 3e18 runs only cover May 2-3, so the band preserves the month-long progress story while keeping the compute scale comparable.
+- Pull result: 57 finished runs with `eval/paloma/c4_en/bpb` in the band.
+- The March chart's best-so-far point was `1.040673` BPB at March 24. The current best is `isoflop-k5e256-d768-3e+18` at `0.988889` BPB, a `0.051784` BPB drop.
 - Configurable MoE implementation: `#4964`.
 - `MoeAdamHHeuristic`, dense layer removal, and sharding fixes: `#4636`.
 - Router logits upcast to fp32: `#4234`.
