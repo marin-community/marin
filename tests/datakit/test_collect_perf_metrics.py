@@ -134,17 +134,18 @@ def test_build_report_combines_summary_logs_and_status():
     report = collect_perf_metrics.build_report(
         job_id="iris-run-abc",
         summary=_fake_summary(),
+        job_tree=_fake_job_tree(),
         logs=_STEP_RUNNER_LOGS,
         status={"status": "succeeded", "marin_prefix": "gs://marin-us-central1"},
-        ferry_module="experiments.ferries.datakit_ferry",
-        wandb_url="https://wandb.ai/example",
         workflow_env={"run_id": "42", "run_attempt": "1", "workflow": "tier1", "commit_sha": "deadbeef"},
     )
     assert report.status == "succeeded"
     assert report.marin_prefix == "gs://marin-us-central1"
-    assert report.preemption_count == 2
+    # Counts come from the job tree (3 children + parent), not the parent-only summary's preemption_count=2.
+    assert report.preemption_count == 3
     assert report.peak_worker_memory_mb == 14202
     assert report.wall_seconds_total == pytest.approx(3054.612)
+    # infra_failures still derives from parent-only per-task heuristic.
     assert report.infra_failures["preempted"] == 1
     # Stage durations come from the parsed logs, not the iris summary.
     assert set(report.stage_wall_seconds) >= set(collect_perf_metrics.EXPECTED_STEPS)
@@ -156,10 +157,9 @@ def test_build_report_falls_back_to_log_wall_time_when_summary_unavailable():
     report = collect_perf_metrics.build_report(
         job_id="iris-run-abc",
         summary=None,
+        job_tree=None,
         logs=logs,
         status=None,
-        ferry_module=None,
-        wandb_url=None,
         workflow_env={"run_id": None, "run_attempt": None, "workflow": None, "commit_sha": None},
     )
     assert report.wall_seconds_total == pytest.approx(3054.612345)
@@ -174,12 +174,96 @@ def test_build_report_treats_missing_download_as_normal_when_cache_hit():
     report = collect_perf_metrics.build_report(
         job_id="iris-run-abc",
         summary=_fake_summary(),
+        job_tree=_fake_job_tree(),
         logs=logs,
         status=None,
-        ferry_module=None,
-        wandb_url=None,
         workflow_env={"run_id": None, "run_attempt": None, "workflow": None, "commit_sha": None},
     )
     assert report.cached_steps == ["download"]
     assert "download" not in collect_perf_metrics.EXPECTED_STEPS
     assert not any("missing expected steps" in w for w in report.warnings)
+
+
+def _fake_job_tree() -> list[dict]:
+    """Realistic shape: parent (launcher) + two child jobs with worker tasks."""
+    return [
+        # Parent — launcher task only
+        {"job_id": "iris-run-abc", "preemption_count": 0, "failure_count": 0, "task_state_counts": {"succeeded": 1}},
+        # Coordinator job
+        {
+            "job_id": "iris-run-abc/zephyr-cache-copy-p0-a0",
+            "preemption_count": 0,
+            "failure_count": 0,
+            "task_state_counts": {"succeeded": 1},
+        },
+        # Workers that actually fan out — these are the ones that get preempted/killed
+        {
+            "job_id": "iris-run-abc/zephyr-cache-copy-p0-a0/workers-a0",
+            "preemption_count": 3,
+            "failure_count": 1,
+            "task_state_counts": {"succeeded": 79, "killed": 27, "preempted": 3},
+        },
+    ]
+
+
+def test_aggregate_job_tree_sums_across_children():
+    """Parent's iris job summary only sees the launcher; children carry the real
+    preemption / failure / task-state counts. aggregate_job_tree must sum them."""
+    agg = collect_perf_metrics.aggregate_job_tree(_fake_job_tree())
+    assert agg["preemption_count"] == 3
+    assert agg["failure_count"] == 1
+    assert agg["task_state_counts"] == {"succeeded": 81, "killed": 27, "preempted": 3}
+    assert agg["job_count"] == 3
+
+
+def test_build_report_uses_tree_aggregation_for_counts():
+    """Counts must come from the whole job tree, not the parent-only summary."""
+    parent_only_summary = {
+        "preemption_count": 0,
+        "failure_count": 0,
+        "task_state_counts": {"succeeded": 1},
+        "tasks": [
+            {
+                "task_id": "iris-run-abc/0",
+                "state": "succeeded",
+                "exit_code": 0,
+                "duration_ms": 3_000_000,
+                "memory_peak_mb": 100,
+                "error": "",
+            },
+        ],
+    }
+    report = collect_perf_metrics.build_report(
+        job_id="iris-run-abc",
+        summary=parent_only_summary,
+        job_tree=_fake_job_tree(),
+        logs="",
+        status=None,
+        workflow_env={"run_id": None, "run_attempt": None, "workflow": None, "commit_sha": None},
+    )
+    # Aggregated counts override the parent-only zeros.
+    assert report.preemption_count == 3
+    assert report.failure_count == 1
+    assert report.task_state_counts["killed"] == 27
+    assert report.tree_job_count == 3
+
+
+def test_build_report_falls_back_to_parent_summary_when_tree_unavailable():
+    summary = {
+        "preemption_count": 5,
+        "failure_count": 2,
+        "task_state_counts": {"succeeded": 1},
+        "tasks": [],
+    }
+    report = collect_perf_metrics.build_report(
+        job_id="iris-run-abc",
+        summary=summary,
+        job_tree=None,
+        logs="",
+        status=None,
+        workflow_env={"run_id": None, "run_attempt": None, "workflow": None, "commit_sha": None},
+    )
+    assert report.preemption_count == 5
+    assert report.failure_count == 2
+    assert report.tree_job_count == 0
+    assert any("iris job list --prefix" in w for w in report.warnings)

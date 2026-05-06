@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -84,8 +85,6 @@ class PerfReport:
     """In-memory model of the report. Serialised verbatim to JSON."""
 
     iris_job_id: str
-    ferry_module: str | None
-    wandb_url: str | None
     status: str | None = None
     marin_prefix: str | None = None
     wall_seconds_total: float | None = None
@@ -97,6 +96,9 @@ class PerfReport:
     preemption_count: int = 0
     failure_count: int = 0
     task_state_counts: dict[str, int] = field(default_factory=dict)
+    # Number of jobs in the iris tree under this run (launcher + child jobs).
+    # The three counts above are summed across all of them.
+    tree_job_count: int = 0
     infra_failures: dict[str, int] = field(default_factory=lambda: {b: 0 for b in FAILURE_BUCKETS})
     workflow_run_id: str | None = None
     workflow_run_attempt: str | None = None
@@ -123,7 +125,13 @@ def _iris_command() -> list[str]:
 
 def _run_iris(args: list[str], iris_config: Path) -> subprocess.CompletedProcess:
     cmd = [*_iris_command(), f"--config={iris_config}", *args]
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0 and "No such file or directory: 'gcloud'" in result.stderr:
+        raise click.ClickException(
+            "iris CLI requires `gcloud` on PATH (controller tunnel uses gcloud SSH). "
+            "Install Google Cloud SDK and retry."
+        )
+    return result
 
 
 def fetch_job_summary(job_id: str, iris_config: Path) -> dict | None:
@@ -139,16 +147,105 @@ def fetch_job_summary(job_id: str, iris_config: Path) -> dict | None:
         return None
 
 
-def fetch_task0_logs(job_id: str, iris_config: Path, max_lines: int = LOG_LINE_CAP) -> str:
-    """Return the tail of task-0 logs for the job, or empty string on failure."""
-    result = _run_iris(
-        ["job", "logs", f"{job_id}/0", "--tail", "--max-lines", str(max_lines)],
-        iris_config,
-    )
+def fetch_job_tree(job_id: str, iris_config: Path) -> list[dict] | None:
+    """Return ``iris job list --json --prefix <job>`` — the parent + all descendants.
+
+    Each entry includes job-level ``preemption_count`` / ``failure_count`` /
+    ``task_state_counts``. We need the tree (not just the parent's summary)
+    because the launcher task is the only thing under the parent itself; the
+    actual fan-out workers live in child iris jobs (zephyr pipeline subjobs).
+    """
+    result = _run_iris(["job", "list", "--json", "--prefix", job_id], iris_config)
     if result.returncode != 0:
-        logger.warning("iris job logs failed (exit %s): %s", result.returncode, result.stderr.strip())
-        return ""
-    return result.stdout
+        logger.warning("iris job list --prefix failed (exit %s): %s", result.returncode, result.stderr.strip())
+        return None
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        logger.warning("iris job list returned non-JSON: %s", exc)
+        return None
+
+
+def aggregate_job_tree(jobs: list[dict]) -> dict:
+    """Sum preemption / failure / task-state counts across every job in the tree.
+
+    Returns a dict with the same field names as ``iris job summary``:
+    ``preemption_count``, ``failure_count``, ``task_state_counts``, plus
+    ``job_count`` for sanity-checking. Used to override the parent-only
+    counts that ``iris job summary <parent>`` returns, since those only
+    describe the launcher task and miss the fan-out workers.
+    """
+    preemption_count = 0
+    failure_count = 0
+    task_state_counts: dict[str, int] = {}
+    for j in jobs:
+        preemption_count += int(j.get("preemption_count") or 0)
+        failure_count += int(j.get("failure_count") or 0)
+        for state, n in (j.get("task_state_counts") or {}).items():
+            task_state_counts[state] = task_state_counts.get(state, 0) + int(n)
+    return {
+        "preemption_count": preemption_count,
+        "failure_count": failure_count,
+        "task_state_counts": task_state_counts,
+        "job_count": len(jobs),
+    }
+
+
+# finelog can refuse very large tail requests with a connect/deadline timeout.
+# Match those errors so we can retry with a smaller tail before giving up.
+_LOG_TIMEOUT_PATTERNS = ("request timed out", "deadline exceeded", "statserror", "deadline_exceeded")
+
+
+def _is_finelog_timeout(stderr: str) -> bool:
+    s = (stderr or "").lower()
+    return any(pat in s for pat in _LOG_TIMEOUT_PATTERNS)
+
+
+def fetch_task0_logs(job_id: str, iris_config: Path, max_lines: int = LOG_LINE_CAP) -> str:
+    """Return the tail of task-0 logs for the job, or empty string on persistent failure.
+
+    finelog can time out on large tails. We retry with progressively smaller
+    tails (200k → 50k → 10k) on timeout-class errors, since the step-completion
+    lines we care about are emitted near the end of the run regardless of cap.
+    """
+    attempts: list[int] = []
+    seen: set[int] = set()
+    for n in (max_lines, max_lines // 4, max_lines // 20, 5000):
+        if n > 0 and n not in seen:
+            attempts.append(n)
+            seen.add(n)
+
+    last_stderr = ""
+    backoff_seconds = 2.0
+    for attempt_idx, lines in enumerate(attempts):
+        result = _run_iris(
+            ["job", "logs", f"{job_id}/0", "--tail", "--max-lines", str(lines)],
+            iris_config,
+        )
+        if result.returncode == 0:
+            if attempt_idx > 0:
+                logger.info("iris job logs succeeded with --max-lines=%d after %d retries", lines, attempt_idx)
+            return result.stdout
+
+        last_stderr = result.stderr.strip()
+        if not _is_finelog_timeout(last_stderr):
+            # Not a transient timeout — no point retrying with a smaller tail.
+            logger.warning("iris job logs failed (exit %s): %s", result.returncode, last_stderr)
+            return ""
+
+        if attempt_idx + 1 < len(attempts):
+            next_lines = attempts[attempt_idx + 1]
+            logger.warning(
+                "iris job logs timed out at --max-lines=%d; retrying with %d after %.1fs",
+                lines,
+                next_lines,
+                backoff_seconds,
+            )
+            time.sleep(backoff_seconds)
+            backoff_seconds *= 2
+
+    logger.warning("iris job logs failed after %d attempts; final error: %s", len(attempts), last_stderr)
+    return ""
 
 
 # --------------------------------------------------------------------------- #
@@ -306,17 +403,21 @@ def build_report(
     *,
     job_id: str,
     summary: dict | None,
+    job_tree: list[dict] | None,
     logs: str,
     status: dict | None,
-    ferry_module: str | None,
-    wandb_url: str | None,
     workflow_env: dict[str, str | None],
 ) -> PerfReport:
-    """Assemble a PerfReport from the iris summary, task-0 logs, and ferry status."""
+    """Assemble a PerfReport from iris summary + tree + task-0 logs + ferry status.
+
+    The parent ``iris job summary`` describes only the launcher task; ``job_tree``
+    is the result of ``iris job list --prefix <parent>`` which surfaces every
+    descendant job. We use the tree (when available) for ``preemption_count``,
+    ``failure_count``, and ``task_state_counts`` so they reflect the whole
+    pipeline, not just the launcher.
+    """
     report = PerfReport(
         iris_job_id=job_id,
-        ferry_module=ferry_module,
-        wandb_url=wandb_url,
         collected_at_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         workflow_run_id=workflow_env.get("run_id"),
         workflow_run_attempt=workflow_env.get("run_attempt"),
@@ -341,11 +442,24 @@ def build_report(
             mems = [t.get("memory_peak_mb", 0) for t in tasks]
             report.peak_worker_memory_mb = max(mems) if mems else 0
             report.infra_failures, report.ooms, report.failed_shards = classify_failures(tasks)
+
+    # Aggregate preemption / failure / task-state counts across the whole job
+    # tree. Falls back to the parent-only summary fields when the tree is
+    # unavailable, so a list-RPC failure doesn't zero these out.
+    if job_tree is not None:
+        agg = aggregate_job_tree(job_tree)
+        report.preemption_count = agg["preemption_count"]
+        report.failure_count = agg["failure_count"]
+        report.task_state_counts = agg["task_state_counts"]
+        report.tree_job_count = agg["job_count"]
+    elif summary is not None:
         report.preemption_count = int(summary.get("preemption_count") or 0)
         report.failure_count = int(summary.get("failure_count") or 0)
         report.task_state_counts = dict(summary.get("task_state_counts") or {})
-        if report.task_state_counts.get("preempted"):
-            report.warnings.append("task_state_counts.preempted > 0: stage durations may be split across attempts")
+        report.warnings.append("iris job list --prefix: failed; counts reflect launcher task only")
+
+    if report.task_state_counts.get("preempted"):
+        report.warnings.append("task_state_counts.preempted > 0: stage durations may be split across attempts")
 
     report.stage_wall_seconds, report.cached_steps = parse_stage_wall_seconds(logs)
     if not report.stage_wall_seconds:
@@ -416,21 +530,15 @@ def upload_report_to_gcs(report: PerfReport, gcs_prefix: str, report_name: str, 
     help="Optional FERRY_STATUS_PATH gs:// URL written by the ferry's _write_status helper.",
 )
 @click.option(
-    "--ferry-module",
-    default=None,
-    help="Ferry module name for provenance, e.g. experiments.ferries.datakit_ferry.",
-)
-@click.option("--wandb-url", default=None, help="Optional W&B run URL passthrough.")
-@click.option(
     "--report-name",
-    required=True,
-    help="Short stable name embedded in the GCS path (e.g. tier1, tier2, tier3).",
+    default=None,
+    help="Short stable name embedded in the GCS path (required only when --gcs-prefix is set).",
 )
 @click.option(
     "--out",
-    required=True,
+    default=None,
     type=click.Path(path_type=Path),
-    help="Local path to write the JSON report.",
+    help="Local path to write the JSON report. When omitted, prints JSON to stdout.",
 )
 @click.option(
     "--gcs-prefix",
@@ -446,15 +554,22 @@ def main(
     job_id: str,
     iris_config: Path,
     status_path: str | None,
-    ferry_module: str | None,
-    wandb_url: str | None,
-    report_name: str,
-    out: Path,
+    report_name: str | None,
+    out: Path | None,
     gcs_prefix: str | None,
     gcs_output_env: str | None,
 ) -> None:
-    """Collect a perf report for a finished datakit ferry run."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    """Collect a perf report for a finished datakit ferry run.
+
+    With only --job-id, the report is printed as JSON to stdout. Pass --out
+    to write a local file, and --gcs-prefix --report-name to mirror to GCS.
+    """
+    if gcs_prefix and not report_name:
+        raise click.UsageError("--gcs-prefix requires --report-name")
+
+    # All script logging goes to stderr; stdout stays clean for the JSON
+    # output when --out is omitted.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
 
     workflow_env = {
         "run_id": os.environ.get("GITHUB_RUN_ID"),
@@ -464,23 +579,27 @@ def main(
     }
 
     summary = fetch_job_summary(job_id, iris_config)
+    job_tree = fetch_job_tree(job_id, iris_config)
     logs = fetch_task0_logs(job_id, iris_config)
     status = load_ferry_status(status_path)
 
     report = build_report(
         job_id=job_id,
         summary=summary,
+        job_tree=job_tree,
         logs=logs,
         status=status,
-        ferry_module=ferry_module,
-        wandb_url=wandb_url,
         workflow_env=workflow_env,
     )
 
-    write_report_local(report, out)
-    logger.info("Wrote perf report to %s", out)
+    if out is not None:
+        write_report_local(report, out)
+        logger.info("Wrote perf report to %s", out)
+    else:
+        click.echo(report.to_json())
 
     if gcs_prefix:
+        assert report_name is not None  # validated above
         ts = _utc_timestamp_compact()
         dest = upload_report_to_gcs(report, gcs_prefix, report_name, ts)
         logger.info("Mirrored perf report to %s", dest)

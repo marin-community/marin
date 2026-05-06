@@ -121,7 +121,6 @@ jobs:
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --status "$FERRY_STATUS_PATH" \
-            --ferry-module experiments.ferries.datakit_tier2_skewed_ferry \
             --report-name tier2 \
             --out perf-report.json \
             --gcs-prefix gs://marin-us-central1/infra/datakit/ferry_perf
