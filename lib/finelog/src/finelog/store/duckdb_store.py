@@ -61,10 +61,13 @@ LOG_NAMESPACE_NAME = "log"
 SEGMENT_TARGET_BYTES = 100 * 1024 * 1024
 DEFAULT_FLUSH_INTERVAL_SEC = 60.0
 
-# Tight DuckDB limits (e.g. 256MB) caused spill-to-disk loops under concurrent
-# tail reads over large row groups, wedging the controller. 4GB is generous
-# against 5 segments x 500MB + zstd decompression scratch.
-_DEFAULT_DUCKDB_MEMORY_LIMIT = "4GB"
+# 4GB was the previous default but in practice finelog's read pattern
+# rarely needs more than tens of MB; the high cap mostly let mimalloc/DuckDB
+# retain pages indefinitely. 512MB on the read pool is plenty against 5
+# segments x ~50MB + zstd decompression scratch. Compaction tier-merges can
+# spill larger sort buffers, so it gets its own (still bounded) limit.
+_DEFAULT_DUCKDB_MEMORY_LIMIT = "512MB"
+_DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT = "1GB"
 _DEFAULT_DUCKDB_THREADS = "4"
 
 # Embedded mode (iris controller's bundled log-server) keeps VMS small so the
@@ -113,6 +116,12 @@ class ConnectionPool:
         config = {"memory_limit": memory_limit, "threads": threads}
         self._conn = duckdb.connect(config=config)
         self._conn.execute("SET enable_object_cache=true")
+        # Serializes DDL on the shared read connection. ``query()`` issues
+        # ``CREATE OR REPLACE VIEW {namespace}`` for every registered
+        # namespace, and concurrent calls would collide on the same view
+        # names. Held end-to-end through the fetch so the views stay valid
+        # while the result materializes.
+        self._read_query_lock = Lock()
 
     @contextmanager
     def checkout(self, buffer_tables: list[pa.Table]) -> Iterator[tuple[duckdb.DuckDBPyConnection, list[str]]]:
@@ -271,6 +280,7 @@ class DuckDBLogStore:
         compaction_config: CompactionConfig = CompactionConfig(),
         segment_target_bytes: int = SEGMENT_TARGET_BYTES,
         duckdb_memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
+        duckdb_compaction_memory_limit: str = _DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT,
         duckdb_threads: str = _DEFAULT_DUCKDB_THREADS,
     ):
         self._data_dir: Path | None = log_dir
@@ -292,13 +302,16 @@ class DuckDBLogStore:
         self._namespace_registered_at: dict[str, int] = {}
         self._namespaces: dict[str, LogNamespaceProtocol] = {}
 
-        # Disk-only kwargs; ignored by memory namespaces.
+        # Disk-only kwargs; ignored by memory namespaces. ``duckdb_memory_limit``
+        # in this dict feeds the per-namespace compaction connection in
+        # ``DiskLogNamespace``; we route the dedicated compaction cap here so
+        # tier-merges don't share the read pool's tighter ceiling.
         self._disk_namespace_kwargs = dict(
             copy_wake=self._wake_copier,
             flush_interval_sec=flush_interval_sec,
             compaction_config=compaction_config,
             segment_target_bytes=segment_target_bytes,
-            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_memory_limit=duckdb_compaction_memory_limit,
             duckdb_threads=duckdb_threads,
         )
 
@@ -467,10 +480,22 @@ class DuckDBLogStore:
 
         Unknown namespaces in the FROM clause surface as DuckDB
         ``CatalogException`` (the view doesn't exist).
+
+        Uses a cursor on the shared read connection rather than opening a
+        fresh ``duckdb.connect()`` per call: a fresh connection is its own
+        in-process DB instance with its own buffer manager, and mimalloc
+        retained those arenas long after ``con.close()`` (RSS climbed by
+        ~50-100MB per call under load). The view + RAM-table names are
+        suffixed with a unique cursor id so concurrent calls on the shared
+        connection don't collide; views and registrations are torn down in
+        ``finally`` to keep the connection clean for the next caller.
         """
-        con = duckdb.connect()
+        cid = _next_cursor_id()
         registered_names: list[str] = []
+        view_names: list[str] = []
         self._query_visibility_lock.read_acquire()
+        self._pool._read_query_lock.acquire()
+        cursor = self._pool._conn.cursor()
         try:
             # Snapshot under the insertion lock so a concurrent drop_table
             # (which mutates the dict under the same lock) can't trigger
@@ -479,12 +504,13 @@ class DuckDBLogStore:
                 ns_snapshot = list(self._namespaces.items())
             for ns_name, ns in ns_snapshot:
                 ns_quoted = quote_ident(ns_name)
+                view_names.append(ns_quoted)
                 segments, ram_tables = ns.query_snapshot()
                 if not segments and not ram_tables:
                     cols_sql = ", ".join(
                         f"NULL::{duckdb_type_for(c)} AS {quote_ident(c.name)}" for c in ns.schema.columns
                     )
-                    con.execute(f"CREATE VIEW {ns_quoted} AS SELECT {cols_sql} WHERE FALSE")
+                    cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS SELECT {cols_sql} WHERE FALSE")
                     continue
 
                 parts: list[str] = []
@@ -492,17 +518,20 @@ class DuckDBLogStore:
                     paths_literal = "[" + ", ".join(quote_literal(s.path) for s in segments) + "]"
                     parts.append(f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)")
                 for table in ram_tables:
-                    reg_name = f"_seg_{len(registered_names)}"
-                    con.register(reg_name, table)
+                    reg_name = f"_q{cid}_seg_{len(registered_names)}"
+                    cursor.register(reg_name, table)
                     registered_names.append(reg_name)
                     parts.append(f"SELECT * FROM {reg_name}")
-                con.execute(f"CREATE VIEW {ns_quoted} AS {' UNION ALL BY NAME '.join(parts)}")
-            return con.execute(sql).fetch_arrow_table()
+                cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS {' UNION ALL BY NAME '.join(parts)}")
+            return cursor.execute(sql).fetch_arrow_table()
         finally:
             for name in registered_names:
-                con.unregister(name)
+                cursor.unregister(name)
+            for vname in view_names:
+                cursor.execute(f"DROP VIEW IF EXISTS {vname}")
+            cursor.close()
+            self._pool._read_query_lock.release()
             self._query_visibility_lock.read_release()
-            con.close()
 
     def drop_table(self, name: str) -> None:
         """Remove ``name`` from the registry and delete its local segments.
@@ -642,8 +671,21 @@ class DuckDBLogStore:
 
 
 def _decode_single_record_batch(arrow_ipc_bytes: bytes) -> pa.RecordBatch:
+    """Decode a single-batch IPC stream.
+
+    Uses ``read_next_batch`` rather than ``list(reader)`` so the EOS check
+    doesn't build an intermediate Python list (this path was 1.15M allocs/30s
+    on prod). Note: the returned ``RecordBatch`` is a zero-copy view into
+    ``arrow_ipc_bytes`` and keeps it alive — see ARROW-7305 in the design
+    notes for why we may want a hard copy here later.
+    """
     reader = paipc.open_stream(pa.BufferReader(arrow_ipc_bytes))
-    batches = list(reader)
-    if len(batches) != 1:
-        raise SchemaValidationError(f"WriteRows: expected exactly one RecordBatch in IPC stream, got {len(batches)}")
-    return batches[0]
+    try:
+        batch = reader.read_next_batch()
+    except StopIteration:
+        raise SchemaValidationError("WriteRows: expected exactly one RecordBatch in IPC stream, got 0") from None
+    try:
+        reader.read_next_batch()
+    except StopIteration:
+        return batch
+    raise SchemaValidationError("WriteRows: expected exactly one RecordBatch in IPC stream, got >1")
