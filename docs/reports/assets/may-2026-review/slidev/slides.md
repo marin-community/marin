@@ -193,9 +193,8 @@ layout: default
 
 </div>
 
-- The useful finding is not "Marin is worse everywhere." It is a map of where to buy back capability with data.
-- The recurring weak families are messy web artifacts, structured text, code-adjacent metadata, tables, multilingual prose, and scientific notation.
-- The dashboard is live at [marin.community/analysis/perplexity-gap](https://marin.community/analysis/perplexity-gap/); use it tomorrow for the exact family-level figure.
+- The recurring weak families are code and messy web artifacts, structured text, code-adjacent metadata, tables, multilingual prose, and scientific notation.
+- The dashboard is live at [marin.community/analysis/perplexity-gap](https://marin.community/analysis/perplexity-gap/).
 
 ---
 layout: section
@@ -220,10 +219,6 @@ layout: split-left-green
 - Current best is **0.9889** BPB at exact **3e18**: `isoflop-k5e256-d768-3e+18`, finished **May 2**.
 - That is below Delphi **2e19** and within **0.0169** BPB of Delphi **3e19**. March 24 MoE best was **1.0407**.
 
-<Box bold>
-
-This is the March-style read: recipe quality at a fixed compute budget moved down.
-</Box>
 
 ---
 layout: default
@@ -234,6 +229,17 @@ layout: default
 - MoE recipe work continued through configurable MoE implementations (`#4964`), `MoeAdamHHeuristic` (`#4636`), router-logit fp32 upcasting (`#4234`), Grug grouped-query XSA fixes (`#4315`), and Muon MoE orthogonalization (`#3902`).
 - Kernel work landed on both TPU and GPU: ragged all-to-all capacity clipping (`#4359`), sender offsets (`#4867`), Pallas API fixes (`#5347`), and Triton `ragged_dot` (`#4297`, `#5350`).
 - Training reliability improved around W&B failures and resume symmetry (`#5332`, `#5415`), checkpoint roots (`#4387`, `#5066`), shuffle defaults (`#5246`, `#5259`), and tokenizer migration (`#4405`, `#4451`, `#4977`).
+
+
+---
+layout: default
+---
+
+# MoE 1e23 and the Death Throes of Ray
+
+<div style="display: flex; align-items: center; justify-content: center; height: 420px;">
+  <img src="/charts/delphi-1e23-progress/cross_entropy_loss_crop.png" alt="1e23 MoE train cross entropy loss over time" style="max-width: 92%; max-height: 410px; object-fit: contain;"/>
+</div>
 
 ---
 layout: split-left-green
