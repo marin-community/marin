@@ -16,7 +16,13 @@ from typing import NamedTuple
 
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
+from iris.cluster.constraints import (
+    AttributeValue,
+    Constraint,
+    WellKnownAttribute,
+    constraints_from_resources,
+    merge_constraints,
+)
 from iris.cluster.controller.codec import (
     constraints_from_json,
     constraints_to_json,
@@ -40,6 +46,7 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.schema import (
     EndpointRow,
     JobDetailRow,
+    TaskDetailRow,
     WorkerDetailRow,
 )
 from iris.cluster.controller.stores import (
@@ -251,6 +258,60 @@ class AssignmentResult(TxResult):
     accepted: list[Assignment] = field(default_factory=list)
     rejected: list[Assignment] = field(default_factory=list)
     start_requests: list[tuple[WorkerId, str, job_pb2.RunTaskRequest]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _AssignmentCandidate:
+    assignment: Assignment
+    task: TaskDetailRow | None
+    job: JobDetailRow | None
+    worker: WorkerDetailRow | None
+    resources: job_pb2.ResourceSpecProto | None
+    rejection_reason: str | None = None
+
+
+@dataclass
+class _StagedWorkerCapacity:
+    cpu_millicores: int
+    memory_bytes: int
+    gpu_count: int
+    tpu_count: int
+
+    @classmethod
+    def from_worker(cls, worker: WorkerDetailRow) -> "_StagedWorkerCapacity":
+        return cls(
+            cpu_millicores=worker.total_cpu_millicores - worker.committed_cpu_millicores,
+            memory_bytes=worker.total_memory_bytes - worker.committed_mem,
+            gpu_count=worker.total_gpu_count - worker.committed_gpu,
+            tpu_count=worker.total_tpu_count - worker.committed_tpu,
+        )
+
+    def copy(self) -> "_StagedWorkerCapacity":
+        return _StagedWorkerCapacity(
+            cpu_millicores=self.cpu_millicores,
+            memory_bytes=self.memory_bytes,
+            gpu_count=self.gpu_count,
+            tpu_count=self.tpu_count,
+        )
+
+    def deduction_error(self, resources: job_pb2.ResourceSpecProto) -> str | None:
+        requested_gpu = get_gpu_count(resources.device)
+        requested_tpu = get_tpu_count(resources.device)
+        if int(resources.cpu_millicores) > self.cpu_millicores:
+            return "insufficient_cpu"
+        if int(resources.memory_bytes) > self.memory_bytes:
+            return "insufficient_memory"
+        if requested_gpu > self.gpu_count:
+            return "insufficient_gpu"
+        if requested_tpu > self.tpu_count:
+            return "insufficient_tpu"
+        return None
+
+    def deduct(self, resources: job_pb2.ResourceSpecProto) -> None:
+        self.cpu_millicores -= int(resources.cpu_millicores)
+        self.memory_bytes -= int(resources.memory_bytes)
+        self.gpu_count -= int(get_gpu_count(resources.device))
+        self.tpu_count -= int(get_tpu_count(resources.device))
 
 
 @dataclass(frozen=True)
@@ -1230,6 +1291,182 @@ class ControllerTransitions:
         )
         return WorkerRegistrationResult(worker_id=worker_id)
 
+    def _worker_tpu_group(self, cur: TransactionCursor, worker: WorkerDetailRow) -> str:
+        row = cur.fetchone(
+            "SELECT str_value FROM worker_attributes WHERE worker_id = ? AND key = ? AND value_type = 'str'",
+            (str(worker.worker_id), WellKnownAttribute.TPU_NAME.value),
+        )
+        if row is not None and row["str_value"]:
+            return str(row["str_value"])
+        return worker.md_tpu_name
+
+    def _workers_in_tpu_group(self, cur: TransactionCursor, tpu_group: str) -> list[WorkerId]:
+        rows = cur.fetchall(
+            "SELECT worker_id FROM workers WHERE md_tpu_name = ? "
+            "UNION SELECT worker_id FROM worker_attributes WHERE key = ? AND str_value = ?",
+            (tpu_group, WellKnownAttribute.TPU_NAME.value, tpu_group),
+        )
+        return [WorkerId(str(row["worker_id"])) for row in rows]
+
+    def _foreign_active_tpu_task_in_group(
+        self,
+        cur: TransactionCursor,
+        *,
+        job_id: JobName,
+        tpu_group: str,
+    ) -> ActiveTaskRow | None:
+        worker_ids = self._workers_in_tpu_group(cur, tpu_group)
+        if not worker_ids:
+            return None
+        active_tasks = self._store.tasks.list_active(
+            cur,
+            TaskScope(worker_ids=worker_ids),
+            states=ACTIVE_TASK_STATES,
+            exclude_reservation_holders=True,
+        )
+        for active_task in active_tasks:
+            if active_task.job_id == job_id:
+                continue
+            if get_tpu_count(active_task.resources.device) > 0:
+                return active_task
+        return None
+
+    def _assignment_tpu_group_rejection(
+        self,
+        cur: TransactionCursor,
+        candidate: _AssignmentCandidate,
+        staged_tpu_groups: dict[str, JobName],
+    ) -> tuple[str | None, str | None]:
+        if candidate.worker is None or candidate.job is None or candidate.resources is None:
+            return None, None
+        if not candidate.job.has_coscheduling:
+            return None, None
+        if get_tpu_count(candidate.resources.device) <= 0:
+            return None, None
+        tpu_group = self._worker_tpu_group(cur, candidate.worker)
+        if not tpu_group:
+            return None, None
+        staged_job = staged_tpu_groups.get(tpu_group)
+        if staged_job is not None and staged_job != candidate.job.job_id:
+            return f"tpu_group_staged_overlap:{tpu_group}:job={staged_job.to_wire()}", tpu_group
+        active_task = self._foreign_active_tpu_task_in_group(cur, job_id=candidate.job.job_id, tpu_group=tpu_group)
+        if active_task is not None:
+            return (
+                f"tpu_group_active_overlap:{tpu_group}:job={active_task.job_id.to_wire()}:"
+                f"task={active_task.task_id.to_wire()}",
+                tpu_group,
+            )
+        return None, tpu_group
+
+    def _build_assignment_candidates(
+        self,
+        cur: TransactionCursor,
+        assignments: list[Assignment],
+    ) -> list[_AssignmentCandidate]:
+        candidates: list[_AssignmentCandidate] = []
+        job_cache: dict[str, JobDetailRow | None] = {}
+        for assignment in assignments:
+            task = self._store.tasks.get_detail(cur, assignment.task_id)
+            if task is None:
+                candidates.append(
+                    _AssignmentCandidate(
+                        assignment=assignment,
+                        task=None,
+                        job=None,
+                        worker=None,
+                        resources=None,
+                        rejection_reason="task_missing",
+                    )
+                )
+                continue
+
+            job_id_wire = task.job_id.to_wire()
+            if job_id_wire not in job_cache:
+                job_cache[job_id_wire] = self._store.jobs.get_detail(cur, task.job_id)
+            job = job_cache[job_id_wire]
+            resources = (
+                resource_spec_from_scalars(
+                    job.res_cpu_millicores,
+                    job.res_memory_bytes,
+                    job.res_disk_bytes,
+                    job.res_device_json,
+                )
+                if job is not None and not job.is_reservation_holder
+                else None
+            )
+
+            worker = self._store.workers.get_detail(cur, assignment.worker_id)
+            rejection_reason: str | None = None
+            if job is None:
+                rejection_reason = "job_missing"
+            elif not task_row_can_be_scheduled(task):
+                rejection_reason = "task_not_schedulable"
+            elif worker is None:
+                rejection_reason = "worker_missing"
+            elif not worker.active:
+                rejection_reason = "worker_inactive"
+            elif not worker.healthy:
+                rejection_reason = "worker_unhealthy"
+
+            candidates.append(
+                _AssignmentCandidate(
+                    assignment=assignment,
+                    task=task,
+                    job=job,
+                    worker=worker,
+                    resources=resources,
+                    rejection_reason=rejection_reason,
+                )
+            )
+        return candidates
+
+    def _assignment_batches(
+        self,
+        candidates: list[_AssignmentCandidate],
+    ) -> list[tuple[bool, list[_AssignmentCandidate]]]:
+        batches: list[tuple[bool, list[_AssignmentCandidate]]] = []
+        coscheduled_batches: dict[str, list[_AssignmentCandidate]] = {}
+        for candidate in candidates:
+            if candidate.job is not None and candidate.job.has_coscheduling:
+                job_id_wire = candidate.job.job_id.to_wire()
+                if job_id_wire not in coscheduled_batches:
+                    coscheduled_batches[job_id_wire] = []
+                    batches.append((True, coscheduled_batches[job_id_wire]))
+                coscheduled_batches[job_id_wire].append(candidate)
+                continue
+            batches.append((False, [candidate]))
+        return batches
+
+    def _validate_assignment_batch(
+        self,
+        cur: TransactionCursor,
+        batch: list[_AssignmentCandidate],
+        staged_capacity: dict[WorkerId, _StagedWorkerCapacity],
+        staged_tpu_groups: dict[str, JobName],
+    ) -> tuple[str | None, dict[WorkerId, _StagedWorkerCapacity], set[str]]:
+        batch_capacity = {worker_id: capacity.copy() for worker_id, capacity in staged_capacity.items()}
+        batch_tpu_groups: set[str] = set()
+        for candidate in batch:
+            if candidate.rejection_reason is not None:
+                return candidate.rejection_reason, batch_capacity, batch_tpu_groups
+            if candidate.worker is None or candidate.job is None:
+                return "invalid_assignment", batch_capacity, batch_tpu_groups
+            if candidate.resources is not None:
+                capacity = batch_capacity.setdefault(
+                    candidate.worker.worker_id,
+                    _StagedWorkerCapacity.from_worker(candidate.worker),
+                )
+                capacity_error = capacity.deduction_error(candidate.resources)
+                if capacity_error is not None:
+                    return capacity_error, batch_capacity, batch_tpu_groups
+                tpu_error, tpu_group = self._assignment_tpu_group_rejection(cur, candidate, staged_tpu_groups)
+                if tpu_error is not None:
+                    return tpu_error, batch_capacity, batch_tpu_groups
+                if tpu_group is not None:
+                    batch_tpu_groups.add(tpu_group)
+                capacity.deduct(candidate.resources)
+        return None, batch_capacity, batch_tpu_groups
+
     def queue_assignments(
         self,
         cur: TransactionCursor,
@@ -1248,66 +1485,90 @@ class ControllerTransitions:
         start_requests: list[tuple[WorkerId, str, job_pb2.RunTaskRequest]] = []
         has_real_dispatch = False
         now_ms = Timestamp.now().epoch_ms()
-        job_cache: dict[str, JobDetailRow] = {}
         jobs_to_update: set[str] = set()
-        for assignment in assignments:
-            task = self._store.tasks.get_detail(cur, assignment.task_id)
-            worker_address = self._store.workers.active_healthy_address(cur, assignment.worker_id)
-            if task is None or worker_address is None:
-                rejected.append(assignment)
-                continue
-            if not task_row_can_be_scheduled(task):
-                rejected.append(assignment)
-                continue
-            job_id_wire = task.job_id.to_wire()
-            if job_id_wire not in job_cache:
-                decoded_job = self._store.jobs.get_detail(cur, task.job_id)
-                if decoded_job is None:
-                    rejected.append(assignment)
-                    continue
-                job_cache[job_id_wire] = decoded_job
-            job = job_cache[job_id_wire]
-            attempt_id = task.current_attempt_id + 1
-            self._store.tasks.assign(
+        staged_capacity: dict[WorkerId, _StagedWorkerCapacity] = {}
+        staged_tpu_groups: dict[str, JobName] = {}
+        candidates = self._build_assignment_candidates(cur, assignments)
+        for is_coscheduled, batch in self._assignment_batches(candidates):
+            reason, batch_capacity, batch_tpu_groups = self._validate_assignment_batch(
                 cur,
-                self._store.attempts,
-                assignment.task_id,
-                assignment.worker_id,
-                worker_address,
-                attempt_id,
-                now_ms,
+                batch,
+                staged_capacity,
+                staged_tpu_groups,
             )
-            if not job.is_reservation_holder:
-                resources = resource_spec_from_scalars(
-                    job.res_cpu_millicores,
-                    job.res_memory_bytes,
-                    job.res_disk_bytes,
-                    job.res_device_json,
+            if reason is not None:
+                rejection_reason = f"coscheduled_gang_rejected:{reason}" if is_coscheduled else reason
+                for candidate in batch:
+                    rejected.append(candidate.assignment)
+                    log_event(
+                        "assignment_rejected",
+                        candidate.assignment.task_id.to_wire(),
+                        worker=str(candidate.assignment.worker_id),
+                        reason=rejection_reason,
+                    )
+                continue
+
+            staged_capacity.clear()
+            staged_capacity.update(batch_capacity)
+            for tpu_group in batch_tpu_groups:
+                job = batch[0].job
+                if job is not None:
+                    staged_tpu_groups.setdefault(tpu_group, job.job_id)
+
+            for candidate in batch:
+                assignment = candidate.assignment
+                task = candidate.task
+                job = candidate.job
+                worker = candidate.worker
+                if task is None or job is None or worker is None:
+                    rejected.append(assignment)
+                    log_event(
+                        "assignment_rejected",
+                        assignment.task_id.to_wire(),
+                        worker=str(assignment.worker_id),
+                        reason="invalid_assignment",
+                    )
+                    continue
+                attempt_id = task.current_attempt_id + 1
+                worker_address = worker.address
+                self._store.tasks.assign(
+                    cur,
+                    self._store.attempts,
+                    assignment.task_id,
+                    assignment.worker_id,
+                    worker_address,
+                    attempt_id,
+                    now_ms,
                 )
-                self._store.workers.add_committed_resources(cur, assignment.worker_id, resources)
-                entrypoint = proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint)
-                # Load inline workdir files from the job_workdir_files table.
-                for filename, data in self._store.jobs.get_workdir_files(cur, task.job_id).items():
-                    entrypoint.workdir_files[filename] = data
-                run_request = job_pb2.RunTaskRequest(
-                    task_id=assignment.task_id.to_wire(),
-                    num_tasks=job.num_tasks,
-                    entrypoint=entrypoint,
-                    environment=proto_from_json(job.environment_json, job_pb2.EnvironmentConfig),
-                    bundle_id=job.bundle_id,
-                    resources=resources,
-                    ports=json.loads(job.ports_json),
-                    attempt_id=attempt_id,
-                    constraints=[c.to_proto() for c in constraints_from_json(job.constraints_json)],
-                    task_image=job.task_image,
-                )
-                if direct_dispatch:
-                    start_requests.append((assignment.worker_id, worker_address, run_request))
-                else:
-                    self._store.dispatch.enqueue_run(cur, assignment.worker_id, run_request.SerializeToString(), now_ms)
-                has_real_dispatch = True
-            jobs_to_update.add(job_id_wire)
-            accepted.append(assignment)
+                jobs_to_update.add(job.job_id.to_wire())
+                accepted.append(assignment)
+                if not job.is_reservation_holder:
+                    resources = candidate.resources
+                    assert resources is not None
+                    self._store.workers.add_committed_resources(cur, assignment.worker_id, resources)
+                    entrypoint = proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint)
+                    # Load inline workdir files from the job_workdir_files table.
+                    for filename, data in self._store.jobs.get_workdir_files(cur, task.job_id).items():
+                        entrypoint.workdir_files[filename] = data
+                    run_request = job_pb2.RunTaskRequest(
+                        task_id=assignment.task_id.to_wire(),
+                        num_tasks=job.num_tasks,
+                        entrypoint=entrypoint,
+                        environment=proto_from_json(job.environment_json, job_pb2.EnvironmentConfig),
+                        bundle_id=job.bundle_id,
+                        resources=resources,
+                        ports=json.loads(job.ports_json),
+                        attempt_id=attempt_id,
+                        constraints=[c.to_proto() for c in constraints_from_json(job.constraints_json)],
+                        task_image=job.task_image,
+                    )
+                    if direct_dispatch:
+                        start_requests.append((assignment.worker_id, worker_address, run_request))
+                    else:
+                        self._store.dispatch.enqueue_run(
+                            cur, assignment.worker_id, run_request.SerializeToString(), now_ms
+                        )
+                    has_real_dispatch = True
         for job_id_wire in jobs_to_update:
             self._store.jobs.mark_running_if_pending(cur, JobName.from_wire(job_id_wire), now_ms)
         for a in accepted:
