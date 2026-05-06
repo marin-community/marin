@@ -38,6 +38,8 @@ echo '=== cloud-final journal ==='
 sudo journalctl -u cloud-final.service --no-pager 2>&1 | tail -n 500
 """
 
+_REDACTED_VALUE = "[REDACTED]"
+
 
 @dataclass(frozen=True)
 class IrisJobStatus:
@@ -223,6 +225,29 @@ def _kubectl(kubeconfig: Path | None) -> list[str]:
     return cmd
 
 
+def _redact_kubernetes_env_entry(entry: object) -> object:
+    if not isinstance(entry, dict):
+        return _redact_kubernetes_env_values(entry)
+
+    redacted = {key: _redact_kubernetes_env_values(value) for key, value in entry.items()}
+    if "value" in redacted:
+        redacted["value"] = _REDACTED_VALUE
+    return redacted
+
+
+def _redact_kubernetes_env_values(value: object) -> object:
+    if isinstance(value, list):
+        return [_redact_kubernetes_env_values(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    redacted = {key: _redact_kubernetes_env_values(child) for key, child in value.items()}
+    env = value.get("env")
+    if isinstance(env, list):
+        redacted["env"] = [_redact_kubernetes_env_entry(entry) for entry in env]
+    return redacted
+
+
 def _kubectl_dump(
     cmd: list[str],
     output_path: Path,
@@ -232,6 +257,26 @@ def _kubectl_dump(
     output_path.write_text(result.stdout or result.stderr or "")
     if result.returncode != 0:
         return f"{description} failed (exit {result.returncode}): {result.stderr.strip()}"
+    return None
+
+
+def _kubectl_pod_json_dump(
+    cmd: list[str],
+    output_path: Path,
+    description: str,
+) -> str | None:
+    result = _run(cmd)
+    if result.returncode != 0:
+        output_path.write_text(result.stderr)
+        return f"{description} failed (exit {result.returncode}): {result.stderr.strip()}"
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        output_path.write_text("")
+        return f"{description} returned invalid JSON: {exc}"
+
+    output_path.write_text(json.dumps(_redact_kubernetes_env_values(data), indent=2) + "\n")
     return None
 
 
@@ -252,7 +297,7 @@ def _collect_coreweave(
     # Match the controller's iris.job_id label sanitization, or the selector misses everything.
     label = _sanitize_label_value(job_id.lstrip("/"))[:63]
     pods_path = output_dir / "kubernetes-pods.json"
-    err = _kubectl_dump(
+    err = _kubectl_pod_json_dump(
         [*kctl, "-n", namespace, "get", "pods", f"-l=iris.job_id={label}", "-o", "json"],
         pods_path,
         "kubectl get pods (job)",
@@ -273,15 +318,18 @@ def _collect_coreweave(
             ["-n", namespace, "logs", "-l", "app=iris-controller", "--tail=-1", "--all-containers", "--previous"],
             "kubectl logs controller --previous",
         ),
-        (
-            "controller-describe.txt",
-            ["-n", namespace, "describe", "pod", "-l", "app=iris-controller"],
-            "kubectl describe controller",
-        ),
     ]:
         err = _kubectl_dump([*kctl, *args], output_dir / fname, desc)
         if err is None:
             written.append(fname)
+
+    err = _kubectl_pod_json_dump(
+        [*kctl, "-n", namespace, "get", "pods", "-l", "app=iris-controller", "-o", "json"],
+        output_dir / "controller-pods.json",
+        "kubectl get controller pods",
+    )
+    if err is None:
+        written.append("controller-pods.json")
 
     if managed_label:
         list_result = _run([*kctl, "-n", namespace, "get", "pods", "-l", f"{managed_label}=true", "-o", "name"])
@@ -290,18 +338,24 @@ def _collect_coreweave(
                 if not line:
                     continue
                 safe = line.replace("/", "-")
-                _kubectl_dump(
+                log_err = _kubectl_dump(
                     [*kctl, "-n", namespace, "logs", line, "--tail=-1", "--all-containers"],
                     output_dir / f"{safe}.log",
                     f"kubectl logs {line}",
                 )
-                _kubectl_dump(
-                    [*kctl, "-n", namespace, "describe", line],
-                    output_dir / f"{safe}-describe.txt",
-                    f"kubectl describe {line}",
+                pod_err = _kubectl_pod_json_dump(
+                    [*kctl, "-n", namespace, "get", line, "-o", "json"],
+                    output_dir / f"{safe}.json",
+                    f"kubectl get {line}",
                 )
-                written.append(f"{safe}.log")
-                written.append(f"{safe}-describe.txt")
+                if log_err is None:
+                    written.append(f"{safe}.log")
+                else:
+                    errors.append(log_err)
+                if pod_err is None:
+                    written.append(f"{safe}.json")
+                else:
+                    errors.append(pod_err)
         else:
             errors.append(f"kubectl get pods -l {managed_label}=true failed: {list_result.stderr.strip()}")
 
