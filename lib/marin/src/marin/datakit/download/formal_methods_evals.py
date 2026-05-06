@@ -41,6 +41,7 @@ import zstandard
 from requests.adapters import HTTPAdapter
 from rigging.filesystem import open_url
 from urllib3.util import Retry
+from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
 from marin.datakit.ingestion_manifest import (
@@ -146,6 +147,20 @@ class DownloadArchiveSliceConfig:
 class _SourceFile:
     filename: str
     content: bytes
+
+
+@dataclass(frozen=True)
+class _ArchiveSliceTask:
+    source: ArchiveSourceConfig
+    http_timeout_seconds: int
+
+
+@dataclass(frozen=True)
+class _ArchiveSliceWriteResult:
+    records: int
+    compressed_bytes: int
+    output_file: str
+    value_error: str | None = None
 
 
 _ARCHIVE_FORMATS: frozenset[str] = frozenset({"tar", "tar.gz", "tgz", "tar.bz2", "tar.xz", "tar.zst", "zip"})
@@ -356,7 +371,7 @@ def _write_budgeted_jsonl_gz(
     source_label: str,
     max_compressed_bytes: int,
     max_files: int | None,
-) -> dict[str, Any]:
+) -> _ArchiveSliceWriteResult:
     """Write records to gzipped JSONL, truncating before the next record would exceed the budget."""
     buf = io.BytesIO()
     written = 0
@@ -384,7 +399,45 @@ def _write_budgeted_jsonl_gz(
     with atomic_rename(output_path) as temp_path, open_url(temp_path, "wb") as out:
         out.write(payload)
     logger.info("wrote %d records (%d compressed bytes) to %s", written, len(payload), output_path)
-    return {"records": written, "compressed_bytes": len(payload), "output_file": output_path}
+    return _ArchiveSliceWriteResult(records=written, compressed_bytes=len(payload), output_file=output_path)
+
+
+def _iter_archive_slice_records(task: _ArchiveSliceTask) -> Iterator[tuple[str, str]]:
+    archive_bytes = _fetch_archive_bytes(task.source.archive_url, task.http_timeout_seconds)
+    members = _iter_archive_members(archive_bytes, task.source.archive_format)
+    filtered = _filter_members(members, task.source.include_globs, task.source.exclude_globs)
+    yield from _emit_records(task.source, filtered)
+
+
+def _write_archive_slice_records(
+    records: Iterator[tuple[str, str]],
+    *,
+    output_path: str,
+    source_label: str,
+    max_compressed_bytes: int,
+    max_files: int | None,
+) -> _ArchiveSliceWriteResult:
+    try:
+        return _write_budgeted_jsonl_gz(
+            records,
+            output_path=output_path,
+            source_label=source_label,
+            max_compressed_bytes=max_compressed_bytes,
+            max_files=max_files,
+        )
+    except ValueError as exc:
+        return _ArchiveSliceWriteResult(records=0, compressed_bytes=0, output_file=output_path, value_error=str(exc))
+
+
+def _single_archive_write_result(results: Iterator[_ArchiveSliceWriteResult]) -> _ArchiveSliceWriteResult:
+    result = next(results, None)
+    if result is None:
+        raise ValueError("archive slice pipeline produced no write result")
+    try:
+        next(results)
+    except StopIteration:
+        return result
+    raise ValueError("archive slice pipeline produced multiple write results")
 
 
 def download_archive_slice(cfg: DownloadArchiveSliceConfig) -> dict[str, Any]:
@@ -395,26 +448,43 @@ def download_archive_slice(cfg: DownloadArchiveSliceConfig) -> dict[str, Any]:
     cfg.source.validate()
     output_path = str(cfg.output_path)
     fsspec_mkdirs(output_path, exist_ok=True)
-    archive_bytes = _fetch_archive_bytes(cfg.source.archive_url, cfg.http_timeout_seconds)
-    members = _iter_archive_members(archive_bytes, cfg.source.archive_format)
-    filtered = _filter_members(members, cfg.source.include_globs, cfg.source.exclude_globs)
-    records = _emit_records(cfg.source, filtered)
     output_file = posixpath.join(output_path, cfg.output_filename)
-    result = _write_budgeted_jsonl_gz(
-        records,
-        output_path=output_file,
-        source_label=cfg.source.resolved_source_label(),
-        max_compressed_bytes=cfg.source.max_compressed_bytes,
-        max_files=cfg.source.max_files,
+    pipeline = Dataset.from_list([_ArchiveSliceTask(cfg.source, cfg.http_timeout_seconds)]).flat_map(
+        _iter_archive_slice_records
     )
-    result["metadata_path"] = _write_source_metadata(
+    result = (
+        ZephyrContext(name="download-archive-slice", max_workers=1)
+        .execute(
+            pipeline.reduce(
+                local_reducer=lambda records: _write_archive_slice_records(
+                    records,
+                    output_path=output_file,
+                    source_label=cfg.source.resolved_source_label(),
+                    max_compressed_bytes=cfg.source.max_compressed_bytes,
+                    max_files=cfg.source.max_files,
+                ),
+                global_reducer=_single_archive_write_result,
+            )
+        )
+        .results[0]
+    )
+    if not isinstance(result, _ArchiveSliceWriteResult):
+        raise TypeError(f"archive slice pipeline returned {type(result).__name__}, expected _ArchiveSliceWriteResult")
+    if result.value_error is not None:
+        raise ValueError(result.value_error)
+    result_dict = {
+        "records": result.records,
+        "compressed_bytes": result.compressed_bytes,
+        "output_file": result.output_file,
+    }
+    result_dict["metadata_path"] = _write_source_metadata(
         source=cfg.source,
         output_path=output_path,
         output_file=output_file,
-        record_count=result["records"],
-        bytes_written=result["compressed_bytes"],
+        record_count=result.records,
+        bytes_written=result.compressed_bytes,
     )
-    return result
+    return result_dict
 
 
 def archive_slice_step(
