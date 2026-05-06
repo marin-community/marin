@@ -406,33 +406,17 @@ def test_high_char_5gram_jaccard_pair_clusters_end_to_end(tmp_path: Path):
 # ---------------------------------------------------------------------------
 # Real-world parser-variant regression tests.
 #
-# Fixtures under resources/parser_variants/<article>/ contain text outputs
-# of the same Wikipedia page extracted by trafilatura, html2text, and
-# readability-lxml from a Common Crawl WARC capture. See
-# resources/parser_variants/generate_test_examples.py for how to refresh
-# or extend them.
+# Fixtures live in the HF dataset at PARSER_VARIANTS_REPO (config
+# parser_variants), pinned to PARSER_VARIANTS_REVISION in conftest.py. They
+# contain text outputs of the same Wikipedia page extracted by trafilatura,
+# html2text, and readability-lxml from a Common Crawl WARC capture. To
+# refresh or extend, see resources/parser_variants/generate_test_examples.py
+# (fetch + parse) and upload_test_examples.py (push to HF).
 # ---------------------------------------------------------------------------
 
-_PARSER_VARIANTS_DIR = Path(__file__).parent / "resources" / "parser_variants"
 
-
-def _load_parser_variants() -> list[dict]:
-    """Load every committed parser-variant fixture as an ingestible {id, text} record."""
-    docs: list[dict] = []
-    for article_dir in sorted(p for p in _PARSER_VARIANTS_DIR.iterdir() if p.is_dir()):
-        for parser_path in sorted(article_dir.glob("*.txt")):
-            docs.append(
-                {
-                    "id": f"{article_dir.name}__{parser_path.stem}",
-                    "text": parser_path.read_text(encoding="utf-8"),
-                }
-            )
-    return docs
-
-
-def _run_dedup_on_parser_variants(tmp_path: Path) -> dict[str, dict]:
-    """Run normalize -> minhash -> fuzzy_dups on the parser-variant corpus."""
-    docs = _load_parser_variants()
+def _run_dedup_on_parser_variants(tmp_path: Path, docs: list[dict]) -> dict[str, dict]:
+    """Run normalize -> minhash -> fuzzy_dups on a parser-variant corpus."""
     src_dir = tmp_path / "src"
     src_dir.mkdir()
     write_jsonl_file(docs, str(src_dir / "shard_0.jsonl.gz"))
@@ -452,14 +436,11 @@ def _cluster_id(by_source_id: dict[str, dict], source_id: str) -> str | None:
     return row["attributes"]["dup_cluster_id"] if row else None
 
 
-def _articles_on_disk() -> list[str]:
-    return sorted(p.name for p in _PARSER_VARIANTS_DIR.iterdir() if p.is_dir())
-
-
-def test_html_parser_variants_cluster_per_article(tmp_path: Path):
+@pytest.mark.data_integration
+def test_html_parser_variants_cluster_per_article(tmp_path: Path, parser_variants_docs, parser_variants_articles):
     """Trafilatura and readability outputs of one Wikipedia article cluster.
 
-    Pinning current pipeline behavior on committed fixtures: at the default
+    Pinning current pipeline behavior on the HF-hosted fixtures: at the default
     MinHash params (num_perms=286, num_bands=26), trafilatura and readability
     extract sufficiently similar text from the same page (measured char-Jaccard
     ~0.89 on these fixtures) to share an LSH bucket and end up in the same
@@ -468,21 +449,20 @@ def test_html_parser_variants_cluster_per_article(tmp_path: Path):
     The html2text variant is intentionally NOT asserted here; see
     ``test_html_parser_variants_all_three_cluster_per_article`` for the gap.
     """
-    by_source_id = _run_dedup_on_parser_variants(tmp_path)
-    articles = _articles_on_disk()
-    assert articles, "no parser-variant fixtures discovered"
+    by_source_id = _run_dedup_on_parser_variants(tmp_path, parser_variants_docs)
+    assert parser_variants_articles, "no parser-variant fixtures discovered"
 
     article_to_cluster: dict[str, str] = {}
-    for article in articles:
+    for article in parser_variants_articles:
         traf_id = f"{article}__trafilatura"
         read_id = f"{article}__readability"
         traf_cluster = _cluster_id(by_source_id, traf_id)
         read_cluster = _cluster_id(by_source_id, read_id)
         assert traf_cluster is not None, f"{traf_id} has no attr row (unexpected singleton)"
         assert read_cluster is not None, f"{read_id} has no attr row (unexpected singleton)"
-        assert traf_cluster == read_cluster, (
-            f"{article}: trafilatura ({traf_cluster!r}) and readability ({read_cluster!r}) " "did not cluster together"
-        )
+        assert (
+            traf_cluster == read_cluster
+        ), f"{article}: trafilatura ({traf_cluster!r}) and readability ({read_cluster!r}) did not cluster together"
         article_to_cluster[article] = traf_cluster
 
     cluster_ids = list(article_to_cluster.values())
@@ -491,6 +471,7 @@ def test_html_parser_variants_cluster_per_article(tmp_path: Path):
     ), f"distinct articles ended up in the same cluster: {article_to_cluster}"
 
 
+@pytest.mark.data_integration
 @pytest.mark.xfail(
     strict=True,
     reason=(
@@ -502,10 +483,12 @@ def test_html_parser_variants_cluster_per_article(tmp_path: Path):
         "should be tightened to assert all three variants cluster."
     ),
 )
-def test_html_parser_variants_all_three_cluster_per_article(tmp_path: Path):
+def test_html_parser_variants_all_three_cluster_per_article(
+    tmp_path: Path, parser_variants_docs, parser_variants_articles
+):
     """Aspirational: every parser variant of one article shares one dup_cluster_id."""
-    by_source_id = _run_dedup_on_parser_variants(tmp_path)
-    for article in _articles_on_disk():
+    by_source_id = _run_dedup_on_parser_variants(tmp_path, parser_variants_docs)
+    for article in parser_variants_articles:
         clusters = {_cluster_id(by_source_id, f"{article}__{p}") for p in ("trafilatura", "html2text", "readability")}
         assert (
             len(clusters) == 1 and None not in clusters

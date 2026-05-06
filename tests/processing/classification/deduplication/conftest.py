@@ -5,6 +5,13 @@ from pathlib import Path
 import pytest
 from zephyr.readers import load_jsonl, load_parquet
 
+# Pinned HF dataset for data_integration test fixtures. Bump
+# ``PARSER_VARIANTS_REVISION`` when ``upload_test_examples.py`` reports a new
+# commit SHA after adding fixtures.
+PARSER_VARIANTS_REPO = "ravwojdyla/marin-test-fixtures"
+PARSER_VARIANTS_CONFIG = "parser_variants"
+PARSER_VARIANTS_REVISION = "0fb2563916e89ad6a81a5e065ad578c1bf47c6f4"
+
 
 @pytest.fixture(scope="module")
 def docs():
@@ -13,6 +20,37 @@ def docs():
     for doc_file in test_resources.glob("*.txt"):
         docs[doc_file.stem] = doc_file.read_text()
     return docs
+
+
+@pytest.fixture(scope="session")
+def parser_variants_corpus():
+    """Pinned ``parser_variants`` config from the marin test-fixtures HF dataset.
+
+    Tests using this fixture must be marked ``@pytest.mark.data_integration``
+    so they only run from CI workflows that have HF access (``HF_TOKEN``
+    is unnecessary for the public dataset, but the marker keeps these
+    network-touching tests off the unit-test job).
+    """
+    from datasets import load_dataset
+
+    return load_dataset(
+        PARSER_VARIANTS_REPO,
+        PARSER_VARIANTS_CONFIG,
+        revision=PARSER_VARIANTS_REVISION,
+        split="train",
+    )
+
+
+@pytest.fixture
+def parser_variants_docs(parser_variants_corpus) -> list[dict]:
+    """Parser-variant rows reshaped as ingestible ``{id, text}`` records."""
+    return [{"id": f"{r['article_slug']}__{r['parser']}", "text": r["text"]} for r in parser_variants_corpus]
+
+
+@pytest.fixture
+def parser_variants_articles(parser_variants_corpus) -> list[str]:
+    """Sorted distinct article slugs present in the corpus."""
+    return sorted({r["article_slug"] for r in parser_variants_corpus})
 
 
 def load_dedup_outputs(output_dir: str) -> dict[str, dict]:

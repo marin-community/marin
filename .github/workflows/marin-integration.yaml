@@ -90,6 +90,12 @@ jobs:
           WANDB_API_KEY: ""
           JAX_TRACEBACK_FILTERING: off
 
+      - name: Run data integration tests
+        run: |
+          uv run pytest tests/ -m data_integration -o "addopts=" --timeout=600 -v
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
       - name: Stop cluster
         if: always()
         run: kill $CLUSTER_PID 2>/dev/null || true
