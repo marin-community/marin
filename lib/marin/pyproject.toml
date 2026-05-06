@@ -172,7 +172,7 @@ evalchemy = [
     "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
     "sympy>=1.12.1,<1.14",
     "antlr4-python3-runtime==4.11",
-    "bespokelabs-curator",  # Required by evalchemy's curator_lm module
+    "bespokelabs-curator==0.1.16",  # Required by evalchemy's curator_lm module
     "sqlalchemy",  # Required by evalchemy's database models
     # For code evals
     "fire",
