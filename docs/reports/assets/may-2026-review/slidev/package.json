@@ -1,0 +1,17 @@
+{
+  "name": "marin-review-may-2026",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "slidev slides.md",
+    "build": "slidev build slides.md",
+    "export": "slidev export slides.md"
+  },
+  "dependencies": {
+    "slidev-theme-open-athena": "git+ssh://git@github.com:Open-Athena/oa-slidev-theme.git"
+  },
+  "devDependencies": {
+    "@slidev/cli": "^51.0.0",
+    "playwright-chromium": "^1.58.2"
+  }
+}

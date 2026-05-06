@@ -1,0 +1,15 @@
+entity: marin-community
+project: marin
+tag: moe_compare
+metric: eval/paloma/c4_en/bpb
+lookback_days: 10
+bucket_hours: 6
+runs_with_recent_history: 95
+buckets: 16
+best_bpb: 1.040673
+best_bucket_start_pt: 2026-03-24T00:00:00-07:00
+best_run_name: moe-sharded-qb-gn-xsa-lindecay-budgetmatch
+best_group: moe-iter04
+groups:
+   68  isoflop-moe-v3
+   27  moe-iter04
