@@ -196,16 +196,29 @@ def test_writes_proceed_during_compaction_copy(store: DuckDBLogStore, monkeypatc
 
     copy_entered = threading.Event()
     release_copy = threading.Event()
-    real_conn = ns._compaction_conn
+    real_open = ns._open_compaction_conn
 
     class _GatedConn:
+        def __init__(self, real):
+            self._real = real
+
         def execute(self, sql, *args, **kwargs):
             copy_entered.set()
             if not release_copy.wait(timeout=5.0):
                 raise AssertionError("test forgot to release the COPY gate")
-            return real_conn.execute(sql, *args, **kwargs)
+            return self._real.execute(sql, *args, **kwargs)
 
-    monkeypatch.setattr(ns, "_compaction_conn", _GatedConn())
+        def close(self):
+            self._real.close()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.close()
+            return False
+
+    monkeypatch.setattr(ns, "_open_compaction_conn", lambda: _GatedConn(real_open()))
 
     compaction_done = threading.Event()
 

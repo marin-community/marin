@@ -132,6 +132,27 @@ def _ssh_args(cfg: FinelogConfig, command: str) -> list[str]:
     return args
 
 
+def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 30) -> bool:
+    """Poll ``/health`` from inside the VM over SSH.
+
+    Used by ``gcp_restart``: the bootstrap re-run goes over SSH, so its
+    "[finelog-init] finelog is healthy" marker never reaches the serial
+    console (which ``_wait_health`` reads). Probing ``localhost:port/health``
+    over SSH gives a direct, unambiguous answer instead.
+    """
+    probe = f"curl -sf -m 5 http://localhost:{port}/health"
+    for _ in range(max_attempts):
+        result = subprocess.run(
+            _ssh_args(cfg, probe),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return True
+        time.sleep(2)
+    return False
+
+
 def _wait_health(name: str, project: str, zone: str, port: int, max_attempts: int = 60) -> bool:
     """Wait for the bootstrap script to report finelog healthy.
 
@@ -280,7 +301,7 @@ def gcp_restart(cfg: FinelogConfig) -> None:
     if result.returncode != 0:
         raise click.ClickException("Bootstrap re-run failed; see SSH output above")
     click.echo("Bootstrap re-applied. Verifying health...")
-    if not _wait_health(cfg.name, gcp.project, gcp.zone, cfg.port):
+    if not _wait_health_via_ssh(cfg, cfg.port):
         raise click.ClickException("finelog did not become healthy after restart")
     click.echo("finelog is healthy.")
 

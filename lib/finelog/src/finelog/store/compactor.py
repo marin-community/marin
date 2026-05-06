@@ -102,6 +102,13 @@ class Compactor:
         Walks tiers from L0 upward and returns the first promotable run.
         Doing the lowest tier first keeps ``len(_local_segments)`` small
         in steady state, which dominates per-read fanout cost.
+
+        The selected run prefix is capped at the level's byte target —
+        after a crash or restart with a large backlog (e.g. thousands of
+        L1 segments), a single tick must not try to merge them all into
+        one ``COPY`` (DuckDB OOMs and the working set scales with the
+        whole prefix). Each tick drains one ``target``-sized chunk; the
+        backlog clears across many ticks.
         """
         for n, target in enumerate(self.config.level_targets):
             at_level = sorted([s for s in segments if s.level == n], key=lambda s: s.min_seq)
@@ -109,11 +116,11 @@ class Compactor:
                 continue
             for run in _contiguous_runs(at_level):
                 if _run_bytes(run) >= target:
-                    return _build_job(run, output_level=n + 1)
+                    return _build_job(_take_until_target(run, target), output_level=n + 1)
                 if n == 0 and self.config.max_l0_age_sec > 0:
                     oldest_age_sec = (now_ms - run[0].created_at_ms) / 1000.0
                     if oldest_age_sec >= self.config.max_l0_age_sec:
-                        return _build_job(run, output_level=n + 1)
+                        return _build_job(_take_until_target(run, target), output_level=n + 1)
         return None
 
     def merge_sql(self, job: CompactionJob, *, schema: Schema, staging_path: Path) -> str:
@@ -165,6 +172,22 @@ def _contiguous_runs(segments: Sequence[SegmentRow]) -> list[list[SegmentRow]]:
 
 def _run_bytes(run: Sequence[SegmentRow]) -> int:
     return sum(s.byte_size for s in run)
+
+
+def _take_until_target(run: Sequence[SegmentRow], target: int) -> list[SegmentRow]:
+    """Take the shortest prefix of ``run`` whose byte sum hits ``target``.
+
+    Always returns at least one segment so age-triggered merges of a
+    sub-target run still make forward progress.
+    """
+    out: list[SegmentRow] = []
+    total = 0
+    for seg in run:
+        out.append(seg)
+        total += seg.byte_size
+        if total >= target:
+            break
+    return out
 
 
 def _build_job(run: Sequence[SegmentRow], *, output_level: int) -> CompactionJob:

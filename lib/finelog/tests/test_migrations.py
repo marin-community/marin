@@ -43,6 +43,7 @@ def test_fresh_registry_runs_baseline_migration(tmp_path):
             "0002_segment_key_value_bounds.py",
             "0003_segment_level.py",
             "0004_segment_copied_at.py",
+            "0005_segments_level_index.py",
         ]
     finally:
         db.close()
@@ -59,6 +60,7 @@ def test_reopen_is_idempotent(tmp_path):
             "0002_segment_key_value_bounds.py",
             "0003_segment_level.py",
             "0004_segment_copied_at.py",
+            "0005_segments_level_index.py",
         ]
     finally:
         db.close()
@@ -96,6 +98,7 @@ def test_pre_migrations_database_inherits_baseline(tmp_path):
             "0002_segment_key_value_bounds.py",
             "0003_segment_level.py",
             "0004_segment_copied_at.py",
+            "0005_segments_level_index.py",
         ]
     finally:
         db.close()

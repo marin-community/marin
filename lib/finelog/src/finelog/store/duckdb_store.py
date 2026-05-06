@@ -66,8 +66,11 @@ DEFAULT_FLUSH_INTERVAL_SEC = 60.0
 # retain pages indefinitely. 512MB on the read pool is plenty against 5
 # segments x ~50MB + zstd decompression scratch. Compaction tier-merges can
 # spill larger sort buffers, so it gets its own (still bounded) limit.
-_DEFAULT_DUCKDB_MEMORY_LIMIT = "512MB"
-_DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT = "1GB"
+_DEFAULT_DUCKDB_MEMORY_LIMIT = "2GB"
+# Sized for an L1 merge of ~256 MiB segments: DuckDB's working set during
+# COPY (... ORDER BY ...) is several x the output size, and the prod
+# 1 GB cap was OOMing.
+_DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT = "4GB"
 _DEFAULT_DUCKDB_THREADS = "4"
 
 # Embedded mode (iris controller's bundled log-server) keeps VMS small so the
@@ -112,8 +115,12 @@ class ConnectionPool:
         self,
         memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
         threads: str = _DEFAULT_DUCKDB_THREADS,
+        temp_directory: Path | None = None,
     ):
-        config = {"memory_limit": memory_limit, "threads": threads}
+        config: dict[str, str] = {"memory_limit": memory_limit, "threads": threads}
+        if temp_directory is not None:
+            temp_directory.mkdir(parents=True, exist_ok=True)
+            config["temp_directory"] = str(temp_directory)
         self._conn = duckdb.connect(config=config)
         self._conn.execute("SET enable_object_cache=true")
         # Serializes DDL on the shared read connection. ``query()`` issues
@@ -289,7 +296,14 @@ class DuckDBLogStore:
 
         self._insertion_lock = Lock()
         self._query_visibility_lock = RWLock()
-        self._pool = ConnectionPool(memory_limit=duckdb_memory_limit, threads=duckdb_threads)
+        # Spill into the data dir, not CWD — the prod container runs with a
+        # read-only working directory.
+        pool_tmp = (log_dir / ".duckdb_tmp_read") if log_dir is not None else None
+        self._pool = ConnectionPool(
+            memory_limit=duckdb_memory_limit,
+            threads=duckdb_threads,
+            temp_directory=pool_tmp,
+        )
         self._catalog = Catalog(self._data_dir)
 
         # Polling uploader: independent of compaction. Walks the catalog
@@ -312,7 +326,6 @@ class DuckDBLogStore:
             compaction_config=compaction_config,
             segment_target_bytes=segment_target_bytes,
             duckdb_memory_limit=duckdb_compaction_memory_limit,
-            duckdb_threads=duckdb_threads,
         )
 
         self._rehydrate_from_registry()

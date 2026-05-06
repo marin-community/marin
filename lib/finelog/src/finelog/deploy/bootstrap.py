@@ -91,6 +91,7 @@ sudo docker run -d --name {{ container_name }} \\
     --network=host \\
     --restart=unless-stopped \\
     --ulimit core=0:0 \\
+    --ulimit nofile=1048576:1048576 \\
     --cap-add SYS_PTRACE \\
     --cpus="${container_cpus}" \\
     --memory="${container_mem_mib}m" \\

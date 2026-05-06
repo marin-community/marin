@@ -57,6 +57,11 @@ def migrate(conn: duckdb.DuckDBPyConnection, *, data_dir: Path | None) -> None:
     # is still present, i.e. first-time apply): ``finalized`` rows become
     # L1, ``tmp`` rows become L0. A re-run after a partial crash is a
     # clean no-op for the SQL phase.
+    # The companion index on (namespace, level, min_seq) is created in
+    # migration 0005, in its own transaction: DuckDB rejects CREATE INDEX
+    # while there are outstanding UPDATEs in the same txn, and rejects
+    # DROP COLUMN if a later column is indexed — there is no single
+    # ordering that satisfies both constraints in one transaction.
     conn.execute("ALTER TABLE segments ADD COLUMN IF NOT EXISTS level INTEGER")
     state_present = bool(
         conn.execute(
@@ -66,7 +71,6 @@ def migrate(conn: duckdb.DuckDBPyConnection, *, data_dir: Path | None) -> None:
     if state_present:
         conn.execute("UPDATE segments SET level = CASE WHEN state = 'finalized' THEN 1 ELSE 0 END")
         conn.execute("ALTER TABLE segments DROP COLUMN state")
-    conn.execute("CREATE INDEX IF NOT EXISTS segments_ns_level_minseq ON segments (namespace, level, min_seq)")
 
     if data_dir is None:
         # In-memory store has no parquet files to rename.
