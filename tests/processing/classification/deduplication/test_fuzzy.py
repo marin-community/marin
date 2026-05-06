@@ -512,3 +512,32 @@ def test_same_site_distinct_bodies_do_not_cluster(tmp_path: Path, same_site_dist
     """
     by_source_id = _run_dedup_on_corpus(tmp_path, same_site_distinct_docs)
     assert not by_source_id, f"distinct same-site articles clustered (over-merge): {sorted(by_source_id.keys())}"
+
+
+@pytest.mark.data_integration
+def test_wikipedia_revisions_cluster_per_article(tmp_path: Path, wikipedia_revisions_docs, wikipedia_revisions_articles):
+    """Different temporal captures of one Wikipedia article must cluster.
+
+    Recall regression on temporal drift: the dedup pipeline must recognise
+    snapshots of the same URL across years (paragraphs added, citations
+    refreshed) as the same logical document. All rows whose
+    ``article_slug`` matches must share one ``dup_cluster_id``, and rows
+    with different slugs must not cross-cluster.
+
+    Fixture char-Jaccard between same-article revisions measures around
+    0.76-0.85; cross-article around 0.21. The MinHash params keep the
+    same-article pairs reliably above the LSH collision threshold.
+    """
+    by_source_id = _run_dedup_on_corpus(tmp_path, wikipedia_revisions_docs)
+    assert wikipedia_revisions_articles, "no revision fixtures discovered"
+
+    article_to_cluster: dict[str, str] = {}
+    for article in wikipedia_revisions_articles:
+        variants = [sid for sid in by_source_id if sid.startswith(f"{article}__")]
+        assert variants, f"no attr rows for revisions of {article!r} (unexpected singletons)"
+        clusters = {by_source_id[sid]["attributes"]["dup_cluster_id"] for sid in variants}
+        assert len(clusters) == 1, f"{article}: revisions split across clusters: {clusters}"
+        article_to_cluster[article] = clusters.pop()
+
+    cluster_ids = list(article_to_cluster.values())
+    assert len(set(cluster_ids)) == len(cluster_ids), f"distinct articles clustered together: {article_to_cluster}"

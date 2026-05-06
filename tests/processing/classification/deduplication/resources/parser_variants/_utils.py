@@ -87,6 +87,64 @@ def fetch_cc_html(url: str) -> tuple[str, dict]:
     return html, metadata
 
 
+def _http_get_with_retry(url: str, *, timeout: int = 60, attempts: int = 5) -> bytes:
+    """GET *url* with exponential backoff on 5xx / transient network errors.
+
+    Decompresses gzip-encoded responses (Wayback's ``id_`` modifier
+    preserves the original capture's Content-Encoding, so snapshots crawled
+    from gzip-serving CDNs come back gzipped regardless of request headers).
+    """
+    import time
+
+    delay = 2.0
+    last_err: Exception | None = None
+    for _ in range(attempts):
+        try:
+            req = Request(url, headers={"User-Agent": "marin-test-fixtures/0.1"})
+            with urlopen(req, timeout=timeout) as resp:
+                body = resp.read()
+                encoding = (resp.headers.get("Content-Encoding") or "").lower()
+            if encoding == "gzip" or body[:2] == b"\x1f\x8b":
+                body = gzip.decompress(body)
+            return body
+        except Exception as e:
+            last_err = e
+            time.sleep(delay)
+            delay = min(delay * 2, 60.0)
+    raise RuntimeError(f"GET failed after {attempts} attempts: {url} ({last_err})")
+
+
+def fetch_wayback_html(url: str, *, year: int) -> tuple[str, dict]:
+    """Fetch one Wayback Machine snapshot of *url* from a given calendar *year*.
+
+    Wayback's CDX search returns the earliest 200/text-html capture in the
+    requested year; the snapshot is then fetched with the ``id_`` modifier
+    so we get the original page bytes (no Wayback toolbar HTML injected).
+    Used by configs that need temporally-spaced captures of the same URL —
+    Common Crawl rarely has multiple captures of one URL while Wayback
+    typically has hundreds. Wayback 5xx errors are retried with backoff
+    since the service is occasionally rate-limited.
+    """
+    cdx = (
+        f"https://web.archive.org/cdx/search/cdx?url={quote(url, safe='')}"
+        f"&output=json&limit=1&from={year}0101&to={year}1231"
+        f"&filter=statuscode:200&filter=mimetype:text/html"
+    )
+    # Wayback CDX is consistently slow (typically 30-90s per query); allow plenty of headroom.
+    rows = json.loads(_http_get_with_retry(cdx, timeout=180).decode())
+    if len(rows) <= 1:
+        raise RuntimeError(f"No Wayback capture for {url} in {year}")
+    timestamp = rows[1][1]
+    snapshot_url = f"https://web.archive.org/web/{timestamp}id_/{url}"
+    html = _http_get_with_retry(snapshot_url, timeout=180).decode("utf-8", errors="replace")
+    metadata = {
+        "source_url": url,
+        "capture_timestamp": timestamp,
+        "archive_source": "wayback",
+    }
+    return html, metadata
+
+
 def fetch_live_html(url: str) -> tuple[str, dict]:
     """Fetch *url* directly via HTTP.
 
