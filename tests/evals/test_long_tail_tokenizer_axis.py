@@ -142,16 +142,22 @@ def test_default_tokenizer_axis_registry_marks_planned_symbolic_slices_non_runna
     assert all(slice_spec.hf_dataset is None for slice_spec in planned)
 
 
-def test_default_tokenizer_axis_step_exposes_config_for_dry_run():
+def test_default_tokenizer_axis_step_propagates_non_default_config_values():
     step = default_tokenizer_axis_step(
         name="unit-test",
         max_docs_per_slice=8,
         max_doc_bytes=1024,
-        include_planned_raw_slices=True,
+        baseline_tokenizer_name="qwen3_8b",
+        include_planned_raw_slices=False,
+        include_o200k_base=True,
+        include_byte_reference=True,
     )
     config = step.config
 
     assert step.name == "analysis/tokenizer_axis/unit-test"
     assert config.max_docs_per_slice == 8
     assert config.max_doc_bytes == 1024
-    assert config.include_planned_raw_slices is True
+    assert config.baseline_tokenizer_name == "qwen3_8b"
+    assert config.include_planned_raw_slices is False
+    assert config.include_o200k_base is True
+    assert config.include_byte_reference is True
