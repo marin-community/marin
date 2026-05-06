@@ -134,12 +134,22 @@ layout: default
 layout: default
 ---
 
-# ![](/icons/chart.svg) Eval Story: Data Gaps, Not One Score
+# ![](/icons/chart.svg) Perplexity Gaps
 
-- `#5005` reframed checkpoint confidence as a portfolio of evidence: broad held-out loss, raw technical text, chat, agent traces, reasoning probes, and hard downstream evals.
-- The broad English story is not the problem. Marin 8B is roughly flat with Llama 3.1 8B on Paloma / Uncheatable (`+0.0029` / `+0.0049` BPB) and beats Qwen3 8B on Paloma while staying close on Uncheatable (`-0.0272` / `+0.0074` BPB).
-- The actionable failures are narrower and more useful: code-heavy slices, tool observations, patches, multilingual text, messy web artifacts, package metadata, tables, and scientific notation.
-- Caveat: these are pretraining proxies. They are useful because they point to data gaps, not because they replace downstream agent benchmarks.
+- In `#4693` and `#5005`, we developed a thesis that Marin's weakness at posttraining is actually observable on the pretrained artifacts. We sought to identify weak points for our v1 Marin data mix.
+- In `#4693`, we look at agentic traces to see if there are particular spans (prose, tool calls, tool results, patches) where Marin is weak.
+- In `#5005` we broaden the search to every data source we could think of that was easy to add. We looked at ~100 new naturalish data sources (with ~80-90 more wired up) and our classic set of ppl evals.
+- The broad English story is not the problem. Marin 8B is roughly on par with Llama 3.1 8B on Paloma / Uncheatable (`+0.0029` / `+0.0049` BPB) and beats Qwen3 8B on Paloma while staying close on Uncheatable (`-0.0272` / `+0.0074` BPB).
+
+---
+layout: default
+---
+
+# ![](/icons/code.svg) Agent Traces: Patch And Observation Gaps
+
+<div style="display: flex; align-items: center; justify-content: center; height: 420px;">
+  <img src="/charts/agent-traces/trace-labels.png" alt="Agent trace span labels" style="max-width: 96%; max-height: 405px; object-fit: contain;"/>
+</div>
 
 ---
 layout: default
@@ -161,7 +171,7 @@ layout: default
 - BPB: lower is better. Patch gain: how much the trace helps predict the final patch; positive means the trace helped.
 - Marin looks basically fine on prose/chat and surprisingly good on tool-call spans.
 - The failures are in understanding tool results and producing patches. More trace context helps peer models predict patches, but hurts Marin.
-- This is now a repeatable agent-trace PPL suite (`#4963`, `#5248`) and should directly inform the next data mix.
+- This is now a repeatable agent-trace PPL suite (`#4963`, `#5248`) and should directly inform the next data mix. (Good evidence for us needing to add program traces, log files, etc. to the mix!)
 
 ---
 layout: default

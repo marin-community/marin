@@ -19,13 +19,14 @@ The Delphi blogpost work is the likely model-science anchor if the final figures
 7. Finelog and observability.
 8. Datakit and Zephyr.
 9. Eval story: data gaps, not one score.
-10. Agent traces: patch and observation gaps.
-11. Perplexity gap: long-tail data.
-12. 3e18 MoE progress over time.
-13. MoE and training mechanics.
-14. Delphi scaling + blog work.
-15. Decisions for tomorrow.
-16. What should be true by next review.
+10. Agent traces: patch and observation gaps, trace-label visual.
+11. Agent traces: patch and observation gaps, model loss table.
+12. Perplexity gap: long-tail data.
+13. 3e18 MoE progress over time.
+14. MoE and training mechanics.
+15. Delphi scaling + blog work.
+16. Decisions for tomorrow.
+17. What should be true by next review.
 
 ## High-Impact Landed Changes
 
