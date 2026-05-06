@@ -74,7 +74,7 @@ jobs:
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
-            -- python -m experiments.ferries.datakit_starcoder2_doc_ferry)
+            -- python -m experiments.ferries.datakit_tier2_skewed_ferry)
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"
         env:
