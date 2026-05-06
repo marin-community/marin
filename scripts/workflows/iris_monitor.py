@@ -6,7 +6,6 @@
 import json
 import os
 import re
-import signal
 import subprocess
 import sys
 import time
@@ -647,13 +646,13 @@ def _wait_for_controller_health(
     health_path: str,
     timeout: float,
     poll_interval: float,
-    supervisor: subprocess.Popen,
+    port_forward: subprocess.Popen,
 ) -> None:
     url = _health_url(controller_url, health_path)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if supervisor.poll() is not None:
-            raise RuntimeError(f"port-forward supervisor exited with code {supervisor.returncode}")
+        if port_forward.poll() is not None:
+            raise RuntimeError(f"kubectl port-forward exited with code {port_forward.returncode}")
         try:
             with urllib.request.urlopen(url, timeout=min(poll_interval, 5.0)) as resp:
                 if 200 <= resp.status < 300:
@@ -664,39 +663,36 @@ def _wait_for_controller_health(
     raise TimeoutError(f"controller {url} never became healthy within {timeout}s")
 
 
-def _start_coreweave_port_forward_supervisor(
+def _start_coreweave_port_forward(
     namespace: str,
     kubeconfig: Path | None,
     *,
-    controller_selector: str,
+    pod_name: str,
     local_port: int,
     remote_port: int,
-    poll_interval: float,
     log_path: Path,
 ) -> subprocess.Popen:
+    """Spawn ``kubectl port-forward pod/X local:remote`` detached.
+
+    Uses ``start_new_session=True`` so the kubectl process survives this
+    Python script exiting — the workflow's later ``Stop port-forward`` step
+    kills it via ``$PF_PID``. The log is opened line-buffered so failure
+    diagnostics that ``cp`` it before SIGTERM see complete output.
+    """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        sys.executable,
-        str(Path(__file__).resolve()),
-        "coreweave-port-forward-supervisor",
-        "--namespace",
+        *_kubectl(kubeconfig),
+        "-n",
         namespace,
-        "--controller-selector",
-        controller_selector,
-        "--local-port",
-        str(local_port),
-        "--remote-port",
-        str(remote_port),
-        "--poll-interval",
-        str(poll_interval),
+        "port-forward",
+        f"pod/{pod_name}",
+        f"{local_port}:{remote_port}",
     ]
-    if kubeconfig is not None:
-        cmd.extend(["--kubeconfig", str(kubeconfig)])
-
-    log_file = log_path.open("a")
+    log_file = log_path.open("a", buffering=1)
     try:
-        return subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+        return subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
     finally:
+        # Parent's copy of the fd can be closed once Popen has dup'd it into the child.
         log_file.close()
 
 
@@ -712,8 +708,14 @@ def open_coreweave_controller_tunnel(
     health_path: str,
     log_path: Path,
 ) -> tuple[str, int]:
+    """Wait for the controller rollout to settle, start ``kubectl port-forward``, probe ``/health``.
+
+    Returns ``(controller_url, kubectl_pid)``. The kubectl child runs in a new
+    session so it outlives this Python process — workflows hold on to the PID
+    and tear it down later via ``kill $PF_PID``.
+    """
     _kubectl_rollout_status(namespace, kubeconfig, timeout=timeout)
-    wait_for_settled_coreweave_controller(
+    pod_name = wait_for_settled_coreweave_controller(
         namespace,
         kubeconfig,
         controller_selector=controller_selector,
@@ -721,13 +723,12 @@ def open_coreweave_controller_tunnel(
         poll_interval=poll_interval,
     )
 
-    supervisor = _start_coreweave_port_forward_supervisor(
+    port_forward = _start_coreweave_port_forward(
         namespace,
         kubeconfig,
-        controller_selector=controller_selector,
+        pod_name=pod_name,
         local_port=local_port,
         remote_port=remote_port,
-        poll_interval=poll_interval,
         log_path=log_path,
     )
     controller_url = f"http://127.0.0.1:{local_port}"
@@ -737,61 +738,12 @@ def open_coreweave_controller_tunnel(
             health_path=health_path,
             timeout=timeout,
             poll_interval=poll_interval,
-            supervisor=supervisor,
+            port_forward=port_forward,
         )
     except (RuntimeError, TimeoutError):
-        _terminate_process(supervisor)
+        _terminate_process(port_forward)
         raise
-    return controller_url, supervisor.pid
-
-
-def run_coreweave_port_forward_supervisor(
-    namespace: str,
-    kubeconfig: Path | None,
-    *,
-    controller_selector: str,
-    local_port: int,
-    remote_port: int,
-    poll_interval: float,
-) -> None:
-    child: subprocess.Popen | None = None
-
-    def stop(_signum: int, _frame: object) -> None:
-        if child is not None:
-            _terminate_process(child)
-        raise SystemExit(0)
-
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
-
-    while True:
-        try:
-            pod_name = wait_for_settled_coreweave_controller(
-                namespace,
-                kubeconfig,
-                controller_selector=controller_selector,
-                timeout=max(poll_interval, 1.0),
-                poll_interval=poll_interval,
-            )
-        except (RuntimeError, TimeoutError, json.JSONDecodeError) as exc:
-            click.echo(f"controller pod is not ready for port-forward: {exc}", err=True)
-            time.sleep(poll_interval)
-            continue
-
-        cmd = [
-            *_kubectl(kubeconfig),
-            "-n",
-            namespace,
-            "port-forward",
-            f"pod/{pod_name}",
-            f"{local_port}:{remote_port}",
-        ]
-        click.echo(f"starting kubectl port-forward to pod/{pod_name}", err=True)
-        child = subprocess.Popen(cmd)
-        status = child.wait()
-        child = None
-        click.echo(f"kubectl port-forward exited with {status}; restarting in {poll_interval}s", err=True)
-        time.sleep(poll_interval)
+    return controller_url, port_forward.pid
 
 
 @click.group()
@@ -999,7 +951,7 @@ def port_forward(
     "--log-path",
     required=True,
     type=click.Path(path_type=Path),
-    help="Path where the port-forward supervisor writes kubectl output.",
+    help="Path where kubectl port-forward writes its stdout/stderr.",
 )
 @click.option("--url-var", default="IRIS_CONTROLLER_URL", show_default=True)
 @click.option("--pid-var", default="PF_PID", show_default=True)
@@ -1030,36 +982,11 @@ def coreweave_controller(
         health_path=health_path,
         log_path=log_path,
     )
-    click.echo(f"Controller healthy on {url} (supervisor pid={pf_pid}, log={log_path})", err=True)
+    click.echo(f"Controller healthy on {url} (kubectl pid={pf_pid}, log={log_path})", err=True)
 
     if path := os.environ.get("GITHUB_ENV"):
         with open(path, "a") as fh:
             fh.write(f"{url_var}={url}\n{pid_var}={pf_pid}\n{log_var}={log_path}\n")
-
-
-@cli.command(name="coreweave-port-forward-supervisor", hidden=True)
-@click.option("--namespace", required=True)
-@click.option("--kubeconfig", default=None, type=click.Path(path_type=Path))
-@click.option("--controller-selector", default="app=iris-controller", show_default=True)
-@click.option("--local-port", default=10000, show_default=True, type=int)
-@click.option("--remote-port", default=10000, show_default=True, type=int)
-@click.option("--poll-interval", default=5.0, show_default=True, type=float)
-def coreweave_port_forward_supervisor(
-    namespace: str,
-    kubeconfig: Path | None,
-    controller_selector: str,
-    local_port: int,
-    remote_port: int,
-    poll_interval: float,
-) -> None:
-    run_coreweave_port_forward_supervisor(
-        namespace,
-        kubeconfig,
-        controller_selector=controller_selector,
-        local_port=local_port,
-        remote_port=remote_port,
-        poll_interval=poll_interval,
-    )
 
 
 if __name__ == "__main__":
