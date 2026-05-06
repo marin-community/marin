@@ -6,11 +6,11 @@ import pytest
 from zephyr.readers import load_jsonl, load_parquet
 
 # Pinned HF dataset for data_integration test fixtures. Bump
-# ``PARSER_VARIANTS_REVISION`` when ``upload_test_examples.py`` reports a new
-# commit SHA after adding fixtures.
-PARSER_VARIANTS_REPO = "ravwojdyla/marin-test-fixtures"
+# ``PARSER_VARIANTS_REVISION`` when ``generate_test_examples.py`` reports a
+# new commit SHA after adding fixtures.
+PARSER_VARIANTS_REPO = "ravwojdyla/marin-test-data-fixtures"
 PARSER_VARIANTS_CONFIG = "parser_variants"
-PARSER_VARIANTS_REVISION = "0fb2563916e89ad6a81a5e065ad578c1bf47c6f4"
+PARSER_VARIANTS_REVISION = "b4410029dd8fd57171283c681912adc3a5092e88"
 
 
 @pytest.fixture(scope="module")

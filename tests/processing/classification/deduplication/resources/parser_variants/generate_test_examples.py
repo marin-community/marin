@@ -8,47 +8,62 @@
 #     "html2text>=2024.2",
 #     "readability-lxml>=0.8",
 #     "lxml[html_clean]>=5.3",
+#     "datasets>=3.0",
+#     "huggingface_hub>=0.25",
 # ]
 # ///
-"""Regenerate parser-variant regression fixtures from Common Crawl HTML.
+"""Refresh the parser-variant fixtures HuggingFace dataset.
 
-Run from anywhere::
+For each entry in ``ARTICLES``: fetch the most recent Common Crawl capture,
+extract text with trafilatura, html2text, and readability-lxml, and build
+one row per (article, parser). Then push all rows as the
+``parser_variants`` config of the target HF dataset and print the new
+commit SHA so you can pin it in the dedup conftest.
 
-    uv run tests/processing/classification/deduplication/resources/parser_variants/generate_test_examples.py
+Run with an HF token that can push to the target repo::
 
-Fetches the most recent Common Crawl capture for each entry in ``ARTICLES``,
-runs trafilatura, html2text, and readability-lxml on the raw HTML, and writes
-one fixture directory per article containing:
+    HF_TOKEN=... uv run tests/.../parser_variants/generate_test_examples.py [--repo NAME] [--dry-run]
 
-* ``metadata.json`` — source URL, CC record locator, capture timestamp
-* ``trafilatura.txt`` / ``html2text.txt`` / ``readability.txt`` — parser output
-
-(Raw HTML is intentionally not committed: it would add ~1.5 MB per article
-and is recoverable from CC via the WARC locator in ``metadata.json``.)
-
-The committed fixtures are the source of truth for
-``test_html_parser_variants_cluster_per_article``. This script is only run
-when adding new articles or refreshing parser outputs after a parser
-upgrade. Inline ``# /// script`` deps keep the parsers out of the project's
-runtime requirements; ``uv run`` resolves them in a transient environment.
+Adding a new article: append ``(slug, url)`` to ``ARTICLES``, run the
+script, bump ``PARSER_VARIANTS_REVISION`` in the dedup conftest to the
+printed commit SHA. PEP 723 inline ``# /// script`` deps keep all parser
+and HF libraries out of ``pyproject.toml`` — ``uv run`` resolves them in
+a transient environment.
 """
 from __future__ import annotations
 
-import json
+import argparse
+import os
 import re
-from pathlib import Path
+import sys
+from collections.abc import Iterator
 
 import cdx_toolkit
 import html2text as html2text_mod
 import trafilatura
+from datasets import Dataset, Features, Value
 from readability import Document
+
+DEFAULT_REPO = "ravwojdyla/marin-test-data-fixtures"
+CONFIG_NAME = "parser_variants"
 
 ARTICLES: list[tuple[str, str]] = [
     ("wikipedia_isaac_newton", "https://en.wikipedia.org/wiki/Isaac_Newton"),
     ("wikipedia_georg_cantor", "https://en.wikipedia.org/wiki/Georg_Cantor"),
 ]
 
-OUT_ROOT = Path(__file__).parent
+FEATURES = Features(
+    {
+        "article_slug": Value("string"),
+        "parser": Value("string"),
+        "text": Value("string"),
+        "source_url": Value("string"),
+        "warc_filename": Value("string"),
+        "warc_offset": Value("int64"),
+        "warc_length": Value("int64"),
+        "capture_timestamp": Value("string"),
+    }
+)
 
 
 def fetch_cc_html(url: str) -> tuple[str, dict]:
@@ -63,11 +78,10 @@ def fetch_cc_html(url: str) -> tuple[str, dict]:
     html = html_bytes.decode("utf-8", errors="replace")
     metadata = {
         "source_url": url,
-        "cc_index": cap.data.get("cdx_api"),
-        "warc_filename": cap.data.get("filename"),
-        "warc_offset": cap.data.get("offset"),
-        "warc_length": cap.data.get("length"),
-        "capture_timestamp": cap.data.get("timestamp"),
+        "warc_filename": cap.data.get("filename", ""),
+        "warc_offset": int(cap.data.get("offset", 0) or 0),
+        "warc_length": int(cap.data.get("length", 0) or 0),
+        "capture_timestamp": cap.data.get("timestamp", ""),
     }
     return html, metadata
 
@@ -92,21 +106,47 @@ def parse_with_readability(html: str) -> str:
     return f"{title}\n\n{text}" if title else text
 
 
-def main() -> None:
+PARSERS = {
+    "trafilatura": parse_with_trafilatura,
+    "html2text": parse_with_html2text,
+    "readability": parse_with_readability,
+}
+
+
+def build_rows() -> Iterator[dict]:
+    """Fetch every article in ``ARTICLES`` and yield one row per (article, parser)."""
     for slug, url in ARTICLES:
-        print(f"=== {slug}: {url}")
-        article_dir = OUT_ROOT / slug
-        article_dir.mkdir(exist_ok=True)
+        print(f"=== {slug}: {url}", file=sys.stderr)
         html, metadata = fetch_cc_html(url)
-        (article_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
-        for name, fn in [
-            ("trafilatura", parse_with_trafilatura),
-            ("html2text", parse_with_html2text),
-            ("readability", parse_with_readability),
-        ]:
-            text = fn(html)
-            (article_dir / f"{name}.txt").write_text(text, encoding="utf-8")
-            print(f"  {name}: {len(text)} chars")
+        for parser_name, parser_fn in PARSERS.items():
+            text = parser_fn(html)
+            print(f"  {parser_name}: {len(text)} chars", file=sys.stderr)
+            yield {"article_slug": slug, "parser": parser_name, "text": text, **metadata}
+
+
+def main() -> None:
+    cli = argparse.ArgumentParser(description="Refresh the parser-variant fixtures HF dataset.")
+    cli.add_argument("--repo", default=DEFAULT_REPO, help=f"target HF dataset repo (default: {DEFAULT_REPO})")
+    cli.add_argument("--dry-run", action="store_true", help="fetch and parse but skip the HF push")
+    args = cli.parse_args()
+
+    if not args.dry_run and not os.environ.get("HF_TOKEN"):
+        print("ERROR: HF_TOKEN env var is required for non-dry-run uploads.", file=sys.stderr)
+        sys.exit(2)
+
+    rows = list(build_rows())
+    print(f"\nBuilt {len(rows)} rows from {len(ARTICLES)} articles", file=sys.stderr)
+
+    if args.dry_run:
+        print("(dry run; skipping push)", file=sys.stderr)
+        return
+
+    ds = Dataset.from_list(rows, features=FEATURES)
+    print(f"\nPushing to {args.repo} (config: {CONFIG_NAME})...", file=sys.stderr)
+    info = ds.push_to_hub(args.repo, config_name=CONFIG_NAME, split="train")
+    print(f"\nDone. Commit: {info.oid}")
+    print(f"      URL:    {info.commit_url}")
+    print(f"\nNext: bump PARSER_VARIANTS_REVISION in the dedup conftest to:\n      {info.oid}")
 
 
 if __name__ == "__main__":
