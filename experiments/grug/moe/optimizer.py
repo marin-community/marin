@@ -27,6 +27,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
     max_grad_norm: float | None = 1.0
     adam_lr: float = 6e-4
     expert_lr: float | None = None
+    freeze_router: bool = False
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -57,14 +58,13 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 components.append(optax.scale(-adam_lr))
                 return optax.chain(*components)
 
-            return optax.multi_transform(
-                {
-                    "adamh": adamh_transform(),
-                    "adamh_expert": adamh_expert_transform(),
-                    "adam": adam_transform(),
-                },
-                self.create_mask,
-            )
+            transforms = {
+                "adamh": adamh_transform(),
+                "adamh_expert": adamh_expert_transform(),
+                "adam": adam_transform(),
+                "frozen": optax.set_to_zero(),
+            }
+            return optax.multi_transform(transforms, self.create_mask)
 
         return optax.inject_hyperparams(optimizer)(
             learning_rate=learning_rate_schedule,
@@ -80,8 +80,10 @@ class GrugMoeAdamHConfig(OptimizerConfig):
             path_lower = path_str.lower()
             if "token_embed" in path_lower:
                 return "adam"
-            if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
+            if "router_bias" in path_lower or "attn_gate" in path_lower:
                 return "adam"
+            if ".router" in path_lower:
+                return "frozen" if self.freeze_router else "adam"
             if ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
                 return "adamh_expert"
             if hasattr(param, "ndim") and param.ndim >= 2:
