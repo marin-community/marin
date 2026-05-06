@@ -188,8 +188,11 @@ def _model_seq_len() -> int:
 # default_tokenize's cpu=4 ask down to a minimal orchestrator footprint that
 # can pack alongside an existing job on the same VM. The tokenize step is
 # pure orchestration — heavy work runs on zephyr workers spawned at their
-# own resource spec — so cpu=1 is plenty.
-_TOKENIZE_RESOURCES = ResourceConfig.with_cpu(cpu=1, ram="4g", disk="10g")
+# own resource spec — so cpu=1 is plenty. RAM is bumped to 12g (just under
+# the 16g VM cap, leaving headroom for the parent's 1g) because the
+# coordinator's shutdown/aggregation phase OOMs at 4g on the larger
+# whole-genome zoonomia_v1 dataset.
+_TOKENIZE_RESOURCES = ResourceConfig.with_cpu(cpu=1, ram="12g", disk="10g")
 
 
 def _tokenize(name: str, dataset: str, dataset_format: DNALmDatasetFormat) -> ExecutorStep:
