@@ -33,8 +33,8 @@ def _make_steps() -> list[ExecutorStep]:
     for floor in FLOOR_VALUES:
         for dim, budget in GATE1_CONFIGS:
             model, optimizer, batch, num_steps = build_from_heuristic(budget=budget, hidden_dim=dim)
-            model = dataclasses.replace(model, expert_floor=floor)
-            run_id = f"expert-floor-{floor:.1f}-d{dim}-{budget:.2e}"
+            model = dataclasses.replace(model, expert_floor=floor, router_z_loss_coef=0.0)
+            run_id = f"expert-floor-{floor:.1f}-nozl-d{dim}-{budget:.2e}"
 
             steps.append(
                 ExecutorStep(
