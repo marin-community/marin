@@ -61,6 +61,9 @@ jobs:
           chmod 600 ~/.ssh/google_compute_engine
           chmod 644 ~/.ssh/google_compute_engine.pub
 
+      # If you change the iris flags below, also update the matching tier
+      # entry in scripts/datakit/submit_perf_run.py (TIERS["2"]) so the
+      # zephyr-perf skill's treatment job stays comparable to this baseline.
       - name: Submit datakit tier2 ferry
         id: submit
         shell: bash -l {0}
