@@ -25,7 +25,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,30 +35,25 @@ logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Step labels emitted by marin.execution.step_runner are
-# ``<pipeline-prefix>/<step-name>_<content-hash>``. The hash is hex (typically
-# 8+ chars). Step names can contain underscores (e.g. ``fuzzy_dups``), so we
-# anchor on the trailing hex hash to peel it off.
-STEP_DURATION_RE = re.compile(r"Step (?P<label>\S+?)_(?P<hash>[0-9a-f]{6,})\s+succeeded in (?P<elapsed>\S+)")
-
-# Step runner emits this line when a step is cache-hit (StepAlreadyDone, the
-# step lock indicates the output already exists). No duration is emitted, so we
-# record cache-hit steps with seconds=0.0 and surface them via cached_steps.
-STEP_CACHE_HIT_RE = re.compile(r"Step (?P<label>\S+?)_(?P<hash>[0-9a-f]{6,})\s+completed by another worker")
-
-# Total-wall-time line from ``rigging.timing.log_time``. The ferries log a
-# label ending in "ferry total wall time", e.g. ``"Datakit ferry total wall
-# time"``. Used as a fallback when no per-task duration is exposed by iris.
-WALL_TIME_RE = re.compile(r"ferry total wall time took (?P<elapsed>[^\n]+)")
-
-# Tail size for ``iris job logs``. Step-completion lines are emitted near the
-# end of the run; 200k lines comfortably covers Tier 3 (~6h) wall time.
-LOG_LINE_CAP = 200_000
+# Each ferry step that fans out work submits a child iris job with a
+# deterministic name prefix. ``zephyr-fuzzy-dups-...-pN-aM`` etc. share a
+# prefix, so multi-phase steps (CC iterations, levanter cache prep) sum
+# naturally. ``zephyr-levanter-cache-{copy,probe}-*`` belong to the tokenize
+# step. ``download`` is optional — the nemotron ferry verifies a pre-staged
+# dump rather than downloading.
+_STEP_PREFIXES: dict[str, str] = {
+    "zephyr-download-hf-": "download",
+    "zephyr-normalize-": "normalize",
+    "zephyr-minhash-attrs-": "minhash",
+    "zephyr-fuzzy-dups-": "fuzzy_dups",
+    "zephyr-consolidate-filter-": "consolidate",
+    "zephyr-tokenize-train-": "tokenize",
+    "zephyr-levanter-cache-copy-": "tokenize",
+    "zephyr-levanter-cache-probe-": "tokenize",
+}
 
 # Non-fatal warning if any of these step names is missing from the parsed
-# durations. ``download`` is intentionally absent — not all ferries download
-# (the nemotron ferry verifies a pre-staged dump), and even when present it
-# may cache-hit and surface only via cached_steps.
+# durations. ``download`` is intentionally absent — see _STEP_PREFIXES above.
 EXPECTED_STEPS: tuple[str, ...] = (
     "normalize",
     "minhash",
@@ -191,132 +185,58 @@ def aggregate_job_tree(jobs: list[dict]) -> dict:
     }
 
 
-# finelog can refuse very large tail requests with a connect/deadline timeout.
-# Match those errors so we can retry with a smaller tail before giving up.
-_LOG_TIMEOUT_PATTERNS = ("request timed out", "deadline exceeded", "statserror", "deadline_exceeded")
-
-
-def _is_finelog_timeout(stderr: str) -> bool:
-    s = (stderr or "").lower()
-    return any(pat in s for pat in _LOG_TIMEOUT_PATTERNS)
-
-
-def fetch_task0_logs(job_id: str, iris_config: Path, max_lines: int = LOG_LINE_CAP) -> str:
-    """Return the tail of task-0 logs for the job, or empty string on persistent failure.
-
-    finelog can time out on large tails. We retry with progressively smaller
-    tails (200k → 50k → 10k) on timeout-class errors, since the step-completion
-    lines we care about are emitted near the end of the run regardless of cap.
-    """
-    attempts: list[int] = []
-    seen: set[int] = set()
-    for n in (max_lines, max_lines // 4, max_lines // 20, 5000):
-        if n > 0 and n not in seen:
-            attempts.append(n)
-            seen.add(n)
-
-    last_stderr = ""
-    backoff_seconds = 2.0
-    for attempt_idx, lines in enumerate(attempts):
-        result = _run_iris(
-            ["job", "logs", f"{job_id}/0", "--tail", "--max-lines", str(lines)],
-            iris_config,
-        )
-        if result.returncode == 0:
-            if attempt_idx > 0:
-                logger.info("iris job logs succeeded with --max-lines=%d after %d retries", lines, attempt_idx)
-            return result.stdout
-
-        last_stderr = result.stderr.strip()
-        if not _is_finelog_timeout(last_stderr):
-            # Not a transient timeout — no point retrying with a smaller tail.
-            logger.warning("iris job logs failed (exit %s): %s", result.returncode, last_stderr)
-            return ""
-
-        if attempt_idx + 1 < len(attempts):
-            next_lines = attempts[attempt_idx + 1]
-            logger.warning(
-                "iris job logs timed out at --max-lines=%d; retrying with %d after %.1fs",
-                lines,
-                next_lines,
-                backoff_seconds,
-            )
-            time.sleep(backoff_seconds)
-            backoff_seconds *= 2
-
-    logger.warning("iris job logs failed after %d attempts; final error: %s", len(attempts), last_stderr)
-    return ""
-
-
 # --------------------------------------------------------------------------- #
-# Parsing
+# Per-step wall times derived from the iris job tree
 # --------------------------------------------------------------------------- #
 
 
-def parse_timedelta_str(s: str) -> float:
-    """Parse a ``str(timedelta)`` value into total seconds.
+def _job_depth(job_id: str) -> int:
+    """Number of ``/`` separators — proxies for tree depth in the iris namespace."""
+    return job_id.count("/")
 
-    Handles both forms produced by Python's timedelta repr:
-        ``"0:13:25.412345"`` and ``"1 day, 0:13:25.412345"`` / ``"2 days, ..."``.
+
+def compute_stage_wall_seconds(
+    jobs: list[dict],
+    parent_id: str,
+) -> tuple[dict[str, float], list[str]]:
+    """Bucket direct-child iris jobs into ferry steps and sum their wall times.
+
+    For each direct child of ``parent_id``, look up its name prefix in
+    ``_STEP_PREFIXES`` and accumulate ``finished_at - started_at``. Multi-phase
+    steps (``zephyr-fuzzy-dups-...-pN-aM``, ``zephyr-tokenize-train-pN-aM``)
+    share a prefix, so their per-phase durations sum.
+
+    We restrict to direct children because workers nested under coordinators
+    would double-count their parent's wall time.
+
+    Returns ``(stage_wall_seconds, cached_steps)``. Steps in ``EXPECTED_STEPS``
+    that don't appear in the tree are reported with ``0.0`` and added to
+    ``cached_steps`` — those steps always run unless the artifact already
+    exists, so absence implies a cache hit.
     """
-    days = 0
-    s = s.strip()
-    if "day" in s:
-        day_part, _, rest = s.partition(",")
-        days = int(day_part.split()[0])
-        s = rest.strip()
-    parts = s.split(":")
-    if len(parts) != 3:
-        raise ValueError(f"Unparseable timedelta string: {s!r}")
-    hours, minutes, seconds = parts
-    return days * 86400 + int(hours) * 3600 + int(minutes) * 60 + float(seconds)
-
-
-def parse_stage_wall_seconds(logs: str) -> tuple[dict[str, float], list[str]]:
-    """Extract ``({step_name: seconds}, [cached_step_names])`` from step_runner logs.
-
-    Two log lines are consumed:
-    - ``Step <label> succeeded in <elapsed>`` — step ran; record its duration.
-    - ``Step <label> completed by another worker`` — cache hit (StepAlreadyDone);
-      record duration as 0.0 and add to ``cached_steps``.
-
-    If a step appears in both forms (rare; only happens across retries), the
-    last occurrence wins — same logic step_runner itself uses.
-    """
+    parent_depth = _job_depth(parent_id)
     durations: dict[str, float] = {}
-    cached: dict[str, bool] = {}
 
-    for match in STEP_DURATION_RE.finditer(logs):
-        label = match.group("label")
-        elapsed = match.group("elapsed")
-        step_name = label.rsplit("/", 1)[-1]
-        try:
-            durations[step_name] = parse_timedelta_str(elapsed)
-            cached[step_name] = False
-        except ValueError:
-            logger.warning("Could not parse step duration %r for %s", elapsed, step_name)
+    for job in jobs:
+        job_id = job.get("job_id") or ""
+        if not job_id.startswith(parent_id):
+            continue
+        if _job_depth(job_id) != parent_depth + 1:
+            continue
+        name = job_id.rsplit("/", 1)[-1]
+        for prefix, step in _STEP_PREFIXES.items():
+            if not name.startswith(prefix):
+                continue
+            start_ms = int((job.get("started_at") or {}).get("epoch_ms") or 0)
+            end_ms = int((job.get("finished_at") or {}).get("epoch_ms") or 0)
+            if start_ms and end_ms and end_ms > start_ms:
+                durations[step] = durations.get(step, 0.0) + (end_ms - start_ms) / 1000.0
+            break
 
-    for match in STEP_CACHE_HIT_RE.finditer(logs):
-        label = match.group("label")
-        step_name = label.rsplit("/", 1)[-1]
-        # Only mark cached if no real run was seen for this step.
-        if step_name not in durations:
-            durations[step_name] = 0.0
-            cached[step_name] = True
-
-    cached_steps = sorted(name for name, was_cached in cached.items() if was_cached)
+    cached_steps = sorted(s for s in EXPECTED_STEPS if s not in durations)
+    for s in cached_steps:
+        durations[s] = 0.0
     return durations, cached_steps
-
-
-def parse_total_wall_seconds_from_logs(logs: str) -> float | None:
-    """Fallback: pull total wall time from the ferry's log_time line."""
-    match = WALL_TIME_RE.search(logs)
-    if not match:
-        return None
-    try:
-        return parse_timedelta_str(match.group("elapsed"))
-    except ValueError:
-        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -404,17 +324,16 @@ def build_report(
     job_id: str,
     summary: dict | None,
     job_tree: list[dict] | None,
-    logs: str,
     status: dict | None,
     workflow_env: dict[str, str | None],
 ) -> PerfReport:
-    """Assemble a PerfReport from iris summary + tree + task-0 logs + ferry status.
+    """Assemble a PerfReport from iris summary + tree + ferry status.
 
     The parent ``iris job summary`` describes only the launcher task; ``job_tree``
     is the result of ``iris job list --prefix <parent>`` which surfaces every
-    descendant job. We use the tree (when available) for ``preemption_count``,
-    ``failure_count``, and ``task_state_counts`` so they reflect the whole
-    pipeline, not just the launcher.
+    descendant job. We use the tree both for aggregated counts and for
+    per-step wall times (each ferry step submits a deterministically-named
+    child job).
     """
     report = PerfReport(
         iris_job_id=job_id,
@@ -461,20 +380,15 @@ def build_report(
     if report.task_state_counts.get("preempted"):
         report.warnings.append("task_state_counts.preempted > 0: stage durations may be split across attempts")
 
-    report.stage_wall_seconds, report.cached_steps = parse_stage_wall_seconds(logs)
-    if not report.stage_wall_seconds:
-        report.warnings.append("no Step ... succeeded/cache-hit lines found in task-0 log tail")
+    if job_tree is not None:
+        report.stage_wall_seconds, report.cached_steps = compute_stage_wall_seconds(job_tree, job_id)
+        if all(report.stage_wall_seconds.get(s, 0.0) == 0.0 for s in EXPECTED_STEPS):
+            report.warnings.append("all expected steps cache-hit; pipeline may not have done any work")
+    else:
+        report.warnings.append("iris job tree unavailable; stage_wall_seconds empty")
 
     if report.wall_seconds_total is None:
-        fallback = parse_total_wall_seconds_from_logs(logs)
-        if fallback is not None:
-            report.wall_seconds_total = fallback
-        else:
-            report.warnings.append("wall_seconds_total: could not derive from iris summary or logs")
-
-    missing = [step for step in EXPECTED_STEPS if step not in report.stage_wall_seconds]
-    if missing:
-        report.warnings.append(f"missing expected steps in stage_wall_seconds: {missing}")
+        report.warnings.append("wall_seconds_total: launcher duration_ms missing from iris summary")
 
     return report
 
@@ -580,14 +494,12 @@ def main(
 
     summary = fetch_job_summary(job_id, iris_config)
     job_tree = fetch_job_tree(job_id, iris_config)
-    logs = fetch_task0_logs(job_id, iris_config)
     status = load_ferry_status(status_path)
 
     report = build_report(
         job_id=job_id,
         summary=summary,
         job_tree=job_tree,
-        logs=logs,
         status=status,
         workflow_env=workflow_env,
     )
