@@ -106,12 +106,19 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: .venv/bin/iris -v --config=${{ env.IRIS_CONFIG }} cluster start --fresh
 
+      - name: Connect to iris-ci controller
+        run: |
+          uv run python scripts/workflows/iris_monitor.py coreweave-controller \
+            --namespace "$IRIS_NAMESPACE" \
+            --kubeconfig "$HOME/.kube/coreweave-iris" \
+            --log-path "$RUNNER_TEMP/iris-cw-port-forward.log"
+
       - name: Submit canary ferry
         id: submit
         shell: bash -l {0}
         run: |
           echo "Multi-host canary: ${CANARY_MULTI_HOST:-0}"
-          JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" \
+          JOB_ID=$(.venv/bin/iris --controller-url="$IRIS_CONTROLLER_URL" \
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             -e MARIN_PREFIX s3://marin-na/marin/ \
@@ -142,7 +149,7 @@ jobs:
         run: |
           uv run python scripts/workflows/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
-            --iris-config "$IRIS_CONFIG" \
+            --controller-url "$IRIS_CONTROLLER_URL" \
             --poll-interval 30 \
             --timeout 10500 \
             --github-output
@@ -179,9 +186,12 @@ jobs:
           DIAG_DIR: /tmp/canary-diag
         run: |
           mkdir -p "$DIAG_DIR"
+          if [ -n "${PF_LOG:-}" ] && [ -f "$PF_LOG" ]; then
+            cp "$PF_LOG" "$DIAG_DIR/port-forward.log"
+          fi
           uv run python scripts/workflows/iris_monitor.py collect \
             --job-id "$JOB_ID" \
-            --iris-config "$IRIS_CONFIG" \
+            --controller-url "$IRIS_CONTROLLER_URL" \
             --provider coreweave \
             --output-dir "$DIAG_DIR" \
             --namespace "$IRIS_NAMESPACE" \
@@ -243,6 +253,15 @@ jobs:
           path: slack_message.md
           retention-days: 1
           if-no-files-found: ignore
+
+      - name: Stop port-forward
+        if: always()
+        run: |
+          if [ -n "${PF_PID:-}" ]; then
+            kill "$PF_PID" 2>/dev/null || true
+          fi
+          pkill -f "kubectl.*$IRIS_NAMESPACE.*port-forward.*pod/iris-controller" 2>/dev/null || true
+          pkill -f "kubectl.*port-forward.*$IRIS_NAMESPACE.*pod/iris-controller" 2>/dev/null || true
 
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. `needs.canary-ferry-cw.result` reflects the main
