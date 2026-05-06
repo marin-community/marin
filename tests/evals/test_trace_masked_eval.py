@@ -28,7 +28,7 @@ from marin.evaluation.trace_masked_eval import (
     _run_with_retries,
     _source_for_dataset,
     _write_results,
-    default_trace_masked_eval,
+    trace_masked_eval_step,
 )
 
 from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
@@ -54,8 +54,8 @@ class FailingAfterLimitSource(ShardedDataSource[int]):
             yield value
 
 
-def test_default_trace_masked_eval_configures_wandb_and_json_trackers():
-    step = default_trace_masked_eval(
+def test_trace_masked_eval_step_configures_wandb_and_json_trackers():
+    step = trace_masked_eval_step(
         name="trace-smoke",
         checkpoint="gs://marin-us-central1/checkpoints/example",
         checkpoint_is_hf=True,

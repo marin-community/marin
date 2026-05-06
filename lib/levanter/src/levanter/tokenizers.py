@@ -229,6 +229,10 @@ def _append_message_end_sentinel(parts: list[str], loop_variable: str) -> None:
     parts.append(previous[len(stripped) :])
 
 
+# HF generation markers identify assistant-token spans, but trace evaluation
+# also needs per-message spans after the full template has rendered. These
+# temporary sentinels make that span recovery robust to templates whose earlier
+# output depends on later messages, for example through `loop.last`.
 def _instrument_message_loop(chat_template: str) -> str:
     parts = _CHAT_TEMPLATE_BLOCK_RE.split(chat_template)
     instrumented: list[str] = []
@@ -282,6 +286,9 @@ class _ChatTemplateMessage(dict):
             return self._message_index
         if key in self:
             return self[key]
+        # Common HF chat templates probe optional message fields with dot
+        # access. Return None for those fields to match dict.get behavior while
+        # preserving StrictUndefined failures for truly unknown attributes.
         if key in {"reasoning_content", "tool_calls"}:
             return None
         raise AttributeError(key)
@@ -307,9 +314,10 @@ def _apply_chat_template_with_masks(
 ) -> dict[str, Any]:
     """Render chat template for batched conversations, returning input_ids and assistant_masks.
 
-    Uses a jinja2 extension to wrap {% generation %}...{% endgeneration %} block content
-    with sentinel strings, then uses the sentinel positions to determine which tokens
-    correspond to assistant content.
+    The `{% generation %}` tags are consumed during Jinja rendering, and this
+    tokenizer wrapper does not use HF's AssistantTracker internals. We render
+    temporary sentinel strings around generation blocks, split the final
+    rendered text on those sentinels, and encode only the real text segments.
     """
     template_str = chat_template or tokenizer.chat_template
     if template_str is None:

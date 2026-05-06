@@ -10,7 +10,7 @@ from levanter.data.text import HfDatasetSourceConfig, TraceChatEvaluationFormat
 from marin.evaluation.trace_masked_eval import (
     TraceMaskedEvalDatasetConfig,
     TraceRowAdapterConfig,
-    default_trace_masked_eval,
+    trace_masked_eval_step,
 )
 from marin.evaluation.trace_masked_results import (
     TraceMaskedResultInput,
@@ -243,7 +243,7 @@ def trace_eval_step(
     chat_template: str,
     tags: tuple[str, ...],
 ) -> ExecutorStep:
-    return default_trace_masked_eval(
+    return trace_masked_eval_step(
         name=f"{name}-{RUN_SUFFIX}",
         checkpoint=output_path_of(checkpoint),
         checkpoint_is_hf=True,
@@ -352,17 +352,14 @@ marin_8b_instruct_eval = trace_eval_step(
 compiled_results = compile_trace_masked_results(
     name="exp4963-head-to-head",
     steps=[
-        TraceMaskedResultInput("Qwen2.5-7B base", output_path_of(qwen2_5_7b_base_eval).cd("results.json")),
-        TraceMaskedResultInput("Qwen2.5-7B instruct", output_path_of(qwen2_5_7b_instruct_eval).cd("results.json")),
-        TraceMaskedResultInput("Qwen3-8B base", output_path_of(qwen3_8b_base_eval).cd("results.json")),
-        TraceMaskedResultInput("Qwen3-8B posttrained", output_path_of(qwen3_8b_eval).cd("results.json")),
-        TraceMaskedResultInput("Llama3.1-8B base", output_path_of(llama_3_1_8b_eval).cd("results.json")),
-        TraceMaskedResultInput(
-            "Llama3.1-8B instruct",
-            output_path_of(llama_3_1_8b_instruct_eval).cd("results.json"),
-        ),
-        TraceMaskedResultInput("Marin-8B base", output_path_of(marin_8b_base_eval).cd("results.json")),
-        TraceMaskedResultInput("Marin-8B instruct", output_path_of(marin_8b_instruct_eval).cd("results.json")),
+        TraceMaskedResultInput("Qwen2.5-7B base", qwen2_5_7b_base_eval),
+        TraceMaskedResultInput("Qwen2.5-7B instruct", qwen2_5_7b_instruct_eval),
+        TraceMaskedResultInput("Qwen3-8B base", qwen3_8b_base_eval),
+        TraceMaskedResultInput("Qwen3-8B posttrained", qwen3_8b_eval),
+        TraceMaskedResultInput("Llama3.1-8B base", llama_3_1_8b_eval),
+        TraceMaskedResultInput("Llama3.1-8B instruct", llama_3_1_8b_instruct_eval),
+        TraceMaskedResultInput("Marin-8B base", marin_8b_base_eval),
+        TraceMaskedResultInput("Marin-8B instruct", marin_8b_instruct_eval),
     ],
 )
 

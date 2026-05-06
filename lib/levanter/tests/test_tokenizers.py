@@ -1239,7 +1239,7 @@ def test_chat_processor_with_marin_tokenizer():
     if not _MODEL_AVAILABLE:
         pytest.skip("HF auth or network unavailable")
 
-    from levanter.data.text.formats import ChatProcessor
+    from levanter.data.text.chat import ChatProcessor
 
     tok = load_tokenizer(MODEL_NAME)
     assert isinstance(tok, MarinTokenizer)

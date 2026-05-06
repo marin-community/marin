@@ -28,7 +28,8 @@ from levanter.store.cache import TreeCache
 from levanter.tokenizers import MarinTokenizer
 
 from .datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig
-from .formats import ChatProcessor, LmDatasetFormatBase
+from .chat import ChatProcessor
+from .formats import LmDatasetFormatBase
 
 logger = logging.getLogger("levanter.data.text.preference")
 

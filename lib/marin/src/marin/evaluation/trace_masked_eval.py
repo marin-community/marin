@@ -45,6 +45,7 @@ from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
 from tqdm_loggable.auto import tqdm
 
+from marin.evaluation.trace_masked_artifacts import TraceMaskedEvalOutput
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
@@ -1325,7 +1326,7 @@ def trace_masked_eval(config: TraceMaskedEvalConfig) -> None:
         levanter.tracker.current_tracker().finish()
 
 
-def run_trace_masked_eval_on_pod(config: TraceMaskedEvalOnPodConfig) -> None:
+def run_trace_masked_eval_on_pod(config: TraceMaskedEvalOnPodConfig) -> TraceMaskedEvalOutput:
     """Submit trace-masked evaluation as a fray job and wait for completion."""
 
     client = current_client()
@@ -1350,9 +1351,12 @@ def run_trace_masked_eval_on_pod(config: TraceMaskedEvalOnPodConfig) -> None:
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
+    return TraceMaskedEvalOutput(
+        results_path=os.path.join(config.trace_masked_eval_config.output_path, RESULTS_FILENAME),
+    )
 
 
-def default_trace_masked_eval(
+def trace_masked_eval_step(
     *,
     checkpoint: str | InputName,
     model: LmConfig,

@@ -5,7 +5,9 @@ import json
 from pathlib import Path
 
 import pytest
+from marin.evaluation.trace_masked_artifacts import TraceMaskedEvalOutput
 from marin.evaluation.trace_masked_results import compile_trace_masked_results_fn
+from marin.execution.artifact import Artifact
 
 
 def _write_results(
@@ -70,7 +72,9 @@ def _write_results(
     path.write_text(json.dumps(results))
 
 
-def test_compile_trace_masked_results_fn_writes_compact_and_expanded_tables(tmp_path):
+def test_compile_trace_masked_results_fn_preserves_metric_mapping_and_patch_gain(tmp_path):
+    """Catch regressions in trace-metric parsing, table outputs, and patch-prefix gain aggregation."""
+
     model_a_path = tmp_path / "model_a_results.json"
     model_b_path = tmp_path / "model_b_results.json"
     _write_results(
@@ -94,12 +98,19 @@ def test_compile_trace_masked_results_fn_writes_compact_and_expanded_tables(tmp_
         patch_50=0.24,
     )
 
+    model_a_artifact_path = tmp_path / "model_a_eval"
+    model_b_artifact_path = tmp_path / "model_b_eval"
+    model_a_artifact_path.mkdir()
+    model_b_artifact_path.mkdir()
+    Artifact.save(TraceMaskedEvalOutput(results_path=str(model_a_path)), str(model_a_artifact_path))
+    Artifact.save(TraceMaskedEvalOutput(results_path=str(model_b_path)), str(model_b_artifact_path))
+
     output_path = tmp_path / "compiled"
     compile_trace_masked_results_fn(
         {
             "inputs": [
-                {"model_name": "Model A", "results_path": str(model_a_path)},
-                {"model_name": "Model B", "results_path": str(model_b_path)},
+                {"model_name": "Model A", "artifact_path": str(model_a_artifact_path)},
+                {"model_name": "Model B", "artifact_path": str(model_b_artifact_path)},
             ],
             "output_path": str(output_path),
         }

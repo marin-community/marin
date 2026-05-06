@@ -3,10 +3,19 @@
 
 # Re-export public API for levanter.data.text
 from .cache import build_lm_dataset_cache, cached_token_count, load_lm_dataset_cache
+from .chat import (
+    ChatDataset,
+    ChatProcessor,
+    ProcessedChatDict,
+    ProcessedTraceChatDict,
+    TraceChatDataset,
+    TraceChatProcessor,
+    build_trace_chat_dataset_cache,
+    dataset_for_trace_chat_format,
+)
 from .datasets import (
     BlockShuffleConfig,
     CausalLmDataset,
-    ChatDataset,
     DEFAULT_LM_DATA_SHUFFLE,
     DatasetComponent,
     DatasetComponentBase,
@@ -17,11 +26,8 @@ from .datasets import (
     LmDatasetSourceConfigBase,
     NamedLmDataset,
     TokenSeqDataset,
-    TraceChatDataset,
     UrlDatasetSourceConfig,
-    build_trace_chat_dataset_cache,
     dataset_for_component,
-    dataset_for_trace_chat_format,
     count_corpus_sizes,
 )
 from .examples import (
@@ -36,14 +42,10 @@ from .examples import (
 )
 from .formats import (
     ChatLmDatasetFormat,
-    ChatProcessor,
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
-    ProcessedChatDict,
-    ProcessedTraceChatDict,
     TextLmDatasetFormat,
     TraceChatEvaluationFormat,
-    TraceChatProcessor,
     preprocessor_for_format,
 )
 from .preference import (

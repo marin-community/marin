@@ -15,7 +15,9 @@ from typing import Any
 import fsspec
 from rigging.filesystem import open_url
 
-from marin.execution.executor import ExecutorStep, OutputName
+from marin.evaluation.trace_masked_artifacts import TraceMaskedEvalOutput
+from marin.execution.artifact import Artifact
+from marin.execution.executor import ExecutorStep, OutputName, output_path_of
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +76,7 @@ class TraceMaskedResultInput:
     """One model/result pair to include in the compiled summary."""
 
     model_name: str
-    results_path: str
+    eval_step: ExecutorStep
 
 
 def _load_results(path: str) -> dict[str, Any]:
@@ -263,10 +265,11 @@ def compile_trace_masked_results_fn(config: dict[str, Any]) -> None:
         if not isinstance(input_entry, Mapping):
             raise ValueError(f"Expected mapping input entry, got {type(input_entry)}")
         model_name = input_entry.get("model_name")
-        results_path = input_entry.get("results_path")
-        if not isinstance(model_name, str) or not isinstance(results_path, str):
+        artifact_path = input_entry.get("artifact_path")
+        if not isinstance(model_name, str) or not isinstance(artifact_path, str):
             raise ValueError(f"Invalid trace-masked input entry {input_entry!r}")
-        rows.append(_summarize_single_model(model_name, _load_results(results_path)))
+        artifact = Artifact.load(artifact_path, TraceMaskedEvalOutput)
+        rows.append(_summarize_single_model(model_name, _load_results(artifact.results_path)))
 
     compact_markdown = _render_markdown_table(rows, COMPACT_COLUMNS)
     compact_text = _render_text_table(rows, COMPACT_COLUMNS)
@@ -315,7 +318,7 @@ def compile_trace_masked_results(
             "inputs": [
                 {
                     "model_name": step.model_name,
-                    "results_path": step.results_path,
+                    "artifact_path": output_path_of(step.eval_step),
                 }
                 for step in steps
             ],
