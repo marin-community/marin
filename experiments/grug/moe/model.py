@@ -72,6 +72,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    expert_floor: float = 0.0  # minimum combine weight: sigmoid(logit) + expert_floor
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -359,7 +360,7 @@ class MoEMLP(eqx.Module):
         selected_experts = selected_experts[:, :-1]
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
+        combine_weights = (jax.nn.sigmoid(unbiased_topk) + self.cfg.expert_floor).astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
