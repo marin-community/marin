@@ -13,18 +13,22 @@ from enum import StrEnum
 from typing import Any
 
 import requests
-from marin.execution import THIS_OUTPUT_PATH
+from fray import LocalClient
 from marin.transform.huggingface.dataset_to_eval import get_nested_item
 from marin.utils import fsspec_mkdirs
 from requests.adapters import HTTPAdapter
 from rigging.filesystem import open_url
 from urllib3.util import Retry
+from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
 
 HF_DATASETS_SERVER_URL = "https://datasets-server.huggingface.co"
 DEFAULT_PAGE_LENGTH = 100
+DEFAULT_REQUEST_TIMEOUT = 120
+DEFAULT_METADATA_FILENAME = "metadata.json"
+LOCAL_ZEPHYR_MAX_THREADS = 8
 
 
 class HfRawTextRenderMode(StrEnum):
@@ -55,18 +59,6 @@ class HfRawTextSurfaceConfig:
     access_note: str = "Public Hugging Face dataset; sampled through Dataset Viewer rows API."
 
 
-@dataclass(frozen=True)
-class HfRawTextMaterializationConfig:
-    """Configuration for materializing raw-text eval shards from Hugging Face rows."""
-
-    surfaces: tuple[HfRawTextSurfaceConfig, ...]
-    output_path: str = THIS_OUTPUT_PATH
-    datasets_server_url: str = HF_DATASETS_SERVER_URL
-    metadata_filename: str = "metadata.json"
-    skip_existing: bool = True
-    request_timeout: int = 120
-
-
 def _requests_session() -> requests.Session:
     session = requests.Session()
     retries = Retry(total=5, backoff_factor=1.0, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
@@ -82,14 +74,15 @@ def _rows_url(base_url: str) -> str:
 
 def _fetch_rows_page(
     session: requests.Session,
-    cfg: HfRawTextMaterializationConfig,
     surface: HfRawTextSurfaceConfig,
     *,
+    datasets_server_url: str,
     offset: int,
     length: int,
+    request_timeout: int,
 ) -> list[dict[str, Any]]:
     response = session.get(
-        _rows_url(cfg.datasets_server_url),
+        _rows_url(datasets_server_url),
         params={
             "dataset": surface.dataset_id,
             "config": surface.config_name,
@@ -97,7 +90,7 @@ def _fetch_rows_page(
             "offset": offset,
             "length": length,
         },
-        timeout=cfg.request_timeout,
+        timeout=request_timeout,
     )
     response.raise_for_status()
     payload = response.json()
@@ -129,8 +122,8 @@ def render_hf_raw_text(row: dict[str, Any], surface: HfRawTextSurfaceConfig) -> 
     raise ValueError(f"Unsupported render mode {surface.render_mode!r}.")
 
 
-def _output_file_path(cfg: HfRawTextMaterializationConfig, surface: HfRawTextSurfaceConfig) -> str:
-    return posixpath.join(str(cfg.output_path), surface.output_filename)
+def _output_file_path(output_path: str, surface: HfRawTextSurfaceConfig) -> str:
+    return posixpath.join(str(output_path), surface.output_filename)
 
 
 def _existing_record_count(output_file: str) -> int:
@@ -140,13 +133,17 @@ def _existing_record_count(output_file: str) -> int:
 
 def _write_surface(
     session: requests.Session,
-    cfg: HfRawTextMaterializationConfig,
+    output_path: str,
     surface: HfRawTextSurfaceConfig,
+    *,
+    datasets_server_url: str,
+    skip_existing: bool,
+    request_timeout: int,
 ) -> dict[str, Any]:
-    output_file = _output_file_path(cfg, surface)
+    output_file = _output_file_path(output_path, surface)
     fsspec_mkdirs(posixpath.dirname(output_file), exist_ok=True)
 
-    if cfg.skip_existing:
+    if skip_existing:
         try:
             record_count = _existing_record_count(output_file)
             logger.info("Skipping existing raw-text shard %s with %s records", output_file, record_count)
@@ -161,7 +158,14 @@ def _write_surface(
         with open_url(temp_path, "wt", encoding="utf-8", compression="gzip") as outfile:
             while record_count < surface.max_rows:
                 remaining = surface.max_rows - record_count
-                rows = _fetch_rows_page(session, cfg, surface, offset=offset, length=min(page_length, remaining))
+                rows = _fetch_rows_page(
+                    session,
+                    surface,
+                    datasets_server_url=datasets_server_url,
+                    offset=offset,
+                    length=min(page_length, remaining),
+                    request_timeout=request_timeout,
+                )
                 if not rows:
                     break
                 for wrapper in rows:
@@ -216,20 +220,42 @@ def _metadata_record(surface: HfRawTextSurfaceConfig, result: dict[str, Any]) ->
     }
 
 
-def materialize_hf_raw_text(cfg: HfRawTextMaterializationConfig) -> dict[str, Any]:
+def materialize_hf_raw_text(
+    *,
+    output_path: str,
+    surfaces: tuple[HfRawTextSurfaceConfig, ...],
+    datasets_server_url: str = HF_DATASETS_SERVER_URL,
+    metadata_filename: str = DEFAULT_METADATA_FILENAME,
+    skip_existing: bool = True,
+    request_timeout: int = DEFAULT_REQUEST_TIMEOUT,
+) -> dict[str, Any]:
     """Materialize configured Hugging Face raw-text surfaces as JSONL.GZ shards."""
 
-    fsspec_mkdirs(str(cfg.output_path), exist_ok=True)
-    session = _requests_session()
+    fsspec_mkdirs(str(output_path), exist_ok=True)
 
-    results: list[dict[str, Any]] = []
+    def _run_surface(surface: HfRawTextSurfaceConfig) -> dict[str, Any]:
+        return _write_surface(
+            _requests_session(),
+            output_path,
+            surface,
+            datasets_server_url=datasets_server_url,
+            skip_existing=skip_existing,
+            request_timeout=request_timeout,
+        )
+
+    pipeline = Dataset.from_list(list(surfaces)).map(_run_surface)
+    max_workers = max(1, min(len(surfaces), LOCAL_ZEPHYR_MAX_THREADS))
+    ctx = ZephyrContext(client=LocalClient(max_threads=max_workers), name="hf-raw-text", max_workers=max_workers)
+    results_by_name = {result["name"]: result for result in ctx.execute(pipeline).results}
+
+    results = []
     metadata: list[dict[str, Any]] = []
-    for surface in cfg.surfaces:
-        result = _write_surface(session, cfg, surface)
+    for surface in surfaces:
+        result = results_by_name[surface.name]
         results.append(result)
         metadata.append(_metadata_record(surface, result))
 
-    metadata_path = posixpath.join(str(cfg.output_path), cfg.metadata_filename)
+    metadata_path = posixpath.join(str(output_path), metadata_filename)
     with open_url(metadata_path, "w", encoding="utf-8") as metadata_file:
         json.dump(metadata, metadata_file, indent=2, ensure_ascii=False)
     logger.info("Wrote metadata to %s", metadata_path)

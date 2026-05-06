@@ -3,6 +3,7 @@
 
 import posixpath
 
+from marin.execution.step_spec import StepSpec
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset
 
 from experiments.evals import raw_web_markup_ppl as raw_web_markup
@@ -48,6 +49,7 @@ def test_raw_web_markup_raw_validation_sets_registers_hf_materialized_slices() -
 def test_raw_web_markup_hf_surfaces_include_sampling_and_license_notes() -> None:
     surface_by_name = {surface.name: surface for surface in raw_web_markup.RAW_WEB_MARKUP_HF_SURFACES}
 
+    assert isinstance(raw_web_markup.raw_web_markup_hf_step, StepSpec)
     assert surface_by_name["textocr_ocr_strings"].dataset_id == "Yesianrohn/OCR-Data"
     assert surface_by_name["textocr_ocr_strings"].license_note == "apache-2.0 on the Hugging Face dataset card."
     assert surface_by_name["textocr_ocr_strings"].max_rows == 2_000

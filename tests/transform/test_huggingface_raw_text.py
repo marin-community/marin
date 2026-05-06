@@ -10,7 +10,6 @@ from typing import ClassVar
 from urllib.parse import parse_qs, urlparse
 
 from marin.transform.huggingface.raw_text import (
-    HfRawTextMaterializationConfig,
     HfRawTextRenderMode,
     HfRawTextSurfaceConfig,
     materialize_hf_raw_text,
@@ -104,7 +103,7 @@ def test_materialize_hf_raw_text_reads_dataset_viewer_rows(tmp_path: Path) -> No
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     try:
-        cfg = HfRawTextMaterializationConfig(
+        result = materialize_hf_raw_text(
             output_path=str(tmp_path),
             datasets_server_url=f"http://127.0.0.1:{server.server_port}",
             surfaces=(
@@ -122,8 +121,6 @@ def test_materialize_hf_raw_text_reads_dataset_viewer_rows(tmp_path: Path) -> No
                 ),
             ),
         )
-
-        result = materialize_hf_raw_text(cfg)
     finally:
         server.shutdown()
         thread.join()
@@ -152,7 +149,7 @@ def test_materialize_hf_raw_text_skip_existing_preserves_record_count(tmp_path: 
             {"id": "textocr_ocr_strings:1", "text": "Beta", "source": "test/textocr", "metadata": {"row_idx": 1}},
         ],
     )
-    cfg = HfRawTextMaterializationConfig(
+    result = materialize_hf_raw_text(
         output_path=str(tmp_path),
         datasets_server_url="http://127.0.0.1:9",
         surfaces=(
@@ -168,8 +165,6 @@ def test_materialize_hf_raw_text_skip_existing_preserves_record_count(tmp_path: 
             ),
         ),
     )
-
-    result = materialize_hf_raw_text(cfg)
 
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert result["metadata"] == str(tmp_path / "metadata.json")

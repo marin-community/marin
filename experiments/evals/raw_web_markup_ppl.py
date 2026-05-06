@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import posixpath
 from collections.abc import Mapping
+from dataclasses import asdict
 
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.step_spec import StepSpec
 from marin.transform.huggingface.raw_text import (
-    HfRawTextMaterializationConfig,
+    DEFAULT_METADATA_FILENAME,
+    DEFAULT_REQUEST_TIMEOUT,
+    HF_DATASETS_SERVER_URL,
     HfRawTextRenderMode,
     HfRawTextSurfaceConfig,
     materialize_hf_raw_text,
@@ -129,14 +132,21 @@ RAW_WEB_MARKUP_HF_SURFACES: tuple[HfRawTextSurfaceConfig, ...] = (
     ),
 )
 
-raw_web_markup_hf = ExecutorStep(
+raw_web_markup_hf_step = StepSpec(
     name="raw/raw_web_markup/hf_image_text",
-    fn=materialize_hf_raw_text,
-    config=HfRawTextMaterializationConfig(
+    fn=lambda output_path: materialize_hf_raw_text(
+        output_path=output_path,
         surfaces=RAW_WEB_MARKUP_HF_SURFACES,
-        output_path=this_output_path(),
     ),
+    hash_attrs={
+        "surfaces": [asdict(surface) for surface in RAW_WEB_MARKUP_HF_SURFACES],
+        "datasets_server_url": HF_DATASETS_SERVER_URL,
+        "metadata_filename": DEFAULT_METADATA_FILENAME,
+        "skip_existing": True,
+        "request_timeout": DEFAULT_REQUEST_TIMEOUT,
+    },
 )
+raw_web_markup_hf = raw_web_markup_hf_step.as_executor_step()
 
 ACTIVE_RAW_WEB_MARKUP_DATASETS: dict[str, RawTextEvaluationDataset] = {
     posixpath.join("svg_stack", "svg_xml_val"): raw_text_dataset(
