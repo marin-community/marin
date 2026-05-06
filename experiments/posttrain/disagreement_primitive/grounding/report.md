@@ -34,7 +34,7 @@ RATIONALE GROUNDING - HYPOTHESIS TESTS
   judge         variant_A      variant_B      full_spec       rub+spec
   gpt              0.0427         0.0063         0.3333         0.1562
   gemini           0.0094         0.0094         0.1990         0.0765
-  glm              0.1493         0.0293         0.4670         0.1661
+  glm              0.1493         0.0293         0.4670         0.1549
 
 [H5] Verbatim quote discipline: spec_quotes / rubric_quotes are real substrings.
   spec_quote_verify_rate (mean over judgments where any spec_quote was provided):
@@ -44,7 +44,7 @@ RATIONALE GROUNDING - HYPOTHESIS TESTS
   variant_A              glm          0.9138           2749
   rubric_plus_spec       gpt          0.9967           2758
   rubric_plus_spec       gemini       0.9759           2741
-  rubric_plus_spec       glm          0.9316           2292
+  rubric_plus_spec       glm          0.9316           2294
 
   rubric_quote_verify_rate:
   condition              judge          mean  n_with_quotes
@@ -68,7 +68,7 @@ RATIONALE GROUNDING - HYPOTHESIS TESTS
   full_spec              glm               254.1        252
   rubric_plus_spec       gpt               125.8        125
   rubric_plus_spec       gemini             66.6         64
-  rubric_plus_spec       glm                85.2         89
+  rubric_plus_spec       glm                79.7         85
 
 [BONUS A] Spec vs rubric grounding by (condition x judge) — mean per judgment
   condition              judge     spec_dist   rub_dist    5g_spec     5g_rub   5g_other
@@ -83,7 +83,7 @@ RATIONALE GROUNDING - HYPOTHESIS TESTS
   full_spec              glm           17.53      16.24      12.93       0.70      11.63
   rubric_plus_spec       gpt           11.04      17.71      11.23       7.19       0.06
   rubric_plus_spec       gemini         6.75       8.13       4.14       2.28       0.03
-  rubric_plus_spec       glm            7.29      12.81       6.25       6.29       0.04
+  rubric_plus_spec       glm            6.75      12.09       5.65       5.84       0.04
 
 [BONUS B] Rubric-style language ('score N' citation) presence rate
   condition              judge      score_n_rate   anchor_word_mean
@@ -98,12 +98,12 @@ RATIONALE GROUNDING - HYPOTHESIS TESTS
   full_spec              glm              0.0019               0.01
   rubric_plus_spec       gpt              0.0022               0.38
   rubric_plus_spec       gemini           0.0047               0.06
-  rubric_plus_spec       glm              0.0913               0.34
+  rubric_plus_spec       glm              0.0835               0.31
 
 [BONUS C] Phase-4 tension flag rates
   gpt: 303/2758 = 0.1099
   gemini: 17/2741 = 0.0062
-  glm: 168/2443 = 0.0688
+  glm: 168/2717 = 0.0618
 
 [BONUS D] SequenceMatcher fuzzy-match: longest contiguous substring shared between
           rationale and spec/rubric. Robust to paraphrase that breaks n-gram match.
@@ -119,7 +119,7 @@ RATIONALE GROUNDING - HYPOTHESIS TESTS
   full_spec              glm           13.30       4.04     0.0566     0.0171
   rubric_plus_spec       gpt           12.94       9.74     0.1028     0.0777
   rubric_plus_spec       gemini         7.04       5.51     0.1062     0.0844
-  rubric_plus_spec       glm            8.76       8.63     0.1023     0.1100
+  rubric_plus_spec       glm            8.16       8.25     0.1036     0.1182
 
 [BONUS D2] Quote fidelity (per provided quote, max contiguous-match pct vs source):
   condition              judge      spec_q_max_pct    rub_q_max_pct

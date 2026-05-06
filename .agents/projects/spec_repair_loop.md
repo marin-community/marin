@@ -1,15 +1,15 @@
 # Spec Repair Loop — closed-loop spec coherence via LM-judge diagnostics + LM-compiler repair
 
-> # 🟢 NEXT AGENT — START HERE (last updated 2026-05-06)
+> # 🟢 NEXT AGENT — START HERE (last updated 2026-05-06 evening — GLM repair executed)
 >
 > **Read §0.5 first** for the canonical design (dual-condition var_A + phase_4 with Δ as primary signal). Skim §0 TL;DR for the older framing if useful, then come back.
 >
 > ## What's done (don't redo)
 >
-> 1. **All 4 LM-as-judge conditions × 3 judges fully judged** on 60 (scenario, response) cases × 46 statements = 32,638 judgments total. See §0.5.3 for condition definitions; data lives at `experiments/posttrain/disagreement_primitive/grounding/per_judgment.jsonl` (66 MB, deterministic; regen via `e8_rationale_grounding.py`).
-> 2. **Per-statement κ-by-condition diagnostic** (§0.5.4) — full 46-statement table, population summary, Δ-attribution signal validated. Reproduce: `.venv/bin/python experiments/posttrain/disagreement_primitive/e9_kappa_diagnostic.py` (~1 s, pure stdlib). Output: `per_statement_kappa_by_condition.jsonl`.
+> 1. **All 4 LM-as-judge conditions × 3 judges fully judged** on 60 (scenario, response) cases × 46 statements = 32,912 judgments total (was 32,638 pre-GLM-repair). See §0.5.3 for condition definitions; data lives at `experiments/posttrain/disagreement_primitive/grounding/per_judgment.jsonl` (~66 MB, deterministic; regen via `e8_rationale_grounding.py`). Pre-repair backup at `grounding/per_judgment.original.jsonl`.
+> 2. **Per-statement κ-by-condition diagnostic** (§0.5.4) — full 46-statement table refreshed post-repair, population summary, Δ-attribution signal validated. Reproduce: `.venv/bin/python experiments/posttrain/disagreement_primitive/e9_kappa_diagnostic.py` (~1 s, pure stdlib). Output: `per_statement_kappa_by_condition.jsonl`.
 > 3. **Dual-condition design specified** (§0.5.5–0.5.7): operator-conditioned gate, cost economics ~$30/round-1 + ~$15-25/subsequent, ~$150-300 total to converge.
-> 4. **GLM phase_4 JSON-repair pass DESIGNED + TESTED** (§0.5.4.1). 18/18 tests pass. ~80% expected recovery on the 315 missing rows. **Production code unchanged — opt-in only.** Files: `e9_glm_json_repair.py`, `test_glm_json_repair.py`, `e9_repair_glm_phase4.py`, `glm_json_repair_report.md`.
+> 4. **GLM phase_4 JSON-repair pass DESIGNED + TESTED + EXECUTED 2026-05-06** (§0.5.4.1). v1 strategies recovered only 121/315 (38%); a v2 fallback (`score_and_reasoning_partial`) was added that handles the unescaped-quote-then-corruption-tail pattern. **Final recovery: 274/315 (87%); coverage 88.6% → 98.5%.** 27/27 tests pass (18 original + 9 new). **Production code unchanged — opt-in only.** Files: `e9_glm_json_repair.py`, `e9_glm_json_score_extract.py` (new), `e9_repair_glm_phase4.py`, `e9_repair_glm_phase4_v2.py` (new), test files, `glm_json_repair_report.md` (with "ACTUAL EXECUTION" appendix).
 > 5. **Codex E9 (spec-only repair operator on 7 targets × 8 candidates × 2 rounds)** ran end-to-end. 0/56 candidates passed gate. Analyzed in §0.5.8 as operator/gate mismatch — the Codex run validated the gate works (correctly rejected wrong-operator edits) but couldn't produce wins because the operator menu was spec-only. Codex artifacts (`e9_repair_common.py`, `e9_apply_edit.py`, `e9_verify_edit.py`, `e9_regen_qualifier_rubrics.py`, `e8_rubrics_v1.jsonl`) are reusable in the v2 design.
 >
 > ## What's open / blocked
@@ -18,7 +18,7 @@
 > |---|---|---|---|
 > | **Validate `e8_rubrics_v1.jsonl`** (Codex's E2 qualifier-preserving rubric regen — 13/16 passed local check) | Re-judge the 16 qualifier-drop statements under both var_A and phase_4 with v1 rubrics; recompute κ-by-condition; compare to baseline. **Cheapest path to a real spec_v0 → spec_v1 win.** | ~$25 OpenAI (Together + Gemini free), ~30 min wall | Awaits user approval to spend |
 > | **Extend Codex E2 to `no_agenda` + `support_programmatic_use`** | These show |Δ| ≥ 0.20 with both κ ≥ 0.5 (rubric subtly distorts otherwise-clean spec); not in original E2 set of 16. | ~$5 OpenAI, ~10 min wall | Awaits user approval to spend |
-> | **Execute GLM phase_4 JSON-repair retry** | Locate the raw GLM phase_4 SDK dumps. Likely path: `results/raw/e8_phase4_glm/<UTC-ts>/judge_phase4_glm/` on the original run host. NOT in this worktree (bundle didn't include them). Then run `e9_repair_glm_phase4.py --raw-dir <path> --out-dir phase4_glm_repaired/`, drop `repaired_judgments.jsonl` next to existing `phase4_glm/judgments.jsonl`, re-run `e8_rationale_grounding.py` + `e9_kappa_diagnostic.py`. Expected: per-statement n_phase_4 rises from min=41/median=53 to within ~3% of GPT/Gemini coverage. | $0 (Together free) | Awaits user finding raw dumps |
+> | ~~Execute GLM phase_4 JSON-repair retry~~ ✅ DONE 2026-05-06 evening. Raw dumps were on disk all along at `results/raw/e8_phase4_glm/2026-05-06T01-02-07/judge_rubric_plus_spec_glm/` (next-agent prompt was wrong). v1 strategies recovered 121/315 (38%); v2 fallback recovered the rest for total 274/315 (87%). Coverage 88.6% → 98.5%. n_phase_4: min 41→52, median 53→60. Per-statement κ shifts mostly small (median Δκ_phase_4 negligible); 9 statements with |Δκ|≥0.05 (largest: be_professional Δκ=−0.123, be_kind +0.086). Strongest signals (do_not_make_unprompted_personal_comments Δ=+0.805, be_rationally_optimistic Δ=−0.553) unchanged. See `glm_json_repair_report.md` "ACTUAL EXECUTION" appendix. | done | done |
 > | **Build `e9_compile_edit_v2.py`** | Dual-condition compiler that reads per-judge structured outputs from phase_4 (`spec_quote`, `rubric_quote`, `rubric_spec_tension`) and dispatches operator class natively. Replaces `e9_compile_edit.py`'s spec-only operator menu. | $0 (pure code) | None — can do anytime |
 > | **Build `e9_verify_edit_v2.py`** | Dual-condition gate that re-judges candidate spec/rubric under both var_A and phase_4 with operator-conditioned Δκ thresholds (§0.5.6). Replaces `e9_verify_edit.py`. | $0 (pure code) | None — can do anytime |
 > | **MVP runs on `do_not_make_unprompted_personal_comments` (Δ=+0.81 force-pick) and `be_rationally_optimistic` (Δ=−0.56 distortion)** | Cleanest tests of the two new operator paths. | ~$50 each | Awaits user approval; gated on v2 compiler + verifier built |
@@ -112,9 +112,13 @@ The project ran all 4 conditions × 3 judges (GPT-5.1, Gemini-3-Flash, GLM-5.1) 
 
 Outputs: `experiments/posttrain/disagreement_primitive/per_statement_kappa_by_condition.jsonl` (one record per statement with all 4 κ values, n per cell, and `delta_var_A_to_phase_4`).
 
-#### 0.5.4.1 — Coverage caveat (live)
+#### 0.5.4.1 — Coverage caveat (RESOLVED 2026-05-06 evening — 98.5% coverage)
 
-**Phase_4 GLM has 88.6% coverage (2443 of 2758 expected rows)**, vs ~100% for the other 11 cells. The cause is NOT max_tokens but JSON parse errors — GLM-5.1 produces malformed JSON on the more complex phase_4 schema (7 fields, with arrays of verbatim quoted phrases that themselves contain quotation marks). Documented error patterns from `claude_subagents/lm_judge_rubric_plus_spec/glm.md`:
+**Status now**: Phase_4 GLM coverage was lifted from **88.6% (2,443 / 2,758) to 98.5% (2,717 / 2,758)** by the v2 JSON-repair pass. The remaining 41 unparseable rows are all `empty_body` (max-tokens-exhausted-on-reasoning) and need a GLM re-run with a larger `max_tokens` budget to fix; the Together calls would be free. Per-statement n_phase_4 was min=41/median=53, now min=52/median=60 (41 of 46 statements at the n=58-60 ceiling). Most per-statement κ_phase_4 shifts are small (≤0.05); 9 statements moved by ≥0.05 — see `glm_json_repair_report.md` "ACTUAL EXECUTION" appendix for the full diff. The per-statement κ table at §0.5.4.6 below is the post-repair version.
+
+The rest of this subsection is preserved as the original problem analysis. The numbers about specific raw-disk locations and recovery estimates are now historical — see the "ACTUAL EXECUTION" section of `glm_json_repair_report.md` for what actually happened.
+
+**Phase_4 GLM had 88.6% coverage (2443 of 2758 expected rows)**, vs ~100% for the other 11 cells. The cause is NOT max_tokens but JSON parse errors — GLM-5.1 produces malformed JSON on the more complex phase_4 schema (7 fields, with arrays of verbatim quoted phrases that themselves contain quotation marks). Documented error patterns from `claude_subagents/lm_judge_rubric_plus_spec/glm.md`:
 
 ```
 JSONDecodeError: Expecting ',' delimiter: line 3 column 281 (char 296)

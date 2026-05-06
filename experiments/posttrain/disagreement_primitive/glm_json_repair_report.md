@@ -244,4 +244,154 @@ and Gemini coverage.
 - `experiments/posttrain/disagreement_primitive/e9_glm_json_repair.py` — the repair function
 - `experiments/posttrain/disagreement_primitive/test_glm_json_repair.py` — 18-test suite
 - `experiments/posttrain/disagreement_primitive/e9_repair_glm_phase4.py` — offline retry CLI
+
+---
+
+## ACTUAL EXECUTION (2026-05-06) — coverage retried, recovery exceeded estimate
+
+The raw GLM phase_4 SDK dumps **were on disk all along** at
+`results/raw/e8_phase4_glm/2026-05-06T01-02-07/judge_rubric_plus_spec_glm/`
+(2,758 per-call `.json` files; the bundle handoff message claimed they
+were missing — the next-agent prompt was wrong). Confirmed via
+`_iter_from_raw_dir` against the directory.
+
+### v1 (`repair_glm_json` strategies only) recovered 121/315 (38%)
+
+Running `e9_repair_glm_phase4.py --raw-dir <path>` produced:
+
+```
+input rows: 2758
+valid:      2443
+repaired:   121  (all via truncated_close)
+unrepairable: 194
+  empty_body: 41
+  unrepairable: 153
+```
+
+This **fell well short of the 80% estimate above**. Investigation showed
+the 153 "unrepairable" records share an undocumented secondary failure
+mode: GLM emits an unescaped quote pair (`","quoted phrase","`) inside
+the `reasoning` value, then the model's logits collapse into a long
+structured-but-meaningless tail of `","..."  :"",` etc. The original
+`escape_unescaped_quote_at_error` strategy can't recover these because
+no single-quote-escape produces a clean parse — the corruption tail is
+syntactically self-defeating.
+
+The error-pattern table at the top of this report was based on the 79
+documented failures from the high-disagreement sub-agent slice; that
+slice happened to UNDERSAMPLE this corruption-tail pattern. The actual
+on-disk distribution leans more heavily on it (≈49% of the failures vs
+the implicit ≈0% in the original report).
+
+### v2 (added `score_and_reasoning_partial` fallback) recovered 274/315 (87%)
+
+A new fallback module
+`e9_glm_json_score_extract.py:score_and_reasoning_partial` handles the
+corruption-tail pattern by truncating at the first unescaped close-quote
+(walking both leftward from `err.pos` and forward from `"reasoning":"`),
+appending `}` to close the object, and accepting the parse only if (a)
+the dict's keys are a subset of the phase_4 schema (rejecting spurious
+sibling keys), (b) `score` is an int in 1..5, and (c) `reasoning` is at
+least 20 chars. The recovered records are partial (no `spec_quotes`,
+`rubric_quotes`, etc., which were corrupted further right) but carry
+enough for κ-by-condition diagnostics and pass the `e8_rationale_grounding`
+non-empty-reasoning gate.
+
+```
+.venv/bin/python experiments/posttrain/disagreement_primitive/e9_repair_glm_phase4_v2.py \
+    --raw-dir results/raw/e8_phase4_glm/2026-05-06T01-02-07/judge_rubric_plus_spec_glm \
+    --out-dir experiments/posttrain/disagreement_primitive/phase4_glm_repaired_v2/
+
+input rows:   2758
+valid:        2443
+repaired:     274
+  via score_and_reasoning_partial: 153
+  via truncated_close:              121
+unrepairable: 41   (all empty_body — irreducible without re-running GLM)
+```
+
+**Final coverage: 2,717 / 2,758 = 98.5%** (was 88.6%). The remaining 41
+empty_body cases need a GLM re-run with larger `max_tokens` to fix
+(the API cost would be Together-free).
+
+### Tests for the new module
+
+`experiments/posttrain/disagreement_primitive/test_glm_json_score_extract.py`:
+**10 of 10 tests pass**. Combined run with the original suite: **28 of 28
+tests pass**.
+
+| family | tests | result |
+|---|--:|---|
+| Documented failure-pattern recovery (short tail / long tail / score=3) | 3 | pass |
+| Schema-key tightening (no spurious sibling keys) | 1 | pass |
+| Negative cases (clean / no-prefix / out-of-range / empty / short reasoning) | 5 | pass |
+| Robustness (escaped quotes inside reasoning) | 1 | pass |
+| **Total** | **10** | **pass** |
+
+### Merge into `phase4_glm/judgments.jsonl`
+
+Per the additive-only rule, the original was preserved at
+`phase4_glm/judgments.original.jsonl` (2,758 rows: 2,443 valid + 315
+error). The merged file at the canonical path replaces the 274
+recovered error rows with their repaired equivalents, preserving the
+original `user_query` and `response` fields, and keeps the 41
+empty_body rows untouched (with the `error` field intact for audit).
+
+### Effect on `per_judgment.jsonl` and the κ-by-condition table
+
+Re-running `e8_rationale_grounding.py` (against the merged judgments)
+and `e9_kappa_diagnostic.py` produced:
+
+- `grounding/per_judgment.jsonl`: 32,638 → 32,912 rows (+274 phase_4 GLM
+  rows; matches recovery count exactly).
+- per-statement `n_phase_4` distribution: was min=41, median=53,
+  worst-10 statements at 41-49; now min=52, median=60, with 41 of 46
+  statements at the n=58-60 ceiling (within 0-3% of GPT/Gemini coverage).
+- population κ shift: phase_4 median +0.480 → +0.486 (negligible);
+  the count of κ<0 statements held at 3 and κ<0.4 held at 17.
+
+**Notable per-statement movements** (|Δκ_phase_4| ≥ 0.05, of 46 statements):
+
+| statement | κ_phase_4 old → new | Δ(A→P4) old → new |
+|---|---|---|
+| `be_professional` | +0.736 → +0.613 (Δκ −0.123) | +0.477 → +0.354 |
+| `be_kind` | +0.378 → +0.464 (Δκ +0.086) | −0.112 → −0.027 |
+| `ask_clarifying_questions` | +0.407 → +0.322 (Δκ −0.085) | −0.008 → −0.093 |
+| `protect_privileged_messages` | +0.080 → +0.157 (Δκ +0.077) | +0.107 → +0.183 |
+| `letter_and_spirit` | +0.141 → +0.215 (Δκ +0.074) | −0.100 → −0.026 |
+| `be_engaging` | +0.417 → +0.477 (Δκ +0.060) | −0.190 → −0.131 |
+| `avoid_errors` | +0.760 → +0.701 (Δκ −0.059) | +0.051 → −0.008 (sign flip; both magnitudes near zero) |
+| `be_thorough_but_efficient` | +0.646 → +0.589 (Δκ −0.057) | +0.307 → +0.250 |
+| `transformation_exception` | +0.781 → +0.726 (Δκ −0.055) | −0.219 → −0.274 |
+
+The MVP target list from `spec_repair_loop.md` §0.5.4 is unchanged:
+`do_not_make_unprompted_personal_comments` (Δ=+0.805 force-pick) and
+`be_rationally_optimistic` (Δ=−0.553 distortion) both stayed essentially
+identical post-repair. `transformation_exception` moved deeper into the
+rubric-distortion bucket (Δ went from −0.219 to −0.274).
+
+### Files added in this v2 round
+
+- `experiments/posttrain/disagreement_primitive/e9_glm_json_score_extract.py` — fallback extractor
+- `experiments/posttrain/disagreement_primitive/test_glm_json_score_extract.py` — 9 tests
+- `experiments/posttrain/disagreement_primitive/e9_repair_glm_phase4_v2.py` — v2 retry CLI
+- `experiments/posttrain/disagreement_primitive/phase4_glm_repaired_v2/repaired_judgments.jsonl`
+- `experiments/posttrain/disagreement_primitive/phase4_glm_repaired_v2/repair_summary.json`
+- `experiments/posttrain/disagreement_primitive/phase4_glm/judgments.original.jsonl` — backup of pre-merge
+- `experiments/posttrain/disagreement_primitive/grounding/per_judgment.original.jsonl` — backup of pre-grounding
+- `experiments/posttrain/disagreement_primitive/grounding/_pre_glm_repair_backup/` — pre-merge {summary,per_statement,qualifier_drop}.csv + report.md
+
+### How to revert
+
+If the merged data turns out to be wrong, restore the originals:
+
+```bash
+cp experiments/posttrain/disagreement_primitive/phase4_glm/judgments.original.jsonl \
+   experiments/posttrain/disagreement_primitive/phase4_glm/judgments.jsonl
+cp experiments/posttrain/disagreement_primitive/grounding/per_judgment.original.jsonl \
+   experiments/posttrain/disagreement_primitive/grounding/per_judgment.jsonl
+cp experiments/posttrain/disagreement_primitive/grounding/_pre_glm_repair_backup/* \
+   experiments/posttrain/disagreement_primitive/grounding/
+.venv/bin/python experiments/posttrain/disagreement_primitive/e9_kappa_diagnostic.py
+```
 - `experiments/posttrain/disagreement_primitive/glm_json_repair_report.md` — this report
