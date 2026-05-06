@@ -43,17 +43,11 @@ inputs:
     description: Maximum agent turns.
     required: false
     default: '500'
-  timeout-minutes:
-    description: Per-action timeout in minutes.
-    required: false
-    default: '30'
-
 runs:
   using: composite
   steps:
     - name: Run claude-code-action
       uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
-      timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
       with:
         claude_code_oauth_token: ${{ inputs.oauth-token }}
         prompt: |

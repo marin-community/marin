@@ -146,6 +146,7 @@ jobs:
         id: claude_triage
         if: (failure() || cancelled()) && github.event_name == 'schedule'
         uses: ./.github/actions/claude-triage
+        timeout-minutes: 30
         with:
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           lane: datakit-smoke
