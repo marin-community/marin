@@ -37,15 +37,14 @@ layout: agenda
 layout: default
 ---
 
-# ![](/icons/calendar.svg) Status Snapshot on May 7, 2026
+# ![](/icons/calendar.svg) April Goal Scorecard
 
-| Area | Status | Read |
+| April goal cluster | Status | Read |
 |---|---|---|
-| Infra | **TODO** | Iris is now the default path; Ray was removed from Marin. Fill in current production reliability. |
-| CoreWeave / GPU | **TODO** | Multi-host GPU canaries and CW cluster wiring landed; current NCCL/JAX status needed. |
-| Data + Zephyr | **TODO** | Datakit normalized around standard Parquet, source registries, and smoke ferries. Fill in latest throughput. |
-| Evals | **TODO** | Perplexity-gap and raw slice coverage expanded materially. Decide which slices changed decisions. |
-| Training + scaling | **TODO** | MoE kernel/config work and Delphi eval/blog work landed. Fill in current run outcomes. |
+| Execution platform + observability (`#4269`, `#4273`, `#4474`) | **Mostly landed** | Ray is gone from Marin; Iris workqueue, dev-TPU, and resource visibility landed. Left: Levanter store, export memory, historical utilization. |
+| Data + library foundations (`#4272`, `#4271`) | **Landed** | Canonical data pipeline and Marin-as-a-library epics closed. Watch whether new datasets are now simple in practice. |
+| MoE scaling + MFU (`#4281`, `#4283`) | **Partial** | Clean MoE isoflop and 1e23 preregistration landed; key ablations and H100/MFU parity remain open. |
+| Agentic + post-training readiness (`#4282`, `#3192`) | **Started** | Experiment-agentification closed; synthetic-data strategy remains open. Evals made code/tool/patch gaps concrete. |
 
 ---
 layout: default

@@ -12,7 +12,7 @@ The Delphi blogpost work is the likely model-science anchor if the final figures
 
 1. Cover: May 2026 Marin Review.
 2. Agenda: scorecard, systems, data/evals, training/scaling, next-review targets.
-3. Status snapshot: table with Infra, CoreWeave/GPU, Data+Zephyr, Evals, Training+Scaling.
+3. April goal scorecard: grouped readout from the preregistered April milestone epics.
 4. Since late March: 5-6 bullets that name the main shifts.
 5. Iris replaced Ray.
 6. CoreWeave and GPU path.
@@ -28,6 +28,20 @@ The Delphi blogpost work is the likely model-science anchor if the final figures
 16. What should be true by next review.
 
 ## High-Impact Landed Changes
+
+## April Goal Scorecard Grouping
+
+The original April milestone has too many issue rows for an exec scorecard, so the deck groups the user-provided core epics into four clusters:
+
+- Execution platform + observability: `#4269`, `#4273`, `#4474`. Ray removal is closed; workqueue/dev-TPU/resource visibility landed; Levanter store, export memory, and historical utilization remain follow-through.
+- Data + library foundations: `#4272`, `#4271`. Both closed; this is the cleanest "landed" row.
+- MoE scaling + MFU: `#4281`, `#4283`. Partial: clean MoE isoflop and 1e23 preregistration landed, but key ablations and H100/MFU parity remain open.
+- Agentic + post-training readiness: `#4282`, `#3192`. Agentified experimentation closed; synthetic-data strategy remains open. The eval work makes this a more concrete data-readiness story than the raw issue state alone.
+
+Dropped from the scorecard as separate rows:
+
+- CoreWeave/GPU, because the April epic set only directly represents it through the H100/MFU part of `#4283`; the separate CoreWeave slide handles that story.
+- Evals as a standalone scorecard row, because the provided April goal list does not include `#4963`/`#5005`; evals are used as evidence for agentic/post-training readiness instead.
 
 ### 1. Ray Was Removed From Marin
 
