@@ -5,7 +5,7 @@
 
 import dataclasses
 
-from fray.cluster import ResourceConfig
+from fray.v2.types import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
