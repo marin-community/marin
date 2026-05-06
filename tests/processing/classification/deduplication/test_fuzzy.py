@@ -415,8 +415,8 @@ def test_high_char_5gram_jaccard_pair_clusters_end_to_end(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def _run_dedup_on_parser_variants(tmp_path: Path, docs: list[dict]) -> dict[str, dict]:
-    """Run normalize -> minhash -> fuzzy_dups on a parser-variant corpus."""
+def _run_dedup_on_corpus(tmp_path: Path, docs: list[dict]) -> dict[str, dict]:
+    """Run normalize -> minhash -> fuzzy_dups on a list of ``{id, text}`` docs."""
     src_dir = tmp_path / "src"
     src_dir.mkdir()
     write_jsonl_file(docs, str(src_dir / "shard_0.jsonl.gz"))
@@ -449,7 +449,7 @@ def test_html_parser_variants_cluster_per_article(tmp_path: Path, parser_variant
     The html2text variant is intentionally NOT asserted here; see
     ``test_html_parser_variants_all_three_cluster_per_article`` for the gap.
     """
-    by_source_id = _run_dedup_on_parser_variants(tmp_path, parser_variants_docs)
+    by_source_id = _run_dedup_on_corpus(tmp_path, parser_variants_docs)
     assert parser_variants_articles, "no parser-variant fixtures discovered"
 
     article_to_cluster: dict[str, str] = {}
@@ -487,9 +487,28 @@ def test_html_parser_variants_all_three_cluster_per_article(
     tmp_path: Path, parser_variants_docs, parser_variants_articles
 ):
     """Aspirational: every parser variant of one article shares one dup_cluster_id."""
-    by_source_id = _run_dedup_on_parser_variants(tmp_path, parser_variants_docs)
+    by_source_id = _run_dedup_on_corpus(tmp_path, parser_variants_docs)
     for article in parser_variants_articles:
         clusters = {_cluster_id(by_source_id, f"{article}__{p}") for p in ("trafilatura", "html2text", "readability")}
         assert (
             len(clusters) == 1 and None not in clusters
         ), f"{article}: parser variants split across clusters: {clusters}"
+
+
+@pytest.mark.data_integration
+def test_same_site_distinct_bodies_do_not_cluster(tmp_path: Path, same_site_distinct_docs):
+    """Distinct articles from one site (heavy shared chrome) must not cluster.
+
+    Pinned regression: even with a chrome-preserving parser (html2text) the
+    pipeline must distinguish articles by their main content, not their
+    template. Each input doc is expected to be a singleton — no attr row.
+    Any clustering of a pair indicates over-merge based on shared chrome.
+
+    The fixtures are Wikipedia pages on disjoint topics (Photography,
+    Photosynthesis, Quantum mechanics, Roman Empire). BBC/Guardian/etc.
+    would have been more typical "news boilerplate" candidates but none of
+    them allow Common Crawl via robots.txt, so Wikipedia is the realistic
+    floor for shared-template + distinct-body in the wild.
+    """
+    by_source_id = _run_dedup_on_corpus(tmp_path, same_site_distinct_docs)
+    assert not by_source_id, f"distinct same-site articles clustered (over-merge): {sorted(by_source_id.keys())}"

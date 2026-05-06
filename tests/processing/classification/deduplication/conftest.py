@@ -5,12 +5,17 @@ from pathlib import Path
 import pytest
 from zephyr.readers import load_jsonl, load_parquet
 
-# Pinned HF dataset for data_integration test fixtures. Bump
-# ``PARSER_VARIANTS_REVISION`` when ``generate_test_examples.py`` reports a
-# new commit SHA after adding fixtures.
-PARSER_VARIANTS_REPO = "ravwojdyla/marin-test-data-fixtures"
-PARSER_VARIANTS_CONFIG = "parser_variants"
+# Pinned HF dataset for data_integration test fixtures. The generation
+# scripts under resources/parser_variants/ each push one config and print
+# a commit SHA — paste that SHA into the corresponding ``*_REVISION``
+# constant below.
+DATASET_REPO = "ravwojdyla/marin-test-data-fixtures"
 PARSER_VARIANTS_REVISION = "b4410029dd8fd57171283c681912adc3a5092e88"
+SAME_SITE_DISTINCT_REVISION = "88401e16e3ae1f03e23a9ca3b48d453727af41ad"
+
+# Back-compat alias used by existing parser-variants fixtures below.
+PARSER_VARIANTS_REPO = DATASET_REPO
+PARSER_VARIANTS_CONFIG = "parser_variants"
 
 
 @pytest.fixture(scope="module")
@@ -51,6 +56,30 @@ def parser_variants_docs(parser_variants_corpus) -> list[dict]:
 def parser_variants_articles(parser_variants_corpus) -> list[str]:
     """Sorted distinct article slugs present in the corpus."""
     return sorted({r["article_slug"] for r in parser_variants_corpus})
+
+
+@pytest.fixture(scope="session")
+def same_site_distinct_corpus():
+    """Pinned ``same_site_distinct_bodies`` config from the marin test-fixtures HF dataset.
+
+    Wikipedia pages on disjoint topics, html2text-extracted so site chrome
+    is preserved. Drives the precision regression that distinct article
+    bodies must not cluster despite shared template.
+    """
+    from datasets import load_dataset
+
+    return load_dataset(
+        DATASET_REPO,
+        "same_site_distinct_bodies",
+        revision=SAME_SITE_DISTINCT_REVISION,
+        split="train",
+    )
+
+
+@pytest.fixture
+def same_site_distinct_docs(same_site_distinct_corpus) -> list[dict]:
+    """Same-site rows reshaped as ingestible ``{id, text}`` records."""
+    return [{"id": r["doc_id"], "text": r["text"]} for r in same_site_distinct_corpus]
 
 
 def load_dedup_outputs(output_dir: str) -> dict[str, dict]:
