@@ -1213,31 +1213,47 @@ def _format_params(n: int) -> str:
     return f"{round(n / 1e6)}M"
 
 
-def run_parameter_scaling_sweep():
-    """Parameter scaling sweep: 8 model sizes (46M to 4B) trained for one epoch each.
+@dataclass(frozen=True)
+class ScalingTrainStep:
+    """Bundle of metadata + ExecutorStep for one parameter-scaling-sweep model.
 
-    Each model uses the AdamH optimizer config produced by DNA_SCALING_HEURISTIC at
-    (SCALING_BATCH_SIZE, target_tokens). No controls — every run is at the transferred
-    optimum for its (B, T). num_train_steps is floored so total tokens consumed never
-    exceed one pass over the mixture.
+    Returned by `build_scaling_train_steps` so downstream consumers (e.g.
+    offline-eval scripts) can identify each model and locate its training
+    output without re-deriving values from the step name.
+    """
+
+    hidden_size: int
+    num_params: int
+    model_config: object  # Qwen3Config; loose-typed to avoid circular imports
+    run_name: str
+    step: ExecutorStep
+
+
+def build_scaling_train_steps(
+    *,
+    num_train_steps: int,
+    hidden_sizes: tuple[int, ...] = SCALING_HIDDEN_SIZES,
+) -> list[ScalingTrainStep]:
+    """Construct one training ExecutorStep per scaling-sweep model.
+
+    Shared by `run_parameter_scaling_sweep` and offline-eval consumers that
+    need to derive each step's GCS output path. Defaults reproduce the
+    production sweep configuration so the same step config (and therefore the
+    same content hash, and therefore the same output path) is produced.
     """
     version = SCALING_VERSION
     mixture = _build_data_mixture()
     target_tokens = _scaling_target_tokens()
-    full_num_steps = target_tokens // (SCALING_BATCH_SIZE * _model_seq_len())
-    # WARMUP_MODE=yes: cap each run to SCALING_WARMUP_STEPS. Optimizer is still built at full
-    # target_tokens so the LR schedule endpoint matches production — the run just stops early.
-    num_steps = SCALING_WARMUP_STEPS if _warmup_mode() else full_num_steps
     optimizer = DNA_SCALING_HEURISTIC.build_optimizer_config(SCALING_BATCH_SIZE, target_tokens)
-    checkpointer = _periodic_checkpoint(keep_every=max(1, num_steps // 3), interval_hours=1)
+    checkpointer = _periodic_checkpoint(keep_every=max(1, num_train_steps // 3), interval_hours=1)
     wandb_group = f"dna-bolinas-scaling-sweep-{version}"
-
     tpu_types = _tpu_types_from_env("SCALING", SCALING_TPU_TYPES)
-    hidden_sizes = _get_scaling_hidden_sizes()
-    all_steps: list[ExecutorStep] = []
+
+    out: list[ScalingTrainStep] = []
     for hidden_size in hidden_sizes:
         model_config = _build_model_config(hidden_size, REFERENCE_HPARAMS.initializer_range)
         num_params = model_config.total_trainable_params(DNA_SCALING_HEURISTIC.vocab_size)
+        run_name = f"dna-bolinas-scaling-{version}-h{hidden_size}-p{_format_params(num_params)}"
         tags = (
             "sweep",
             "dna",
@@ -1249,24 +1265,51 @@ def run_parameter_scaling_sweep():
             f"tokens={target_tokens}",
             f"bs={SCALING_BATCH_SIZE}",
         )
-        all_steps.append(
-            _build_scaled_train_step(
-                optimizer=optimizer,
+        step = _build_scaled_train_step(
+            optimizer=optimizer,
+            model_config=model_config,
+            data_mixture=mixture,
+            run_name=run_name,
+            wandb_group=wandb_group,
+            tags=tags,
+            batch_size=SCALING_BATCH_SIZE,
+            num_train_steps=num_train_steps,
+            tpu_type=tpu_types,
+            checkpointer=checkpointer,
+            run_eval_harness=True,
+            per_device_parallelism=SCALING_PER_DEVICE_PARALLELISM,
+        )
+        out.append(
+            ScalingTrainStep(
+                hidden_size=hidden_size,
+                num_params=num_params,
                 model_config=model_config,
-                data_mixture=mixture,
-                run_name=f"dna-bolinas-scaling-{version}-h{hidden_size}-p{_format_params(num_params)}",
-                wandb_group=wandb_group,
-                tags=tags,
-                batch_size=SCALING_BATCH_SIZE,
-                num_train_steps=num_steps,
-                tpu_type=tpu_types,
-                checkpointer=checkpointer,
-                run_eval_harness=True,
-                per_device_parallelism=SCALING_PER_DEVICE_PARALLELISM,
+                run_name=run_name,
+                step=step,
             )
         )
+    return out
 
-    executor_main(steps=all_steps, description=f"DNA Bolinas parameter scaling {version}")
+
+def run_parameter_scaling_sweep():
+    """Parameter scaling sweep: 8 model sizes (46M to 4B) trained for one epoch each.
+
+    Each model uses the AdamH optimizer config produced by DNA_SCALING_HEURISTIC at
+    (SCALING_BATCH_SIZE, target_tokens). No controls — every run is at the transferred
+    optimum for its (B, T). num_train_steps is floored so total tokens consumed never
+    exceed one pass over the mixture.
+    """
+    target_tokens = _scaling_target_tokens()
+    full_num_steps = target_tokens // (SCALING_BATCH_SIZE * _model_seq_len())
+    # WARMUP_MODE=yes: cap each run to SCALING_WARMUP_STEPS. Optimizer is still built at full
+    # target_tokens so the LR schedule endpoint matches production — the run just stops early.
+    num_steps = SCALING_WARMUP_STEPS if _warmup_mode() else full_num_steps
+    hidden_sizes = _get_scaling_hidden_sizes()
+    train_steps = build_scaling_train_steps(num_train_steps=num_steps, hidden_sizes=hidden_sizes)
+    executor_main(
+        steps=[t.step for t in train_steps],
+        description=f"DNA Bolinas parameter scaling {SCALING_VERSION}",
+    )
 
 
 # =============================================================================
