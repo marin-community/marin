@@ -132,13 +132,14 @@ def _ssh_args(cfg: FinelogConfig, command: str) -> list[str]:
     return args
 
 
-def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 30) -> bool:
+def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 90) -> bool:
     """Poll ``/health`` from inside the VM over SSH.
 
-    Used by ``gcp_restart``: the bootstrap re-run goes over SSH, so its
-    "[finelog-init] finelog is healthy" marker never reaches the serial
-    console (which ``_wait_health`` reads). Probing ``localhost:port/health``
-    over SSH gives a direct, unambiguous answer instead.
+    Used by both ``gcp_up`` (where the first attempts may fail while
+    OS Login propagates the SSH key on the fresh VM) and ``gcp_restart``.
+    A direct probe is unambiguous: serial-console marker scraping was
+    fragile because ``gcp_restart`` re-runs the bootstrap over SSH and
+    that path never reaches the console.
     """
     probe = f"curl -sf -m 5 http://localhost:{port}/health"
     for _ in range(max_attempts):
@@ -150,40 +151,6 @@ def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 30) 
         if result.returncode == 0:
             return True
         time.sleep(2)
-    return False
-
-
-def _wait_health(name: str, project: str, zone: str, port: int, max_attempts: int = 60) -> bool:
-    """Wait for the bootstrap script to report finelog healthy.
-
-    Polls the VM's serial console output (no SSH required, so this works on
-    VMs that enforce OS Login restricting the operator's account). The
-    bootstrap script in ``bootstrap.py`` validates ``/health`` from inside
-    the VM and prints sentinel markers; we just look for them.
-    """
-    del port  # the bootstrap script polls /health itself; we read its verdict.
-    healthy_marker = "[finelog-init] finelog is healthy"
-    failed_marker = "[finelog-init] FAILED"
-    for _ in range(max_attempts):
-        result = subprocess.run(
-            [
-                "gcloud",
-                "compute",
-                "instances",
-                "get-serial-port-output",
-                name,
-                f"--project={project}",
-                f"--zone={zone}",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            if healthy_marker in result.stdout:
-                return True
-            if failed_marker in result.stdout:
-                return False
-        time.sleep(3)
     return False
 
 
@@ -235,7 +202,7 @@ def gcp_up(cfg: FinelogConfig) -> None:
     click.echo("Instance created. Startup script will install Docker and launch finelog.")
 
     click.echo("Waiting for finelog /health (up to ~3 minutes)...")
-    if not _wait_health(cfg.name, gcp.project, gcp.zone, cfg.port):
+    if not _wait_health_via_ssh(cfg, cfg.port):
         raise click.ClickException("finelog did not become healthy; inspect via `finelog deploy logs`")
     click.echo("finelog is healthy.")
 
