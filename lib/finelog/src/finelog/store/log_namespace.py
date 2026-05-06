@@ -556,14 +556,12 @@ class DiskLogNamespace:
         self._bg_thread.start()
 
     def _open_compaction_conn(self) -> duckdb.DuckDBPyConnection:
-        """Open a fresh DuckDB connection for one compaction COPY.
+        """Fresh DuckDB connection for one compaction COPY.
 
-        See the comment in ``__init__`` for why we open per-merge.
-        ``temp_directory`` is pinned inside the namespace data dir so
-        DuckDB doesn't try to spill into the read-only container CWD;
-        ``preserve_insertion_order`` is off because the COPY ``ORDER
-        BY``s explicitly, and ``threads=2`` keeps the per-thread sort
-        buffer footprint bounded.
+        Opened per-merge so DuckDB's per-conn spill accountant resets
+        (it leaks bytes after failed COPYs). ``preserve_insertion_order``
+        is off because the COPY ``ORDER BY``s explicitly, and
+        ``threads=2`` caps the per-thread sort buffer footprint.
         """
         self._compaction_tmp.mkdir(parents=True, exist_ok=True)
         return duckdb.connect(
@@ -1287,7 +1285,7 @@ class DiskLogNamespace:
         order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
         limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
 
-        with self._read_pool.checkout(ram_tables) as (conn, ram_names):
+        with self._read_pool.cursor(ram_tables) as (conn, ram_names):
             source = _build_union_source(parquet_files, ram_names, self._arrow_schema)
             sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
             return conn.execute(sql, params).fetchall()
@@ -1383,7 +1381,7 @@ class MemoryLogNamespace:
         limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
         where_clause = " AND ".join(where_parts)
 
-        with self._read_pool.checkout([table]) as (conn, ram_names):
+        with self._read_pool.cursor([table]) as (conn, ram_names):
             source = _build_union_source([], ram_names, self._arrow_schema)
             sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
             rows = conn.execute(sql, params).fetchall()
@@ -1444,8 +1442,9 @@ class MemoryLogNamespace:
 
 
 class _ReadPoolProtocol(Protocol):
-    def checkout(
-        self, buffer_tables: list[pa.Table]
+    def cursor(
+        self,
+        buffer_tables: list[pa.Table] | None = None,
     ) -> AbstractContextManager[tuple[duckdb.DuckDBPyConnection, list[str]]]: ...
 
 

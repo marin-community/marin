@@ -102,13 +102,19 @@ def _next_cursor_id() -> int:
         return _cursor_counter
 
 
+_DEFAULT_POOL_RECYCLE_SEC = 600.0
+
+
 class ConnectionPool:
     """Single DuckDB read connection shared across all read paths.
 
     ``enable_object_cache`` keeps parquet footer / row-group stats hot
-    across queries. Compaction does not share this connection — each
-    namespace owns its own DuckDB conn for compaction COPYs so concurrent
-    namespaces can't collide on session state.
+    across queries. The connection is recycled periodically (default
+    10 min) so DuckDB-internal accounting (spill counters, arena bloat)
+    cannot accumulate without bound.
+
+    All access goes through :meth:`cursor`, which serializes callers,
+    recycles if stale, and manages table registration / cleanup.
     """
 
     def __init__(
@@ -116,36 +122,57 @@ class ConnectionPool:
         memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
         threads: str = _DEFAULT_DUCKDB_THREADS,
         temp_directory: Path | None = None,
+        recycle_sec: float = _DEFAULT_POOL_RECYCLE_SEC,
     ):
-        config: dict[str, str] = {"memory_limit": memory_limit, "threads": threads}
+        self._config: dict[str, str] = {"memory_limit": memory_limit, "threads": threads}
         if temp_directory is not None:
             temp_directory.mkdir(parents=True, exist_ok=True)
-            config["temp_directory"] = str(temp_directory)
-        self._conn = duckdb.connect(config=config)
-        self._conn.execute("SET enable_object_cache=true")
-        # Serializes DDL on the shared read connection. ``query()`` issues
-        # ``CREATE OR REPLACE VIEW {namespace}`` for every registered
-        # namespace, and concurrent calls would collide on the same view
-        # names. Held end-to-end through the fetch so the views stay valid
-        # while the result materializes.
-        self._read_query_lock = Lock()
+            self._config["temp_directory"] = str(temp_directory)
+        self._recycle_sec = recycle_sec
+        self._conn = self._new_conn()
+        self._conn_born = time.monotonic()
+        self._lock = Lock()
+
+    def _new_conn(self) -> duckdb.DuckDBPyConnection:
+        conn = duckdb.connect(config=dict(self._config))
+        conn.execute("SET enable_object_cache=true")
+        return conn
+
+    def _maybe_recycle(self) -> None:
+        if time.monotonic() - self._conn_born < self._recycle_sec:
+            return
+        old = self._conn
+        self._conn = self._new_conn()
+        self._conn_born = time.monotonic()
+        old.close()
+        logger.debug("ConnectionPool recycled read connection")
 
     @contextmanager
-    def checkout(self, buffer_tables: list[pa.Table]) -> Iterator[tuple[duckdb.DuckDBPyConnection, list[str]]]:
-        """Yield ``(cursor, ram_table_names)`` with each RAM table registered."""
-        cid = _next_cursor_id()
-        cursor = self._conn.cursor()
-        names: list[str] = []
-        try:
-            for i, table in enumerate(buffer_tables):
-                name = f"_ram_{cid}_{i}"
-                cursor.register(name, table)
-                names.append(name)
-            yield cursor, names
-        finally:
-            for name in names:
-                cursor.unregister(name)
-            cursor.close()
+    def cursor(
+        self,
+        buffer_tables: list[pa.Table] | None = None,
+    ) -> Iterator[tuple[duckdb.DuckDBPyConnection, list[str]]]:
+        """Yield ``(cursor, ram_table_names)`` under the pool lock.
+
+        Recycles the underlying connection if stale, registers any
+        ``buffer_tables`` with auto-generated names, and tears
+        everything down on exit.
+        """
+        with self._lock:
+            self._maybe_recycle()
+            cid = _next_cursor_id()
+            cur = self._conn.cursor()
+            names: list[str] = []
+            try:
+                for i, table in enumerate(buffer_tables or []):
+                    name = f"_ram_{cid}_{i}"
+                    cur.register(name, table)
+                    names.append(name)
+                yield cur, names
+            finally:
+                for name in names:
+                    cur.unregister(name)
+                cur.close()
 
     def close(self) -> None:
         self._conn.close()
@@ -493,57 +520,46 @@ class DuckDBLogStore:
 
         Unknown namespaces in the FROM clause surface as DuckDB
         ``CatalogException`` (the view doesn't exist).
-
-        Uses a cursor on the shared read connection rather than opening a
-        fresh ``duckdb.connect()`` per call: a fresh connection is its own
-        in-process DB instance with its own buffer manager, and mimalloc
-        retained those arenas long after ``con.close()`` (RSS climbed by
-        ~50-100MB per call under load). The view + RAM-table names are
-        suffixed with a unique cursor id so concurrent calls on the shared
-        connection don't collide; views and registrations are torn down in
-        ``finally`` to keep the connection clean for the next caller.
         """
-        cid = _next_cursor_id()
-        registered_names: list[str] = []
         view_names: list[str] = []
         self._query_visibility_lock.read_acquire()
-        self._pool._read_query_lock.acquire()
-        cursor = self._pool._conn.cursor()
         try:
-            # Snapshot under the insertion lock so a concurrent drop_table
-            # (which mutates the dict under the same lock) can't trigger
-            # "dictionary changed size during iteration".
-            with self._insertion_lock:
-                ns_snapshot = list(self._namespaces.items())
-            for ns_name, ns in ns_snapshot:
-                ns_quoted = quote_ident(ns_name)
-                view_names.append(ns_quoted)
-                segments, ram_tables = ns.query_snapshot()
-                if not segments and not ram_tables:
-                    cols_sql = ", ".join(
-                        f"NULL::{duckdb_type_for(c)} AS {quote_ident(c.name)}" for c in ns.schema.columns
-                    )
-                    cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS SELECT {cols_sql} WHERE FALSE")
-                    continue
+            with self._pool.cursor() as (cursor, _):
+                # Snapshot under the insertion lock so a concurrent drop_table
+                # can't trigger "dictionary changed size during iteration".
+                with self._insertion_lock:
+                    ns_snapshot = list(self._namespaces.items())
 
-                parts: list[str] = []
-                if segments:
-                    paths_literal = "[" + ", ".join(quote_literal(s.path) for s in segments) + "]"
-                    parts.append(f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)")
-                for table in ram_tables:
-                    reg_name = f"_q{cid}_seg_{len(registered_names)}"
-                    cursor.register(reg_name, table)
-                    registered_names.append(reg_name)
-                    parts.append(f"SELECT * FROM {reg_name}")
-                cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS {' UNION ALL BY NAME '.join(parts)}")
-            return cursor.execute(sql).fetch_arrow_table()
+                extra_registered: list[str] = []
+                try:
+                    for ns_name, ns in ns_snapshot:
+                        ns_quoted = quote_ident(ns_name)
+                        view_names.append(ns_quoted)
+                        segments, ram_tables = ns.query_snapshot()
+                        if not segments and not ram_tables:
+                            cols_sql = ", ".join(
+                                f"NULL::{duckdb_type_for(c)} AS {quote_ident(c.name)}" for c in ns.schema.columns
+                            )
+                            cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS SELECT {cols_sql} WHERE FALSE")
+                            continue
+
+                        parts: list[str] = []
+                        if segments:
+                            paths_literal = "[" + ", ".join(quote_literal(s.path) for s in segments) + "]"
+                            parts.append(f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)")
+                        for table in ram_tables:
+                            reg_name = f"_q{_next_cursor_id()}_seg_{len(extra_registered)}"
+                            cursor.register(reg_name, table)
+                            extra_registered.append(reg_name)
+                            parts.append(f"SELECT * FROM {reg_name}")
+                        cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS {' UNION ALL BY NAME '.join(parts)}")
+                    return cursor.execute(sql).fetch_arrow_table()
+                finally:
+                    for name in extra_registered:
+                        cursor.unregister(name)
+                    for vname in view_names:
+                        cursor.execute(f"DROP VIEW IF EXISTS {vname}")
         finally:
-            for name in registered_names:
-                cursor.unregister(name)
-            for vname in view_names:
-                cursor.execute(f"DROP VIEW IF EXISTS {vname}")
-            cursor.close()
-            self._pool._read_query_lock.release()
             self._query_visibility_lock.read_release()
 
     def drop_table(self, name: str) -> None:
