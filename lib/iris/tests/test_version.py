@@ -48,6 +48,27 @@ def test_client_revision_date_empty_when_git_fails(monkeypatch):
     assert iris_version.client_revision_date() == ""
 
 
+def test_git_iris_date_falls_back_when_path_filter_empty(monkeypatch):
+    """Shallow CI clones often produce empty path-filtered git log output;
+    we must still return a valid HEAD date by retrying without the path filter."""
+    calls: list[tuple] = []
+
+    def _fake_check_output(cmd, **kwargs):
+        calls.append(tuple(cmd))
+        # First invocation has the `--` path filter and returns empty
+        # (simulating shallow clone whose tip didn't touch lib/iris).
+        # Second invocation drops the filter and returns the HEAD date.
+        if "--" in cmd:
+            return ""
+        return "2026-05-07\n"
+
+    monkeypatch.setattr(subprocess, "check_output", _fake_check_output)
+    assert iris_version._git_iris_date() == "2026-05-07"
+    assert len(calls) == 2
+    assert "--" in calls[0]
+    assert "--" not in calls[1]
+
+
 def test_client_revision_date_is_cached(monkeypatch):
     """Resolver computes once per process; subsequent calls reuse the result."""
     monkeypatch.setattr(iris_version, "BUILD_DATE", "")

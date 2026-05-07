@@ -18,12 +18,11 @@ from iris._build_info import BUILD_DATE
 _CACHED: str | None = None
 
 
-def _git_iris_date() -> str:
-    iris_root = Path(__file__).resolve().parents[2]
+def _git_log_date(iris_root: Path, *path_filter: str) -> str:
     try:
-        # %cs is short committer date (YYYY-MM-DD); empty if path has no commits.
+        # %cs is short committer date (YYYY-MM-DD).
         out = subprocess.check_output(
-            ["git", "log", "-1", "--format=%cs", "--", iris_root.as_posix()],
+            ["git", "log", "-1", "--format=%cs", *path_filter],
             cwd=iris_root,
             text=True,
             stderr=subprocess.DEVNULL,
@@ -32,6 +31,14 @@ def _git_iris_date() -> str:
         return out
     except (subprocess.SubprocessError, OSError):
         return ""
+
+
+def _git_iris_date() -> str:
+    # Path-filtered first (precise iris date for full clones), unfiltered
+    # fallback (date of HEAD) for shallow CI clones where the tip commit
+    # may not have touched lib/iris and `git log -- path` returns empty.
+    iris_root = Path(__file__).resolve().parents[2]
+    return _git_log_date(iris_root, "--", iris_root.as_posix()) or _git_log_date(iris_root)
 
 
 def client_revision_date() -> str:
