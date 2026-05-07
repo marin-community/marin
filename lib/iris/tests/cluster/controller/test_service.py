@@ -357,6 +357,7 @@ def test_launch_job_rejects_empty_name(service, state):
         entrypoint=make_test_entrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
+        client_revision_date=date.today().isoformat(),
     )
 
     with pytest.raises(ConnectError) as exc_info:
@@ -392,6 +393,7 @@ def test_get_job_status_reports_has_children(service, state):
         entrypoint=job_pb2.RuntimeEntrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
+        client_revision_date=date.today().isoformat(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._store.transaction() as cur:
@@ -439,6 +441,7 @@ def test_submit_argv_roundtrips_through_get_job_status(service):
         entrypoint=make_test_entrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         submit_argv=["iris", "job", "run", "-e", "LOG_LEVEL", "info", "--", "python", "t.py"],
+        client_revision_date=date.today().isoformat(),
     )
     service.launch_job(launch_req, None)
 
@@ -463,6 +466,7 @@ def test_submit_argv_empty_when_omitted(service):
         name=job_name.to_wire(),
         entrypoint=make_test_entrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        client_revision_date=date.today().isoformat(),
     )
     service.launch_job(launch_req, None)
 
@@ -489,6 +493,7 @@ def test_get_job_status_redacts_sensitive_env_vars(service):
                 "NUM_WORKERS": "4",
             }
         ),
+        client_revision_date=date.today().isoformat(),
     )
     service.launch_job(launch_req, None)
 
@@ -935,6 +940,7 @@ def test_list_jobs_all_scope_includes_descendants(service, state):
         entrypoint=job_pb2.RuntimeEntrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
+        client_revision_date=date.today().isoformat(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._store.transaction() as cur:
@@ -960,6 +966,7 @@ def test_list_jobs_job_query_roots_and_children(service, state):
         entrypoint=job_pb2.RuntimeEntrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
+        client_revision_date=date.today().isoformat(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._store.transaction() as cur:
@@ -1201,6 +1208,7 @@ def test_launch_job_injects_device_constraints_from_tpu_resource(service, state)
         entrypoint=make_test_entrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
+        client_revision_date=date.today().isoformat(),
     )
     request.resources.device.CopyFrom(tpu_device("v5litepod-16"))
 
@@ -1227,6 +1235,7 @@ def test_launch_job_user_constraints_override_auto(service, state):
         entrypoint=make_test_entrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
+        client_revision_date=date.today().isoformat(),
     )
     request.resources.device.CopyFrom(tpu_device("v5litepod-16"))
     request.constraints.append(user_variant.to_proto())
@@ -1254,6 +1263,7 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
         entrypoint=make_test_entrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
+        client_revision_date=date.today().isoformat(),
     )
 
     service.launch_job(request, None)
@@ -1353,6 +1363,7 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
+        client_revision_date=date.today().isoformat(),
     )
     with state._store.transaction() as cur:
         state.submit_job(cur, job_id, request, Timestamp.now())
@@ -1473,6 +1484,7 @@ def test_launch_job_nested_with_stale_client_date_is_exempt(service):
         entrypoint=make_test_entrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
+        client_revision_date=date.today().isoformat(),
     )
     child_req.client_revision_date = "2000-01-01"
 

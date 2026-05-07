@@ -4,6 +4,8 @@
 """Tests for budget tracking (resource_value / compute_user_spend / interleave_by_user)
 and the admin API RPCs that expose them."""
 
+from datetime import date
+
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -177,6 +179,7 @@ def _launch_request(
         environment=job_pb2.EnvironmentConfig(),
         replicas=replicas,
         priority_band=band,
+        client_revision_date=date.today().isoformat(),
     )
     if include_resources:
         req.resources.CopyFrom(job_pb2.ResourceSpecProto(cpu_millicores=cpu_millicores, memory_bytes=memory_bytes))

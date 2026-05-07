@@ -7,6 +7,7 @@ import shutil
 import tempfile
 from contextlib import contextmanager
 from dataclasses import replace as _replace
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
@@ -278,6 +279,11 @@ def make_direct_job_request(
         environment=job_pb2.EnvironmentConfig(),
         replicas=replicas,
         task_image=task_image,
+        # Stamp today's date so the controller's client-freshness gate
+        # (service.py:_check_client_freshness) doesn't reject these test
+        # submissions once the 14-day window past FEATURE_INTRODUCTION_DATE
+        # closes. Tests that exercise the gate explicitly should override.
+        client_revision_date=date.today().isoformat(),
     )
 
 
@@ -507,6 +513,8 @@ def make_job_request(
         replicas=replicas,
         priority_band=priority_band,
         task_image=task_image,
+        # See make_direct_job_request for rationale.
+        client_revision_date=date.today().isoformat(),
     )
     if scheduling_timeout_seconds > 0:
         request.scheduling_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(scheduling_timeout_seconds)))

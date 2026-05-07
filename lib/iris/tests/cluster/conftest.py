@@ -169,6 +169,8 @@ class ServiceTestHarness:
         resources: job_pb2.ResourceSpecProto | None = None,
     ) -> JobName:
         """Submit a job via the RPC layer. Returns job_id."""
+        from datetime import date
+
         from tests.cluster.controller.conftest import make_test_entrypoint
 
         job_id = JobName.root(user, name)
@@ -179,6 +181,7 @@ class ServiceTestHarness:
             environment=job_pb2.EnvironmentConfig(),
             replicas=replicas,
             max_retries_failure=max_retries_failure,
+            client_revision_date=date.today().isoformat(),
         )
         self.service.launch_job(request, None)
         return job_id

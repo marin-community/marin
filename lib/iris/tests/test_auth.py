@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Auth tests for Iris controller with static token authentication."""
 
+from datetime import date
+
 import pytest
 from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
@@ -88,6 +90,7 @@ def test_static_auth_job_ownership():
             name="/user-a/auth-owned-job",
             entrypoint=entrypoint.to_proto(),
             resources=ResourceSpec(cpu=1, memory="1g").to_proto(),
+            client_revision_date=date.today().isoformat(),
         )
         resp = client_a.launch_job(launch_req)
         job_id = resp.job_id
