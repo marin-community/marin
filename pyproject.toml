@@ -20,7 +20,7 @@ dependencies = [
     "marin-zephyr",
     # top level deps. try to keep these small.
     "watchdog",
-    "marin-dupekit >= 0.1.0",
+    "marin-dupekit >= 0.1.1",
 ]
 
 [tool.uv]

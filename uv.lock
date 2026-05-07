@@ -5204,11 +5204,14 @@ test = [
 
 [[package]]
 name = "marin-dupekit"
-version = "0.1.0"
+version = "0.1.1"
 source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/98/eb/972b7efdcd53b8b5b7c2454bec63e25e8a99366b34c03289a35da22f2310/marin_dupekit-0.1.1.tar.gz", hash = "sha256:84b360333430854c2b4533f81f4b3c8388528ce6fadbb9a0036a3ae0d180ec5b", size = 72591, upload-time = "2026-05-07T17:22:58.759Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f3/b6/e19a2c0958e5de6d17fc1ec22835518a5e55f9c5f638a464bfc5763c64e6/marin_dupekit-0.1.0-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:ff7bc91f28da9c4859d59e7298a767ba5247cf0861379037fc6b09994c394d39", size = 4140634, upload-time = "2026-05-07T00:24:24.624Z" },
-    { url = "https://files.pythonhosted.org/packages/02/32/071b3ee4129f4242f334dcbe4be8e0918d74abb9c26206b9ea17d5f96f5c/marin_dupekit-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c4cc34c62a9dd9b045fa747a8798bda2e767c102f95ecb64bfa732ded34aa18e", size = 4520230, upload-time = "2026-05-07T00:24:22.672Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/dd/c1c5d82041010695c3cb041c65e6a4b8b96f5929ebd09a9c8f4a385077a5/marin_dupekit-0.1.1-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:0c1736c008ec315a7f81199027613ffbfb1edf57cc5ffc1013e50a3b117d8338", size = 4418556, upload-time = "2026-05-07T17:22:50.977Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/30/67600bd320709ffd47724e16f855441290b8ae734865f1b8722f15217617/marin_dupekit-0.1.1-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:c267eff627ea67891fc9c8feb6fb439e9f14449f36ce5784db0da3e35e74e036", size = 3981022, upload-time = "2026-05-07T17:22:53.222Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/e9/03799c7a5eb967e3bd962f466246b47dbaee31838b1b95a64b51aaeddf4e/marin_dupekit-0.1.1-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:d654fbbcc94072f9f8743db39a79e3c062937ea5c347196dd474dbf581bda180", size = 4140797, upload-time = "2026-05-07T17:22:55.047Z" },
+    { url = "https://files.pythonhosted.org/packages/2c/a1/103537135e37c81ef6ef6a4cbadb4aedcfeec3667716958ea0eef53f5e4e/marin_dupekit-0.1.1-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:060f7bdc6d43aba2cc8a0426bb54d0509a7da360ffd3275f02b84d28fcd7110a", size = 4520199, upload-time = "2026-05-07T17:22:56.98Z" },
 ]
 
 [[package]]
@@ -5800,7 +5803,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "marin", editable = "lib/marin" },
-    { name = "marin-dupekit", specifier = ">=0.1.0" },
+    { name = "marin-dupekit", specifier = ">=0.1.1" },
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
