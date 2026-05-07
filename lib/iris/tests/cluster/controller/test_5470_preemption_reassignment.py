@@ -10,7 +10,7 @@ processes are sent AFTER the transaction commits (async). The scheduling thread
 can run a tick between the decommit and the kills, see the freed capacity, and
 assign a second gang to workers that still have stale processes.
 
-The fix populates `_workers_pending_kill` inside the decommit transaction (before
+The fix populates the KillRegistry inside the decommit transaction (before
 commit) so the scheduling thread cannot observe freed capacity without also
 seeing the pending-kill marker.
 

@@ -234,7 +234,7 @@ class Assignment:
 
 
 @dataclass
-class _PendingKill:
+class PendingKill:
     """A single (task_id, attempt_id, worker_id) kill obligation.
 
     ``task_id`` is wire format. ``worker_id`` is None for direct-provider
@@ -261,11 +261,11 @@ class KillBuffer:
     floor and no registry state is mutated.
     """
 
-    items: list[_PendingKill] = field(default_factory=list)
+    items: list[PendingKill] = field(default_factory=list)
 
     def add(self, task_id: str, attempt_id: int, worker_id: WorkerId | None) -> None:
         self.items.append(
-            _PendingKill(
+            PendingKill(
                 task_id=task_id,
                 attempt_id=attempt_id,
                 worker_id=worker_id,
@@ -281,6 +281,69 @@ class KillBuffer:
 
     def __bool__(self) -> bool:
         return bool(self.items)
+
+
+class KillRegistry:
+    """In-memory record of (task_id, attempt_id) -> pending kill.
+
+    Each entry is a kill obligation produced by a controller transition. The
+    controller's kill-dispatcher thread drains undispatched entries, sends
+    StopTasks RPCs to the assigned worker, and marks them dispatched on success.
+    Entries are cleared by heartbeat-confirmed terminal task updates or by
+    worker removal.
+
+    Not persisted: on controller restart the Poll() reconcile re-discovers
+    orphans by comparing worker-reported tasks against controller DB.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._items: dict[tuple[str, int], PendingKill] = {}
+
+    def add_many(self, kb: KillBuffer) -> None:
+        """Merge a KillBuffer into the registry.
+
+        Existing records for the same (task_id, attempt_id) are overwritten so
+        a fresh entry resets the dispatched flag.
+        """
+        if not kb:
+            return
+        with self._lock:
+            for item in kb:
+                self._items[(item.task_id, item.attempt_id)] = item
+
+    def remove(self, task_id: str, attempt_id: int) -> None:
+        with self._lock:
+            self._items.pop((task_id, attempt_id), None)
+
+    def remove_for_worker(self, worker_id: WorkerId) -> None:
+        with self._lock:
+            stale = [key for key, item in self._items.items() if item.worker_id == worker_id]
+            for key in stale:
+                self._items.pop(key, None)
+
+    def undispatched(self) -> list[PendingKill]:
+        with self._lock:
+            return [item for item in self._items.values() if not item.dispatched]
+
+    def mark_dispatched(self, task_id: str, attempt_id: int) -> None:
+        with self._lock:
+            entry = self._items.get((task_id, attempt_id))
+            if entry is not None:
+                entry.dispatched = True
+
+    def workers_with_pending(self) -> set[WorkerId]:
+        """Workers that still have at least one pending kill.
+
+        Already-dispatched kills still count because the worker has not yet
+        confirmed the container stopped.
+        """
+        with self._lock:
+            return {item.worker_id for item in self._items.values() if item.worker_id is not None}
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._items)
 
 
 @dataclass(frozen=True)
@@ -507,7 +570,10 @@ def _kill_non_terminal_tasks(
             worker_id=decommit_worker,
             resources=decommit_resources,
         )
-        kb.add(task_id, row.current_attempt_id, worker_id)
+        # PENDING tasks have no running container; skip to avoid a None-worker
+        # entry that leaks in the registry (no heartbeat ever clears it).
+        if row.state != job_pb2.TASK_STATE_PENDING:
+            kb.add(task_id, row.current_attempt_id, worker_id)
 
 
 def _cascade_children(
@@ -1384,7 +1450,7 @@ class ControllerTransitions:
         coscheduled cascade, resource decommit, endpoint cleanup, and
         deduplicated job recompute.
 
-        Heartbeat-driven transitions clear any prior ``_PendingKill`` entry for
+        Heartbeat-driven transitions clear any prior ``PendingKill`` entry for
         the task whenever the worker reports it terminal, so the kill registry
         releases the scheduler-exclusion marker once the worker confirms the
         container actually stopped.
@@ -1833,6 +1899,10 @@ class ControllerTransitions:
         worker-removal transaction. Chunks commit between themselves so the
         SQLite writer is released and other RPCs (register, apply_heartbeats_batch,
         ...) can interleave instead of stalling behind a zone-wide failure.
+
+        Invariant: kb entries are merged only after their chunk's transaction
+        commits cleanly; registry cleanup for removed workers runs in the same
+        post-commit step.
         """
         if not failures:
             return WorkerFailureBatchResult()
@@ -1842,6 +1912,8 @@ class ControllerTransitions:
 
         for chunk_start in range(0, len(failures), chunk_size):
             chunk = failures[chunk_start : chunk_start + chunk_size]
+            chunk_kb = KillBuffer()
+            chunk_removed: list[tuple[WorkerId, str | None]] = []
             with self._store.transaction() as cur:
                 now_ms = Timestamp.now().epoch_ms()
                 for worker_id, worker_address, error in chunk:
@@ -1850,7 +1922,7 @@ class ControllerTransitions:
                         worker_id,
                         error,
                         now_ms=now_ms,
-                        kb=kb,
+                        kb=chunk_kb,
                     )
                     results.append(result)
                     log_event(
@@ -1861,16 +1933,17 @@ class ControllerTransitions:
                         error=error,
                     )
                     if result.worker_removed:
-                        removed_workers.append((worker_id, worker_address))
+                        chunk_removed.append((worker_id, worker_address))
+            # Chunk committed cleanly: merge its kills and evict stale registry
+            # entries for the now-gone workers.
+            kb.items.extend(chunk_kb.items)
+            removed_workers.extend(chunk_removed)
+            for worker_id, _ in chunk_removed:
+                self._store.workers.remove_from_attr_cache(worker_id)
+            if self._kill_registry is not None:
+                for worker_id, _ in chunk_removed:
+                    self._kill_registry.remove_for_worker(worker_id)
 
-        for worker_id, _ in removed_workers:
-            self._store.workers.remove_from_attr_cache(worker_id)
-        # When the worker disappears, drop any pending-kill records for it: the
-        # daemon is gone and there is no one to send StopTasks to. Done as a
-        # post-hoc registry update; the transaction already committed.
-        if self._kill_registry is not None:
-            for worker_id, _ in removed_workers:
-                self._kill_registry.remove_for_worker(worker_id)
         return WorkerFailureBatchResult(
             removed_workers=removed_workers,
             results=results,

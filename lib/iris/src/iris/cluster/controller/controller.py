@@ -110,10 +110,11 @@ from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
     KillBuffer,
+    KillRegistry,
+    PendingKill,
     ReservationClaim,
     SchedulingEvent,
     TaskUpdate,
-    _PendingKill,
     log_event,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
@@ -148,82 +149,6 @@ class SchedulingOutcome(enum.Enum):
     NO_PENDING_TASKS = "no_pending_tasks"
     NO_ASSIGNMENTS = "no_assignments"
     ASSIGNMENTS_MADE = "assignments_made"
-
-
-class KillRegistry:
-    """In-memory record of (task_id, attempt_id) -> worker pending kill.
-
-    Each entry is a kill obligation produced by a controller transition. The
-    kill-dispatcher thread drains undispatched entries, sends StopTasks RPCs
-    to the assigned worker, and marks them dispatched on success. Entries are
-    cleared by:
-
-    - heartbeat apply when the worker reports the task terminal (the worker
-      confirms the container actually stopped — the scheduler-exclusion
-      marker stays in place from RPC ack until that confirmation, closing
-      the #5470 race).
-    - worker failure when the worker is removed from the cluster (no daemon
-      remains to receive the RPC).
-
-    Not persisted: on controller restart the Poll() reconcile re-discovers
-    orphans by comparing worker-reported tasks against controller DB.
-
-    ``KillBuffer`` and ``_PendingKill`` live in ``transitions.py`` to avoid a
-    transitions -> controller import cycle; conceptually they are the
-    per-transaction and per-entry siblings of this class.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        # Keyed by (task_id_wire, attempt_id) -> _PendingKill
-        self._items: dict[tuple[str, int], _PendingKill] = {}
-
-    def add_many(self, kb: KillBuffer) -> None:
-        """Merge a KillBuffer into the registry.
-
-        Existing records for the same (task_id, attempt_id) are overwritten so
-        a fresh entry resets the dispatched flag (e.g. the controller observed
-        a kill twice from different transitions).
-        """
-        if not kb:
-            return
-        with self._lock:
-            for item in kb:
-                self._items[(item.task_id, item.attempt_id)] = item
-
-    def remove(self, task_id: str, attempt_id: int) -> None:
-        with self._lock:
-            self._items.pop((task_id, attempt_id), None)
-
-    def remove_for_worker(self, worker_id: WorkerId) -> None:
-        with self._lock:
-            stale = [k for k, v in self._items.items() if v.worker_id == worker_id]
-            for k in stale:
-                self._items.pop(k, None)
-
-    def undispatched(self) -> list[_PendingKill]:
-        with self._lock:
-            return [item for item in self._items.values() if not item.dispatched]
-
-    def mark_dispatched(self, task_id: str, attempt_id: int) -> None:
-        with self._lock:
-            entry = self._items.get((task_id, attempt_id))
-            if entry is not None:
-                entry.dispatched = True
-
-    def workers_with_pending(self) -> set[WorkerId]:
-        """Workers that still have at least one pending kill (dispatched or not).
-
-        The scheduler excludes these workers from new assignments. We include
-        already-dispatched kills because the worker hasn't yet confirmed the
-        container stopped — see #5470 for the race that motivated the marker.
-        """
-        with self._lock:
-            return {item.worker_id for item in self._items.values() if item.worker_id is not None}
-
-    def __len__(self) -> int:
-        with self._lock:
-            return len(self._items)
 
 
 def _drain_queue(q: queue_mod.Queue, timeout: float = 1.0) -> list:
@@ -2438,15 +2363,16 @@ class Controller:
         pending = self._kill_registry.undispatched()
         if not pending:
             return
-        # Direct-provider tasks (worker_id is None) shouldn't reach here on
-        # the non-K8s path; defensively skip them.
+        # K8s tasks (worker_id=None) are routed through buffer_direct_kill in
+        # register_kills and never enter this registry; skip any that somehow
+        # sneak through rather than asserting, to be safe under future changes.
         with_workers = [item for item in pending if item.worker_id is not None]
         if not with_workers:
             return
         worker_ids = {item.worker_id for item in with_workers if item.worker_id is not None}
         workers = _workers_by_id(self._db, worker_ids)
 
-        by_worker: dict[tuple[WorkerId, str], list[_PendingKill]] = {}
+        by_worker: dict[tuple[WorkerId, str], list[PendingKill]] = {}
         for item in with_workers:
             assert item.worker_id is not None
             worker = workers.get(item.worker_id)
@@ -2596,26 +2522,28 @@ class Controller:
         for wid in worker_ids:
             log_event("worker_failing", wid, trigger=reason)
         kb = KillBuffer()
-        failure_result = self._transitions.fail_workers_batch(worker_ids, reason=reason, kb=kb)
         removed: list[WorkerId] = []
-        for wid, addr in failure_result.removed_workers:
-            self._provider.on_worker_failed(wid, addr)
-            removed.append(wid)
-        if self._autoscaler:
-            sibling_worker_ids = self._autoscaler.terminate_slices_for_workers(
-                [str(wid) for wid, _ in failure_result.removed_workers]
-            )
-            for wid in sibling_worker_ids:
-                log_event("worker_failing", str(wid), trigger=sibling_reason)
-            sibling_failures = self._transitions.fail_workers_batch(
-                sibling_worker_ids,
-                reason=sibling_reason,
-                kb=kb,
-            )
-            for wid, addr in sibling_failures.removed_workers:
+        try:
+            failure_result = self._transitions.fail_workers_batch(worker_ids, reason=reason, kb=kb)
+            for wid, addr in failure_result.removed_workers:
                 self._provider.on_worker_failed(wid, addr)
                 removed.append(wid)
-        self.register_kills(kb)
+            if self._autoscaler:
+                sibling_worker_ids = self._autoscaler.terminate_slices_for_workers(
+                    [str(wid) for wid, _ in failure_result.removed_workers]
+                )
+                for wid in sibling_worker_ids:
+                    log_event("worker_failing", str(wid), trigger=sibling_reason)
+                sibling_failures = self._transitions.fail_workers_batch(
+                    sibling_worker_ids,
+                    reason=sibling_reason,
+                    kb=kb,
+                )
+                for wid, addr in sibling_failures.removed_workers:
+                    self._provider.on_worker_failed(wid, addr)
+                    removed.append(wid)
+        finally:
+            self.register_kills(kb)
         return removed
 
     def _run_autoscaler_once(self) -> None:
