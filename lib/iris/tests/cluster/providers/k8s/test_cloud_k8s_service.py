@@ -1,16 +1,70 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for CloudK8sService helpers and K8sResource enum path construction.
-
-These test the path construction methods on the K8sResource enum, which
-replaced the old _api_path_for_manifest and _api_path_for_resource functions.
-"""
+"""Tests for CloudK8sService helpers and K8sResource enum path construction."""
 
 from __future__ import annotations
 
 import pytest
+from iris.cluster.providers.k8s import service as k8s_service
 from iris.cluster.providers.k8s.types import K8sResource
+
+
+class _FakeApiClient:
+    def __init__(self) -> None:
+        self.request = "normal-request"
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+    def __enter__(self) -> _FakeApiClient:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+
+class _FakeCoreV1Api:
+    def __init__(self, api_client: _FakeApiClient) -> None:
+        self.api_client = api_client
+
+    def connect_get_namespaced_pod_exec(self, **kwargs: object) -> str:
+        raise AssertionError("fake stream should own exec method invocation")
+
+
+def test_exec_stream_does_not_mutate_shared_api_client(monkeypatch: pytest.MonkeyPatch):
+    assert k8s_service.kubernetes is not None
+    kubernetes = k8s_service.kubernetes
+
+    monkeypatch.setattr(k8s_service, "DynamicClient", lambda api_client: object())
+    monkeypatch.setattr(kubernetes.client, "ApiClient", _FakeApiClient)
+    monkeypatch.setattr(kubernetes.client, "CoreV1Api", _FakeCoreV1Api)
+    monkeypatch.setattr(kubernetes.client, "CustomObjectsApi", lambda api_client: object())
+    monkeypatch.setattr(kubernetes.config, "load_incluster_config", lambda: None)
+
+    svc = k8s_service.CloudK8sService(namespace="iris")
+    shared_client = svc._api_client
+    shared_request = shared_client.request
+    stream_client: _FakeApiClient | None = None
+
+    def stream(api_method, **kwargs: object) -> str:
+        nonlocal stream_client
+        core_v1 = api_method.__self__
+        stream_client = core_v1.api_client
+        stream_client.request = "websocket-request"
+        return "stdout"
+
+    monkeypatch.setattr(kubernetes.stream, "stream", stream)
+
+    result = svc.exec("pod-1", ["true"], container="task", timeout=5)
+
+    assert result.returncode == 0
+    assert result.stdout == "stdout"
+    assert stream_client is not None
+    assert stream_client is not shared_client
+    assert shared_client.request == shared_request
+    assert stream_client.closed
 
 
 # Test item_path construction for namespaced resources
