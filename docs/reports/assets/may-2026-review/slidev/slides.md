@@ -52,18 +52,20 @@ layout: default
 
 # ![](/icons/flag.svg) Since Late March
 
+- We got the compute grant!
+
+## Infra
 - Ray was removed from Marin as an execution path.
 - Iris got budgets, priorities, preemption, better scheduler hot paths, and a real status/debug surface.
 - CoreWeave moved from bring-up into recurring smoke/canary coverage.
 - Datakit and Zephyr now have a clearer download -> normalize -> dedup -> consolidate -> tokenize path.
-- Evals grew from a few headline suites into a broader diagnostic/perplexity-gap matrix.
-- Delphi moved from scaling-ladder training toward downstream evals and blog figures.
 
-<Box>
+## Modeling
 
-TODO: Convert this into 3-4 measured claims once tomorrow's run/job status is known.
-
-</Box>
+- MoE recipe continued to improve. 1e23 MoE still running
+- Delphi release+blog post almost done!
+- Lots more training data source ingested, including new code-adjacent synthetic data.
+- Lots of new perplexity evals to identify gaps in our existing coverage.
 
 ---
 layout: section
@@ -193,7 +195,7 @@ layout: default
 
 </div>
 
-- The recurring weak families are code and messy web artifacts, structured text, code-adjacent metadata, tables, multilingual prose, and scientific notation.
+- The recurring weak families are code, messy web artifacts, structured text, code-adjacent metadata, tables, multilingual prose, and scientific notation.
 - The dashboard is live at [marin.community/analysis/perplexity-gap](https://marin.community/analysis/perplexity-gap/).
 
 ---
@@ -219,6 +221,41 @@ layout: split-left-green
 - Current best is **0.9889** BPB at exact **3e18**: `isoflop-k5e256-d768-3e+18`, finished **May 2**.
 - That is below Delphi **2e19** and within **0.0169** BPB of Delphi **3e19**. March 24 MoE best was **1.0407**.
 
+---
+layout: split-left-green
+---
+
+# ![](/icons/chart.svg) 1.7e18 MoE Progress Over Time
+
+<img src="/charts/moe-progress-frontier/dial_moe_1p7e18_progress.png" alt="1.7e18-scale dial_moe finished run progress over time" style="width:620px;"/>
+
+::right::
+
+<div style="font-size: 0.84em; line-height: 1.14">
+
+- **217** finished `dial_moe` runs in the **1e18-2e18** FLOP band; **187** are in the **1.65e18-1.75e18** focus band.
+- Orange is cumulative best within the 1.7e18 focus band; gray points show the broader 1e18-2e18 context.
+- Best focus run is **1.0151** BPB: `may-arch-lr0.8x-d768-1.70e+18`, finished **May 1**.
+- The 1.7e18 best beats the March 3e18 MoE best by **0.0256** BPB at about **57%** of the compute.
+- Current 3e18 best is still another **0.0262** BPB lower, so this separates recipe progress from scale.
+
+</div>
+
+---
+layout: default
+---
+
+# April MoE improvements
+
+From 60+ experiments, these are the ones that stuck.
+
+
+* [Expert Sparsity](https://github.com/marin-community/marin/issues/5387).  64 -> 256 experts. 17% speedup at 2e18, and 25% speedup at 9e18.
+* [Partial RoPE](https://github.com/marin-community/marin/issues/4946). Applying RoPE to only half of the head dims. 9% at 2e17, 12% at 2e18, 4% at 9e18, and 6% at 3e19.
+* [Partial Key Offset.](https://github.com/marin-community/marin/issues/4976) Shifting half of the head dims for each key by one position on the long windows gives a 19-22% speedup across all 4 compute scales, building on partial RoPE.
+* [Embed to AdamH](https://github.com/marin-community/marin/issues/5184). The main benefit of moving the embed from AdamW to AdamH is to give cleaner parameter and gradient norm scaling over training.
+
+
 
 ---
 layout: default
@@ -235,11 +272,24 @@ layout: default
 layout: default
 ---
 
-# MoE 1e23 and the Death Throes of Ray
+# MoE 1e23  Progress
 
 <div style="display: flex; align-items: center; justify-content: center; height: 420px;">
   <img src="/charts/delphi-1e23-progress/cross_entropy_loss_crop.png" alt="1e23 MoE train cross entropy loss over time" style="max-width: 92%; max-height: 410px; object-fit: contain;"/>
 </div>
+
+
+---
+layout: default
+---
+
+# The Death Throes of Ray
+
+- Node instability (I think caused by Ray, but may have been GCP) led to a run crash that we had a hard time recovering from.
+- Interaction of a bug in our logging and wandb's quirky resume behavior meant we couldn't reuse run ids -> auto-recovery didn't work.
+- Also had some issues where we had checkpoint corruption due to a botched launch and checkpointing policy.
+- We need a "hero run" skill/playbook to mitigate.
+
 
 ---
 layout: split-left-green
@@ -262,19 +312,6 @@ TODO: Replace March figure with final blog figure and summarize the 1e23 result,
 
 </Box>
 
----
-layout: default
----
-
-# ![](/icons/flag.svg) Decisions For Tomorrow
-
-| Question | Evidence Needed | Owner |
-|---|---|---|
-| Is Iris stable enough to keep Ray fully retired? | job failure rate, babysitting load, stuck-job incidents | TODO |
-| Is CoreWeave ready for model work beyond smoke tests? | multi-host canary status, NCCL/JAX failures, throughput | TODO |
-| Which data pipeline improvements changed throughput or cost? | Zephyr/datakit stage timings, dedup resume data, ferry history | TODO |
-| Which eval slices changed a training/data choice? | perplexity-gap deltas by source, raw slice outliers | TODO |
-| What is the Delphi headline? | final 1e23 loss/evals, blog figure, forecast error | TODO |
 
 ---
 layout: default
@@ -282,8 +319,15 @@ layout: default
 
 # ![](/icons/rocket.svg) What Should Be True By Next Review
 
-- TODO: Iris reliability target, with a measured incident/babysitting threshold.
-- TODO: CoreWeave readiness target, with one named multi-host workload.
-- TODO: Data target, with tokens staged and a cost/throughput constraint.
-- TODO: Eval target, with a published diagnostic matrix and one action taken from it.
-- TODO: Training target, with the next MoE/Delphi milestone and the evidence needed to stop debating it.
+<div style="font-size: 0.75em; line-height: 1.16">
+
+| June-review claim | Estimate | May milestone read |
+| --- | ---: | --- |
+| June model plan is locked: scaling recipe plus pre/mid-training data mix. | 65% | `#5358` and `#5359` are P1s with clear defs of done; final mixture may slip toward mid-June. |
+| 1e23 MoE has a decision readout: final-ish loss, stability story, and forecast error. | 75% | `#4697` is already the hero run; next review should be about what it taught us. |
+| Data pipeline can feed the run: ~20T fuzzy-deduped corpus, decontam choice, quality buckets / metrics. | 55% | `#5360` is the main dependency; dedup and contamination are P0, quality/domain tagging are riskier. |
+| CoreWeave can train the June 16B-A2B MoE for ~1k steps on 2+ H100 hosts. | 50% | `#5356` and `#5357` are P1, but kernel perf and Nemotron-level MFU are still the stretch. |
+| Evals close the loop into data: PPL gaps correlate with downstream results, selected evals run preemption-resilient on Iris. | 60% | `#5367` is scoped; `#5368` adds inference-service integration risk. |
+| Infra tune-up lands daily ergonomics: unified queries, proxy, and GitHub -> Iris links. | 40% | `#5369` is explicitly P2/catch-all, so expect partial progress unless it unblocks the above. |
+
+</div>

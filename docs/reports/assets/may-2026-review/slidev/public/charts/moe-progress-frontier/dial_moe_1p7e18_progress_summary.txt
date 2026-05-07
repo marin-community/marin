@@ -1,0 +1,29 @@
+entity_project: marin-community/dial_moe
+metric: eval/paloma/c4_en/bpb
+compute_band_flops: 1.000000e+18..2.000000e+18
+focus_band_flops: 1.650000e+18..1.750000e+18
+source_csv: dial_moe_runs.csv
+generated_at_utc: 2026-05-06T23:50:11.500Z
+runs_in_band: 217
+runs_in_focus_band: 187
+first_focus_created_at: 2026-04-14T02:51:55Z
+last_focus_created_at: 2026-05-06T00:19:28Z
+focus_median_bpb: 1.038491
+best_bpb: 1.015061
+best_run_name: may-arch-lr0.8x-d768-1.70e+18
+best_group: may-arch
+best_created_at: 2026-05-01T21:26:39Z
+best_compute_flops: 1.700000e+18
+march_3e18_reference_bpb: 1.040673
+current_3e18_best_bpb: 0.988889
+delphi_3e18_reference_bpb: 1.087110
+improvement_vs_march_3e18_bpb: 0.025612
+gap_vs_current_3e18_best_bpb: 0.026172
+frontier_updates:
+  2026-04-14T02:51:55Z  1.038477  1.700000e+18  moe-v16-compute-opt-d768-1.70e+18  compute-optimal-sweep
+  2026-04-15T04:33:12Z  1.029790  1.700000e+18  moe-e128-d768-1.70e+18  e128-ablation
+  2026-04-21T15:34:35Z  1.023266  1.700000e+18  combined-best-d768-1.70e+18  combined-best
+  2026-04-30T00:53:53Z  1.020312  1.700000e+18  k6e256s5-d768-1.70e+18  k6e256s5
+  2026-05-01T21:26:30Z  1.020297  1.700000e+18  may-arch-lr0.6x-d768-1.70e+18  may-arch
+  2026-05-01T21:26:33Z  1.015455  1.700000e+18  may-arch-lr1.0x-d768-1.70e+18  may-arch
+  2026-05-01T21:26:39Z  1.015061  1.700000e+18  may-arch-lr0.8x-d768-1.70e+18  may-arch
