@@ -25,6 +25,7 @@ from rigging.timing import Duration, Timestamp
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.log_store_helpers import task_log_key
 from iris.cluster.runtime.types import (
     ContainerConfig,
@@ -698,6 +699,13 @@ class TaskAttempt:
             self._controller_address,
         )
         env = dict(iris_env)
+
+        # Surface the worker's region so in-task code (e.g. the legacy Marin
+        # executor) can query where it is running. We no longer auto-inherit
+        # this onto child jobs — see #5279 / #5541.
+        region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
+        if region_attr and region_attr.string_value:
+            env["IRIS_WORKER_REGION"] = region_attr.string_value
 
         env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
