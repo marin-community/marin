@@ -1339,10 +1339,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
 
 
 def test_get_scheduler_state_with_running_task(controller_service, state):
-    """get_scheduler_state must not crash when there are running tasks.
-
-    Regression: JobName has no `.job` attribute — the code must use `.parent`.
-    """
+    """get_scheduler_state aggregates a running task into a (band, user, worker, job) bucket."""
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     # Submit a job and move a task to RUNNING
@@ -1382,8 +1379,12 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
             None,
         )
         assert resp.total_running == 1
-        assert resp.running_tasks[0].job_id == job_id.to_wire()
-        assert resp.running_tasks[0].user_id == "alice"
+        assert len(resp.running_buckets) == 1
+        bucket = resp.running_buckets[0]
+        assert bucket.job_id == job_id.to_wire()
+        assert bucket.user_id == "alice"
+        assert bucket.worker_id == "w1"
+        assert bucket.count == 1
         # alice has no explicit user_budgets row but has an active task — the
         # scheduler state must report her spend using UserBudgetDefaults so the
         # dashboard renders Spent/Limit/Utilization instead of '-'.

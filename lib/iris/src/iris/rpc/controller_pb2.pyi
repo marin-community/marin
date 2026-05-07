@@ -650,32 +650,30 @@ class Controller(_message.Message):
     class GetSchedulerStateRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
-    class SchedulerTaskEntry(_message.Message):
-        __slots__ = ("task_id", "job_id", "user_id", "original_band", "effective_band", "queue_position", "resource_value")
-        TASK_ID_FIELD_NUMBER: _ClassVar[int]
-        JOB_ID_FIELD_NUMBER: _ClassVar[int]
-        USER_ID_FIELD_NUMBER: _ClassVar[int]
-        ORIGINAL_BAND_FIELD_NUMBER: _ClassVar[int]
-        EFFECTIVE_BAND_FIELD_NUMBER: _ClassVar[int]
-        QUEUE_POSITION_FIELD_NUMBER: _ClassVar[int]
-        RESOURCE_VALUE_FIELD_NUMBER: _ClassVar[int]
-        task_id: str
-        job_id: str
-        user_id: str
-        original_band: _job_pb2.PriorityBand
-        effective_band: _job_pb2.PriorityBand
-        queue_position: int
-        resource_value: int
-        def __init__(self, task_id: _Optional[str] = ..., job_id: _Optional[str] = ..., user_id: _Optional[str] = ..., original_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., effective_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., queue_position: _Optional[int] = ..., resource_value: _Optional[int] = ...) -> None: ...
-    class SchedulerBandGroup(_message.Message):
-        __slots__ = ("band", "tasks", "total_in_band")
+    class PendingTaskBucket(_message.Message):
+        __slots__ = ("band", "user_id", "job_id", "count")
         BAND_FIELD_NUMBER: _ClassVar[int]
-        TASKS_FIELD_NUMBER: _ClassVar[int]
-        TOTAL_IN_BAND_FIELD_NUMBER: _ClassVar[int]
+        USER_ID_FIELD_NUMBER: _ClassVar[int]
+        JOB_ID_FIELD_NUMBER: _ClassVar[int]
+        COUNT_FIELD_NUMBER: _ClassVar[int]
         band: _job_pb2.PriorityBand
-        tasks: _containers.RepeatedCompositeFieldContainer[Controller.SchedulerTaskEntry]
-        total_in_band: int
-        def __init__(self, band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., tasks: _Optional[_Iterable[_Union[Controller.SchedulerTaskEntry, _Mapping]]] = ..., total_in_band: _Optional[int] = ...) -> None: ...
+        user_id: str
+        job_id: str
+        count: int
+        def __init__(self, band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., user_id: _Optional[str] = ..., job_id: _Optional[str] = ..., count: _Optional[int] = ...) -> None: ...
+    class RunningTaskBucket(_message.Message):
+        __slots__ = ("band", "user_id", "worker_id", "job_id", "count")
+        BAND_FIELD_NUMBER: _ClassVar[int]
+        USER_ID_FIELD_NUMBER: _ClassVar[int]
+        WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+        JOB_ID_FIELD_NUMBER: _ClassVar[int]
+        COUNT_FIELD_NUMBER: _ClassVar[int]
+        band: _job_pb2.PriorityBand
+        user_id: str
+        worker_id: str
+        job_id: str
+        count: int
+        def __init__(self, band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., user_id: _Optional[str] = ..., worker_id: _Optional[str] = ..., job_id: _Optional[str] = ..., count: _Optional[int] = ...) -> None: ...
     class SchedulerUserBudget(_message.Message):
         __slots__ = ("user_id", "budget_limit", "budget_spent", "max_band", "effective_band", "utilization_percent")
         USER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -691,38 +689,17 @@ class Controller(_message.Message):
         effective_band: _job_pb2.PriorityBand
         utilization_percent: float
         def __init__(self, user_id: _Optional[str] = ..., budget_limit: _Optional[int] = ..., budget_spent: _Optional[int] = ..., max_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., effective_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., utilization_percent: _Optional[float] = ...) -> None: ...
-    class SchedulerRunningTask(_message.Message):
-        __slots__ = ("task_id", "job_id", "user_id", "worker_id", "effective_band", "resource_value", "preemptible", "preemptible_by", "is_coscheduled")
-        TASK_ID_FIELD_NUMBER: _ClassVar[int]
-        JOB_ID_FIELD_NUMBER: _ClassVar[int]
-        USER_ID_FIELD_NUMBER: _ClassVar[int]
-        WORKER_ID_FIELD_NUMBER: _ClassVar[int]
-        EFFECTIVE_BAND_FIELD_NUMBER: _ClassVar[int]
-        RESOURCE_VALUE_FIELD_NUMBER: _ClassVar[int]
-        PREEMPTIBLE_FIELD_NUMBER: _ClassVar[int]
-        PREEMPTIBLE_BY_FIELD_NUMBER: _ClassVar[int]
-        IS_COSCHEDULED_FIELD_NUMBER: _ClassVar[int]
-        task_id: str
-        job_id: str
-        user_id: str
-        worker_id: str
-        effective_band: _job_pb2.PriorityBand
-        resource_value: int
-        preemptible: bool
-        preemptible_by: _containers.RepeatedScalarFieldContainer[_job_pb2.PriorityBand]
-        is_coscheduled: bool
-        def __init__(self, task_id: _Optional[str] = ..., job_id: _Optional[str] = ..., user_id: _Optional[str] = ..., worker_id: _Optional[str] = ..., effective_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., resource_value: _Optional[int] = ..., preemptible: _Optional[bool] = ..., preemptible_by: _Optional[_Iterable[_Union[_job_pb2.PriorityBand, str]]] = ..., is_coscheduled: _Optional[bool] = ...) -> None: ...
     class GetSchedulerStateResponse(_message.Message):
-        __slots__ = ("pending_queue", "user_budgets", "running_tasks", "total_pending", "total_running")
-        PENDING_QUEUE_FIELD_NUMBER: _ClassVar[int]
+        __slots__ = ("user_budgets", "total_pending", "total_running", "pending_buckets", "running_buckets")
         USER_BUDGETS_FIELD_NUMBER: _ClassVar[int]
-        RUNNING_TASKS_FIELD_NUMBER: _ClassVar[int]
         TOTAL_PENDING_FIELD_NUMBER: _ClassVar[int]
         TOTAL_RUNNING_FIELD_NUMBER: _ClassVar[int]
-        pending_queue: _containers.RepeatedCompositeFieldContainer[Controller.SchedulerBandGroup]
+        PENDING_BUCKETS_FIELD_NUMBER: _ClassVar[int]
+        RUNNING_BUCKETS_FIELD_NUMBER: _ClassVar[int]
         user_budgets: _containers.RepeatedCompositeFieldContainer[Controller.SchedulerUserBudget]
-        running_tasks: _containers.RepeatedCompositeFieldContainer[Controller.SchedulerRunningTask]
         total_pending: int
         total_running: int
-        def __init__(self, pending_queue: _Optional[_Iterable[_Union[Controller.SchedulerBandGroup, _Mapping]]] = ..., user_budgets: _Optional[_Iterable[_Union[Controller.SchedulerUserBudget, _Mapping]]] = ..., running_tasks: _Optional[_Iterable[_Union[Controller.SchedulerRunningTask, _Mapping]]] = ..., total_pending: _Optional[int] = ..., total_running: _Optional[int] = ...) -> None: ...
+        pending_buckets: _containers.RepeatedCompositeFieldContainer[Controller.PendingTaskBucket]
+        running_buckets: _containers.RepeatedCompositeFieldContainer[Controller.RunningTaskBucket]
+        def __init__(self, user_budgets: _Optional[_Iterable[_Union[Controller.SchedulerUserBudget, _Mapping]]] = ..., total_pending: _Optional[int] = ..., total_running: _Optional[int] = ..., pending_buckets: _Optional[_Iterable[_Union[Controller.PendingTaskBucket, _Mapping]]] = ..., running_buckets: _Optional[_Iterable[_Union[Controller.RunningTaskBucket, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...

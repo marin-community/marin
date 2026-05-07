@@ -33,7 +33,8 @@ import logging
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from threading import RLock
+from threading import Lock, RLock
+from typing import Generic, TypeVar
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.codec import resource_spec_from_scalars
@@ -70,6 +71,61 @@ logger = logging.getLogger(__name__)
 # direction. A read-only ``Protocol`` would be stricter; not yet worth the
 # plumbing.)
 Tx = TransactionCursor | QuerySnapshot
+
+
+# =============================================================================
+# SnapshotView — TTL-cached, singleflight-rebuilt dataset
+# =============================================================================
+
+
+T = TypeVar("T")
+
+
+class SnapshotView(Generic[T]):
+    """Periodically-refreshed in-memory view of a dataset.
+
+    The dashboard polls a small set of list/aggregate RPCs continuously
+    (ListJobs, ListWorkers, GetSchedulerState). A per-request DB fan-out on
+    these is wasted work — the data they read is already a few seconds stale
+    by the time the browser renders it. ``SnapshotView`` lets callers expose
+    "the latest known set of jobs / workers / etc." as one Python object that
+    handlers filter, sort, and paginate locally.
+
+    Semantics:
+
+    * ``read()`` returns the cached value if it was built within ``ttl_s``,
+      otherwise rebuilds and returns the new one.
+    * Reads are serialized on a single lock. Concurrent callers that arrive
+      during a rebuild wait on the lock and observe the freshly-built value;
+      ``build`` runs at most once per TTL window even under contention.
+    * If ``build`` raises, the exception propagates to the caller and the
+      cached value is left unchanged. The next reader retries.
+
+    Write-driven invalidation is intentionally not built in. Callers that need
+    read-your-writes consistency should not use snapshots — they should issue
+    a live read.
+    """
+
+    def __init__(self, name: str, ttl_s: float, build: Callable[[], T]) -> None:
+        self._name = name
+        self._ttl_s = ttl_s
+        self._build = build
+        self._lock = Lock()
+        self._value: T | None = None
+        self._built_at: float = 0.0
+
+    def read(self) -> T:
+        """Return the latest snapshot, rebuilding if older than TTL."""
+        with self._lock:
+            if self._value is None or (time.monotonic() - self._built_at) >= self._ttl_s:
+                self._value = self._build()
+                self._built_at = time.monotonic()
+            return self._value
+
+    def invalidate(self) -> None:
+        """Force the next ``read()`` to rebuild."""
+        with self._lock:
+            self._built_at = 0.0
 
 
 # =============================================================================

@@ -493,20 +493,21 @@ export interface ListApiKeysResponse {
 
 // -- Scheduler State --
 
-export interface SchedulerTaskEntry {
-  taskId: string
-  jobId: string
+/** Aggregated pending-task count keyed by (band, user, job). */
+export interface PendingTaskBucket {
+  band: string
   userId: string
-  originalBand: string
-  effectiveBand: string
-  queuePosition: number
-  resourceValue: number
+  jobId: string
+  count: number
 }
 
-export interface SchedulerBandGroup {
+/** Aggregated running-task count keyed by (band, user, worker, job). */
+export interface RunningTaskBucket {
   band: string
-  tasks: SchedulerTaskEntry[]
-  totalInBand: number
+  userId: string
+  workerId: string
+  jobId: string
+  count: number
 }
 
 export interface SchedulerUserBudget {
@@ -518,24 +519,12 @@ export interface SchedulerUserBudget {
   utilizationPercent: number
 }
 
-export interface SchedulerRunningTask {
-  taskId: string
-  jobId: string
-  userId: string
-  workerId: string
-  effectiveBand: string
-  resourceValue: number
-  preemptible: boolean
-  preemptibleBy: string[]
-  isCoscheduled: boolean
-}
-
 export interface GetSchedulerStateResponse {
-  pendingQueue: SchedulerBandGroup[]
   userBudgets: SchedulerUserBudget[]
-  runningTasks: SchedulerRunningTask[]
   totalPending: number
   totalRunning: number
+  pendingBuckets: PendingTaskBucket[]
+  runningBuckets: RunningTaskBucket[]
 }
 
 // -- RPC Statistics (iris.stats.StatsService) --
