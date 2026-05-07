@@ -106,26 +106,43 @@ class SnapshotView(Generic[T]):
     a live read.
     """
 
-    def __init__(self, name: str, ttl_s: float, build: Callable[[], T]) -> None:
+    def __init__(
+        self,
+        name: str,
+        ttl_s: float,
+        build: Callable[[], T],
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._name = name
         self._ttl_s = ttl_s
         self._build = build
+        # ``clock`` is injectable so tests can drive TTL expiry deterministically
+        # without ``time.sleep``. Production uses ``time.monotonic``.
+        self._clock = clock
         self._lock = Lock()
         self._value: T | None = None
         self._built_at: float = 0.0
+        self._force_rebuild: bool = True
 
     def read(self) -> T:
         """Return the latest snapshot, rebuilding if older than TTL."""
         with self._lock:
-            if self._value is None or (time.monotonic() - self._built_at) >= self._ttl_s:
+            if self._force_rebuild or (self._clock() - self._built_at) >= self._ttl_s:
                 self._value = self._build()
-                self._built_at = time.monotonic()
+                self._built_at = self._clock()
+                self._force_rebuild = False
+            assert self._value is not None
             return self._value
 
     def invalidate(self) -> None:
-        """Force the next ``read()`` to rebuild."""
+        """Force the next ``read()`` to rebuild.
+
+        Uses an explicit flag rather than backdating ``_built_at`` so the
+        contract holds regardless of the clock's origin (e.g. a freshly-booted
+        host whose ``monotonic()`` is still less than ``ttl_s``).
+        """
         with self._lock:
-            self._built_at = 0.0
+            self._force_rebuild = True
 
 
 # =============================================================================
