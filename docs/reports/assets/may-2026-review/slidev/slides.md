@@ -81,6 +81,8 @@ layout: default
 
 # ![](/icons/servers.svg) Iris Replaced Ray
 
+TODO: russell
+
 - `#5138` removed Ray from Marin, with related cleanup in `#5132`, `#5131`, `#5089`, `#5087`, `#5076`, `#5031`, and `#5028`.
 - Iris now carries user-facing scheduling concepts: budgets and priorities (`#4096`, `#5081`), preemptible jobs (`#5083`), manual slices (`#5078`), same-variant preemption (`#5240`), and routing docs (`#5418`, `#5426`).
 - Scheduler and API hot paths were tightened: lightweight job-state polling (`#4209`), raw SQL / denormalized scheduling rows (`#4181`, `#4264`), ListJobs/ListWorkers pagination and filtering (`#4558`, `#4703`, `#5025`, `#5384`, `#5454`), and cached resource scalars in `can_fit` (`#5412`).
@@ -91,6 +93,8 @@ layout: default
 ---
 
 # ![](/icons/gpu.svg) CoreWeave / GPU Path
+
+TODO: russell
 
 - CoreWeave CI and canaries continued after the March rollout: Iris PR workflow (`#4174`), canary routing and timeouts (`#5112`, `#5125`, `#5429`, `#5463`, `#5479`), and sharp-edge docs (`#5431`).
 - New CW cluster wiring landed for RNO2A / USW09B plus `cwobject` S3 paths (`#5420`).
@@ -108,6 +112,8 @@ layout: default
 ---
 
 # ![](/icons/chart.svg) Finelog and Observability
+
+TODO: russell
 
 - Iris log delivery moved from heartbeat-based logging to a push LogService (`#4274`), then into `lib/finelog` (`#5212`).
 - Storage and query behavior improved through stable segments, DuckDB/Parquet compaction, zstd batches, a leveled compactor, catalog-driven copy workers, namespace stats, and dashboard plumbing (`#4518`, `#4881`, `#5290`, `#5441`, `#5457`, `#5459`, `#5456`).
@@ -127,10 +133,24 @@ layout: default
 
 # ![](/icons/big-data.svg) Datakit and Zephyr
 
+TODO: russell
+
 - `datakit` was bootstrapped for consolidated downloads (`#4142`) and now has normalize, source registry, staged workflows, and smoke ferries (`#4188`, `#4598`, `#5105`, `#5450`).
 - The pipeline now writes normalized Parquet, supports split main/duplicate outputs, exact dedup in normalize, MinHash / fuzzy dedup job separation, and per-shard resume for MinHash attrs (`#4596`, `#4610`, `#4876`, `#4893`, `#5397`).
 - Zephyr got stronger execution semantics: subprocess-per-shard and later inline shard execution (`#4522`, `#5282`), shuffle/external-sort fixes (`#4695`, `#4782`), stage counters (`#4189`, `#4212`, `#5063`), schema diagnostics (`#5136`, `#5142`), and byte-based scatter heuristics (`#5340`).
-- Data sources added or normalized include rollout pipelines for six datasets (`#4329`), NSF abstracts (`#4516`), HPLT likely non-duplicates (`#4326`), BHL stitching (`#5408`), GAIR/daVinci-Dev (`#5252`), Molmo2-Cap (`#5299`), and public diagnostic logs (`#5121`).
+
+---
+layout: default
+---
+
+# Training Data
+
+TODO: will
+
+- Landed/normalized sources now include rollout pipelines for six datasets (`#4329`), NSF abstracts (`#4516`), PleIAs/common_corpus (`#4606`), HPLT likely non-duplicates (`#4326`), BHL stitching (`#5408`), GAIR/daVinci-Dev (`#5252`), Molmo2-Cap (`#5299`), nyuuzyou/svgfind (`#5304`), and public diagnostic logs (`#5121`).
+- Will's in-flight source work adds more code/agent-adjacent surfaces: Stack v2 stitching (`#5009`), SWE-Rebench Contree traces (`#5276`), Hermes agent reasoning traces (`#5300`), SEC-EDGAR (`#5305`), and MASSIVE multilingual tool use (`#5339`).
+
+
 
 ---
 layout: default
@@ -188,7 +208,7 @@ layout: default
 | Paloma | -0.027 | -0.088 | Edited English is not the main gap |
 | Uncheatable Eval | +0.007 | -0.026 | Prose-heavy held-out slices mostly hold up |
 | FineWeb2 multilingual | +0.243 | +0.184 | English-only training shows up immediately |
-| Runnable long tail | +0.091 | +0.102 | Raw technical surfaces are weak |
+| SVG Markup | +0.098 | +0.104 | Markup in general is weak |
 | Package metadata | +0.082 | +0.038 | Repo-adjacent structured text is undercovered |
 | Bio / chem notation | TODO | +0.082 | Science notation is a clear blind spot |
 | Game / music notation | TODO | -0.200 | Not every weird slice is bad |
@@ -216,7 +236,6 @@ layout: split-left-green
 
 ::right::
 
-- **57** finished `dial_moe` runs in the **2.5e18-4.0e18** FLOP band; metric is `eval/paloma/c4_en/bpb`.
 - Orange is cumulative best; teal lines are Delphi AdamH refs: **3e18 1.0871**, **2e19 0.9948**, **3e19 0.9720**.
 - Current best is **0.9889** BPB at exact **3e18**: `isoflop-k5e256-d768-3e+18`, finished **May 2**.
 - That is below Delphi **2e19** and within **0.0169** BPB of Delphi **3e19**. March 24 MoE best was **1.0407**.
@@ -255,15 +274,15 @@ From 60+ experiments, these are the ones that stuck.
 * [Partial Key Offset.](https://github.com/marin-community/marin/issues/4976) Shifting half of the head dims for each key by one position on the long windows gives a 19-22% speedup across all 4 compute scales, building on partial RoPE.
 * [Embed to AdamH](https://github.com/marin-community/marin/issues/5184). The main benefit of moving the embed from AdamW to AdamH is to give cleaner parameter and gradient norm scaling over training.
 
+Many null results besides, and lots more work in progress!
 
 
 ---
 layout: default
 ---
 
-# ![](/icons/tpu.svg) MoE and Training Mechanics
+# ![](/icons/tpu.svg) Misc Training stuff
 
-- MoE recipe work continued through configurable MoE implementations (`#4964`), `MoeAdamHHeuristic` (`#4636`), router-logit fp32 upcasting (`#4234`), Grug grouped-query XSA fixes (`#4315`), and Muon MoE orthogonalization (`#3902`).
 - Kernel work landed on both TPU and GPU: ragged all-to-all capacity clipping (`#4359`), sender offsets (`#4867`), Pallas API fixes (`#5347`), and Triton `ragged_dot` (`#4297`, `#5350`).
 - Training reliability improved around W&B failures and resume symmetry (`#5332`, `#5415`), checkpoint roots (`#4387`, `#5066`), shuffle defaults (`#5246`, `#5259`), and tokenizer migration (`#4405`, `#4451`, `#4977`).
 
@@ -275,7 +294,7 @@ layout: default
 # MoE 1e23  Progress
 
 <div style="display: flex; align-items: center; justify-content: center; height: 420px;">
-  <img src="/charts/delphi-1e23-progress/cross_entropy_loss_crop.png" alt="1e23 MoE train cross entropy loss over time" style="max-width: 92%; max-height: 410px; object-fit: contain;"/>
+  <img src="/charts/moe-1e23-progress/cross_entropy_loss_crop.png" alt="1e23 MoE train cross entropy loss over time" style="max-width: 92%; max-height: 410px; object-fit: contain;"/>
 </div>
 
 
@@ -296,6 +315,8 @@ layout: split-left-green
 ---
 
 # ![](/icons/chart.svg) Delphi Scaling + Blog Work
+
+TODO: will
 
 <img src="/charts/delphi_scaling_suite_results.png" alt="Delphi scaling suite placeholder" style="width:100%;"/>
 
@@ -319,15 +340,8 @@ layout: default
 
 # ![](/icons/rocket.svg) What Should Be True By Next Review
 
-<div style="font-size: 0.75em; line-height: 1.16">
 
-| June-review claim | Estimate | May milestone read |
-| --- | ---: | --- |
-| June model plan is locked: scaling recipe plus pre/mid-training data mix. | 65% | `#5358` and `#5359` are P1s with clear defs of done; final mixture may slip toward mid-June. |
-| 1e23 MoE has a decision readout: final-ish loss, stability story, and forecast error. | 75% | `#4697` is already the hero run; next review should be about what it taught us. |
-| Data pipeline can feed the run: ~20T fuzzy-deduped corpus, decontam choice, quality buckets / metrics. | 55% | `#5360` is the main dependency; dedup and contamination are P0, quality/domain tagging are riskier. |
-| CoreWeave can train the June 16B-A2B MoE for ~1k steps on 2+ H100 hosts. | 50% | `#5356` and `#5357` are P1, but kernel perf and Nemotron-level MFU are still the stretch. |
-| Evals close the loop into data: PPL gaps correlate with downstream results, selected evals run preemption-resilient on Iris. | 60% | `#5367` is scoped; `#5368` adds inference-service integration risk. |
-| Infra tune-up lands daily ergonomics: unified queries, proxy, and GitHub -> Iris links. | 40% | `#5369` is explicitly P2/catch-all, so expect partial progress unless it unblocks the above. |
-
-</div>
+- Scaling recipe (#5358, @ClassicLarry) — isoFLOP results integrated from April, LR retuned, possible long-context  extension; output is a forecast for the June run.
+- Data mix — @Helw150 launches an active swarm over all datakit/sources.py (#5359, target launch May 15) that must   beat proportional baselines on UncheatableEval/HumanEval/MMLU/GPQA + David's PPL sets; @ravwojdyla lands the upstream pipeline (#5360: dedup params + contamination detection p0, quality scores p1) in time to feed it; @dlwh + @Helw150 identify the perplexity gaps that drive mixture decisions (#5367).
+- GPU training — @rjpower gets a June-sized MoE running ~1k steps across 2+ H100 hosts on CoreWeave (#5356), while @dlwh chases Nemotron-parity MFU on the H100 kernels (#5357).
+- Eval + infra — @yonromai stands up a preemption-resilient vLLM eval service on Iris (#5368, P0 = MMLU + HumanEval on the 1e22 MoE); #5369 is the catch-all infra tune-up (unified queries, zero-trust proxy, GH→Iris).
