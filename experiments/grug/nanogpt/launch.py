@@ -21,16 +21,17 @@ import jmp
 import optax
 from fray.cluster import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LmDataConfig
+from levanter.data.text import DatasetComponent, LmDataConfig
 from levanter.optim import OptimizerConfig
 from levanter.optim.grugmuon import _grug_scale_with_muon, _match_update_sharding
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import leaf_key_paths
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.training.training import temporary_checkpoint_base_path
 
-from experiments.grug.nanogpt.model import BATCH_SIZE, NanoGPTConfig
+from experiments.grug.nanogpt.model import BATCH_SIZE, TRAIN_STEPS, NanoGPTConfig
 from experiments.grug.nanogpt.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 
 # ---- Optimizer matching nanogpt_ref.py exactly ----
@@ -192,23 +193,64 @@ def run_nanogpt_trial(config: NanoGPTLaunchConfig) -> None:
 
 
 # ---- Data config ----
-# Points at the FineWeb10B-GPT2 TreeCache. The cache path will be set
-# at launch time depending on which region the data was written to.
+# Resolved at runtime from marin_prefix() so it reads from the local region's bucket.
 
-FINEWEB_GPT2_DATA = LmDataConfig(
-    tokenizer="gpt2",
-    vocab_size=BATCH_SIZE,  # placeholder, overridden by model
-    block_cross_document_attention=False,  # match ref: plain causal, no intradoc masking
-    components={
-        "fineweb_train": dataclasses.field(default_factory=dict),  # type: ignore[call-overload]
-    },
+
+def _fineweb_gpt2_data() -> LmDataConfig:
+    from rigging.filesystem import marin_prefix
+
+    base = os.path.join(marin_prefix(), "data", "fineweb10B-gpt2")
+    return LmDataConfig(
+        tokenizer="gpt2",
+        block_cross_document_attention=False,  # match ref: plain causal, no intradoc masking
+        auto_build_caches=False,
+        components={
+            "fineweb_train": DatasetComponent(cache_dir=os.path.join(base, "train"), split="train"),
+            "fineweb_val": DatasetComponent(cache_dir=os.path.join(base, "validation"), split="validation"),
+        },
+        train_weights={"fineweb_train": 1.0},
+    )
+
+
+# ---- Default launch step ----
+
+NANOGPT_MODEL = NanoGPTConfig()
+NANOGPT_OPTIMIZER = NanoGPTOptimizerConfig()
+
+
+nanogpt_trial = ExecutorStep(
+    name="grug/nanogpt-trial",
+    fn=run_nanogpt_trial,
+    config=NanoGPTLaunchConfig(
+        model=versioned(NANOGPT_MODEL),
+        data=_fineweb_gpt2_data(),
+        output_path=this_output_path(),
+        run_id="nanogpt-trial",
+        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+        steps=versioned(TRAIN_STEPS),
+        batch_size=versioned(BATCH_SIZE),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["nanogpt"],
+            group="nanogpt",
+            name="nanogpt-trial",
+        ),
+        optimizer=versioned(NANOGPT_OPTIMIZER),
+        grug_trainer=versioned(GrugTrainerConfig(z_loss_weight=0.0, ema_beta=None, log_every=1)),
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=BATCH_SIZE,
+                steps_per_eval=125,
+                max_eval_batches=None,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+    ),
 )
-
-# For now, the data config is a placeholder. The actual cache paths
-# need to be set once the convert_fineweb_gpt2 job completes.
-# TODO: Wire up the fineweb10B-gpt2 TreeCache paths here.
 
 
 if __name__ == "__main__":
-    # Placeholder — will be wired up once data conversion is done.
-    print("NanoGPT launch config ready. Data paths need to be configured.")
+    executor_main(steps=[nanogpt_trial], description="NanoGPT reproduction on FineWeb10B-GPT2.")
