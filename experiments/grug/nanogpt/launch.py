@@ -35,6 +35,8 @@ from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 from experiments.grug.nanogpt.model import BATCH_SIZE, MODEL_DIM, SEQ_LEN, TRAIN_STEPS, NanoGPTConfig
 from experiments.grug.nanogpt.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 
+ADAMH_TRAIN_STEPS = 4875  # match adamh_ref
+
 # ---- Optimizer matching nanogpt_ref.py exactly ----
 # The ref uses a "stable then decay" schedule: constant for first 30%, linear decay over last 70%.
 # No warmup at all.
@@ -221,7 +223,7 @@ def _adamh_optimizer_for_nanogpt() -> "GrugMoeAdamHConfig":
     from experiments.grug.moe.heuristic import MoeAdamHHeuristic
 
     h = MoeAdamHHeuristic()
-    tokens = BATCH_SIZE * SEQ_LEN * TRAIN_STEPS  # ~1.89B
+    tokens = BATCH_SIZE * SEQ_LEN * ADAMH_TRAIN_STEPS  # ~2.56B
     tpb = BATCH_SIZE * SEQ_LEN  # 524288
 
     return GrugMoeAdamHConfig(
@@ -244,7 +246,7 @@ NANOGPT_OPTIMIZER = NanoGPTOptimizerConfig()
 EVAL_CFG = GrugEvalConfig(
     eval_batch_size=BATCH_SIZE,
     steps_per_eval=125,
-    max_eval_batches=19,  # 19 batches x 512 seqs x 1024 tok ~ 10M tokens
+    max_eval_batches=20,
     eval_current=True,
     eval_ema=False,
 )
@@ -288,7 +290,7 @@ nanogpt_adamh_trial = ExecutorStep(
         output_path=this_output_path(),
         run_id="nanogpt-adamh-trial",
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-        steps=versioned(TRAIN_STEPS),
+        steps=versioned(ADAMH_TRAIN_STEPS),
         batch_size=versioned(BATCH_SIZE),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
