@@ -13,7 +13,7 @@ from typing import TypeVar
 import draccus
 from fray import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
 from mergedeep import mergedeep
-from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
+from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket, to_mirror_url
 
 from marin.execution.executor import materialize
 from marin.training.run_environment import add_run_env_variables
@@ -108,9 +108,19 @@ def bake_output_path(train_config: TrainConfigT, output_path: str) -> TrainConfi
     """Bake ``output_path`` into the trainer's checkpointer and HF save path.
 
     Sets:
-    * ``trainer.checkpointer.base_path`` → ``<output_path>/checkpoints``
-    * ``trainer.checkpointer.temporary_base_path`` → region-local temp bucket
-    * ``hf_save_path`` → ``<output_path>/hf``
+    * ``trainer.checkpointer.base_path`` → ``mirror://<output_path>/checkpoints``
+      so a job preempted in one region resumes the prior checkpoint after
+      rescheduling to a different region.  ``mirror://`` paths are converted
+      to a concrete regional URL by ``resolve_tree`` at the tensorstore
+      boundary inside Levanter; the marin bucket→region mapping is the only
+      thing that varies between regions.
+    * ``trainer.checkpointer.temporary_base_path`` → region-local temp bucket.
+      Stays regional: temp checkpoints exist to bridge save_interval gaps
+      within a single training session and are cleared by bucket TTL — the
+      cross-region copy cost on resume rarely pays off before they're
+      superseded.
+    * ``hf_save_path`` → ``<output_path>/hf`` (concrete; HF export does not
+      need cross-region resume in this PR).
 
     The ``append_run_id_to_base_path`` flag is NOT changed here; callers that
     impute a run id from the output path should also set it to ``False`` via
@@ -120,7 +130,7 @@ def bake_output_path(train_config: TrainConfigT, output_path: str) -> TrainConfi
         train_config.trainer,
         checkpointer=replace(
             train_config.trainer.checkpointer,
-            base_path=os.path.join(output_path, DEFAULT_CHECKPOINTS_PATH),
+            base_path=to_mirror_url(os.path.join(output_path, DEFAULT_CHECKPOINTS_PATH)),
             temporary_base_path=temporary_checkpoint_base_path(output_path),
         ),
     )

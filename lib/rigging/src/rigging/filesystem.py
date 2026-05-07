@@ -23,6 +23,7 @@ Cross-region transfer budget:
   the ``MARIN_I_WILL_PAY_FOR_ALL_FEES`` env var to override the guard.
 """
 
+import concurrent.futures
 import contextlib
 import contextvars
 import dataclasses
@@ -30,14 +31,16 @@ import functools
 import logging
 import os
 import pathlib
+import posixpath
 import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Generator, Sequence
 from pathlib import PurePath
-from typing import Any
+from typing import Any, Literal
 
 import fsspec
 
@@ -824,6 +827,20 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         self._remote_prefixes = _mirror_remote_prefixes(self._local_prefix)
         self._budget = budget if budget is not None else _global_transfer_budget
         self._worker_id = default_worker_id()
+        # Process-local per-file mutexes.  The distributed lock serializes
+        # copies across processes; threads inside a single process share the
+        # same ``worker_id`` and would all "successfully" reacquire it, so
+        # we need an in-memory lock to prevent intra-process duplicate copies.
+        self._inproc_copy_locks: dict[str, threading.Lock] = {}
+        self._inproc_copy_locks_mutex = threading.Lock()
+
+    def _inproc_copy_lock(self, path: str) -> threading.Lock:
+        with self._inproc_copy_locks_mutex:
+            lock = self._inproc_copy_locks.get(path)
+            if lock is None:
+                lock = threading.Lock()
+                self._inproc_copy_locks[path] = lock
+            return lock
 
     # -- budget resolution ----------------------------------------------------
 
@@ -858,6 +875,15 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         return fs.size(fspath)
 
     def _fs_copy(self, src_url: str, dst_url: str) -> None:
+        """Copy one file from *src_url* to *dst_url*.
+
+        No tmp+rename: GCS and S3 PUTs commit atomically (the destination
+        object is invisible until upload finishes), and local destinations
+        only see one writer per file in real workloads — the per-file
+        lock + intra-process mutex in :meth:`_copy_to_local` already
+        serializes intra-process writers, and there is no realistic
+        scenario where two separate processes race on the same local path.
+        """
         src_fs, src_path = self._get_fs_and_path(src_url)
         dst_fs, dst_path = self._get_fs_and_path(dst_url)
 
@@ -882,55 +908,195 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         return None
 
     def _copy_to_local(self, source_prefix: str, path: str) -> None:
-        local_url = self._local_url(path)
-        remote_url = self._remote_url(source_prefix, path)
+        """Copy one file from *source_prefix* to the local prefix.
 
-        lock = create_lock(self._lock_path_for(path), self._worker_id)
+        Two-layer locking:
 
-        if not lock.try_acquire():
-            for _ in range(60):
-                time.sleep(2)
-                if self._fs_exists(local_url):
-                    return
-                if not lock.has_active_holder():
-                    break
-            if self._fs_exists(local_url):
-                return
-            if not lock.try_acquire():
-                raise RuntimeError(f"Could not acquire mirror lock for {path} after waiting")
+        - Process-local :class:`threading.Lock` serializes threads inside
+          this process (the distributed lock can't, since they share a
+          worker id).
+        - Distributed lock serializes processes across the cluster.
 
-        try:
-            if self._fs_exists(local_url):
-                return
-
-            size = self._fs_size(remote_url)
-            if size is not None:
-                self._active_budget().record(size, remote_url)
-
-            logger.info("Mirror: copying %s → %s", remote_url, local_url)
-            self._fs_copy(remote_url, local_url)
-        finally:
-            lock.release()
-
-    def _resolve_path(self, path: str) -> str:
-        """Resolve a mirror path to a concrete URL, copying if needed."""
+        Atomic at the destination via :meth:`_fs_copy`, so partial files
+        are never observable even if both locks fail.
+        """
         local_url = self._local_url(path)
         if self._fs_exists(local_url):
-            return local_url
+            return
 
-        source_prefix = self._find_in_remote_prefixes(path)
+        with self._inproc_copy_lock(path):
+            if self._fs_exists(local_url):
+                return
+
+            remote_url = self._remote_url(source_prefix, path)
+            lock = create_lock(self._lock_path_for(path), self._worker_id)
+
+            if not lock.try_acquire():
+                for _ in range(60):
+                    time.sleep(2)
+                    if self._fs_exists(local_url):
+                        return
+                    if not lock.has_active_holder():
+                        break
+                if self._fs_exists(local_url):
+                    return
+                if not lock.try_acquire():
+                    raise RuntimeError(f"Could not acquire mirror lock for {path} after waiting")
+
+            try:
+                if self._fs_exists(local_url):
+                    return
+
+                size = self._fs_size(remote_url)
+                if size is not None:
+                    self._active_budget().record(size, remote_url)
+
+                logger.info("Mirror: copying %s → %s", remote_url, local_url)
+                self._fs_copy(remote_url, local_url)
+            finally:
+                lock.release()
+
+    # -- tree-on-open materialization ----------------------------------------
+
+    def _copy_one_file(self, file_rel: str) -> None:
+        """Copy one file to the local prefix, picking whichever region has it.
+
+        Uses the mirror's union view: any remote that carries the file is a
+        valid source.  Pure no-op when the file is already local.  Silently
+        skips files that disappeared from every region between enumeration
+        and copy (concurrent delete in source).
+        """
+        if self._fs_exists(self._local_url(file_rel)):
+            return
+        source_prefix = self._find_in_remote_prefixes(file_rel)
         if source_prefix is None:
+            return
+        self._copy_to_local(source_prefix, file_rel)
+
+    def _copy_tree_to_local(self, dir_rel: str, *, parallelism: int = 32) -> None:
+        """Materialize every file under *dir_rel* in the local prefix.
+
+        Walks the mirror's union view recursively; each subdir scan and
+        each file copy runs as its own pool task, so deep trees fan out
+        naturally.  Per-file locking + atomic destination writes (via
+        :meth:`_copy_to_local`) keep racing copies cheap and correct.
+
+        No pre-flight budget check — files charge against the
+        :class:`TransferBudget` as they're copied, surfacing exhaustion
+        the moment a copy would push past the limit.
+        """
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=parallelism)
+        futures: list[concurrent.futures.Future] = []
+        futures_lock = threading.Lock()
+
+        def submit(fn: Callable[..., Any], *args: Any) -> None:
+            # Propagate the current context (notably the mirror-budget
+            # contextvar) into the worker thread; ThreadPoolExecutor does
+            # not do this by default.
+            ctx = contextvars.copy_context()
+            fut = pool.submit(ctx.run, fn, *args)
+            with futures_lock:
+                futures.append(fut)
+
+        def visit(rel: str) -> None:
+            try:
+                entries = self.ls(rel, detail=True)
+            except FileNotFoundError:
+                return
+            for entry in entries:
+                name = entry["name"]
+                if entry.get("type") == "directory":
+                    submit(visit, name)
+                else:
+                    submit(self._copy_one_file, name)
+
+        try:
+            submit(visit, dir_rel)
+            # Drain.  visit() can append more futures while we wait, so re-check
+            # the list length after each await rather than snapshotting it.
+            i = 0
+            while True:
+                with futures_lock:
+                    if i >= len(futures):
+                        break
+                    fut = futures[i]
+                fut.result()
+                i += 1
+        finally:
+            pool.shutdown()
+
+    def _ensure_file_local(self, path: str, *, parallelism: int = 32) -> None:
+        """Ensure *path* is locally present, materializing its enclosing dir."""
+        local_url = self._local_url(path)
+        if self._fs_exists(local_url):
+            return
+
+        parent = posixpath.dirname(path)
+        if parent:
+            self._copy_tree_to_local(parent, parallelism=parallelism)
+        else:
+            # Top-level file with no enclosing directory in the mirror namespace.
+            self._copy_one_file(path)
+
+        if not self._fs_exists(local_url):
             raise FileNotFoundError(f"mirror://{path} not found in any marin bucket")
 
-        self._copy_to_local(source_prefix, path)
-        return local_url
+    # -- public tree-resolve --------------------------------------------------
+
+    def resolve_tree(
+        self,
+        path: str,
+        *,
+        mode: Literal["read", "write"],
+        parallelism: int = 32,
+    ) -> str:
+        """Resolve a directory tree URL to a concrete local URL.
+
+        - ``mode="read"``: ensure every file under *path* exists locally,
+          copying from whichever region(s) carry the tree.  Returns the
+          concrete local URL.
+        - ``mode="write"``: ensure the local destination directory exists
+          and return its concrete URL.  No copy.
+        """
+        rel = self._strip_protocol(path)
+        local_url = self._local_url(rel)
+
+        if mode == "write":
+            local_fs, local_path = self._get_fs_and_path(local_url)
+            local_fs.makedirs(local_path, exist_ok=True)
+            return local_url
+
+        if mode == "read":
+            self._copy_tree_to_local(rel, parallelism=parallelism)
+            if not self._fs_exists(local_url):
+                raise FileNotFoundError(f"mirror://{rel}: no marin region carries this tree")
+            return local_url
+
+        raise ValueError(f"resolve_tree: invalid mode {mode!r}; expected 'read' or 'write'")
 
     # -- fsspec interface: info/ls/exists -------------------------------------
 
     def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
+        """Probe-only file info.
+
+        Does NOT auto-copy the file.  Returns metadata from the local prefix
+        if present, otherwise from the first remote prefix that has the
+        file.  Tree materialization happens only on read (``_open`` /
+        ``cat_file``) or via :meth:`resolve_tree`.
+        """
         path = self._strip_protocol(path)
-        resolved = self._resolve_path(path)
-        fs, fspath = self._get_fs_and_path(resolved)
+        local_url = self._local_url(path)
+        if self._fs_exists(local_url):
+            fs, fspath = self._get_fs_and_path(local_url)
+            info = fs.info(fspath, **kwargs)
+            info["name"] = path
+            return info
+
+        source_prefix = self._find_in_remote_prefixes(path)
+        if source_prefix is None:
+            raise FileNotFoundError(f"mirror://{path} not found in any marin bucket")
+        remote_url = self._remote_url(source_prefix, path)
+        fs, fspath = self._get_fs_and_path(remote_url)
         info = fs.info(fspath, **kwargs)
         info["name"] = path
         return info
@@ -980,8 +1146,9 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
     def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
         path = self._strip_protocol(path)
         if "r" in mode:
-            resolved = self._resolve_path(path)
-            fs, fspath = self._get_fs_and_path(resolved)
+            self._ensure_file_local(path)
+            local_url = self._local_url(path)
+            fs, fspath = self._get_fs_and_path(local_url)
             return fs.open(fspath, mode, **kwargs)
         else:
             local_url = self._local_url(path)
@@ -993,8 +1160,9 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
 
     def cat_file(self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any) -> bytes:
         path = self._strip_protocol(path)
-        resolved = self._resolve_path(path)
-        fs, fspath = self._get_fs_and_path(resolved)
+        self._ensure_file_local(path)
+        local_url = self._local_url(path)
+        fs, fspath = self._get_fs_and_path(local_url)
         return fs.cat_file(fspath, start=start, end=end, **kwargs)
 
     # -- fsspec interface: write operations ------------------------------------
@@ -1032,9 +1200,10 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
     def copy(self, path1: str, path2: str, **kwargs: Any) -> None:
         path1 = self._strip_protocol(path1)
         path2 = self._strip_protocol(path2)
-        resolved_src = self._resolve_path(path1)
-        local_dst = self._local_url(path2)
-        self._fs_copy(resolved_src, local_dst)
+        self._ensure_file_local(path1)
+        src_local = self._local_url(path1)
+        dst_local = self._local_url(path2)
+        self._fs_copy(src_local, dst_local)
 
     @property
     def bytes_copied(self) -> int:
@@ -1044,3 +1213,57 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
 
 # Register the mirror:// protocol with fsspec.
 fsspec.register_implementation("mirror", MirrorFileSystem)
+
+
+# ---------------------------------------------------------------------------
+# Tree-resolve and mirror-URL helpers
+#
+# These exist so that systems that do not understand the mirror:// protocol
+# (notably tensorstore, which opens GCS kvstores directly) can still receive
+# a concrete URL while their callers configure paths as mirror://.
+# ---------------------------------------------------------------------------
+
+
+def resolve_tree(
+    path: str,
+    *,
+    mode: Literal["read", "write"],
+    parallelism: int = 32,
+) -> str:
+    """Resolve a directory tree URL to a concrete URL.
+
+    Passthrough for non-``mirror://`` paths.  For ``mirror://`` paths,
+    delegates to :meth:`MirrorFileSystem.resolve_tree`:
+
+    - ``mode="read"``: ensure every file under *path* is locally present
+      (copying from whichever remote region carries the tree) and return
+      the concrete local URL.
+    - ``mode="write"``: ensure the local destination directory exists and
+      return its concrete URL.  No copy.
+
+    Used at the boundary to systems that bypass fsspec — primarily
+    tensorstore, which opens its GCS kvstore from the path string and
+    cannot navigate ``mirror://`` itself.
+    """
+    if not path.startswith("mirror://"):
+        return path
+    fs = fsspec.filesystem("mirror")
+    return fs.resolve_tree(path, mode=mode, parallelism=parallelism)
+
+
+def to_mirror_url(concrete_url: str) -> str:
+    """Convert a marin ``gs://marin-{region}/path`` URL to ``mirror://path``.
+
+    Passthrough for non-GCS URLs and for GCS URLs whose bucket is not a
+    known marin data bucket.  Already-``mirror://`` URLs are returned
+    unchanged.
+    """
+    if concrete_url.startswith("mirror://"):
+        return concrete_url
+    bucket = _bucket_from_gcs_url(concrete_url)
+    if bucket is None or bucket not in _BUCKET_TO_REGION:
+        return concrete_url
+    rest = concrete_url[len("gs://") + len(bucket) :].lstrip("/")
+    if not rest:
+        return concrete_url
+    return f"mirror://{rest}"

@@ -74,7 +74,11 @@ class SweepTrial:
 # Build all trials at submission time so workers do no config work. Configs
 # carry placeholders (OutputName, InputName) until resolved on the worker, so
 # checkpoint paths land in the *worker's* region after a cross-region
-# preemption.
+# preemption.  ``bake_output_path`` writes the checkpointer base as a
+# ``mirror://`` URL, and Levanter's checkpoint save/load route through
+# ``resolve_tree``, so a trial preempted in one region resumes the prior
+# step's checkpoint after rescheduling to a different region instead of
+# restarting from step 0.
 trials = []
 for sc in sweep_configs:
     # Marin will automatically create unique ids for runs b/c the model_config is versioned

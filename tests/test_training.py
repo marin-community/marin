@@ -92,7 +92,13 @@ def test_update_config_to_use_out_path_sets_run_specific_temp_checkpoints(traine
         updated = _update_config_to_use_out_path(config)
 
         checkpointer = updated.train_config.trainer.checkpointer
-        assert checkpointer.base_path == "gs://marin-us-east5/experiments/grug/base-trial/checkpoints"
+        # base_path is mirror:// so a job preempted in one region resumes the prior
+        # checkpoint after rescheduling to another region.  The marin-{region}
+        # bucket is the only thing that varies between regions, so dropping it
+        # from the URL is sufficient.
+        assert checkpointer.base_path == "mirror://experiments/grug/base-trial/checkpoints"
+        # Temp checkpoints stay regional: TTL handles cleanup, and cross-region
+        # copy on resume rarely pays off before they're superseded.
         assert checkpointer.temporary_base_path == (
             "gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
         )

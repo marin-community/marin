@@ -33,6 +33,8 @@ from haliax.jax_utils import is_in_jit, is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 from jaxtyping import PyTree
 
+from rigging.filesystem import resolve_tree
+
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
     tree_deserialize_leaves_tensorstore,
@@ -689,7 +691,9 @@ def save_checkpoint(
         is_temporary: whether the checkpoint is temporary
     """
     step = int(step)
-    checkpoint_path = str(checkpoint_path)
+    # Resolve mirror:// to a concrete URL once, before tensorstore (which bypasses
+    # fsspec) and the metadata writer see the path.  Passthrough for non-mirror paths.
+    checkpoint_path = resolve_tree(str(checkpoint_path), mode="write")
     checkpoint_debug = debug or CheckpointDebugConfig()
     logger.info(f"Saving checkpoint to {checkpoint_path} for step {step}")
     progress_logger: _CheckpointProgressLogger | None = None
@@ -792,7 +796,9 @@ def load_checkpoint(
         the loaded checkpoint, with the same structure as the exemplar tree
 
     """
-    checkpoint_path = str(checkpoint_path)
+    # Materialize the entire checkpoint tree locally once, before tensorstore opens
+    # any kvstore.  Passthrough for non-mirror paths.
+    checkpoint_path = resolve_tree(str(checkpoint_path), mode="read")
 
     if is_in_jit():
         logger.warning("Loading checkpoint in jit. This is not recommended and probably won't work.")
