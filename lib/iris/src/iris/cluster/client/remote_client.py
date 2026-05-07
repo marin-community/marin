@@ -376,18 +376,17 @@ class RemoteClusterClient:
     def list_jobs(
         self,
         *,
-        query: controller_pb2.Controller.JobQuery | None = None,
+        query: controller_pb2.Controller.JobQuery,
         page_size: int = 500,
     ) -> list[job_pb2.JobStatus]:
         """Fetch all jobs matching ``query`` by paging through ``ListJobs``.
 
-        The server caps each page at ``MAX_LIST_JOBS_LIMIT``; this helper walks
-        ``has_more`` / ``total_count`` to return the full result set without
-        asking the controller for an unbounded scan.
+        The server caps each page at ``MAX_LIST_JOBS_LIMIT`` and rejects deep
+        offsets (``MAX_LIST_JOBS_OFFSET``). Callers must supply a query that
+        narrows the result set with ``state_filter`` / ``name_filter`` /
+        ``parent_job_id``; otherwise the page walk will fail once it reaches
+        the offset cap.
         """
-        if query is None:
-            query = controller_pb2.Controller.JobQuery()
-
         jobs: list[job_pb2.JobStatus] = []
         offset = query.offset or 0
         while True:

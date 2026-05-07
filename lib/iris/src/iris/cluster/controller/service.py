@@ -575,6 +575,11 @@ _SORT_FIELD_TO_SQL: dict[int, str] = {
 
 
 MAX_LIST_JOBS_LIMIT = 500
+# Hard cap on how deep ListJobs callers may page. A correctly-filtered query
+# should narrow the result set; anything reaching offsets this deep is a sign
+# of a caller scanning the entire jobs table page-by-page, which is what the
+# snapshot is supposed to prevent. Force callers to filter instead.
+MAX_LIST_JOBS_OFFSET = 5000
 MAX_LIST_WORKERS_LIMIT = 1000
 
 
@@ -783,6 +788,12 @@ def _query_from_list_jobs_request(
         query.limit = MAX_LIST_JOBS_LIMIT
     if query.offset < 0:
         query.offset = 0
+    if query.offset > MAX_LIST_JOBS_OFFSET:
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            f"query.offset={query.offset} exceeds MAX_LIST_JOBS_OFFSET={MAX_LIST_JOBS_OFFSET}; "
+            "narrow the result set with state_filter/name_filter/parent_job_id instead of paging deeper.",
+        )
     return query
 
 
@@ -2718,8 +2729,5 @@ class ControllerServiceImpl:
     ) -> job_pb2.SetTaskStatusTextResponse:
         """Task pushes a markdown status string to the coordinator."""
         task_id = JobName.from_wire(request.task_id)
-        task = _read_task_with_attempts(self._db, task_id)
-        if task is None:
-            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
         self._transitions.record_task_status_text(task_id, request.status_text_detail_md, request.status_text_summary_md)
         return job_pb2.SetTaskStatusTextResponse()

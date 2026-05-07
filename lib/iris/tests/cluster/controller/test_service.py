@@ -18,6 +18,7 @@ from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
     FRESHNESS_WINDOW,
+    MAX_LIST_JOBS_OFFSET,
     ControllerServiceImpl,
     _check_client_freshness,
 )
@@ -893,6 +894,16 @@ def test_list_jobs_sql_pagination(service):
 
     assert len(response3.jobs) == 1
     assert response3.has_more is False
+
+
+def test_list_jobs_rejects_deep_offset(service):
+    """Offsets past MAX_LIST_JOBS_OFFSET are rejected to force callers to filter."""
+    request = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(offset=MAX_LIST_JOBS_OFFSET + 1, limit=500)
+    )
+    with pytest.raises(ConnectError) as exc_info:
+        service.list_jobs(request, None)
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
 
 
 def test_list_jobs_state_filter(service):
