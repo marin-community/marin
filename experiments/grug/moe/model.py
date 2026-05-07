@@ -70,6 +70,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    separate_gate_up: bool = False  # Store gate/up as separate params (for per-param optimizers)
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -312,7 +313,9 @@ class MoEMLP(eqx.Module):
 
     router: jax.Array
     router_bias: jax.Array
-    w_gate_up: jax.Array
+    w_gate_up: jax.Array | None
+    w_gate: jax.Array | None  # Separate gate projection when separate_gate_up=True
+    w_up: jax.Array | None  # Separate up projection when separate_gate_up=True
     w_down: jax.Array
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -326,17 +329,24 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
-        w_gate = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
-        w_up = _init_weight(k_up, (e, d, i), cfg.initializer_std)
-        # TODO: Explore whether concatenating gate/up at init (instead of keeping separate params)
-        # is (1) a meaningful MFU speedup and (2) a meaningful perf hit due to AdamH treating the
-        # concatenated tensor as a single parameter for its scale-invariant norm computation.
-        w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
+
+        if cfg.separate_gate_up:
+            w_gate = reshard(_init_weight(k_gate, (e, d, i), cfg.initializer_std), P("expert", "data", "model"))
+            w_up = reshard(_init_weight(k_up, (e, d, i), cfg.initializer_std), P("expert", "data", "model"))
+            w_gate_up = None
+        else:
+            w_gate = None
+            w_up = None
+            w_gate_init = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
+            w_up_init = _init_weight(k_up, (e, d, i), cfg.initializer_std)
+            w_gate_up = reshard(jnp.concatenate([w_gate_init, w_up_init], axis=-1), P("expert", "data", "model"))
 
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
-            w_gate_up=reshard(w_gate_up, P("expert", "data", "model")),
+            w_gate_up=w_gate_up,
+            w_gate=w_gate,
+            w_up=w_up,
             w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
             cfg=cfg,
         )
@@ -389,11 +399,12 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
+        w_gate_up = self.w_gate_up if self.w_gate_up is not None else jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         routed_flat = moe_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
-            self.w_gate_up,
+            w_gate_up,
             self.w_down,
             activation=ActivationFunctionEnum.silu,
             implementation=self.cfg.moe_implementation,

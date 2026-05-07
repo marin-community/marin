@@ -54,6 +54,7 @@ class GrugMoeLaunchConfig:
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    enable_cross_region_ckpt_read: bool = False
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -77,7 +78,60 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
     return tracker
 
 
+def _find_checkpoint_across_regions(output_path: str) -> str | None:
+    """Search all regional marin buckets for the latest checkpoint."""
+    import json
+
+    from rigging.filesystem import REGION_TO_DATA_BUCKET
+
+    if not output_path.startswith("gs://"):
+        return None
+    parts = output_path.split("/", 3)
+    if len(parts) < 4:
+        return None
+    local_bucket = parts[2]
+    suffix = parts[3]
+    checkpoint_suffix = os.path.join(suffix, "checkpoints")
+
+    import gcsfs
+
+    fs = gcsfs.GCSFileSystem()
+    best_step = -1
+    best_path = None
+    local_step = -1
+
+    for bucket in REGION_TO_DATA_BUCKET.values():
+        candidate = f"{bucket}/{checkpoint_suffix}"
+        try:
+            subdirs = fs.ls(candidate)
+        except FileNotFoundError:
+            continue
+        for subdir in subdirs:
+            metadata_path = f"{subdir}/metadata.json"
+            try:
+                with fs.open(metadata_path) as f:
+                    metadata = json.load(f)
+                step = int(metadata.get("step", -1))
+                has_data = fs.exists(f"{subdir}/manifest.ocdbt") or fs.exists(f"{subdir}/d")
+                if not has_data:
+                    continue
+                if bucket == local_bucket:
+                    local_step = max(local_step, step)
+                if step > best_step:
+                    best_step = step
+                    best_path = f"gs://{candidate}"
+            except Exception:
+                continue
+
+    if best_step > local_step and best_path and local_bucket not in best_path:
+        return best_path
+    return None
+
+
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
+    checkpoint_base = os.path.join(config.output_path, "checkpoints")
+    load_path = _find_checkpoint_across_regions(config.output_path) if config.enable_cross_region_ckpt_read else None
+
     # Map template launch knobs onto full Levanter TrainerConfig.
     trainer = TrainerConfig(
         id=config.run_id,
@@ -91,8 +145,9 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mesh=MeshConfig(axes={"expert": 1}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
+        load_checkpoint_path=load_path,
         checkpointer=CheckpointerConfig(
-            base_path=os.path.join(config.output_path, "checkpoints"),
+            base_path=checkpoint_base,
             temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
