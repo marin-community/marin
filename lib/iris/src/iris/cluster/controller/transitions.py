@@ -304,12 +304,17 @@ class KillRegistry:
         """Merge a KillBuffer into the registry.
 
         Existing records for the same (task_id, attempt_id) are overwritten so
-        a fresh entry resets the dispatched flag.
+        a fresh entry resets the dispatched flag. Entries without a worker are
+        direct-provider kills or non-running tasks; the direct provider consumes
+        them through its own dispatch queue, and the non-K8s registry has no
+        worker to dispatch them to.
         """
         if not kb:
             return
         with self._lock:
             for item in kb:
+                if item.worker_id is None:
+                    continue
                 self._items[(item.task_id, item.attempt_id)] = item
 
     def remove(self, task_id: str, attempt_id: int) -> None:

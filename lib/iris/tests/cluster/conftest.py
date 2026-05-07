@@ -132,7 +132,6 @@ class _HarnessController:
 
     def __init__(self) -> None:
         self.wake = Mock()
-        self.kill_tasks_on_workers = Mock()
         self.register_kills = Mock()
         self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
