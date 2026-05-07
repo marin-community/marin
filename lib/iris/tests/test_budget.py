@@ -19,7 +19,7 @@ from iris.cluster.controller.budget import (
     resource_value,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.transitions import Assignment, HeartbeatApplyRequest, TaskUpdate
+from iris.cluster.controller.transitions import Assignment, HeartbeatApplyRequest, KillBuffer, TaskUpdate
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import VerifiedIdentity, _verified_identity
@@ -231,6 +231,7 @@ def _start_running_job(
                     worker_id=worker_id,
                     updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
                 ),
+                KillBuffer(),
             )
 
 

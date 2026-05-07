@@ -1669,7 +1669,7 @@ class Controller:
             self._transitions.apply_direct_provider_updates(cur, result.updates, kb)
         self._provider_scheduling_events = list(result.scheduling_events) if result.scheduling_events else []
         self._provider_capacity = result.capacity
-        self._register_kills(kb)
+        self.register_kills(kb)
 
     def _run_profile_loop(self, stop_event: threading.Event) -> None:
         """Periodically capture CPU and memory profiles for all running tasks.
@@ -2213,7 +2213,7 @@ class Controller:
                 with self._store.transaction() as cur:
                     for preemptor_name, victim_id in preemptions:
                         self._transitions.preempt_task(cur, victim_id, reason=f"Preempted by {preemptor_name}", kb=kb)
-                self._register_kills(kb)
+                self.register_kills(kb)
                 logger.info("Preemption pass: %d tasks preempted", len(preemptions))
         return preemptions
 
@@ -2284,7 +2284,7 @@ class Controller:
         kb = KillBuffer()
         with self._store.transaction() as cur:
             self._transitions.cancel_tasks_for_timeout(cur, task_ids, reason="Execution timeout exceeded", kb=kb)
-        self._register_kills(kb)
+        self.register_kills(kb)
 
     def _mark_task_unschedulable(self, task: TaskRow) -> None:
         """Mark a task as unschedulable due to timeout."""
@@ -2305,7 +2305,7 @@ class Controller:
                 reason=f"Scheduling timeout exceeded ({timeout})",
                 kb=kb,
             )
-        self._register_kills(kb)
+        self.register_kills(kb)
 
     def create_scheduling_context(self, workers: list[WorkerRow]) -> SchedulingContext:
         """Create a scheduling context for the given workers."""
@@ -2315,7 +2315,7 @@ class Controller:
             building_counts=building_counts,
         )
 
-    def _register_kills(self, kb: KillBuffer) -> None:
+    def register_kills(self, kb: KillBuffer) -> None:
         """Flush a KillBuffer after a clean transaction commit.
 
         Non-K8s providers track kills in the in-memory ``KillRegistry``; the
@@ -2570,7 +2570,7 @@ class Controller:
         kb = KillBuffer()
         with self._store.transaction() as cur:
             self._transitions.apply_heartbeats_batch(cur, requests, kb)
-        self._register_kills(kb)
+        self.register_kills(kb)
 
     def _run_task_updater_loop(self, stop_event: threading.Event) -> None:
         """Batched task state updater.
@@ -2615,7 +2615,7 @@ class Controller:
             for wid, addr in sibling_failures.removed_workers:
                 self._provider.on_worker_failed(wid, addr)
                 removed.append(wid)
-        self._register_kills(kb)
+        self.register_kills(kb)
         return removed
 
     def _run_autoscaler_once(self) -> None:

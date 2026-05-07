@@ -23,6 +23,7 @@ from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
+    KillBuffer,
     TaskUpdate,
 )
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
@@ -132,6 +133,7 @@ class _HarnessController:
     def __init__(self) -> None:
         self.wake = Mock()
         self.kill_tasks_on_workers = Mock()
+        self.register_kills = Mock()
         self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.autoscaler = None
@@ -236,7 +238,7 @@ class ServiceTestHarness:
             batch = self.state.drain_for_direct_provider(cur)
         result = self.k8s_provider.sync(batch)
         with self.state._store.transaction() as cur:
-            self.state.apply_direct_provider_updates(cur, result.updates)
+            self.state.apply_direct_provider_updates(cur, result.updates, KillBuffer())
 
     # ── GCP-specific ────────────────────────────────────────────
 
@@ -384,6 +386,7 @@ class ServiceTestHarness:
                             )
                         ],
                     ),
+                    KillBuffer(),
                 )
 
         with self.state._store.transaction() as cur:
@@ -399,6 +402,7 @@ class ServiceTestHarness:
                         )
                     ],
                 ),
+                KillBuffer(),
             )
 
 

@@ -84,9 +84,9 @@ def test_dry_run_kill_tasks_skipped(dry_run_controller):
     kb = KillBuffer()
     kb.add(task_id=task_id, attempt_id=0, worker_id="worker-1")
 
-    # In dry-run mode, _register_kills should return early without queuing
+    # In dry-run mode, register_kills should return early without queuing
     # any actual kill RPCs. The method logs the would-be kills and returns.
-    controller._register_kills(kb)
+    controller.register_kills(kb)
 
     # If we get here without exception, dry-run mode worked correctly.
     # In a real run, the kill would be registered in the registry.
