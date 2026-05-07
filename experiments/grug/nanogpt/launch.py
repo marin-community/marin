@@ -31,7 +31,8 @@ from levanter.utils.jax_utils import leaf_key_paths
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.training.training import temporary_checkpoint_base_path
 
-from experiments.grug.nanogpt.model import BATCH_SIZE, TRAIN_STEPS, NanoGPTConfig
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
+from experiments.grug.nanogpt.model import BATCH_SIZE, MODEL_DIM, SEQ_LEN, TRAIN_STEPS, NanoGPTConfig
 from experiments.grug.nanogpt.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 
 # ---- Optimizer matching nanogpt_ref.py exactly ----
@@ -212,10 +213,42 @@ def _fineweb_gpt2_data() -> LmDataConfig:
     )
 
 
-# ---- Default launch step ----
+# ---- AdamH optimizer using the grug MoE heuristic LR formula ----
+
+
+def _adamh_optimizer_for_nanogpt() -> "GrugMoeAdamHConfig":
+    """Compute AdamH hyperparameters using the MoE heuristic for the nanogpt architecture."""
+    from experiments.grug.moe.heuristic import MoeAdamHHeuristic
+
+    h = MoeAdamHHeuristic()
+    tokens = BATCH_SIZE * SEQ_LEN * TRAIN_STEPS  # ~1.89B
+    tpb = BATCH_SIZE * SEQ_LEN  # 524288
+
+    return GrugMoeAdamHConfig(
+        learning_rate=h._compute_learning_rate(tpb, tokens, MODEL_DIM),
+        adam_lr=h._compute_adam_lr(tpb, tokens, MODEL_DIM),
+        beta1=h.beta1,
+        beta2=h._compute_beta2(tpb),
+        epsilon=h._compute_epsilon(tpb, tokens),
+        max_grad_norm=h.max_grad_norm,
+        warmup=h.warmup,
+        lr_schedule=h.lr_schedule,
+        min_lr_ratio=h.min_lr_ratio,
+    )
+
+
+# ---- Default launch steps ----
 
 NANOGPT_MODEL = NanoGPTConfig()
 NANOGPT_OPTIMIZER = NanoGPTOptimizerConfig()
+EVAL_CFG = GrugEvalConfig(
+    eval_batch_size=BATCH_SIZE,
+    steps_per_eval=125,
+    max_eval_batches=None,
+    eval_current=True,
+    eval_ema=False,
+)
+TRAINER_CFG = GrugTrainerConfig(z_loss_weight=0.0, ema_beta=None, log_every=1)
 
 
 nanogpt_trial = ExecutorStep(
@@ -233,24 +266,45 @@ nanogpt_trial = ExecutorStep(
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             project="dial_moe",
-            tags=["nanogpt"],
+            tags=["nanogpt", "muon"],
             group="nanogpt",
             name="nanogpt-trial",
         ),
         optimizer=versioned(NANOGPT_OPTIMIZER),
-        grug_trainer=versioned(GrugTrainerConfig(z_loss_weight=0.0, ema_beta=None, log_every=1)),
-        eval=versioned(
-            GrugEvalConfig(
-                eval_batch_size=BATCH_SIZE,
-                steps_per_eval=125,
-                max_eval_batches=None,
-                eval_current=True,
-                eval_ema=False,
-            )
+        grug_trainer=versioned(TRAINER_CFG),
+        eval=versioned(EVAL_CFG),
+    ),
+)
+
+
+nanogpt_adamh_trial = ExecutorStep(
+    name="grug/nanogpt-adamh-trial",
+    fn=run_nanogpt_trial,
+    config=NanoGPTLaunchConfig(
+        model=versioned(NANOGPT_MODEL),
+        data=_fineweb_gpt2_data(),
+        output_path=this_output_path(),
+        run_id="nanogpt-adamh-trial",
+        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+        steps=versioned(TRAIN_STEPS),
+        batch_size=versioned(BATCH_SIZE),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["nanogpt", "adamh"],
+            group="nanogpt",
+            name="nanogpt-adamh-trial",
         ),
+        optimizer=versioned(_adamh_optimizer_for_nanogpt()),
+        grug_trainer=versioned(TRAINER_CFG),
+        eval=versioned(EVAL_CFG),
     ),
 )
 
 
 if __name__ == "__main__":
-    executor_main(steps=[nanogpt_trial], description="NanoGPT reproduction on FineWeb10B-GPT2.")
+    executor_main(
+        steps=[nanogpt_trial, nanogpt_adamh_trial],
+        description="NanoGPT reproduction: Muon vs AdamH on FineWeb10B-GPT2.",
+    )
