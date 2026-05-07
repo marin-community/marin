@@ -9,23 +9,24 @@ from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
 from levanter.tracker import NoopConfig
 
-from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, _prepare_grug
+from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, resolve_grug_run_config
 
 _DUMMY_DATA: Any = object()
 
 
-def test_prepare_grug_sets_temporary_checkpoint_base_path():
-    """``_prepare_grug`` wires the checkpointer's ``base_path`` and
+def test_resolve_grug_run_config_sets_temporary_checkpoint_base_path():
+    """``resolve_grug_run_config`` wires the checkpointer's ``base_path`` and
     ``temporary_base_path`` to paths derived from the resolved output_path,
     so callers that pin ``override_output_path`` get stable, predictable
-    checkpoint locations.
+    checkpoint locations. The resolution runs under the *current* region's
+    ``marin_prefix()``, which is what makes cross-region preemption work.
     """
     output_path = "gs://marin-us-east5/experiments/grug/base-trial"
     with (
         patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
     ):
-        _, run_config, _ = _prepare_grug(
+        run_config = resolve_grug_run_config(
             "grug-temp-path-test",
             GrugBaseLaunchConfig(
                 model=GRUG_130M_MODEL,

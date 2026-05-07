@@ -21,7 +21,14 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.executor import compute_output_path, resolve_local_placeholders, this_output_path, versioned
+from marin.execution.executor import (
+    compute_output_path,
+    materialize,
+    resolve_local_placeholders,
+    this_output_path,
+    unwrap_versioned_value,
+    versioned,
+)
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.training.training import temporary_checkpoint_base_path
 
@@ -129,27 +136,40 @@ def _build_grug_run_config(
     )
 
 
-def _prepare_grug(
+def resolve_grug_run_config(
     name: str,
-    launch: GrugBaseLaunchConfig,
-    *,
+    raw_launch: GrugBaseLaunchConfig,
     override_output_path: str | None = None,
-) -> tuple[str, GrugRunConfig, str]:
-    """Resolve output path and build a ``GrugRunConfig`` without submitting.
+) -> GrugRunConfig:
+    """Resolve a placeholder-bearing ``GrugBaseLaunchConfig`` into a runnable
+    ``GrugRunConfig`` under the *current* region.
 
-    Returns:
-        (name, run_config, output_path) — the three values needed to submit the
-        job or inspect in tests.
+    Designed to be invoked on the Iris worker so ``marin_prefix()`` reflects
+    the worker's region after a cross-region preemption — putting checkpoint
+    paths in the worker's region, not the submitter's.
     """
-    output_path = compute_output_path(name, launch, override_output_path=override_output_path)
+    output_path = compute_output_path(name, raw_launch, override_output_path=override_output_path)
 
     # Substitute OutputName placeholders in the launch config and unwrap
     # VersionedValue wrappers. Upstream InputName / ExecutorStep references
-    # (data placeholders) are preserved for the worker's `materialize` call.
-    launch = resolve_local_placeholders(launch, output_path)
+    # (data placeholders) are preserved for the `materialize` call below.
+    launch = resolve_local_placeholders(raw_launch, output_path)
 
     run_config = _build_grug_run_config(launch, output_path=output_path)
-    return name, run_config, output_path
+    return materialize(run_config)
+
+
+def _run_grug_on_worker(
+    name: str,
+    raw_launch: GrugBaseLaunchConfig,
+    override_output_path: str | None,
+) -> None:
+    """Grug training entrypoint: resolve under worker region, then run locally.
+
+    Top-level so Fray can pickle it as a JobRequest entrypoint.
+    """
+    run_config = resolve_grug_run_config(name, raw_launch, override_output_path)
+    _run_grug_local(run_config)
 
 
 def train_grug(
@@ -161,8 +181,9 @@ def train_grug(
 ) -> None:
     """Build and immediately submit a grug training job to Iris.
 
-    Resolves the output path locally, bakes checkpoint paths into the config,
-    and blocks until the Iris job completes.
+    Path baking (output path computation, checkpointer paths) is deferred to
+    the worker so a job preempted across regions resolves under the new region.
+    Blocks until the Iris job completes.
 
     Args:
         name: Human-readable identifier; forms the basis of the output path.
@@ -170,14 +191,13 @@ def train_grug(
         override_output_path: Optional explicit output path, bypassing the hash-based one.
         env_vars: Env vars to inject into the Iris worker at startup.
     """
-    _, run_config, _output_path = _prepare_grug(name, launch, override_output_path=override_output_path)
-
+    resources = unwrap_versioned_value(launch.resources)
     _submit_train_job(
         name=name,
-        train_config=run_config,
-        resources=run_config.resources,
+        entrypoint_callable=_run_grug_on_worker,
+        args=[name, launch, override_output_path],
+        resources=resources,
         env_vars=dict(env_vars or {}),
-        worker_fn=_run_grug_local,
     )
 
 

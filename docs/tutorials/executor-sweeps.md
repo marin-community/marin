@@ -65,21 +65,28 @@ runs a 3x3 LR/WD grid on a tiny Llama:
 
 ```python
 from fray.cluster import ResourceConfig
-from marin.execution.executor import materialize
 from marin.execution.sweep import SweepTarget, claim_and_run
+
+from experiments.defaults import _run_training_on_worker
 
 NUM_WORKERS = 3
 SWEEP_NAME = "train-tiny-sweep"
 
-# Pre-build all trials at submission time so workers do no config work.
+# Pre-build all trials at submission time. Configs carry placeholders
+# (OutputName, InputName) until the worker resolves them — that way checkpoint
+# paths land in the worker's region after a cross-region preemption.
 targets = [SweepTarget(target_id=t.name, config=t) for t in trials]
 
 
 def _run_one(target: SweepTarget) -> None:
-    """Materialize the trial's config and train inline on this TPU worker."""
+    """Resolve the trial's config under this worker's region and train inline."""
     trial = target.config
-    config = materialize(trial.inner_config)
-    levanter_train_lm.main(config)
+    _run_training_on_worker(
+        name=trial.name,
+        raw_config=trial.raw_config,
+        override_output_path=None,
+        resources=RESOURCES,
+    )
 
 
 def _sweep_worker_entrypoint(sweep_root: str) -> None:

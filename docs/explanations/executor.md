@@ -119,13 +119,14 @@ to a worker. The worker reads the already-resolved trainer config and starts
 training.
 
 For runs where you would rather have the executor walk happen *inside* the
-training worker, use `experiments.defaults.train(...)` instead. It builds the
-same Levanter config, computes the output path locally, then submits a
-single Iris training job that calls `materialize` on the worker to resolve
-any embedded `ExecutorStep`s and `InputName`s. This puts the upstream
-resolution (e.g. tokenization) under the worker's regional `marin_prefix()`,
-so a cross-region preempt-and-resume does not have to drag tokenized data
-back across regions: the new worker re-tokenizes locally.
+training worker, use `experiments.defaults.train(...)` instead. It builds a
+Levanter config with `OutputName` / `InputName` placeholders intact, then
+submits a single Iris training job that resolves the entire chain on the
+worker — `compute_output_path`, `resolve_local_placeholders`, the checkpointer
+bake, run-id imputation, and `materialize`. Every path comes from the
+worker's regional `marin_prefix()`, so a cross-region preempt-and-resume
+writes checkpoints in the new region and re-tokenizes locally instead of
+dragging data back across regions.
 
 Use `default_train` + `executor_main` when you want a normal experiment
 graph; use `train` for one-shot launches and sweep trials (see the

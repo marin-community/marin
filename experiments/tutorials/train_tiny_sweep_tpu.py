@@ -13,17 +13,16 @@ import dataclasses
 import os
 from dataclasses import dataclass
 
-import levanter.main.train_lm as levanter_train_lm
 from fray import client as fray_client
 from fray.cluster import ResourceConfig
 from fray.types import Entrypoint, JobRequest, create_environment
 from levanter.main.train_lm import TrainLmConfig
-from marin.execution.executor import materialize, versioned
+from marin.execution.executor import versioned
 from marin.execution.sweep import SweepTarget, claim_and_run
 from marin.training.training import extras_for_resources, resolve_training_env
 from rigging.filesystem import marin_prefix
 
-from experiments.defaults import prepare_lm_train
+from experiments.defaults import _run_training_on_worker, prepare_lm_train
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.llama import llama_30m
 from experiments.pretraining_datasets.simple import tokenized
@@ -65,16 +64,19 @@ sweep_configs = [
 @dataclass(frozen=True)
 class SweepTrial:
     name: str
-    inner_config: TrainLmConfig
+    raw_config: TrainLmConfig
 
 
-# Build all trials at submission time so workers do no config work.
+# Build all trials at submission time so workers do no config work. Configs
+# carry placeholders (OutputName, InputName) until resolved on the worker, so
+# checkpoint paths land in the *worker's* region after a cross-region
+# preemption.
 trials = []
 for sc in sweep_configs:
     # Marin will automatically create unique ids for runs b/c the model_config is versioned
     # however, we can give each run a unique name for easier identification
     _name = f"tutorial-slimpajama_6b-30m-sweep-lr{sc.learning_rate}-wd{sc.weight_decay}"
-    _job_name, _inner_config, _output_path = prepare_lm_train(
+    _job_name, _raw_config = prepare_lm_train(
         name=_name,
         tokenized=tokenized["slimpajama_6b"],
         model_config=versioned(llama_30m),
@@ -82,16 +84,20 @@ for sc in sweep_configs:
         tags=["llama", "30m", "slimpajama_6b", "tutorial", "sweep", "test20251117"],
         eval_harness_tasks=CORE_TASKS,
     )
-    trials.append(SweepTrial(name=_job_name, inner_config=_inner_config))
+    trials.append(SweepTrial(name=_job_name, raw_config=_raw_config))
 
 targets = [SweepTarget(target_id=t.name, config=t) for t in trials]
 
 
 def _run_one(target: SweepTarget) -> None:
-    """Materialize the trial's config and train inline on this TPU worker."""
+    """Resolve the trial's config under this worker's region and train inline."""
     trial: SweepTrial = target.config
-    config = materialize(trial.inner_config)
-    levanter_train_lm.main(config)
+    _run_training_on_worker(
+        name=trial.name,
+        raw_config=trial.raw_config,
+        override_output_path=None,
+        resources=RESOURCES,
+    )
 
 
 def _sweep_worker_entrypoint(sweep_root: str) -> None:

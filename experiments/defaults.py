@@ -575,32 +575,31 @@ def default_train(
 
 def _submit_train_job(
     name: str,
-    train_config: Any,
+    entrypoint_callable: Callable[..., None],
+    args: Sequence[Any],
     resources: ResourceConfig,
     env_vars: dict[str, str] | None,
-    worker_fn: Callable[[Any], None],
 ) -> None:
     """Resolve env, build a JobRequest, submit to Iris, block on completion.
 
     Args:
         name: Job name (used for the Iris job label after sanitization).
-        train_config: Trainer config object with a concrete ``output_path``
-            attribute already baked in. May contain ``InputName`` placeholders
-            resolved by ``materialize`` on the worker.
+        entrypoint_callable: Top-level callable invoked on the worker. The
+            worker is responsible for the resolution chain (compute the output
+            path under its own region, bake checkpointer paths, materialize
+            placeholders) before running training.
+        args: Positional arguments passed to ``entrypoint_callable``. Carries
+            placeholder-bearing configs and any other state the worker needs.
         resources: TPU/GPU/CPU resources to request from Iris.
         env_vars: Env vars injected into the Iris worker at startup. Values are
             resolved in the caller's process.
-        worker_fn: Top-level callable invoked on the worker after materialization.
     """
     resolved_env_vars = dict(env_vars or {})
     env = resolve_training_env(resolved_env_vars, resources)
 
     job_request = JobRequest(
         name=_sanitize_job_name(name),
-        entrypoint=Entrypoint.from_callable(
-            _run_training_on_worker,
-            args=[worker_fn, train_config],
-        ),
+        entrypoint=Entrypoint.from_callable(entrypoint_callable, args=list(args)),
         resources=resources,
         environment=create_environment(env_vars=env, extras=extras_for_resources(resources)),
     )
@@ -610,14 +609,50 @@ def _submit_train_job(
     handle.wait(raise_on_failure=True)
 
 
+def resolve_lm_train_config(
+    name: str,
+    raw_config: TrainLmConfig,
+    override_output_path: str | None,
+    resources: ResourceConfig,
+) -> TrainLmConfig:
+    """Resolve a placeholder-bearing ``TrainLmConfig`` under the *current* region.
+
+    Runs the full path-baking chain (output path computation, OutputName
+    substitution, checkpointer baking, run-id imputation, materialization of
+    upstream ExecutorSteps) on the caller. Designed to be invoked on the Iris
+    worker so ``marin_prefix()`` reflects the worker's region after a
+    cross-region preemption — putting checkpoint paths in the worker's region,
+    not the submitter's.
+    """
+    output_path = compute_output_path(name, raw_config, override_output_path=override_output_path)
+    config = resolve_local_placeholders(raw_config, output_path)
+    config = bake_output_path(config, output_path)
+    config, _ = impute_run_id(config, output_path=output_path)
+
+    # Disable accelerator requirement when running without GPU/TPU resources.
+    if resources.device.kind == "cpu":
+        config = dataclasses.replace(
+            config,
+            trainer=dataclasses.replace(config.trainer, require_accelerator=False),
+        )
+
+    # Guard against cross-region GCS access; skip on CPU (no region to match).
+    check_train_config_paths(config, resources)
+    return materialize(config)
+
+
 def _run_training_on_worker(
-    worker_fn: Callable[[Any], None],
-    train_config: Any,
+    name: str,
+    raw_config: TrainLmConfig,
+    override_output_path: str | None,
+    resources: ResourceConfig,
 ) -> None:
-    """Resolve upstream ExecutorSteps in train_config, then run worker_fn.
-    Top-level so Fray can pickle it as a JobRequest entrypoint."""
-    train_config = materialize(train_config)
-    worker_fn(train_config)
+    """LM training entrypoint: resolve under worker region, then run levanter.
+
+    Top-level so Fray can pickle it as a JobRequest entrypoint.
+    """
+    config = resolve_lm_train_config(name, raw_config, override_output_path, resources)
+    levanter_train_lm.main(config)
 
 
 def prepare_lm_train(
@@ -631,16 +666,17 @@ def prepare_lm_train(
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
-    override_output_path: str | None = None,
-) -> tuple[str, TrainLmConfig, str]:
-    """Resolve the output path and bake all paths into the trainer config.
+) -> tuple[str, TrainLmConfig]:
+    """Build the placeholder-bearing trainer config without resolving paths.
+
+    Path resolution is deferred to the worker (via ``resolve_lm_train_config``)
+    so cross-region preemption picks up the worker's region instead of the
+    submitter's. Does NOT submit any Iris job.
 
     Returns:
-        (job_name, baked_config, output_path) where ``job_name`` is the
-        ``checkpoints/<truncated_name>`` string used for the Iris job label,
-        ``baked_config`` has all checkpointer and HF save paths filled in and a
-        stable run id stamped, and ``output_path`` is the concrete GCS (or
-        local) path the trainer writes to. Does NOT submit any Iris job.
+        ``(job_name, raw_config)`` where ``job_name`` is the
+        ``checkpoints/<truncated_name>`` string used for the Iris job label and
+        ``raw_config`` still has ``OutputName`` / ``InputName`` placeholders.
     """
     truncated_name, inner_config = _build_train_lm_config(
         name,
@@ -653,29 +689,7 @@ def prepare_lm_train(
         wandb_name=wandb_name,
         wandb_group=wandb_group,
     )
-
-    job_name = os.path.join("checkpoints", truncated_name)
-    output_path = compute_output_path(
-        job_name,
-        inner_config,
-        override_output_path=override_output_path,
-    )
-    resources = train_config.resources
-    inner_config = resolve_local_placeholders(inner_config, output_path)
-    inner_config = bake_output_path(inner_config, output_path)
-    inner_config, _run_id = impute_run_id(inner_config, output_path=output_path)
-
-    # Disable accelerator requirement when running without GPU/TPU resources.
-    if resources.device.kind == "cpu":
-        inner_config = dataclasses.replace(
-            inner_config,
-            trainer=dataclasses.replace(inner_config.trainer, require_accelerator=False),
-        )
-
-    # Guard against cross-region GCS access; skip on CPU (no region to match).
-    check_train_config_paths(inner_config, resources)
-
-    return job_name, inner_config, output_path
+    return os.path.join("checkpoints", truncated_name), inner_config
 
 
 def train(
@@ -693,8 +707,9 @@ def train(
 ) -> None:
     """Build and immediately submit a Levanter LM training job to Iris.
 
-    Resolves the output path locally, bakes it into the trainer config, stamps
-    a stable run id, and blocks until the Iris job completes. This is the
+    Path baking (output path computation, checkpointer paths, run-id stamping)
+    is deferred to the worker so a job preempted across regions resolves under
+    the new region. Blocks until the Iris job completes. This is the
     single-call alternative to ``prepare_lm_train`` + ``_submit_train_job``.
 
     Args:
@@ -711,7 +726,7 @@ def train(
         wandb_group: Optional W&B group. Defaults to ``$WANDB_GROUP`` if unset.
         override_output_path: Optional explicit output path, bypassing the hash-based one.
     """
-    job_name, inner_config, _output_path = prepare_lm_train(
+    job_name, inner_config = prepare_lm_train(
         name,
         tokenized,
         model_config,
@@ -721,15 +736,14 @@ def train(
         eval_harness_tasks=eval_harness_tasks,
         wandb_name=wandb_name,
         wandb_group=wandb_group,
-        override_output_path=override_output_path,
     )
 
     _submit_train_job(
-        job_name,
-        inner_config,
-        train_config.resources,
-        dict(train_config.env_vars or {}),
-        levanter_train_lm.main,
+        name=job_name,
+        entrypoint_callable=_run_training_on_worker,
+        args=[job_name, inner_config, override_output_path, train_config.resources],
+        resources=train_config.resources,
+        env_vars=dict(train_config.env_vars or {}),
     )
 
 
