@@ -12,7 +12,6 @@ Same architecture as model.py but with:
 """
 
 import dataclasses
-import math
 import os
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -34,7 +33,7 @@ from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.grug.moe.adamh import scale_by_adamh
 from experiments.grug.nanogpt.model import BATCH_SIZE, NanoGPTConfig
-from experiments.grug.nanogpt.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.nanogpt.train_adamh_ref import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 
 # ---- Constants from nanogpt_adamh_ref.py ----
 ADAMH_REF_TRAIN_STEPS = 4875
@@ -137,84 +136,6 @@ class NanoGPTAdamHRefConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
-# ---- Custom init matching the ref ----
-# Kaiming-uniform with per-module multipliers, applied post-hoc to the standard model.
-
-
-def _kaiming_uniform_std(fan_in: int) -> float:
-    """std of Kaiming-uniform: U(-1/sqrt(fan_in), 1/sqrt(fan_in)) has std = 1/sqrt(3*fan_in)."""
-    return 1.0 / math.sqrt(3.0 * fan_in)
-
-
-def apply_adamh_ref_init(model, cfg: NanoGPTConfig, key):
-    """Re-initialize model weights to match nanogpt_adamh_ref.py init."""
-    import equinox as eqx
-    from jax import random
-    from jax.sharding import PartitionSpec as P
-    from jax.sharding import reshard
-    from levanter.grug.sharding import Pembed_vocab, Plm_head
-
-    dim = cfg.hidden_dim
-    ff = cfg.intermediate_dim
-    hdim = cfg.num_heads * cfg.head_dim
-
-    # Kaiming-uniform: sample uniform(-bound, bound) where bound = 1/sqrt(fan_in)
-    def kaiming_uniform(key, shape, fan_in, multiplier=1.0):
-        bound = multiplier / math.sqrt(fan_in)
-        return random.uniform(key, shape, minval=-bound, maxval=bound)
-
-    keys = random.split(key, 20)
-    ki = iter(range(len(keys)))
-
-    # Embed: PyTorch Embedding uses N(0,1) by default
-    model = eqx.tree_at(
-        lambda m: m.embed,
-        model,
-        reshard(random.normal(keys[next(ki)], (cfg.vocab_size, dim)), Pembed_vocab),
-    )
-
-    # LM head: zeroed
-    model = eqx.tree_at(lambda m: m.proj.weight, model, reshard(jnp.zeros((dim, cfg.vocab_size)), Plm_head))
-    model = eqx.tree_at(lambda m: m.proj.bias, model, jnp.zeros((cfg.vocab_size,)))
-
-    # Per-block init
-    for i, block in enumerate(model.blocks):
-        bkeys = random.split(keys[next(ki)], 12)
-        bki = iter(range(len(bkeys)))
-
-        # QKV: default Kaiming (fan_in=dim)
-        for attr in ["q", "k", "v"]:
-            layer = getattr(block.attn, attr)
-            w = kaiming_uniform(bkeys[next(bki)], (dim, hdim), dim)
-            b = kaiming_uniform(bkeys[next(bki)], (hdim,), dim)
-            layer = eqx.tree_at(lambda l: l.weight, layer, reshard(w, P("data", "model")))
-            layer = eqx.tree_at(lambda l: l.bias, layer, b)
-            block = eqx.tree_at(lambda bl, a=attr: getattr(bl.attn, a), block, layer)
-
-        # attn.proj: Kaiming x 1.25, bias zeroed
-        w = kaiming_uniform(bkeys[next(bki)], (hdim, dim), hdim, multiplier=1.25)
-        block = eqx.tree_at(lambda bl: bl.attn.proj.weight, block, reshard(w, P("model", "data")))
-        block = eqx.tree_at(lambda bl: bl.attn.proj.bias, block, jnp.zeros((dim,)))
-
-        # mlp.fc: Kaiming x 1.5 (fan_in=dim)
-        w = kaiming_uniform(bkeys[next(bki)], (dim, ff), dim, multiplier=1.5)
-        b = kaiming_uniform(bkeys[next(bki)], (ff,), dim)
-        block = eqx.tree_at(lambda bl: bl.mlp.fc.weight, block, reshard(w, P("data", "model")))
-        block = eqx.tree_at(lambda bl: bl.mlp.fc.bias, block, b)
-
-        # mlp.proj: Kaiming x 3.0 (fan_in=ff), bias zeroed
-        w = kaiming_uniform(bkeys[next(bki)], (ff, dim), ff, multiplier=3.0)
-        block = eqx.tree_at(lambda bl: bl.mlp.proj.weight, block, reshard(w, P("model", "data")))
-        block = eqx.tree_at(lambda bl: bl.mlp.proj.bias, block, jnp.zeros((dim,)))
-
-        # Norms stay at ones (default)
-        blocks_list = list(model.blocks)
-        blocks_list[i] = block
-        model = eqx.tree_at(lambda m: m.blocks, model, tuple(blocks_list))
-
-    return model
-
-
 # ---- Data config ----
 
 
@@ -261,21 +182,7 @@ def _resolve_tracker(tracker, run_id):
 
 
 def run_nanogpt_adamh_ref_trial(config: NanoGPTAdamHRefLaunchConfig) -> None:
-    """Run nanogpt with AdamH ref init and optimizer."""
-    # We override the train.py initial_state to apply the custom init.
-    # Import here to avoid circular deps.
-    from experiments.grug.nanogpt import train as nanogpt_train
-
-    # Monkey-patch initial_state to apply the ref init
-    _orig_initial_state = nanogpt_train.initial_state
-
-    def _adamh_ref_initial_state(model_config, *, optimizer, mp, key, ema_beta):
-        state = _orig_initial_state(model_config, optimizer=optimizer, mp=mp, key=key, ema_beta=ema_beta)
-        new_params = apply_adamh_ref_init(state.params, model_config, key)
-        return dataclasses.replace(state, params=new_params, ema_params=new_params if ema_beta else None)
-
-    nanogpt_train.initial_state = _adamh_ref_initial_state
-
+    """Run nanogpt with AdamH ref init (Kaiming + multipliers) and optimizer."""
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
@@ -309,7 +216,7 @@ def run_nanogpt_adamh_ref_trial(config: NanoGPTAdamHRefLaunchConfig) -> None:
 
 # ---- Launch step ----
 
-NANOGPT_MODEL = NanoGPTConfig(zero_init_proj=False)
+NANOGPT_MODEL = NanoGPTConfig()
 ADAMH_REF_OPTIMIZER = NanoGPTAdamHRefConfig()
 
 nanogpt_adamh_ref_trial = ExecutorStep(

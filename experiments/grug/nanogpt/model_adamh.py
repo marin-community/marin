@@ -57,7 +57,6 @@ class NanoGPTConfig:
     attn_scale: float = ATTN_SCALE
     logit_cap: float = LOGIT_CAP
     rope_base: float = ROPE_BASE
-    zero_init_proj: bool = True  # False for AdamH (needs nonzero norms)
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
@@ -175,7 +174,7 @@ class CausalSelfAttention(eqx.Module):
             k=LinearWithBias.init(cfg.hidden_dim, hdim, std, key=k_k, weight_pspec=P("data", "model")),
             v=LinearWithBias.init(cfg.hidden_dim, hdim, std, key=k_v, weight_pspec=P("data", "model")),
             proj=LinearWithBias.init(
-                hdim, cfg.hidden_dim, std, key=k_proj, weight_pspec=P("model", "data"), zero_init=cfg.zero_init_proj
+                hdim, cfg.hidden_dim, std, key=k_proj, weight_pspec=P("model", "data"), zero_init=True
             ),
             cfg=cfg,
         )
@@ -218,12 +217,7 @@ class MLP(eqx.Module):
         return MLP(
             fc=LinearWithBias.init(cfg.hidden_dim, cfg.intermediate_dim, std, key=k_fc, weight_pspec=P("data", "model")),
             proj=LinearWithBias.init(
-                cfg.intermediate_dim,
-                cfg.hidden_dim,
-                std,
-                key=k_proj,
-                weight_pspec=P("model", "data"),
-                zero_init=cfg.zero_init_proj,
+                cfg.intermediate_dim, cfg.hidden_dim, std, key=k_proj, weight_pspec=P("model", "data"), zero_init=True
             ),
         )
 
@@ -276,7 +270,7 @@ class Transformer(eqx.Module):
         k_embed, k_proj, *block_keys = random.split(key, cfg.num_layers + 2)
         embed = reshard(_init_weight(k_embed, (cfg.vocab_size, cfg.hidden_dim), 0.02), Pembed_vocab)
         proj = LinearWithBias.init(
-            cfg.hidden_dim, cfg.vocab_size, 0.02, key=k_proj, weight_pspec=Plm_head, zero_init=cfg.zero_init_proj
+            cfg.hidden_dim, cfg.vocab_size, 0.02, key=k_proj, weight_pspec=Plm_head, zero_init=True
         )
         blocks = tuple(Block.init(cfg, key=bk) for bk in block_keys)
         return Transformer(
@@ -330,102 +324,15 @@ class Transformer(eqx.Module):
 
         # Fused cross-entropy with logit soft-cap.
         # Note: proj bias is zero-init; we drop it here to use the fused kernel.
-        per_pos = fused_linear_softmax_cross_entropy_loss(
+        return fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.proj.weight,
             labels,
             weight=loss_weight,
-            reduction="none",
+            reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             logit_soft_cap=self.config.logit_cap,
             dtype=loss_dtype,
-        )
-        if reduction == "none":
-            return per_pos
-        total = jnp.sum(per_pos)
-        denom = jnp.maximum(jnp.sum(loss_weight), 1.0)
-        if reduction == "sum":
-            return total
-        return total / denom
-
-
-# ---- Transformer with Kaiming-uniform init matching nanogpt_adamh_ref.py ----
-
-
-def _kaiming_uniform(key: PRNGKeyArray, shape: tuple[int, ...], fan_in: int, multiplier: float = 1.0) -> jax.Array:
-    bound = multiplier / math.sqrt(fan_in)
-    return random.uniform(key, shape, minval=-bound, maxval=bound)
-
-
-class TransformerAdamHRef(Transformer):
-    """Same architecture as Transformer but with Kaiming-uniform init + per-module multipliers."""
-
-    @staticmethod
-    def init(cfg: NanoGPTConfig, *, key: PRNGKeyArray) -> "TransformerAdamHRef":
-        dim = cfg.hidden_dim
-        ff = cfg.intermediate_dim
-        hdim = cfg.num_heads * cfg.head_dim
-
-        k_embed, _k_proj, *block_keys = random.split(key, cfg.num_layers + 2)
-
-        # Embed: N(0,1) matching PyTorch nn.Embedding default
-        embed = reshard(random.normal(k_embed, (cfg.vocab_size, dim)), Pembed_vocab)
-
-        # LM head: zeroed weight, zeroed bias
-        proj = LinearWithBias(
-            weight=reshard(jnp.zeros((dim, cfg.vocab_size)), Plm_head),
-            bias=jnp.zeros((cfg.vocab_size,)),
-        )
-
-        # Norms: ones (default)
-        norm1 = RMSNorm.init(dim)
-        norm2 = RMSNorm.init(dim)
-
-        # Blocks with Kaiming init + multipliers
-        blocks = []
-        for bk in block_keys:
-            keys = random.split(bk, 10)
-            # QKV: default Kaiming (fan_in=dim)
-            q = LinearWithBias(
-                weight=reshard(_kaiming_uniform(keys[0], (dim, hdim), dim), P("data", "model")),
-                bias=_kaiming_uniform(keys[1], (hdim,), dim),
-            )
-            k_layer = LinearWithBias(
-                weight=reshard(_kaiming_uniform(keys[2], (dim, hdim), dim), P("data", "model")),
-                bias=_kaiming_uniform(keys[3], (hdim,), dim),
-            )
-            v = LinearWithBias(
-                weight=reshard(_kaiming_uniform(keys[4], (dim, hdim), dim), P("data", "model")),
-                bias=_kaiming_uniform(keys[5], (hdim,), dim),
-            )
-            # attn.proj: Kaiming x 1.25, bias zeroed
-            attn_proj = LinearWithBias(
-                weight=reshard(_kaiming_uniform(keys[6], (hdim, dim), hdim, 1.25), P("model", "data")),
-                bias=jnp.zeros((dim,)),
-            )
-            attn = CausalSelfAttention(q=q, k=k_layer, v=v, proj=attn_proj, cfg=cfg)
-
-            # mlp.fc: Kaiming x 1.5 (fan_in=dim)
-            fc = LinearWithBias(
-                weight=reshard(_kaiming_uniform(keys[7], (dim, ff), dim, 1.5), P("data", "model")),
-                bias=_kaiming_uniform(keys[8], (ff,), dim),
-            )
-            # mlp.proj: Kaiming x 3.0 (fan_in=ff), bias zeroed
-            mlp_proj = LinearWithBias(
-                weight=reshard(_kaiming_uniform(keys[9], (ff, dim), ff, 3.0), P("model", "data")),
-                bias=jnp.zeros((dim,)),
-            )
-            mlp = MLP(fc=fc, proj=mlp_proj)
-
-            blocks.append(Block(attn=attn, mlp=mlp, norm1=RMSNorm.init(dim), norm2=RMSNorm.init(dim)))
-
-        return TransformerAdamHRef(
-            embed=embed,
-            blocks=tuple(blocks),
-            proj=proj,
-            norm1=norm1,
-            norm2=norm2,
-            config=cfg,
         )
 
 
