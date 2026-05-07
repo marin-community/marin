@@ -4,10 +4,11 @@
 """Collect a structured perf report for a finished datakit ferry run.
 
 Given an iris job id, this shells out to the iris CLI to extract:
-- per-step wall times (regex over task-0 logs emitted by ``marin.execution.step_runner``)
-- per-task peak memory and exit codes (``iris job summary --json``)
-- job-level preemption / failure counts and per-state task counts
-- a heuristic bucket classification of non-succeeded tasks
+- per-step wall times derived from deterministic ``zephyr-<step>-*`` child-job
+  names + ``started_at``/``finished_at`` on ``iris job list --prefix``
+- aggregated preemption / failure / task-state counts across the whole tree
+- per-task peak memory and a heuristic bucket classification of non-succeeded
+  tasks, fetched via ``iris job summary --json`` for each leaf worker job
 
 The report is written as JSON locally and (optionally) mirrored to a GCS prefix
 under a ``report_<utc-ts>_<short-name>/`` directory so that runs can be compared
@@ -160,6 +161,59 @@ def fetch_job_tree(job_id: str, iris_config: Path) -> list[dict] | None:
         return None
 
 
+def fetch_leaf_summaries(job_tree: list[dict], iris_config: Path) -> list[dict]:
+    """Fetch ``iris job summary --json`` for every leaf job in the tree.
+
+    Per-task data (``memory_peak_mb``, ``error``, ``exit_code``) lives on each
+    job's own task array, which ``iris job list --prefix`` does not return.
+    Leaves are jobs with ``has_children == false`` — those are the worker
+    pools where the actual fan-out work runs. Coordinator jobs are skipped:
+    their tasks are dispatcher-only and don't carry useful memory or error
+    signal.
+    """
+    summaries: list[dict] = []
+    for job in job_tree:
+        if job.get("has_children") is not False:
+            continue
+        job_id = job.get("job_id")
+        if not job_id:
+            continue
+        s = fetch_job_summary(job_id, iris_config)
+        if s is not None:
+            summaries.append(s)
+    return summaries
+
+
+def aggregate_per_task_metrics(summaries: list[dict]) -> tuple[int, dict[str, int], int, int]:
+    """Walk every task across all summaries and return cross-tree per-task metrics.
+
+    Returns ``(peak_worker_memory_mb, infra_failures, ooms, failed_shards)``,
+    aggregated across the launcher and every leaf worker job.
+    """
+    peak_memory = 0
+    buckets: dict[str, int] = {b: 0 for b in FAILURE_BUCKETS}
+    ooms = 0
+    failed_shards = 0
+    for summary in summaries:
+        for task in summary.get("tasks") or []:
+            mem = int(task.get("memory_peak_mb") or 0)
+            if mem > peak_memory:
+                peak_memory = mem
+            bucket = classify_task_failure(
+                state=task.get("state", ""),
+                exit_code=task.get("exit_code"),
+                error=task.get("error"),
+            )
+            if bucket is None:
+                continue
+            buckets[bucket] = buckets.get(bucket, 0) + 1
+            if bucket == "oom":
+                ooms += 1
+            elif bucket == "application_failure":
+                failed_shards += 1
+    return peak_memory, buckets, ooms, failed_shards
+
+
 def aggregate_job_tree(jobs: list[dict]) -> dict:
     """Sum preemption / failure / task-state counts across every job in the tree.
 
@@ -250,9 +304,16 @@ def classify_task_failure(state: str, exit_code: int | None, error: str | None) 
     Heuristic — refined as we see real failure shapes from scheduled runs.
     Order matters: preempt and OOM win over the generic application_failure
     bucket so we don't lose specificity.
+
+    ``state=killed`` returns None: across the marin pipelines, killed tasks
+    are almost always cleanup kills after a coordinator finishes (the iris
+    controller terminates remaining workers). Counting them as failures
+    would inflate ``application_failure`` on every healthy run. The rare
+    case (e.g. user-cancelled run) shows up via the parent's job state, not
+    via per-task counts.
     """
     state_lc = (state or "").lower()
-    if state_lc == "succeeded":
+    if state_lc in {"succeeded", "killed"}:
         return None
     error_lc = (error or "").lower()
     if state_lc == "preempted" or "preempt" in error_lc:
@@ -263,35 +324,9 @@ def classify_task_failure(state: str, exit_code: int | None, error: str | None) 
         return "hardware_fault"
     if "schedule" in error_lc or "timeout" in error_lc or state_lc == "unschedulable":
         return "scheduling_timeout"
-    if state_lc in {"failed", "killed", "worker_failed"}:
+    if state_lc in {"failed", "worker_failed"}:
         return "application_failure"
     return "other"
-
-
-def classify_failures(tasks: list[dict]) -> tuple[dict[str, int], int, int]:
-    """Classify tasks; return ``(infra_failures, ooms, failed_shards)``.
-
-    ``failed_shards`` is the number of non-succeeded tasks whose bucket is
-    ``application_failure``-like (i.e. neither OOM nor preempted) — kept for
-    backward compatibility with the README's original two-field schema.
-    """
-    buckets: dict[str, int] = {b: 0 for b in FAILURE_BUCKETS}
-    ooms = 0
-    failed_shards = 0
-    for t in tasks:
-        bucket = classify_task_failure(
-            state=t.get("state", ""),
-            exit_code=t.get("exit_code"),
-            error=t.get("error"),
-        )
-        if bucket is None:
-            continue
-        buckets[bucket] = buckets.get(bucket, 0) + 1
-        if bucket == "oom":
-            ooms += 1
-        elif bucket == "application_failure":
-            failed_shards += 1
-    return buckets, ooms, failed_shards
 
 
 # --------------------------------------------------------------------------- #
@@ -324,16 +359,19 @@ def build_report(
     job_id: str,
     summary: dict | None,
     job_tree: list[dict] | None,
+    leaf_summaries: list[dict],
     status: dict | None,
     workflow_env: dict[str, str | None],
 ) -> PerfReport:
-    """Assemble a PerfReport from iris summary + tree + ferry status.
+    """Assemble a PerfReport from iris summary + tree + leaf summaries + status.
 
-    The parent ``iris job summary`` describes only the launcher task; ``job_tree``
-    is the result of ``iris job list --prefix <parent>`` which surfaces every
-    descendant job. We use the tree both for aggregated counts and for
-    per-step wall times (each ferry step submits a deterministically-named
-    child job).
+    Sources, in order of who-knows-what:
+    - parent ``iris job summary``: launcher task duration → ``wall_seconds_total``.
+    - ``iris job list --prefix``: per-step wall times (deterministic zephyr-*
+      child names) and aggregated preemption / failure / task-state counts
+      across the whole tree.
+    - per-leaf ``iris job summary``: per-task ``memory_peak_mb`` and ``error``
+      strings, which only live on the leaf workers, not on the parent.
     """
     report = PerfReport(
         iris_job_id=job_id,
@@ -351,16 +389,21 @@ def build_report(
         report.warnings.append("ferry_status_path: not readable; status/marin_prefix unset")
 
     if summary is None:
-        report.warnings.append("iris job summary --json: failed; per-task fields unavailable")
+        report.warnings.append("iris job summary --json: failed; wall_seconds_total unavailable")
     else:
         tasks = summary.get("tasks") or []
-        if tasks:
-            durations = [t.get("duration_ms") for t in tasks if t.get("duration_ms")]
-            if durations:
-                report.wall_seconds_total = max(durations) / 1000.0
-            mems = [t.get("memory_peak_mb", 0) for t in tasks]
-            report.peak_worker_memory_mb = max(mems) if mems else 0
-            report.infra_failures, report.ooms, report.failed_shards = classify_failures(tasks)
+        durations = [t.get("duration_ms") for t in tasks if t.get("duration_ms")]
+        if durations:
+            report.wall_seconds_total = max(durations) / 1000.0
+
+    # Per-task metrics across the launcher AND every leaf worker job.
+    summaries_for_tasks = ([summary] if summary else []) + leaf_summaries
+    if summaries_for_tasks:
+        report.peak_worker_memory_mb, report.infra_failures, report.ooms, report.failed_shards = (
+            aggregate_per_task_metrics(summaries_for_tasks)
+        )
+    if not leaf_summaries:
+        report.warnings.append("no leaf summaries fetched; peak_worker_memory_mb/infra_failures reflect launcher only")
 
     # Aggregate preemption / failure / task-state counts across the whole job
     # tree. Falls back to the parent-only summary fields when the tree is
@@ -494,12 +537,14 @@ def main(
 
     summary = fetch_job_summary(job_id, iris_config)
     job_tree = fetch_job_tree(job_id, iris_config)
+    leaf_summaries = fetch_leaf_summaries(job_tree, iris_config) if job_tree else []
     status = load_ferry_status(status_path)
 
     report = build_report(
         job_id=job_id,
         summary=summary,
         job_tree=job_tree,
+        leaf_summaries=leaf_summaries,
         status=status,
         workflow_env=workflow_env,
     )
