@@ -70,6 +70,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    freeze_router: bool = False
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -311,6 +312,7 @@ class MoEMLP(eqx.Module):
     """QB-routed MoE with sigmoid combine weights."""
 
     router: jax.Array
+    router_lambda: jax.Array | None  # Per-expert learnable scale on router logits
     router_bias: jax.Array
     w_gate_up: jax.Array
     w_down: jax.Array
@@ -333,8 +335,11 @@ class MoEMLP(eqx.Module):
         # concatenated tensor as a single parameter for its scale-invariant norm computation.
         w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
 
+        router_lambda = jnp.ones((e,)) if cfg.freeze_router else None
+
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
+            router_lambda=router_lambda,
             router_bias=jnp.zeros((e,)),
             w_gate_up=reshard(w_gate_up, P("expert", "data", "model")),
             w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
@@ -349,7 +354,10 @@ class MoEMLP(eqx.Module):
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        router_w = jax.lax.stop_gradient(self.router) if self.cfg.freeze_router else self.router
+        router_logits = jnp.einsum("td,de->te", x_flat, reshard(router_w, P(None, None))).astype(jnp.float32)
+        if self.router_lambda is not None:
+            router_logits = router_logits * self.router_lambda
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
