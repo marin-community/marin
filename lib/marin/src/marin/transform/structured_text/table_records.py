@@ -345,10 +345,24 @@ def _fsspec_url(fs: Any, path: str) -> str:
 
 
 def _parquet_file_matches_split(path: str, split: str) -> bool:
+    """Match a parquet file path against a HuggingFace split.
+
+    Recognizes both common HF download layouts:
+
+    * Flat: ``<split>.parquet`` or sharded ``<split>-<shard>-of-<total>.parquet``,
+      as exported by datasets that store parquet files at the repo root or in a
+      single ``data/`` directory.
+    * Nested: ``<config>/<split>/<shard>.parquet``, the layout used by HF's
+      ``refs/convert/parquet`` auto-conversion branch (e.g. for script-based
+      datasets like ``GEM/totto``).
+    """
     filename = os.path.basename(path)
     if not filename.endswith(".parquet"):
         return False
-    return filename == f"{split}.parquet" or filename.startswith(f"{split}-")
+    if filename == f"{split}.parquet" or filename.startswith(f"{split}-"):
+        return True
+    parent = os.path.basename(os.path.dirname(path))
+    return parent == split
 
 
 def _find_split_parquet_files(input_path: str, split: str, subset: str | None) -> list[str]:

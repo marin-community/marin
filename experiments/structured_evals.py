@@ -62,7 +62,10 @@ LONG_TAIL_PPL_EPIC_ISSUE = 5005
 STRUCTURED_TEXT_ISSUE = 5059
 
 TOTTO_DATASET_ID = "GEM/totto"
-TOTTO_REVISION = "5e745cedfd0050cc18aa143e5325d03061941d7d"
+# Pinned to the HF ``refs/convert/parquet`` ref because the script-loader main
+# revision contains no parquet files; this commit on the auto-convert ref ships
+# parquet shards under ``totto/<split>/<shard>.parquet``.
+TOTTO_REVISION = "a39a62bf1d92d9cf83d34593e2da559482cf1a6c"
 WIKITABLEQUESTIONS_DATASET_ID = "Stanford/wikitablequestions"
 WIKITABLEQUESTIONS_REVISION = "fac45b3184e0ce9b79eecac454acf17e0a51f94e"
 GITTABLES_DATASET_ID = "target-benchmark/gittables-corpus"

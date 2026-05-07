@@ -371,6 +371,37 @@ def test_stage_table_record_source_loads_downloaded_parquet_split(tmp_path):
     assert records[0]["id"] == "wtq:test:validation:00000000"
 
 
+def test_stage_table_record_source_loads_hf_autoconvert_parquet_layout(tmp_path):
+    """Recognize the HF ``refs/convert/parquet`` layout ``<config>/<split>/<shard>.parquet``.
+
+    Reproduces the GEM/totto auto-convert layout, where the basename of the
+    parquet file is e.g. ``0000.parquet`` and the split is encoded in the
+    parent directory name.
+    """
+    input_dir = tmp_path / "raw"
+    output_dir = tmp_path / "staged"
+    validation_dir = input_dir / "totto" / "validation"
+    train_dir = input_dir / "totto" / "train"
+    validation_dir.mkdir(parents=True)
+    train_dir.mkdir(parents=True)
+    Dataset.from_list([_wtq_fixture()]).to_parquet(validation_dir / "0000.parquet")
+    Dataset.from_list([_wtq_fixture()]).to_parquet(train_dir / "0000.parquet")
+
+    cfg = TableRecordStagingConfig(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        source_label="totto:test",
+        serializer_name="wikitablequestions",
+        split="validation",
+    )
+    result = stage_table_record_source(cfg)
+
+    assert result["record_count"] == 1
+    records = _read_staged_records(output_dir)
+    assert len(records) == 1
+    assert records[0]["id"] == "totto:test:validation:00000000"
+
+
 def test_stage_table_record_source_respects_byte_cap(tmp_path):
     # Use many copies; the cap should stop ingestion before all are written.
     fixtures = [_wtq_fixture() for _ in range(500)]
