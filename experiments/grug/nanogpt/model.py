@@ -322,12 +322,12 @@ class Transformer(eqx.Module):
         loss_weight = loss_weight.astype(loss_dtype)
 
         # Compute logits with soft-cap
-        raw = jnp.einsum("bsd,dv->bsv", hidden, self.proj.weight) + self.proj.bias
+        raw = jnp.einsum("bsd,dv->bsv", hidden, self.proj.weight, out_sharding=Pbatch) + self.proj.bias
         raw = raw.astype(jnp.float32)
         cap = self.config.logit_cap
         logits = cap * raw * jax.lax.rsqrt(raw**2 + cap**2)
 
-        # Cross-entropy
+        # Cross-entropy (logits fully replicated on vocab axis)
         log_probs = jax.nn.log_softmax(logits, axis=-1)
         token_losses = -jnp.take_along_axis(log_probs, labels[..., None], axis=-1).squeeze(-1)
         weighted = token_losses * loss_weight
