@@ -25,7 +25,7 @@ layout: agenda
 
 ## Scorecard since late March
 
-## Systems: Iris, CoreWeave, finelog, inference, cost
+## Systems: Iris, CoreWeave, finelog, inference, priorities
 
 ## Data and eval coverage
 
@@ -52,21 +52,22 @@ layout: default
 
 # ![](/icons/flag.svg) Since Late March
 
-- We got the compute grant!
+- Compute grant landed.
 
 ## Infra
-- Ray was removed from Marin as an execution path; Iris owns scheduling, with budgets actually enforced.
-- CoreWeave moved from bring-up into recurring smoke/canary coverage; Triton `ragged_dot` ships a 3.1× MoE backward speedup.
-- Finelog became a real log system — leveled compaction, ~73 → ~9 files steady-state, queryable from a dashboard.
-- Datakit and Zephyr now have an instrumented `download → normalize → dedup → consolidate → tokenize` lifecycle across 97 sources.
-- Inference service is designed and prototyped (#5368) but not yet on real evals; cost story is "compute budgets yes, dollars no."
+- Ray removed from Marin's execution path; Iris owns scheduling with enforced budgets.
+- CoreWeave on recurring smoke/canary coverage; Triton `ragged_dot` ships 3.1× MoE backward speedup.
+- Finelog: leveled compaction, ~73 → ~9 files steady-state, dashboard-queryable.
+- Datakit/Zephyr: instrumented `download → normalize → dedup → consolidate → tokenize` across 97 sources.
+- Inference service designed and prototyped (#5368); not yet on real evals.
+- Priority/preemption regime live — 35k+ preempted attempts since May 1.
 
 ## Modeling
 
-- MoE recipe continued to improve. 1e23 MoE still running
-- Delphi release+blog post almost done!
-- Lots more training data source ingested, including new code-adjacent synthetic data.
-- Lots of new perplexity evals to identify gaps in our existing coverage.
+- MoE recipe improvements continued; 1e23 MoE still running.
+- Delphi release + blog post near done.
+- New training data sources ingested, including code-adjacent synthetic data.
+- Expanded perplexity evals across coverage gaps.
 
 ---
 layout: section
@@ -74,7 +75,7 @@ layout: section
 
 # Systems
 
-Iris, CoreWeave, logs, inference, cost
+Iris, CoreWeave, logs, inference, priorities
 
 ---
 layout: split-left-green
@@ -88,12 +89,12 @@ layout: split-left-green
 
 <div style="font-size: 0.85em; line-height: 1.18">
 
-**#5138 deleted ~3,100 LOC on Apr 23.** Zero `import ray` in `lib/`. (Ray survives only as a transitive dep of `marin[vllm]`; not holding a wake.)
+**#5138 deleted ~3,100 LOC on Apr 23.** Zero `import ray` in `lib/` (transitive dep of `marin[vllm]` only).
 
-- Cleanup: #5137/#5140 retired fray.v1 and promoted fray.v2 → `fray.*`. Parent epic #4453 closed behind it.
-- **What you get**: budgets live (#5081, Apr 24 — `1000·accel + RAM_GB + 5·CPU`, researchers ≤ 75k, everyone else BATCH-only), preemptible jobs (#5083), same-variant slice eviction (#5240), manual slices (#5078).
-- Hot paths got attacked: PollTasks race (#5090), ping-based worker reaper (#4883), cached `can_fit` (#5412), ListJobs/SchedulerState perf (#5454).
-- **Not done**: canary pass-rate to 90% (#4270). #5469 (May 6 — controller-rollout race lost a parent job) is fixed; the class isn't.
+- Cleanup: #5137/#5140 retired fray.v1, promoted fray.v2 → `fray.*`. Parent epic #4453 closed.
+- Budgets live (#5081, Apr 24): `1000·accel + RAM_GB + 5·CPU`, researchers ≤ 75k, others BATCH-only. Preemptible jobs (#5083), same-variant slice eviction (#5240), manual slices (#5078).
+- Hot paths: PollTasks race (#5090), ping-based worker reaper (#4883), cached `can_fit` (#5412), ListJobs/SchedulerState perf (#5454).
+- Open: canary pass-rate to 90% (#4270). #5469 (May 6 controller-rollout race) fixed; the class isn't.
 
 </div>
 
@@ -110,8 +111,8 @@ layout: default
 
 <div style="font-size: 0.82em; margin-top: 6px; line-height: 1.2">
 
-- One user/day for two weeks, then **17–19 distinct users/day** by early May. **27 distinct users** total in the window.
-- Top 15 users each ran ≥20 root jobs; `bizon` is mostly automation, the rest are people. **27,000 root + child jobs in 28 days**, against a controller that wasn't the default execution path in March.
+- One user/day for two weeks, then **17–19 distinct users/day** by early May. **27 distinct users** total in window.
+- Top 15 users each ran ≥20 root jobs (`bizon` is automation, rest are people). **27,000 root + child jobs in 28 days**.
 
 </div>
 
@@ -121,11 +122,11 @@ layout: default
 
 # ![](/icons/gpu.svg) CoreWeave: From Bring-Up To Recurring Validation
 
-**Triton `ragged_dot` lands a 3.1× Grug MoE backward speedup over main** (#4297, #5350). That's the headline.
+**3.1× Grug MoE backward speedup** via Triton `ragged_dot` (#4297, #5350).
 
-- Canaries got real: Iris PR workflow (#4174), canary routing/timeouts/manual runs (#5112, #5125, #5429, #5463, #5479), sharp-edge docs (#5431). RNO2A / USW09B clusters and `cwobject` S3 paths wired in #5420.
-- Stack moved: JAX 0.10 / CUDA 13 (#5428), native vLLM as the only path (#4753, #5326 — Docker sidecar gone), NCCL fixes (#5379, #5461).
-- **Where we are**: multi-host JAX runs on CoreWeave — it's just slow. The work for the next month is making it fast. H100 MFU parity (#5357) is open; a June-sized MoE across 2+ H100 hosts is the target (#5356). Path is real; throughput isn't there yet.
+- Canaries: Iris PR workflow (#4174), canary routing/timeouts/manual runs (#5112, #5125, #5429, #5463, #5479), sharp-edge docs (#5431). RNO2A / USW09B clusters and `cwobject` S3 paths in #5420.
+- Stack: JAX 0.10 / CUDA 13 (#5428), native vLLM as the only path (#4753, #5326 — Docker sidecar removed), NCCL fixes (#5379, #5461).
+- Multi-host JAX runs on CoreWeave; throughput not yet competitive. H100 MFU parity (#5357) open; June-sized MoE across 2+ H100 hosts (#5356) is the target.
 
 ---
 layout: split-left-green
@@ -139,13 +140,13 @@ layout: split-left-green
 
 <div style="font-size: 0.82em; line-height: 1.18">
 
-A month ago Iris had no central log or stats store. Today `lib/finelog` captures **every log line and every metric, from every job and worker, consistently**.
+`lib/finelog` captures every log line and metric from every job and worker.
 
-The chart: 24h of the `iris.worker` namespace — 3,252 workers, 16 TPU variants, sampled every 10s, all queryable.
+Chart: 24h of the `iris.worker` namespace — 3,252 workers, 16 TPU variants, sampled every 10s.
 
-- **Logs + stats, one service**: lifted out of the controller (#5212, Apr 28); per-ns DuckDB + Vue dashboard (#5290).
-- **Persistence**: leveled compactor (#5456) bounds the namespace at ~9 files / 256 MiB terminal, each byte rewritten ~2× total (was ~3×). zstd + RAM cap (#5457).
-- **What you get**: "where are the logs at 3am" is a URL. "Did this regress" is a SQL query. Neither existed in March.
+- Logs + stats unified: lifted out of controller (#5212, Apr 28); per-ns DuckDB + Vue dashboard (#5290).
+- Leveled compactor (#5456) bounds namespace at ~9 files / 256 MiB terminal; each byte rewritten ~2× total (was ~3×). zstd + RAM cap (#5457).
+- Logs addressable by URL; regressions queryable via SQL.
 
 </div>
 
@@ -155,17 +156,17 @@ layout: default
 
 # ![](/icons/servers.svg) Inference Service: Designed, Prototyped, Not Yet Real
 
-The thesis (RFC #5285, merged): eval code talks OpenAI HTTP and is not allowed to know whether the backend is vLLM, Levanter, or a deterministic stub. Iris owns the lifecycle.
+RFC #5285 (merged): eval code talks OpenAI HTTP. Backend (vLLM / Levanter / stub) is opaque. Iris owns the lifecycle.
 
-- **What's there**: `RunningModel` / `OpenAIEndpoint` abstraction landed. Docker-sidecar vLLM removed (#5326, Apr 30) — native vLLM is the only production path. MVP broker + proxy + worker actor written and tested locally against the OpenAI stub and the real `lm_eval` tiny-scoring path (#5351, closed without merge — design notes survived, code didn't). Full design doc still open for review (#5400).
-- **What's not there**: an actual run. Backend launch + readiness wiring still has to live next to the worker. Single-threaded proxy, no streaming, no cancellation, no persistent broker — all intentional for the MVP, all needed before this is a "service" in the sense your sysadmin uses the word.
-- **The milestone that decides this** (#5368, @yonromai): MMLU-SL-Verb-5shot + HumanEval-5shot on the **1e22 MoE on a v5p-8, preemption-resilient.** Service is co-located with each eval job, not global. Today, when a TPU worker gets evicted, the eval blows up; the def-of-done is "it resumes."
+- **Abstraction**: `RunningModel` / `OpenAIEndpoint` landed. Docker-sidecar vLLM removed (#5326, Apr 30); native vLLM is the only production path. Design doc open for review (#5400).
+- **Prototype**: MVP broker + proxy + worker actor tested locally against OpenAI stub and `lm_eval` tiny-scoring (#5351, closed without merge — design retained). Single-threaded proxy, no streaming, no cancellation, no persistent broker.
+- **Milestone** (#5368, @yonromai): MMLU-SL-Verb-5shot + HumanEval-5shot on the 1e22 MoE on a v5p-8, preemption-resilient. Service co-located with each eval job. Def-of-done: eval resumes after TPU worker eviction.
 
 ---
 layout: split-left-green
 ---
 
-# ![](/icons/chart.svg) Cost & Capacity: Budgets, Yes; Dollars, No
+# ![](/icons/chart.svg) Iris Now Has Priorities
 
 <img src="/charts/iris-usage/preemptions.png" alt="Task preemptions per day" style="width:620px;"/>
 
@@ -173,13 +174,13 @@ layout: split-left-green
 
 <div style="font-size: 0.82em; line-height: 1.18">
 
-**Compute budgets**: enforced. **Dollar visibility**: nowhere.
+**35,520 preempted task attempts since May 1**, peak ~16k/day on May 3. Same-variant slice eviction (#5240) lets a higher-priority task reclaim a slot.
 
-The chart is budgets biting: **35,520 preempted task attempts since May 1**, peak ~16k/day on May 3. #5240 made same-variant eviction work; #5081 made budgets the thing enforced.
+- **Per-user budgets** (#5081, Apr 24): resource-value cap `1000·accel + RAM_GB + 5·CPU`. Researchers ≤ 75k; others BATCH-only.
+- **Bands**: PRODUCTION preempts INTERACTIVE; BATCH is preemptible. Manual slices bypass (#5078).
+- **Cross-region transfer budget** (#5225): tensorstore checkpoint I/O charged in compute units; cross-region bandwidth is a primary cost driver.
 
-- **Enforced** (#5081): per-user cap, `1000·accel + RAM_GB + 5·CPU`. Researchers ≤ 75k; others BATCH-only. Cross-region tensorstore I/O on a transfer budget in compute units (#5225) — bandwidth is a top cost driver.
-- **Not built**: billing-export dashboard, USD ledger, alerts/teardown, per-user $ accounting, storage-cost attribution. AGENTS.md's "storage and bandwidth are major cost drivers" remains a warning, not a reading.
-- **Honest**: compute, sensibly. Dollars, ask in June.
+Dollar accounting (billing-export, USD ledger, per-user $ caps) not yet wired.
 
 </div>
 
