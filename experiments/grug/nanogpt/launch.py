@@ -305,6 +305,6 @@ nanogpt_adamh_trial = ExecutorStep(
 
 if __name__ == "__main__":
     executor_main(
-        steps=[nanogpt_trial, nanogpt_adamh_trial],
-        description="NanoGPT reproduction: Muon vs AdamH on FineWeb10B-GPT2.",
+        steps=[nanogpt_adamh_trial],
+        description="NanoGPT with AdamH on FineWeb10B-GPT2.",
     )
