@@ -83,9 +83,7 @@ def test_drop_table_does_not_delete_remote_objects(tmp_path: Path):
         ns._flush_step()
         # Only compacted segments are uploaded.
         ns._force_compact_l0()
-        # Copy is async; wait for the worker to drain before asserting the
-        # file is visible at the destination.
-        assert store._wait_for_copies(timeout=5.0)
+        ns._sync_step()
 
         remote_ns_dir = remote / "iris.worker"
         assert remote_ns_dir.exists()

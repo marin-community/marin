@@ -166,10 +166,16 @@ class Catalog:
         "created_at_ms, min_key_value, max_key_value, copied_at_ms"
     )
 
-    def list_segments(self, namespace: str) -> list[SegmentRow]:
+    def list_segments(self, namespace: str, *, min_level: int = 0) -> list[SegmentRow]:
+        """Segment rows for ``namespace`` with ``level >= min_level``, ordered by ``min_seq``."""
         rows = self._conn.execute(
-            f"SELECT {self._SEGMENT_COLUMNS} FROM segments WHERE namespace = ? ORDER BY min_seq",
-            [namespace],
+            f"""
+            SELECT {self._SEGMENT_COLUMNS}
+            FROM segments
+            WHERE namespace = ? AND level >= ?
+            ORDER BY min_seq
+            """,
+            [namespace, min_level],
         ).fetchall()
         return [self._row_from_tuple(r) for r in rows]
 
@@ -305,23 +311,6 @@ class Catalog:
             "UPDATE segments SET copied_at_ms = ? WHERE namespace = ? AND path = ?",
             [copied_at_ms, namespace, path],
         )
-
-    def list_pending_copies(self) -> list[SegmentRow]:
-        """All L>=1 rows whose remote upload has not yet completed.
-
-        Ordered by ``min_seq`` so we drain oldest-first across the whole
-        store. This is the copy worker's only view into the catalog.
-        """
-        rows = self._conn.execute(
-            f"""
-            SELECT {self._SEGMENT_COLUMNS}
-            FROM segments
-            WHERE level >= 1
-              AND copied_at_ms IS NULL
-            ORDER BY namespace, min_seq
-            """
-        ).fetchall()
-        return [self._row_from_tuple(r) for r in rows]
 
     def select_eviction_candidate(self, namespace: str) -> SegmentRow | None:
         """Pick the oldest evictable segment in ``namespace``.

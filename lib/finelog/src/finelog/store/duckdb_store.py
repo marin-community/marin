@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
-import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -24,7 +22,6 @@ from pathlib import Path
 from threading import Lock
 
 import duckdb
-import fsspec.core
 import pyarrow as pa
 import pyarrow.ipc as paipc
 
@@ -77,13 +74,6 @@ _DEFAULT_DUCKDB_THREADS = "4"
 # parent doesn't trip Linux's overcommit heuristic when forking subprocesses.
 EMBEDDED_DUCKDB_MEMORY_LIMIT = "128MB"
 EMBEDDED_DUCKDB_THREADS = "2"
-
-# Streaming chunk size for src->dst copy. 4 MiB keeps RAM usage flat regardless
-# of segment size while still amortizing per-write overhead on GCS.
-_COPY_CHUNK_BYTES = 4 * 1024 * 1024
-# How long ``close()`` waits for the copy worker to drain before forcing exit.
-_COPY_DRAIN_TIMEOUT_SEC = 10.0
-
 
 # Namespace names: lowercase ASCII alphanumerics + ._-, starting with a
 # letter, max 64 chars. Restrictive enough to be safe as both a directory
@@ -188,101 +178,6 @@ class ConnectionPool:
         self._conn.close()
 
 
-class CopyWorker:
-    """Polling background uploader for L>=1 catalog segments.
-
-    One worker per :class:`DuckDBLogStore`. Walks the catalog every
-    ``_POLL_INTERVAL_SEC`` (or sooner when woken) for ``level >= 1 AND
-    copied_at_ms IS NULL`` rows, streams each parquet to remote storage,
-    and stamps the row on success. Per-segment RAM footprint is bounded
-    by ``_COPY_CHUNK_BYTES``.
-
-    Decoupling from compaction means the copy policy is "anything
-    promoted to L1+ that doesn't yet have a remote copy" — the planner
-    doesn't know or care about uploads.
-    """
-
-    _POLL_INTERVAL_SEC = 5.0
-
-    def __init__(self, store: DuckDBLogStore, remote_log_dir: str) -> None:
-        self._store = store
-        self._remote_log_dir = remote_log_dir
-        self._stop = threading.Event()
-        self._wake = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="finelog_copy", daemon=True)
-        self._thread.start()
-
-    def wake(self) -> None:
-        """Hint that new L>=1 segments may exist; speeds up the next pass."""
-        self._wake.set()
-
-    def wait_drained(self, timeout: float) -> bool:
-        """Block until the catalog has no L>=1 rows missing ``copied_at_ms``.
-
-        Returns True on drain, False on timeout.
-        """
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            self.wake()
-            with self._store._insertion_lock:
-                if not self._store._catalog.list_pending_copies():
-                    return True
-            time.sleep(0.05)
-        with self._store._insertion_lock:
-            return not self._store._catalog.list_pending_copies()
-
-    def close(self, timeout: float = _COPY_DRAIN_TIMEOUT_SEC) -> None:
-        self.wait_drained(timeout)
-        self._stop.set()
-        self._wake.set()
-        self._thread.join(timeout=timeout)
-
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                with self._store._insertion_lock:
-                    pending = self._store._catalog.list_pending_copies()
-            except Exception:
-                logger.warning("copy poll failed", exc_info=True)
-                pending = []
-            for row in pending:
-                if self._stop.is_set():
-                    break
-                completed_ms = self._upload(row.namespace, Path(row.path))
-                if completed_ms is not None:
-                    self._store._mark_copied(row.namespace, row.path, completed_ms)
-            self._wake.wait(timeout=self._POLL_INTERVAL_SEC)
-            self._wake.clear()
-
-    def _upload(self, namespace: str, local_path: Path) -> int | None:
-        """Stream ``local_path`` to the remote path. Returns completion ms
-        on success, ``None`` on failure (the catalog row stays unstamped
-        and the next poll retries)."""
-        remote_path = f"{self._remote_log_dir.rstrip('/')}/{namespace}/{local_path.name}"
-        upload_start = time.monotonic()
-        try:
-            with (
-                fsspec.core.open(str(local_path), "rb") as f_src,
-                fsspec.core.open(remote_path, "wb") as f_dst,
-            ):
-                shutil.copyfileobj(f_src, f_dst, length=_COPY_CHUNK_BYTES)
-        except Exception:
-            logger.warning("Failed to copy %s to %s", local_path, remote_path, exc_info=True)
-            return None
-        try:
-            size = local_path.stat().st_size
-        except OSError:
-            size = -1
-        logger.info(
-            "Copied %s to %s: bytes=%d elapsed_ms=%d",
-            local_path.name,
-            remote_path,
-            size,
-            int((time.monotonic() - upload_start) * 1000),
-        )
-        return int(time.time() * 1000)
-
-
 def _validate_namespace_name(name: str, data_dir: Path | None) -> Path | None:
     """Validate ``name`` and return its on-disk subdirectory (or ``None``)."""
     if not _NAMESPACE_NAME_RE.match(name):
@@ -343,22 +238,17 @@ class DuckDBLogStore:
         )
         self._catalog = Catalog(self._data_dir)
 
-        # Polling uploader: independent of compaction. Walks the catalog
-        # for L>=1 segments without ``copied_at_ms`` and uploads them.
-        # Only spun up when remote storage is configured.
-        self._copy_worker: CopyWorker | None = (
-            CopyWorker(self, remote_log_dir) if remote_log_dir and self._data_dir is not None else None
-        )
-
         self._namespace_registered_at: dict[str, int] = {}
         self._namespaces: dict[str, LogNamespaceProtocol] = {}
 
         # Disk-only kwargs; ignored by memory namespaces. ``duckdb_memory_limit``
         # in this dict feeds the per-namespace compaction connection in
         # ``DiskLogNamespace``; we route the dedicated compaction cap here so
-        # tier-merges don't share the read pool's tighter ceiling.
+        # tier-merges don't share the read pool's tighter ceiling. Each disk
+        # namespace owns its own remote sync — empty ``remote_log_dir``
+        # disables it.
         self._disk_namespace_kwargs = dict(
-            copy_wake=self._wake_copier,
+            remote_log_dir=remote_log_dir,
             flush_interval_sec=flush_interval_sec,
             compaction_config=compaction_config,
             segment_target_bytes=segment_target_bytes,
@@ -603,18 +493,6 @@ class DuckDBLogStore:
         finally:
             self._query_visibility_lock.write_release()
 
-    def _mark_copied(self, namespace: str, path: str, copied_at_ms: int) -> None:
-        """Worker-thread entry point for stamping the catalog after upload.
-
-        Eviction filters on ``copied_at_ms IS NOT NULL`` so a freshly
-        compacted segment becomes evictable only after the remote copy
-        is durable.
-        """
-        ns = self._namespaces.get(namespace)
-        if ns is None:
-            return
-        ns.mark_copied(path, copied_at_ms)
-
     def append(self, key: str, entries: list) -> None:
         if not entries:
             return
@@ -656,21 +534,8 @@ class DuckDBLogStore:
     def close(self) -> None:
         for ns in self._namespaces.values():
             ns.close()
-        if self._copy_worker is not None:
-            self._copy_worker.close()
         self._pool.close()
         self._catalog.close()
-
-    def _wake_copier(self) -> None:
-        """Hint the copy worker that fresh L>=1 segments may exist."""
-        if self._copy_worker is not None:
-            self._copy_worker.wake()
-
-    def _wait_for_copies(self, timeout: float = _COPY_DRAIN_TIMEOUT_SEC) -> bool:
-        """Block until the catalog has no pending L>=1 copies. Test/shutdown hook."""
-        if self._copy_worker is None:
-            return True
-        return self._copy_worker.wait_drained(timeout)
 
     # Test hooks below; forward to the registered "log" namespace.
 

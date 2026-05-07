@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 from finelog.store.compactor import CompactionConfig
@@ -13,7 +12,7 @@ from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 
 
 def _list_segments_locked(store: DuckDBLogStore, namespace: str):
-    """Catalog read serialized against the bg threads (copy worker, bg loop).
+    """Catalog read serialized against the bg thread.
 
     DuckDB connections aren't thread-safe and the catalog docstring is
     explicit that callers hold ``_insertion_lock``. Tests that read directly
@@ -21,20 +20,6 @@ def _list_segments_locked(store: DuckDBLogStore, namespace: str):
     """
     with store._insertion_lock:
         return store._catalog.list_segments(namespace)
-
-
-def _wait_until_copied(store: DuckDBLogStore, namespace: str, timeout: float = 5.0) -> None:
-    """Block until every L>=1 catalog row in ``namespace`` has ``copied_at_ms``.
-
-    Eviction is gated on the copy stamp; tests that target eviction must
-    wait for the worker before they can assert anything about it.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        rows = _list_segments_locked(store, namespace)
-        if rows and all(r.copied_at_ms is not None for r in rows if r.level >= 1):
-            return
-        time.sleep(0.05)
 
 
 def test_eviction_drops_oldest_segment_when_cap_exceeded(tmp_path: Path):
@@ -51,14 +36,12 @@ def test_eviction_drops_oldest_segment_when_cap_exceeded(tmp_path: Path):
 
         store.write_rows("ns", _ipc_bytes(_worker_batch(["a"], [1], [1])))
         _seal(store, "ns")
-        _wait_until_copied(store, "ns")
         first_l1 = sorted((tmp_path / "data" / "ns").glob("seg_L1_*.parquet"))
         assert len(first_l1) == 1
         first_path = first_l1[0]
 
         store.write_rows("ns", _ipc_bytes(_worker_batch(["b"], [2], [2])))
         _seal(store, "ns")
-        _wait_until_copied(store, "ns")
         # Drive the eviction tick (compaction tail invokes _eviction_step).
         store._namespaces["ns"]._eviction_step()
 
@@ -131,7 +114,7 @@ def test_fifo_eviction_across_mixed_levels(tmp_path: Path):
             ns._flush_step()
             while ns._compaction_step():
                 pass
-            _wait_until_copied(store, "ns")
+            ns._sync_step()
 
         # Eviction should now have run and brought us to <=2 segments,
         # popping oldest first.

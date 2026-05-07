@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import threading
 import time
 from collections import deque
@@ -27,6 +28,7 @@ from threading import Condition, Lock
 from typing import NamedTuple, Protocol
 
 import duckdb
+import fsspec.core
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -87,6 +89,9 @@ _BG_HEARTBEAT_INTERVAL_SEC = 10.0
 # Hard ceiling on the per-read parquet working set; safety net for body-LIKE
 # queries that cannot be pruned by row-group statistics.
 _MAX_PARQUET_BYTES_PER_READ = 2_500 * 1024 * 1024
+
+# 4 MiB amortizes GCS per-write overhead without growing with segment size.
+_REMOTE_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
 
 
 class SegmentMetadata(NamedTuple):
@@ -452,7 +457,7 @@ class DiskLogNamespace:
         name: str,
         schema: Schema,
         data_dir: Path,
-        copy_wake: Callable[[], None],
+        remote_log_dir: str,
         segment_target_bytes: int,
         flush_interval_sec: float,
         compaction_config: CompactionConfig,
@@ -468,10 +473,9 @@ class DiskLogNamespace:
         self._data_dir = data_dir
         data_dir.mkdir(parents=True, exist_ok=True)
 
-        # Notifies the store-wide copy worker that fresh L>=1 catalog
-        # rows may exist; the worker polls the catalog regardless, this
-        # just shortens the latency from "compaction commit" to "upload".
-        self._copy_wake = copy_wake
+        # Empty string disables remote sync.
+        self._remote_namespace_dir = f"{remote_log_dir.rstrip('/')}/{name}" if remote_log_dir else ""
+
         self._segment_target_bytes = segment_target_bytes
         self._compactor = Compactor(compaction_config)
 
@@ -689,11 +693,11 @@ class DiskLogNamespace:
         self._stop.set()
         self._wake.set()
         self._bg_thread.join()
-        # Flush turns RAM into L0 on disk so a clean restart picks it up.
-        # We do NOT promote L0 to L1 at close — L0 is local-only by design,
-        # and re-discovery on boot brings them back. The store-wide copy
-        # worker handles L1+ uploads independently.
+        # Flush RAM to L0 so a clean restart picks it up. We deliberately do
+        # NOT promote L0 to L1 here — L0 is local-only by design.
         self._flush_step()
+        # Final reconcile so the bucket matches the catalog at shutdown.
+        self._sync_step()
 
     def stop_and_join(self) -> None:
         """Stop the bg thread without flushing or compacting (used by ``DropTable``)."""
@@ -757,6 +761,7 @@ class DiskLogNamespace:
                     pass
                 self._compaction_rl.mark_run()
                 last_compact_at = time.monotonic()
+                self._sync_step()
                 self._eviction_step()
 
             self._wake.wait(timeout=min(self._flush_rl.time_until_next(), 1.0))
@@ -1003,7 +1008,6 @@ class DiskLogNamespace:
             pre_swap=lambda: os.rename(old.path, new_path),
         )
         logger.info("Level-bumped %s -> L%d (%s)", Path(old.path).name, job.output_level, new_filename)
-        self._copy_wake()
 
     def _apply_merge(self, job: CompactionJob) -> None:
         merged_filename = seg_filename(level=job.output_level, min_seq=job.output_min_seq)
@@ -1056,7 +1060,6 @@ class DiskLogNamespace:
             merged_seg.max_seq,
             int((time.monotonic() - compaction_start) * 1000),
         )
-        self._copy_wake()
 
     def _commit_swap(
         self,
@@ -1113,6 +1116,72 @@ class DiskLogNamespace:
                         logger.warning("Failed to unlink merged input %s", path, exc_info=True)
         finally:
             self._query_visibility_lock.write_release()
+
+    def _sync_step(self) -> None:
+        """Reconcile the remote namespace prefix with the catalog.
+
+        Uploads catalog L>=1 rows missing from remote, deletes remote
+        objects not referenced by the catalog. No-op when the namespace
+        has no remote prefix configured.
+        """
+        if not self._remote_namespace_dir:
+            return
+        with self._insertion_lock:
+            rows = self._catalog.list_segments(self.name, min_level=1)
+        # Compare on basename: catalog stores local absolute paths while
+        # ``fs.find`` returns backend-specific forms (gcs ``bucket/...``,
+        # local absolute). Filename is the only stable key.
+        live = {Path(r.path).name: r for r in rows}
+
+        try:
+            fs, root = fsspec.core.url_to_fs(self._remote_namespace_dir)
+            remote = {Path(p).name: p for p in fs.find(root)}
+        except Exception:
+            logger.warning("remote sync list failed for %s", self.name, exc_info=True)
+            return
+
+        for filename, row in live.items():
+            if filename in remote:
+                continue
+            completed_ms = self._upload(Path(row.path))
+            if completed_ms is not None:
+                self.mark_copied(row.path, completed_ms)
+
+        for filename, fs_path in remote.items():
+            if filename in live:
+                continue
+            try:
+                fs.rm(fs_path)
+                logger.info("Removed orphan remote segment %s/%s", self.name, filename)
+            except Exception:
+                logger.warning("orphan delete failed: %s", fs_path, exc_info=True)
+
+    def _upload(self, local_path: Path) -> int | None:
+        """Stream ``local_path`` to remote. Returns completion epoch_ms, or
+        ``None`` on failure (the next sync retries)."""
+        remote_path = f"{self._remote_namespace_dir}/{local_path.name}"
+        upload_start = time.monotonic()
+        try:
+            with (
+                fsspec.core.open(str(local_path), "rb") as f_src,
+                fsspec.core.open(remote_path, "wb") as f_dst,
+            ):
+                shutil.copyfileobj(f_src, f_dst, length=_REMOTE_UPLOAD_CHUNK_BYTES)
+        except Exception:
+            logger.warning("Failed to copy %s to %s", local_path, remote_path, exc_info=True)
+            return None
+        try:
+            size = local_path.stat().st_size
+        except OSError:
+            size = -1
+        logger.info(
+            "Copied %s to %s: bytes=%d elapsed_ms=%d",
+            local_path.name,
+            remote_path,
+            size,
+            int((time.monotonic() - upload_start) * 1000),
+        )
+        return int(time.time() * 1000)
 
     def _eviction_step(self) -> None:
         """Evict the namespace's oldest L>=1 copied segments until under caps.
