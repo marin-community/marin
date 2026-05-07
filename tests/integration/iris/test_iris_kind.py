@@ -33,7 +33,7 @@ from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.stores import ControllerStore
-from iris.cluster.controller.transitions import ControllerTransitions
+from iris.cluster.controller.transitions import ControllerTransitions, KillBuffer
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.service import CloudK8sService
 from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE, K8sTaskProvider
@@ -53,7 +53,7 @@ class _HarnessController:
 
     def __init__(self) -> None:
         self.wake = Mock()
-        self.kill_tasks_on_workers = Mock()
+        self.register_kills = Mock()
         self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.autoscaler = None
@@ -78,8 +78,10 @@ class ServiceTestHarness:
         with self.state._store.transaction() as cur:
             batch = self.state.drain_for_direct_provider(cur)
         result = self.k8s_provider.sync(batch)
+        kb = KillBuffer()
         with self.state._store.transaction() as cur:
-            self.state.apply_direct_provider_updates(cur, result.updates)
+            self.state.apply_direct_provider_updates(cur, result.updates, kb)
+        self.service._controller.register_kills(kb)
 
 
 def _make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:

@@ -297,6 +297,7 @@ markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "tpu_ci: mark tests that require a TPU",
     "integration: mark tests as integration tests that require cluster infrastructure",
+    "e2e: mark tests as end-to-end tests that require external services",
 ]
 testpaths = ["tests", "experiments"]
 
