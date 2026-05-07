@@ -182,7 +182,7 @@ class CloudK8sService:
             raise ImportError("Install iris[controller] to use CloudK8sService")
         if self.kubeconfig_path:
             self.kubeconfig_path = os.path.expanduser(self.kubeconfig_path)
-        self._api_client = self._new_api_client()
+        self._api_client = self.create_api_client()
 
         assert DynamicClient is not None
         self._dyn = DynamicClient(self._api_client)
@@ -195,7 +195,7 @@ class CloudK8sService:
             cmd.extend(["--kubeconfig", self.kubeconfig_path])
         self._kubectl_prefix = cmd
 
-    def _new_api_client(self) -> kubernetes.client.ApiClient:
+    def create_api_client(self) -> kubernetes.client.ApiClient:
         if self.kubeconfig_path:
             return kubernetes.config.new_client_from_config(
                 config_file=self.kubeconfig_path,
@@ -571,7 +571,7 @@ class CloudK8sService:
                 if container:
                     kwargs["container"] = container
 
-                with self._new_api_client() as exec_api_client:
+                with self.create_api_client() as exec_api_client:
                     resp = kubernetes.stream.stream(
                         kubernetes.client.CoreV1Api(exec_api_client).connect_get_namespaced_pod_exec,
                         **kwargs,
