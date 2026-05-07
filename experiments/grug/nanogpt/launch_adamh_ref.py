@@ -129,6 +129,8 @@ class NanoGPTAdamHRefConfig(OptimizerConfig):
                 return "embed"
             if path_lower.startswith("proj.") or path_lower == "proj":
                 return "head"
+            if "gated_norm" in path_lower or "attn_gate" in path_lower:
+                return "norm_bias"
             if "blocks" in path_lower and hasattr(param, "ndim") and param.ndim >= 2:
                 return "adamh"
             return "norm_bias"
