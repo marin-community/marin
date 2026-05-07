@@ -10,11 +10,12 @@ marin-libs wheels - same trigger shape (schedule + tag + workflow_dispatch +
 PR-smoke), no `push: branches: [main]` recursion.
 
 Modes:
-    nightly  -- `<bump_patch(Cargo.toml)>-dev.<YYYYMMDDhhmm>` (UTC). Minute
-                precision keeps the value human-readable while staying
-                collision-free in practice (only a same-minute manual
-                dispatch racing the cron would clash). Cargo.toml stays
-                frozen; subsequent runs read the same base.
+    nightly  -- `<bumped_patch>-dev.<YYYYMMDDhhmm>` (UTC), where
+                `<bumped_patch>` is one patch above max(Cargo.toml, latest
+                stable on PyPI). Sorting above the current stable is what
+                lets `marin-dupekit >= 0.1.0.dev0` in root pyproject.toml
+                resolve to the latest dev. Cargo.toml never needs to be
+                re-bumped after a stable cut.
     stable   -- version supplied via --version (extracted from the tag in CI).
                 Cargo.toml is rewritten on disk so maturin builds with that
                 version; the change is not committed.
@@ -30,6 +31,7 @@ Usage:
 
 import argparse
 import datetime as dt
+import json
 import os
 import platform
 import re
@@ -38,6 +40,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -46,6 +49,8 @@ REPO_ROOT = DUPEKIT_DIR.parent.parent
 MANIFEST_PATH = DUPEKIT_DIR / "Cargo.toml"
 DIST_DIR = REPO_ROOT / "dist"
 TOOLS_DIR = REPO_ROOT / ".tools"
+
+PYPI_JSON_URL = "https://pypi.org/pypi/marin-dupekit/json"
 
 ZIG_VERSION = "0.15.2"
 # ziglang.org's own server is very slow (<0.1 MB/s); use a community mirror
@@ -184,29 +189,50 @@ def _parse_semver(version: str) -> tuple[int, int, int]:
     return int(parts[0]), int(parts[1]), int(parts[2])
 
 
+def _max_version(a: str, b: str) -> str:
+    return a if _parse_semver(a) >= _parse_semver(b) else b
+
+
 def _bump_patch(version: str) -> str:
     major, minor, patch = _parse_semver(version)
     return f"{major}.{minor}.{patch + 1}"
 
 
-def _resolve_nightly_version() -> str:
-    """Build a nightly version off Cargo.toml.
+def _query_pypi_latest_stable() -> str | None:
+    """Latest non-pre-release version on PyPI, or None if the project doesn't exist yet.
 
-    Format is `<bumped_patch>-dev.<YYYYMMDDhhmm>`:
-      - `<bumped_patch>` anticipates the next stable so dev versions sort
-        between the current Cargo version (last cut stable) and the next one.
-      - `<YYYYMMDDhhmm>` is UTC timestamp at minute precision: human-readable
-        (you can tell at a glance when a nightly was cut), monotonic, and
-        unique enough — collision would require two runs to fire in the same
-        wall-clock minute, which only happens if a manual dispatch races the
-        cron.
-
-    Cargo accepts `-dev.N` as a semver prerelease; maturin emits the wheel as
-    PEP 440 `<bumped_patch>.devN`, which uv/pip both treat as a pre-release of
-    the upcoming stable (so the floor pin in root pyproject.toml continues to
-    resolve to a stable, not a nightly).
+    PyPI's `info.version` reports the latest stable (it skips pre-releases per
+    its own conventions), which is exactly what we want as the bump base.
     """
-    bumped = _bump_patch(_read_cargo_version())
+    try:
+        with urllib.request.urlopen(PYPI_JSON_URL, timeout=15) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+    return data.get("info", {}).get("version") or None
+
+
+def _resolve_nightly_version() -> str:
+    """Build a nightly version that uv/pip will prefer over the current stable.
+
+    Format: `<bumped_patch_above_stable>-dev.<YYYYMMDDhhmm>`.
+      - The bump base is `max(Cargo.toml, latest stable on PyPI)`, so the
+        resulting `<bumped>` always sits one patch *above* whatever is
+        currently stable. PEP 440 then orders the dev release *above* the
+        stable (`0.1.2.dev* > 0.1.1`), which is the property that lets root
+        pyproject.toml's `marin-dupekit >= 0.1.0.dev0` pin resolve to the
+        latest dev rather than the older stable.
+      - Querying PyPI also means Cargo.toml never has to be re-bumped after a
+        stable cut - the script always anticipates the next patch correctly.
+      - `<YYYYMMDDhhmm>` (UTC) keeps each dev release unique per minute and
+        readable at a glance.
+    """
+    cargo = _read_cargo_version()
+    pypi_stable = _query_pypi_latest_stable()
+    base = _max_version(cargo, pypi_stable) if pypi_stable else cargo
+    bumped = _bump_patch(base)
     stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%d%H%M")
     return f"{bumped}-dev.{stamp}"
 

@@ -20,7 +20,12 @@ dependencies = [
     "marin-zephyr",
     # top level deps. try to keep these small.
     "watchdog",
-    "marin-dupekit >= 0.1.0",
+    # `>= 0.1.0.dev0` opts uv into pre-releases for this one package so the
+    # daily nightly published by .github/workflows/dupekit-release-wheels.yaml
+    # (`X.Y.Z.dev<YYYYMMDDhhmm>`) is picked up by `uv lock` automatically.
+    # Cut a stable tag (`dupekit-v<X.Y.Z>`) when promoting; uv prefers the
+    # higher version, so a stable supersedes any earlier dev of the same Z.
+    "marin-dupekit >= 0.1.0.dev0",
 ]
 
 [tool.uv]
