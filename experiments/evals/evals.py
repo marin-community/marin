@@ -23,6 +23,7 @@ from marin.execution.executor import (
     versioned,
 )
 from marin.execution.remote import remote
+from marin.inference.vllm_server import validate_vllm_mode_env
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
 from experiments.evals.evalchemy_results_compiler import compile_evalchemy_results_fn
