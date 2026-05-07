@@ -786,7 +786,7 @@ class ControllerTransitions:
         # transitions can clear pending-kill records on terminal updates and
         # worker-failure transitions can drop kills for vanished workers.
         # None in tests that exercise transitions in isolation.
-        self._kill_registry: "KillRegistry | None" = kill_registry
+        self._kill_registry: KillRegistry | None = kill_registry
 
     @property
     def _db(self) -> "ControllerDB":
@@ -2460,9 +2460,7 @@ class ControllerTransitions:
             tasks_to_kill=tasks_to_kill,
         )
 
-    def apply_direct_provider_updates(
-        self, cur: TransactionCursor, updates: list[TaskUpdate], kb: KillBuffer
-    ) -> None:
+    def apply_direct_provider_updates(self, cur: TransactionCursor, updates: list[TaskUpdate], kb: KillBuffer) -> None:
         """Apply a batch of task state updates from a KubernetesProvider.
 
         Same state machine as apply_task_updates but without worker lookup,

@@ -39,11 +39,11 @@ from iris.cluster.controller.db import task_row_can_be_scheduled
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
 from iris.cluster.controller.schema import WorkerRow
 from iris.cluster.controller.transitions import (
-    KillBuffer,
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
+    KillBuffer,
     TaskUpdate,
 )
 from iris.cluster.types import JobName, WorkerId, is_job_finished
@@ -1541,7 +1541,8 @@ def test_holder_task_removed_from_worker_when_parent_succeeds(state):
                         new_state=job_pb2.TASK_STATE_SUCCEEDED,
                     )
                 ],
-            ), kb=KillBuffer()
+            ),
+            kb=KillBuffer(),
         )
 
     holder_task = _query_task(state, holder_task.task_id)

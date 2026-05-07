@@ -12,10 +12,10 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
 from iris.cluster.controller.transitions import (
-    KillBuffer,
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
     HeartbeatApplyRequest,
+    KillBuffer,
     TaskUpdate,
     _resolve_task_failure_state,
 )
@@ -1245,7 +1245,8 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
                             new_state=job_pb2.TASK_STATE_RUNNING,
                         )
                     ],
-                ), kb=KillBuffer()
+                ),
+                kb=KillBuffer(),
             )
 
         # The attempt row must remain in a consistent terminal state — NOT flipped

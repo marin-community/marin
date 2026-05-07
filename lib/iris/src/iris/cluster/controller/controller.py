@@ -2461,8 +2461,7 @@ class Controller:
             return
 
         jobs = [
-            (worker_id, address, [item.task_id for item in items])
-            for (worker_id, address), items in by_worker.items()
+            (worker_id, address, [item.task_id for item in items]) for (worker_id, address), items in by_worker.items()
         ]
         results = {worker_id: error for worker_id, error in self._provider.stop_tasks(jobs)}
         for (worker_id, _), items in by_worker.items():

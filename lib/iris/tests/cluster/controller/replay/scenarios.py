@@ -16,10 +16,10 @@ from contextlib import contextmanager
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.schema import EndpointRow
 from iris.cluster.controller.transitions import (
-    KillBuffer,
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
+    KillBuffer,
     ReservationClaim,
     TaskUpdate,
 )

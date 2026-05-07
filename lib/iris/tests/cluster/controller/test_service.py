@@ -22,10 +22,10 @@ from iris.cluster.controller.service import (
     _check_client_freshness,
 )
 from iris.cluster.controller.transitions import (
-    KillBuffer,
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
+    KillBuffer,
     TaskUpdate,
 )
 from iris.cluster.types import JobName, WorkerId, tpu_device
@@ -92,7 +92,8 @@ def _assign_and_transition(
             HeartbeatApplyRequest(
                 worker_id=worker_id,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-            ), kb=KillBuffer()
+            ),
+            kb=KillBuffer(),
         )
     if target_state != job_pb2.TASK_STATE_RUNNING:
         with state._store.transaction() as cur:
@@ -101,7 +102,8 @@ def _assign_and_transition(
                 HeartbeatApplyRequest(
                     worker_id=worker_id,
                     updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=target_state, error=error)],
-                ), kb=KillBuffer()
+                ),
+                kb=KillBuffer(),
             )
 
 

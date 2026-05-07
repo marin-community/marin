@@ -18,10 +18,10 @@ transitions.py:2030-2111.
 """
 
 from iris.cluster.controller.transitions import (
-    KillBuffer,
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
     HeartbeatApplyRequest,
+    KillBuffer,
     TaskUpdate,
 )
 from iris.rpc import job_pb2
@@ -114,7 +114,8 @@ def test_non_holder_task_not_reset_like_reservation_holder_on_worker_failure(sta
                         new_state=job_pb2.TASK_STATE_RUNNING,
                     ),
                 ],
-            ), kb=KillBuffer()
+            ),
+            kb=KillBuffer(),
         )
 
     # Capture the non-holder task's pre-failure attempt state so we can

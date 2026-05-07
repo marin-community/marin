@@ -6,9 +6,9 @@
 from finelog.rpc import logging_pb2
 from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.controller.transitions import (
-    KillBuffer,
     DirectProviderBatch,
     DirectProviderSyncResult,
+    KillBuffer,
     TaskUpdate,
 )
 from iris.cluster.types import JobName
@@ -200,7 +200,8 @@ def test_apply_succeeded(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
 
     # Then to SUCCEEDED.
@@ -209,7 +210,8 @@ def test_apply_succeeded(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_SUCCEEDED),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
 
     task = query_task(state, task_id)
@@ -237,14 +239,16 @@ def test_apply_failed_with_retry(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
 
     task = query_task(state, task_id)
@@ -273,14 +277,16 @@ def test_apply_failed_no_retry(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_FAILED, error="fatal"),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
 
     task = query_task(state, task_id)
@@ -305,7 +311,8 @@ def test_apply_failed_directly_from_assigned(state):
                     new_state=job_pb2.TASK_STATE_FAILED,
                     error="kubectl apply failed: RequestEntityTooLarge",
                 ),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
 
     task = query_task(state, task_id)
@@ -333,14 +340,16 @@ def test_apply_worker_failed_from_running_retries(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_WORKER_FAILED),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
 
     task = query_task(state, task_id)
@@ -361,7 +370,8 @@ def test_apply_worker_failed_from_assigned(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_WORKER_FAILED),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
 
     task = query_task(state, task_id)
@@ -440,14 +450,16 @@ def test_apply_ignores_finished_task(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_SUCCEEDED),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
 
     # Try to move to FAILED after already succeeded.

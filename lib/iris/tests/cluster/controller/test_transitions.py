@@ -32,11 +32,11 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
-    KillBuffer,
     MAX_REPLICAS_PER_JOB,
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
+    KillBuffer,
     PruneResult,
     TaskUpdate,
 )
@@ -800,7 +800,8 @@ def test_endpoint_survives_building_state(state):
                         new_state=job_pb2.TASK_STATE_BUILDING,
                     )
                 ],
-            ), kb=KillBuffer()
+            ),
+            kb=KillBuffer(),
         )
 
     # Register endpoint during BUILDING (e.g. jax_init.py pre-registration)
@@ -829,7 +830,8 @@ def test_endpoint_survives_building_state(state):
                         new_state=job_pb2.TASK_STATE_RUNNING,
                     )
                 ],
-            ), kb=KillBuffer()
+            ),
+            kb=KillBuffer(),
         )
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
@@ -1498,7 +1500,8 @@ def test_stale_attempt_ignored(state):
                         new_state=job_pb2.TASK_STATE_SUCCEEDED,
                     )
                 ],
-            ), kb=KillBuffer()
+            ),
+            kb=KillBuffer(),
         )
 
     # Task should still be RUNNING on the new attempt
@@ -1539,7 +1542,8 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
                 HeartbeatApplyRequest(
                     worker_id=worker_id,
                     updates=[TaskUpdate(task_id=task.task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
-                ), kb=KillBuffer()
+                ),
+                kb=KillBuffer(),
             )
 
     assert any("Stale attempt precondition violation" in r.message for r in caplog.records)
@@ -3402,7 +3406,9 @@ def _run_direct_tasks(state: ControllerTransitions, task_ids: list[JobName]) -> 
         state.drain_for_direct_provider(cur)
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
-            cur, [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids], kb=KillBuffer()
+            cur,
+            [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids],
+            kb=KillBuffer(),
         )
 
 
@@ -3506,7 +3512,8 @@ def test_apply_running(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
 
     assert _task_state_direct(state, task_id) == job_pb2.TASK_STATE_RUNNING
@@ -3524,14 +3531,16 @@ def test_apply_succeeded(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
 
     task = _task_row_direct(state, task_id)
@@ -3552,14 +3561,16 @@ def test_apply_failed_with_retry(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
 
     # Task should be PENDING again (1 failure <= 1 max_retries_failure).
@@ -3595,14 +3606,16 @@ def test_apply_failed_no_retry(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
 
     task = _task_row_direct(state, task_id)
@@ -3623,14 +3636,16 @@ def test_apply_worker_failed(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED, error="node died"),
-            ], kb=KillBuffer()
+            ],
+            kb=KillBuffer(),
         )
 
     # Should be retried (preemption_count=1 <= max_retries_preemption=1).
