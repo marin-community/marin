@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from iris.cluster.config import (
     config_to_dict,
     connect_cluster,
@@ -21,10 +20,9 @@ from iris.cluster.config import (
     make_local_config,
     validate_config,
 )
-from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.constraints import WellKnownAttribute
-from iris.rpc import config_pb2
-from iris.rpc import controller_pb2
+from iris.cluster.providers.factory import create_provider_bundle
+from iris.rpc import config_pb2, controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, ExponentialBackoff
@@ -735,6 +733,8 @@ scale_groups:
             iris_root / "examples" / "marin.yaml",
             iris_root / "examples" / "marin-dev.yaml",
             iris_root / "examples" / "coreweave.yaml",
+            iris_root / "examples" / "coreweave-rno2a.yaml",
+            iris_root / "examples" / "coreweave-usw09b.yaml",
             iris_root / "examples" / "test.yaml",
         ]
 

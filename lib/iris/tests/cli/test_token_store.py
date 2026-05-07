@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 
 import pytest
-
 from iris.cli.token_store import (
     ClusterCredential,
     cluster_name_from_url,

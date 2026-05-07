@@ -9,8 +9,9 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
+from iris.cluster.dashboard_common import favicon_route, html_shell, static_files_mount
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.dashboard_common import html_shell, static_files_mount
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.worker_connect import WorkerServiceWSGIApplication
 
 
@@ -37,12 +38,13 @@ class WorkerDashboard:
         return self._app
 
     def _create_app(self) -> Starlette:
-        rpc_wsgi_app = WorkerServiceWSGIApplication(service=self._service)
+        rpc_wsgi_app = WorkerServiceWSGIApplication(service=self._service, compressions=IRIS_RPC_COMPRESSIONS)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         routes = [
             Route("/health", self._health),
             Route("/", self._dashboard),
+            favicon_route(),
             Route("/task/{task_id:path}", self._task_detail_page),
             Route("/status", self._status_page),
             static_files_mount(),
@@ -51,14 +53,14 @@ class WorkerDashboard:
         return Starlette(routes=routes)
 
     def _status_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Status", "worker"))
+        return HTMLResponse(html_shell("worker"))
 
     def _health(self, _request: Request) -> JSONResponse:
         """Simple health check endpoint for bootstrap and load balancers."""
         return JSONResponse({"status": "healthy"})
 
     def _dashboard(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Worker", "worker"))
+        return HTMLResponse(html_shell("worker"))
 
     def _task_detail_page(self, request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Task Detail", "worker"))
+        return HTMLResponse(html_shell("worker"))

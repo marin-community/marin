@@ -5,11 +5,11 @@
 
 from typing import Protocol
 
-from iris.cluster.types import Entrypoint, JobName, TaskAttempt
-from iris.rpc import logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from finelog.rpc import logging_pb2
 from rigging.timing import Duration
+
+from iris.cluster.types import Entrypoint, JobName, TaskAttempt
+from iris.rpc import controller_pb2, job_pb2
 
 
 class ClusterClient(Protocol):
@@ -51,7 +51,7 @@ class ClusterClient(Protocol):
         self,
         job_id: JobName,
         timeout: float = 300.0,
-        poll_interval: float = 2.0,
+        poll_interval: float = 30.0,
     ) -> job_pb2.JobStatus: ...
 
     def wait_for_job_with_streaming(
@@ -59,7 +59,7 @@ class ClusterClient(Protocol):
         job_id: JobName,
         *,
         timeout: float,
-        poll_interval: float,
+        poll_interval: float = 30.0,
         since_ms: int = 0,
         min_level: str = "",
     ) -> job_pb2.JobStatus: ...
@@ -80,7 +80,12 @@ class ClusterClient(Protocol):
 
     def list_workers(self) -> list[controller_pb2.Controller.WorkerHealthStatus]: ...
 
-    def list_jobs(self) -> list[job_pb2.JobStatus]: ...
+    def list_jobs(
+        self,
+        *,
+        query: controller_pb2.Controller.JobQuery | None = None,
+        page_size: int = 500,
+    ) -> list[job_pb2.JobStatus]: ...
 
     def get_task_status(self, task_name: JobName) -> job_pb2.TaskStatus: ...
 

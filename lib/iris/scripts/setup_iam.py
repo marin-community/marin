@@ -479,7 +479,7 @@ def _check_result(
     help=(
         "Optional gs:// bucket or path used to verify bucket metadata access "
         "with the worker SA, e.g. gs://marin-us-east5 or "
-        "gs://marin-tmp-us-east5/ttl=1d"
+        "gs://marin-us-east5/tmp/ttl=1d"
     ),
 )
 @click.argument("email")

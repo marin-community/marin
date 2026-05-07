@@ -4,7 +4,6 @@
 """Tests for iris.cluster.types — Entrypoint, EnvironmentSpec, and constraint helpers."""
 
 import pytest
-
 from iris.cluster.constraints import (
     Constraint,
     ConstraintOp,

@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 from connectrpc.errors import ConnectError
+from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.client import IrisClient
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
@@ -26,11 +28,9 @@ from iris.cluster.types import (
     ResourceSpec,
     gpu_device,
 )
-from iris.rpc import config_pb2, logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
+from iris.version import client_revision_date
 from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import (
@@ -38,8 +38,8 @@ from .conftest import (
     MARIN_ROOT,
     ClusterCapabilities,
     IrisTestCluster,
-    _NoOpPage,
     _add_coscheduling_group,
+    _NoOpPage,
     assert_visible,
     dashboard_goto,
     discover_capabilities,
@@ -435,10 +435,13 @@ def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
+    # Wait for actual scale group content, not just the tab heading ("Autoscaler")
+    # which appears before the API response loads.
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Autoscaler') || "
-        "document.body.textContent.includes('Scale Group') || "
-        "document.body.textContent.includes('scale group')",
+        "() => !document.body.textContent.includes('Loading') && "
+        "(document.body.textContent.includes('Scale Group') || "
+        "document.body.textContent.includes('scale group') || "
+        "document.body.textContent.includes('local-cpu'))",
         timeout=10000,
     )
     smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
@@ -729,6 +732,7 @@ def test_exec_in_container(smoke_cluster):
 # ============================================================================
 
 
+@pytest.mark.timeout(120)
 def test_checkpoint_restore():
     """Controller restart resumes from checkpoint: completed jobs visible, cluster functional.
 
@@ -1010,6 +1014,7 @@ def test_static_auth_job_ownership():
             name="/user-a/auth-owned-job",
             entrypoint=entrypoint.to_proto(),
             resources=ResourceSpec(cpu=1, memory="1g").to_proto(),
+            client_revision_date=client_revision_date(),
         )
         resp = client_a.launch_job(launch_req)
         job_id = resp.job_id

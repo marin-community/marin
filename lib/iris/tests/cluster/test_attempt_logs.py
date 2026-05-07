@@ -7,8 +7,7 @@ Verifies that task status correctly records multiple attempts after
 failure + retry, using the ServiceTestHarness (parameterized GCP + K8s).
 """
 
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 
 from .conftest import ServiceTestHarness
 

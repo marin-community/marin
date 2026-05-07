@@ -14,8 +14,7 @@ from pathlib import Path
 import pytest
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
-from iris.rpc import config_pb2
-from iris.rpc import job_pb2
+from iris.rpc import config_pb2, job_pb2
 
 from tests.e2e._docker_cluster import E2ECluster
 

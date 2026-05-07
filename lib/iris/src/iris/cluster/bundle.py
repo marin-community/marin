@@ -175,25 +175,9 @@ class BundleStore:
 
     def _evict_if_needed_locked(self) -> None:
         """Evict oldest entries from in-memory cache. Caller must hold _lock."""
-        if self._max_cache_items <= 0 and self._max_cache_bytes <= 0:
-            return
-
-        count = len(self._cache)
-        evict_for_items = max(0, count - self._max_cache_items) if self._max_cache_items > 0 else 0
-        n_to_evict = evict_for_items
-
-        if self._max_cache_bytes > 0 and self._cache_bytes > self._max_cache_bytes:
-            freed = 0
-            for i, (_bid, blob) in enumerate(self._cache.items()):
-                if i >= n_to_evict and self._cache_bytes - freed <= self._max_cache_bytes:
-                    break
-                freed += len(blob)
-                n_to_evict = i + 1
-
-        if n_to_evict <= 0:
-            return
-
-        for _ in range(n_to_evict):
+        while (self._max_cache_items > 0 and len(self._cache) > self._max_cache_items) or (
+            self._max_cache_bytes > 0 and self._cache_bytes > self._max_cache_bytes
+        ):
             _bid, blob = self._cache.popitem(last=False)
             self._cache_bytes -= len(blob)
 

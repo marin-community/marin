@@ -8,14 +8,6 @@ and first_fit_decreasing() directly -- no platform or provider is needed.
 """
 
 import pytest
-
-from iris.cluster.controller.autoscaler.models import AdditiveReq, DemandEntry
-from iris.cluster.controller.autoscaler.routing import (
-    RoutingBudget,
-    first_fit_decreasing,
-    route_demand,
-)
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.constraints import (
     Constraint,
     ConstraintOp,
@@ -25,20 +17,30 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.rpc import config_pb2
-from iris.rpc import job_pb2
-from rigging.timing import Duration, Timestamp
-from tests.cluster.providers.conftest import (
-    make_mock_platform,
-    make_mock_slice_handle,
+from iris.cluster.controller.autoscaler.models import AdditiveReq, DemandEntry
+from iris.cluster.controller.autoscaler.routing import (
+    RoutingBudget,
+    first_fit_decreasing,
+    route_demand,
 )
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.rpc import config_pb2, job_pb2
+from rigging.timing import Duration, Timestamp
 
 from tests.cluster.controller.conftest import (
     DEFAULT_RESOURCES,
-    make_big_demand_entries as _make_big_demand_entries,
-    mark_discovered_ready as _mark_discovered_ready,
     make_demand_entries,
     make_scale_group_config,
+)
+from tests.cluster.controller.conftest import (
+    make_big_demand_entries as _make_big_demand_entries,
+)
+from tests.cluster.controller.conftest import (
+    mark_discovered_ready as _mark_discovered_ready,
+)
+from tests.cluster.providers.conftest import (
+    make_mock_platform,
+    make_mock_slice_handle,
 )
 
 # ---------------------------------------------------------------------------
