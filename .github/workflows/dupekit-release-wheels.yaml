@@ -39,14 +39,41 @@ jobs:
     outputs:
       mode: ${{ steps.pick.outputs.mode }}
       version: ${{ steps.resolved.outputs.version }}
+      skip: ${{ steps.stale.outputs.skip || 'false' }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Need recent history (~last day) for the stale-nightly check below.
+          # 50 commits is far more than a typical day's churn but cheap to
+          # fetch; falls back gracefully on quieter days.
+          fetch-depth: 50
+
+      # Skip the nightly when the package hasn't changed in the last day.
+      # Only applies to scheduled runs - manual dispatch and tag pushes always
+      # build, since the human triggering them has a reason to.
+      - id: stale
+        if: github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          # 25h not 24h: small buffer so a cron that drifts a few minutes late
+          # still sees yesterday's commits.
+          changes=$(git log --since='25 hours ago' --format=%H -- rust/dupekit/ .github/workflows/dupekit-release-wheels.yaml)
+          if [[ -z "$changes" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::no dupekit changes in the last 25h, skipping nightly"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "dupekit changes since yesterday:"
+            echo "$changes"
+          fi
+
       # Hoist user-supplied inputs into env so they reach the shell as
       # variables, not as `${{ ... }}` template substitutions. Per GitHub's
       # actions hardening guide, free-form inputs interpolated into a shell
       # script are an injection vector even when the trigger requires write
       # access.
       - id: pick
+        if: steps.stale.outputs.skip != 'true'
         env:
           INPUT_MODE: ${{ github.event.inputs.mode }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
@@ -70,6 +97,7 @@ jobs:
       # legs and the publish job all consume this output, so wheels and the
       # sdist agree on a single value.
       - id: resolved
+        if: steps.stale.outputs.skip != 'true'
         env:
           MODE: ${{ steps.pick.outputs.mode }}
           INPUT_VERSION: ${{ steps.pick.outputs.input_version }}
@@ -81,6 +109,7 @@ jobs:
 
   build:
     needs: resolve
+    if: needs.resolve.outputs.skip != 'true'
     strategy:
       matrix:
         include:
@@ -109,7 +138,11 @@ jobs:
   publish:
     # Manual mode produces local-version identifiers (`X.Y.Z+<sha>`) which PyPI
     # rejects, so it's a build-only smoke regardless of how it was triggered.
-    if: github.event_name != 'pull_request' && needs.resolve.outputs.mode != 'manual'
+    # Stale nightly skip is propagated from the resolve job.
+    if: |
+      github.event_name != 'pull_request'
+      && needs.resolve.outputs.mode != 'manual'
+      && needs.resolve.outputs.skip != 'true'
     needs: [resolve, build]
     runs-on: ubuntu-latest
     environment: pypi-publish
