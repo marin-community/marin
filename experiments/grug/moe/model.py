@@ -70,6 +70,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    router_hidden_dim: int | None = None  # None = linear router; set to e.g. 64 for MLP router
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -311,6 +312,7 @@ class MoEMLP(eqx.Module):
     """QB-routed MoE with sigmoid combine weights."""
 
     router: jax.Array
+    router_up: jax.Array | None  # MLP router: (router_hidden_dim, num_experts)
     router_bias: jax.Array
     w_gate_up: jax.Array
     w_down: jax.Array
@@ -318,7 +320,7 @@ class MoEMLP(eqx.Module):
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_gate, k_up, k_down = random.split(key, 4)
+        k_router, k_gate, k_up, k_down, k_router_up = random.split(key, 5)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -333,8 +335,18 @@ class MoEMLP(eqx.Module):
         # concatenated tensor as a single parameter for its scale-invariant norm computation.
         w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
 
+        rh = cfg.router_hidden_dim
+        if rh is not None:
+            # MLP router: hidden_dim -> rh -> num_experts
+            router = reshard(_init_weight(k_router, (d, rh), cfg.initializer_std), P(None, None))
+            router_up = reshard(_init_weight(k_router_up, (rh, e), cfg.initializer_std), P(None, None))
+        else:
+            router = reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None))
+            router_up = None
+
         return MoEMLP(
-            router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
+            router=router,
+            router_up=router_up,
             router_bias=jnp.zeros((e,)),
             w_gate_up=reshard(w_gate_up, P("expert", "data", "model")),
             w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
@@ -349,7 +361,13 @@ class MoEMLP(eqx.Module):
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        if self.router_up is not None:
+            # MLP router: hidden_dim -> router_hidden_dim (silu) -> num_experts
+            h = jnp.einsum("td,dh->th", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+            h = jax.nn.silu(h)
+            router_logits = jnp.einsum("th,he->te", h, reshard(self.router_up, P(None, None)))
+        else:
+            router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
