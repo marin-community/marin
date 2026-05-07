@@ -117,7 +117,10 @@ def _build_pypi_mirror_env(multi_region: str, project: str = _AR_PROJECT) -> _Py
             f"({sorted(_SUPPORTED_MULTI_REGIONS)}). Pass the result of "
             f"zone_to_multi_region()."
         )
-    base = f"https://{multi_region}-python.pkg.dev/{project}"
+    # Embed `oauth2accesstoken@` so uv invokes the keyring `subprocess`
+    # provider — uv only does that when the URL has a username component.
+    # Without it uv hits AR anonymously and gets 401 regardless of keyring.
+    base = f"https://oauth2accesstoken@{multi_region}-python.pkg.dev/{project}"
     return _PypiMirrorEnv(
         default_index=f"{base}/{_PYPI_MIRROR_REPO}/simple/",
         pytorch_cpu_index=f"{base}/{_PYTORCH_CPU_MIRROR_REPO}/simple/",

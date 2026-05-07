@@ -20,13 +20,12 @@ dependencies = [
     "marin-zephyr",
     # top level deps. try to keep these small.
     "watchdog",
-    "dupekit >= 0.1.0",
+    "marin-dupekit >= 0.1.0",
 ]
 
 [tool.uv]
 fork-strategy = "fewest"
 find-links = [
-    "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-40ac799",
     "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
 ]
 override-dependencies = [

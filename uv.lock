@@ -1846,18 +1846,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dupekit"
-version = "0.1.0"
-source = { registry = "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-40ac799" }
-sdist = { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0.tar.gz" }
-wheels = [
-    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0-cp311-abi3-manylinux_2_28_aarch64.whl" },
-    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl" },
-    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0-cp311-abi3-macosx_10_12_x86_64.whl" },
-    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0-cp311-abi3-macosx_11_0_arm64.whl" },
-]
-
-[[package]]
 name = "durationpy"
 version = "0.10"
 source = { registry = "https://pypi.org/simple" }
@@ -4926,7 +4914,7 @@ cpu = [
     { name = "torchvision", version = "0.25.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-5-marin-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-5-marin-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-5-marin-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform == 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform == 'linux' and extra == 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'linux' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'linux' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform == 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform == 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (sys_platform == 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform == 'win32' and extra == 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'win32' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'win32' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'win32' and extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
 ]
 dedup = [
-    { name = "dupekit" },
+    { name = "marin-dupekit" },
 ]
 eval = [
     { name = "lm-eval", extra = ["api", "math"] },
@@ -5067,7 +5055,6 @@ requires-dist = [
     { name = "datasets", specifier = "<5.0.0" },
     { name = "deepdiff", specifier = ">=8.6.2" },
     { name = "draccus", specifier = ">=0.11.5" },
-    { name = "dupekit", marker = "extra == 'dedup'" },
     { name = "fasteners", specifier = ">=0.19" },
     { name = "fire", marker = "extra == 'evalchemy'" },
     { name = "flask", specifier = ">=3.1.3" },
@@ -5091,6 +5078,7 @@ requires-dist = [
     { name = "lm-eval", extras = ["math", "api"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lxml", extras = ["html-clean"] },
     { name = "lxml-html-clean", specifier = ">=0.4.4" },
+    { name = "marin-dupekit", marker = "extra == 'dedup'" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },
@@ -5212,6 +5200,15 @@ test = [
     { name = "pytest-profiling" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+]
+
+[[package]]
+name = "marin-dupekit"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f3/b6/e19a2c0958e5de6d17fc1ec22835518a5e55f9c5f638a464bfc5763c64e6/marin_dupekit-0.1.0-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:ff7bc91f28da9c4859d59e7298a767ba5247cf0861379037fc6b09994c394d39", size = 4140634, upload-time = "2026-05-07T00:24:24.624Z" },
+    { url = "https://files.pythonhosted.org/packages/02/32/071b3ee4129f4242f334dcbe4be8e0918d74abb9c26206b9ea17d5f96f5c/marin_dupekit-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c4cc34c62a9dd9b045fa747a8798bda2e767c102f95ecb64bfa732ded34aa18e", size = 4520230, upload-time = "2026-05-07T00:24:22.672Z" },
 ]
 
 [[package]]
@@ -5788,8 +5785,8 @@ name = "marin-root"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "dupekit" },
     { name = "marin" },
+    { name = "marin-dupekit" },
     { name = "marin-finelog" },
     { name = "marin-fray" },
     { name = "marin-haliax" },
@@ -5802,8 +5799,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dupekit", specifier = ">=0.1.0" },
     { name = "marin", editable = "lib/marin" },
+    { name = "marin-dupekit", specifier = ">=0.1.0" },
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
