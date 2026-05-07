@@ -122,12 +122,20 @@ def convert(output_base: str, num_shards: int = NUM_TRAIN_SHARDS):
 
 def main():
     parser = argparse.ArgumentParser(description="Convert FineWeb10B-GPT2 to Levanter TreeCache")
-    parser.add_argument("--output", required=True, help="Output directory (local or gs://)")
+    parser.add_argument("--output", default=None, help="Output directory (default: marin_prefix()/data/fineweb10B-gpt2)")
     parser.add_argument("--num-shards", type=int, default=NUM_TRAIN_SHARDS, help="Number of train shards")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
-    convert(args.output, args.num_shards)
+
+    output = args.output
+    if output is None:
+        from rigging.filesystem import marin_prefix
+
+        output = os.path.join(marin_prefix(), "data", "fineweb10B-gpt2")
+
+    logger.info(f"Output: {output}")
+    convert(output, args.num_shards)
 
 
 if __name__ == "__main__":
