@@ -1,4 +1,4 @@
-.PHONY: help clean check fix setup_pre_commit rust-dev rust-user rust-status rust-package
+.PHONY: help clean check fix setup_pre_commit rust-dev rust-user rust-status
 .DEFAULT: help
 
 
@@ -137,9 +137,6 @@ rust-dev:
 rust-user:
 	@python3 scripts/rust_mode.py user
 	uv sync
-
-rust-package:
-	@python3 scripts/rust_package.py
 
 rust-status:
 	@python3 scripts/rust_mode.py status

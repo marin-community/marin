@@ -28,9 +28,15 @@ def migrate(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_tasks_job_failures " "ON tasks(job_id, failure_count, preemption_count)"
     )
 
-    # Speed up _read_worker_detail: resource history ordered by timestamp_ms but
-    # the existing index orders by id. Add a proper (worker_id, timestamp_ms DESC) index.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_worker_resource_history_ts "
-        "ON worker_resource_history(worker_id, timestamp_ms DESC)"
-    )
+    # Historical: this also created idx_worker_resource_history_ts on
+    # worker_resource_history. The table is dropped in 0040 and no longer
+    # appears in MAIN_TABLES, so a fresh DB never has the table here. The
+    # index drop is handled by 0040 for legacy DBs.
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_resource_history'"
+    ).fetchone()
+    if has_table:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_worker_resource_history_ts "
+            "ON worker_resource_history(worker_id, timestamp_ms DESC)"
+        )

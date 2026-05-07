@@ -123,7 +123,9 @@ server is part of the monitoring setup. State file allows resume after context r
    - otherwise: sleep 570
 
 2. CHECK LOGS
-   uv run iris --config <CONFIG> job logs --since-seconds 900 --include-children <JOB_ID> | rg -i -e "loss|error|traceback|exception|resource_exhausted|oom|compiler_base\.cc:2587|program hbm requirement|largest program allocations|ownerdiederror|dead node|node death|autoscaler unsatisfied resources|no accelerator found|failed_precondition|device or resource busy"
+   uv run iris --config <CONFIG> job logs --since-seconds 900 <JOB_ID> | rg -i -e "loss|error|traceback|exception|resource_exhausted|oom|compiler_base\.cc:2587|program hbm requirement|largest program allocations|ownerdiederror|dead node|node death|autoscaler unsatisfied resources|no accelerator found|failed_precondition|device or resource busy"
+
+   `iris job logs <JOB_ID>` includes child-job task logs by default.
 
 3. CHECK STATUS
    uv run iris --config <CONFIG> job list --json --prefix <JOB_ID>

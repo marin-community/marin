@@ -29,8 +29,8 @@ from dataclasses import dataclass
 from connectrpc.request import RequestContext
 from google.protobuf.json_format import MessageToJson
 from google.protobuf.message import Message
+from rigging.redaction import redact_json_text
 
-from iris.cluster.redaction import redact_json_preview
 from iris.rpc import stats_pb2, time_pb2
 from iris.rpc.auth import get_verified_identity
 
@@ -279,7 +279,7 @@ def _render_preview(request: Message | None, max_bytes: int) -> str:
     except Exception:
         logger.debug("Failed to render request preview for %s", type(request).__name__, exc_info=True)
         return ""
-    rendered = redact_json_preview(rendered)
+    rendered = redact_json_text(rendered)
     return _truncate(rendered, max_bytes)
 
 

@@ -182,15 +182,7 @@ class CloudK8sService:
             raise ImportError("Install iris[controller] to use CloudK8sService")
         if self.kubeconfig_path:
             self.kubeconfig_path = os.path.expanduser(self.kubeconfig_path)
-            self._api_client = kubernetes.config.new_client_from_config(
-                config_file=self.kubeconfig_path,
-            )
-        else:
-            try:
-                kubernetes.config.load_incluster_config()
-                self._api_client = kubernetes.client.ApiClient()
-            except kubernetes.config.ConfigException:
-                self._api_client = kubernetes.config.new_client_from_config()
+        self._api_client = self.create_api_client()
 
         assert DynamicClient is not None
         self._dyn = DynamicClient(self._api_client)
@@ -202,6 +194,18 @@ class CloudK8sService:
         if self.kubeconfig_path:
             cmd.extend(["--kubeconfig", self.kubeconfig_path])
         self._kubectl_prefix = cmd
+
+    def create_api_client(self) -> kubernetes.client.ApiClient:
+        if self.kubeconfig_path:
+            return kubernetes.config.new_client_from_config(
+                config_file=self.kubeconfig_path,
+            )
+
+        try:
+            kubernetes.config.load_incluster_config()
+            return kubernetes.client.ApiClient()
+        except kubernetes.config.ConfigException:
+            return kubernetes.config.new_client_from_config()
 
     def _resource_api(self, resource: K8sResource):
         """Get the DynamicClient resource handle for a K8sResource enum member."""
@@ -567,10 +571,11 @@ class CloudK8sService:
                 if container:
                     kwargs["container"] = container
 
-                resp = kubernetes.stream.stream(
-                    self._core_v1.connect_get_namespaced_pod_exec,
-                    **kwargs,
-                )
+                with self.create_api_client() as exec_api_client:
+                    resp = kubernetes.stream.stream(
+                        kubernetes.client.CoreV1Api(exec_api_client).connect_get_namespaced_pod_exec,
+                        **kwargs,
+                    )
                 return ExecResult(returncode=0, stdout=resp, stderr="")
             except ApiException as e:
                 return ExecResult(returncode=1, stdout="", stderr=str(e))

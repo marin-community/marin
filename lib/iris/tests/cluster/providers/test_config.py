@@ -733,6 +733,8 @@ scale_groups:
             iris_root / "examples" / "marin.yaml",
             iris_root / "examples" / "marin-dev.yaml",
             iris_root / "examples" / "coreweave.yaml",
+            iris_root / "examples" / "coreweave-rno2a.yaml",
+            iris_root / "examples" / "coreweave-usw09b.yaml",
             iris_root / "examples" / "test.yaml",
         ]
 

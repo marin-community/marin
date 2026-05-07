@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
@@ -126,8 +127,7 @@ def _normalize_output_pattern(output_pattern: str | Callable[[int, int], str]) -
         Callable that takes (shard_idx, total_shards) and returns the output path
     """
     if isinstance(output_pattern, str):
-        pattern_str = output_pattern
-        return lambda shard_idx, total: format_shard_path(pattern_str, shard_idx, total)
+        return functools.partial(format_shard_path, output_pattern)
     return output_pattern
 
 
@@ -892,7 +892,7 @@ class Dataset(Generic[T]):
 
         def keep_first(k, items: Iterator[T]) -> T:
             """Reducer that keeps the first item."""
-            return next(iter(items))
+            return next(items)
 
         return self.map_shard(streaming_dedup).group_by(key=key, reducer=keep_first, num_output_shards=num_output_shards)
 

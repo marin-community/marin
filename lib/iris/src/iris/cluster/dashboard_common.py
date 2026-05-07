@@ -163,7 +163,7 @@ _NOT_BUILT_HTML = """\
 """
 
 
-def html_shell(title: str, dashboard_type: str = "controller") -> str:
+def html_shell(dashboard_type: str = "controller") -> str:
     """Return the pre-built HTML page for a dashboard.
 
     Vue Router handles all client-side routing, so every route within

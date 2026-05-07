@@ -13,11 +13,22 @@ dependencies = [
     "connect-python>=0.9.0",
     "duckdb>=1.0.0",
     "fsspec>=2024.0.0",
+    "numpy>=1.26",
     "protobuf>=5.0",
     "pyarrow>=19.0.0",
     "pyyaml>=6.0",
     "starlette>=0.50.0",
     "uvicorn[standard]>=0.23.0",
+    "zstandard>=0.22",
+]
+
+# Extras installed in the Docker image but split out so the dep-install layer
+# (--no-install-project) is cached on pyproject.toml changes, not source edits.
+[project.optional-dependencies]
+server = [
+    "gcsfs>=2024.0.0",
+    "py-spy",
+    "memray",
 ]
 
 [project.scripts]
@@ -30,7 +41,7 @@ dev = [
     "pytest-asyncio",
     "pytest-timeout",
     "pytest-xdist",
-    "gcsfs>=2024.0.0",
+    "marin-finelog[server]",
 ]
 
 [tool.hatch.build.targets.wheel]

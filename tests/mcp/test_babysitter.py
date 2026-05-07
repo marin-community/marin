@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import marin.mcp.babysitter as babysitter
 from iris.cli.token_store import store_token
 from iris.rpc import controller_pb2, job_pb2, time_pb2
 from marin.mcp.babysitter import (
     IrisBabysitter,
     IrisConnectionConfig,
-    _job_summary_payload,
     _token_provider,
     classify_diagnosis,
     parse_zephyr_progress,
@@ -104,10 +104,31 @@ def test_job_summary_payload_preserves_summary_task_fields():
         exit_code=0,
     )
 
-    payload = _job_summary_payload(job, [running_task])
+    payload = babysitter._job_summary_payload(job, [running_task])
 
     assert payload["tasks"][0]["index"] == "0"
     assert payload["tasks"][0]["exit_code"] is None
+    assert "resource_usage" not in payload
+    assert "resource_requests" in payload
+    assert "resource_usage" not in payload
+
+
+def test_job_summary_payload_does_not_require_full_job_serialization(monkeypatch):
+    job = job_pb2.JobStatus(
+        job_id="/alice/train",
+        name="train",
+        state=job_pb2.JOB_STATE_RUNNING,
+        task_count=1,
+    )
+
+    def fail_full_job_serialization(_job):
+        raise AttributeError("resource_usage")
+
+    monkeypatch.setattr(babysitter, "job_status_to_json", fail_full_job_serialization)
+
+    payload = babysitter._job_summary_payload(job, [])
+
+    assert payload["job_id"] == "/alice/train"
     assert "resource_requests" in payload
 
 

@@ -30,12 +30,13 @@ from pathlib import Path
 
 import click
 import duckdb
-from scripts.storage.constants import (
+from tqdm import tqdm
+
+from scripts.ops.storage.constants import (
     BUCKET_LOCATIONS,
     DISCOUNT_FACTOR,
     STORAGE_CLASS_PRICING,
 )
-from tqdm import tqdm
 
 
 def _download_gcs_parquet(gcs_dir: str, local_dir: Path) -> Path:

@@ -30,6 +30,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.version import client_revision_date
 from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import (
@@ -1013,6 +1014,7 @@ def test_static_auth_job_ownership():
             name="/user-a/auth-owned-job",
             entrypoint=entrypoint.to_proto(),
             resources=ResourceSpec(cpu=1, memory="1g").to_proto(),
+            client_revision_date=client_revision_date(),
         )
         resp = client_a.launch_job(launch_req)
         job_id = resp.job_id

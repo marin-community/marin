@@ -65,6 +65,7 @@ nav:
       - Setting up a Local GPU Environment: tutorials/local-gpu.md
       - Prepare a Storage Bucket: tutorials/storage-bucket.md
       - Executor 101: tutorials/executor-101.md
+      - Executor Sweeps: tutorials/executor-sweeps.md
       - Training an LM: tutorials/train-an-lm.md
   - Explanations:
       - The Language Modeling Pipeline: explanations/lm-pipeline.md

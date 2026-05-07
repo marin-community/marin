@@ -31,6 +31,8 @@ from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
+from tests.cluster.conftest import fake_log_client_from_service
+
 from .conftest import (
     make_job_request,
     make_test_entrypoint,
@@ -88,7 +90,6 @@ def _assign_and_transition(
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
             ),
         )
@@ -98,7 +99,6 @@ def _assign_and_transition(
                 cur,
                 HeartbeatApplyRequest(
                     worker_id=worker_id,
-                    worker_resource_snapshot=None,
                     updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=target_state, error=error)],
                 ),
             )
@@ -692,7 +692,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -723,7 +723,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -999,7 +999,8 @@ def test_task_summaries_sql_group_by(state, service):
     service.launch_job(make_job_request("multi-task", replicas=3), None)
 
     job_id = JobName.root("test-user", "multi-task")
-    summaries = _task_summaries_for_jobs(state._db, {job_id})
+    with state._db.read_snapshot() as q:
+        summaries = _task_summaries_for_jobs(q, {job_id})
 
     assert job_id in summaries
     s = summaries[job_id]
@@ -1086,10 +1087,106 @@ def test_list_workers_returns_all(service, state):
     response = service.list_workers(request, None)
 
     assert len(response.workers) == 3
+    assert response.total_count == 3
+    assert response.has_more is False
 
     # All workers should be healthy after registration
     for w in response.workers:
         assert w.healthy is True
+
+
+def _register_workers_for_query(service, state, *, count_cpu: int, count_gpu: int) -> None:
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
+
+    state._db.ensure_user("system:worker", Timestamp.now(), role="worker")
+    token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
+    try:
+        for i in range(count_cpu):
+            service.register(
+                controller_pb2.Controller.RegisterRequest(
+                    address=f"cpu-host{i}:8080",
+                    metadata=make_worker_metadata(),
+                    worker_id=f"cpu-worker-{i:02d}",
+                ),
+                None,
+            )
+        for i in range(count_gpu):
+            service.register(
+                controller_pb2.Controller.RegisterRequest(
+                    address=f"gpu-host{i}:8080",
+                    metadata=make_worker_metadata(gpu_count=1, gpu_name="h100"),
+                    worker_id=f"gpu-worker-{i:02d}",
+                ),
+                None,
+            )
+    finally:
+        _verified_identity.reset(token)
+
+
+def test_list_workers_pagination(service, state):
+    """list_workers respects offset/limit and reports total_count + has_more."""
+    _register_workers_for_query(service, state, count_cpu=7, count_gpu=0)
+
+    page1 = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(offset=0, limit=3),
+        ),
+        None,
+    )
+    assert [w.worker_id for w in page1.workers] == ["cpu-worker-00", "cpu-worker-01", "cpu-worker-02"]
+    assert page1.total_count == 7
+    assert page1.has_more is True
+
+    page2 = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(offset=3, limit=3),
+        ),
+        None,
+    )
+    assert [w.worker_id for w in page2.workers] == ["cpu-worker-03", "cpu-worker-04", "cpu-worker-05"]
+    assert page2.has_more is True
+
+    page3 = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(offset=6, limit=3),
+        ),
+        None,
+    )
+    assert [w.worker_id for w in page3.workers] == ["cpu-worker-06"]
+    assert page3.has_more is False
+
+
+def test_list_workers_filter_by_contains(service, state):
+    """contains matches worker_id substring (case-insensitive) and address."""
+    _register_workers_for_query(service, state, count_cpu=2, count_gpu=2)
+
+    by_id = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(contains="GPU-WORKER"),
+        ),
+        None,
+    )
+    assert by_id.total_count == 2
+    assert all(w.worker_id.startswith("gpu-worker-") for w in by_id.workers)
+
+    by_address = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(contains="cpu-host1"),
+        ),
+        None,
+    )
+    assert by_address.total_count == 1
+    assert by_address.workers[0].worker_id == "cpu-worker-01"
+
+    # Substring (not just prefix): a token that appears in the middle of
+    # worker_id should still match.
+    by_substring = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(contains="worker-0"),
+        ),
+        None,
+    )
+    assert by_substring.total_count == 4
 
 
 # =============================================================================
@@ -1186,7 +1283,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=auth,
     )
 
@@ -1222,7 +1319,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=auth,
     )
 
@@ -1242,10 +1339,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
 
 
 def test_get_scheduler_state_with_running_task(controller_service, state):
-    """get_scheduler_state must not crash when there are running tasks.
-
-    Regression: JobName has no `.job` attribute — the code must use `.parent`.
-    """
+    """get_scheduler_state aggregates a running task into a (band, user, worker, job) bucket."""
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     # Submit a job and move a task to RUNNING
@@ -1285,8 +1379,12 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
             None,
         )
         assert resp.total_running == 1
-        assert resp.running_tasks[0].job_id == job_id.to_wire()
-        assert resp.running_tasks[0].user_id == "alice"
+        assert len(resp.running_buckets) == 1
+        bucket = resp.running_buckets[0]
+        assert bucket.job_id == job_id.to_wire()
+        assert bucket.user_id == "alice"
+        assert bucket.worker_id == "w1"
+        assert bucket.count == 1
         # alice has no explicit user_budgets row but has an active task — the
         # scheduler state must report her spend using UserBudgetDefaults so the
         # dashboard renders Spent/Limit/Utilization instead of '-'.
@@ -1351,7 +1449,7 @@ def test_launch_job_root_with_fresh_client_date(service):
     """Root submission with today's date succeeds end-to-end through launch_job."""
     request = make_job_request("fresh-client")
     request.client_revision_date = date.today().isoformat()
-    response = service.launch_job(request, None)
+    response = service.launch_job(request, object())
     assert response.job_id == JobName.root("test-user", "fresh-client").to_wire()
 
 
@@ -1360,7 +1458,7 @@ def test_launch_job_root_with_stale_client_date(service):
     request = make_job_request("stale-client")
     request.client_revision_date = "2000-01-01"
     with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request, None)
+        service.launch_job(request, object())
     assert exc_info.value.code == Code.FAILED_PRECONDITION
 
 
@@ -1387,7 +1485,13 @@ def test_set_task_status_text_persists_via_store(service):
     """set_task_status_text persists the supplied markdown via the store."""
     service.launch_job(make_job_request("stats-job"), None)
     task_id = JobName.root("test-user", "stats-job").task(0)
-    status_text = "Physical stages:\n→ 1. Map\n\nShards: 3/10 complete, 2 in-flight, 5 queued"
-    request = job_pb2.SetTaskStatusTextRequest(task_id=task_id.to_wire(), status_text_md=status_text)
+    detail_text = "Physical stages:\n→ 1. Map\n\nShards: 3/10 complete, 2 in-flight, 5 queued"
+    summary_text = "**Map** 30% (3/10) 1.2 MiB/s"
+    request = job_pb2.SetTaskStatusTextRequest(
+        task_id=task_id.to_wire(),
+        status_text_detail_md=detail_text,
+        status_text_summary_md=summary_text,
+    )
     service.set_task_status_text(request, None)
-    assert service._store.tasks.get_status_text(task_id.to_wire()) == status_text
+    assert service._store.tasks.get_status_text_detail(task_id.to_wire()) == detail_text
+    assert service._store.tasks.get_status_text_summary(task_id.to_wire()) == summary_text

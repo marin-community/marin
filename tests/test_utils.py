@@ -4,11 +4,10 @@
 import glob
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
 
 import draccus
 import pytest
-from marin.utils import asdict_excluding, rebase_file_path
+from marin.utils import rebase_file_path
 
 
 def parameterize_with_configs(pattern: str, config_path: str | None = None) -> Callable:
@@ -69,27 +68,6 @@ def skip_in_ci(fn_or_msg):
         return decorator
 
     return pytest.mark.skipif("CI" in os.environ, reason="skipped in CI")(fn_or_msg)
-
-
-@dataclass
-class NestedConfig:
-    name: str
-    value: int
-    runtime_env: str = "test"
-
-
-def test_asdict_excluding_simple():
-    """Test asdict_excluding with a simple dataclass."""
-    config = NestedConfig(name="test", value=42)
-    result = asdict_excluding(config, exclude={"runtime_env"})
-    assert result == {"name": "test", "value": 42}
-    assert "runtime_env" not in result
-
-
-def test_asdict_excluding_invalid():
-    """Test asdict_excluding with non-dataclass input."""
-    with pytest.raises(ValueError, match="Only dataclasses are supported"):
-        asdict_excluding({"key": "value"}, exclude=set())
 
 
 def test_rebase_file_path_requires_new_extension_when_old_provided(tmp_path):

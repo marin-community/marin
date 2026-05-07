@@ -182,7 +182,6 @@ def job_status_to_json(job: job_pb2.JobStatus, tasks: Iterable[job_pb2.TaskStatu
         "completed_count": int(job.completed_count),
         "task_state_counts": dict(job.task_state_counts),
         "has_children": bool(job.has_children),
-        "resource_usage": _resource_usage_to_json(job.resource_usage),
         "resource_requests": _resource_spec_to_json(job.resources),
         "ports": dict(job.ports),
         "tasks": task_payloads,
@@ -666,7 +665,18 @@ class IrisBabysitter:
 
 def _job_summary_payload(job: job_pb2.JobStatus, tasks: list[job_pb2.TaskStatus]) -> dict[str, Any]:
     summary = build_job_summary(job, tasks)
-    for key, value in job_status_to_json(job).items():
+    extra_fields = {
+        "submitted_at_ms": _timestamp_ms(job.submitted_at),
+        "started_at_ms": _timestamp_ms(job.started_at),
+        "finished_at_ms": _timestamp_ms(job.finished_at),
+        "duration_ms": _duration_ms(job.started_at, job.finished_at),
+        "status_message": job.status_message,
+        "pending_reason": job.pending_reason,
+        "has_children": bool(job.has_children),
+        "resource_requests": _resource_spec_to_json(job.resources),
+        "ports": dict(job.ports),
+    }
+    for key, value in extra_fields.items():
         summary.setdefault(key, value)
     return summary
 
