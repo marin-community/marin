@@ -9,15 +9,15 @@ permissions:
   contents: read
 
 jobs:
-  datakit-starcoder2-doc-ferry:
+  datakit-tier2-ferry:
     runs-on: ubuntu-latest
     timeout-minutes: 180  # ~10–20 min run; ample buffer
     concurrency:
-      group: datakit-starcoder2-doc-ferry
+      group: datakit-tier2-ferry
       cancel-in-progress: true
     env:
-      SMOKE_RUN_ID: datakit-starcoder2-doc-ferry-${{ github.run_id }}-${{ github.run_attempt }}
-      FERRY_STATUS_PATH: gs://marin-us-central1/tmp/ttl=1d/ci/datakit-starcoder2-doc-ferry-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
+      SMOKE_RUN_ID: datakit-tier2-ferry-${{ github.run_id }}-${{ github.run_attempt }}
+      FERRY_STATUS_PATH: gs://marin-us-central1/tmp/ttl=1d/ci/datakit-tier2-ferry-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/examples/marin.yaml
@@ -61,10 +61,11 @@ jobs:
           chmod 600 ~/.ssh/google_compute_engine
           chmod 644 ~/.ssh/google_compute_engine.pub
 
-      - name: Submit datakit starcoder2-doc ferry
+      - name: Submit datakit tier2 ferry
         id: submit
         shell: bash -l {0}
         run: |
+          set -euo pipefail
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
             --extra=cpu \
@@ -75,13 +76,17 @@ jobs:
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
             -- python -m experiments.ferries.datakit_tier2_skewed_ferry)
+          if [ -z "$JOB_ID" ]; then
+            echo "iris job run produced no job id" >&2
+            exit 1
+          fi
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
-      - name: Wait for datakit starcoder2-doc ferry
+      - name: Wait for datakit tier2 ferry
         shell: bash -l {0}
         run: |
           JOB_ID="${{ steps.submit.outputs.job_id }}"
@@ -146,14 +151,14 @@ jobs:
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. See the datakit-smoke workflow for rationale.
   notify-slack:
-    needs: datakit-starcoder2-doc-ferry
-    if: always() && (needs.datakit-starcoder2-doc-ferry.result == 'failure' || needs.datakit-starcoder2-doc-ferry.result == 'cancelled') && github.event_name == 'schedule'
+    needs: datakit-tier2-ferry
+    if: always() && (needs.datakit-tier2-ferry.result == 'failure' || needs.datakit-tier2-ferry.result == 'cancelled') && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - name: Notify Slack
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          TEXT: ":red_circle: *Datakit Starcoder2-Doc Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TEXT: ":red_circle: *Datakit Tier 2 Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
           PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
           curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"

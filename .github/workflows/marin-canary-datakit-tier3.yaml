@@ -65,12 +65,14 @@ jobs:
         id: submit
         shell: bash -l {0}
         run: |
-          # TODO: drop --memory=4G and --no-preemptible once the tokenize
-          # job is fixed.
+          set -euo pipefail
+          # TODO: drop --memory=4G/--enable-extra-resources and --no-preemptible
+          # once the tokenize job is fixed.
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
             --region=europe-west4 \
             --memory=4G --disk=5G --cpu=1 --extra=cpu \
+            --enable-extra-resources \
             --no-preemptible \
             --priority production \
             -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
@@ -81,6 +83,10 @@ jobs:
             -e HF_TOKEN "$HF_TOKEN" \
             -e FERRY_TEST_MAX_FILES "1000" \
             -- python -m experiments.ferries.datakit_nemotron_ferry)
+          if [ -z "$JOB_ID" ]; then
+            echo "iris job run produced no job id" >&2
+            exit 1
+          fi
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"
         env:
