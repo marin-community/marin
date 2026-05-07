@@ -779,6 +779,12 @@ class TaskAttempt:
         # in env_vars suppresses injection (the value also flows through to
         # the task via the env.update below).
         mirror_disabled = self.request.environment.env_vars.get(_IRIS_PYPI_MIRROR_ENV_VAR) == _IRIS_PYPI_MIRROR_OPT_OUT
+        if mirror_disabled:
+            logger.info(
+                "pypi mirror skipped: %s=%s opt-out",
+                _IRIS_PYPI_MIRROR_ENV_VAR,
+                _IRIS_PYPI_MIRROR_OPT_OUT,
+            )
         if region_attr and region_attr.string_value and not mirror_disabled:
             try:
                 multi_region = zone_to_multi_region(region_attr.string_value)
@@ -794,7 +800,14 @@ class TaskAttempt:
                     region_attr.string_value,
                 )
             else:
-                env.update(_build_pypi_mirror_env(multi_region).as_env())
+                mirror_env = _build_pypi_mirror_env(multi_region).as_env()
+                logger.info(
+                    "pypi mirror enabled for region=%s multi_region=%s env=%s",
+                    region_attr.string_value,
+                    multi_region,
+                    mirror_env,
+                )
+                env.update(mirror_env)
 
         env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
