@@ -15,10 +15,12 @@ Polars DataFrames, and merge.  Yield the mergedRecordBatches.  Run files are
 deleted after the merge completes.
 """
 
+import heapq
 import logging
 from collections.abc import Iterator
 from itertools import islice
 
+import cloudpickle
 import pyarrow as pa
 import pyarrow.compute as pc
 from rigging.filesystem import url_to_fs
@@ -48,7 +50,7 @@ def _to_large_type(t: pa.DataType) -> pa.DataType:
     return t
 
 
-def k_way_merge(batches: Iterator[pa.RecordBatch], key: str) -> Iterator[pa.RecordBatch]:
+def in_memory_k_way_merge(batches: Iterator[pa.RecordBatch], key: str) -> Iterator[pa.RecordBatch]:
     """Merge a list of sorted RecordBatches into a single sorted RecordBatch stream.
 
     concat_tables and sort_indices create a table that's larger than the input tables.
@@ -121,7 +123,7 @@ def external_sort_merge(
         batch_group = list(islice(batches, fan_in))
         if not batch_group:
             break
-        merged = k_way_merge(batch_group, sort_key)
+        merged = in_memory_k_way_merge(batch_group, sort_key)
         run_path = f"{external_sort_dir}/run-{batch_idx:04d}.spill"
         total_rows = 0
         with SpillWriter(run_path) as writer:
@@ -136,15 +138,30 @@ def external_sort_merge(
         return
 
     try:
+        # For the second batch, we fall back to merging in Python because there does not appear to be a streaming k-way
+        # merge in PyArrow. It's possible that we can do better using Polars, but that will require more trickery than
+        # I or the agents have right now.
+        schema = None
+
+        def _read_run(path: str) -> Iterator:
+            nonlocal schema
+
+            for batch in SpillReader(path).iter_batches():
+                if schema is None:
+                    schema = batch.schema
+                yield from batch.to_pylist()
+
+        run_iters = [_read_run(p) for p in run_paths]
         fs_run_paths = [f"{spill_dir}/run-{i:04d}.spill" for i in range(len(run_paths))]
 
-        all_batches = []
-        for path in run_paths:
-            for batch in SpillReader(path).iter_batches():
-                all_batches.append(batch)
+        for item in heapq.merge(*run_iters, key=lambda x: x[sort_key]):
+            if "_payload" in item and item["_payload"] is not None:
+                item = cloudpickle.loads(item["_payload"])
+            if "__zephyr_sort_key__" in item:
+                del item["__zephyr_sort_key__"]
 
-        if all_batches:
-            yield from k_way_merge(all_batches, key=sort_key)
+            yield item
+
     finally:
         if fs_run_paths:
             try:

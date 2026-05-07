@@ -53,7 +53,7 @@ from iris.env_resources import TaskResources
 from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import log_time
 
-from zephyr.external_sort import compute_fan_in, external_sort_merge, k_way_merge
+from zephyr.external_sort import compute_fan_in, external_sort_merge, in_memory_k_way_merge
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -259,21 +259,43 @@ def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -
     return [s for s in ordered if s is not None]
 
 
+def _batch_to_items(batch: pa.RecordBatch | pa.Table) -> Iterator:
+    """Convert a single RecordBatch or Table to Python items, handling mixed schemas."""
+    sort_key_idx = batch.schema.get_field_index(_SORT_KEY_COL)
+    if sort_key_idx >= 0:
+        batch = batch.remove_column(sort_key_idx)
+
+    if _PAYLOAD_COL in batch.schema.names:
+        payload_col = batch.column(_PAYLOAD_COL)
+        if payload_col.null_count > 0:
+            # Mixed batch: some rows are Arrow-typed, some are cloudpickled.
+            # payload_col has None for Arrow-typed rows.
+            payload_list = payload_col.to_pylist()
+            data_batch = batch.remove_column(batch.schema.get_field_index(_PAYLOAD_COL))
+            data_rows = data_batch.to_pylist()
+            for p, row in zip(payload_list, data_rows, strict=True):
+                if p is not None:
+                    yield cloudpickle.loads(p)
+                else:
+                    yield row
+        else:
+            # Pure payload batch: all rows are cloudpickled.
+            for p in payload_col.to_pylist():
+                yield cloudpickle.loads(p)
+    else:
+        # Pure Arrow batch.
+        yield from batch.to_pylist()
+
+
 def _batches_to_items(batches: Iterable[pa.RecordBatch]) -> Iterator:
     """Convert RecordBatches to Python items, stripping internal columns.
 
     Strips ``_SORT_KEY_COL`` (present on disk for merge-sort) and deserializes
-    the cloudpickle payload column when present.
+    the cloudpickle payload column when present. handles mixed schemas where
+    some rows are Arrow-typed and some are cloudpickled.
     """
     for batch in batches:
-        sort_key_idx = batch.schema.get_field_index(_SORT_KEY_COL)
-        if sort_key_idx >= 0:
-            batch = batch.remove_column(sort_key_idx)
-        if _PAYLOAD_COL in batch.schema.names:
-            for payload_bytes in batch.column(_PAYLOAD_COL).to_pylist():
-                yield cloudpickle.loads(payload_bytes)
-        else:
-            yield from batch.to_pylist()
+        yield from _batch_to_items(batch)
 
 
 # ---------------------------------------------------------------------------
@@ -444,7 +466,6 @@ class ScatterReader:
         )
 
         if use_external:
-
             memory_limit = TaskResources.from_environment().memory_bytes
             per_iter_bytes = self.max_compressed_chunk_bytes
             fan_in = compute_fan_in(per_iter_bytes, memory_limit)
@@ -455,19 +476,19 @@ class ScatterReader:
                 per_iter_bytes // 1024,
                 external_sort_dir,
             )
-            merged_batches = external_sort_merge(
+            merged = external_sort_merge(
                 self.get_iterators(),
                 sort_key=_SORT_KEY_COL,
                 external_sort_dir=external_sort_dir,
                 fan_in=fan_in,
             )
-            yield from groupby(_batches_to_items(merged_batches), key=key_fn)
+            yield from groupby(merged, key=key_fn)
         else:
             all_batches = list(self.get_iterators())
             logger.info("Merging %d batches across %d chunks", len(all_batches), self.total_chunks)
             if len(all_batches) == 0:
                 return
-            merged = k_way_merge(all_batches, key=_SORT_KEY_COL)
+            merged = in_memory_k_way_merge(all_batches, key=_SORT_KEY_COL)
             yield from groupby(_batches_to_items(merged), key=key_fn)
 
 
@@ -592,15 +613,9 @@ class ScatterWriter:
         combined = pa.concat_tables(tables, promote_options="permissive")
 
         if self._combiner_fn is not None:
-            # Combiner requires Python callables — strip the sort-key column
-            # first so it doesn't appear in the rows passed to the combiner,
-            # then rebuild the table and reattach a fresh sort-key column.
-            sort_col_idx_pre = combined.schema.get_field_index(_SORT_KEY_COL)
-            data_table = combined.remove_column(sort_col_idx_pre)
-            if _PAYLOAD_COL in data_table.schema.names:
-                rows = [cloudpickle.loads(b) for b in data_table.column(_PAYLOAD_COL).to_pylist()]
-            else:
-                rows = data_table.to_pylist()
+            # Combiner requires Python callables — handle mixed schemas
+            # where some rows are Arrow-typed and some are cloudpickled.
+            rows = list(_batch_to_items(combined))
             rows = _apply_combiner(rows, self._key_fn, self._combiner_fn)
             sort_keys_bytes = [msgspec.msgpack.encode(self._sort_key(row), order="deterministic") for row in rows]
             try:

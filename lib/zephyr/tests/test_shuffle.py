@@ -9,6 +9,7 @@ without spinning up a full coordinator.
 
 import msgspec
 import pyarrow as pa
+from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge, in_memory_k_way_merge
 from zephyr.shuffle import (
     _SORT_KEY_COL,
     ScatterReader,
@@ -445,26 +446,20 @@ def _make_sorted_batch(values: list[int]) -> pa.RecordBatch:
 
 
 def test_external_sort_merge_streaming(tmp_path):
-    from zephyr.external_sort import external_sort_merge
-
     batches = [_make_sorted_batch([1, 4, 7]), _make_sorted_batch([2, 5, 8]), _make_sorted_batch([3, 6, 9])]
-    result_batches = list(external_sort_merge(iter(batches), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
-    result = [v for b in result_batches for v in b.column("v").to_pylist()]
+    rows = list(external_sort_merge(iter(batches), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
+    result = [row["v"] for row in rows]
     assert result == list(range(1, 10))
 
 
 def test_external_sort_merge_single_batch(tmp_path):
-    from zephyr.external_sort import external_sort_merge
-
     batches = [_make_sorted_batch([i]) for i in range(10)]
-    result_batches = list(external_sort_merge(iter(batches), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
-    result = [v for b in result_batches for v in b.column("v").to_pylist()]
+    rows = list(external_sort_merge(iter(batches), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
+    result = [row["v"] for row in rows]
     assert result == list(range(10))
 
 
 def test_external_sort_merge_cleans_up(tmp_path):
-    from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
-
     batches = [_make_sorted_batch([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
     list(external_sort_merge(iter(batches), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
@@ -472,8 +467,6 @@ def test_external_sort_merge_cleans_up(tmp_path):
 
 def test_k_way_merge_promotes_null_column_with_int64():
     """``null`` vs ``int64`` across batches must unify (from_pylist pinned null early)."""
-    from zephyr.external_sort import k_way_merge
-
     sort_keys_a = [msgspec.msgpack.encode(v, order="deterministic") for v in [1, 3]]
     batch_a = pa.record_batch(
         {"v": pa.array([None, None], type=pa.null()), _SORT_KEY_COL: pa.array(sort_keys_a, type=pa.binary())}
@@ -482,6 +475,61 @@ def test_k_way_merge_promotes_null_column_with_int64():
     batch_b = pa.record_batch(
         {"v": pa.array([2, 4], type=pa.int64()), _SORT_KEY_COL: pa.array(sort_keys_b, type=pa.binary())}
     )
-    merged = list(k_way_merge(iter([batch_a, batch_b]), key=_SORT_KEY_COL))
+    merged = list(in_memory_k_way_merge(iter([batch_a, batch_b]), key=_SORT_KEY_COL))
     values = [v for b in merged for v in b.column("v").to_pylist()]
     assert values == [None, 2, None, 4]
+
+
+def test_mixed_schema_corruption(tmp_path):
+    """Verify that mixing Arrow-friendly and Arrow-hostile items in the same shard works."""
+    data_path = str(tmp_path / "mixed.shuffle")
+
+    def _key(x):
+        return x["k"]
+
+    num_shards = 1
+
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, num_output_shards=num_shards)
+
+    friendly_items = [{"k": 1, "v": i} for i in range(5)]
+    writer.write(_items_to_record_batch(friendly_items, _key, None, num_shards))
+
+    hostile_items = [{"k": 1, "v": frozenset([1, 2, 3])}]
+    writer.write(_items_to_record_batch(hostile_items, _key, None, num_shards))
+
+    writer.close()
+
+    reader = ScatterReader.from_sidecars([data_path], target_shard=0)
+    recovered = list(_batches_to_items(reader.get_iterators()))
+
+    expected = friendly_items + hostile_items
+    assert recovered == expected
+
+
+def test_mixed_schema_with_combiner(tmp_path):
+    """Verify that combiners work correctly with mixed-schema buffers."""
+    data_path = str(tmp_path / "combined.shuffle")
+
+    def _key(x):
+        return x["k"]
+
+    num_shards = 1
+
+    def _combiner(key, items):
+        return list(items)
+
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, num_output_shards=num_shards, combiner_fn=_combiner)
+
+    friendly_items = [{"k": 1, "v": i} for i in range(5)]
+    writer.write(_items_to_record_batch(friendly_items, _key, None, num_shards))
+
+    hostile_items = [{"k": 1, "v": frozenset([1, 2, 3])}]
+    writer.write(_items_to_record_batch(hostile_items, _key, None, num_shards))
+
+    writer.close()
+
+    reader = ScatterReader.from_sidecars([data_path], target_shard=0)
+    recovered = list(_batches_to_items(reader.get_iterators()))
+
+    expected = friendly_items + hostile_items
+    assert recovered == expected
