@@ -198,6 +198,7 @@ def run_nanogpt_trial(config: NanoGPTLaunchConfig) -> None:
 FINEWEB_GPT2_DATA = LmDataConfig(
     tokenizer="gpt2",
     vocab_size=BATCH_SIZE,  # placeholder, overridden by model
+    block_cross_document_attention=False,  # match ref: plain causal, no intradoc masking
     components={
         "fineweb_train": dataclasses.field(default_factory=dict),  # type: ignore[call-overload]
     },
