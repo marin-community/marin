@@ -4,10 +4,10 @@
 """
 Tutorial: LR/WD hyper-parameter sweep over a tiny model on TPU using TinyStories.
 
-A single Iris job submits ``NUM_WORKERS`` CPU-only coordinator replicas; each
-races on ``step_lock`` to claim grid targets and dispatch child TPU training
-jobs. ``SWEEP_NAME`` is the stable lock-path key — bump it to start a fresh
-sweep over the same grid.
+Submits ``NUM_WORKERS`` independent TPU jobs; each worker races on
+``step_lock`` to claim grid targets and trains inline on its own TPU. There is
+no CPU coordinator. ``SWEEP_NAME`` is the stable lock-path key — bump it to
+start a fresh sweep over the same grid.
 """
 import dataclasses
 import os
@@ -18,11 +18,12 @@ from fray import client as fray_client
 from fray.cluster import ResourceConfig
 from fray.types import Entrypoint, JobRequest, create_environment
 from levanter.main.train_lm import TrainLmConfig
-from marin.execution.executor import versioned
+from marin.execution.executor import materialize, versioned
 from marin.execution.sweep import SweepTarget, claim_and_run
+from marin.training.training import extras_for_resources, resolve_training_env
 from rigging.filesystem import marin_prefix
 
-from experiments.defaults import _submit_train_job, prepare_lm_train
+from experiments.defaults import prepare_lm_train
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.llama import llama_30m
 from experiments.pretraining_datasets.simple import tokenized
@@ -35,9 +36,9 @@ EVALS = CORE_TASKS
 # `iris job run` invocations converge on the same target set. Bump for a fresh sweep.
 SWEEP_NAME = "train-tiny-sweep"
 
-# Each CPU coordinator replica claims one target at a time and blocks on its
-# own child training job, so NUM_WORKERS sets the parallelism — three trials
-# run concurrently here. Workers exit when no unclaimed targets remain.
+# Each TPU worker claims one target at a time and trains inline on its own
+# TPU, so NUM_WORKERS sets the parallelism — three trials run concurrently
+# here. Workers exit when no unclaimed targets remain.
 NUM_WORKERS = 3
 
 small_train_config = SimpleTrainConfig(
@@ -65,12 +66,9 @@ sweep_configs = [
 class SweepTrial:
     name: str
     inner_config: TrainLmConfig
-    output_path: str
-    resources: ResourceConfig
-    env_vars: dict[str, str]
 
 
-# Build all trials at submission time so coordinators do no config work.
+# Build all trials at submission time so workers do no config work.
 trials = []
 for sc in sweep_configs:
     # Marin will automatically create unique ids for runs b/c the model_config is versioned
@@ -84,36 +82,23 @@ for sc in sweep_configs:
         tags=["llama", "30m", "slimpajama_6b", "tutorial", "sweep", "test20251117"],
         eval_harness_tasks=CORE_TASKS,
     )
-    trials.append(
-        SweepTrial(
-            name=_job_name,
-            inner_config=_inner_config,
-            output_path=_output_path,
-            resources=sc.resources,
-            env_vars=dict(sc.env_vars or {}),
-        )
-    )
+    trials.append(SweepTrial(name=_job_name, inner_config=_inner_config))
 
 targets = [SweepTarget(target_id=t.name, config=t) for t in trials]
 
 
 def _run_one(target: SweepTarget) -> None:
-    """Submit one sweep trial as a child Iris training job and block on it."""
+    """Materialize the trial's config and train inline on this TPU worker."""
     trial: SweepTrial = target.config
-    _submit_train_job(
-        name=trial.name,
-        train_config=trial.inner_config,
-        resources=trial.resources,
-        env_vars=trial.env_vars,
-        worker_fn=levanter_train_lm.main,
-    )
+    config = materialize(trial.inner_config)
+    levanter_train_lm.main(config)
 
 
 def _sweep_worker_entrypoint(sweep_root: str) -> None:
-    """One CPU sweep coordinator: loop, claim a target, dispatch a child TPU job.
+    """One TPU sweep worker: loop, claim a target, train inline.
 
     ``sweep_root`` is resolved once in the submitter (where ``marin_prefix()``
-    reflects the user's region) and baked into the entrypoint args. All N CPU
+    reflects the user's region) and baked into the entrypoint args. All N TPU
     replicas thus contend on the same lock namespace regardless of where Iris
     schedules them.
     """
@@ -123,12 +108,18 @@ def _sweep_worker_entrypoint(sweep_root: str) -> None:
 if __name__ == "__main__":
     sweep_root = os.path.join(marin_prefix(), "sweeps", SWEEP_NAME)
     client = fray_client.current_client()
-    handle = client.submit(
-        JobRequest(
-            name=SWEEP_NAME,
-            entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[sweep_root]),
-            resources=ResourceConfig.with_cpu(replicas=NUM_WORKERS),
-            environment=create_environment(),
+
+    env = resolve_training_env(base_env=None, resources=RESOURCES)
+    handles = []
+    for i in range(NUM_WORKERS):
+        handle = client.submit(
+            JobRequest(
+                name=f"{SWEEP_NAME}-{i}",
+                entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[sweep_root]),
+                resources=RESOURCES,
+                environment=create_environment(env_vars=env, extras=extras_for_resources(RESOURCES)),
+            )
         )
-    )
-    handle.wait(raise_on_failure=True)
+        handles.append(handle)
+    for h in handles:
+        h.wait(raise_on_failure=True)
