@@ -59,7 +59,7 @@ DEFAULT_TARGET_STEPS: int = 2**14
 # tokenize() dispatches the actual Map+Write and cache-copy work to remote
 # zephyr workers; this coordinator actor only orchestrates and assembles
 # the per-bucket ledger. Bounded resources keep entrypoint memory flat.
-_TOKENIZE_COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="3g", preemptible=False)
+_TOKENIZE_COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="5g", preemptible=False)
 
 
 def simulated_experiment_budget(*, train_batch_size: int, num_train_steps: int, seq_len: int) -> int:

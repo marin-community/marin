@@ -12,7 +12,7 @@ import dataclasses
 
 from experiments.defaults import default_validation_sets
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
-from experiments.pretraining_datasets.nemotron import nemotron_mix_block_shuffle, tokenize_nemotron
+from experiments.pretraining_datasets.nemotron import nemotron_mix, tokenize_nemotron
 from marin.execution.executor import ExecutorStep, executor_main
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
@@ -48,7 +48,7 @@ def main() -> None:
     ]
     validation_steps = [
         _with_worker_caps(step).with_output_path(f"{S3_PREFIX}/{step.name}")
-        for step in default_validation_sets(tokenizer=nemotron_mix_block_shuffle.tokenizer).values()
+        for step in default_validation_sets(tokenizer=nemotron_mix.tokenizer).values()
     ]
     steps = nemotron_steps + dclm_steps + validation_steps
 
