@@ -21,10 +21,10 @@ End-to-end release flow (driven by .github/workflows/dupekit-release-wheels.yaml
 6. Re-resolve uv.lock so the auto-PR commits a consistent lockfile.
 
 Usage:
-    python scripts/rust_package.py --bump --build-wheels --targets linux
-    python scripts/rust_package.py --bump --build-wheels --targets macos
-    python scripts/rust_package.py --bump --sdist-only
-    python scripts/rust_package.py --bump --update-pyproject
+    python rust/dupekit/build_package.py --bump --build-wheels --targets linux
+    python rust/dupekit/build_package.py --bump --build-wheels --targets macos
+    python rust/dupekit/build_package.py --bump --sdist-only
+    python rust/dupekit/build_package.py --bump --update-pyproject
 
 Prerequisites:
     maturin (installed automatically via uv tool if missing)
@@ -43,8 +43,9 @@ import time
 import urllib.request
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-MANIFEST_PATH = REPO_ROOT / "rust" / "dupekit" / "Cargo.toml"
+DUPEKIT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = DUPEKIT_DIR.parent.parent
+MANIFEST_PATH = DUPEKIT_DIR / "Cargo.toml"
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 DIST_DIR = REPO_ROOT / "dist"
 TOOLS_DIR = REPO_ROOT / ".tools"

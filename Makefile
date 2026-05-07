@@ -139,7 +139,7 @@ rust-user:
 	uv sync
 
 rust-package:
-	@python3 scripts/rust_package.py
+	@python3 rust/dupekit/build_package.py
 
 rust-status:
 	@python3 scripts/rust_mode.py status

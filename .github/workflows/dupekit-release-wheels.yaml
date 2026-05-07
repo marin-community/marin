@@ -32,7 +32,7 @@ jobs:
           filters: |
             relevant:
               - 'rust/dupekit/**'
-              - 'scripts/rust_package.py'
+              - 'rust/dupekit/build_package.py'
               - '.github/workflows/dupekit-release-wheels.yaml'
 
   # Linux wheels (x86_64 + aarch64) cross-compiled via zig on ubuntu.
@@ -54,7 +54,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Build wheels
-        run: python scripts/rust_package.py --bump --build-wheels --targets ${{ matrix.targets }}
+        run: python rust/dupekit/build_package.py --bump --build-wheels --targets ${{ matrix.targets }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -86,7 +86,7 @@ jobs:
       # bump must match what the matrix legs computed - both read the same
       # Cargo.toml from $GITHUB_SHA and bump patch by 1, so they agree.
       - name: Bump version and build sdist
-        run: python scripts/rust_package.py --bump --sdist-only
+        run: python rust/dupekit/build_package.py --bump --sdist-only
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@v1.12.4
@@ -94,7 +94,7 @@ jobs:
           packages-dir: dist/
 
       # Branch setup happens AFTER the PyPI publish so a publish failure does
-      # not poison the auto-PR. Resetting to $GITHUB_SHA gives rust_package a
+      # not poison the auto-PR. Resetting to $GITHUB_SHA gives build_package a
       # clean baseline to write on top of, regardless of what the existing PR
       # branch contained.
       - name: Set up release branch
@@ -115,7 +115,7 @@ jobs:
       - name: Bump version and update pyproject
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python scripts/rust_package.py --bump --update-pyproject
+        run: python rust/dupekit/build_package.py --bump --update-pyproject
 
       - name: Open or update PR
         env:
