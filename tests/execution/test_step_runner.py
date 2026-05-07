@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 import pytest
 from fray.types import ResourceConfig
+from iris.cluster.client.job_info import JobInfo, set_job_info
+from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact, PathMetadata
 from marin.execution.executor import Executor, ExecutorStep, _dag_tpu_regions, resolve_executor_step
 from marin.execution.remote import RemoteCallable, remote
@@ -984,6 +986,61 @@ def test_executor_resolve_steps_does_not_apply_unrelated_tpu_regions(iris_active
     assert isinstance(resolved_tpu.fn, RemoteCallable)
     assert resolved_cpu.fn.resources.regions == ["us-east1"]
     assert resolved_tpu.fn.resources.regions == ["us-central2"]
+
+
+def test_resolve_executor_step_handles_jobinfo_without_worker_region(iris_active, remote_step):
+    """Legacy executor path must not AttributeError when JobInfo has no worker_region.
+
+    Regression for #5541: PR #5279 dropped ``JobInfo.worker_region`` while the
+    legacy executor's ``_iris_worker_region_pin()`` still reads it. With the
+    field restored (defaulting to None), step resolution proceeds normally and
+    falls back to GCS-derived region inference.
+    """
+    info = JobInfo(task_id=JobName.from_wire("/tester/parent/0:1"))
+    assert info.worker_region is None
+    set_job_info(info)
+    try:
+        resolved = resolve_executor_step(
+            remote_step,
+            config={"input_path": "gs://marin-us-central2/data/input"},
+            output_path="/out/test-abc",
+        )
+    finally:
+        set_job_info(None)
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-central2"]
+
+
+def test_resolve_executor_step_accepts_compatible_jobinfo_worker_region(iris_active, remote_step):
+    """When JobInfo.worker_region matches the step's allowed regions, resolution succeeds."""
+    info = JobInfo(task_id=JobName.from_wire("/tester/parent/0:1"), worker_region="us-central2")
+    set_job_info(info)
+    try:
+        resolved = resolve_executor_step(
+            remote_step,
+            config={"input_path": "gs://marin-us-central2/data/input"},
+            output_path="/out/test-abc",
+        )
+    finally:
+        set_job_info(None)
+
+    assert isinstance(resolved.fn, RemoteCallable)
+
+
+def test_resolve_executor_step_raises_when_jobinfo_region_mismatches(iris_active, remote_step):
+    """JobInfo worker_region pin must conflict-fail if it disagrees with GCS-inferred regions."""
+    info = JobInfo(task_id=JobName.from_wire("/tester/parent/0:1"), worker_region="us-east1")
+    set_job_info(info)
+    try:
+        with pytest.raises(ValueError, match="inherited Iris region"):
+            resolve_executor_step(
+                remote_step,
+                config={"input_path": "gs://marin-us-central2/data/input"},
+                output_path="/out/test-abc",
+            )
+    finally:
+        set_job_info(None)
 
 
 def _two_tpu_steps(first_regions: list[str], second_regions: list[str]) -> list[ExecutorStep]:
