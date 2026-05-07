@@ -775,7 +775,7 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
             HeartbeatApplyRequest(
                 worker_id=wid,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-            ),
+            ), kb=KillBuffer()
         )
     with state._store.transaction() as cur:
         state.apply_task_updates(
@@ -783,7 +783,7 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
             HeartbeatApplyRequest(
                 worker_id=wid,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
-            ),
+            ), kb=KillBuffer()
         )
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
@@ -828,7 +828,7 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
                 updates=[
                     TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_BUILDING),
                 ],
-            ),
+            ), kb=KillBuffer()
         )
     with state._store.transaction() as cur:
         state.apply_task_updates(
@@ -843,7 +843,7 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
                         error="TPU init failure",
                     ),
                 ],
-            ),
+            ), kb=KillBuffer()
         )
     # Second attempt: re-dispatch to the same worker, RUNNING.
     with state._store.transaction() as cur:
@@ -854,7 +854,7 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
             HeartbeatApplyRequest(
                 worker_id=wid,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=1, new_state=job_pb2.TASK_STATE_RUNNING)],
-            ),
+            ), kb=KillBuffer()
         )
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
@@ -890,7 +890,7 @@ def test_get_worker_status_includes_running_tasks(client, state, job_request):
         state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
 
     with state._store.transaction() as cur:
-        state.apply_task_updates(cur, HeartbeatApplyRequest(worker_id=wid, updates=[]))
+        state.apply_task_updates(cur, HeartbeatApplyRequest(worker_id=wid, updates=[]), kb=KillBuffer())
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
     running_job_ids = resp.get("worker", {}).get("runningJobIds", [])

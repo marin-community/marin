@@ -88,6 +88,7 @@ from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
+    KillBuffer,
     task_updates_from_proto,
 )
 from iris.cluster.log_store_helpers import build_log_source
@@ -937,11 +938,7 @@ class ControllerProtocol(Protocol):
 
     def wake(self) -> None: ...
 
-    def kill_tasks_on_workers(
-        self,
-        task_ids: set[JobName],
-        task_kill_workers: dict[JobName, WorkerId] | None = None,
-    ) -> None: ...
+    def register_kills(self, kb: "KillBuffer") -> None: ...
 
     def create_scheduling_context(self, workers: list[WorkerRow]) -> SchedulingContext: ...
 
@@ -1164,6 +1161,13 @@ class ControllerServiceImpl:
         # transaction further down — between the two txs another submitter
         # can race, but ``INSERT INTO jobs`` then PK-conflicts, which is a
         # legitimate error rather than a correctness bug.
+        # The RECREATE branch's cancel_job path produces kill obligations; the
+        # buffer is drained into the registry only after a clean commit so a
+        # transaction rollback discards the kills atomically. Without this,
+        # the prior bug (#5470 follow-up) was that cancel_job's return value
+        # was discarded entirely and StopTasks RPCs never fired, leaving stale
+        # containers running on workers that the new job was being scheduled to.
+        launch_kb = KillBuffer()
         with self._store.transaction() as cur:
             existing_state = self._store.jobs.get_state(cur, job_id)
             if existing_state is not None:
@@ -1180,7 +1184,7 @@ class ControllerServiceImpl:
                     self._transitions.remove_finished_job(cur, job_id)
                 elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
                     if not is_job_finished(existing_state):
-                        self._transitions.cancel_job(cur, job_id, "Replaced by new submission")
+                        self._transitions.cancel_job(cur, job_id, "Replaced by new submission", launch_kb)
                     self._transitions.remove_finished_job(cur, job_id)
                 elif is_job_finished(existing_state):
                     # Default/UNSPECIFIED: replace finished jobs
@@ -1192,6 +1196,7 @@ class ControllerServiceImpl:
                     self._transitions.remove_finished_job(cur, job_id)
                 else:
                     raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
+        self._controller.register_kills(launch_kb)
 
         # Handle bundle_blob: upload to bundle store, then replace blob
         # with the resulting GCS path (preserving all other fields).
@@ -1370,10 +1375,10 @@ class ControllerServiceImpl:
         self._authorize_job_owner(job_id)
         # cancel_job uses a recursive CTE to walk the full subtree in a single
         # transaction, so there is no need to recurse manually.
+        kb = KillBuffer()
         with self._store.transaction() as cur:
-            result = self._transitions.cancel_job(cur, job_id, reason="Terminated by user")
-        if result.tasks_to_kill:
-            self._controller.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
+            self._transitions.cancel_job(cur, job_id, reason="Terminated by user", kb=kb)
+        self._controller.register_kills(kb)
         return job_pb2.Empty()
 
     def _job_to_proto(
@@ -2642,12 +2647,15 @@ class ControllerServiceImpl:
         them via ``ControllerTransitions.apply_task_updates``. Stop decisions
         are delivered via the StopTasks RPC, not piggy-backed on the response.
 
-        The kill decisions produced here are ignored: the poll loop reruns the
-        same transition logic and routes kills through ``_stop_tasks_direct``,
-        so push-path kills are recovered with ≤60s latency.
+        The kill decisions produced here flow through the same ``KillBuffer``
+        path as the poll loop and end up in the controller's ``KillRegistry``,
+        which the kill-dispatcher thread drains. If the push-path commit
+        succeeds but the registry add races with the poll loop, the duplicate
+        registry entry is harmless — both refer to the same (task, attempt).
         """
         updates = task_updates_from_proto(request.updates)
         if updates:
+            kb = KillBuffer()
             with self._store.transaction() as cur:
                 self._transitions.apply_task_updates(
                     cur,
@@ -2655,7 +2663,9 @@ class ControllerServiceImpl:
                         worker_id=WorkerId(request.worker_id),
                         updates=updates,
                     ),
+                    kb,
                 )
+            self._controller.register_kills(kb)
             self._controller.wake()
         return controller_pb2.Controller.UpdateTaskStatusResponse()
 

@@ -32,6 +32,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
+    KillBuffer,
     MAX_REPLICAS_PER_JOB,
     Assignment,
     ControllerTransitions,
@@ -266,7 +267,7 @@ def test_job_cancellation_kills_all_tasks(harness):
     harness.dispatch(tasks[1], worker_id)
 
     with harness.state._store.transaction() as cur:
-        harness.state.cancel_job(cur, job_id, reason="User cancelled")
+        harness.state.cancel_job(cur, job_id, reason="User cancelled", kb=KillBuffer())
 
     assert harness.query_job(job_id).state == job_pb2.JOB_STATE_KILLED
     for task in tasks:
@@ -292,7 +293,7 @@ def test_cancel_job_releases_committed_worker_resources(harness):
     assert _query_worker(harness.state, w2).committed_cpu_millicores == 1000
 
     with harness.state._store.transaction() as cur:
-        harness.state.cancel_job(cur, JobName.root("test-user", "j1"), reason="User cancelled")
+        harness.state.cancel_job(cur, JobName.root("test-user", "j1"), reason="User cancelled", kb=KillBuffer())
 
     assert _query_worker(harness.state, w1).committed_cpu_millicores == 0, "w1 leaked committed_cpu_millicores"
     assert _query_worker(harness.state, w1).committed_mem == 0, "w1 leaked committed_mem"
@@ -330,7 +331,7 @@ def test_cancel_job_finalizes_task_attempts(harness):
         assert att.finished_at is None
 
     with harness.state._store.transaction() as cur:
-        harness.state.cancel_job(cur, JobName.root("test-user", "j1"), reason="User cancelled")
+        harness.state.cancel_job(cur, JobName.root("test-user", "j1"), reason="User cancelled", kb=KillBuffer())
 
     for t in tasks:
         att = _query_attempt(harness.state, t.task_id, attempt_ids[t.task_id])
@@ -348,13 +349,14 @@ def test_cancel_job_preserves_kill_worker_mapping_after_clearing_tasks(harness):
     harness.dispatch(tasks[0], w1)
     harness.dispatch(tasks[1], w2)
 
+    kb = KillBuffer()
     with harness.state._store.transaction() as cur:
-        result = harness.state.cancel_job(cur, JobName.root("test-user", "j1"), reason="User cancelled")
+        harness.state.cancel_job(cur, JobName.root("test-user", "j1"), reason="User cancelled", kb=kb)
 
-    assert result.tasks_to_kill == {tasks[0].task_id, tasks[1].task_id}
-    assert result.task_kill_workers == {
-        tasks[0].task_id: w1,
-        tasks[1].task_id: w2,
+    kb_kills = {(item.task_id, item.worker_id) for item in kb}
+    assert kb_kills == {
+        (tasks[0].task_id.to_wire(), w1),
+        (tasks[1].task_id.to_wire(), w2),
     }
     assert harness.query_task(tasks[0].task_id).current_worker_id is None
     assert harness.query_task(tasks[1].task_id).current_worker_id is None
@@ -401,7 +403,7 @@ def test_cancel_job_removes_endpoints_for_job_tree(state):
     assert len(_endpoints(state, EndpointQuery())) == 2
 
     with state._store.transaction() as cur:
-        state.cancel_job(cur, JobName.root("test-user", "parent"), reason="User cancelled")
+        state.cancel_job(cur, JobName.root("test-user", "parent"), reason="User cancelled", kb=KillBuffer())
 
     assert _endpoints(state, EndpointQuery()) == []
 
@@ -414,7 +416,7 @@ def test_cancelled_job_tasks_excluded_from_demand(harness):
 
     harness.dispatch(tasks[0], worker_id)
     with harness.state._store.transaction() as cur:
-        harness.state.cancel_job(cur, job_id, reason="User cancelled")
+        harness.state.cancel_job(cur, job_id, reason="User cancelled", kb=KillBuffer())
 
     assert harness.query_job(job_id).state == job_pb2.JOB_STATE_KILLED
     for task in tasks:
@@ -798,7 +800,7 @@ def test_endpoint_survives_building_state(state):
                         new_state=job_pb2.TASK_STATE_BUILDING,
                     )
                 ],
-            ),
+            ), kb=KillBuffer()
         )
 
     # Register endpoint during BUILDING (e.g. jax_init.py pre-registration)
@@ -827,7 +829,7 @@ def test_endpoint_survives_building_state(state):
                         new_state=job_pb2.TASK_STATE_RUNNING,
                     )
                 ],
-            ),
+            ), kb=KillBuffer()
         )
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
@@ -1133,7 +1135,7 @@ def test_coscheduled_task_failure_kills_siblings(state):
     assert _query_task(state, tasks[0].task_id).state == job_pb2.TASK_STATE_FAILED
     for task in tasks[1:]:
         assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_WORKER_FAILED
-        assert task.task_id in txn.tasks_to_kill
+        assert task.task_id in {JobName.from_wire(item.task_id) for item in txn}
 
 
 def test_coscheduled_cascade_releases_worker_resources(state):
@@ -1236,7 +1238,7 @@ def test_coscheduled_task_worker_failure_kills_siblings(state):
     assert check_task_is_finished(_query_task(state, tasks[0].task_id))
     for task in tasks[1:]:
         assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_WORKER_FAILED
-        assert task.task_id in txn.tasks_to_kill
+        assert task.task_id in {JobName.from_wire(item.task_id) for item in txn}
 
 
 def test_coscheduled_task_success_does_not_affect_siblings(state):
@@ -1268,7 +1270,7 @@ def test_coscheduled_task_success_does_not_affect_siblings(state):
     assert _query_task(state, tasks[0].task_id).state == job_pb2.TASK_STATE_SUCCEEDED
     for task in tasks[1:]:
         assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
-    assert len(txn.tasks_to_kill) == 0
+    assert len({JobName.from_wire(item.task_id) for item in txn}) == 0
 
 
 def test_non_coscheduled_task_failure_does_not_kill_siblings(state):
@@ -1303,7 +1305,7 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(state):
         assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
 
     # No tasks marked to kill from coscheduling cascade
-    assert len(txn.tasks_to_kill) == 0
+    assert len({JobName.from_wire(item.task_id) for item in txn}) == 0
 
 
 def test_coscheduled_retriable_failure_bounces_siblings_to_pending(state):
@@ -1349,7 +1351,7 @@ def test_coscheduled_retriable_failure_bounces_siblings_to_pending(state):
         assert sib.state == job_pb2.TASK_STATE_PENDING
         assert sib.failure_count == 0
         assert sib.preemption_count == 0
-        assert task.task_id in txn.tasks_to_kill
+        assert task.task_id in {JobName.from_wire(item.task_id) for item in txn}
 
     # Surviving workers must release their committed resources for re-cosched.
     for i in range(1, 4):
@@ -1496,7 +1498,7 @@ def test_stale_attempt_ignored(state):
                         new_state=job_pb2.TASK_STATE_SUCCEEDED,
                     )
                 ],
-            ),
+            ), kb=KillBuffer()
         )
 
     # Task should still be RUNNING on the new attempt
@@ -1537,7 +1539,7 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
                 HeartbeatApplyRequest(
                     worker_id=worker_id,
                     updates=[TaskUpdate(task_id=task.task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
-                ),
+                ), kb=KillBuffer()
             )
 
     assert any("Stale attempt precondition violation" in r.message for r in caplog.records)
@@ -2387,7 +2389,7 @@ def test_fail_workers_by_ids_cascades_tasks(state):
     assert _query_task(state, tasks1[0].task_id).state == job_pb2.TASK_STATE_RUNNING
     assert _query_task(state, tasks2[0].task_id).state == job_pb2.TASK_STATE_RUNNING
 
-    result = state.fail_workers_batch(["w2"], reason="slice terminated")
+    result = state.fail_workers_batch(["w2"], reason="slice terminated", kb=KillBuffer())
 
     assert len(result.removed_workers) == 1
     assert result.removed_workers[0][0] == w2
@@ -2408,7 +2410,7 @@ def test_fail_workers_batch_skips_unknown(state):
     meta = make_worker_metadata()
     register_worker(state, "w1", "host1:8080", meta)
 
-    result = state.fail_workers_batch(["w-unknown"], reason="unknown")
+    result = state.fail_workers_batch(["w-unknown"], reason="unknown", kb=KillBuffer())
     assert result.removed_workers == []
 
     w = _query_worker(state, WorkerId("w1"))
@@ -2421,7 +2423,7 @@ def test_fail_workers_batch_force_removes_without_threshold(state):
     meta = make_worker_metadata()
     worker_id = register_worker(state, "w1", "host1:8080", meta)
 
-    result = state.fail_workers_batch(["w1"], reason="slice terminated")
+    result = state.fail_workers_batch(["w1"], reason="slice terminated", kb=KillBuffer())
 
     assert len(result.results) == 1
     assert result.results[0].worker_removed
@@ -2460,7 +2462,7 @@ def test_fail_workers_batch_does_not_block_readers(state):
     # because its lookup query uses read_snapshot (WAL reader).
     # The inner write transaction for actually failing workers still needs the
     # write lock, so we test with unknown IDs to isolate the read path.
-    result = state.fail_workers_batch(["w-nonexistent"], reason="test")
+    result = state.fail_workers_batch(["w-nonexistent"], reason="test", kb=KillBuffer())
     assert result.removed_workers == []
 
     done.set()
@@ -2858,7 +2860,7 @@ def test_holder_task_cleanup_releases_no_resources(state):
     # Kill the holder task via parent job cancellation
     parent_job_id = JobName.root("test-user", "j1")
     with state._store.transaction() as cur:
-        state.cancel_job(cur, parent_job_id, reason="test")
+        state.cancel_job(cur, parent_job_id, reason="test", kb=KillBuffer())
 
     # Worker GPUs should be unchanged (nothing to release)
     worker_after = _query_worker(state, wid)
@@ -3400,7 +3402,7 @@ def _run_direct_tasks(state: ControllerTransitions, task_ids: list[JobName]) -> 
         state.drain_for_direct_provider(cur)
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
-            cur, [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids]
+            cur, [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids], kb=KillBuffer()
         )
 
 
@@ -3504,7 +3506,7 @@ def test_apply_running(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
+            ], kb=KillBuffer()
         )
 
     assert _task_state_direct(state, task_id) == job_pb2.TASK_STATE_RUNNING
@@ -3522,14 +3524,14 @@ def test_apply_succeeded(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
+            ], kb=KillBuffer()
         )
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED),
-            ],
+            ], kb=KillBuffer()
         )
 
     task = _task_row_direct(state, task_id)
@@ -3550,14 +3552,14 @@ def test_apply_failed_with_retry(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
+            ], kb=KillBuffer()
         )
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
-            ],
+            ], kb=KillBuffer()
         )
 
     # Task should be PENDING again (1 failure <= 1 max_retries_failure).
@@ -3593,14 +3595,14 @@ def test_apply_failed_no_retry(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
+            ], kb=KillBuffer()
         )
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
-            ],
+            ], kb=KillBuffer()
         )
 
     task = _task_row_direct(state, task_id)
@@ -3621,14 +3623,14 @@ def test_apply_worker_failed(state):
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
+            ], kb=KillBuffer()
         )
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED, error="node died"),
-            ],
+            ], kb=KillBuffer()
         )
 
     # Should be retried (preemption_count=1 <= max_retries_preemption=1).
@@ -3652,27 +3654,29 @@ def test_buffer_direct_kill(state):
 
 
 def test_cancel_job_kills_direct_provider_tasks(state):
-    """cancel_job includes NULL-worker_id (direct-provider) tasks in tasks_to_kill."""
+    """cancel_job appends NULL-worker_id (direct-provider) tasks to the kill buffer."""
     task_ids = _submit_job_direct(state, "/user/job1", replicas=2)
     _run_direct_tasks(state, task_ids)
 
+    kb = KillBuffer()
     with state._store.transaction() as cur:
-        result = state.cancel_job(cur, JobName.from_wire("/user/job1"), reason="test cancel")
+        state.cancel_job(cur, JobName.from_wire("/user/job1"), reason="test cancel", kb=kb)
 
-    assert result.tasks_to_kill == set(task_ids)
+    assert {item.task_id for item in kb} == {tid.to_wire() for tid in task_ids}
 
 
 def test_kill_non_terminal_direct_provider_tasks(state):
-    """_kill_non_terminal_tasks includes NULL-worker_id tasks in tasks_to_kill."""
+    """_kill_non_terminal_tasks appends NULL-worker_id tasks to the kill buffer."""
     task_ids = _submit_job_direct(state, "/user/job1")
     _run_direct_tasks(state, task_ids)
 
     # Trigger via cancel_job which calls _kill_non_terminal_tasks indirectly through
     # cascade, or call it via a job failure path. Use cancel_job for simplicity.
+    kb = KillBuffer()
     with state._store.transaction() as cur:
-        result = state.cancel_job(cur, JobName.from_wire("/user/job1"), reason="test kill")
+        state.cancel_job(cur, JobName.from_wire("/user/job1"), reason="test kill", kb=kb)
 
-    assert task_ids[0] in result.tasks_to_kill
+    assert task_ids[0].to_wire() in {item.task_id for item in kb}
 
 
 def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harness):
@@ -3722,6 +3726,7 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
             holder_job_id,
             "Job finalized",
             0,
+            KillBuffer(),
         )
 
     # Holder's termination must not touch the co-tenant's committed counters.
@@ -3734,19 +3739,22 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
 
 
 def test_max_failures_kills_direct_provider_tasks(state):
-    """When a task fails and triggers kill of siblings, direct-provider tasks appear in tasks_to_kill."""
+    """When a task fails and triggers kill of siblings, direct-provider tasks appear in the kill buffer."""
     task_ids = _submit_job_direct(state, "/user/job1", replicas=2, max_retries_failure=0)
     _run_direct_tasks(state, task_ids)
 
     # Fail one task — with max_task_failures=0 (default) this should kill the job,
     # triggering _kill_non_terminal_tasks for the sibling.
+    kb = KillBuffer()
     with state._store.transaction() as cur:
-        result = state.apply_direct_provider_updates(
-            cur, [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom")]
+        state.apply_direct_provider_updates(
+            cur,
+            [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom")],
+            kb=kb,
         )
 
-    # The sibling task (task_ids[1]) should be in tasks_to_kill.
-    assert task_ids[1] in result.tasks_to_kill
+    # The sibling task (task_ids[1]) should be in the kill buffer.
+    assert task_ids[1].to_wire() in {item.task_id for item in kb}
 
 
 # =============================================================================
@@ -3790,7 +3798,7 @@ def test_job_expands_to_replicas_and_retry_limits(harness) -> None:
 def test_job_becomes_unschedulable_when_task_unschedulable(harness) -> None:
     tasks = harness.submit("unsched", replicas=2)
     with harness.state._store.transaction() as cur:
-        harness.state.mark_task_unschedulable(cur, tasks[0].task_id, reason="no capacity")
+        harness.state.mark_task_unschedulable(cur, tasks[0].task_id, reason="no capacity", kb=KillBuffer())
     assert harness.query_job(JobName.root("test-user", "unsched")).state == job_pb2.JOB_STATE_UNSCHEDULABLE
 
 
@@ -3798,5 +3806,5 @@ def test_job_cancel_marks_job_killed(harness) -> None:
     harness.submit("killed", replicas=2)
     jid = JobName.root("test-user", "killed")
     with harness.state._store.transaction() as cur:
-        harness.state.cancel_job(cur, jid, reason="manual")
+        harness.state.cancel_job(cur, jid, reason="manual", kb=KillBuffer())
     assert harness.query_job(jid).state == job_pb2.JOB_STATE_KILLED

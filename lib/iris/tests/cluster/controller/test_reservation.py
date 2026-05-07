@@ -39,6 +39,7 @@ from iris.cluster.controller.db import task_row_can_be_scheduled
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
 from iris.cluster.controller.schema import WorkerRow
 from iris.cluster.controller.transitions import (
+    KillBuffer,
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
     ControllerTransitions,
@@ -493,7 +494,7 @@ def test_cleanup_removes_finished_job_claims(ctrl):
 
     # Kill the job to mark it as finished.
     with ctrl.state._store.transaction() as cur:
-        ctrl.state.cancel_job(cur, jid, reason="test")
+        ctrl.state.cancel_job(cur, jid, reason="test", kb=KillBuffer())
 
     job = _query_job(ctrl.state, jid)
     assert is_job_finished(job.state)
@@ -1425,7 +1426,7 @@ def test_holder_task_worker_death_no_failure_record(state):
         assert active_wid == worker_id
 
         # Kill the worker — holder task must NOT go through WORKER_FAILED.
-        state.fail_workers([(worker_id, None, "simulated crash")])
+        state.fail_workers([(worker_id, None, "simulated crash")], kb=KillBuffer())
 
         holder_task = _query_task_with_attempts(state, holder_task.task_id)
         assert holder_task is not None
@@ -1540,7 +1541,7 @@ def test_holder_task_removed_from_worker_when_parent_succeeds(state):
                         new_state=job_pb2.TASK_STATE_SUCCEEDED,
                     )
                 ],
-            ),
+            ), kb=KillBuffer()
         )
 
     holder_task = _query_task(state, holder_task.task_id)
@@ -1591,7 +1592,7 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
     # skips them. Only the explicit _cancel_child_jobs call at the end of
     # _on_job_cancelled can clean up the holder.
     with state._store.transaction() as cur:
-        state.cancel_job(cur, parent_job_id, reason="manual cancel")
+        state.cancel_job(cur, parent_job_id, reason="manual cancel", kb=KillBuffer())
 
     holder_task = _query_task(state, holder_task.task_id)
     assert holder_task is not None

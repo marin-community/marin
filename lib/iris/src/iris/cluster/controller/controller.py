@@ -109,9 +109,11 @@ from iris.cluster.controller.transitions import (
     ClusterCapacity,
     ControllerTransitions,
     HeartbeatApplyRequest,
+    KillBuffer,
     ReservationClaim,
     SchedulingEvent,
     TaskUpdate,
+    _PendingKill,
     log_event,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
@@ -146,6 +148,82 @@ class SchedulingOutcome(enum.Enum):
     NO_PENDING_TASKS = "no_pending_tasks"
     NO_ASSIGNMENTS = "no_assignments"
     ASSIGNMENTS_MADE = "assignments_made"
+
+
+class KillRegistry:
+    """In-memory record of (task_id, attempt_id) -> worker pending kill.
+
+    Each entry is a kill obligation produced by a controller transition. The
+    kill-dispatcher thread drains undispatched entries, sends StopTasks RPCs
+    to the assigned worker, and marks them dispatched on success. Entries are
+    cleared by:
+
+    - heartbeat apply when the worker reports the task terminal (the worker
+      confirms the container actually stopped — the scheduler-exclusion
+      marker stays in place from RPC ack until that confirmation, closing
+      the #5470 race).
+    - worker failure when the worker is removed from the cluster (no daemon
+      remains to receive the RPC).
+
+    Not persisted: on controller restart the Poll() reconcile re-discovers
+    orphans by comparing worker-reported tasks against controller DB.
+
+    ``KillBuffer`` and ``_PendingKill`` live in ``transitions.py`` to avoid a
+    transitions -> controller import cycle; conceptually they are the
+    per-transaction and per-entry siblings of this class.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        # Keyed by (task_id_wire, attempt_id) -> _PendingKill
+        self._items: dict[tuple[str, int], _PendingKill] = {}
+
+    def add_many(self, kb: KillBuffer) -> None:
+        """Merge a KillBuffer into the registry.
+
+        Existing records for the same (task_id, attempt_id) are overwritten so
+        a fresh entry resets the dispatched flag (e.g. the controller observed
+        a kill twice from different transitions).
+        """
+        if not kb:
+            return
+        with self._lock:
+            for item in kb:
+                self._items[(item.task_id, item.attempt_id)] = item
+
+    def remove(self, task_id: str, attempt_id: int) -> None:
+        with self._lock:
+            self._items.pop((task_id, attempt_id), None)
+
+    def remove_for_worker(self, worker_id: WorkerId) -> None:
+        with self._lock:
+            stale = [k for k, v in self._items.items() if v.worker_id == worker_id]
+            for k in stale:
+                self._items.pop(k, None)
+
+    def undispatched(self) -> list[_PendingKill]:
+        with self._lock:
+            return [item for item in self._items.values() if not item.dispatched]
+
+    def mark_dispatched(self, task_id: str, attempt_id: int) -> None:
+        with self._lock:
+            entry = self._items.get((task_id, attempt_id))
+            if entry is not None:
+                entry.dispatched = True
+
+    def workers_with_pending(self) -> set[WorkerId]:
+        """Workers that still have at least one pending kill (dispatched or not).
+
+        The scheduler excludes these workers from new assignments. We include
+        already-dispatched kills because the worker hasn't yet confirmed the
+        container stopped — see #5470 for the race that motivated the marker.
+        """
+        with self._lock:
+            return {item.worker_id for item in self._items.values() if item.worker_id is not None}
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._items)
 
 
 def _drain_queue(q: queue_mod.Queue, timeout: float = 1.0) -> list:
@@ -747,21 +825,6 @@ def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[Wor
     return {worker.worker_id: worker for worker in workers}
 
 
-def _task_worker_mapping(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, WorkerId]:
-    if not task_ids:
-        return {}
-    task_wires = [task_id.to_wire() for task_id in task_ids]
-    placeholders = ",".join("?" for _ in task_wires)
-    with queries.read_snapshot() as snapshot:
-        rows = snapshot.raw(
-            f"SELECT t.task_id, t.current_worker_id AS worker_id FROM tasks t "
-            f"WHERE t.task_id IN ({placeholders}) AND t.current_worker_id IS NOT NULL",
-            tuple(task_wires),
-            decoders={"task_id": JobName.from_wire, "worker_id": WorkerId},
-        )
-    return {row.task_id: row.worker_id for row in rows}
-
-
 def _worker_matches_reservation_entry(
     worker: WorkerRow,
     res_entry: job_pb2.ReservationEntry,
@@ -1195,9 +1258,15 @@ class Controller:
         logging.getLogger("iris").addHandler(self._log_handler)
 
         self._health = WorkerHealthTracker()
+        # Pending-kill registry: see #5470. Holds the scheduler-exclusion
+        # marker for workers with in-flight kills until the worker reports the
+        # task terminal via heartbeat. Wired into transitions so heartbeat
+        # apply and worker-failure transitions can clear entries.
+        self._kill_registry = KillRegistry()
         self._transitions = ControllerTransitions(
             store=self._store,
             health=self._health,
+            kill_registry=self._kill_registry,
         )
         self._scheduler = Scheduler()
 
@@ -1234,16 +1303,8 @@ class Controller:
         self._prune_thread: ManagedThread | None = None
         self._task_updater_thread: ManagedThread | None = None
         self._ping_thread: ManagedThread | None = None
+        self._kill_dispatcher_thread: ManagedThread | None = None
         self._task_update_queue: queue_mod.Queue[HeartbeatApplyRequest] = queue_mod.Queue()
-
-        # Workers with outstanding StopTasks RPCs from the task-updater thread.
-        # The scheduling thread excludes these workers so it won't reassign a
-        # TPU slice while stale processes are still being killed on the workers.
-        # See issue #5470: without this, a coscheduled gang requeue decommits
-        # resources instantly but kill RPCs arrive later, allowing a second gang
-        # to be dispatched to workers that still have running processes.
-        self._workers_pending_kill: set[WorkerId] = set()
-        self._workers_pending_kill_lock = threading.Lock()
 
         self._autoscaler: Autoscaler | None = autoscaler
 
@@ -1347,6 +1408,9 @@ class Controller:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
             self._ping_thread = self._threads.spawn(self._run_ping_loop, name="ping-loop")
             self._task_updater_thread = self._threads.spawn(self._run_task_updater_loop, name="task-updater-loop")
+            self._kill_dispatcher_thread = self._threads.spawn(
+                self._run_kill_dispatcher_loop, name="kill-dispatcher-loop"
+            )
             if not self._config.dry_run:
                 self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")
                 self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
@@ -1435,6 +1499,9 @@ class Controller:
         if self._task_updater_thread:
             self._task_updater_thread.stop()
             self._task_updater_thread.join(timeout=join_timeout)
+        if self._kill_dispatcher_thread:
+            self._kill_dispatcher_thread.stop()
+            self._kill_dispatcher_thread.join(timeout=join_timeout)
         if self._prune_thread:
             self._prune_thread.stop()
             self._prune_thread.join(timeout=join_timeout)
@@ -1597,12 +1664,12 @@ class Controller:
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
         result = provider.sync(batch)
+        kb = KillBuffer()
         with self._store.transaction() as cur:
-            tx_result = self._transitions.apply_direct_provider_updates(cur, result.updates)
+            self._transitions.apply_direct_provider_updates(cur, result.updates, kb)
         self._provider_scheduling_events = list(result.scheduling_events) if result.scheduling_events else []
         self._provider_capacity = result.capacity
-        if tx_result.tasks_to_kill:
-            self.kill_tasks_on_workers(tx_result.tasks_to_kill, tx_result.task_kill_workers)
+        self._register_kills(kb)
 
     def _run_profile_loop(self, stop_event: threading.Event) -> None:
         """Periodically capture CPU and memory profiles for all running tasks.
@@ -2046,14 +2113,16 @@ class Controller:
         modified_workers = _inject_reservation_taints(state.workers, claims)
         modified_jobs = _inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
 
-        # Exclude workers with outstanding StopTasks RPCs from the task-updater
-        # thread. This prevents the scheduler from assigning new tasks to workers
-        # that still have stale processes being killed. Without this, a
-        # coscheduled gang requeue frees committed resources in the DB before the
-        # kill RPCs complete, and the scheduler can place a second gang on workers
-        # that are still running the first gang's processes (#5470).
-        with self._workers_pending_kill_lock:
-            pending_kill = set(self._workers_pending_kill)
+        # Exclude workers with pending kills from the kill registry. This
+        # prevents the scheduler from assigning new tasks to workers that still
+        # have stale processes being killed. Without this, a coscheduled gang
+        # requeue frees committed resources in the DB before the kill RPCs
+        # complete, and the scheduler can place a second gang on workers that
+        # are still running the first gang's processes (#5470). The marker
+        # stays until the worker reports the task terminal via heartbeat —
+        # not just until the StopTasks RPC ack returns — because the worker
+        # may take minutes to actually stop the container.
+        pending_kill = self._kill_registry.workers_with_pending()
         if pending_kill:
             pre_filter = len(modified_workers)
             modified_workers = [w for w in modified_workers if w.worker_id not in pending_kill]
@@ -2139,15 +2208,12 @@ class Controller:
             preemptions = _run_preemption_pass(unscheduled, running_info, context)
             # Apply all preemptions in one transaction so slice evictions
             # (N siblings of a coscheduled preemptor) are all-or-nothing.
-            kills: set[JobName] = set()
             if preemptions:
+                kb = KillBuffer()
                 with self._store.transaction() as cur:
                     for preemptor_name, victim_id in preemptions:
-                        preempt_result = self._transitions.preempt_task(
-                            cur, victim_id, reason=f"Preempted by {preemptor_name}"
-                        )
-                        kills |= preempt_result.tasks_to_kill
-                self.kill_tasks_on_workers(kills)
+                        self._transitions.preempt_task(cur, victim_id, reason=f"Preempted by {preemptor_name}", kb=kb)
+                self._register_kills(kb)
                 logger.info("Preemption pass: %d tasks preempted", len(preemptions))
         return preemptions
 
@@ -2215,10 +2281,10 @@ class Controller:
         for task in timed_out:
             logger.warning("Task %s exceeded execution timeout, killing", task.task_id)
         task_ids = {t.task_id for t in timed_out}
+        kb = KillBuffer()
         with self._store.transaction() as cur:
-            result = self._transitions.cancel_tasks_for_timeout(cur, task_ids, reason="Execution timeout exceeded")
-        if result.tasks_to_kill:
-            self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
+            self._transitions.cancel_tasks_for_timeout(cur, task_ids, reason="Execution timeout exceeded", kb=kb)
+        self._register_kills(kb)
 
     def _mark_task_unschedulable(self, task: TaskRow) -> None:
         """Mark a task as unschedulable due to timeout."""
@@ -2231,14 +2297,15 @@ class Controller:
         else:
             timeout = None
         logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout}), marking as UNSCHEDULABLE")
+        kb = KillBuffer()
         with self._store.transaction() as cur:
-            result = self._transitions.mark_task_unschedulable(
+            self._transitions.mark_task_unschedulable(
                 cur,
                 task.task_id,
                 reason=f"Scheduling timeout exceeded ({timeout})",
+                kb=kb,
             )
-        if result.tasks_to_kill:
-            self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
+        self._register_kills(kb)
 
     def create_scheduling_context(self, workers: list[WorkerRow]) -> SchedulingContext:
         """Create a scheduling context for the given workers."""
@@ -2248,26 +2315,31 @@ class Controller:
             building_counts=building_counts,
         )
 
-    def kill_tasks_on_workers(
-        self,
-        task_ids: set[JobName],
-        task_kill_workers: dict[JobName, WorkerId] | None = None,
-    ) -> None:
-        """Kill tasks on their assigned workers.
+    def register_kills(self, kb: KillBuffer) -> None:
+        """Flush a KillBuffer after a clean transaction commit.
 
-        Non-K8s providers send StopTasks RPCs directly. K8s buffers direct kills
-        for the provider sync loop to consume.
+        Non-K8s providers track kills in the in-memory ``KillRegistry``; the
+        kill-dispatcher thread drains it and sends StopTasks RPCs. K8s
+        providers route kills through the dispatch_queue (consumed by
+        ``drain_for_direct_provider`` and the K8s sync loop). The kb is
+        provider-agnostic so transitions never need to know which backend is
+        in use.
         """
+        if not kb:
+            return
         if self._config.dry_run:
-            logger.info("[DRY-RUN] Would kill %d tasks on workers: %s", len(task_ids), list(task_ids)[:5])
+            logger.info(
+                "[DRY-RUN] Would record %d kills: %s",
+                len(kb),
+                [item.task_id for item in kb.items[:5]],
+            )
             return
-        if not isinstance(self._provider, K8sTaskProvider):
-            self._stop_tasks_direct(task_ids, task_kill_workers)
+        if isinstance(self._provider, K8sTaskProvider):
+            with self._store.transaction() as cur:
+                for item in kb:
+                    self._transitions.buffer_direct_kill(cur, item.task_id)
             return
-        # K8s: buffer direct kills for the provider sync loop.
-        with self._store.transaction() as cur:
-            for task_id in task_ids:
-                self._transitions.buffer_direct_kill(cur, task_id.to_wire())
+        self._kill_registry.add_many(kb)
 
     # =========================================================================
     # Worker lifecycle RPC dispatch (StartTasks / StopTasks / Ping / PollTasks)
@@ -2352,29 +2424,69 @@ class Controller:
                         )
                     )
 
-    def _stop_tasks_direct(
-        self,
-        task_ids: set[JobName],
-        task_kill_workers: dict[JobName, WorkerId] | None = None,
-    ) -> None:
-        """Send StopTasks RPCs directly to workers."""
-        mapping = dict(task_kill_workers or {})
-        unresolved = task_ids - set(mapping.keys())
-        if unresolved:
-            mapping.update(_task_worker_mapping(self._db, unresolved))
-        workers = _workers_by_id(self._db, set(mapping.values()))
+    def _drain_kill_registry(self) -> None:
+        """Send StopTasks RPCs for undispatched kills in the registry.
 
-        by_worker: dict[tuple[WorkerId, str], list[str]] = {}
-        for task_id, worker_id in mapping.items():
-            worker = workers.get(worker_id)
+        Each successful per-worker StopTasks call marks its kills dispatched.
+        Failed RPCs leave entries undispatched so the next dispatcher tick
+        retries; entries are only removed by heartbeat-confirmed termination
+        or worker removal. The scheduler-exclusion marker therefore survives
+        until the worker actually reports the task terminal — closing the
+        race window from #5470 even when the worker takes minutes to stop the
+        container.
+        """
+        pending = self._kill_registry.undispatched()
+        if not pending:
+            return
+        # Direct-provider tasks (worker_id is None) shouldn't reach here on
+        # the non-K8s path; defensively skip them.
+        with_workers = [item for item in pending if item.worker_id is not None]
+        if not with_workers:
+            return
+        worker_ids = {item.worker_id for item in with_workers if item.worker_id is not None}
+        workers = _workers_by_id(self._db, worker_ids)
+
+        by_worker: dict[tuple[WorkerId, str], list[_PendingKill]] = {}
+        for item in with_workers:
+            assert item.worker_id is not None
+            worker = workers.get(item.worker_id)
             if worker is None:
+                # Worker vanished between enqueue and dispatch: drop the kill.
+                # The daemon is gone, so there's nothing to send the RPC to.
+                self._kill_registry.remove(item.task_id, item.attempt_id)
                 continue
-            by_worker.setdefault((worker_id, worker.address), []).append(task_id.to_wire())
+            by_worker.setdefault((item.worker_id, worker.address), []).append(item)
 
-        jobs = [(worker_id, address, wids) for (worker_id, address), wids in by_worker.items()]
-        for worker_id, error in self._provider.stop_tasks(jobs):
+        if not by_worker:
+            return
+
+        jobs = [
+            (worker_id, address, [item.task_id for item in items])
+            for (worker_id, address), items in by_worker.items()
+        ]
+        results = {worker_id: error for worker_id, error in self._provider.stop_tasks(jobs)}
+        for (worker_id, _), items in by_worker.items():
+            error = results.get(worker_id)
             if error is not None:
                 logger.warning("StopTasks RPC failed for worker %s: %s", worker_id, error)
+                # Leave undispatched; next tick will retry.
+                continue
+            for item in items:
+                self._kill_registry.mark_dispatched(item.task_id, item.attempt_id)
+
+    def _run_kill_dispatcher_loop(self, stop_event: threading.Event) -> None:
+        """Drain the kill registry every ~500ms and send StopTasks RPCs.
+
+        Decouples the kill dispatch from the producing transaction so a
+        transition never has to remember to call back into the controller.
+        Failed RPCs stay in the registry for the next tick to retry.
+        """
+        while not stop_event.is_set():
+            try:
+                self._drain_kill_registry()
+            except Exception:
+                logger.exception("Kill dispatcher iteration failed")
+            stop_event.wait(0.5)
 
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""
@@ -2448,30 +2560,18 @@ class Controller:
                 )
 
     def _process_heartbeat_updates(self, requests: list[HeartbeatApplyRequest]) -> None:
-        """Apply heartbeat-driven transitions and send kill RPCs.
+        """Apply heartbeat-driven transitions and record kills in the registry.
 
-        The pending-kill set is populated inside the decommit transaction so that
-        the scheduling thread cannot observe freed capacity without also seeing
-        the pending-kill marker.
+        Kill dispatch is handled out-of-band by ``_run_kill_dispatcher_loop`` so
+        this thread doesn't block on per-worker StopTasks RPCs. The registry
+        is populated inside the same transaction that decommits resources,
+        so the scheduling thread cannot observe freed capacity without also
+        seeing the pending-kill marker (#5470).
         """
-        workers_to_kill: set[WorkerId] = set()
+        kb = KillBuffer()
         with self._store.transaction() as cur:
-            results = self._transitions.apply_heartbeats_batch(cur, requests)
-            all_tasks_to_kill: set[JobName] = set()
-            all_task_kill_workers: dict[JobName, WorkerId] = {}
-            for result in results:
-                all_tasks_to_kill.update(result.tasks_to_kill)
-                all_task_kill_workers.update(result.task_kill_workers)
-            if all_tasks_to_kill:
-                workers_to_kill = set(all_task_kill_workers.values())
-                with self._workers_pending_kill_lock:
-                    self._workers_pending_kill |= workers_to_kill
-        if workers_to_kill:
-            try:
-                self._stop_tasks_direct(all_tasks_to_kill, all_task_kill_workers)
-            finally:
-                with self._workers_pending_kill_lock:
-                    self._workers_pending_kill -= workers_to_kill
+            self._transitions.apply_heartbeats_batch(cur, requests, kb)
+        self._register_kills(kb)
 
     def _run_task_updater_loop(self, stop_event: threading.Event) -> None:
         """Batched task state updater.
@@ -2496,7 +2596,8 @@ class Controller:
         """
         for wid in worker_ids:
             log_event("worker_failing", wid, trigger=reason)
-        failure_result = self._transitions.fail_workers_batch(worker_ids, reason=reason)
+        kb = KillBuffer()
+        failure_result = self._transitions.fail_workers_batch(worker_ids, reason=reason, kb=kb)
         removed: list[WorkerId] = []
         for wid, addr in failure_result.removed_workers:
             self._provider.on_worker_failed(wid, addr)
@@ -2510,14 +2611,12 @@ class Controller:
             sibling_failures = self._transitions.fail_workers_batch(
                 sibling_worker_ids,
                 reason=sibling_reason,
+                kb=kb,
             )
             for wid, addr in sibling_failures.removed_workers:
                 self._provider.on_worker_failed(wid, addr)
                 removed.append(wid)
-            failure_result.tasks_to_kill.update(sibling_failures.tasks_to_kill)
-            failure_result.task_kill_workers.update(sibling_failures.task_kill_workers)
-        if failure_result.tasks_to_kill:
-            self.kill_tasks_on_workers(failure_result.tasks_to_kill, failure_result.task_kill_workers)
+        self._register_kills(kb)
         return removed
 
     def _run_autoscaler_once(self) -> None:

@@ -56,6 +56,7 @@ from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
+    KillBuffer,
     TaskUpdate,
 )
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
@@ -133,7 +134,7 @@ class MockController:
 
     def __init__(self):
         self.wake = Mock()
-        self.kill_tasks_on_workers = Mock()
+        self.register_kills = Mock()
         self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.autoscaler = None
@@ -602,9 +603,10 @@ def healthy_active_workers(state: ControllerTransitions) -> list[WorkerRow]:
     return hydrate_worker_attributes(state, workers)
 
 
-def dispatch_task(state: ControllerTransitions, task: TaskDetailRow, worker_id: WorkerId) -> None:
+def dispatch_task(state: ControllerTransitions, task: TaskDetailRow, worker_id: WorkerId) -> KillBuffer:
     with state._store.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)])
+    kb = KillBuffer()
     with state._store.transaction() as cur:
         state.apply_task_updates(
             cur,
@@ -618,7 +620,9 @@ def dispatch_task(state: ControllerTransitions, task: TaskDetailRow, worker_id: 
                     )
                 ],
             ),
+            kb,
         )
+    return kb
 
 
 def transition_task(
@@ -628,12 +632,14 @@ def transition_task(
     *,
     error: str | None = None,
     exit_code: int | None = None,
-) -> object:
+) -> KillBuffer:
     task = query_task_with_attempts(state, task_id)
     assert task is not None
+    kb = KillBuffer()
     if new_state == job_pb2.TASK_STATE_KILLED:
         with state._store.transaction() as cur:
-            return state.cancel_job(cur, task.job_id, reason=error or "killed")
+            state.cancel_job(cur, task.job_id, reason=error or "killed", kb=kb)
+        return kb
     # Compute worker_id: prefer current attempt's worker, fall back to current_worker_id.
     current_attempt = task.attempts[-1] if task.attempts else None
     worker_id = current_attempt.worker_id if current_attempt is not None else task.current_worker_id
@@ -644,9 +650,9 @@ def transition_task(
             error=error,
             exit_code=exit_code,
         )
-        return state
+        return kb
     with state._store.transaction() as cur:
-        return state.apply_task_updates(
+        state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
@@ -660,12 +666,16 @@ def transition_task(
                     )
                 ],
             ),
+            kb,
         )
+    return kb
 
 
-def fail_worker(state: ControllerTransitions, worker_id: WorkerId, error: str) -> None:
+def fail_worker(state: ControllerTransitions, worker_id: WorkerId, error: str) -> KillBuffer:
     """Force-remove a worker via the explicit kill path used by the reaper thread."""
-    state.fail_workers([(worker_id, None, error)])
+    kb = KillBuffer()
+    state.fail_workers([(worker_id, None, error)], kb)
+    return kb
 
 
 # =============================================================================

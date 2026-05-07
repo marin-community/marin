@@ -102,7 +102,7 @@ def transition_task_to_running(state: ControllerTransitions, task) -> None:
                         new_state=job_pb2.TASK_STATE_RUNNING,
                     )
                 ],
-            ),
+            ), kb=KillBuffer()
         )
 
 
@@ -119,7 +119,7 @@ def transition_task_to_state(state: ControllerTransitions, task, new_state: int)
                         new_state=new_state,
                     )
                 ],
-            ),
+            ), kb=KillBuffer()
         )
 
 

@@ -30,6 +30,7 @@ from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.transitions import (
     Assignment,
     HeartbeatApplyRequest,
+    KillBuffer,
     TaskUpdate,
 )
 from iris.cluster.types import JobName, WorkerId
@@ -130,6 +131,7 @@ def _schedule_and_commit(scheduler, state):
 
 
 def _transition_to_running(state, task):
+    kb = KillBuffer()
     with state._store.transaction() as cur:
         state.apply_task_updates(
             cur,
@@ -141,15 +143,17 @@ def _transition_to_running(state, task):
                     )
                 ],
             ),
+            kb,
         )
 
 
 def _worker_fail_one_task(state, task):
     """Send WORKER_FAILED for one task. For coscheduled jobs this triggers
     _requeue_coscheduled_siblings which bounces all siblings to PENDING and
-    decommits their resources."""
+    decommits their resources. Returns the resulting kill buffer."""
+    kb = KillBuffer()
     with state._store.transaction() as cur:
-        result = state.apply_task_updates(
+        state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
                 worker_id=task.current_worker_id,
@@ -162,8 +166,9 @@ def _worker_fail_one_task(state, task):
                     )
                 ],
             ),
+            kb,
         )
-    return result
+    return kb
 
 
 def _assigned_workers_by_job(assignments):
@@ -250,8 +255,8 @@ class TestPreemptionReassignmentRace:
         # First gang fails during BUILDING -> decommit happens in DB.
         # In production, kill RPCs are queued but NOT yet sent.
         first_job_tasks = query_tasks_for_job(state, first_job)
-        fail_result = _worker_fail_one_task(state, first_job_tasks[0])
-        assert fail_result.tasks_to_kill, "Coscheduled requeue should produce kill targets"
+        fail_kb = _worker_fail_one_task(state, first_job_tasks[0])
+        assert len(fail_kb) > 0, "Coscheduled requeue should produce kill targets"
 
         for i in range(VMS_PER_SLICE):
             w = _query_worker(state, WorkerId(f"slice-3-w{i}"))
@@ -274,12 +279,15 @@ class TestPreemptionReassignmentRace:
         assert assigned_workers == slice3_workers, "Assignment should land on slice-3 (the only healthy slice)"
 
     def test_pending_kill_guard_prevents_reassignment(self, make_controller):
-        """WITH the fix: _process_heartbeat_updates populates _workers_pending_kill
-        inside the decommit transaction, and the scheduler excludes those workers.
+        """WITH the fix: heartbeat-driven transitions populate the KillRegistry
+        inside the decommit transaction, and the scheduler excludes those
+        workers. The marker stays until the worker reports the task terminal
+        via heartbeat — not just until the StopTasks RPC ack returns.
 
-        Mocks _stop_tasks_direct (the RPC boundary) to run a scheduling tick
-        mid-kill, verifying the guard blocks reassignment while kills are in
-        flight.
+        Drives ``_process_heartbeat_updates`` (which queues kills into the
+        registry) and then runs a scheduling tick before any heartbeat clears
+        the registry, verifying the guard blocks reassignment while kills are
+        outstanding.
         """
         ctrl = make_controller(remote_state_dir="file:///tmp/iris-5470-test")
         state = ctrl._transitions
@@ -311,28 +319,22 @@ class TestPreemptionReassignmentRace:
             ],
         )
 
-        # Mock _stop_tasks_direct to intercept the kill RPCs and run scheduling
-        # mid-kill -- this is the exact interleaving that causes #5470.
-        pending_kill_during_rpc = None
-
-        def intercepting_stop(task_ids, task_kill_workers=None):
-            nonlocal pending_kill_during_rpc
-            with ctrl._workers_pending_kill_lock:
-                pending_kill_during_rpc = set(ctrl._workers_pending_kill)
-            ctrl._run_scheduling()
-
-        ctrl._stop_tasks_direct = intercepting_stop
-
-        # Drive the production code path
+        # Drive the production code path. _process_heartbeat_updates commits
+        # the requeue and pushes kills into the registry without dispatching
+        # them — the kill-dispatcher thread runs separately, so the registry
+        # holds undispatched entries between heartbeat-apply and dispatcher
+        # tick. Nothing here should run the dispatcher.
         ctrl._process_heartbeat_updates([fail_request])
 
-        # Verify pending-kill was populated during the RPC window
-        assert pending_kill_during_rpc, "pending-kill set should be non-empty during kill RPCs"
+        # Verify the registry is populated and excludes slice-3 workers.
+        pending_kill = ctrl._kill_registry.workers_with_pending()
         slice3_workers = {WorkerId(f"slice-3-w{i}") for i in range(VMS_PER_SLICE)}
-        assert pending_kill_during_rpc & slice3_workers, "slice-3 workers should be in pending-kill during kill RPCs"
+        assert pending_kill, "kill registry should be non-empty after heartbeat-apply"
+        assert pending_kill & slice3_workers, "slice-3 workers should be in the registry"
 
-        # The mid-kill scheduling tick should NOT have placed gang B on slice-3
-        # because 7 of 8 workers were excluded (the gang needs all 8).
+        # Run a scheduling tick BEFORE any heartbeat clears the registry.
+        # The scheduler must exclude slice-3 because of the pending kills.
+        ctrl._run_scheduling()
         tasks_b_during = query_tasks_for_job(state, job_b_id)
         b_on_slice3 = [
             t
@@ -344,9 +346,26 @@ class TestPreemptionReassignmentRace:
             f"{[str(t.current_worker_id) for t in b_on_slice3]}"
         )
 
-        # After kills complete, pending-kill should be cleared
-        with ctrl._workers_pending_kill_lock:
-            assert len(ctrl._workers_pending_kill) == 0, "pending-kill should be empty after kills"
+        # Once the workers report the killed tasks terminal via a follow-up
+        # heartbeat, the registry should clear.
+        for t in assigned_a:
+            with state._store.transaction() as cur:
+                state.apply_task_updates(
+                    cur,
+                    HeartbeatApplyRequest(
+                        worker_id=t.current_worker_id,
+                        updates=[
+                            TaskUpdate(
+                                task_id=t.task_id,
+                                attempt_id=t.current_attempt_id,
+                                new_state=job_pb2.TASK_STATE_KILLED,
+                                error="killed",
+                            )
+                        ],
+                    ),
+                    KillBuffer(),
+                )
+        assert len(ctrl._kill_registry) == 0, "registry should be cleared after terminal heartbeats"
 
     def test_committed_tpu_correct_through_full_cycle(self, scheduler, state):
         """Track committed_tpu at every step to verify accounting."""

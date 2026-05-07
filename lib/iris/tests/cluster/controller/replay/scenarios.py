@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.schema import EndpointRow
 from iris.cluster.controller.transitions import (
+    KillBuffer,
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
@@ -301,7 +302,7 @@ def scenario_worker_failure_cascade(transitions: ControllerTransitions, clock: F
     (task_id,) = _task_ids(transitions, job_id)
     apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_id)]))
     # Direct call: fail_workers is intentionally not an IrisEvent.
-    transitions.fail_workers([(worker_id, "w-doomed:8080", "node lost")])
+    transitions.fail_workers([(worker_id, "w-doomed:8080", "node lost")], kb=KillBuffer())
 
 
 def scenario_cancel_running_job(transitions: ControllerTransitions, clock: FrozenClock) -> None:
