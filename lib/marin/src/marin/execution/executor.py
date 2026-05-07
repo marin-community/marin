@@ -1259,6 +1259,11 @@ def instantiate_config(config: Any, output_path: str | None, output_paths: dict[
         elif isinstance(obj, list):
             # Recurse through lists
             return [recurse(x) for x in obj]
+        elif isinstance(obj, tuple) and hasattr(obj, "_fields"):
+            # Preserve NamedTuple subclasses when resolving nested values.
+            return type(obj)(*(recurse(x) for x in obj))
+        elif isinstance(obj, tuple):
+            return tuple(recurse(x) for x in obj)
         elif isinstance(obj, dict):
             # Recurse through dicts
             return dict((i, recurse(x)) for i, x in obj.items())
@@ -1297,6 +1302,10 @@ def resolve_local_placeholders(config: ConfigT, output_path: str) -> ConfigT:
             return replace(obj, **{f.name: recurse(getattr(obj, f.name)) for f in fields(obj)})
         if isinstance(obj, list):
             return [recurse(x) for x in obj]
+        if isinstance(obj, tuple) and hasattr(obj, "_fields"):
+            return type(obj)(*(recurse(x) for x in obj))
+        if isinstance(obj, tuple):
+            return tuple(recurse(x) for x in obj)
         if isinstance(obj, dict):
             return {k: recurse(v) for k, v in obj.items()}
         return obj

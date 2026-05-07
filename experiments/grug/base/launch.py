@@ -33,7 +33,7 @@ from experiments.grug.base.train import (
     GrugTrainerConfig,
     _run_grug_local,
 )
-from experiments.pretraining_datasets import nemotron_mix_block_shuffle
+from experiments.pretraining_datasets import nemotron_mix
 
 
 @dataclass(frozen=True)
