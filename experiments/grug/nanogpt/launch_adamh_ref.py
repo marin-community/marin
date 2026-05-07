@@ -309,17 +309,17 @@ def run_nanogpt_adamh_ref_trial(config: NanoGPTAdamHRefLaunchConfig) -> None:
 
 # ---- Launch step ----
 
-NANOGPT_MODEL = NanoGPTConfig()
+NANOGPT_MODEL = NanoGPTConfig(zero_init_proj=False)
 ADAMH_REF_OPTIMIZER = NanoGPTAdamHRefConfig()
 
 nanogpt_adamh_ref_trial = ExecutorStep(
-    name="grug/nanogpt-adamh-ref-trial",
+    name="grug/nanogpt-adamh-ref-trial-v2",
     fn=run_nanogpt_adamh_ref_trial,
     config=NanoGPTAdamHRefLaunchConfig(
         model=versioned(NANOGPT_MODEL),
         data=_fineweb_gpt2_data(),
         output_path=this_output_path(),
-        run_id="nanogpt-adamh-ref-trial",
+        run_id="nanogpt-adamh-ref-trial-v2",
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
         steps=versioned(ADAMH_REF_TRAIN_STEPS),
         batch_size=versioned(BATCH_SIZE),
@@ -329,7 +329,7 @@ nanogpt_adamh_ref_trial = ExecutorStep(
             project="dial_moe",
             tags=["nanogpt", "adamh-ref"],
             group="nanogpt",
-            name="nanogpt-adamh-ref-trial",
+            name="nanogpt-adamh-ref-trial-v2",
         ),
         optimizer=versioned(ADAMH_REF_OPTIMIZER),
         grug_trainer=versioned(GrugTrainerConfig(z_loss_weight=0.0, ema_beta=None, log_every=1)),
