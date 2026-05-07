@@ -283,13 +283,13 @@ nanogpt_nofeat_muon = ExecutorStep(
 )
 
 nanogpt_nofeat_adamh = ExecutorStep(
-    name="grug/nanogpt-nofeat-adamh",
+    name="grug/nanogpt-nofeat-adamh-v2",
     fn=run_nanogpt_trial,
     config=NanoGPTLaunchConfig(
         model=versioned(NANOGPT_ADAMH_MODEL),
         data=_fineweb_gpt2_data(),
         output_path=this_output_path(),
-        run_id="nanogpt-nofeat-adamh",
+        run_id="nanogpt-nofeat-adamh-v2",
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
         steps=versioned(ADAMH_TRAIN_STEPS),
         batch_size=versioned(BATCH_SIZE),
@@ -299,7 +299,7 @@ nanogpt_nofeat_adamh = ExecutorStep(
             project="dial_moe",
             tags=["nanogpt", "nofeat", "adamh"],
             group="nanogpt-nofeat",
-            name="nanogpt-nofeat-adamh",
+            name="nanogpt-nofeat-adamh-v2",
         ),
         optimizer=versioned(_adamh_optimizer_for_nanogpt(steps=ADAMH_TRAIN_STEPS)),
         grug_trainer=versioned(TRAINER_CFG),
@@ -308,13 +308,13 @@ nanogpt_nofeat_adamh = ExecutorStep(
 )
 
 nanogpt_nofeat_adamh_ref = ExecutorStep(
-    name="grug/nanogpt-nofeat-adamh-ref",
+    name="grug/nanogpt-nofeat-adamh-v2-ref",
     fn=run_nanogpt_trial,
     config=NanoGPTLaunchConfig(
         model=versioned(NANOGPT_ADAMH_MODEL),
         data=_fineweb_gpt2_data(),
         output_path=this_output_path(),
-        run_id="nanogpt-nofeat-adamh-ref",
+        run_id="nanogpt-nofeat-adamh-v2-ref",
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
         steps=versioned(ADAMH_REF_TRAIN_STEPS),
         batch_size=versioned(BATCH_SIZE),
@@ -324,7 +324,7 @@ nanogpt_nofeat_adamh_ref = ExecutorStep(
             project="dial_moe",
             tags=["nanogpt", "nofeat", "adamh-ref"],
             group="nanogpt-nofeat",
-            name="nanogpt-nofeat-adamh-ref",
+            name="nanogpt-nofeat-adamh-v2-ref",
         ),
         optimizer=versioned(NanoGPTAdamHRefConfig()),
         grug_trainer=versioned(TRAINER_CFG),
@@ -335,6 +335,6 @@ nanogpt_nofeat_adamh_ref = ExecutorStep(
 
 if __name__ == "__main__":
     executor_main(
-        steps=[nanogpt_nofeat_muon, nanogpt_nofeat_adamh, nanogpt_nofeat_adamh_ref],
-        description="NanoGPT no-feat: Muon vs AdamH vs AdamH-ref.",
+        steps=[nanogpt_nofeat_adamh],
+        description="NanoGPT no-feat AdamH v2.",
     )
