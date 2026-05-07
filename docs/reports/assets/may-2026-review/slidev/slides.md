@@ -207,6 +207,72 @@ layout: default
 layout: default
 ---
 
+# ![](/icons/chart.svg) Perplexity Gaps
+
+- In `#4693` and `#5005`, we developed a thesis that Marin's weakness at posttraining is actually observable on the pretrained artifacts. We sought to identify weak points for our v1 Marin data mix.
+- In `#4693`, we look at agentic traces to see if there are particular spans (prose, tool calls, tool results, patches) where Marin is weak.
+- In `#5005` we broaden the search to every data source we could think of that was easy to add. We looked at ~100 new naturalish data sources (with ~80-90 more wired up) and our classic set of ppl evals.
+- The broad English story is not the problem. Marin 8B is roughly on par with Llama 3.1 8B on Paloma / Uncheatable (`+0.0029` / `+0.0049` BPB) and beats Qwen3 8B on Paloma while staying close on Uncheatable (`-0.0272` / `+0.0074` BPB).
+
+---
+layout: default
+---
+
+# ![](/icons/code.svg) Agent Traces: Patch And Observation Gaps
+
+<div style="display: flex; align-items: center; justify-content: center; height: 420px;">
+  <img src="/charts/agent-traces/trace-labels.png" alt="Agent trace span labels" style="max-width: 96%; max-height: 405px; object-fit: contain;"/>
+</div>
+
+---
+layout: default
+---
+
+# ![](/icons/code.svg) Agent Traces: Patch And Observation Gaps
+
+<div style="font-size: 0.72em; line-height: 1.15">
+
+| Model | Assistant | Tool | Observation | Patch | Patch gain |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Qwen3-8B base | 0.482 | 0.796 | 0.428 | 0.220 | +0.161 |
+| Llama3.1-8B base | 0.532 | 0.619 | 0.459 | 0.237 | +0.183 |
+| Marin-8B base | 0.543 | 0.435 | 0.752 | 1.867 | -1.432 |
+| Marin-8B instruct | 0.564 | 0.477 | 0.902 | 1.934 | -1.429 |
+
+</div>
+
+- BPB: lower is better. Patch gain: how much the trace helps predict the final patch; positive means the trace helped.
+- Marin looks basically fine on prose/chat and surprisingly good on tool-call spans.
+- The failures are in understanding tool results and producing patches. More trace context helps peer models predict patches, but hurts Marin.
+- This is now a repeatable agent-trace PPL suite (`#4963`, `#5248`) and should directly inform the next data mix. (Good evidence for us needing to add program traces, log files, etc. to the mix!)
+
+---
+layout: default
+---
+
+# ![](/icons/chart.svg) Perplexity Gap: Long-Tail Data
+
+<div style="font-size: 0.72em; line-height: 1.15">
+
+| Slice family | 8B gap vs Qwen3 | 32B gap vs Qwen3 | Read |
+| --- | ---: | ---: | --- |
+| Paloma | -0.027 | -0.088 | Edited English is not the main gap |
+| Uncheatable Eval | +0.007 | -0.026 | Prose-heavy held-out slices mostly hold up |
+| FineWeb2 multilingual | +0.243 | +0.184 | English-only training shows up immediately |
+| SVG Markup | +0.098 | +0.104 | Markup in general is weak |
+| Package metadata | +0.082 | +0.038 | Repo-adjacent structured text is undercovered |
+| Bio / chem notation | TODO | +0.082 | Science notation is a clear blind spot |
+| Game / music notation | TODO | -0.200 | Not every weird slice is bad |
+
+</div>
+
+- The recurring weak families are code, messy web artifacts, structured text, code-adjacent metadata, tables, multilingual prose, and scientific notation.
+- The dashboard is live at [marin.community/analysis/perplexity-gap](https://marin.community/analysis/perplexity-gap/).
+
+---
+layout: default
+---
+
 # Training Data
 
 - **Landed**: rollout pipelines for six datasets (`#4329`), NSF abstracts (`#4516`), PleIAs/common_corpus (`#4606`), HPLT likely non-duplicates (`#4326`), BHL stitching (`#5408`), GAIR/daVinci-Dev (`#5252`), Molmo2-Cap (`#5299`), nyuuzyou/svgfind (`#5304`), public diagnostic logs (`#5121`).
@@ -283,74 +349,6 @@ Tags: messaging app, chat app, …
 </div>
 
 </div>
-
-
-
----
-layout: default
----
-
-# ![](/icons/chart.svg) Perplexity Gaps
-
-- In `#4693` and `#5005`, we developed a thesis that Marin's weakness at posttraining is actually observable on the pretrained artifacts. We sought to identify weak points for our v1 Marin data mix.
-- In `#4693`, we look at agentic traces to see if there are particular spans (prose, tool calls, tool results, patches) where Marin is weak.
-- In `#5005` we broaden the search to every data source we could think of that was easy to add. We looked at ~100 new naturalish data sources (with ~80-90 more wired up) and our classic set of ppl evals.
-- The broad English story is not the problem. Marin 8B is roughly on par with Llama 3.1 8B on Paloma / Uncheatable (`+0.0029` / `+0.0049` BPB) and beats Qwen3 8B on Paloma while staying close on Uncheatable (`-0.0272` / `+0.0074` BPB).
-
----
-layout: default
----
-
-# ![](/icons/code.svg) Agent Traces: Patch And Observation Gaps
-
-<div style="display: flex; align-items: center; justify-content: center; height: 420px;">
-  <img src="/charts/agent-traces/trace-labels.png" alt="Agent trace span labels" style="max-width: 96%; max-height: 405px; object-fit: contain;"/>
-</div>
-
----
-layout: default
----
-
-# ![](/icons/code.svg) Agent Traces: Patch And Observation Gaps
-
-<div style="font-size: 0.72em; line-height: 1.15">
-
-| Model | Assistant | Tool | Observation | Patch | Patch gain |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Qwen3-8B base | 0.482 | 0.796 | 0.428 | 0.220 | +0.161 |
-| Llama3.1-8B base | 0.532 | 0.619 | 0.459 | 0.237 | +0.183 |
-| Marin-8B base | 0.543 | 0.435 | 0.752 | 1.867 | -1.432 |
-| Marin-8B instruct | 0.564 | 0.477 | 0.902 | 1.934 | -1.429 |
-
-</div>
-
-- BPB: lower is better. Patch gain: how much the trace helps predict the final patch; positive means the trace helped.
-- Marin looks basically fine on prose/chat and surprisingly good on tool-call spans.
-- The failures are in understanding tool results and producing patches. More trace context helps peer models predict patches, but hurts Marin.
-- This is now a repeatable agent-trace PPL suite (`#4963`, `#5248`) and should directly inform the next data mix. (Good evidence for us needing to add program traces, log files, etc. to the mix!)
-
----
-layout: default
----
-
-# ![](/icons/chart.svg) Perplexity Gap: Long-Tail Data
-
-<div style="font-size: 0.72em; line-height: 1.15">
-
-| Slice family | 8B gap vs Qwen3 | 32B gap vs Qwen3 | Read |
-| --- | ---: | ---: | --- |
-| Paloma | -0.027 | -0.088 | Edited English is not the main gap |
-| Uncheatable Eval | +0.007 | -0.026 | Prose-heavy held-out slices mostly hold up |
-| FineWeb2 multilingual | +0.243 | +0.184 | English-only training shows up immediately |
-| SVG Markup | +0.098 | +0.104 | Markup in general is weak |
-| Package metadata | +0.082 | +0.038 | Repo-adjacent structured text is undercovered |
-| Bio / chem notation | TODO | +0.082 | Science notation is a clear blind spot |
-| Game / music notation | TODO | -0.200 | Not every weird slice is bad |
-
-</div>
-
-- The recurring weak families are code, messy web artifacts, structured text, code-adjacent metadata, tables, multilingual prose, and scientific notation.
-- The dashboard is live at [marin.community/analysis/perplexity-gap](https://marin.community/analysis/perplexity-gap/).
 
 ---
 layout: default
