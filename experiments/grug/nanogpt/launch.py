@@ -32,6 +32,7 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
+from experiments.grug.nanogpt.launch_adamh_ref import ADAMH_REF_TRAIN_STEPS, NanoGPTAdamHRefConfig
 from experiments.grug.nanogpt.model import BATCH_SIZE, MODEL_DIM, SEQ_LEN, TRAIN_STEPS, NanoGPTConfig
 from experiments.grug.nanogpt.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 
@@ -207,6 +208,7 @@ def _fineweb_gpt2_data() -> LmDataConfig:
         tokenizer="gpt2",
         block_cross_document_attention=False,  # match ref: plain causal, no intradoc masking
         auto_build_caches=False,
+        shuffle=False,  # match ref: sequential data reading
         components={
             "fineweb_train": DatasetComponent(cache_dir=base, split="train"),
             "fineweb_val": DatasetComponent(cache_dir=base, split="validation"),
@@ -253,14 +255,16 @@ EVAL_CFG = GrugEvalConfig(
 TRAINER_CFG = GrugTrainerConfig(z_loss_weight=0.0, ema_beta=None, log_every=1)
 
 
-nanogpt_trial = ExecutorStep(
-    name="grug/nanogpt-trial",
+NANOGPT_ADAMH_MODEL = NanoGPTConfig(zero_init_proj=False)
+
+nanogpt_nofeat_muon = ExecutorStep(
+    name="grug/nanogpt-nofeat-muon",
     fn=run_nanogpt_trial,
     config=NanoGPTLaunchConfig(
         model=versioned(NANOGPT_MODEL),
         data=_fineweb_gpt2_data(),
         output_path=this_output_path(),
-        run_id="nanogpt-trial",
+        run_id="nanogpt-nofeat-muon",
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
         steps=versioned(TRAIN_STEPS),
         batch_size=versioned(BATCH_SIZE),
@@ -268,9 +272,9 @@ nanogpt_trial = ExecutorStep(
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             project="dial_moe",
-            tags=["nanogpt", "muon"],
-            group="nanogpt",
-            name="nanogpt-trial",
+            tags=["nanogpt", "nofeat", "muon"],
+            group="nanogpt-nofeat",
+            name="nanogpt-nofeat-muon",
         ),
         optimizer=versioned(NANOGPT_OPTIMIZER),
         grug_trainer=versioned(TRAINER_CFG),
@@ -278,29 +282,51 @@ nanogpt_trial = ExecutorStep(
     ),
 )
 
-
-NANOGPT_ADAMH_MODEL = NanoGPTConfig(zero_init_proj=False)
-
-nanogpt_adamh_trial = ExecutorStep(
-    name="grug/nanogpt-adamh-trial-v4",
+nanogpt_nofeat_adamh = ExecutorStep(
+    name="grug/nanogpt-nofeat-adamh",
     fn=run_nanogpt_trial,
     config=NanoGPTLaunchConfig(
         model=versioned(NANOGPT_ADAMH_MODEL),
         data=_fineweb_gpt2_data(),
         output_path=this_output_path(),
-        run_id="nanogpt-adamh-trial-v4",
+        run_id="nanogpt-nofeat-adamh",
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-        steps=versioned(TRAIN_STEPS),
+        steps=versioned(ADAMH_TRAIN_STEPS),
         batch_size=versioned(BATCH_SIZE),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             project="dial_moe",
-            tags=["nanogpt", "adamh"],
-            group="nanogpt",
-            name="nanogpt-adamh-trial",
+            tags=["nanogpt", "nofeat", "adamh"],
+            group="nanogpt-nofeat",
+            name="nanogpt-nofeat-adamh",
         ),
-        optimizer=versioned(_adamh_optimizer_for_nanogpt()),
+        optimizer=versioned(_adamh_optimizer_for_nanogpt(steps=ADAMH_TRAIN_STEPS)),
+        grug_trainer=versioned(TRAINER_CFG),
+        eval=versioned(EVAL_CFG),
+    ),
+)
+
+nanogpt_nofeat_adamh_ref = ExecutorStep(
+    name="grug/nanogpt-nofeat-adamh-ref",
+    fn=run_nanogpt_trial,
+    config=NanoGPTLaunchConfig(
+        model=versioned(NANOGPT_ADAMH_MODEL),
+        data=_fineweb_gpt2_data(),
+        output_path=this_output_path(),
+        run_id="nanogpt-nofeat-adamh-ref",
+        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+        steps=versioned(ADAMH_REF_TRAIN_STEPS),
+        batch_size=versioned(BATCH_SIZE),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["nanogpt", "nofeat", "adamh-ref"],
+            group="nanogpt-nofeat",
+            name="nanogpt-nofeat-adamh-ref",
+        ),
+        optimizer=versioned(NanoGPTAdamHRefConfig()),
         grug_trainer=versioned(TRAINER_CFG),
         eval=versioned(EVAL_CFG),
     ),
@@ -309,6 +335,6 @@ nanogpt_adamh_trial = ExecutorStep(
 
 if __name__ == "__main__":
     executor_main(
-        steps=[nanogpt_trial],
-        description="NanoGPT Muon trial on FineWeb10B-GPT2.",
+        steps=[nanogpt_nofeat_muon, nanogpt_nofeat_adamh, nanogpt_nofeat_adamh_ref],
+        description="NanoGPT no-feat: Muon vs AdamH vs AdamH-ref.",
     )
