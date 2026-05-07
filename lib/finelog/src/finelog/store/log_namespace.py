@@ -511,8 +511,12 @@ class DiskLogNamespace:
         #   2. Local parquet files — authoritative for unflushed catalog
         #      state (genuine boot from disk, no prior catalog).
         #   3. Remote bucket — authoritative for wiped-catalog recovery,
-        #      handled in the bg loop's first sync tick rather than here
-        #      so __init__ stays free of network calls.
+        #      handled below by ``_adopt_remote_segments`` *before* the
+        #      bg loop starts. We can't defer this to the first sync tick:
+        #      that tick's phase-2 orphan-delete would see an empty
+        #      catalog with a populated bucket and ``fs.rm`` everything.
+        #      The cost is a network round-trip per parquet file at boot
+        #      when the bucket is non-empty.
         #
         # Each catalog row is reattached to its on-disk file when present;
         # ``REMOTE``-only rows stay in the catalog but never enter the
@@ -1250,6 +1254,13 @@ class DiskLogNamespace:
         has been uploaded in phase 1, so the durable copy is in place
         before any input remote bytes are deleted.
 
+        Phase 2 is skipped entirely when any phase-1 upload failed: if
+        the merged output isn't durable, the only remaining copies of
+        its seq range are the compaction inputs sitting in the bucket
+        (whose catalog rows were dropped at commit time). Deleting them
+        as orphans before the replacement is durable would lose data.
+        Cleanup is harmless to defer to the next tick.
+
         No-op when the namespace has no remote prefix configured.
         """
         if not self._remote_namespace_dir:
@@ -1265,6 +1276,7 @@ class DiskLogNamespace:
         with self._insertion_lock:
             rows = self._catalog.list_segments(self.name, min_level=1)
 
+        all_durable = True
         for row in rows:
             if row.location != SegmentLocation.LOCAL:
                 continue
@@ -1276,6 +1288,11 @@ class DiskLogNamespace:
                 continue
             if self._upload(Path(row.path)):
                 self._mark_uploaded(row.path)
+            else:
+                all_durable = False
+
+        if not all_durable:
+            return
 
         # Re-snapshot: phase 1 may have added basenames to the bucket; we
         # only want to delete files whose basename is genuinely orphan

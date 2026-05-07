@@ -98,3 +98,44 @@ def test_drop_table_does_not_delete_remote_objects(tmp_path: Path):
         assert not (tmp_path / "data" / "iris.worker").exists()
     finally:
         store.close()
+
+
+def test_drop_table_stops_bg_thread_before_dropping_catalog_rows(tmp_path: Path):
+    """drop_table joins the bg thread *before* dropping catalog rows.
+
+    With the prior order (``catalog.delete → stop_and_join``), a bg
+    ``_sync_step`` tick taken between the lock release and the join
+    would see an empty catalog plus a populated bucket and ``fs.rm``
+    every remote file. The fix is to stop the bg thread first. This
+    test pins the new order.
+    """
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    store = DuckDBLogStore(log_dir=tmp_path / "data", remote_log_dir=str(remote))
+    try:
+        store.register_table("iris.worker", _worker_schema())
+        store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
+        ns = store._namespaces["iris.worker"]
+        ns._flush_step()
+        ns._force_compact_l0()
+        ns._sync_step()
+        assert sorted((remote / "iris.worker").glob("*.parquet"))
+
+        # Spy on stop_and_join to assert the catalog still has rows when
+        # the bg thread joins; if the order ever regresses the catalog
+        # would be empty here.
+        observed = {"rows_at_stop": None}
+        original_stop = ns.stop_and_join
+
+        def spy() -> None:
+            with store._insertion_lock:
+                observed["rows_at_stop"] = list(store._catalog.list_segments("iris.worker"))
+            original_stop()
+
+        ns.stop_and_join = spy  # type: ignore[method-assign]
+
+        store.drop_table("iris.worker")
+
+        assert observed["rows_at_stop"], "bg thread joined after catalog rows were dropped"
+    finally:
+        store.close()

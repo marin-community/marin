@@ -467,9 +467,16 @@ class DuckDBLogStore:
 
         We can't hold the insertion mutex end-to-end because the bg flush
         thread itself takes it every iteration; joining under the mutex
-        would deadlock. Instead: (1) remove from registry under the mutex,
-        (2) stop_and_join the bg thread, (3) take the rwlock write side and
-        delete the segment directory.
+        would deadlock. The order is:
+
+          1. Remove from the registry under the mutex (new ops fail fast).
+          2. Stop and join the bg thread — *before* dropping catalog rows,
+             because ``_sync_step`` would otherwise see an empty catalog
+             plus a populated bucket and ``fs.rm`` every remote file as
+             an orphan.
+          3. Drop the catalog rows now that no concurrent reader can act
+             on them.
+          4. Take the rwlock write side and delete the segment directory.
 
         GCS-archived data is intentionally preserved; the bucket is the
         caller's to clean up.
@@ -481,11 +488,13 @@ class DuckDBLogStore:
             ns = self._namespaces.get(name)
             if ns is None:
                 raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
-            self._catalog.delete(name)
             del self._namespaces[name]
             self._namespace_registered_at.pop(name, None)
 
         ns.stop_and_join()
+
+        with self._insertion_lock:
+            self._catalog.delete(name)
 
         self._query_visibility_lock.write_acquire()
         try:
