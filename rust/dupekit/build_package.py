@@ -10,10 +10,11 @@ marin-libs wheels - same trigger shape (schedule + tag + workflow_dispatch +
 PR-smoke), no `push: branches: [main]` recursion.
 
 Modes:
-    nightly  -- `<bump_patch(Cargo.toml)>-dev.<GITHUB_RUN_ID>`. Run id makes
-                the value globally unique, so concurrent nightly runs (or a
-                manual nightly dispatch racing the cron) cannot collide.
-                Cargo.toml stays frozen; subsequent runs read the same base.
+    nightly  -- `<bump_patch(Cargo.toml)>-dev.<YYYYMMDDhhmm>` (UTC). Minute
+                precision keeps the value human-readable while staying
+                collision-free in practice (only a same-minute manual
+                dispatch racing the cron would clash). Cargo.toml stays
+                frozen; subsequent runs read the same base.
     stable   -- version supplied via --version (extracted from the tag in CI).
                 Cargo.toml is rewritten on disk so maturin builds with that
                 version; the change is not committed.
@@ -28,6 +29,7 @@ Usage:
 """
 
 import argparse
+import datetime as dt
 import os
 import platform
 import re
@@ -188,15 +190,16 @@ def _bump_patch(version: str) -> str:
 
 
 def _resolve_nightly_version() -> str:
-    """Build a never-collides nightly version off Cargo.toml.
+    """Build a nightly version off Cargo.toml.
 
-    Format is `<bumped_patch>-dev.<run_id>`:
+    Format is `<bumped_patch>-dev.<YYYYMMDDhhmm>`:
       - `<bumped_patch>` anticipates the next stable so dev versions sort
         between the current Cargo version (last cut stable) and the next one.
-      - `<run_id>` is `GITHUB_RUN_ID` (globally unique per workflow run on
-        GitHub). Two concurrent nightly runs cannot collide on the same value
-        the way a deterministic patch+1 scheme can, and we no longer need to
-        query PyPI to figure out what's safe.
+      - `<YYYYMMDDhhmm>` is UTC timestamp at minute precision: human-readable
+        (you can tell at a glance when a nightly was cut), monotonic, and
+        unique enough — collision would require two runs to fire in the same
+        wall-clock minute, which only happens if a manual dispatch races the
+        cron.
 
     Cargo accepts `-dev.N` as a semver prerelease; maturin emits the wheel as
     PEP 440 `<bumped_patch>.devN`, which uv/pip both treat as a pre-release of
@@ -204,8 +207,8 @@ def _resolve_nightly_version() -> str:
     resolve to a stable, not a nightly).
     """
     bumped = _bump_patch(_read_cargo_version())
-    run_id = os.environ.get("GITHUB_RUN_ID", "0")
-    return f"{bumped}-dev.{run_id}"
+    stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%d%H%M")
+    return f"{bumped}-dev.{stamp}"
 
 
 def _resolve_manual_version() -> str:
