@@ -44,9 +44,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            targets: linux
+            target: linux
           - os: macos-14
-            targets: macos
+            target: macos
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -54,7 +54,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Build wheels
-        run: python rust/dupekit/build_package.py --bump --build-wheels --targets ${{ matrix.targets }}
+        run: python rust/dupekit/build_package.py --bump --build ${{ matrix.target }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -90,7 +90,7 @@ jobs:
       # (and accidentally re-bumping) Cargo.toml.
       - name: Bump version and build sdist
         id: bump
-        run: python rust/dupekit/build_package.py --bump --sdist-only
+        run: python rust/dupekit/build_package.py --bump --build sdist
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@v1.12.4
