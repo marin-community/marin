@@ -25,7 +25,6 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 from levanter.grug.attention import AttentionMask, align_kv_heads, attention
-from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head
 
 from experiments.grug.nanogpt.model import (
@@ -292,19 +291,19 @@ class Transformer(eqx.Module):
         labels = jnp.concatenate([token_ids[:, 1:], jnp.zeros_like(token_ids[:, :1])], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        per_pos = fused_linear_softmax_cross_entropy_loss(
-            hidden,
-            self.proj.weight,
-            labels,
-            weight=loss_weight,
-            reduction="none",
-            logsumexp_weight=logsumexp_weight,
-            logit_soft_cap=self.config.logit_cap,
-            dtype=loss_dtype,
-        )
+        raw = jnp.einsum("bsd,dv->bsv", hidden, self.proj.weight, out_sharding=Pbatch)
+        raw = raw.astype(jnp.float32)
+        cap = self.config.logit_cap
+        logits = cap * jnp.tanh(raw / cap) if cap is not None and cap > 0 else raw
+        log_probs = jax.nn.log_softmax(logits, axis=-1)
+        token_losses = -jnp.take_along_axis(log_probs, labels[..., None], axis=-1).squeeze(-1)
+        if logsumexp_weight is not None and logsumexp_weight > 0:
+            lse = jax.scipy.special.logsumexp(logits, axis=-1)
+            token_losses = token_losses + logsumexp_weight * lse**2
+        weighted = token_losses * loss_weight
         if reduction == "none":
-            return per_pos
-        total = jnp.sum(per_pos)
+            return weighted
+        total = jnp.sum(weighted)
         denom = jnp.maximum(jnp.sum(loss_weight), 1.0)
         if reduction == "sum":
             return total
