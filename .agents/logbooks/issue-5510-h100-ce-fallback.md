@@ -156,21 +156,58 @@
 - Next action:
   - Run one CoreWeave Grug MoE canary from this branch to check whether the kernel-level win moves end-to-end canary step time materially.
 
+### 2026-05-07 16:05 - Grug MoE H100 canary with hybrid patch
+- Hypothesis: The H100 hybrid route is viable in the real Grug MoE canary path, and the canary will select `pallas_gpu` instead of falling back to XLA.
+- Command:
+  - GitHub workflow dispatch on branch `issue-5510-investigate-logs`.
+  - Workflow: https://github.com/marin-community/marin/actions/runs/25506693140
+  - Commit: `ef4c51815fa1a6e2f887eef33dbbd4d95f295884`
+  - Iris parent: `/runner/iris-run-job-20260507-155411`
+  - Iris child: `/runner/iris-run-job-20260507-155411/grug-train-canary-gpu-25506693140-1`
+  - W&B: https://wandb.ai/marin-community/marin/runs/canary-gpu-25506693140-1
+- Config:
+  - CoreWeave GPU canary, H100, 8 devices, 1 host.
+  - JAX `0.10.0`.
+  - Canary target tokens `6,553,600`; minimum steps `40`; max loss `8.0`.
+- Result:
+  - Workflow completed successfully in `10m57s`.
+  - Child log recorded `Fused cross-entropy selected implementation: pallas_gpu` at `2026-05-07 15:55:52 UTC`, so the canary used the patched Pallas entry point rather than falling back to XLA.
+  - Canary metric validation passed:
+    - steps completed `99.0000` vs threshold `40.0000`
+    - final loss `6.5663` vs threshold `8.0000`
+  - Final progress line: `100it/100it`, `elapsed:04:42`, `rate:4.9it/s`, `loss=6.57`.
+  - The profile summary reports H100 hardware, 8 devices, 1 host, artifact `jax-profile-step-5-30:v20`.
+  - Profile `step_time` is empty (`count: 0` for all/steady-state steps), and the trace is suspected truncated at exactly `1,000,000` complete events.
+  - Profile time breakdown: compute `28.0%`, communication `7.1%`, host `23.2%`, stall `41.7%`.
+  - `triton_softmax_87` remains visible in gap context, expected because the hybrid keeps XLA forward. The visible CE-adjacent marker is not dominant; `fusion_3134` is `222,219.684` over `60,687,957.091` total exclusive duration (`~0.37%` of this summary basis).
+- Interpretation:
+  - The hybrid route is viable in the canary and preserves numerical/training sanity.
+  - The direct microbench gives the clean performance signal: roughly `15%` better CE value+grad throughput and `11.4%` better forward+value_and_grad combined throughput at the Grug local CE shape.
+  - This canary does not provide a clean end-to-end step-time comparison because workflow elapsed includes compile/profile/checkpoint overhead, profile `step_time` is empty, and the trace is truncated.
+  - Available canary profiles still point at host/stall/communication as larger end-to-end bottlenecks than CE.
+- Next action:
+  - Treat the hybrid as a viable targeted H100 CE patch if the goal is to avoid fallback and improve CE value+grad.
+  - Do not claim a proven Grug canary step-time win from this run alone.
+  - Keep explicit route logging in the patch so future canaries say whether `pallas_gpu` means native Pallas or H100 hybrid.
+
 ## Findings
-- Confidence: replicated for fallback behavior, exploratory for end-to-end performance impact.
+- Confidence: replicated for fallback behavior and H100 CE microbench delta; exploratory for end-to-end canary step-time impact.
 - The cited H100 canary and successful neighboring canary profile summaries are XLA CE runs, not Pallas CE runs.
 - Same-shape H100 `pallas_gpu` CE does not currently lower, so there is no direct apples-to-apples H100 speedup/slowdown number for Pallas versus XLA at the issue shape.
 - #4297/#5350 are about the H100 MoE `ragged_dot` Pallas-Triton path, not fused CE. The `~8.8%` to `3.10x` H100 gains from those PRs should not be attributed to fused CE.
 - The H100 CE fallback is consistent with the intentional NVIDIA-wide CE launch guard from #3160; the JAX 0.10/CUDA 13 update is not evidence that the #5350 MoE Triton kernel was disabled.
 - The best available H100 profile summaries do not show CE-related XLA/Triton markers as the dominant bottleneck, but the summaries are trace-truncated and lack step-time stats.
 - GB10 historical Pallas wins are not valid H100 evidence: they use GB10-specific routing and include a hybrid XLA-forward/custom-backward path.
-- A local experimental patch now makes the H100 large-vocab CE `pallas_gpu` entry point run via an XLA-forward/custom-backward hybrid route. It still needs H100 performance validation.
+- A local experimental patch now makes the H100 large-vocab CE `pallas_gpu` entry point run via an XLA-forward/custom-backward hybrid route.
+- Direct H100 microbenching at the Grug local CE shape shows the hybrid improves CE value+grad throughput by roughly `15%`, replicated across two runs.
+- One Grug MoE H100 canary with the hybrid selected `pallas_gpu`, passed metric validation, and completed training, but did not yield a clean steady-state step-time comparison.
 
 ## Recommendations
 - Keep treating current published H100 Grug MoE canary numbers as XLA CE numbers unless rerun with the experimental H100 hybrid patch.
-- Make canary/profile outputs record the selected CE implementation and include it in perf labels; current H100 canary numbers should be described as XLA CE numbers.
+- Make canary/profile outputs record the selected CE implementation and route; current H100 canary numbers should be described as XLA CE numbers unless the route log says otherwise.
 - Do not add a simple H100 tuned-table row for this shape. The launch/mosaic failures indicate the current Pallas GPU kernel design cannot fit the H100 shared-memory regime for float32 weights.
-- Run an H100 CE microbench and one Grug MoE canary with the local hybrid patch before merging it as a performance change. Compare against current XLA CE on the same JAX/CUDA image.
-- If the hybrid patch does not move step time materially, prioritize the #5350-style `ragged_dot` path and broader host/stall/communication bottlenecks over native CE kernel work.
+- If the team wants a narrow fix for #5510, PR the H100 hybrid route as an H100-specific compatibility/perf patch, not as native H100 Pallas CE. The supporting evidence is replicated CE microbench improvement plus a passing Grug H100 canary.
+- Do not claim a proven end-to-end Grug canary speedup from the current run. Use a non-truncated profile or a cleaner same-image A/B canary if step-time improvement is required for merge.
+- Prioritize the #5350-style `ragged_dot` path and broader host/stall/communication bottlenecks over native CE kernel work unless CE shows up as a real bottleneck in a cleaner profile.
 - If the team wants true native H100 Pallas CE, start a separate kernel rewrite task. The current tiled forward likely needs a different Triton/Mosaic algorithm that avoids per-program full-H weight/input tiles and keeps `(B,V)` accumulators within shared-memory/register limits.
 - Before prioritizing that work, capture a non-truncated H100 profile or microbench report with step-time stats and CE-specific timings; current evidence suggests stalls/host/communication are likely larger canary-level bottlenecks than the CE fallback.

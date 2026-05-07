@@ -57,6 +57,7 @@ _VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 logger = logging.getLogger(__name__)
 _CANONICAL_PALLAS_IMPLEMENTATIONS: dict[str, ArrayImpl] = {}
 _PALLAS_GPU_USES_INTERNAL_BLOCK_SIZES: Callable[[jax.Array, jax.Array], bool] | None = None
+_PALLAS_GPU_INTERNAL_ROUTE_NAME = "h100_xla_forward_custom_backward_hybrid"
 
 try:
     from .pallas_tpu import (
@@ -729,9 +730,21 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 continue
 
         selected = str(impl_for_call)
-        if selected not in _SELECTED_IMPL_LOGGED:
-            _SELECTED_IMPL_LOGGED.add(selected)
-            logger.info("Fused cross-entropy selected implementation: %s", selected)
+        selected_route = None
+        if selected == "pallas_gpu" and _PALLAS_GPU_USES_INTERNAL_BLOCK_SIZES is not None:
+            try:
+                if _PALLAS_GPU_USES_INTERNAL_BLOCK_SIZES(x, w):
+                    selected_route = _PALLAS_GPU_INTERNAL_ROUTE_NAME
+            except Exception:
+                selected_route = None
+
+        selected_log_key = selected if selected_route is None else f"{selected}:{selected_route}"
+        if selected_log_key not in _SELECTED_IMPL_LOGGED:
+            _SELECTED_IMPL_LOGGED.add(selected_log_key)
+            if selected_route is None:
+                logger.info("Fused cross-entropy selected implementation: %s", selected)
+            else:
+                logger.info("Fused cross-entropy selected implementation: %s route=%s", selected, selected_route)
 
         if len(result) == 2:
             loss, lse = result

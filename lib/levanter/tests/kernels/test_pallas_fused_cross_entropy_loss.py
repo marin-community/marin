@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import warnings
 
 import jax
@@ -973,6 +974,36 @@ def test_fused_cross_entropy_pallas_gpu_h100_internal_route_skips_autotune(
     )
 
     assert seen_block_sizes == [None]
+
+
+def test_fused_cross_entropy_pallas_gpu_h100_internal_route_logs_route(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    x = jnp.ones((4, 8), dtype=jnp.bfloat16)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+
+    def fake_impl(x_raw, labels_raw, w_raw, *, block_sizes=None, **_kwargs):
+        del labels_raw, w_raw, block_sizes
+        batch = x_raw.shape[0]
+        return jnp.zeros((batch,), dtype=jnp.float32), jnp.zeros((batch,), dtype=jnp.float32)
+
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_gpu", fake_impl)
+    monkeypatch.setattr(fused_api, "_PALLAS_GPU_USES_INTERNAL_BLOCK_SIZES", lambda x_raw, w_raw: True)
+    monkeypatch.setattr(fused_api, "_SELECTED_IMPL_LOGGED", set())
+
+    caplog.set_level(logging.INFO, logger=fused_api.logger.name)
+    fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        implementation="pallas_gpu",
+    )
+
+    assert "Fused cross-entropy selected implementation: pallas_gpu" in caplog.text
+    assert "route=h100_xla_forward_custom_backward_hybrid" in caplog.text
 
 
 def test_fused_cross_entropy_pallas_gpu_h100_large_vocab_uses_h100_backward_tile(
