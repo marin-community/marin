@@ -132,6 +132,51 @@ def test_stage_lm_eval_source_renders_mmlu_with_choices_and_answer(tmp_path: Pat
     assert records[0]["text"].endswith("Answer: D")
     assert records[0]["provenance"]["num_fewshot"] == 2
     assert records[0]["provenance"]["renderer"] == LmEvalRawRenderer.MMLU.value
+    assert records[0]["provenance"]["subject"] == "elementary_mathematics"
+
+
+def test_stage_lm_eval_source_renders_subjectless_mmlu_with_fallback_fewshot(tmp_path: Path):
+    """Auxiliary-train MMLU rows lack a per-example subject; staging must still succeed."""
+    manifest = _manifest(LmEvalRawRenderer.MMLU, source_label="mmlu:test", split="auxiliary_train", subset="all")
+    cfg = LmEvalRawStagingConfig(
+        input_path="fake://mmlu",
+        output_path=str(tmp_path),
+        source_label="mmlu:test",
+        renderer_name=LmEvalRawRenderer.MMLU,
+        split="auxiliary_train",
+        subset="all",
+        num_fewshot=2,
+        fewshot_split="dev",
+        source_manifest=manifest,
+        content_fingerprint=manifest.fingerprint(),
+    )
+
+    subjectless_query = {**_mmlu_fixture(), "subject": ""}
+    dev_fewshot_rows = [
+        {**_mmlu_fixture(), "subject": "elementary_mathematics", "question": "What is 3 + 3?", "answer": 3},
+        {
+            **_mmlu_fixture(),
+            "subject": "abstract_algebra",
+            "question": "Identity element of a group?",
+            "choices": ["zero", "the unique e", "any element", "none"],
+            "answer": 1,
+        },
+    ]
+
+    with patch(
+        "marin.transform.evaluation.raw_lm_eval._load_hf_iterable",
+        side_effect=[iter(dev_fewshot_rows), iter([subjectless_query])],
+    ):
+        result = stage_lm_eval_source(cfg)
+
+    assert result["record_count"] == 1
+    records = _read_staged_records(tmp_path)
+    assert records[0]["text"].startswith("The following are multiple choice questions (with answers).\n")
+    # Both dev rows show up as fallback few-shot supports, in their iteration order.
+    assert "What is 3 + 3?" in records[0]["text"]
+    assert "Identity element of a group?" in records[0]["text"]
+    assert records[0]["text"].rstrip().endswith("Answer: C")
+    assert records[0]["provenance"]["subject"] == ""
 
 
 def test_stage_lm_eval_source_rejects_mmlu_fewshot_from_query_split(tmp_path: Path):

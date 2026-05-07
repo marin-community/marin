@@ -36,6 +36,10 @@ MMLU_DEFAULT_NUM_FEWSHOT = 5
 MMLU_DEFAULT_FEWSHOT_SPLIT = "dev"
 MMLU_CHOICE_LABELS = ("A", "B", "C", "D")
 MMLU_DESCRIPTION_TEMPLATE = "The following are multiple choice questions (with answers) about {subject}."
+MMLU_SUBJECTLESS_DESCRIPTION = "The following are multiple choice questions (with answers)."
+# Few-shot bucket key used when an MMLU row has no usable per-example subject (e.g. the
+# `auxiliary_train` split, which is sourced from ARC/OBQA/RACE and carries an empty subject).
+MMLU_FALLBACK_FEWSHOT_KEY = ""
 GSM8K_COT_DEFAULT_NUM_FEWSHOT = 8
 # Fallback for environments that do not install Marin's optional lm-eval extra.
 GSM8K_COT_FEWSHOT_EXAMPLES: tuple[tuple[str, str], ...] = (
@@ -162,7 +166,7 @@ def _mmlu_subject(example: dict[str, Any]) -> str:
 
 def _render_mmlu_description(subject: str) -> str:
     if not subject:
-        raise ValueError("MMLU examples must include a subject")
+        return MMLU_SUBJECTLESS_DESCRIPTION
     return MMLU_DESCRIPTION_TEMPLATE.format(subject=subject.replace("_", " "))
 
 
@@ -191,21 +195,31 @@ def _build_mmlu_fewshot_index(
     *,
     num_fewshot: int,
 ) -> dict[str, list[str]]:
+    """Build per-subject MMLU few-shot supports plus a subject-agnostic fallback bucket.
+
+    The fallback bucket (keyed by `MMLU_FALLBACK_FEWSHOT_KEY`) holds the first `num_fewshot`
+    renderable rows in iteration order regardless of subject. It is used when scoring rows
+    that lack a per-example subject (e.g. the `auxiliary_train` split).
+    """
     by_subject: dict[str, list[str]] = {}
     if num_fewshot <= 0:
         return by_subject
 
+    fallback: list[str] = []
     for example in _load_hf_iterable(input_path, split, subset):
-        subject = _mmlu_subject(example)
-        if not subject:
-            continue
         rendered = _render_mmlu_question_block(example)
         if not rendered:
+            continue
+        if len(fallback) < num_fewshot:
+            fallback.append(rendered)
+        subject = _mmlu_subject(example)
+        if not subject:
             continue
         supports = by_subject.setdefault(subject, [])
         if len(supports) < num_fewshot:
             supports.append(rendered)
 
+    by_subject[MMLU_FALLBACK_FEWSHOT_KEY] = fallback
     return by_subject
 
 
@@ -222,7 +236,8 @@ def _render_mmlu_example(
     subject = _mmlu_subject(example)
     blocks = [_render_mmlu_description(subject)]
     if num_fewshot > 0:
-        supports = fewshot_index.get(subject, [])[:num_fewshot]
+        bucket_key = subject if subject else MMLU_FALLBACK_FEWSHOT_KEY
+        supports = fewshot_index.get(bucket_key, [])[:num_fewshot]
         if len(supports) < num_fewshot:
             message = f"Found {len(supports)} MMLU few-shot examples for subject {subject!r}; expected {num_fewshot}"
             raise ValueError(message)
@@ -310,12 +325,14 @@ def stage_lm_eval_source(cfg: LmEvalRawStagingConfig) -> dict[str, int | str]:
     with atomic_rename(out_file) as temp_path:
         with open_url(temp_path, "wt", encoding="utf-8", compression=compression) as outfile:
             for index, example in enumerate(_load_hf_iterable(cfg.input_path, cfg.split, cfg.subset)):
+                provenance_extra: dict[str, Any] = {}
                 if cfg.renderer_name is LmEvalRawRenderer.MMLU:
                     text = _render_mmlu_example(
                         example,
                         fewshot_index=mmlu_fewshot_index,
                         num_fewshot=cfg.num_fewshot,
                     )
+                    provenance_extra["subject"] = _mmlu_subject(example)
                 elif cfg.renderer_name is LmEvalRawRenderer.GSM8K:
                     text = _render_gsm8k_example(example, num_fewshot=cfg.num_fewshot)
                 else:
@@ -334,6 +351,7 @@ def stage_lm_eval_source(cfg: LmEvalRawStagingConfig) -> dict[str, int | str]:
                         "num_fewshot": cfg.num_fewshot,
                         "fewshot_split": cfg.fewshot_split,
                         "index": index,
+                        **provenance_extra,
                         **cfg.extra_metadata,
                     },
                 }
