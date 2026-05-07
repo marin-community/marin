@@ -900,6 +900,100 @@ def test_fused_cross_entropy_pallas_gpu_grad_tracing_non_gb10_path(
     jax.make_jaxpr(jax.grad(loss_fn, argnums=(0, 1)))(x, w)
 
 
+def test_fused_cross_entropy_pallas_gpu_h100_large_vocab_routes_to_xla_forward(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100 80gb hbm3")
+    monkeypatch.setattr(pallas_gpu, "_h100_native_forward_opt_in_enabled", lambda: False)
+
+    seen_block_sizes: list[fused_api.BlockSizes | None] = []
+
+    def fake_xla(x_raw, labels_raw, w_raw, *, block_sizes=None, dtype=None, return_argmax=False, **_kwargs):
+        del labels_raw, w_raw
+        seen_block_sizes.append(block_sizes)
+        out_dtype = jnp.dtype(dtype) if dtype is not None else x_raw.dtype
+        loss = jnp.zeros((x_raw.shape[0],), dtype=out_dtype)
+        lse = jnp.ones((x_raw.shape[0],), dtype=out_dtype)
+        if return_argmax:
+            return loss, lse, jnp.zeros((x_raw.shape[0],), dtype=jnp.int32)
+        return loss, lse
+
+    monkeypatch.setattr(pallas_gpu, "linear_softmax_cross_entropy_loss_xla", fake_xla)
+
+    x = jnp.ones((16, 16), dtype=jnp.bfloat16)
+    w = jnp.ones((16, 65536), dtype=jnp.float32)
+    y = jnp.zeros((16,), dtype=jnp.int32)
+
+    loss, lse = pallas_gpu.linear_softmax_cross_entropy_loss_pallas_gpu(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+    )
+
+    jax.block_until_ready((loss, lse))
+    assert seen_block_sizes == [None]
+    assert jnp.all(loss == 0.0)
+    assert jnp.all(lse == 1.0)
+
+
+def test_fused_cross_entropy_pallas_gpu_h100_internal_route_skips_autotune(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    x = jnp.ones((4, 8), dtype=jnp.bfloat16)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+    seen_block_sizes: list[fused_api.BlockSizes | None] = []
+
+    def fake_impl(x_raw, labels_raw, w_raw, *, block_sizes=None, **_kwargs):
+        del labels_raw, w_raw
+        seen_block_sizes.append(block_sizes)
+        batch = x_raw.shape[0]
+        return jnp.zeros((batch,), dtype=jnp.float32), jnp.zeros((batch,), dtype=jnp.float32)
+
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_gpu", fake_impl)
+    monkeypatch.setattr(fused_api, "_PALLAS_GPU_USES_INTERNAL_BLOCK_SIZES", lambda x_raw, w_raw: True)
+    monkeypatch.setattr(
+        fused_api,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("block inference should not be called")),
+    )
+    monkeypatch.setattr(
+        fused_api,
+        "_autotune_block_sizes_on_miss",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("autotune should not be called")),
+    )
+
+    fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        implementation="pallas_gpu",
+    )
+
+    assert seen_block_sizes == [None]
+
+
+def test_fused_cross_entropy_pallas_gpu_h100_large_vocab_uses_h100_backward_tile(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100 80gb hbm3")
+    monkeypatch.setattr(pallas_gpu, "_h100_native_forward_opt_in_enabled", lambda: False)
+
+    x = jnp.ones((16, 16), dtype=jnp.bfloat16)
+    w = jnp.ones((16, 65536), dtype=jnp.float32)
+
+    assert (
+        pallas_gpu._custom_backward_v_block_size(
+            x,
+            w,
+            fused_api.BlockSizes(b_block_size=16, h_block_size=16, v_block_size=64),
+        )
+        == 8192
+    )
+
+
 def test_pallas_autotune_used_when_tuned_match_missing(monkeypatch: pytest.MonkeyPatch):
     x = jnp.ones((4, 8), dtype=jnp.float32)
     w = jnp.ones((8, 16), dtype=jnp.float32)

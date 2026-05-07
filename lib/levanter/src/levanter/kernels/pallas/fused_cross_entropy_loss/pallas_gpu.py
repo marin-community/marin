@@ -31,6 +31,9 @@ _GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3072
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
 _GB10_NATIVE_FORWARD_OPT_IN_ENV_VAR = "LEVANTER_PALLAS_GPU_GB10_NATIVE_FORWARD"
+_H100_LARGE_VOCAB_MIN_V = 65_536
+_H100_CUSTOM_BWD_V_BLOCK = 8192
+_H100_NATIVE_FORWARD_OPT_IN_ENV_VAR = "LEVANTER_PALLAS_GPU_H100_NATIVE_FORWARD"
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -55,6 +58,11 @@ def _device_kind() -> str:
 
 def _gb10_native_forward_opt_in_enabled() -> bool:
     opt_in_raw = os.environ.get(_GB10_NATIVE_FORWARD_OPT_IN_ENV_VAR, "")
+    return opt_in_raw.lower() in {"1", "true", "yes", "on"}
+
+
+def _h100_native_forward_opt_in_enabled() -> bool:
+    opt_in_raw = os.environ.get(_H100_NATIVE_FORWARD_OPT_IN_ENV_VAR, "")
     return opt_in_raw.lower() in {"1", "true", "yes", "on"}
 
 
@@ -99,6 +107,27 @@ def _gb10_xla_fallback_block_sizes(
     if b_dim >= 1024:
         return BlockSizes(v_block_size=_GB10_XLA_STREAMING_V_BLOCK_BATCH_1K)
     return None
+
+
+def _should_use_h100_large_vocab_hybrid(
+    x: Float[Array, "B H"],
+    w: Float[Array, "H V"],
+) -> bool:
+    device_kind = _device_kind()
+    if "h100" not in device_kind:
+        return False
+    if x.dtype != jnp.bfloat16:
+        return False
+    if w.dtype not in (jnp.bfloat16, jnp.float32):
+        return False
+    return w.shape[1] >= _H100_LARGE_VOCAB_MIN_V
+
+
+def _pallas_gpu_uses_internal_block_sizes(
+    x: Float[Array, "B H"],
+    w: Float[Array, "H V"],
+) -> bool:
+    return _should_use_h100_large_vocab_hybrid(x, w) and not _h100_native_forward_opt_in_enabled()
 
 
 class PallasUnsupportedError(NotImplementedError):
@@ -456,6 +485,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_fa_style_streaming(
         "logit_soft_cap",
         "precision",
         "gb10_native_forward_opt_in",
+        "h100_native_forward_opt_in",
         "return_argmax",
     ],
 )
@@ -469,6 +499,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
     gb10_native_forward_opt_in: bool = False,
+    h100_native_forward_opt_in: bool = False,
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """GPU Pallas implementation returning per-example loss and logsumexp."""
@@ -476,10 +507,17 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
     is_gb10 = "gb10" in device_kind
     is_gb10_bf16 = is_gb10 and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
     gb10_native_forward_opt_in = is_gb10_bf16 and gb10_native_forward_opt_in
+    h100_hybrid = _should_use_h100_large_vocab_hybrid(x, w)
+    h100_native_forward_opt_in = h100_hybrid and h100_native_forward_opt_in
 
     if gb10_native_forward_opt_in and block_sizes is None:
         raise PallasUnsupportedError(
             "GB10 native Pallas forward opt-in requires explicit block sizes. "
+            "Set block_sizes=BlockSizes(...) to keep launch/memory behavior bounded."
+        )
+    if h100_native_forward_opt_in and block_sizes is None:
+        raise PallasUnsupportedError(
+            "H100 native Pallas forward opt-in requires explicit block sizes. "
             "Set block_sizes=BlockSizes(...) to keep launch/memory behavior bounded."
         )
 
@@ -488,6 +526,20 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
             x,
             labels,
             w,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+            return_argmax=return_argmax,
+        )
+    if h100_hybrid and not h100_native_forward_opt_in:
+        # The native tiled Pallas forward materializes too much per-program
+        # state for the Grug H100 large-vocab shape. Keep forward identical to
+        # the proven XLA streaming path while using pallas_gpu dispatch policy.
+        return linear_softmax_cross_entropy_loss_xla(
+            x,
+            labels,
+            w,
+            block_sizes=None,
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
@@ -619,6 +671,8 @@ def _custom_backward_v_block_size(
     gb10_tuned = _gb10_custom_backward_v_block_size(x, w)
     if gb10_tuned is not None:
         return gb10_tuned
+    if _should_use_h100_large_vocab_hybrid(x, w) and not _h100_native_forward_opt_in_enabled():
+        return _H100_CUSTOM_BWD_V_BLOCK
     if block_sizes is not None:
         return block_sizes.v_block_size
     return BlockSizes.get_default().v_block_size
@@ -708,7 +762,7 @@ def _backward_streaming_from_lse(
     return grad_x.astype(x.dtype), grad_w.astype(w.dtype)
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(3, 4, 5, 6, 7))
+@partial(jax.custom_vjp, nondiff_argnums=(3, 4, 5, 6, 7, 8))
 def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
@@ -718,6 +772,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     gb10_native_forward_opt_in: bool,
+    h100_native_forward_opt_in: bool,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
     return _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
         x,
@@ -728,6 +783,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
         logit_soft_cap=logit_soft_cap,
         precision=precision,
         gb10_native_forward_opt_in=gb10_native_forward_opt_in,
+        h100_native_forward_opt_in=h100_native_forward_opt_in,
     )
 
 
@@ -740,6 +796,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     gb10_native_forward_opt_in: bool,
+    h100_native_forward_opt_in: bool,
 ):
     loss, lse = _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
         x,
@@ -750,6 +807,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
         logit_soft_cap=logit_soft_cap,
         precision=precision,
         gb10_native_forward_opt_in=gb10_native_forward_opt_in,
+        h100_native_forward_opt_in=h100_native_forward_opt_in,
     )
     # We carry this shape-derived tuning choice in residuals so bwd can use
     # exactly the same policy decision as fwd without recomputing dispatch logic.
@@ -763,6 +821,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_bwd(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     gb10_native_forward_opt_in: bool,
+    h100_native_forward_opt_in: bool,
     residuals,
     output_cotangent,
 ):
@@ -798,6 +857,7 @@ _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward.defvjp(
         "logit_soft_cap",
         "precision",
         "gb10_native_forward_opt_in",
+        "h100_native_forward_opt_in",
         "return_argmax",
     ],
 )
@@ -811,6 +871,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
     gb10_native_forward_opt_in: bool = False,
+    h100_native_forward_opt_in: bool = False,
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     if return_argmax:
@@ -823,6 +884,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
             logit_soft_cap=logit_soft_cap,
             precision=precision,
             gb10_native_forward_opt_in=gb10_native_forward_opt_in,
+            h100_native_forward_opt_in=h100_native_forward_opt_in,
             return_argmax=True,
         )
     return _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
@@ -834,6 +896,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
         logit_soft_cap,
         precision,
         gb10_native_forward_opt_in,
+        h100_native_forward_opt_in,
     )
 
 
@@ -863,6 +926,7 @@ def linear_softmax_cross_entropy_loss_pallas_gpu(
         )
 
     gb10_native_forward_opt_in = _gb10_native_forward_opt_in_enabled()
+    h100_native_forward_opt_in = _h100_native_forward_opt_in_enabled()
     return _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
         x,
         labels,
@@ -872,6 +936,7 @@ def linear_softmax_cross_entropy_loss_pallas_gpu(
         logit_soft_cap=logit_soft_cap,
         precision=precision,
         gb10_native_forward_opt_in=gb10_native_forward_opt_in,
+        h100_native_forward_opt_in=h100_native_forward_opt_in,
         return_argmax=return_argmax,
     )
 

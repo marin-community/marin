@@ -38,6 +38,8 @@ _FWD_LSE_FORI_LOOP_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_FORI_LOOP_BENCH"
 _FWD_LSE_FORI_V_MULT_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_FORI_V_MULT_BENCH"
 _FWD_LSE_STORE_PATH_ENV = "LEVANTER_PALLAS_TPU_FWD_LSE_STORE_PATH_BENCH"
 _BWD_USE_XLA_STREAMING_ENV = "LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH"
+_H100_NATIVE_FORWARD_OPT_IN_ENV_VAR = "LEVANTER_PALLAS_GPU_H100_NATIVE_FORWARD"
+_H100_LARGE_VOCAB_MIN_V = 65_536
 
 
 class _TeeStream:
@@ -487,6 +489,7 @@ def _run_variant(
     steps: int,
     warmup: int,
     forward_only: bool,
+    value_and_grad: bool,
 ) -> dict[str, float]:
     implementation = variant.implementation
 
@@ -554,7 +557,10 @@ def _run_variant(
                     total_denom = jax.lax.psum(loss.shape[0], "data")
                     return total_sum / total_denom
 
-                return jax.grad(loss_inner, argnums=(0, 1))(x_in, w_in, y_in)
+                grad_fn = jax.value_and_grad(loss_inner, argnums=(0, 1)) if value_and_grad else jax.grad(
+                    loss_inner, argnums=(0, 1)
+                )
+                return grad_fn(x_in, w_in, y_in)
 
             grad_jit = jax.jit(
                 jax.shard_map(
@@ -590,7 +596,10 @@ def _run_variant(
         loss_jit = jax.jit(loss_fn)
         compile_time, steady_time, loss_out = _time_jitted(loss_jit, x_raw, w_raw, y_raw, steps=steps, warmup=warmup)
         if not forward_only:
-            grad_jit = jax.jit(jax.grad(loss_fn, argnums=(0, 1)))
+            grad_fn = jax.value_and_grad(loss_fn, argnums=(0, 1)) if value_and_grad else jax.grad(
+                loss_fn, argnums=(0, 1)
+            )
+            grad_jit = jax.jit(grad_fn)
             bwd_compile_time, bwd_steady_time, _ = _time_jitted(
                 grad_jit, x_raw, w_raw, y_raw, steps=steps, warmup=warmup
             )
@@ -610,6 +619,23 @@ def _run_variant(
     return result
 
 
+def _selected_route(implementation: str, input_dtype: jnp.dtype, weight_dtype: jnp.dtype, vocab: int) -> str:
+    if implementation != "pallas_gpu":
+        return implementation
+    device_kind = jax.devices()[0].device_kind.lower() if jax.devices() else ""
+    h100_native_forward = os.environ.get(_H100_NATIVE_FORWARD_OPT_IN_ENV_VAR, "").lower() in {"1", "true", "yes", "on"}
+    h100_hybrid = (
+        "h100" in device_kind
+        and input_dtype == jnp.bfloat16
+        and weight_dtype in (jnp.bfloat16, jnp.float32)
+        and vocab >= _H100_LARGE_VOCAB_MIN_V
+        and not h100_native_forward
+    )
+    if h100_hybrid:
+        return "pallas_gpu_h100_xla_forward_custom_backward_hybrid"
+    return "pallas_gpu"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch", type=int, default=64)
@@ -617,6 +643,7 @@ def main() -> None:
     parser.add_argument("--embed", type=int, default=1024)
     parser.add_argument("--vocab", type=int, default=128256)
     parser.add_argument("--input-dtype", type=str, default="bfloat16")
+    parser.add_argument("--weight-dtype", type=str, default=None)
     parser.add_argument("--accum-dtype", type=str, default="float32")
     parser.add_argument("--implementation", type=str, default="pallas_tpu")
     parser.add_argument("--block-sizes", type=str, choices=("default", "infer"), default="default")
@@ -655,6 +682,11 @@ def main() -> None:
     parser.add_argument("--compare-fwd-lse-store-path", action="store_true")
     parser.add_argument("--compare-bwd-use-xla-streaming", action="store_true")
     parser.add_argument("--forward-only", action="store_true")
+    parser.add_argument(
+        "--value-and-grad",
+        action="store_true",
+        help="Measure value_and_grad instead of grad-only for the non-forward benchmark.",
+    )
     parser.add_argument(
         "--xla-dump-dir",
         type=str,
@@ -732,6 +764,8 @@ def main() -> None:
         atexit.register(log_capture.__exit__, None, None, None)
 
     print("devices:", jax.devices())
+    device_kind = jax.devices()[0].device_kind if jax.devices() else ""
+    print("device_kind", device_kind)
     print("xla_flags", os.environ.get("XLA_FLAGS", ""))
     print("libtpu_init_args", os.environ.get("LIBTPU_INIT_ARGS", ""))
     if resolved_xla_dump_dir is not None:
@@ -745,6 +779,7 @@ def main() -> None:
     vocab = args.vocab
     tokens = batch * pos
     input_dtype = jnp.dtype(args.input_dtype)
+    weight_dtype = jnp.dtype(args.weight_dtype) if args.weight_dtype is not None else input_dtype
     accum_dtype = jnp.dtype(args.accum_dtype)
     use_shard_map = args.shard_map
     data_shards = args.data_shards or len(jax.devices())
@@ -765,7 +800,7 @@ def main() -> None:
     key = jax.random.PRNGKey(0)
     key_x, key_w, key_y = jax.random.split(key, 3)
     x_raw = jax.random.normal(key_x, (tokens, embed), dtype=input_dtype)
-    w_raw = jax.random.normal(key_w, (embed, vocab), dtype=input_dtype)
+    w_raw = jax.random.normal(key_w, (embed, vocab), dtype=weight_dtype)
     y_raw = jax.random.randint(key_y, (tokens,), 0, vocab, dtype=jnp.int32)
 
     roofline = _estimate_v5p_roofline(
@@ -802,6 +837,8 @@ def main() -> None:
         result: dict[str, str | int | float] = {
             "variant": variant.name,
             "implementation": variant.implementation,
+            "selected_route": _selected_route(variant.implementation, input_dtype, weight_dtype, vocab),
+            "device_kind": device_kind,
             "skip_label_logits": int(variant.skip_label_logits),
             "fwd_xw_bf16": int(variant.fwd_xw_bf16),
             "fwd_dot_accum_bf16": int(variant.fwd_dot_accum_bf16),
@@ -823,7 +860,9 @@ def main() -> None:
             "embed": embed,
             "vocab": vocab,
             "input_dtype": str(input_dtype),
+            "weight_dtype": str(weight_dtype),
             "accum_dtype": str(accum_dtype),
+            "value_and_grad": int(args.value_and_grad),
             "xla_dump_dir": resolved_xla_dump_dir or "",
             "compiler_log_path": resolved_compiler_log_path or "",
             "xla_flags": os.environ.get("XLA_FLAGS", ""),
@@ -844,6 +883,7 @@ def main() -> None:
                     steps=args.steps,
                     warmup=args.warmup,
                     forward_only=args.forward_only,
+                    value_and_grad=args.value_and_grad,
                 )
 
             fwd_tps = tokens / metrics["steady_time_s"]
@@ -873,6 +913,8 @@ def main() -> None:
         result = {key: value for key, value in result.items() if key != "error" or len(str(value)) < 800}
         print("variant", variant.name)
         print("implementation", variant.implementation)
+        print("selected_route", result["selected_route"])
+        print("device_kind", device_kind)
         print("skip_label_logits", int(variant.skip_label_logits))
         print("fwd_xw_bf16", int(variant.fwd_xw_bf16))
         print("fwd_dot_accum_bf16", int(variant.fwd_dot_accum_bf16))
@@ -895,7 +937,9 @@ def main() -> None:
         print("embed", embed)
         print("vocab", vocab)
         print("input_dtype", input_dtype)
+        print("weight_dtype", weight_dtype)
         print("accum_dtype", accum_dtype)
+        print("value_and_grad", int(args.value_and_grad))
         if result["status"] == "ok":
             print("loss", result["loss"])
             print("compile_time_s", result["compile_time_s"])

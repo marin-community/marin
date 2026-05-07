@@ -56,6 +56,7 @@ _VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 
 logger = logging.getLogger(__name__)
 _CANONICAL_PALLAS_IMPLEMENTATIONS: dict[str, ArrayImpl] = {}
+_PALLAS_GPU_USES_INTERNAL_BLOCK_SIZES: Callable[[jax.Array, jax.Array], bool] | None = None
 
 try:
     from .pallas_tpu import (
@@ -69,10 +70,15 @@ except ImportError:
     PallasUnsupportedError = NotImplementedError  # type: ignore[assignment]
 
 try:
-    from .pallas_gpu import PallasUnsupportedError, linear_softmax_cross_entropy_loss_pallas_gpu
+    from .pallas_gpu import (
+        PallasUnsupportedError,
+        _pallas_gpu_uses_internal_block_sizes,
+        linear_softmax_cross_entropy_loss_pallas_gpu,
+    )
 
     IMPLEMENTATIONS["pallas_gpu"] = linear_softmax_cross_entropy_loss_pallas_gpu
     _CANONICAL_PALLAS_IMPLEMENTATIONS["pallas_gpu"] = linear_softmax_cross_entropy_loss_pallas_gpu
+    _PALLAS_GPU_USES_INTERNAL_BLOCK_SIZES = _pallas_gpu_uses_internal_block_sizes
 except ImportError:
     pass
 
@@ -608,39 +614,46 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         elif impl_for_call in ("xla", "reference"):
             block_sizes_for_impl = None
         elif isinstance(impl_for_call, str) and impl_for_call in ("pallas_tpu", "pallas_gpu"):
-            inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
-                x.shape[0],
-                x.shape[1],
-                w.shape[1],
-                dtype=dtype,
-                x_dtype=x.dtype,
-                w_dtype=w.dtype,
-            )
-            fn = IMPLEMENTATIONS.get(impl_for_call)
-            if fn is None or not _pallas_impl_matches_current_backend(impl_for_call, fn=fn):
-                block_sizes_for_impl = inferred
-            elif has_tuned_match:
-                block_sizes_for_impl = inferred
+            if (
+                impl_for_call == "pallas_gpu"
+                and _PALLAS_GPU_USES_INTERNAL_BLOCK_SIZES is not None
+                and _PALLAS_GPU_USES_INTERNAL_BLOCK_SIZES(x, w)
+            ):
+                block_sizes_for_impl = None
             else:
-                try:
-                    block_sizes_for_impl = _autotune_block_sizes_on_miss(
-                        impl_name=impl_for_call,
-                        fn=fn,
-                        x=x,
-                        labels=labels,
-                        w=w,
-                        inferred=inferred,
-                        dtype=dtype,
-                        logit_soft_cap=logit_soft_cap,
-                        precision=precision,
-                        return_argmax=return_argmax,
-                    )
-                except Exception as exc:
-                    if explicit:
-                        raise
-                    _warn_pallas_fallback_once(exc)
-                    errors.append(exc)
-                    continue
+                inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
+                    x.shape[0],
+                    x.shape[1],
+                    w.shape[1],
+                    dtype=dtype,
+                    x_dtype=x.dtype,
+                    w_dtype=w.dtype,
+                )
+                fn = IMPLEMENTATIONS.get(impl_for_call)
+                if fn is None or not _pallas_impl_matches_current_backend(impl_for_call, fn=fn):
+                    block_sizes_for_impl = inferred
+                elif has_tuned_match:
+                    block_sizes_for_impl = inferred
+                else:
+                    try:
+                        block_sizes_for_impl = _autotune_block_sizes_on_miss(
+                            impl_name=impl_for_call,
+                            fn=fn,
+                            x=x,
+                            labels=labels,
+                            w=w,
+                            inferred=inferred,
+                            dtype=dtype,
+                            logit_soft_cap=logit_soft_cap,
+                            precision=precision,
+                            return_argmax=return_argmax,
+                        )
+                    except Exception as exc:
+                        if explicit:
+                            raise
+                        _warn_pallas_fallback_once(exc)
+                        errors.append(exc)
+                        continue
         else:
             block_sizes_for_impl = infer_block_sizes(
                 x.shape[0],
