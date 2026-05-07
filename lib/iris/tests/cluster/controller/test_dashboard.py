@@ -27,7 +27,13 @@ from iris.cluster.controller.schema import (
     EndpointRow,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
+from iris.cluster.controller.transitions import (
+    Assignment,
+    ControllerTransitions,
+    HeartbeatApplyRequest,
+    KillBuffer,
+    TaskUpdate,
+)
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
@@ -775,7 +781,8 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
             HeartbeatApplyRequest(
                 worker_id=wid,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-            ), kb=KillBuffer()
+            ),
+            kb=KillBuffer(),
         )
     with state._store.transaction() as cur:
         state.apply_task_updates(
@@ -783,7 +790,8 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
             HeartbeatApplyRequest(
                 worker_id=wid,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
-            ), kb=KillBuffer()
+            ),
+            kb=KillBuffer(),
         )
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
@@ -828,7 +836,8 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
                 updates=[
                     TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_BUILDING),
                 ],
-            ), kb=KillBuffer()
+            ),
+            kb=KillBuffer(),
         )
     with state._store.transaction() as cur:
         state.apply_task_updates(
@@ -843,7 +852,8 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
                         error="TPU init failure",
                     ),
                 ],
-            ), kb=KillBuffer()
+            ),
+            kb=KillBuffer(),
         )
     # Second attempt: re-dispatch to the same worker, RUNNING.
     with state._store.transaction() as cur:
@@ -854,7 +864,8 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
             HeartbeatApplyRequest(
                 worker_id=wid,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=1, new_state=job_pb2.TASK_STATE_RUNNING)],
-            ), kb=KillBuffer()
+            ),
+            kb=KillBuffer(),
         )
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})

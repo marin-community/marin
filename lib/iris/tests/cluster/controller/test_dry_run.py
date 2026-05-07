@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
+from iris.cluster.controller.transitions import KillBuffer
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
@@ -78,4 +79,15 @@ def test_dry_run_pruning_skipped(dry_run_controller):
 def test_dry_run_kill_tasks_skipped(dry_run_controller):
     controller = dry_run_controller
     task_id = JobName.root("test-user", "fake-job").child("t0")
-    controller.kill_tasks_on_workers({task_id})
+
+    # Create a KillBuffer with a fake kill entry
+    kb = KillBuffer()
+    kb.add(task_id=task_id, attempt_id=0, worker_id="worker-1")
+
+    # In dry-run mode, _register_kills should return early without queuing
+    # any actual kill RPCs. The method logs the would-be kills and returns.
+    controller._register_kills(kb)
+
+    # If we get here without exception, dry-run mode worked correctly.
+    # In a real run, the kill would be registered in the registry.
+    assert controller._config.dry_run

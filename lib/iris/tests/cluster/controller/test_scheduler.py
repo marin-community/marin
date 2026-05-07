@@ -20,7 +20,13 @@ from iris.cluster.controller.scheduler import (
     Scheduler,
     SchedulingResult,
 )
-from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
+from iris.cluster.controller.transitions import (
+    Assignment,
+    ControllerTransitions,
+    HeartbeatApplyRequest,
+    KillBuffer,
+    TaskUpdate,
+)
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
@@ -102,7 +108,8 @@ def transition_task_to_running(state: ControllerTransitions, task) -> None:
                         new_state=job_pb2.TASK_STATE_RUNNING,
                     )
                 ],
-            ), kb=KillBuffer()
+            ),
+            kb=KillBuffer(),
         )
 
 
@@ -119,7 +126,8 @@ def transition_task_to_state(state: ControllerTransitions, task, new_state: int)
                         new_state=new_state,
                     )
                 ],
-            ), kb=KillBuffer()
+            ),
+            kb=KillBuffer(),
         )
 
 
