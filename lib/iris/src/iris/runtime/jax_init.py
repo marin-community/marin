@@ -130,7 +130,9 @@ def initialize_jax(
     # TPU has its own coordinator discovery via the TPU runtime, so avoid the
     # Iris endpoint dance. We still call JAX distributed initialization to
     # create the host-side distributed client used by Levanter multihost
-    # utilities.
+    # utilities. levanter.distributed delegates here when running under Iris
+    # (see lib/levanter/src/levanter/distributed.py initialize_distributed),
+    # so this is the single init site on the Iris+TPU path.
     if os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get("JAX_PLATFORMS", "") == "tpu":
         logger.info("TPU detected; initializing JAX distributed via TPU runtime autodiscovery")
         jax.distributed.initialize()

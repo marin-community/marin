@@ -181,8 +181,6 @@ def train_grug(
     )
 
 
-RESOLVED_RUN_ID = _resolve_run_id("grug-base-trial")
-
 # Shared between the launch config (where the trainer reads it to build the
 # Levanter mesh) and the _submit_train_job call (where the worker is
 # scheduled). Same object on both sides avoids drift.
@@ -194,7 +192,7 @@ grug_base_launch = GrugBaseLaunchConfig(
     data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
     output_path=this_output_path(),
     # Keep run id out of versioning so changing job metadata doesn't create a new output path.
-    run_id=RESOLVED_RUN_ID,
+    run_id=_resolve_run_id("grug-base-trial"),
     resources=versioned(_GRUG_BASE_RESOURCES),
     steps=versioned(2_000),
     batch_size=versioned(512),

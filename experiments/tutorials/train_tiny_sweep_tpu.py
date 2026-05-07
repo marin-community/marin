@@ -35,7 +35,10 @@ EVALS = CORE_TASKS
 # `iris job run` invocations converge on the same target set. Bump for a fresh sweep.
 SWEEP_NAME = "train-tiny-sweep"
 
-NUM_WORKERS = 3  # CPU coordinator replicas; workers exit when all targets are claimed.
+# Each CPU coordinator replica claims one target at a time and blocks on its
+# own child training job, so NUM_WORKERS sets the parallelism — three trials
+# run concurrently here. Workers exit when no unclaimed targets remain.
+NUM_WORKERS = 3
 
 small_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
@@ -70,6 +73,8 @@ class SweepTrial:
 # Build all trials at submission time so coordinators do no config work.
 trials = []
 for sc in sweep_configs:
+    # Marin will automatically create unique ids for runs b/c the model_config is versioned
+    # however, we can give each run a unique name for easier identification
     _name = f"tutorial-slimpajama_6b-30m-sweep-lr{sc.learning_rate}-wd{sc.weight_decay}"
     _job_name, _inner_config, _output_path = prepare_lm_train(
         name=_name,
