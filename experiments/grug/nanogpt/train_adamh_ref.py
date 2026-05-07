@@ -25,7 +25,9 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.nanogpt.model import NanoGPTConfig
 from experiments.grug.nanogpt.model import TransformerAdamHRef as Transformer
 from experiments.grug.nanogpt.train import (
+    GrugEvalConfig,  # noqa: F401 — re-exported for launch_adamh_ref
     GrugRunConfig,
+    GrugTrainerConfig,  # noqa: F401 — re-exported for launch_adamh_ref
     GrugTrainState,
     _compute_flops,
     _make_train_step,
