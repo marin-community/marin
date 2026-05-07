@@ -20,6 +20,7 @@ from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
+    KillBuffer,
     ReservationClaim,
     TaskUpdate,
 )
@@ -163,11 +164,12 @@ def apply_event(transitions: ControllerTransitions, event: IrisEvent) -> Any:
     """
     store = transitions._store
     with store.transaction() as cur:
+        kb = KillBuffer()
         match event:
             case SubmitJob(job_id, request, ts):
                 return transitions.submit_job(cur, job_id, request, ts)
             case CancelJob(job_id, reason):
-                return transitions.cancel_job(cur, job_id, reason)
+                return transitions.cancel_job(cur, job_id, reason, kb)
             case RegisterOrRefreshWorker(worker_id, address, metadata, ts, slice_id, scale_group):
                 return transitions.register_or_refresh_worker(
                     cur,
@@ -181,15 +183,15 @@ def apply_event(transitions: ControllerTransitions, event: IrisEvent) -> Any:
             case QueueAssignments(assignments, direct_dispatch):
                 return transitions.queue_assignments(cur, assignments, direct_dispatch=direct_dispatch)
             case ApplyTaskUpdates(request):
-                return transitions.apply_task_updates(cur, request)
+                return transitions.apply_task_updates(cur, request, kb)
             case ApplyHeartbeatsBatch(requests):
                 return transitions.apply_heartbeats_batch(cur, requests)
             case PreemptTask(task_id, reason):
-                return transitions.preempt_task(cur, task_id, reason)
+                return transitions.preempt_task(cur, task_id, reason, kb)
             case CancelTasksForTimeout(task_ids, reason):
-                return transitions.cancel_tasks_for_timeout(cur, set(task_ids), reason)
+                return transitions.cancel_tasks_for_timeout(cur, set(task_ids), reason, kb)
             case MarkTaskUnschedulable(task_id, reason):
-                return transitions.mark_task_unschedulable(cur, task_id, reason)
+                return transitions.mark_task_unschedulable(cur, task_id, reason, kb)
             case RemoveFinishedJob(job_id):
                 return transitions.remove_finished_job(cur, job_id)
             case RemoveWorker(worker_id):
@@ -199,7 +201,7 @@ def apply_event(transitions: ControllerTransitions, event: IrisEvent) -> Any:
             case DrainForDirectProvider(max_promotions):
                 return transitions.drain_for_direct_provider(cur, max_promotions)
             case ApplyDirectProviderUpdates(updates):
-                return transitions.apply_direct_provider_updates(cur, updates)
+                return transitions.apply_direct_provider_updates(cur, updates, kb)
             case BufferDirectKill(task_id):
                 return transitions.buffer_direct_kill(cur, task_id)
             case AddEndpoint(endpoint):
