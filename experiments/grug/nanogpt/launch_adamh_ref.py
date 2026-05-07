@@ -337,7 +337,7 @@ nanogpt_adamh_ref_trial = ExecutorStep(
             GrugEvalConfig(
                 eval_batch_size=BATCH_SIZE,
                 steps_per_eval=125,
-                max_eval_batches=None,
+                max_eval_batches=20,  # match ref: 10.5M tokens
                 eval_current=True,
                 eval_ema=False,
             )

@@ -244,7 +244,7 @@ NANOGPT_OPTIMIZER = NanoGPTOptimizerConfig()
 EVAL_CFG = GrugEvalConfig(
     eval_batch_size=BATCH_SIZE,
     steps_per_eval=125,
-    max_eval_batches=None,
+    max_eval_batches=20,  # 20 batches x 512 seqs x 1024 tok = 10.5M tokens, matching ref
     eval_current=True,
     eval_ema=False,
 )
