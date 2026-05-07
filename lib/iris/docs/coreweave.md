@@ -215,6 +215,81 @@ Marin's `gpu` extra installs the JAX CUDA 13 wheel stack from PyPI. CoreWeave
 GPU nodes must expose NVIDIA driver 580 or newer; `nvidia-smi` should report
 CUDA 13.x.
 
+### Grug MoE Canary Warm-Node Multinode Smoke
+
+For a realistic Grug MoE multinode smoke, use the GPU path in
+`experiments.ferries.canary_ferry`. This is a warm-node validation: before
+submitting the job, verify that the required GPU nodes are already `CURRENT`,
+free, and schedulable. This does not validate cold-start or real gang scheduling
+behavior.
+
+Minimum preflight:
+
+```bash
+uv run iris --cluster=<cluster> job list --state running
+kubectl --kubeconfig <kubeconfig> get nodepool.compute.coreweave.com <nodepool> \
+  -o custom-columns=NAME:.metadata.name,TARGET:.spec.targetNodes,CURRENT:.status.currentNodes,INPROGRESS:.status.nodesInProgress
+kubectl --kubeconfig <kubeconfig> -n <namespace> get pods -o wide
+```
+
+Starting smoke settings:
+
+| Target | Cluster | Namespace | Kubeconfig | NodePool | `CANARY_GPU_*` | Batch | `NCCL_SOCKET_IFNAME` |
+|--------|---------|-----------|------------|----------|-----------------|-------|----------------------|
+| H100x8 x 2 | `coreweave-ci` | `iris-ci` | `~/.kube/coreweave-iris` | `iris-ci-h100-8x` | `TYPE=H100`, `COUNT=8`, `REPLICAS=2` | 64 | `=enp157s0np0` |
+| B200x8 x 2 | `coreweave-usw09b` | `iris` | `~/.kube/cw-usw09b.yaml` | `iris-usw09b-b200-8x` | `TYPE=B200`, `COUNT=8`, `REPLICAS=2` | 128 | `=enp44s0np0` |
+| GH200x1 x 2 | `coreweave-rno2a` | `iris` | `~/.kube/cw-rno2a.yaml` | `iris-rno2a-gh200-1x` | `TYPE=GH200`, `COUNT=1`, `REPLICAS=2` | 16 | `=eth0` |
+
+For H100, manually warm the second node before launch and restore the pool after
+the run:
+
+```bash
+kubectl --kubeconfig ~/.kube/coreweave-iris patch nodepool.compute.coreweave.com iris-ci-h100-8x \
+  --type merge -p '{"spec":{"targetNodes":2}}'
+
+# After the smoke:
+kubectl --kubeconfig ~/.kube/coreweave-iris patch nodepool.compute.coreweave.com iris-ci-h100-8x \
+  --type merge -p '{"spec":{"targetNodes":1}}'
+```
+
+Submit with explicit `-e` environment variables; do not rely on the submitter's
+shell environment being visible inside the Iris job. Because this canary uses
+real SlimPajama data, use a shared durable `MARIN_PREFIX` plus the credentials
+needed to read/write that prefix. `CANARY_TRACKER=json_logger` avoids requiring
+W&B for this smoke.
+
+```bash
+RUN_ID="cw-grug-mn-warm-<target>-$(date -u +%Y%m%d-%H%M%S)"
+LOG="/tmp/marin-cw-grug-moe/${RUN_ID}.log"
+mkdir -p "$(dirname "$LOG")"
+
+uv run iris --cluster=<cluster> job run \
+  --job-name "$RUN_ID" \
+  --cpu 1 --memory 2GB --disk 8GB --extra cpu \
+  -e MARIN_PREFIX <shared-marin-prefix> \
+  -e RUN_ID "$RUN_ID" \
+  -e CANARY_ACCELERATOR gpu \
+  -e CANARY_GPU_TYPE <H100|B200|GH200> \
+  -e CANARY_GPU_COUNT <8|1> \
+  -e CANARY_GPU_REPLICAS 2 \
+  -e CANARY_STEPS 20 \
+  -e CANARY_BATCH_SIZE <64|128|16> \
+  -e CANARY_PROFILER_ENABLED false \
+  -e CANARY_TRACKER json_logger \
+  -e NCCL_SOCKET_IFNAME '<interface>' \
+  -e HF_TOKEN "$HF_TOKEN" \
+  -e AWS_ACCESS_KEY_ID "$AWS_ACCESS_KEY_ID" \
+  -e AWS_SECRET_ACCESS_KEY "$AWS_SECRET_ACCESS_KEY" \
+  -e AWS_ENDPOINT_URL "$AWS_ENDPOINT_URL" \
+  -- python -m experiments.ferries.canary_ferry 2>&1 | tee "$LOG"
+```
+
+Expected success signals: both replicas report JAX 0.10.0, both enter
+`initialize_jax` with `IRIS_NUM_TASKS=2`, both emit tracker summaries, the step
+reaches 20/20, and the parent job exits `JOB_STATE_SUCCEEDED`. H100 batch 128
+has OOMed with the current Grug MoE model; use batch 64 for functional
+validation.
+
 ### KubernetesProvider Operations
 
 On CoreWeave, there are no persistent worker daemons. The controller dispatches
