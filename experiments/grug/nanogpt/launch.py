@@ -307,37 +307,8 @@ nanogpt_adamh_trial = ExecutorStep(
 )
 
 
-HALF_BATCH = BATCH_SIZE // 2  # 256
-DOUBLE_STEPS = TRAIN_STEPS * 2  # 7200
-
-nanogpt_adamh_halfbatch = ExecutorStep(
-    name="grug/nanogpt-adamh-halfbatch",
-    fn=run_nanogpt_trial,
-    config=NanoGPTLaunchConfig(
-        model=versioned(NANOGPT_ADAMH_MODEL),
-        data=_fineweb_gpt2_data(),
-        output_path=this_output_path(),
-        run_id="nanogpt-adamh-halfbatch",
-        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-        steps=versioned(DOUBLE_STEPS),
-        batch_size=versioned(HALF_BATCH),
-        seed=versioned(0),
-        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-        tracker=WandbConfig(
-            project="dial_moe",
-            tags=["nanogpt", "adamh", "halfbatch"],
-            group="nanogpt",
-            name="nanogpt-adamh-halfbatch",
-        ),
-        optimizer=versioned(_adamh_optimizer_for_nanogpt(batch_size=HALF_BATCH, steps=DOUBLE_STEPS)),
-        grug_trainer=versioned(TRAINER_CFG),
-        eval=versioned(EVAL_CFG),
-    ),
-)
-
-
 if __name__ == "__main__":
     executor_main(
-        steps=[nanogpt_adamh_halfbatch],
-        description="NanoGPT with AdamH half-batch on FineWeb10B-GPT2.",
+        steps=[nanogpt_adamh_trial],
+        description="NanoGPT with AdamH on FineWeb10B-GPT2.",
     )

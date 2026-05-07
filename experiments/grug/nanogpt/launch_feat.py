@@ -183,8 +183,39 @@ nanogpt_feat_adamh_ref = ExecutorStep(
 )
 
 
+# ---- 4. AdamH heuristic + features, half batch (256 seqs x 7200 steps) ----
+
+HALF_BATCH = BATCH_SIZE // 2  # 256
+DOUBLE_STEPS = TRAIN_STEPS * 2  # 7200
+
+nanogpt_feat_adamh_halfbatch = ExecutorStep(
+    name="grug/nanogpt-feat-adamh-halfbatch",
+    fn=run_feat_trial,
+    config=FeatLaunchConfig(
+        model=versioned(FEAT_MODEL_ADAMH),
+        data=_fineweb_gpt2_data(),
+        output_path=this_output_path(),
+        run_id="nanogpt-feat-adamh-halfbatch",
+        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+        steps=versioned(DOUBLE_STEPS),
+        batch_size=versioned(HALF_BATCH),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["nanogpt", "feat", "adamh", "halfbatch"],
+            group="nanogpt-feat",
+            name="nanogpt-feat-adamh-halfbatch",
+        ),
+        optimizer=versioned(_adamh_optimizer_for_nanogpt(batch_size=HALF_BATCH, steps=DOUBLE_STEPS)),
+        grug_trainer=versioned(TRAINER_CFG),
+        eval=versioned(EVAL_CFG),
+    ),
+)
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=[nanogpt_feat_muon, nanogpt_feat_adamh, nanogpt_feat_adamh_ref],
-        description="NanoGPT with grug features: Muon vs AdamH vs AdamH-ref.",
+        steps=[nanogpt_feat_adamh_halfbatch],
+        description="NanoGPT with grug features + AdamH half-batch.",
     )
