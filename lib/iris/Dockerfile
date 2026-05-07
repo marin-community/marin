@@ -158,11 +158,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
 
-# Keyring backend for AR PyPI mirror auth (UV_KEYRING_PROVIDER=subprocess).
-# Lets uv mint short-lived OAuth tokens off the GCE metadata server when
-# resolving from {us,europe}-python.pkg.dev.
-RUN uv pip install --system keyrings.google-artifactregistry-auth
-
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain stable --profile minimal
 ENV PATH="/root/.cargo/bin:$PATH"
