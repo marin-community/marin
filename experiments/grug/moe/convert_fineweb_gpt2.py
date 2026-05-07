@@ -13,7 +13,6 @@ Usage (as iris job):
 """
 
 import argparse
-import json
 import logging
 import os
 import tempfile
@@ -62,17 +61,7 @@ def _write_docs_to_cache(store: TreeStore, docs: list[np.ndarray]) -> int:
 
 def _write_ledger(output_dir: str, total_rows: int, shard_rows: dict[str, int]):
     ledger = CacheLedger(total_num_rows=total_rows, shard_rows=shard_rows, is_finished=True)
-    ledger_path = os.path.join(output_dir, "cache_ledger.json")
-    if output_dir.startswith("gs://"):
-        import gcsfs
-
-        fs = gcsfs.GCSFileSystem()
-        with fs.open(ledger_path, "w") as f:
-            json.dump(ledger.to_dict(), f)
-    else:
-        os.makedirs(output_dir, exist_ok=True)
-        with open(ledger_path, "w") as f:
-            json.dump(ledger.to_dict(), f)
+    ledger._serialize_and_commit(output_dir)
 
 
 def convert(output_base: str, num_shards: int = NUM_TRAIN_SHARDS):

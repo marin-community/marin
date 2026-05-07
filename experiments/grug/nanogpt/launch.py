@@ -205,8 +205,8 @@ def _fineweb_gpt2_data() -> LmDataConfig:
         block_cross_document_attention=False,  # match ref: plain causal, no intradoc masking
         auto_build_caches=False,
         components={
-            "fineweb_train": DatasetComponent(cache_dir=os.path.join(base, "train"), split="train"),
-            "fineweb_val": DatasetComponent(cache_dir=os.path.join(base, "validation"), split="validation"),
+            "fineweb_train": DatasetComponent(cache_dir=base, split="train"),
+            "fineweb_val": DatasetComponent(cache_dir=base, split="validation"),
         },
         train_weights={"fineweb_train": 1.0},
     )
