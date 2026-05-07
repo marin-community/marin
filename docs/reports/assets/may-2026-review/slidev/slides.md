@@ -148,20 +148,25 @@ layout: default
 - **Landed**: rollout pipelines for six datasets (`#4329`), NSF abstracts (`#4516`), PleIAs/common_corpus (`#4606`), HPLT likely non-duplicates (`#4326`), BHL stitching (`#5408`), GAIR/daVinci-Dev (`#5252`), Molmo2-Cap (`#5299`), nyuuzyou/svgfind (`#5304`), public diagnostic logs (`#5121`).
 - **In-flight**, mostly code/agent-adjacent: Stack v2 stitching (`#5009`), SWE-Rebench Contree traces (`#5276`), Hermes agent reasoning traces (`#5300`), SEC-EDGAR (`#5305`), MASSIVE multilingual tool use (`#5339`).
 
-<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.7em; font-size: 0.55em; line-height: 1.2; margin-top: 0.6em;">
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.7em; font-size: 0.50em; line-height: 1.2; margin-top: 0.6em;">
 
 <div>
 
 **MASSIVE tool use (`#5339`)**
 
 ```text
-Tools: [{"type":"function","name":"alarm_set",
-  "parameters":{"time":[…],"date":[…], …}}, …]
-Request: wake me up at nine am on friday
+Tools: [{"type":"function",
+  "name":"alarm_set",
+  "parameters":{"time":[…],
+                "date":[…], …}},
+ …]
+Request: wake me up at nine am
+         on friday
 tool_call: {"type":"function_call",
   "name":"alarm_set",
-  "arguments":"{\"time\":[\"nine am\"],
-                \"date\":[\"friday\"]}"}
+  "arguments":"{
+    \"time\":[\"nine am\"],
+    \"date\":[\"friday\"]}"}
 ```
 
 </div>
@@ -182,7 +187,8 @@ What is 12 * 7?
 <gpt>
 <think>I need to multiply.</think>
 <tool_call>{"name":"calc",
-  "arguments":{"expr":"12*7"}}</tool_call>
+  "arguments":{"expr":"12*7"}}
+</tool_call>
 <tool_response>84</tool_response>
 The answer is 84.
 </gpt>
