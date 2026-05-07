@@ -282,13 +282,13 @@ nanogpt_trial = ExecutorStep(
 NANOGPT_ADAMH_MODEL = NanoGPTConfig(zero_init_proj=False)
 
 nanogpt_adamh_trial = ExecutorStep(
-    name="grug/nanogpt-adamh-trial-v2",
+    name="grug/nanogpt-adamh-trial-v3",
     fn=run_nanogpt_trial,
     config=NanoGPTLaunchConfig(
         model=versioned(NANOGPT_ADAMH_MODEL),
         data=_fineweb_gpt2_data(),
         output_path=this_output_path(),
-        run_id="nanogpt-adamh-trial-v2",
+        run_id="nanogpt-adamh-trial-v3",
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
         steps=versioned(ADAMH_TRAIN_STEPS),
         batch_size=versioned(BATCH_SIZE),
