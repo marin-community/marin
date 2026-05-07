@@ -1448,7 +1448,7 @@ def test_launch_job_root_with_fresh_client_date(service):
     """Root submission with today's date succeeds end-to-end through launch_job."""
     request = make_job_request("fresh-client")
     request.client_revision_date = date.today().isoformat()
-    response = service.launch_job(request, None)
+    response = service.launch_job(request, object())
     assert response.job_id == JobName.root("test-user", "fresh-client").to_wire()
 
 
@@ -1457,7 +1457,7 @@ def test_launch_job_root_with_stale_client_date(service):
     request = make_job_request("stale-client")
     request.client_revision_date = "2000-01-01"
     with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request, None)
+        service.launch_job(request, object())
     assert exc_info.value.code == Code.FAILED_PRECONDITION
 
 

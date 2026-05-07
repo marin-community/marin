@@ -1090,10 +1090,12 @@ class ControllerServiceImpl:
 
         job_id = JobName.from_wire(request.name)
 
-        # Reject root submissions from stale clients. Nested submissions (from
-        # a job already running in the cluster) are exempt — the workload would
-        # otherwise crash mid-flight as the freshness window slides forward.
-        if job_id.is_root:
+        # Reject root RPC submissions from stale clients. Direct in-process
+        # calls have no wire client; tests and harnesses use ctx=None.
+        # Nested submissions are exempt because they come from an already
+        # running workload, which would otherwise crash mid-flight as the
+        # freshness window slides forward.
+        if job_id.is_root and ctx is not None:
             _check_client_freshness(request.client_revision_date, date.today())
 
         # When an auth provider is configured, override the user segment with
