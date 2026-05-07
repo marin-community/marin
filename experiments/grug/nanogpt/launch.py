@@ -223,7 +223,7 @@ def _adamh_optimizer_for_nanogpt() -> "GrugMoeAdamHConfig":
     from experiments.grug.moe.heuristic import MoeAdamHHeuristic
 
     h = MoeAdamHHeuristic()
-    tokens = BATCH_SIZE * SEQ_LEN * ADAMH_TRAIN_STEPS  # ~2.56B
+    tokens = BATCH_SIZE * SEQ_LEN * TRAIN_STEPS  # ~1.89B
     tpb = BATCH_SIZE * SEQ_LEN  # 524288
 
     return GrugMoeAdamHConfig(
@@ -282,15 +282,15 @@ nanogpt_trial = ExecutorStep(
 NANOGPT_ADAMH_MODEL = NanoGPTConfig(zero_init_proj=False)
 
 nanogpt_adamh_trial = ExecutorStep(
-    name="grug/nanogpt-adamh-trial-v3",
+    name="grug/nanogpt-adamh-trial-v4",
     fn=run_nanogpt_trial,
     config=NanoGPTLaunchConfig(
         model=versioned(NANOGPT_ADAMH_MODEL),
         data=_fineweb_gpt2_data(),
         output_path=this_output_path(),
-        run_id="nanogpt-adamh-trial-v3",
+        run_id="nanogpt-adamh-trial-v4",
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-        steps=versioned(ADAMH_TRAIN_STEPS),
+        steps=versioned(TRAIN_STEPS),
         batch_size=versioned(BATCH_SIZE),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
