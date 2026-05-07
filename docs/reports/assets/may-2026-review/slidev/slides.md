@@ -145,10 +145,74 @@ layout: default
 
 # Training Data
 
-TODO: will
+- **Landed**: rollout pipelines for six datasets (`#4329`), NSF abstracts (`#4516`), PleIAs/common_corpus (`#4606`), HPLT likely non-duplicates (`#4326`), BHL stitching (`#5408`), GAIR/daVinci-Dev (`#5252`), Molmo2-Cap (`#5299`), nyuuzyou/svgfind (`#5304`), public diagnostic logs (`#5121`).
+- **In-flight**, mostly code/agent-adjacent: Stack v2 stitching (`#5009`), SWE-Rebench Contree traces (`#5276`), Hermes agent reasoning traces (`#5300`), SEC-EDGAR (`#5305`), MASSIVE multilingual tool use (`#5339`).
 
-- Landed/normalized sources now include rollout pipelines for six datasets (`#4329`), NSF abstracts (`#4516`), PleIAs/common_corpus (`#4606`), HPLT likely non-duplicates (`#4326`), BHL stitching (`#5408`), GAIR/daVinci-Dev (`#5252`), Molmo2-Cap (`#5299`), nyuuzyou/svgfind (`#5304`), and public diagnostic logs (`#5121`).
-- Will's in-flight source work adds more code/agent-adjacent surfaces: Stack v2 stitching (`#5009`), SWE-Rebench Contree traces (`#5276`), Hermes agent reasoning traces (`#5300`), SEC-EDGAR (`#5305`), and MASSIVE multilingual tool use (`#5339`).
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.7em; font-size: 0.55em; line-height: 1.2; margin-top: 0.6em;">
+
+<div>
+
+**MASSIVE tool use (`#5339`)**
+
+```text
+Tools: [{"type":"function","name":"alarm_set",
+  "parameters":{"time":[…],"date":[…], …}}, …]
+Request: wake me up at nine am on friday
+tool_call: {"type":"function_call",
+  "name":"alarm_set",
+  "arguments":"{\"time\":[\"nine am\"],
+                \"date\":[\"friday\"]}"}
+```
+
+</div>
+
+<div>
+
+**Hermes agent traces (`#5300`)**
+
+```text
+<tools>
+{json tool-spec block}
+</tools>
+
+<human>
+What is 12 * 7?
+</human>
+
+<gpt>
+<think>I need to multiply.</think>
+<tool_call>{"name":"calc",
+  "arguments":{"expr":"12*7"}}</tool_call>
+<tool_response>84</tool_response>
+The answer is 84.
+</gpt>
+```
+
+</div>
+
+<div>
+
+**svgfind (`#5304`)**
+
+```text
+Create an SVG which matches the
+following description.
+Title: messaging
+Data Pack: ui-outlines
+Tags: messaging app, chat app, …
+
+<svg viewBox="144 144 512 512"
+     fill="#000" …>
+  <path d="m211 169c-23 0-42 19
+           -42 42 …"/>
+  <path d="m300 242c-31 0-57 25
+           -57 57 …"/>
+</svg>
+```
+
+</div>
+
+</div>
 
 
 
@@ -217,6 +281,30 @@ layout: default
 
 - The recurring weak families are code, messy web artifacts, structured text, code-adjacent metadata, tables, multilingual prose, and scientific notation.
 - The dashboard is live at [marin.community/analysis/perplexity-gap](https://marin.community/analysis/perplexity-gap/).
+
+---
+layout: default
+---
+
+# ![](/icons/chart.svg) Active Mixture Optimization (300M / 6.3T)
+
+<div style="display: flex; align-items: center; justify-content: center; height: 420px;">
+  <img src="/charts/data-mix/thompson-mixture.png" alt="Thompson-mean optimal mixture vs proportional baseline, mean of 200 bootstrap simplex argmaxes" style="max-width: 96%; max-height: 405px; object-fit: contain;"/>
+</div>
+
+- Sweep hundreds of two-phase mixtures, model how the mixture predicts our evals, recommend the best one.
+
+---
+layout: default
+---
+
+# ![](/icons/chart.svg) Mixture Transfers d512 → d1280
+
+<div style="display: flex; align-items: center; justify-content: center; height: 420px;">
+  <img src="/charts/data-mix/scaling-validation.png" alt="Per-task log-log bpb at four widths, optimized mixture vs proportional baseline" style="max-width: 96%; max-height: 405px; object-fit: contain;"/>
+</div>
+
+- Wins on MMLU and ARC, helps GSM8K only at scale, **loses on HumanEval** — code is underweighted, motivates the May 15 swarm (`#5359`).
 
 ---
 layout: section
@@ -314,25 +402,41 @@ layout: default
 layout: split-left-green
 ---
 
-# ![](/icons/chart.svg) Delphi Scaling + Blog Work
+# ![](/icons/chart.svg) Delphi: Forecasts 1e23 Within 0.2%
 
-TODO: will
-
-<img src="/charts/delphi_scaling_suite_results.png" alt="Delphi scaling suite placeholder" style="width:100%;"/>
+<img src="/charts/delphi/delphi-ladder.png" alt="Delphi v2 IsoFLOP parabolas and scaling-law extrapolation to 1e21 / 1e22 / 1e23 FLOPs" style="width:100%;"/>
 
 ::right::
 
-- `#4591` added the seed sweep for Delphi 1e21 / 1e22 / 1e23 runs.
-- `#5168` added downstream evals for the Delphi scaling-suite blogpost.
-- `experiments/exp1337_eval_suite.py` says it generates the data behind the `mmlu-emergence` figure for `content/blog/delphi.md`.
-- I did not find `content/blog/delphi.md` locally. Treat this slide as a placeholder until the draft/post path is available.
+<div style="font-size: 0.84em; line-height: 1.18">
 
-<Box>
+- Open scaling suite from **3e18 → 1e23** FLOPs (top run: 25B params, 600B tokens), Qwen 3 architecture on Nemotron-CC + StarCoderData + ProofPile 2.
+- Pre-registered fit on **3e18–3e20** IsoFLOPs predicts 1e23 final loss within **0.2%** — **100× less compute** than the run itself.
+- v1 broke at scale: 1e22 missed by **2.5%**, 1e23 diverged. Fix was a token-horizon LR correction $(T_0/T)^{0.3}$ + **AdamH** (Kaiyue Wen, Marin), which removes weight decay from the recipe and improves width transfer.
+- Held-out residuals: **1e21 +0.5%**, **1e22 +0.2%**, **1e23 +0.2%**.
+- Recipe checked in as an `add_scaling_heuristic` skill; checkpoints + per-figure data on HF (`marin-community/delphi-blog-data`).
 
-TODO: Replace March figure with final blog figure and summarize the 1e23 result, MMLU/HumanEval/GSM8K projection, and any mismatch from the scaling forecast.
+</div>
 
-</Box>
+---
+layout: split-left-green
+---
 
+# ![](/icons/chart.svg) Delphi: Downstream Forecasts + Seed CI
+
+<img src="/charts/delphi/mmlu-emergence.png" alt="Two-step downstream forecast for MMLU: soft metric scaling law + observational sigmoid to accuracy" style="width:100%;"/>
+
+::right::
+
+<div style="font-size: 0.82em; line-height: 1.16">
+
+- Two-step regression: scaling law on a **soft metric** (per-choice log-prob, or BPB on a reference completion), then an **observational sigmoid** fit on Llama / Qwen / OLMo to map soft → hard score.
+- At 1e23: **MMLU 60%**, **HumanEval 19%**, **GSM8K 27%** (base only, no midtrain/SFT/RL); 1e25 forecast plotted as a hollow ×.
+- Seed sweep (`#4591`): three seeds at 1e21 and 1e22 sit inside the bootstrap 95% CI; seed-to-seed spread ≈ **0.1%**, ~10× tighter than the CI itself (±0.5% at 1e21 → ±4% at 1e23).
+- Downstream eval pipeline shipped via `#5168`; blog: [openathena.ai/blog/delphi](https://openathena.ai/blog/delphi).
+- **Next:** extend the recipe to MoE — tracked in [marin#4697](https://github.com/marin-community/marin/issues/4697).
+
+</div>
 
 ---
 layout: default
