@@ -25,7 +25,7 @@ layout: agenda
 
 ## Scorecard since late March
 
-## Systems: Iris, CoreWeave, finelog
+## Systems: Iris, CoreWeave, finelog, inference, cost
 
 ## Data and eval coverage
 
@@ -55,10 +55,11 @@ layout: default
 - We got the compute grant!
 
 ## Infra
-- Ray was removed from Marin as an execution path.
-- Iris got budgets, priorities, preemption, better scheduler hot paths, and a real status/debug surface.
-- CoreWeave moved from bring-up into recurring smoke/canary coverage.
-- Datakit and Zephyr now have a clearer download -> normalize -> dedup -> consolidate -> tokenize path.
+- Ray was removed from Marin as an execution path; Iris owns scheduling, with budgets actually enforced.
+- CoreWeave moved from bring-up into recurring smoke/canary coverage; Triton `ragged_dot` ships a 3.1× MoE backward speedup.
+- Finelog became a real log system — leveled compaction, ~73 → ~9 files steady-state, queryable from a dashboard.
+- Datakit and Zephyr now have an instrumented `download → normalize → dedup → consolidate → tokenize` lifecycle across 97 sources.
+- Inference service is designed and prototyped (#5368) but not yet on real evals; cost story is "compute budgets yes, dollars no."
 
 ## Modeling
 
@@ -73,51 +74,114 @@ layout: section
 
 # Systems
 
-Iris, CoreWeave, and logs
+Iris, CoreWeave, logs, inference, cost
+
+---
+layout: split-left-green
+---
+
+# ![](/icons/servers.svg) Ray Is Gone; Iris Owns The Scheduler
+
+<img src="/charts/iris-usage/jobs_per_day.png" alt="Root jobs submitted per day on the Iris controller" style="width:620px;"/>
+
+::right::
+
+<div style="font-size: 0.85em; line-height: 1.18">
+
+**#5138 deleted ~3,100 LOC on Apr 23.** Zero `import ray` in `lib/`. (Ray survives only as a transitive dep of `marin[vllm]`; not holding a wake.)
+
+- Cleanup: #5137/#5140 retired fray.v1 and promoted fray.v2 → `fray.*`. Parent epic #4453 closed behind it.
+- **What you get**: budgets live (#5081, Apr 24 — `1000·accel + RAM_GB + 5·CPU`, researchers ≤ 75k, everyone else BATCH-only), preemptible jobs (#5083), same-variant slice eviction (#5240), manual slices (#5078).
+- Hot paths got attacked: PollTasks race (#5090), ping-based worker reaper (#4883), cached `can_fit` (#5412), ListJobs/SchedulerState perf (#5454).
+- **Not done**: canary pass-rate to 90% (#4270). #5469 (May 6 — controller-rollout race lost a parent job) is fixed; the class isn't.
+
+</div>
 
 ---
 layout: default
 ---
 
-# ![](/icons/servers.svg) Iris Replaced Ray
+# ![](/icons/flag.svg) Who's Actually Using Iris
 
-TODO: russell
+<div style="display: flex; gap: 16px; align-items: flex-start;">
+  <img src="/charts/iris-usage/active_users.png" alt="Distinct users per day" style="width: 52%;"/>
+  <img src="/charts/iris-usage/top_users.png" alt="Top 15 users by jobs submitted" style="width: 46%;"/>
+</div>
 
-- `#5138` removed Ray from Marin, with related cleanup in `#5132`, `#5131`, `#5089`, `#5087`, `#5076`, `#5031`, and `#5028`.
-- Iris now carries user-facing scheduling concepts: budgets and priorities (`#4096`, `#5081`), preemptible jobs (`#5083`), manual slices (`#5078`), same-variant preemption (`#5240`), and routing docs (`#5418`, `#5426`).
-- Scheduler and API hot paths were tightened: lightweight job-state polling (`#4209`), raw SQL / denormalized scheduling rows (`#4181`, `#4264`), ListJobs/ListWorkers pagination and filtering (`#4558`, `#4703`, `#5025`, `#5384`, `#5454`), and cached resource scalars in `can_fit` (`#5412`).
-- Dashboard work moved debugging closer to the jobs: state filters, child job sorting, task summaries, status markdown, endpoint proxying, and task-resource history.
+<div style="font-size: 0.82em; margin-top: 6px; line-height: 1.2">
 
----
-layout: default
----
+- One user/day for two weeks, then **17–19 distinct users/day** by early May. **27 distinct users** total in the window.
+- Top 15 users each ran ≥20 root jobs; `bizon` is mostly automation, the rest are people. **27,000 root + child jobs in 28 days**, against a controller that wasn't the default execution path in March.
 
-# ![](/icons/gpu.svg) CoreWeave / GPU Path
-
-TODO: russell
-
-- CoreWeave CI and canaries continued after the March rollout: Iris PR workflow (`#4174`), canary routing and timeouts (`#5112`, `#5125`, `#5429`, `#5463`, `#5479`), and sharp-edge docs (`#5431`).
-- New CW cluster wiring landed for RNO2A / USW09B plus `cwobject` S3 paths (`#5420`).
-- GPU stack moved with JAX 0.10 / CUDA 13 (`#5428`), native vLLM mode (`#4753`, `#5326`), and CoreWeave NCCL fixes (`#5379`, `#5461`).
-- Grug MoE GPU work got a Triton `ragged_dot` path and a reported **3.1x** backward speedup over main (`#4297`, `#5350`).
-
-<Box>
-
-TODO: Fill in whether multi-host JAX performance is still the blocking issue, and whether the canary is green enough to trust per-PR changes.
-
-</Box>
+</div>
 
 ---
 layout: default
 ---
 
-# ![](/icons/chart.svg) Finelog and Observability
+# ![](/icons/gpu.svg) CoreWeave: From Bring-Up To Recurring Validation
 
-TODO: russell
+**Triton `ragged_dot` lands a 3.1× Grug MoE backward speedup over main** (#4297, #5350). That's the headline.
 
-- Iris log delivery moved from heartbeat-based logging to a push LogService (`#4274`), then into `lib/finelog` (`#5212`).
-- Storage and query behavior improved through stable segments, DuckDB/Parquet compaction, zstd batches, a leveled compactor, catalog-driven copy workers, namespace stats, and dashboard plumbing (`#4518`, `#4881`, `#5290`, `#5441`, `#5457`, `#5459`, `#5456`).
-- Debugging loops got more concrete: CPU/memory profiling, job profile summaries, RPC stats, task-resource history, status markdown, and linked log lines (`#4186`, `#4194`, `#4935`, `#5284`, `#5443`, `#5174`).
+- Canaries got real: Iris PR workflow (#4174), canary routing/timeouts/manual runs (#5112, #5125, #5429, #5463, #5479), sharp-edge docs (#5431). RNO2A / USW09B clusters and `cwobject` S3 paths wired in #5420.
+- Stack moved: JAX 0.10 / CUDA 13 (#5428), native vLLM as the only path (#4753, #5326 — Docker sidecar gone), NCCL fixes (#5379, #5461).
+- **Where we are**: multi-host JAX runs on CoreWeave — it's just slow. The work for the next month is making it fast. H100 MFU parity (#5357) is open; a June-sized MoE across 2+ H100 hosts is the target (#5356). Path is real; throughput isn't there yet.
+
+---
+layout: split-left-green
+---
+
+# ![](/icons/chart.svg) Finelog: We Now Capture Everything
+
+<img src="/charts/iris-usage/cluster_utilization.png" alt="Concurrent TPU tasks by accelerator variant, last 24h" style="width:620px;"/>
+
+::right::
+
+<div style="font-size: 0.82em; line-height: 1.18">
+
+A month ago Iris had no central log or stats store. Today `lib/finelog` captures **every log line and every metric, from every job and worker, consistently**.
+
+The chart: 24h of the `iris.worker` namespace — 3,252 workers, 16 TPU variants, sampled every 10s, all queryable.
+
+- **Logs + stats, one service**: lifted out of the controller (#5212, Apr 28); per-ns DuckDB + Vue dashboard (#5290).
+- **Persistence**: leveled compactor (#5456) bounds the namespace at ~9 files / 256 MiB terminal, each byte rewritten ~2× total (was ~3×). zstd + RAM cap (#5457).
+- **What you get**: "where are the logs at 3am" is a URL. "Did this regress" is a SQL query. Neither existed in March.
+
+</div>
+
+---
+layout: default
+---
+
+# ![](/icons/servers.svg) Inference Service: Designed, Prototyped, Not Yet Real
+
+The thesis (RFC #5285, merged): eval code talks OpenAI HTTP and is not allowed to know whether the backend is vLLM, Levanter, or a deterministic stub. Iris owns the lifecycle.
+
+- **What's there**: `RunningModel` / `OpenAIEndpoint` abstraction landed. Docker-sidecar vLLM removed (#5326, Apr 30) — native vLLM is the only production path. MVP broker + proxy + worker actor written and tested locally against the OpenAI stub and the real `lm_eval` tiny-scoring path (#5351, closed without merge — design notes survived, code didn't). Full design doc still open for review (#5400).
+- **What's not there**: an actual run. Backend launch + readiness wiring still has to live next to the worker. Single-threaded proxy, no streaming, no cancellation, no persistent broker — all intentional for the MVP, all needed before this is a "service" in the sense your sysadmin uses the word.
+- **The milestone that decides this** (#5368, @yonromai): MMLU-SL-Verb-5shot + HumanEval-5shot on the **1e22 MoE on a v5p-8, preemption-resilient.** Service is co-located with each eval job, not global. Today, when a TPU worker gets evicted, the eval blows up; the def-of-done is "it resumes."
+
+---
+layout: split-left-green
+---
+
+# ![](/icons/chart.svg) Cost & Capacity: Budgets, Yes; Dollars, No
+
+<img src="/charts/iris-usage/preemptions.png" alt="Task preemptions per day" style="width:620px;"/>
+
+::right::
+
+<div style="font-size: 0.82em; line-height: 1.18">
+
+**Compute budgets**: enforced. **Dollar visibility**: nowhere.
+
+The chart is budgets biting: **35,520 preempted task attempts since May 1**, peak ~16k/day on May 3. #5240 made same-variant eviction work; #5081 made budgets the thing enforced.
+
+- **Enforced** (#5081): per-user cap, `1000·accel + RAM_GB + 5·CPU`. Researchers ≤ 75k; others BATCH-only. Cross-region tensorstore I/O on a transfer budget in compute units (#5225) — bandwidth is a top cost driver.
+- **Not built**: billing-export dashboard, USD ledger, alerts/teardown, per-user $ accounting, storage-cost attribution. AGENTS.md's "storage and bandwidth are major cost drivers" remains a warning, not a reading.
+- **Honest**: compute, sensibly. Dollars, ask in June.
+
+</div>
 
 ---
 layout: section
@@ -131,13 +195,13 @@ More sources, better pipelines, broader diagnostics
 layout: default
 ---
 
-# ![](/icons/big-data.svg) Datakit and Zephyr
+# ![](/icons/big-data.svg) Datakit: 97 Sources, One Lifecycle, Now Measured
 
-TODO: russell
+`download → normalize → embed/classify/dedup → consolidate → tokenize`. Same-shape Parquet at every stage, `(id, text)` invariant, co-partitioning all the way through. The testbed baseline (#5159, Apr 25) targets **~1T input tokens proportionally sampled across 97 registered sources** in `lib/marin/src/marin/datakit/sources.py`.
 
-- `datakit` was bootstrapped for consolidated downloads (`#4142`) and now has normalize, source registry, staged workflows, and smoke ferries (`#4188`, `#4598`, `#5105`, `#5450`).
-- The pipeline now writes normalized Parquet, supports split main/duplicate outputs, exact dedup in normalize, MinHash / fuzzy dedup job separation, and per-shard resume for MinHash attrs (`#4596`, `#4610`, `#4876`, `#4893`, `#5397`).
-- Zephyr got stronger execution semantics: subprocess-per-shard and later inline shard execution (`#4522`, `#5282`), shuffle/external-sort fixes (`#4695`, `#4782`), stage counters (`#4189`, `#4212`, `#5063`), schema diagnostics (`#5136`, `#5142`), and byte-based scatter heuristics (`#5340`).
+- Ferries now persist a perf report (#5494, May 7): per-stage wall times, peak worker memory, preemption + failure counts. One tier1 ferry currently runs as 13 leaf jobs with 392 cleanup tasks classified correctly. Artifacts mirror to `gs://marin-us-central1/infra/datakit/ferry_perf/` (90d retention) — so "is this getting slower" stops being an anecdote.
+- Zephyr execution sharpened: inline shard execution replacing subprocess-per-shard (#5282), zstd-chunk shuffle (#4782), byte-budget scatter (#5340), Iris CPU defaults lowered with burst on on-demand/k8s (#5405).
+- **Not done**: V0 decontamination (#5519, ready for scale), dedup-param + quality-score selection (#5360), the testbed's verdict on which dedup strategy actually wins (#5200). The pipeline is now well enough instrumented that these are answerable; the answers are not yet written down.
 
 ---
 layout: default
