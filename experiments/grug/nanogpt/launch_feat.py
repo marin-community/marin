@@ -216,6 +216,6 @@ nanogpt_feat_adamh_halfbatch = ExecutorStep(
 
 if __name__ == "__main__":
     executor_main(
-        steps=[nanogpt_feat_adamh, nanogpt_feat_adamh_ref, nanogpt_feat_adamh_halfbatch],
-        description="NanoGPT with grug features: AdamH variants.",
+        steps=[nanogpt_feat_adamh],
+        description="NanoGPT feat-adamh debug run.",
     )

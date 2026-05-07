@@ -223,6 +223,31 @@ def _make_train_step(
         loss, grads = jax.value_and_grad(loss_fn)(state.params)
         updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
         params = optax.apply_updates(state.params, updates)
+
+        # Debug: on step 0, log norms of every parameter, grad, and update
+        def _debug_norms(step, params, grads, updates):
+            from levanter.utils.jax_utils import leaf_key_paths
+
+            paths = leaf_key_paths(params)
+
+            def _log_one(param, grad, update, path):
+                path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+                p_norm = jnp.linalg.norm(param.astype(jnp.float32))
+                g_norm = jnp.linalg.norm(grad.astype(jnp.float32))
+                u_norm = jnp.linalg.norm(update.astype(jnp.float32))
+                jax.debug.print(
+                    "step={s} {p}: param_norm={pn:.6f} grad_norm={gn:.6f} update_norm={un:.6f}",
+                    s=step,
+                    p=path_str,
+                    pn=p_norm,
+                    gn=g_norm,
+                    un=u_norm,
+                )
+
+            jax.tree.map(_log_one, params, grads, updates, paths)
+
+        jax.lax.cond(state.step == 0, lambda: _debug_norms(state.step, params, grads, updates), lambda: None)
+
         ema_params = None
         if ema_beta is not None and state.ema_params is not None:
             ema_params = jax.tree_util.tree_map(
