@@ -330,16 +330,23 @@ class Transformer(eqx.Module):
 
         # Fused cross-entropy with logit soft-cap.
         # Note: proj bias is zero-init; we drop it here to use the fused kernel.
-        return fused_linear_softmax_cross_entropy_loss(
+        per_pos = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.proj.weight,
             labels,
             weight=loss_weight,
-            reduction=reduction,
+            reduction="none",
             logsumexp_weight=logsumexp_weight,
             logit_soft_cap=self.config.logit_cap,
             dtype=loss_dtype,
         )
+        if reduction == "none":
+            return per_pos
+        total = jnp.sum(per_pos)
+        denom = jnp.maximum(jnp.sum(loss_weight), 1.0)
+        if reduction == "sum":
+            return total
+        return total / denom
 
 
 def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractMesh, P]:
