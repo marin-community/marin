@@ -277,11 +277,13 @@ nanogpt_trial = ExecutorStep(
 )
 
 
+NANOGPT_ADAMH_MODEL = NanoGPTConfig(zero_init_proj=False)
+
 nanogpt_adamh_trial = ExecutorStep(
     name="grug/nanogpt-adamh-trial",
     fn=run_nanogpt_trial,
     config=NanoGPTLaunchConfig(
-        model=versioned(NANOGPT_MODEL),
+        model=versioned(NANOGPT_ADAMH_MODEL),
         data=_fineweb_gpt2_data(),
         output_path=this_output_path(),
         run_id="nanogpt-adamh-trial",

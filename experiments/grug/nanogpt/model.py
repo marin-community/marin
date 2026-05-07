@@ -57,6 +57,7 @@ class NanoGPTConfig:
     attn_scale: float = ATTN_SCALE
     logit_cap: float = LOGIT_CAP
     rope_base: float = ROPE_BASE
+    zero_init_proj: bool = True  # False for AdamH (needs nonzero norms)
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
@@ -174,7 +175,7 @@ class CausalSelfAttention(eqx.Module):
             k=LinearWithBias.init(cfg.hidden_dim, hdim, std, key=k_k, weight_pspec=P("data", "model")),
             v=LinearWithBias.init(cfg.hidden_dim, hdim, std, key=k_v, weight_pspec=P("data", "model")),
             proj=LinearWithBias.init(
-                hdim, cfg.hidden_dim, std, key=k_proj, weight_pspec=P("model", "data"), zero_init=True
+                hdim, cfg.hidden_dim, std, key=k_proj, weight_pspec=P("model", "data"), zero_init=cfg.zero_init_proj
             ),
             cfg=cfg,
         )
@@ -217,7 +218,12 @@ class MLP(eqx.Module):
         return MLP(
             fc=LinearWithBias.init(cfg.hidden_dim, cfg.intermediate_dim, std, key=k_fc, weight_pspec=P("data", "model")),
             proj=LinearWithBias.init(
-                cfg.intermediate_dim, cfg.hidden_dim, std, key=k_proj, weight_pspec=P("model", "data"), zero_init=True
+                cfg.intermediate_dim,
+                cfg.hidden_dim,
+                std,
+                key=k_proj,
+                weight_pspec=P("model", "data"),
+                zero_init=cfg.zero_init_proj,
             ),
         )
 
@@ -270,7 +276,7 @@ class Transformer(eqx.Module):
         k_embed, k_proj, *block_keys = random.split(key, cfg.num_layers + 2)
         embed = reshard(_init_weight(k_embed, (cfg.vocab_size, cfg.hidden_dim), 0.02), Pembed_vocab)
         proj = LinearWithBias.init(
-            cfg.hidden_dim, cfg.vocab_size, 0.02, key=k_proj, weight_pspec=Plm_head, zero_init=True
+            cfg.hidden_dim, cfg.vocab_size, 0.02, key=k_proj, weight_pspec=Plm_head, zero_init=cfg.zero_init_proj
         )
         blocks = tuple(Block.init(cfg, key=bk) for bk in block_keys)
         return Transformer(
