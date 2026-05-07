@@ -4,7 +4,9 @@ build-backend = "maturin"
 
 [project]
 name = "marin-dupekit"
-version = "0.1.0"
+# Version is read from rust/dupekit/Cargo.toml by maturin so the release
+# workflow has a single source of truth to bump.
+dynamic = ["version"]
 description = "Optimized code for text de-duplication, written in Rust"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -123,8 +124,6 @@ def main() -> None:
 
     if not args.dry_run:
         # uv publish reads UV_PUBLISH_TOKEN automatically
-        import os
-
         if not os.environ.get("UV_PUBLISH_TOKEN"):
             print("ERROR: Set UV_PUBLISH_TOKEN to a PyPI API token (account-scoped).", file=sys.stderr)
             print("  Create one at https://pypi.org/manage/account/token/", file=sys.stderr)

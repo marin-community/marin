@@ -24,7 +24,7 @@ Usage:
     python rust/dupekit/build_package.py --bump --build-wheels --targets linux
     python rust/dupekit/build_package.py --bump --build-wheels --targets macos
     python rust/dupekit/build_package.py --bump --sdist-only
-    python rust/dupekit/build_package.py --bump --update-pyproject
+    python rust/dupekit/build_package.py --set-version 0.1.7 --update-pyproject
 
 Prerequisites:
     maturin (installed automatically via uv tool if missing)
@@ -210,7 +210,17 @@ def bump_cargo_patch_version() -> str:
     new = _bump_patch(current)
     _write_cargo_version(new)
     print(f"Bumped marin-dupekit version: {current} -> {new}")
+    _emit_github_output("version", new)
     return new
+
+
+def _emit_github_output(key: str, value: str) -> None:
+    """Append `key=value` to $GITHUB_OUTPUT when running under GitHub Actions."""
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(f"{key}={value}\n")
 
 
 def _ensure_dist_dir() -> None:
@@ -392,6 +402,15 @@ def main() -> None:
         help="Bump the patch version in rust/dupekit/Cargo.toml before any other action.",
     )
     parser.add_argument(
+        "--set-version",
+        metavar="VERSION",
+        help=(
+            "Write VERSION verbatim into rust/dupekit/Cargo.toml. Use this "
+            "in the second-stage release step to avoid an implicit re-bump - "
+            "the first stage emits its bumped version to $GITHUB_OUTPUT."
+        ),
+    )
+    parser.add_argument(
         "--build-wheels",
         action="store_true",
         help="Build platform wheels into dist/ (use --targets to pick a subset).",
@@ -414,11 +433,21 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not (args.bump or args.build_wheels or args.sdist_only or args.update_pyproject):
-        parser.error("nothing to do; pass at least one of --bump, --build-wheels, --sdist-only, --update-pyproject")
+    if not (args.bump or args.build_wheels or args.sdist_only or args.update_pyproject or args.set_version):
+        parser.error(
+            "nothing to do; pass at least one of "
+            "--bump, --set-version, --build-wheels, --sdist-only, --update-pyproject"
+        )
+
+    if args.bump and args.set_version:
+        parser.error("--bump and --set-version are mutually exclusive")
 
     if args.bump:
         version = bump_cargo_patch_version()
+    elif args.set_version:
+        _write_cargo_version(args.set_version)
+        version = args.set_version
+        print(f"Set marin-dupekit version: {version}")
     else:
         version = _read_cargo_version()
 

@@ -85,7 +85,11 @@ jobs:
       # to PyPI gets one canonical sdist tarball at the bumped version. The
       # bump must match what the matrix legs computed - both read the same
       # Cargo.toml from $GITHUB_SHA and bump patch by 1, so they agree.
+      # Captures the bumped version into outputs.version so the auto-PR step
+      # downstream can pin to the exact published version without re-reading
+      # (and accidentally re-bumping) Cargo.toml.
       - name: Bump version and build sdist
+        id: bump
         run: python rust/dupekit/build_package.py --bump --sdist-only
 
       - name: Publish to PyPI
@@ -94,9 +98,9 @@ jobs:
           packages-dir: dist/
 
       # Branch setup happens AFTER the PyPI publish so a publish failure does
-      # not poison the auto-PR. Resetting to $GITHUB_SHA gives build_package a
-      # clean baseline to write on top of, regardless of what the existing PR
-      # branch contained.
+      # not poison the auto-PR. We always reset the worktree to $GITHUB_SHA so
+      # that --set-version below writes onto a known-clean baseline regardless
+      # of whether the auto-PR branch already exists on origin.
       - name: Set up release branch
         env:
           BRANCH: auto/update-dupekit-wheels
@@ -107,15 +111,20 @@ jobs:
           git fetch origin "$BRANCH" --depth=1 2>/dev/null || true
           if git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null; then
             git checkout -B "$BRANCH" "refs/remotes/origin/$BRANCH"
-            git checkout "$GITHUB_SHA" -- .
           else
             git checkout -B "$BRANCH"
           fi
+          git checkout "$GITHUB_SHA" -- .
 
-      - name: Bump version and update pyproject
+      # Pin Cargo.toml + root pyproject.toml to the exact version we just
+      # published. Using --set-version (not --bump) makes this idempotent and
+      # removes the implicit "Cargo.toml must be at $GITHUB_SHA's version"
+      # invariant from the previous --bump-twice design.
+      - name: Pin pyproject to published version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python rust/dupekit/build_package.py --bump --update-pyproject
+          PUBLISHED_VERSION: ${{ steps.bump.outputs.version }}
+        run: python rust/dupekit/build_package.py --set-version "$PUBLISHED_VERSION" --update-pyproject
 
       - name: Open or update PR
         env:
