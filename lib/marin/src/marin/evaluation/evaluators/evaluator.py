@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from rigging.log_setup import configure_logging as _init_logging
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.utils import remove_tpu_lockfile_on_exit
-from rigging.log_setup import configure_logging as _init_logging
 
 
 @dataclass(frozen=True)

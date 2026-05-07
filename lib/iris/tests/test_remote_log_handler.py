@@ -9,7 +9,6 @@ import threading
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-
 from iris.log_server import client as client_mod
 from iris.log_server.client import LogPusher, RemoteLogHandler
 from iris.rpc import logging_pb2

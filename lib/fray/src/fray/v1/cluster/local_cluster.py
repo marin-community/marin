@@ -24,9 +24,9 @@ from fray.v1.cluster.base import (
     TaskStatus,
     TpuConfig,
 )
+from fray.v1.environment_context import temporary_env_vars
 from fray.v1.isolated_env import TemporaryVenv
 from fray.v1.job.context import SyncContext, fray_default_job_ctx
-from fray.v1.environment_context import temporary_env_vars
 
 logger = logging.getLogger(__name__)
 

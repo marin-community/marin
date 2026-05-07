@@ -5,10 +5,10 @@ from dataclasses import dataclass
 
 import jax
 import optax
-
 from levanter.optim import OptimizerConfig
-from experiments.grug.moe.adamh import scale_by_adamh
 from levanter.utils.jax_utils import leaf_key_paths
+
+from experiments.grug.moe.adamh import scale_by_adamh
 
 
 @OptimizerConfig.register_subclass("grug_moe_adamh_v2")

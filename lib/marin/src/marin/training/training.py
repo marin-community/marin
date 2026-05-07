@@ -5,9 +5,9 @@ import dataclasses
 import importlib
 import logging
 import os
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from collections.abc import Callable
 from typing import TypeVar
 
 import draccus
@@ -22,8 +22,8 @@ from fray.v2 import (
     current_client,
 )
 from mergedeep import mergedeep
-
 from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
+
 from marin.training.run_environment import add_run_env_variables
 
 logger = logging.getLogger(__name__)

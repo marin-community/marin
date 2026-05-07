@@ -6,7 +6,6 @@
 import json
 
 import pytest
-
 from marin.datakit.download.huggingface import (
     DownloadConfig,
     _relative_path_in_source,

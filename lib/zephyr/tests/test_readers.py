@@ -6,7 +6,6 @@
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-
 from zephyr.expr import ColumnExpr, CompareExpr, LiteralExpr
 from zephyr.readers import InputFileSpec, iter_parquet_row_groups, load_parquet
 

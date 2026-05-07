@@ -15,9 +15,10 @@ import zipfile
 from io import BytesIO
 
 import requests
-from marin.execution.step_spec import StepSpec
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.writers import write_parquet_file
+
+from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 

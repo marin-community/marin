@@ -28,18 +28,10 @@ Usage:
 
 """
 
-from collections.abc import Generator
-from contextlib import contextmanager
-from dataclasses import dataclass
-from pathlib import Path
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
 import atexit
-import click
 import getpass
 import logging
 import os
-import ray
 import re
 import shlex
 import signal
@@ -48,16 +40,22 @@ import sys
 import tempfile
 import threading
 import time
-import yaml
+from collections.abc import Generator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 
-import ray.cloudpickle as cloudpickle
-
+import click
 import marin.utils
+import ray
+import ray.cloudpickle as cloudpickle
+import yaml
 from fray.v1.cluster import ray as ray_utils
+from fray.v1.cluster.ray.auth import maybe_fetch_local_ray_token
 from marin.cluster.config import RayClusterConfig, find_config_by_region
 from marin.utils import _hacky_remove_tpu_lockfile
-
-from fray.v1.cluster.ray.auth import maybe_fetch_local_ray_token
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 # Register `marin.utils` by value, so it can work over `ray.remote` without `marin` being installed on the worker.
 # See also #1786 / #1789.

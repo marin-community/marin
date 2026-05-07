@@ -17,9 +17,9 @@ import logging
 import os
 
 from iris.cluster.log_store._types import (
+    _EST_BYTES_PER_ROW,
     CONTROLLER_LOG_KEY,
     LogReadResult,
-    _EST_BYTES_PER_ROW,
     build_log_source,
     task_log_key,
     worker_log_key,

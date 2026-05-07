@@ -10,7 +10,6 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 from fray.v1.job import create_job_ctx, fray_default_job_ctx
-
 from marin.datakit.normalize import generate_id, normalize_to_parquet
 
 

@@ -15,6 +15,7 @@ https://github.com/Open-Athena/bolinas-dna/issues/57
 import dataclasses
 
 from fray.v2 import ResourceConfig
+from marin.execution.executor import executor_main
 
 from experiments.dna.defaults import (
     DNA_TOKENIZER_V1,
@@ -24,7 +25,6 @@ from experiments.dna.defaults import (
     dna_train,
 )
 from experiments.qwen3 import qwen3_0_6b_hd128, qwen3_1_7b, qwen3_4b_hd128
-from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
 # =============================================================================

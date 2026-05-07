@@ -9,6 +9,8 @@ https://github.com/Open-Athena/bolinas-dna/issues/22
 
 import dataclasses
 
+from marin.execution.executor import executor_main
+
 from experiments.dna.defaults import (
     DNA_TOKENIZER_V1,
     MRNA_PLUS_PROMOTERS_DATASET_V1,
@@ -19,7 +21,6 @@ from experiments.dna.defaults import (
     dna_train,
 )
 from experiments.qwen3 import qwen3_1_7b
-from marin.execution.executor import executor_main
 
 SEQ_LEN = 512
 model_config = dataclasses.replace(qwen3_1_7b, max_seq_len=dna_effective_seq_len(SEQ_LEN, DNA_TOKENIZER_V1))

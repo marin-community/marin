@@ -20,6 +20,8 @@ https://github.com/Open-Athena/bolinas-dna/issues/13
 
 import dataclasses
 
+from marin.execution.executor import executor_main
+
 from experiments.defaults import default_train
 from experiments.dna.defaults import (
     CDS_DATASET_V1,
@@ -30,7 +32,6 @@ from experiments.dna.defaults import (
     dna_tokenize_rw_v1,
 )
 from experiments.qwen3 import qwen3_1_7b
-from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
 SEQ_LEN = 512

@@ -8,7 +8,6 @@ the snapshot test which ensures reproducibility of config generation.
 """
 
 import jax.numpy as jnp
-
 from marin.scaling_laws.isoflop_analysis import (
     DEFAULT_SEQ_LEN,
     CandidateConfig,
@@ -181,8 +180,8 @@ def test_end_to_end_analysis_pipeline():
     Uses SAMPLE_METRICS_DATA (simulating real wandb metrics) to verify the full
     pipeline: metrics transformation -> curve fitting -> scaling law extraction.
     """
-    from marin.scaling_laws import round_flops_to_bucket
     from experiments.isoflop_sweep import transform_levanter_metrics
+    from marin.scaling_laws import round_flops_to_bucket
 
     # Transform metrics using the Levanter transform function
     records = transform_levanter_metrics(SAMPLE_METRICS_DATA, "eval/paloma/c4_en/bpb")

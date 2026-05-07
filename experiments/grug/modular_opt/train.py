@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 import jax
 import jax.numpy as jnp
 import jmp
+import levanter.callbacks as callbacks
+import levanter.tracker
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
@@ -19,9 +21,6 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
-
-import levanter.callbacks as callbacks
-import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data import AsyncDataset, DataLoader

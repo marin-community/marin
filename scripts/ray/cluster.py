@@ -11,7 +11,6 @@ Usage:
   uv run scripts/ray/cluster.py update-configs
 """
 
-from dataclasses import dataclass
 import json
 import logging
 import os
@@ -20,21 +19,22 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import click
 import yaml
-
 from fray.v1.cluster.ray.auth import ray_auth_secret
 from fray.v1.cluster.ray.dashboard import DashboardConfig, ray_dashboard
-from marin.cluster import gcp
 from marin.cluster.config import (
     RayClusterConfig,
     find_config_by_region,
     list_available_configs,
     update_cluster_configs,
 )
+
+from marin.cluster import gcp
 
 TPU_TYPE_TO_VM_IMAGE = {
     "v5litepod": "v2-alpha-tpuv5-lite",

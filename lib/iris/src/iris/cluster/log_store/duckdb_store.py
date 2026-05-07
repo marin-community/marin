@@ -64,18 +64,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Condition, Lock
 
-
 import duckdb
 import fsspec.core
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+from rigging.timing import RateLimiter
 
 from iris.cluster.log_store._types import _EST_BYTES_PER_ROW, REGEX_META_RE, LogReadResult
 from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
-from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
 

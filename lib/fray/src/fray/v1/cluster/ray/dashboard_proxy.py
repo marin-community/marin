@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape as html_escape
 
-from flask import Flask, Response, request
 import requests
+from flask import Flask, Response, request
 from werkzeug.serving import make_server
 
 logger = logging.getLogger(__name__)

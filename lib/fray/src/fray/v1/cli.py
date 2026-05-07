@@ -14,6 +14,7 @@ from pathlib import Path
 
 import click
 import yaml
+from rigging.log_setup import configure_logging
 from tabulate import tabulate
 
 from fray.v1.cluster import Cluster, create_cluster
@@ -26,7 +27,6 @@ from fray.v1.cluster.base import (
     ResourceConfig,
     TpuConfig,
 )
-from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

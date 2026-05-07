@@ -4,7 +4,6 @@
 """Tests for vortex file format support."""
 
 import pytest
-
 from fray.v2 import ResourceConfig
 from fray.v2.local_backend import LocalClient
 from zephyr import Dataset

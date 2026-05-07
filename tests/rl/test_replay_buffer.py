@@ -9,9 +9,10 @@ import numpy as np
 import pytest
 
 try:
-    from marin.rl import train_batch
     from marin.rl.replay_buffer import ReplayBuffer, ReplayDataLoader
     from marin.rl.rl_losses import RLOOLoss
+
+    from marin.rl import train_batch
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 from marin.rl.rollout_storage import (

@@ -24,8 +24,7 @@ import msgspec
 import xxhash
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
-
-from zephyr.external_sort import external_sort_merge
+from rigging.log_setup import configure_logging
 
 from zephyr.dataset import (
     Dataset,
@@ -48,8 +47,8 @@ from zephyr.dataset import (
     resolve_glob,
 )
 from zephyr.expr import Expr
+from zephyr.external_sort import external_sort_merge
 from zephyr.readers import InputFileSpec
-from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

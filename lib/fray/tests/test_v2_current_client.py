@@ -6,7 +6,6 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from fray.v2.client import current_client, set_current_client
 from fray.v2.local_backend import LocalClient
 

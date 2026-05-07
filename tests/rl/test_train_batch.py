@@ -5,9 +5,9 @@
 
 import numpy as np
 import pytest
+from marin.rl.types import Rollout, RolloutWithAdvantage
 
 from marin.rl import train_batch
-from marin.rl.types import Rollout, RolloutWithAdvantage
 
 
 def create_test_rollout(

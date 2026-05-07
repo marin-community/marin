@@ -17,15 +17,15 @@ Mix is still DCLM+Math+Code
 
 import dataclasses
 
+from fray.cluster import ResourceConfig
 from levanter.schedule import ScheduleStep
+from marin.execution.executor import executor_main
 
 from experiments.defaults import default_train
 from experiments.llama import llama_70b
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp859_big_tootsies import dclm_mixture_config_llama3_zoned
-from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
 
 llama_70b_train_config_mk6 = SimpleTrainConfig(
     num_train_steps=1_000_000,  # we won't actually go this long. will adjust as needed

@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for region validation in inspect_data.py."""
 
-import click
 import logging
 
+import click
 import pytest
 
 from scripts.debug.inspect_data import _normalize_cluster_region, _validate_data_region

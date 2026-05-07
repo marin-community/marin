@@ -15,7 +15,6 @@ import os
 
 import pytest
 import ray
-
 from iris.actor import ActorClient, ActorServer
 from iris.actor.resolver import FixedResolver
 from marin.rl.curriculum import Curriculum, CurriculumConfig, LessonConfig

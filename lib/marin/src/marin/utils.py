@@ -15,9 +15,9 @@ import braceexpand
 import datasets
 import fsspec
 import requests
+from huggingface_hub.utils import HfHubHTTPError
 from rigging.filesystem import url_to_fs
 from rigging.timing import ExponentialBackoff, retry_with_backoff
-from huggingface_hub.utils import HfHubHTTPError
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")

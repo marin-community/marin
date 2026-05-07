@@ -11,8 +11,9 @@ from dataclasses import dataclass
 
 import draccus
 from bs4 import BeautifulSoup
-from marin import markdown
 from zephyr import Dataset, ZephyrContext, load_jsonl
+
+from marin import markdown
 
 
 def transform_abstract(html: BeautifulSoup):

@@ -9,7 +9,6 @@ from pathlib import Path
 
 import jinja2
 import yaml
-
 from fray.v2.types import get_tpu_topology
 
 # Cluster configuration constants and templates

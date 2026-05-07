@@ -15,15 +15,16 @@ import time
 from dataclasses import dataclass, field
 
 import huggingface_hub
-from rigging.filesystem import open_url, url_to_fs
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
+from rigging.filesystem import open_url, url_to_fs
+from rigging.log_setup import configure_logging
+from zephyr import Dataset, ZephyrContext
+from zephyr.writers import atomic_rename
+
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.execution.step_spec import StepSpec
 from marin.utilities.validation_utils import write_provenance_json
-from zephyr import Dataset, ZephyrContext
-from zephyr.writers import atomic_rename
-from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

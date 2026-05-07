@@ -23,6 +23,7 @@ https://github.com/Open-Athena/bolinas-dna/issues/64
 import dataclasses
 
 from levanter.data.text import TextLmDatasetFormat
+from marin.execution.executor import executor_main
 
 from experiments.defaults import default_tokenize
 from experiments.dna.defaults import (
@@ -30,7 +31,6 @@ from experiments.dna.defaults import (
     dna_train,
 )
 from experiments.qwen3 import qwen3_0_6b_hd128
-from marin.execution.executor import executor_main
 
 KMER_TOKENIZERS = {
     "4mer": {"hf_id": "bolinas-dna/tokenizer-4-mer", "max_seq_len": 64},

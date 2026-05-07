@@ -18,8 +18,8 @@ from pathlib import Path
 import requests
 import yaml
 
-from .dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
 from .auth import maybe_fetch_local_ray_token
+from .dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
 
 logger = logging.getLogger(__name__)
 

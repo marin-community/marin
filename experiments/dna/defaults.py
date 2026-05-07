@@ -10,10 +10,10 @@ from collections.abc import Sequence
 from fray.cluster import ResourceConfig
 from levanter.data.text import DNABatchTokenizer, DNALmDatasetFormat, TextLmDatasetFormat
 from levanter.tokenizers import load_tokenizer
+from marin.execution.executor import ExecutorStep
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep
 
 # =============================================================================
 # Shared constants (V1 = first generation of DNA experiments)

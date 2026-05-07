@@ -60,6 +60,9 @@ from levanter.checkpoint import discover_latest_checkpoint
 from levanter.eval_harness import EvalHarnessMainConfig, LmEvalHarnessConfig, run_eval_harness_main
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from marin.execution.executor import Executor, ExecutorStep, executor_main
+from marin.execution.remote import remote
+from rigging.filesystem import check_path_in_region, marin_prefix
 
 from experiments.dna.exp109_bolinas_scaling_sweep import (
     SCALING_BATCH_SIZE,
@@ -73,9 +76,6 @@ from experiments.dna.exp109_bolinas_scaling_sweep import (
     build_scaling_train_steps,
 )
 from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2_255, convert_to_levanter_task_config
-from marin.execution.executor import Executor, ExecutorStep, executor_main
-from marin.execution.remote import remote
-from rigging.filesystem import check_path_in_region, marin_prefix
 
 logger = logging.getLogger(__name__)
 

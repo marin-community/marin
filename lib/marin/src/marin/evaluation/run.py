@@ -15,14 +15,13 @@ import os
 import time
 
 import draccus
-
 from fray.cluster import ResourceConfig, TpuConfig, get_tpu_topology
 from fray.v1.cluster import ResourceConfig as V1ResourceConfig
 from fray.v1.cluster import TpuConfig as V1TpuConfig
 
 from marin.evaluation.evaluation_config import EvaluationConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.evaluators.evalchemy_evaluator import EvalchemyEvaluator
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.evaluators.harbor_evaluator import HarborEvaluator
 from marin.evaluation.evaluators.levanter_lm_eval_evaluator import LevanterLmEvalEvaluator
 from marin.evaluation.evaluators.lm_evaluation_harness_evaluator import LMEvaluationHarnessEvaluator

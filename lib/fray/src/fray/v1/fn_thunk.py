@@ -29,9 +29,9 @@ from typing import Any
 import click
 import cloudpickle
 from rigging.filesystem import open_url
+from rigging.log_setup import configure_logging
 
 from fray.v1.cluster.base import Entrypoint
-from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

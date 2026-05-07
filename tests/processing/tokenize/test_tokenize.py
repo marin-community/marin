@@ -9,7 +9,6 @@ import pytest
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, TreeCache
-from marin.execution import InputName
 from marin.processing.tokenize.tokenize import (
     MIN_GROUP_BYTES,
     HfTokenizeConfig,
@@ -20,6 +19,8 @@ from marin.processing.tokenize.tokenize import (
 )
 from zephyr.dataset import FileEntry
 from zephyr.readers import InputFileSpec
+
+from marin.execution import InputName
 
 # Dummy values for other required TokenizeConfig fields
 DUMMY_CACHE_PATH = "/dummy/cache"

@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Generic, ParamSpec, TypeVar, overload
 
 from fray.v2 import client as fray_client
-from fray.v2.types import ResourceConfig, Entrypoint, JobRequest, create_environment
+from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
 P = ParamSpec("P")
 R = TypeVar("R")

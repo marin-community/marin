@@ -38,7 +38,6 @@ from collections import Counter
 import click
 import haliax as hax
 import jax.random as jrandom
-
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.utils.thread_utils import blocking_wait
 
@@ -187,9 +186,8 @@ def _submit_to_cluster(
 ):
     import asyncio
 
-    from ray.job_submission import JobSubmissionClient
-
     from fray.v1.cluster.ray import DashboardConfig, ray_dashboard
+    from ray.job_submission import JobSubmissionClient
 
     config = _resolve_cluster_config(cluster)
 
@@ -623,7 +621,6 @@ def _cluster_runtime_env() -> dict:
 def _run_tui_on_cluster(cluster: str, wandb_config_json: str, step: int):
     """Run the TUI locally with data fetched from a Ray cluster actor."""
     import ray
-
     from fray.v1.cluster.ray import DashboardConfig, ray_dashboard
 
     config = _resolve_cluster_config(cluster)

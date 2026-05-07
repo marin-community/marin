@@ -14,10 +14,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from starlette.testclient import TestClient
-
 from iris.log_server.main import build_log_server_asgi
 from iris.log_server.server import LogServiceImpl
+from starlette.testclient import TestClient
 
 
 @pytest.fixture

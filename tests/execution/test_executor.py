@@ -12,7 +12,6 @@ from threading import Thread
 
 import pytest
 from draccus.utils import Dataclass
-from marin.execution import THIS_OUTPUT_PATH
 from marin.execution.executor import (
     Executor,
     ExecutorStep,
@@ -29,6 +28,8 @@ from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
 )
+
+from marin.execution import THIS_OUTPUT_PATH
 
 
 @dataclass(frozen=True)

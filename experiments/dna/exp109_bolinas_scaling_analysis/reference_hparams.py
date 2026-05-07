@@ -13,10 +13,9 @@ Caches wandb data locally; pass --refresh to re-fetch.
 import json
 import math
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-
-from dataclasses import dataclass
 
 import lightgbm as lgb
 import matplotlib.pyplot as plt

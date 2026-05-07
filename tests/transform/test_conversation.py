@@ -9,8 +9,8 @@ from marin.transform.conversation.adapters import InputDatasetFormat, TransformA
 from marin.transform.conversation.conversation_to_dolma import transform_conversation_to_dolma
 from marin.transform.conversation.preference_data_adapters import PreferenceTransformAdapter
 from marin.transform.conversation.transform_conversation import (
-    transform_row,
     TransformSFTDatasetConfig,
+    transform_row,
 )
 
 OPENAI_FORMAT_SAMPLE = {

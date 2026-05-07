@@ -32,6 +32,7 @@ import sys
 import traceback
 from collections.abc import Sequence
 from typing import ClassVar
+
 from fray.v1.cluster import ResourceConfig
 from rigging.filesystem import filesystem as marin_filesystem
 

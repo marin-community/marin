@@ -8,7 +8,6 @@ from __future__ import annotations
 import threading
 
 import pytest
-
 from iris.cluster.controller.db import EndpointQuery
 from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.schema import ENDPOINT_PROJECTION, EndpointRow

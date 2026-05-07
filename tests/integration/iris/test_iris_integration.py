@@ -20,19 +20,17 @@ from iris.cluster.types import (
     ResourceSpec,
     gpu_device,
 )
-from iris.rpc import logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2, logging_pb2
 from rigging.timing import Duration, ExponentialBackoff
 
 from .jobs import (
     busy_loop,
+    fail,
     log_verbose,
     noop,
     quick,
-    fail,
-    sleep,
     register_endpoint,
+    sleep,
 )
 
 logger = logging.getLogger(__name__)

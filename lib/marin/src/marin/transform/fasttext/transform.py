@@ -17,9 +17,9 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from rigging.log_setup import configure_logging
-from rigging.filesystem import open_url
 from marin.core.runtime import cached_or_construct_output
+from rigging.filesystem import open_url
+from rigging.log_setup import configure_logging
 
 configure_logging(level=logging.INFO)
 logger = logging.getLogger("fasttext-to-dolma")

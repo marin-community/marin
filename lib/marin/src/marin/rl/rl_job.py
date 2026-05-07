@@ -31,7 +31,7 @@ from marin.rl.environments.inference_ctx import (
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
-from marin.rl.rollout_worker import RolloutWorkerConfig, RolloutTrackerConfig
+from marin.rl.rollout_worker import RolloutTrackerConfig, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.utilities.json_encoder import CustomJsonEncoder

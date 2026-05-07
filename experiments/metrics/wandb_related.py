@@ -7,8 +7,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import wandb
-from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
+
+from marin.processing.tokenize import get_vocab_size_for_tokenizer
 
 logger = logging.getLogger(__name__)
 

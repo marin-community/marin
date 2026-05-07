@@ -15,6 +15,8 @@ eval_harness_tasks=[].
 
 import dataclasses
 
+from marin.execution.executor import executor_main
+
 from experiments.defaults import default_train
 from experiments.dna.defaults import (
     DNA_TOKENIZER_V1,
@@ -22,9 +24,8 @@ from experiments.dna.defaults import (
     dna_effective_seq_len,
     dna_tokenize_rw_v1,
 )
-from experiments.llama import llama_50m
 from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2
-from marin.execution.executor import executor_main
+from experiments.llama import llama_50m
 
 # =============================================================================
 # Dataset — reuse an existing promoter + mRNA dataset (256 context, 128 stride)

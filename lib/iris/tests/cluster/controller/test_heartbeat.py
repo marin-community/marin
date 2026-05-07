@@ -14,12 +14,11 @@ from iris.cluster.controller.schema import (
     TASK_DETAIL_PROJECTION,
     WORKER_DETAIL_PROJECTION,
 )
-from tests.cluster.controller.conftest import FakeProvider
 from iris.cluster.controller.transitions import (
+    HEARTBEAT_STALENESS_THRESHOLD,
     Assignment,
     ControllerTransitions,
     DispatchBatch,
-    HEARTBEAT_STALENESS_THRESHOLD,
     HeartbeatAction,
     HeartbeatApplyRequest,
     RunningTaskEntry,
@@ -27,9 +26,10 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import controller_pb2
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
+
+from tests.cluster.controller.conftest import FakeProvider
 
 
 @pytest.fixture

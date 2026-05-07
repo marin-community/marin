@@ -17,11 +17,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 import fsspec
-from rigging.filesystem import open_url, url_to_fs
 import msgspec
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from rigging.filesystem import open_url, url_to_fs
 
 from zephyr import counters
 from zephyr.expr import Expr

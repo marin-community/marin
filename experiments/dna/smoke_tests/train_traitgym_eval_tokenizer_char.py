@@ -13,16 +13,17 @@ pipeline runs end-to-end without crashing and produces valid numbers.
 
 import dataclasses
 
+from fray.v2 import ResourceConfig
+from levanter.data.text import DNALmDatasetFormat
+from marin.execution.executor import executor_main
+
 from experiments.defaults import default_tokenize, default_train
 from experiments.dna.defaults import (
     SHORT_RUN_CONFIG_V1,
     dna_effective_seq_len,
 )
-from experiments.llama import llama_50m
 from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2
-from fray.v2 import ResourceConfig
-from levanter.data.text import DNALmDatasetFormat
-from marin.execution.executor import executor_main
+from experiments.llama import llama_50m
 
 # =============================================================================
 # Config

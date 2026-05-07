@@ -7,8 +7,7 @@ import threading
 from pathlib import Path
 
 import pytest
-
-from iris.cluster.log_store import LogStore, _EST_BYTES_PER_ROW, task_log_key
+from iris.cluster.log_store import _EST_BYTES_PER_ROW, LogStore, task_log_key
 from iris.cluster.log_store.duckdb_store import DuckDBLogStore
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import logging_pb2

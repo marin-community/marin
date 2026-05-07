@@ -11,6 +11,7 @@ Train 32B on on Nemotron with Starcoderdata and Proofpile 2
 import dataclasses
 
 import haliax
+from fray.cluster import ResourceConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.optim import AdamConfig
 from levanter.optim.clip_update_norm import ClipUpdateNormConfig
@@ -20,7 +21,6 @@ from experiments.defaults import default_train
 from experiments.llama import llama_32b
 from experiments.pretraining_datasets import nemotron_mix
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
 from marin.execution import executor_main
 
 ## 32b experiments

@@ -8,14 +8,13 @@ from unittest.mock import AsyncMock, patch
 import jax.random
 import numpy as np
 import pytest
+from levanter.tokenizers import load_tokenizer
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
-from levanter.tokenizers import load_tokenizer
 
 try:
     import verifiers as vf
-
     from marin.rl.environments.prime_intellect_env import PrimeIntellectEnv
 except ImportError:
     pytest.skip("verifiers library not installed", allow_module_level=True)

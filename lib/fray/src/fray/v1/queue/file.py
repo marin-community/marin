@@ -13,9 +13,8 @@ from os import PathLike
 from pathlib import Path
 from typing import Any, TypeVar
 
-from rigging.filesystem import url_to_fs
-
 from fray.v1.queue.base import Lease, Queue
+from rigging.filesystem import url_to_fs
 
 logger = logging.getLogger(__name__)
 

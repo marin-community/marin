@@ -6,15 +6,15 @@
 import pytest
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.transitions import (
+    TASK_RESOURCE_HISTORY_RETENTION,
+    TASK_RESOURCE_HISTORY_TERMINAL_TTL,
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
     TaskUpdate,
-    TASK_RESOURCE_HISTORY_RETENTION,
-    TASK_RESOURCE_HISTORY_TERMINAL_TTL,
 )
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2, controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
 

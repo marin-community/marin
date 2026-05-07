@@ -15,9 +15,9 @@ from levanter.store.cache import CacheOptions
 from marin.datakit.canonical.fineweb_edu import download as fineweb_edu_download
 from marin.datakit.download.huggingface import download_hf_step
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
 
 from experiments.llama import llama3_tokenizer
+from marin.processing.tokenize import TokenizeConfig, tokenize
 
 # ============================================================================
 # HELPER FUNCTIONS

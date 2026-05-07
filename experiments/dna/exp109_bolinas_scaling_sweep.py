@@ -23,6 +23,7 @@ from datetime import timedelta
 from functools import lru_cache
 
 import jmp
+from fray.cluster import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import DNALmDatasetFormat
 from levanter.eval_harness import LmEvalHarnessConfig
@@ -31,6 +32,9 @@ from levanter.optim import AdamHConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.remote import remote
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.dna.defaults import dna_effective_seq_len
@@ -49,11 +53,7 @@ from experiments.references.reference_hyperparameter_sweep import (
 )
 from experiments.scaling_law_sweeps.completed_adamh import CompletedAdamHHeuristic
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.execution.remote import remote
 from marin.processing.tokenize import lm_mixture_data_config
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 # =============================================================================
 # Module-level constants
@@ -818,22 +818,41 @@ def _build_transfer_grid(axis: TransferSweepAxis, center: float, num_points: int
     return grid
 
 
-# Epsilon is swept one-sided: the transferred center (4e-15) sits at the lower
-# feasibility bound, so a symmetric grid would have ~no span. Instead, sample 6
-# log-spaced points up to and including TRANSFER_EPSILON_HIGH. Indexed 1..6 in run
-# names — the implicit 0 is the positive control / center.
+# Epsilon sweep. The transferred center (~4e-15) sits at the lower feasibility bound,
+# so the primary sweep is one-sided upward: TRANSFER_EPSILON_NUM_POINTS log-spaced
+# points up to and including TRANSFER_EPSILON_HIGH (run-name indices 1..N). Below-center
+# probes mirror the same multiplicative step downward TRANSFER_EPSILON_LOW_NUM_POINTS
+# times — at the current settings each step is ~80x (~2 OOM), so 3 steps below 4e-15
+# bottoms out near 1e-20, which we take as sufficiently small that epsilon should have
+# no effect on AdamH's denominator. Appended after the upper grid so existing upper
+# runs (indices 1..N) keep their wandb run names.
 TRANSFER_EPSILON_HIGH = 1e-3
 TRANSFER_EPSILON_NUM_POINTS = 6
+TRANSFER_EPSILON_LOW_NUM_POINTS = 3
 
 
-def _build_epsilon_grid(center: float, end: float, count: int) -> list[float]:
-    """One-sided log-spaced grid above `center`, ending exactly at `end`.
+def _build_epsilon_grid(
+    center: float,
+    end: float,
+    count: int,
+    *,
+    extend_below_count: int = 0,
+) -> list[float]:
+    """Log-spaced grid above `center` up to `end`, optionally mirrored below center.
 
-    Returns `count` points where the i-th (1-indexed) is `center * (end/center)^(i/count)`.
-    The last point equals `end` exactly (modulo floating-point).
+    Returns `count` upper points where the i-th (1-indexed) is
+    `center * (end/center)^(i/count)`; the last equals `end` (modulo fp).
+
+    `extend_below_count` appends that many points below `center` using the same
+    multiplicative step as the upper grid: the i-th (1-indexed) below is
+    `center / (end/center)^(i/count)`. Appended (not sort-merged) so the original
+    upper points keep their enumerate() indices in run names.
     """
     assert center < end, f"epsilon grid center {center} must be below end {end}"
-    return [center * (end / center) ** (i / count) for i in range(1, count + 1)]
+    factor = (end / center) ** (1 / count)
+    grid = [center * factor**i for i in range(1, count + 1)]
+    grid.extend(center / factor**i for i in range(1, extend_below_count + 1))
+    return grid
 
 
 # --- Preview ---
@@ -883,14 +902,26 @@ def _print_transfer_preview():
         print(f"  {axis.field}  bounds=[{axis.low:.6g}, {axis.high:.6g}]  center={center:.6g}  log={axis.log_scale}")
         print(f"    grid ({len(grid)} points, {len(off_center)} off-center): {[f'{v:.6g}' for v in sorted(grid)]}")
     epsilon_center = TRANSFER_OPTIMIZER.epsilon
-    epsilon_grid = _build_epsilon_grid(epsilon_center, TRANSFER_EPSILON_HIGH, TRANSFER_EPSILON_NUM_POINTS)
-    print(f"  epsilon  end={TRANSFER_EPSILON_HIGH:.6g}  center={epsilon_center:.6g}  log=True (one-sided)")
-    print(f"    grid ({len(epsilon_grid)} points, all off-center): {[f'{v:.6g}' for v in epsilon_grid]}")
+    epsilon_off_center = _build_epsilon_grid(
+        epsilon_center,
+        TRANSFER_EPSILON_HIGH,
+        TRANSFER_EPSILON_NUM_POINTS,
+        extend_below_count=TRANSFER_EPSILON_LOW_NUM_POINTS,
+    )
+    epsilon_grid = [epsilon_center, *epsilon_off_center]
+    print(
+        f"  epsilon  end={TRANSFER_EPSILON_HIGH:.6g}  center={epsilon_center:.6g}  "
+        f"upper={TRANSFER_EPSILON_NUM_POINTS}  lower={TRANSFER_EPSILON_LOW_NUM_POINTS}  log=True"
+    )
+    print(
+        f"    grid ({len(epsilon_grid)} points, {len(epsilon_off_center)} off-center): "
+        f"{[f'{v:.6g}' for v in sorted(epsilon_grid)]}"
+    )
     print()
 
     off_center_per_size = sum(
         len(_build_transfer_grid(ax, getattr(TRANSFER_OPTIMIZER, ax.field))) - 1 for ax in TRANSFER_SWEEP_AXES
-    ) + len(epsilon_grid)
+    ) + len(epsilon_off_center)
     primary_total = 2 + off_center_per_size  # positive + negative + off-center
     smaller_per_size = 1 + off_center_per_size  # positive + off-center
     total = primary_total + smaller_per_size * len(smaller_sizes)
@@ -1011,8 +1042,9 @@ def run_transfer_validation_sweep():
 
     At every scale: positive control (transferred optimizer, the per-scale anchor)
         + LR grid + beta2 grid (centers deduped against positive control) + epsilon
-        grid (6 log-spaced points up to TRANSFER_EPSILON_HIGH; one-sided because
-        the transferred center sits at the lower feasibility bound).
+        grid (log-spaced points up to TRANSFER_EPSILON_HIGH plus mirrored below-center
+        probes — the transferred center sits at the lower feasibility bound, so
+        going below it should have no effect).
     Only at the primary scale: negative control (unscaled reference optimizer),
         which validates that transfer scaling beats reference at the target regime.
 
@@ -1121,10 +1153,15 @@ def run_transfer_validation_sweep():
                     )
                 )
 
-        # Epsilon: one-sided grid; indices 1..6 since the implicit 0 is the positive
-        # control (epsilon's transferred center sits at the lower feasibility bound).
+        # Epsilon: upper grid (indices 1..N) plus mirrored below-center probes
+        # (subsequent indices, same log step as the upper grid). The implicit 0 is the
+        # positive control at the transferred center, which sits at the lower
+        # feasibility bound — below-center probes confirm flat behavior in that regime.
         epsilon_grid = _build_epsilon_grid(
-            TRANSFER_OPTIMIZER.epsilon, TRANSFER_EPSILON_HIGH, TRANSFER_EPSILON_NUM_POINTS
+            TRANSFER_OPTIMIZER.epsilon,
+            TRANSFER_EPSILON_HIGH,
+            TRANSFER_EPSILON_NUM_POINTS,
+            extend_below_count=TRANSFER_EPSILON_LOW_NUM_POINTS,
         )
         for i, value in enumerate(epsilon_grid, start=1):
             swept_optimizer = replace(TRANSFER_OPTIMIZER, epsilon=value)

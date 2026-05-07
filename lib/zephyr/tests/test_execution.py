@@ -577,7 +577,6 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
     """When a worker recovers (re-registers) after all workers died,
     the dead timer resets and execution can continue."""
     import threading
-
     from unittest.mock import MagicMock
 
     from zephyr.execution import ListShard, ShardTask, TaskResult, WorkerState, ZephyrCoordinator

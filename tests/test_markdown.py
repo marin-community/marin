@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 from marin.markdown import mathml_to_markdown, minimal_markdown_escape, to_markdown
 
 

@@ -7,8 +7,9 @@ import os.path
 
 from marin.datakit.download.dolmino import DOLMINO_DATASETS, download_dolmino_step
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
+
+from marin.processing.tokenize import TokenizeConfig, tokenize
 
 _dolmino_download = download_dolmino_step().as_executor_step()
 _dolmino_base_dir = _dolmino_download.cd("bb54cab").cd("data")

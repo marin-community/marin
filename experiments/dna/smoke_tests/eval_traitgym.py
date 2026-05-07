@@ -26,12 +26,12 @@ from fray.v2 import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_en
 from levanter.distributed import RayConfig
 from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
+from marin.execution.executor import ExecutorStep, executor_main
+from rigging.filesystem import marin_temp_bucket
 
 from experiments.dna.defaults import DNA_RESOURCES_V1, DNA_TOKENIZER_V1, dna_effective_seq_len
-from experiments.qwen3 import qwen3_0_6b_hd128
 from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2, convert_to_levanter_task_config
-from rigging.filesystem import marin_temp_bucket
-from marin.execution.executor import ExecutorStep, executor_main
+from experiments.qwen3 import qwen3_0_6b_hd128
 
 logger = logging.getLogger(__name__)
 
