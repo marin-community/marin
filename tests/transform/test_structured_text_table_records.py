@@ -371,6 +371,33 @@ def test_stage_table_record_source_loads_downloaded_parquet_split(tmp_path):
     assert records[0]["id"] == "wtq:test:validation:00000000"
 
 
+def test_stage_table_record_source_loads_prefixed_split_parquet(tmp_path):
+    # The mirrored ``target-benchmark/gittables-corpus`` revision (#5534)
+    # ships its train shard as ``corpus_train.parquet``. Other HF mirrors
+    # use the ``<config>_<split>-XXXXX-of-YYYYY.parquet`` convention.
+    # Both must resolve when ``split="train"``; an unrelated ``pretrain``
+    # shard at root must not.
+    input_dir = tmp_path / "raw"
+    output_dir = tmp_path / "staged"
+    input_dir.mkdir()
+    Dataset.from_list([_gittables_fixture()]).to_parquet(input_dir / "corpus_train.parquet")
+    Dataset.from_list([_gittables_fixture()]).to_parquet(input_dir / "pretrain.parquet")
+
+    cfg = TableRecordStagingConfig(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        source_label="gittables:test",
+        serializer_name="gittables",
+        split="train",
+    )
+    result = stage_table_record_source(cfg)
+
+    assert result["record_count"] == 1
+    records = _read_staged_records(output_dir)
+    assert len(records) == 1
+    assert records[0]["id"] == "gittables:test:train:00000000"
+
+
 def test_stage_table_record_source_respects_byte_cap(tmp_path):
     # Use many copies; the cap should stop ingestion before all are written.
     fixtures = [_wtq_fixture() for _ in range(500)]

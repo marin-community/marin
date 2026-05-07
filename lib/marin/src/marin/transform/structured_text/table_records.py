@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import posixpath
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -344,11 +345,25 @@ def _fsspec_url(fs: Any, path: str) -> str:
     return f"{protocol}://{path}"
 
 
+_SPLIT_TOKEN_DELIMITERS = re.compile(r"[_\-.]")
+
+
 def _parquet_file_matches_split(path: str, split: str) -> bool:
+    """Return True if ``path`` looks like a shard for ``split``.
+
+    Tokenizes the filename stem on ``_``, ``-``, and ``.`` and checks that
+    ``split`` appears as a complete token. Catches both the standard HF
+    layouts (``train.parquet``, ``train-00000-of-00001.parquet``) and
+    layouts that prefix the split with a dataset shorthand
+    (e.g., ``corpus_train.parquet`` for ``target-benchmark/gittables-corpus``,
+    or ``corpus_train-00000-of-00001.parquet``). Single-token names like
+    ``pretrain.parquet`` do not match ``train``.
+    """
     filename = os.path.basename(path)
     if not filename.endswith(".parquet"):
         return False
-    return filename == f"{split}.parquet" or filename.startswith(f"{split}-")
+    stem = filename[: -len(".parquet")]
+    return split in _SPLIT_TOKEN_DELIMITERS.split(stem)
 
 
 def _find_split_parquet_files(input_path: str, split: str, subset: str | None) -> list[str]:
