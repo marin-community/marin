@@ -19,7 +19,7 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.grug.nanogpt.launch import NanoGPTOptimizerConfig, _adamh_optimizer_for_nanogpt
-from experiments.grug.nanogpt.launch_adamh_ref import ADAMH_REF_TRAIN_STEPS, NanoGPTAdamHRefConfig
+from experiments.grug.nanogpt.launch_adamh_ref import NanoGPTAdamHRefConfig
 from experiments.grug.nanogpt.model import BATCH_SIZE, TRAIN_STEPS
 from experiments.grug.nanogpt.model_grug import GrugNanoGPTConfig
 from experiments.grug.nanogpt.train_grug import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig
@@ -169,13 +169,13 @@ nanogpt_feat_adamh_ref = ExecutorStep(
         output_path=this_output_path(),
         run_id="nanogpt-feat-adamh-debug-ref",
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-        steps=versioned(ADAMH_REF_TRAIN_STEPS),
+        steps=versioned(50),
         batch_size=versioned(BATCH_SIZE),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             project="dial_moe",
-            tags=["nanogpt", "feat", "adamh-ref"],
+            tags=["nanogpt", "feat", "adamh-ref", "debug"],
             group="nanogpt-feat",
             name="nanogpt-feat-adamh-debug-ref",
         ),
@@ -219,6 +219,6 @@ nanogpt_feat_adamh_halfbatch = ExecutorStep(
 
 if __name__ == "__main__":
     executor_main(
-        steps=[nanogpt_feat_adamh],
-        description="NanoGPT feat-adamh debug run.",
+        steps=[nanogpt_feat_adamh, nanogpt_feat_adamh_ref],
+        description="NanoGPT feat-adamh debug runs.",
     )
