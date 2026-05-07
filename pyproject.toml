@@ -30,6 +30,13 @@ dependencies = [
 
 [tool.uv]
 fork-strategy = "fewest"
+# Allow pre-releases globally so `uv lock` resolves marin-dupekit to its
+# latest nightly (`X.Y.Z.dev<timestamp>` published by the dupekit release
+# workflow). uv has no per-package prerelease config; in practice almost
+# none of our other dependencies publish pre-releases on PyPI, so this
+# only affects dupekit and the already-pinned `omegaconf>=2.4.0.dev4`
+# below.
+prerelease = "allow"
 find-links = [
     "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
 ]
