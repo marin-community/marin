@@ -39,6 +39,7 @@ from finelog.rpc import logging_pb2
 from finelog.store.catalog import (
     Catalog,
     NamespaceStats,
+    SegmentLocation,
     SegmentRow,
 )
 from finelog.store.compactor import (
@@ -264,7 +265,10 @@ class LocalSegment:
     # can compare numeric keys with native ordering.
     min_key_value: object | None = None
     max_key_value: object | None = None
-    copied_at_ms: int | None = None
+    # Where the bytes live. The deque only ever holds ``LOCAL`` or ``BOTH``
+    # entries; eviction flips to ``REMOTE`` and removes the entry from the
+    # deque (the row stays in the catalog as a durable-archive pointer).
+    location: SegmentLocation = SegmentLocation.LOCAL
 
 
 def _stamp_seq_column(batch: pa.RecordBatch, first_seq: int, arrow_schema: pa.Schema) -> pa.Table:
@@ -427,8 +431,6 @@ class LogNamespaceProtocol(Protocol):
 
     def evict_segment(self, path: str) -> int: ...
 
-    def mark_copied(self, path: str, copied_at_ms: int) -> None: ...
-
     def remove_local_storage(self) -> None: ...
 
     def close(self) -> None: ...
@@ -503,42 +505,103 @@ class DiskLogNamespace:
         )
         self._local_segments: deque[LocalSegment] = deque()
 
-        # Reconcile from disk: parquet files are authoritative across
-        # crashes. Walk every ``seg_L<n>_*.parquet`` and rebuild the
-        # in-memory deque + catalog rows. ``created_at_ms`` falls back to
-        # the file mtime when the catalog has nothing for this path —
-        # close enough for L0 aging and stable across reboots.
+        # Reconcile boot state across three sources of truth (in order):
+        #   1. Catalog rows — authoritative for ``REMOTE`` segments whose
+        #      local file was evicted before the prior shutdown.
+        #   2. Local parquet files — authoritative for unflushed catalog
+        #      state (genuine boot from disk, no prior catalog).
+        #   3. Remote bucket — authoritative for wiped-catalog recovery,
+        #      handled in the bg loop's first sync tick rather than here
+        #      so __init__ stays free of network calls.
+        #
+        # Each catalog row is reattached to its on-disk file when present;
+        # ``REMOTE``-only rows stay in the catalog but never enter the
+        # deque (queries don't see archived data). Local files without a
+        # catalog row are inserted as ``LOCAL`` (sync uploads them next
+        # tick).
         key_column = self.schema.key_column or None
         catalog_rows = {row.path: row for row in self._catalog.list_segments(self.name)}
-        for p in _discover_segments(data_dir):
-            meta = _read_segment_metadata(p, key_column=key_column)
-            row = catalog_rows.get(str(p))
-            created_at_ms = row.created_at_ms if row is not None else int(p.stat().st_mtime * 1000)
-            copied_at_ms = row.copied_at_ms if row is not None else None
+        local_files = {str(p): p for p in _discover_segments(data_dir)}
+        seen_paths: set[str] = set()
+
+        # Pass 1: walk catalog rows. Local-present → deque entry; otherwise
+        # leave the row in place as the durable-archive pointer.
+        for path_str, row in catalog_rows.items():
+            seen_paths.add(path_str)
+            local_path = local_files.get(path_str)
+            if local_path is None:
+                if row.location == SegmentLocation.LOCAL:
+                    # Local file went missing while the catalog still
+                    # claims LOCAL — data is lost. Drop the row so sync
+                    # doesn't keep trying to upload a non-existent file.
+                    logger.warning(
+                        "Catalog row %s missing local file and has no remote copy; dropping",
+                        path_str,
+                    )
+                    self._catalog.remove_segment(self.name, path_str)
+                elif row.location == SegmentLocation.BOTH:
+                    # Local file lost but bucket copy is durable; collapse
+                    # to ``REMOTE`` so queries don't try to read the
+                    # missing file.
+                    self._catalog.set_location(self.name, path_str, SegmentLocation.REMOTE)
+                continue
+            meta = _read_segment_metadata(local_path, key_column=key_column)
+            location = SegmentLocation.BOTH if row.location == SegmentLocation.REMOTE else row.location
             self._local_segments.append(
                 LocalSegment(
-                    path=str(p),
+                    path=path_str,
+                    size_bytes=local_path.stat().st_size,
+                    level=meta.level,
+                    min_seq=meta.min_seq,
+                    max_seq=meta.max_seq,
+                    row_count=meta.row_count,
+                    created_at_ms=row.created_at_ms,
+                    min_key_value=meta.min_key_value,
+                    max_key_value=meta.max_key_value,
+                    location=location,
+                )
+            )
+
+        # Pass 2: walk local files. Anything not already accounted for is
+        # a genuine fresh-from-disk segment (or a compaction-mid-crash
+        # leftover; sync will upload it then orphan-delete in the next
+        # round if it's truly stale).
+        for path_str, p in local_files.items():
+            if path_str in seen_paths:
+                continue
+            meta = _read_segment_metadata(p, key_column=key_column)
+            self._local_segments.append(
+                LocalSegment(
+                    path=path_str,
                     size_bytes=p.stat().st_size,
                     level=meta.level,
                     min_seq=meta.min_seq,
                     max_seq=meta.max_seq,
                     row_count=meta.row_count,
-                    created_at_ms=created_at_ms,
+                    created_at_ms=int(p.stat().st_mtime * 1000),
                     min_key_value=meta.min_key_value,
                     max_key_value=meta.max_key_value,
-                    copied_at_ms=copied_at_ms,
+                    location=SegmentLocation.LOCAL,
                 )
             )
 
-        # Reconcile rewrites the catalog rows wholesale; ``created_at_ms``
-        # and ``copied_at_ms`` already came back from the catalog above
-        # (or from mtime fallback), so the rewrite is a no-op for those
-        # fields and a refresh of structural columns (level, key bounds)
-        # for any catalog row that drifted from the parquet footer.
-        self._catalog.reconcile_segments(
-            self.name,
-            [self._segment_to_row(seg) for seg in self._local_segments],
-        )
+        # Order the deque by min_seq so query iteration matches the
+        # implicit "oldest first" expected by callers and the planner.
+        self._local_segments = deque(sorted(self._local_segments, key=lambda s: s.min_seq))
+
+        # Refresh the catalog from the deque so any drift in level / key
+        # bounds (parquet footer is authoritative) is corrected. REMOTE
+        # rows are left untouched. Each upsert is independent so no
+        # transaction is required.
+        for seg in self._local_segments:
+            self._catalog.upsert_segment(self._segment_to_row(seg))
+
+        # Wiped-catalog recovery: if the remote bucket has parquet files
+        # that no row references, adopt them as ``REMOTE``. Without this,
+        # the first ``_sync_step`` after a catalog wipe would treat the
+        # whole bucket as orphan and ``fs.rm`` everything.
+        if self._remote_namespace_dir:
+            self._adopt_remote_segments(key_column=key_column)
 
         self._flush_rl = RateLimiter(flush_interval_sec)
         self._compaction_rl = RateLimiter(compaction_config.check_interval_sec)
@@ -867,7 +930,7 @@ class DiskLogNamespace:
             created_at_ms=seg.created_at_ms,
             min_key_value=None if seg.min_key_value is None else str(seg.min_key_value),
             max_key_value=None if seg.max_key_value is None else str(seg.max_key_value),
-            copied_at_ms=seg.copied_at_ms,
+            location=seg.location,
         )
 
     def _write_new_segment(self, sealed: _SealedBuffer) -> None:
@@ -1117,48 +1180,118 @@ class DiskLogNamespace:
         finally:
             self._query_visibility_lock.write_release()
 
+    def _adopt_remote_segments(self, *, key_column: str | None) -> None:
+        """Insert ``REMOTE`` catalog rows for bucket files with no row.
+
+        Runs once at boot when ``_remote_namespace_dir`` is configured.
+        After a catalog wipe the bucket is the only durable record of
+        every L>=1 segment; we read each parquet footer remotely to
+        reconstruct row metadata, then insert at ``location=REMOTE``.
+        Files whose basename is already in the catalog are left alone
+        (the local-disk pass already attached them).
+        """
+        try:
+            fs, root = fsspec.core.url_to_fs(self._remote_namespace_dir)
+            remote_paths = list(fs.find(root))
+        except Exception:
+            logger.warning("remote adopt list failed for %s", self.name, exc_info=True)
+            return
+
+        catalog_basenames = {Path(r.path).name for r in self._catalog.list_segments(self.name)}
+        for fs_path in remote_paths:
+            basename = Path(fs_path).name
+            if basename in catalog_basenames:
+                continue
+            parsed = parse_seg_filename(basename)
+            if parsed is None:
+                logger.warning("ignoring unparseable remote file %s/%s", self.name, basename)
+                continue
+            level, min_seq = parsed
+            try:
+                with fs.open(fs_path, "rb") as f:
+                    metadata = pq.read_metadata(f)
+            except Exception:
+                logger.warning("failed reading remote parquet footer %s/%s", self.name, basename, exc_info=True)
+                continue
+            num_rows = metadata.num_rows
+            min_key, max_key = _key_bounds_from_parquet(metadata, key_column)
+            try:
+                byte_size = fs.info(fs_path).get("size", 0)
+            except Exception:
+                byte_size = 0
+            local_path = self._data_dir / basename
+            self._catalog.upsert_segment(
+                SegmentRow(
+                    namespace=self.name,
+                    path=str(local_path),
+                    level=level,
+                    min_seq=min_seq,
+                    max_seq=min_seq + max(num_rows - 1, 0),
+                    row_count=num_rows,
+                    byte_size=int(byte_size),
+                    created_at_ms=int(time.time() * 1000),
+                    location=SegmentLocation.REMOTE,
+                    min_key_value=None if min_key is None else str(min_key),
+                    max_key_value=None if max_key is None else str(max_key),
+                )
+            )
+            logger.info("Adopted remote segment %s/%s as REMOTE", self.name, basename)
+
     def _sync_step(self) -> None:
         """Reconcile the remote namespace prefix with the catalog.
 
-        Uploads catalog L>=1 rows missing from remote, deletes remote
-        objects not referenced by the catalog. No-op when the namespace
-        has no remote prefix configured.
+        The catalog is the source of truth for what should exist remotely.
+        Phase 1 uploads every ``LOCAL`` row at L>=1 (or adopts a row whose
+        file is already remote, which happens after a crash between
+        ``fs`` write and the catalog flip). Phase 2 ``fs.rm``s any remote
+        file with no catalog row — those are compaction inputs whose row
+        has been dropped. The ordering is what makes this safe: by the
+        time phase 2 runs, the merged output that subsumes those inputs
+        has been uploaded in phase 1, so the durable copy is in place
+        before any input remote bytes are deleted.
+
+        No-op when the namespace has no remote prefix configured.
         """
         if not self._remote_namespace_dir:
             return
-        with self._insertion_lock:
-            rows = self._catalog.list_segments(self.name, min_level=1)
-        # Compare on basename: catalog stores local absolute paths while
-        # ``fs.find`` returns backend-specific forms (gcs ``bucket/...``,
-        # local absolute). Filename is the only stable key.
-        live = {Path(r.path).name: r for r in rows}
 
         try:
             fs, root = fsspec.core.url_to_fs(self._remote_namespace_dir)
-            remote = {Path(p).name: p for p in fs.find(root)}
+            remote_basenames = {Path(p).name for p in fs.find(root)}
         except Exception:
             logger.warning("remote sync list failed for %s", self.name, exc_info=True)
             return
 
-        for filename, row in live.items():
-            if filename in remote:
-                continue
-            completed_ms = self._upload(Path(row.path))
-            if completed_ms is not None:
-                self.mark_copied(row.path, completed_ms)
+        with self._insertion_lock:
+            rows = self._catalog.list_segments(self.name, min_level=1)
 
-        for filename, fs_path in remote.items():
-            if filename in live:
+        for row in rows:
+            if row.location != SegmentLocation.LOCAL:
                 continue
+            basename = Path(row.path).name
+            if basename in remote_basenames:
+                # Crash recovery: the file was uploaded but the catalog
+                # never flipped. Adopt without re-uploading.
+                self._mark_uploaded(row.path)
+                continue
+            if self._upload(Path(row.path)):
+                self._mark_uploaded(row.path)
+
+        # Re-snapshot: phase 1 may have added basenames to the bucket; we
+        # only want to delete files whose basename is genuinely orphan
+        # (no catalog row at all).
+        with self._insertion_lock:
+            catalog_basenames = {Path(r.path).name for r in self._catalog.list_segments(self.name, min_level=1)}
+        for basename in remote_basenames - catalog_basenames:
             try:
-                fs.rm(fs_path)
-                logger.info("Removed orphan remote segment %s/%s", self.name, filename)
+                fs.rm(f"{self._remote_namespace_dir}/{basename}")
+                logger.info("Deleted orphan remote segment %s/%s", self.name, basename)
             except Exception:
-                logger.warning("orphan delete failed: %s", fs_path, exc_info=True)
+                logger.warning("orphan delete failed: %s/%s", self.name, basename, exc_info=True)
 
-    def _upload(self, local_path: Path) -> int | None:
-        """Stream ``local_path`` to remote. Returns completion epoch_ms, or
-        ``None`` on failure (the next sync retries)."""
+    def _upload(self, local_path: Path) -> bool:
+        """Stream ``local_path`` to remote. Returns True on success;
+        the next sync retries on failure."""
         remote_path = f"{self._remote_namespace_dir}/{local_path.name}"
         upload_start = time.monotonic()
         try:
@@ -1169,7 +1302,7 @@ class DiskLogNamespace:
                 shutil.copyfileobj(f_src, f_dst, length=_REMOTE_UPLOAD_CHUNK_BYTES)
         except Exception:
             logger.warning("Failed to copy %s to %s", local_path, remote_path, exc_info=True)
-            return None
+            return False
         try:
             size = local_path.stat().st_size
         except OSError:
@@ -1181,7 +1314,20 @@ class DiskLogNamespace:
             size,
             int((time.monotonic() - upload_start) * 1000),
         )
-        return int(time.time() * 1000)
+        return True
+
+    def _mark_uploaded(self, path: str) -> None:
+        """Flip a segment's location to ``BOTH`` after a successful upload.
+
+        Updates the in-memory deque and the catalog under the insertion
+        lock so the planner / eviction queries see consistent state.
+        """
+        with self._insertion_lock:
+            for s in self._local_segments:
+                if s.path == path:
+                    s.location = SegmentLocation.BOTH
+                    break
+            self._catalog.set_location(self.name, path, SegmentLocation.BOTH)
 
     def _eviction_step(self) -> None:
         """Evict the namespace's oldest L>=1 copied segments until under caps.
@@ -1223,31 +1369,34 @@ class DiskLogNamespace:
         """Snapshot every locally-tracked segment. Caller MUST hold the insertion lock."""
         return list(self._local_segments)
 
-    def mark_copied(self, path: str, copied_at_ms: int) -> None:
-        """Stamp the catalog row + in-memory deque after a copy upload completes.
-
-        The copy worker calls this from its own thread; ``_insertion_lock``
-        serializes it against the bg thread's catalog mutations.
-        """
-        with self._insertion_lock:
-            for s in self._local_segments:
-                if s.path == path:
-                    s.copied_at_ms = copied_at_ms
-                    break
-            self._catalog.mark_copied(self.name, path, copied_at_ms)
-
     def evict_segment(self, path: str) -> int:
-        """Remove ``path`` from tracking and unlink the file. Returns bytes freed."""
+        """Drop ``path`` from the local deque and unlink the file. Returns
+        bytes freed.
+
+        For a ``BOTH`` segment, the catalog row stays in place at
+        ``REMOTE`` and the bucket copy is the durable archive. For a
+        ``LOCAL``-only segment, eviction is destructive: there's no
+        durable copy, so the row is dropped entirely. Production eviction
+        runs through ``select_eviction_candidate`` which gates on
+        ``BOTH``; the destructive branch is here for direct callers
+        (tests, manual recovery) that have already accepted the
+        consequences.
+        """
         with self._insertion_lock:
             new: deque[LocalSegment] = deque()
             removed_bytes = 0
+            removed_location: SegmentLocation | None = None
             for s in self._local_segments:
                 if s.path == path:
                     removed_bytes = s.size_bytes
+                    removed_location = s.location
                     continue
                 new.append(s)
             self._local_segments = new
-            self._catalog.remove_segment(self.name, path)
+            if removed_location is SegmentLocation.BOTH:
+                self._catalog.set_location(self.name, path, SegmentLocation.REMOTE)
+            else:
+                self._catalog.remove_segment(self.name, path)
         try:
             Path(path).unlink(missing_ok=True)
         except OSError:
@@ -1474,9 +1623,6 @@ class MemoryLogNamespace:
 
     def evict_segment(self, path: str) -> int:
         return 0
-
-    def mark_copied(self, path: str, copied_at_ms: int) -> None:
-        return None
 
     def remove_local_storage(self) -> None:
         with self._insertion_lock:

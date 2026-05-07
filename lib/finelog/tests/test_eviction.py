@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from finelog.store.catalog import SegmentLocation
 from finelog.store.compactor import CompactionConfig
 from finelog.store.duckdb_store import DuckDBLogStore
 
@@ -55,7 +56,7 @@ def test_eviction_drops_oldest_segment_when_cap_exceeded(tmp_path: Path):
 def test_eviction_skips_segments_not_yet_copied(tmp_path: Path):
     """A freshly-promoted L1 segment is not evicted until the upload completes."""
     config = CompactionConfig(max_segments_per_namespace=1, level_targets=(1,))
-    # No remote_log_dir → no copy worker → copied_at_ms stays NULL.
+    # No remote_log_dir → no upload happens → location stays LOCAL.
     store = DuckDBLogStore(log_dir=tmp_path / "data", compaction_config=config)
     try:
         store.register_table("ns", _worker_schema())
@@ -116,13 +117,22 @@ def test_fifo_eviction_across_mixed_levels(tmp_path: Path):
                 pass
             ns._sync_step()
 
-        # Eviction should now have run and brought us to <=2 segments,
-        # popping oldest first.
+        # Eviction should now have run and brought us to <=2 local segments,
+        # popping oldest first. Evicted rows stay in the catalog with
+        # location=REMOTE so the bucket archive is preserved.
         ns._eviction_step()
-        remaining_rows = _list_segments_locked(store, "ns")
-        assert len(remaining_rows) <= 2
-        # Whatever's left, the smallest min_seq is strictly greater than the
-        # smallest seq we ever wrote (1) — i.e. eviction came from the front.
-        assert min(r.min_seq for r in remaining_rows) > 1
+        all_rows = _list_segments_locked(store, "ns")
+        local_rows = [r for r in all_rows if r.location in {SegmentLocation.LOCAL, SegmentLocation.BOTH}]
+        remote_rows = [r for r in all_rows if r.location is SegmentLocation.REMOTE]
+        assert len(local_rows) <= 2
+        # Whatever's left locally, the smallest min_seq is strictly greater
+        # than the smallest seq we ever wrote (0) — i.e. eviction came from
+        # the front.
+        assert min(r.min_seq for r in local_rows) > 0
+        # The evicted rows show up as REMOTE archive pointers and their
+        # remote files survive.
+        assert remote_rows
+        for r in remote_rows:
+            assert (tmp_path / "remote" / "ns" / Path(r.path).name).exists()
     finally:
         store.close()

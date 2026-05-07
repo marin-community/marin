@@ -14,7 +14,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from finelog.store.catalog import Catalog, SegmentRow
+from finelog.store.catalog import Catalog, SegmentLocation, SegmentRow
 from finelog.store.migrations import apply_migrations, transactional
 
 
@@ -44,6 +44,7 @@ def test_fresh_registry_runs_baseline_migration(tmp_path):
             "0003_segment_level.py",
             "0004_segment_copied_at.py",
             "0005_segments_level_index.py",
+            "0006_segment_lifecycle.py",
         ]
     finally:
         db.close()
@@ -61,6 +62,7 @@ def test_reopen_is_idempotent(tmp_path):
             "0003_segment_level.py",
             "0004_segment_copied_at.py",
             "0005_segments_level_index.py",
+            "0006_segment_lifecycle.py",
         ]
     finally:
         db.close()
@@ -99,6 +101,7 @@ def test_pre_migrations_database_inherits_baseline(tmp_path):
             "0003_segment_level.py",
             "0004_segment_copied_at.py",
             "0005_segments_level_index.py",
+            "0006_segment_lifecycle.py",
         ]
     finally:
         db.close()
@@ -245,20 +248,20 @@ def test_catalog_segments_apis_function_after_migration(tmp_path):
             created_at_ms=0,
             min_key_value="alpha",
             max_key_value="zeta",
-            copied_at_ms=42,
+            location=SegmentLocation.BOTH,
         )
         db.upsert_segment(seg)
         stats = db.aggregate_namespace_stats("ns")
         assert stats.row_count == 10
         assert stats.segment_count == 1
 
-        # 0002 + 0003 + 0004 columns survive the round-trip.
+        # 0002 + 0003 + 0006 columns survive the round-trip.
         rows = db.list_segments("ns")
         assert len(rows) == 1
         assert rows[0].level == 1
         assert rows[0].min_key_value == "alpha"
         assert rows[0].max_key_value == "zeta"
-        assert rows[0].copied_at_ms == 42
+        assert rows[0].location is SegmentLocation.BOTH
 
         seg_no_key = SegmentRow(
             namespace="ns",
@@ -275,6 +278,6 @@ def test_catalog_segments_apis_function_after_migration(tmp_path):
         no_key_row = next(r for r in rows if r.path.endswith("0000000011.parquet"))
         assert no_key_row.min_key_value is None
         assert no_key_row.max_key_value is None
-        assert no_key_row.copied_at_ms is None
+        assert no_key_row.location is SegmentLocation.LOCAL
     finally:
         db.close()

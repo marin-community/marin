@@ -13,9 +13,11 @@ evict → drop → restart).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from finelog.rpc import logging_pb2
-from finelog.store.catalog import Catalog, NamespaceStats
+from finelog.store.catalog import Catalog, NamespaceStats, SegmentLocation
 from finelog.store.duckdb_store import DuckDBLogStore
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
@@ -102,7 +104,9 @@ def test_compaction_replaces_l0_rows_atomically(store):
     assert stats.segment_count == 1
 
 
-def test_eviction_removes_segment_row(store):
+def test_eviction_local_only_drops_row(store):
+    """Eviction of a ``LOCAL``-only segment is destructive: with no remote
+    copy to fall back on, the row is dropped entirely."""
     store.register_table("iris.worker", _worker_schema())
     batch = _worker_batch(["w-0"], [1], [1])
     store.write_rows("iris.worker", _ipc_bytes(batch))
@@ -111,6 +115,7 @@ def test_eviction_removes_segment_row(store):
     segs = _segments(store, "iris.worker")
     assert len(segs) == 1
     path = segs[0].path
+    assert segs[0].location is SegmentLocation.LOCAL
 
     store._namespaces["iris.worker"].evict_segment(path)
 
@@ -118,6 +123,41 @@ def test_eviction_removes_segment_row(store):
     stats = _stats(store, "iris.worker")
     assert stats.row_count == 0
     assert stats.segment_count == 0
+
+
+def test_eviction_flips_remote_durable_segment(tmp_path):
+    """Eviction of a ``BOTH`` segment keeps the catalog row at ``REMOTE``
+    so the durable bucket archive is preserved."""
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    store = DuckDBLogStore(log_dir=tmp_path / "data", remote_log_dir=str(remote))
+    try:
+        store.register_table("iris.worker", _worker_schema())
+        store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-0"], [1], [1])))
+        _seal(store, "iris.worker")
+        ns = store._namespaces["iris.worker"]
+        ns._sync_step()
+        segs = _segments(store, "iris.worker")
+        assert len(segs) == 1
+        path = segs[0].path
+        assert segs[0].location is SegmentLocation.BOTH
+
+        ns.evict_segment(path)
+
+        rows = _segments(store, "iris.worker")
+        assert len(rows) == 1
+        assert rows[0].path == path
+        assert rows[0].location is SegmentLocation.REMOTE
+        # Local file unlinked; remote file preserved.
+        assert not Path(path).exists()
+        assert (remote / "iris.worker" / Path(path).name).exists()
+        # Stats track queryable data only (the deque excludes REMOTE rows
+        # because the read path doesn't fetch from the bucket today).
+        stats = _stats(store, "iris.worker")
+        assert stats.segment_count == 0
+        assert stats.row_count == 0
+    finally:
+        store.close()
 
 
 def test_drop_table_clears_namespace_segments(store):
@@ -166,17 +206,17 @@ def test_segments_catalog_survives_restart(tmp_path):
         s2.close()
 
 
-def test_reconcile_preserves_copied_at_ms(tmp_path):
-    """A successful upload's stamp survives the next-boot reconcile pass."""
+def test_reconcile_preserves_location(tmp_path):
+    """An uploaded segment's BOTH location survives the next-boot reconcile pass."""
     log_dir = tmp_path / "store"
     s1 = DuckDBLogStore(log_dir=log_dir)
     s1.register_table("iris.worker", _worker_schema())
     s1.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-0"], [1], [1])))
     _seal(s1, "iris.worker")
     seg = _segments(s1, "iris.worker")[0]
-    # Simulate a successful copy: stamp the catalog row.
-    s1._namespaces["iris.worker"].mark_copied(seg.path, copied_at_ms=12345)
-    assert _segments(s1, "iris.worker")[0].copied_at_ms == 12345
+    # Simulate a successful copy via the catalog's public API.
+    s1._namespaces["iris.worker"]._mark_uploaded(seg.path)
+    assert _segments(s1, "iris.worker")[0].location is SegmentLocation.BOTH
     s1.close()
 
     s2 = DuckDBLogStore(log_dir=log_dir)
@@ -184,8 +224,8 @@ def test_reconcile_preserves_copied_at_ms(tmp_path):
         rows = _segments(s2, "iris.worker")
         assert len(rows) == 1
         assert rows[0].path == seg.path
-        # Reconcile rewrites the row but keeps the copy stamp.
-        assert rows[0].copied_at_ms == 12345
+        # Reconcile preserves the BOTH state — local file present + previously uploaded.
+        assert rows[0].location is SegmentLocation.BOTH
     finally:
         s2.close()
 
