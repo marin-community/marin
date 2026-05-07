@@ -480,7 +480,6 @@ def _component_tpu_pins(
                 adjacency[step].add(dep)
                 adjacency[dep].add(step)
 
-    inherited_region_pin = _iris_worker_region_pin()
     chosen_region_by_step: dict[ExecutorStep, str | None] = {step: None for step in steps}
     visited: set[ExecutorStep] = set()
 
@@ -524,16 +523,7 @@ def _component_tpu_pins(
         if not component_regions:
             continue
 
-        if inherited_region_pin is not None:
-            chosen_region = inherited_region_pin.lower()
-            if chosen_region not in component_regions:
-                component_step_names = ", ".join(sorted(s.name for s in component))
-                raise ValueError(
-                    f"TPU-connected executor steps {component_step_names} require one of "
-                    f"{sorted(component_regions)}, but inherited Iris region is {chosen_region!r}."
-                )
-        else:
-            chosen_region = sorted(component_regions)[0]
+        chosen_region = sorted(component_regions)[0]
 
         for component_step in component:
             chosen_region_by_step[component_step] = chosen_region
@@ -552,15 +542,6 @@ def _iris_backend_is_active() -> bool:
     return isinstance(client, FrayIrisClient)
 
 
-def _iris_worker_region_pin() -> str | None:
-    from iris.cluster.client.job_info import get_job_info
-
-    job_info = get_job_info()
-    if job_info is None:
-        return None
-    return job_info.worker_region
-
-
 def _maybe_attach_inferred_region_constraint(
     *,
     step_name: str,
@@ -573,8 +554,6 @@ def _maybe_attach_inferred_region_constraint(
 ) -> RemoteCallable:
     if not _iris_backend_is_active():
         return remote_fn
-
-    inherited_region_pin = _iris_worker_region_pin()
 
     allowed_regions = _allowed_regions_for_step(
         step_name=step_name,
@@ -591,36 +570,15 @@ def _maybe_attach_inferred_region_constraint(
                 f"Executor step {step_name!r} cannot be pinned to {pinned_region!r}; "
                 f"allowed regions are {sorted(allowed_regions)}."
             )
-        if inherited_region_pin is not None and inherited_region_pin.lower() != pinned_region:
-            raise ValueError(
-                f"Executor step {step_name!r} must run in {pinned_region!r}, "
-                f"but inherited Iris region is {inherited_region_pin.lower()!r}."
-            )
         return dataclasses.replace(
             remote_fn,
             resources=dataclasses.replace(remote_fn.resources, regions=[pinned_region]),
         )
 
     if remote_fn.resources.regions is not None:
-        if inherited_region_pin is not None and allowed_regions is not None:
-            pinned_region = inherited_region_pin.lower()
-            if pinned_region not in allowed_regions:
-                raise ValueError(
-                    f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
-                    f"but inferred regions are {sorted(allowed_regions)}."
-                )
         return remote_fn
 
     if allowed_regions is None:
-        return remote_fn
-
-    if inherited_region_pin is not None:
-        pinned_region = inherited_region_pin.lower()
-        if pinned_region not in allowed_regions:
-            raise ValueError(
-                f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
-                f"but inferred regions are {sorted(allowed_regions)}."
-            )
         return remote_fn
 
     logger.info(

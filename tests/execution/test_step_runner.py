@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 import pytest
 from fray.types import ResourceConfig
+from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
+from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact, PathMetadata
 from marin.execution.executor import Executor, ExecutorStep, _dag_tpu_regions, resolve_executor_step
 from marin.execution.remote import RemoteCallable, remote
@@ -756,6 +758,27 @@ def remote_step():
         pass
 
     return ExecutorStep(name="test", fn=my_fn, config=None)
+
+
+@pytest.fixture
+def current_iris_job():
+    previous_job_info = get_job_info()
+    set_job_info(JobInfo(task_id=JobName.from_wire("/agent/test/0")))
+    yield
+    set_job_info(previous_job_info)
+
+
+def test_resolve_executor_step_ignores_current_iris_job_info_without_worker_region(
+    iris_active, current_iris_job, remote_step
+):
+    resolved = resolve_executor_step(
+        remote_step,
+        config={"input_path": "gs://marin-us-central2/data/input"},
+        output_path="/out/test-abc",
+    )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == ["us-central2"]
 
 
 def test_resolve_executor_step_infers_region_for_iris_without_pin(iris_active, remote_step):
