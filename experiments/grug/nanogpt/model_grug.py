@@ -292,13 +292,20 @@ class Transformer(eqx.Module):
         labels = jnp.concatenate([token_ids[:, 1:], jnp.zeros_like(token_ids[:, :1])], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        return fused_linear_softmax_cross_entropy_loss(
+        per_pos = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.proj.weight,
             labels,
             weight=loss_weight,
-            reduction=reduction,
+            reduction="none",
             logsumexp_weight=logsumexp_weight,
             logit_soft_cap=self.config.logit_cap,
             dtype=loss_dtype,
         )
+        if reduction == "none":
+            return per_pos
+        total = jnp.sum(per_pos)
+        denom = jnp.maximum(jnp.sum(loss_weight), 1.0)
+        if reduction == "sum":
+            return total
+        return total / denom
