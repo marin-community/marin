@@ -2,21 +2,32 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build, publish, and pin marin-dupekit wheels.
+"""Build (and let CI publish) marin-dupekit wheels.
 
-Driven by .github/workflows/dupekit-release-wheels.yaml. The matrix legs build
-linux and macos wheels; the release leg builds the sdist (separately, so it
-isn't duplicated across legs and clobbered by download-artifact merge), then
-publishes dist/ and re-pins the root pyproject.toml.
+Driven by .github/workflows/dupekit-release-wheels.yaml. Mirrors the
+nightly/stable/manual mode split used by scripts/python_libs_package.py for the
+marin-libs wheels - same trigger shape (schedule + tag + workflow_dispatch +
+PR-smoke), no `push: branches: [main]` recursion.
+
+Modes:
+    nightly  -- date-stamped patch above the highest known version
+                (max of Cargo.toml and the latest version on PyPI). Each
+                schedule run produces a never-before-published version, so
+                Cargo.toml never needs to be committed back to the repo.
+    stable   -- version supplied via --version (extracted from the tag in CI).
+                Cargo.toml is rewritten on disk so maturin builds with that
+                version; the change is not committed.
+    manual   -- builds with the Cargo.toml version verbatim plus a +<sha>
+                local-version suffix. Used for PR smoke and ad-hoc dev builds.
 
 Usage:
-    python rust/dupekit/build_package.py --bump --build linux
-    python rust/dupekit/build_package.py --bump --build macos
-    python rust/dupekit/build_package.py --bump --build sdist
-    python rust/dupekit/build_package.py --set-version 0.1.7 --update-pyproject
+    python rust/dupekit/build_package.py --mode nightly --build linux
+    python rust/dupekit/build_package.py --mode stable --version 0.1.7 --build sdist
+    python rust/dupekit/build_package.py --mode manual --build macos
 """
 
 import argparse
+import json
 import os
 import platform
 import re
@@ -25,15 +36,17 @@ import subprocess
 import sys
 import tarfile
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 DUPEKIT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = DUPEKIT_DIR.parent.parent
 MANIFEST_PATH = DUPEKIT_DIR / "Cargo.toml"
-PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 DIST_DIR = REPO_ROOT / "dist"
 TOOLS_DIR = REPO_ROOT / ".tools"
+
+PYPI_JSON_URL = "https://pypi.org/pypi/marin-dupekit/json"
 
 ZIG_VERSION = "0.15.2"
 # ziglang.org's own server is very slow (<0.1 MB/s); use a community mirror
@@ -144,6 +157,9 @@ def _maturin(*args: str, env: dict[str, str] | None = None) -> None:
     subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=env)
 
 
+_VERSION_RE = re.compile(r'^(version\s*=\s*)"[^"]+"', re.MULTILINE)
+
+
 def _read_cargo_version() -> str:
     text = MANIFEST_PATH.read_text()
     m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
@@ -155,35 +171,79 @@ def _read_cargo_version() -> str:
 
 def _write_cargo_version(new_version: str) -> None:
     text = MANIFEST_PATH.read_text()
-    new_text, n = re.subn(
-        r'^(version\s*=\s*)"[^"]+"',
-        rf'\1"{new_version}"',
-        text,
-        count=1,
-        flags=re.MULTILINE,
-    )
+    new_text, n = _VERSION_RE.subn(rf'\1"{new_version}"', text, count=1)
     if n != 1:
         print(f"ERROR: Failed to rewrite version in {MANIFEST_PATH}", file=sys.stderr)
         sys.exit(1)
     MANIFEST_PATH.write_text(new_text)
 
 
-def _bump_patch(version: str) -> str:
-    parts = version.split(".")
+def _parse_semver(version: str) -> tuple[int, int, int]:
+    parts = version.split(".")[:3]
     if len(parts) != 3 or not all(p.isdigit() for p in parts):
-        print(f"ERROR: Cargo.toml version {version!r} is not a semver triple", file=sys.stderr)
-        sys.exit(1)
-    major, minor, patch = (int(p) for p in parts)
+        raise ValueError(f"Not a semver triple: {version!r}")
+    return int(parts[0]), int(parts[1]), int(parts[2])
+
+
+def _max_version(a: str, b: str) -> str:
+    return a if _parse_semver(a) >= _parse_semver(b) else b
+
+
+def _query_pypi_latest_version() -> str | None:
+    """Return the highest released version from PyPI, or None if the project doesn't exist yet."""
+    try:
+        with urllib.request.urlopen(PYPI_JSON_URL, timeout=15) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+
+    # info.version reflects the latest *non-yanked* release per PyPI's convention.
+    return data.get("info", {}).get("version")
+
+
+def _bump_patch(version: str) -> str:
+    major, minor, patch = _parse_semver(version)
     return f"{major}.{minor}.{patch + 1}"
 
 
-def bump_cargo_patch_version() -> str:
-    current = _read_cargo_version()
-    new = _bump_patch(current)
-    _write_cargo_version(new)
-    print(f"Bumped marin-dupekit version: {current} -> {new}")
-    _emit_github_output("version", new)
-    return new
+def _resolve_nightly_version() -> str:
+    """Bump patch above max(Cargo.toml, latest on PyPI).
+
+    Reading PyPI is what lets Cargo.toml stay frozen between releases without
+    bumping into "version already published" rejections - the script always
+    advances past whatever's actually published, so subsequent runs don't need
+    Cargo.toml to be committed back to the repo.
+
+    Plain `X.Y.Z` (no date suffix, no prerelease tag) keeps Cargo and PEP 440
+    happy without relying on maturin's semver→PEP 440 translation rules.
+    """
+    cargo = _read_cargo_version()
+    pypi = _query_pypi_latest_version()
+    base = _max_version(cargo, pypi) if pypi else cargo
+    return _bump_patch(base)
+
+
+def _resolve_manual_version() -> str:
+    sha = os.environ.get("GITHUB_SHA", "")[:8] or "local"
+    # `+<segment>` is semver build metadata and PEP 440 local-version - both
+    # ecosystems treat it as "same release, different build", which is what we
+    # want for ad-hoc smoke builds.
+    return f"{_read_cargo_version()}+{sha}"
+
+
+def resolve_version(mode: str, override: str | None) -> str:
+    if mode == "stable":
+        if not override:
+            print("ERROR: --mode stable requires --version", file=sys.stderr)
+            sys.exit(1)
+        return override
+    if mode == "nightly":
+        return _resolve_nightly_version()
+    if mode == "manual":
+        return _resolve_manual_version()
+    raise ValueError(f"unknown mode: {mode}")
 
 
 def _list_dist_artifacts(label: str) -> None:
@@ -240,28 +300,6 @@ def build_sdist() -> None:
     _list_dist_artifacts("sdist(s)")
 
 
-def update_pyproject(version: str) -> None:
-    """Pin marin-dupekit to `version` in root pyproject.toml and re-lock."""
-    original = PYPROJECT_PATH.read_text()
-    new_text, n = re.subn(
-        r'"marin-dupekit\s*>=\s*[^"]*"',
-        f'"marin-dupekit >= {version}"',
-        original,
-    )
-    if n == 0:
-        print("ERROR: pyproject.toml has no marin-dupekit dependency line to update.", file=sys.stderr)
-        sys.exit(1)
-
-    if new_text != original:
-        PYPROJECT_PATH.write_text(new_text)
-        print(f"\n--- Updated pyproject.toml: marin-dupekit pinned to >= {version} ---")
-    else:
-        print(f"\n--- pyproject.toml already pinned to marin-dupekit >= {version} ---")
-
-    print("\n--- Running uv lock ---")
-    subprocess.run(["uv", "lock"], check=True, cwd=REPO_ROOT)
-
-
 _BUILDERS = {
     "linux": build_linux_wheels,
     "macos": build_macos_wheels,
@@ -271,52 +309,42 @@ _BUILDERS = {
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    version_group = parser.add_mutually_exclusive_group()
-    version_group.add_argument(
-        "--bump",
-        action="store_true",
-        help="Bump the patch version in rust/dupekit/Cargo.toml.",
-    )
-    version_group.add_argument(
-        "--set-version",
-        metavar="VERSION",
+    parser.add_argument("--mode", choices=["nightly", "stable", "manual"], required=True)
+    parser.add_argument(
+        "--version",
         help=(
-            "Write VERSION verbatim into rust/dupekit/Cargo.toml. The release "
-            "job uses this in the second-stage step to avoid an implicit "
-            "re-bump - the first stage emits its bumped version to $GITHUB_OUTPUT."
+            "Stable: required, taken verbatim. "
+            "Nightly: optional precomputed value (CI computes it once in the resolve "
+            "job and passes it to every matrix leg, so all wheels and the sdist agree). "
+            "Manual: optional override; otherwise derived from Cargo.toml + GITHUB_SHA."
         ),
     )
     parser.add_argument(
         "--build",
         choices=sorted(_BUILDERS),
-        help="Build linux wheels (zig cross-compile), macos wheels (native), or sdist into dist/.",
+        help="Build target. Omit with --resolve-only to just print the version.",
     )
     parser.add_argument(
-        "--update-pyproject",
+        "--resolve-only",
         action="store_true",
-        help="Update root pyproject.toml dependency pin and run uv lock.",
+        help="Print the resolved version to stdout and emit it to $GITHUB_OUTPUT; do not build.",
     )
     args = parser.parse_args()
 
-    if not (args.bump or args.set_version or args.build or args.update_pyproject):
-        parser.error("nothing to do; pass --bump, --set-version, --build, or --update-pyproject")
+    if not args.resolve_only and not args.build:
+        parser.error("--build is required unless --resolve-only is set")
 
-    if args.bump:
-        version = bump_cargo_patch_version()
-    elif args.set_version:
-        _write_cargo_version(args.set_version)
-        version = args.set_version
-        print(f"Set marin-dupekit version: {version}")
-    else:
-        version = _read_cargo_version()
+    version = args.version if args.version else resolve_version(args.mode, args.version)
+    print(f"marin-dupekit version: {version} (mode={args.mode})")
+    _emit_github_output("version", version)
 
-    print(f"marin-dupekit version: {version}")
+    if args.resolve_only:
+        return
 
-    if args.build:
-        _BUILDERS[args.build]()
-
-    if args.update_pyproject:
-        update_pyproject(version)
+    # maturin reads version from Cargo.toml. Stamp it for the duration of this
+    # build; we never commit the change back.
+    _write_cargo_version(version)
+    _BUILDERS[args.build]()
 
 
 if __name__ == "__main__":
