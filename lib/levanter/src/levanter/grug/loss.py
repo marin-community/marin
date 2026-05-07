@@ -76,6 +76,7 @@ def fused_linear_softmax_cross_entropy_loss(
     reduction: str = "mean",
     logsumexp_weight: float | None = None,
     dtype: jnp.dtype = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
     implementation: str | tuple[str, ...] | None = None,
 ) -> jax.Array:
@@ -134,7 +135,7 @@ def fused_linear_softmax_cross_entropy_loss(
             weight=flat_weight,
             logsumexp_weight=logsumexp_weight,
             dtype=dtype,
-            logit_soft_cap=None,
+            logit_soft_cap=logit_soft_cap,
             precision=precision,
             implementation=implementation,
         )
