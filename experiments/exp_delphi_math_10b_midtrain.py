@@ -256,6 +256,7 @@ BASES: dict[str, MidtrainingBaseConfig] = {
         train_batch_size=1024,
         default_tpu_type="v5p-512",
         v5p_compute=(
+            V5PComputeConfig("v5p-64", per_device_parallelism=4),
             V5PComputeConfig("v5p-128", per_device_parallelism=4),
             V5PComputeConfig("v5p-256", per_device_parallelism=4),
             V5PComputeConfig("v5p-512", per_device_parallelism=4),
