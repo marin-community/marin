@@ -37,7 +37,7 @@ running a full executor pipeline. `compute_output_path` and
 worker-side counterpart that submits any embedded `ExecutorStep`s and
 substitutes resolved paths into the config.
 
-::: marin.execution.executor.walk_config
-::: marin.execution.executor.resolve_local_placeholders
-::: marin.execution.executor.compute_output_path
-::: marin.execution.executor.materialize
+::: marin.execution.walk_config
+::: marin.execution.resolve_local_placeholders
+::: marin.execution.compute_output_path
+::: marin.execution.materialize
