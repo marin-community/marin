@@ -45,6 +45,7 @@ class GrugMoeAdamHMuonConfig(OptimizerConfig):
     adam_lr: float = 6e-4
     muon_lr: float = 0.02
     muon_momentum: float = 0.95
+    muon_attn: bool = False  # Also use Muon for attention weights
 
     def build(self, num_train_steps):
         adamh_lr_schedule = self.lr_scheduler(num_train_steps)
@@ -98,79 +99,92 @@ class GrugMoeAdamHMuonConfig(OptimizerConfig):
             # Embeddings, router, biases, norms -> adam
             if "token_embed" in path_lower or "router" in path_lower or "attn_gate" in path_lower:
                 return "adam"
-            # 2D attention weights -> adamh
+            # 2D attention weights -> muon (if muon_attn) or adamh
             if hasattr(param, "ndim") and param.ndim >= 2:
-                return "adamh"
+                return "muon" if self.muon_attn else "adamh"
             return "adam"
 
         return jax.tree.map(mask_fn, params, paths)
 
 
+# (muon_attn, warmup_override, tag)
+VARIANTS: list[tuple[bool, float | None, str]] = [
+    (False, None, "expert"),  # Muon on experts only
+    (True, None, "all"),  # Muon on experts + attention
+    (True, 0.02, "all-w2"),  # Muon on experts + attention, 2% warmup
+]
+
+
+def _make_step(
+    muon_lr: float, dim: int, budget: float, muon_attn: bool, warmup_override: float | None, tag: str
+) -> ExecutorStep:
+    model, optimizer, batch, num_steps = build_from_heuristic(budget=budget, hidden_dim=dim)
+    model = dataclasses.replace(
+        model,
+        num_experts=32,
+        num_experts_per_token=2,
+        intermediate_dim=dim,
+        separate_gate_up=True,
+        router_z_loss_coef=0.0,
+    )
+    warmup = warmup_override if warmup_override is not None else optimizer.warmup
+    opt = GrugMoeAdamHMuonConfig(
+        learning_rate=optimizer.learning_rate,
+        adam_lr=optimizer.adam_lr if hasattr(optimizer, "adam_lr") else 6e-4,
+        muon_lr=muon_lr,
+        beta1=optimizer.beta1,
+        beta2=optimizer.beta2,
+        epsilon=optimizer.epsilon,
+        max_grad_norm=optimizer.max_grad_norm,
+        warmup=warmup,
+        lr_schedule=optimizer.lr_schedule,
+        min_lr_ratio=optimizer.min_lr_ratio,
+        muon_attn=muon_attn,
+    )
+    lr_str = f"{muon_lr:.2f}".replace("0.", ".")
+    run_id = f"grugmuon-{tag}-lr{lr_str}-d{dim}-{budget:.2e}"
+
+    return ExecutorStep(
+        name=f"grug/{run_id}",
+        fn=run_grug_moe_trial,
+        config=GrugMoeLaunchConfig(
+            model=versioned(model),
+            data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+            output_path=this_output_path(),
+            run_id=run_id,
+            resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+            enable_cross_region_ckpt_read=True,
+            steps=versioned(num_steps),
+            batch_size=versioned(batch),
+            seed=versioned(0),
+            mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+            tracker=WandbConfig(
+                project="dial_moe",
+                tags=["grugmuon", tag, f"muon_lr={muon_lr}", f"d={dim}"],
+                group=f"grugmuon-{tag}",
+                name=run_id,
+            ),
+            optimizer=versioned(opt),
+            grug_trainer=versioned(GrugTrainerConfig(z_loss_weight=1e-4, ema_beta=None, log_every=1)),
+            eval=versioned(
+                GrugEvalConfig(
+                    eval_batch_size=512,
+                    steps_per_eval=1000,
+                    max_eval_batches=8,
+                    eval_current=True,
+                    eval_ema=False,
+                )
+            ),
+        ),
+    )
+
+
 def _make_steps() -> list[ExecutorStep]:
     steps: list[ExecutorStep] = []
-    for muon_lr in MUON_LRS:
-        for dim, budget in GATE1_CONFIGS:
-            model, optimizer, batch, num_steps = build_from_heuristic(budget=budget, hidden_dim=dim)
-            # Override model: pick 2 from 32, expert width = hidden_dim, separate gate/up, no z-loss
-            model = dataclasses.replace(
-                model,
-                num_experts=32,
-                num_experts_per_token=2,
-                intermediate_dim=dim,
-                separate_gate_up=True,
-                router_z_loss_coef=0.0,
-            )
-            # Override optimizer: AdamH + Muon
-            opt = GrugMoeAdamHMuonConfig(
-                learning_rate=optimizer.learning_rate,
-                adam_lr=optimizer.adam_lr if hasattr(optimizer, "adam_lr") else 6e-4,
-                muon_lr=muon_lr,
-                beta1=optimizer.beta1,
-                beta2=optimizer.beta2,
-                epsilon=optimizer.epsilon,
-                max_grad_norm=optimizer.max_grad_norm,
-                warmup=optimizer.warmup,
-                lr_schedule=optimizer.lr_schedule,
-                min_lr_ratio=optimizer.min_lr_ratio,
-            )
-            lr_str = f"{muon_lr:.2f}".replace("0.", ".")
-            run_id = f"grugmuon-lr{lr_str}-d{dim}-{budget:.2e}"
-
-            steps.append(
-                ExecutorStep(
-                    name=f"grug/{run_id}",
-                    fn=run_grug_moe_trial,
-                    config=GrugMoeLaunchConfig(
-                        model=versioned(model),
-                        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-                        output_path=this_output_path(),
-                        run_id=run_id,
-                        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-                        enable_cross_region_ckpt_read=True,
-                        steps=versioned(num_steps),
-                        batch_size=versioned(batch),
-                        seed=versioned(0),
-                        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-                        tracker=WandbConfig(
-                            project="dial_moe",
-                            tags=["grugmuon", f"muon_lr={muon_lr}", f"d={dim}"],
-                            group="grugmuon",
-                            name=run_id,
-                        ),
-                        optimizer=versioned(opt),
-                        grug_trainer=versioned(GrugTrainerConfig(z_loss_weight=1e-4, ema_beta=None, log_every=1)),
-                        eval=versioned(
-                            GrugEvalConfig(
-                                eval_batch_size=512,
-                                steps_per_eval=1000,
-                                max_eval_batches=8,
-                                eval_current=True,
-                                eval_ema=False,
-                            )
-                        ),
-                    ),
-                )
-            )
+    for muon_attn, warmup_override, tag in VARIANTS:
+        for muon_lr in MUON_LRS:
+            for dim, budget in GATE1_CONFIGS:
+                steps.append(_make_step(muon_lr, dim, budget, muon_attn, warmup_override, tag))
     return steps
 
 
