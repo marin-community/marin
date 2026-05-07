@@ -134,20 +134,23 @@ nanogpt_feat_muon = ExecutorStep(
 # ---- 2. AdamH heuristic + features (3600 steps) ----
 
 nanogpt_feat_adamh = ExecutorStep(
-    name="grug/nanogpt-feat-adamh-v2",
+    name="grug/nanogpt-feat-adamh-debug",
     fn=run_feat_trial,
     config=FeatLaunchConfig(
         model=versioned(FEAT_MODEL_ADAMH),
         data=_fineweb_gpt2_data(),
         output_path=this_output_path(),
-        run_id="nanogpt-feat-adamh-v2",
+        run_id="nanogpt-feat-adamh-debug",
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-        steps=versioned(TRAIN_STEPS),
+        steps=versioned(50),
         batch_size=versioned(BATCH_SIZE),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
-            project="dial_moe", tags=["nanogpt", "feat", "adamh"], group="nanogpt-feat", name="nanogpt-feat-adamh-v2"
+            project="dial_moe",
+            tags=["nanogpt", "feat", "adamh", "debug"],
+            group="nanogpt-feat",
+            name="nanogpt-feat-adamh-debug",
         ),
         optimizer=versioned(_adamh_optimizer_for_nanogpt()),
         grug_trainer=versioned(TRAINER_CFG),
@@ -158,13 +161,13 @@ nanogpt_feat_adamh = ExecutorStep(
 # ---- 3. AdamH ref + features (4875 steps) ----
 
 nanogpt_feat_adamh_ref = ExecutorStep(
-    name="grug/nanogpt-feat-adamh-v2-ref",
+    name="grug/nanogpt-feat-adamh-debug-ref",
     fn=run_feat_trial,
     config=FeatLaunchConfig(
         model=versioned(FEAT_MODEL_ADAMH),
         data=_fineweb_gpt2_data(),
         output_path=this_output_path(),
-        run_id="nanogpt-feat-adamh-v2-ref",
+        run_id="nanogpt-feat-adamh-debug-ref",
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
         steps=versioned(ADAMH_REF_TRAIN_STEPS),
         batch_size=versioned(BATCH_SIZE),
@@ -174,7 +177,7 @@ nanogpt_feat_adamh_ref = ExecutorStep(
             project="dial_moe",
             tags=["nanogpt", "feat", "adamh-ref"],
             group="nanogpt-feat",
-            name="nanogpt-feat-adamh-v2-ref",
+            name="nanogpt-feat-adamh-debug-ref",
         ),
         optimizer=versioned(NanoGPTAdamHRefConfig()),
         grug_trainer=versioned(TRAINER_CFG),
@@ -189,13 +192,13 @@ HALF_BATCH = BATCH_SIZE // 2  # 256
 DOUBLE_STEPS = TRAIN_STEPS * 2  # 7200
 
 nanogpt_feat_adamh_halfbatch = ExecutorStep(
-    name="grug/nanogpt-feat-adamh-v2-halfbatch",
+    name="grug/nanogpt-feat-adamh-debug-halfbatch",
     fn=run_feat_trial,
     config=FeatLaunchConfig(
         model=versioned(FEAT_MODEL_ADAMH),
         data=_fineweb_gpt2_data(),
         output_path=this_output_path(),
-        run_id="nanogpt-feat-adamh-v2-halfbatch",
+        run_id="nanogpt-feat-adamh-debug-halfbatch",
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
         steps=versioned(DOUBLE_STEPS),
         batch_size=versioned(HALF_BATCH),
@@ -205,7 +208,7 @@ nanogpt_feat_adamh_halfbatch = ExecutorStep(
             project="dial_moe",
             tags=["nanogpt", "feat", "adamh", "halfbatch"],
             group="nanogpt-feat",
-            name="nanogpt-feat-adamh-v2-halfbatch",
+            name="nanogpt-feat-adamh-debug-halfbatch",
         ),
         optimizer=versioned(_adamh_optimizer_for_nanogpt(batch_size=HALF_BATCH, steps=DOUBLE_STEPS)),
         grug_trainer=versioned(TRAINER_CFG),
