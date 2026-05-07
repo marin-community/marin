@@ -93,13 +93,15 @@ def _sweep_worker_entrypoint(sweep_root: str) -> None:
     claim_and_run(sweep_root, targets, _run_one)
 ```
 
-The submitter resolves `sweep_root` once (using `marin_prefix()` from the
-user's region) and bakes it into the entrypoint args, so all replicas contend
-on the same lock namespace regardless of where Iris schedules them. Then it
-submits N independent TPU Iris jobs that all run the same entrypoint:
+`SWEEP_ROOT` is pinned to a fixed region (matching iris's
+`MARIN_REMOTE_STATE_DIR` convention) so workers across regions — and
+re-submissions from a different region — contend on the same lock namespace.
+The submitter bakes it into the entrypoint args and submits N independent
+TPU Iris jobs that all run the same entrypoint:
 
 ```python
-sweep_root = os.path.join(marin_prefix(), "sweeps", SWEEP_NAME)
+SWEEP_ROOT = f"gs://marin-us-central2/sweeps/{SWEEP_NAME}"
+
 client = fray_client.current_client()
 
 env = resolve_training_env(base_env=None, resources=RESOURCES)
@@ -108,7 +110,7 @@ for i in range(NUM_WORKERS):
     handle = client.submit(
         JobRequest(
             name=f"{SWEEP_NAME}-{i}",
-            entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[sweep_root]),
+            entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[SWEEP_ROOT]),
             resources=RESOURCES,
             environment=create_environment(env_vars=env, extras=extras_for_resources(RESOURCES)),
         )

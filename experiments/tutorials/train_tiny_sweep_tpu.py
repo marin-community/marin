@@ -10,7 +10,6 @@ no CPU coordinator. ``SWEEP_NAME`` is the stable lock-path key — bump it to
 start a fresh sweep over the same grid.
 """
 import dataclasses
-import os
 from dataclasses import dataclass
 
 from fray import client as fray_client
@@ -20,7 +19,6 @@ from levanter.main.train_lm import TrainLmConfig
 from marin.execution.executor import versioned
 from marin.execution.sweep import SweepTarget, claim_and_run
 from marin.training.training import extras_for_resources, resolve_training_env
-from rigging.filesystem import marin_prefix
 
 from experiments.defaults import _run_training_on_worker, prepare_lm_train
 from experiments.evals.task_configs import CORE_TASKS
@@ -34,6 +32,12 @@ EVALS = CORE_TASKS
 # Stable sweep identifier — derives the lock root so workers from different
 # `iris job run` invocations converge on the same target set. Bump for a fresh sweep.
 SWEEP_NAME = "train-tiny-sweep"
+
+# Sweep lock root lives in a fixed region (matches MARIN_REMOTE_STATE_DIR
+# in iris). Workers in any region contend on the same path, and re-submitting
+# the same sweep from a different region resumes against the same locks
+# instead of starting a new claim namespace.
+SWEEP_ROOT = f"gs://marin-us-central2/sweeps/{SWEEP_NAME}"
 
 # Each TPU worker claims one target at a time and trains inline on its own
 # TPU, so NUM_WORKERS sets the parallelism — three trials run concurrently
@@ -103,16 +107,15 @@ def _run_one(target: SweepTarget) -> None:
 def _sweep_worker_entrypoint(sweep_root: str) -> None:
     """One TPU sweep worker: loop, claim a target, train inline.
 
-    ``sweep_root`` is resolved once in the submitter (where ``marin_prefix()``
-    reflects the user's region) and baked into the entrypoint args. All N TPU
-    replicas thus contend on the same lock namespace regardless of where Iris
-    schedules them.
+    ``sweep_root`` is the canonical (region-pinned) lock path baked into the
+    entrypoint args. All TPU replicas — across regions, across resubmissions —
+    contend on the same lock namespace regardless of where Iris schedules
+    them.
     """
     claim_and_run(sweep_root, targets, _run_one)
 
 
 if __name__ == "__main__":
-    sweep_root = os.path.join(marin_prefix(), "sweeps", SWEEP_NAME)
     client = fray_client.current_client()
 
     env = resolve_training_env(base_env=None, resources=RESOURCES)
@@ -121,7 +124,7 @@ if __name__ == "__main__":
         handle = client.submit(
             JobRequest(
                 name=f"{SWEEP_NAME}-{i}",
-                entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[sweep_root]),
+                entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[SWEEP_ROOT]),
                 resources=RESOURCES,
                 environment=create_environment(env_vars=env, extras=extras_for_resources(RESOURCES)),
             )
