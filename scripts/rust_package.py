@@ -39,6 +39,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.request
 from pathlib import Path
 
@@ -49,6 +50,10 @@ DIST_DIR = REPO_ROOT / "dist"
 TOOLS_DIR = REPO_ROOT / ".tools"
 
 ZIG_VERSION = "0.15.2"
+
+# ziglang.org's own server is very slow (<0.1 MB/s); use a community mirror
+# from https://ziglang.org/download/community-mirrors.txt instead.
+ZIG_DOWNLOAD_BASE = "https://pkg.earth/zig"
 
 # Linux targets cross-compiled via zig
 LINUX_TARGETS = [
@@ -98,13 +103,29 @@ def _ensure_zig() -> str:
     if zig_bin.exists():
         return str(zig_bin)
 
-    url = f"https://ziglang.org/download/{ZIG_VERSION}/zig-{plat}-{ZIG_VERSION}.tar.xz"
-    print(f"Downloading zig {ZIG_VERSION} for {plat}...")
+    filename = f"zig-{plat}-{ZIG_VERSION}.tar.xz"
+    url = f"{ZIG_DOWNLOAD_BASE}/{filename}"
+    print(f"Downloading zig {ZIG_VERSION} for {plat} from {ZIG_DOWNLOAD_BASE}...")
 
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
-    archive_path = TOOLS_DIR / f"zig-{plat}-{ZIG_VERSION}.tar.xz"
+    archive_path = TOOLS_DIR / filename
 
-    urllib.request.urlretrieve(url, archive_path)
+    last_report = time.monotonic()
+
+    def _report(block_num: int, block_size: int, total_size: int) -> None:
+        nonlocal last_report
+        now = time.monotonic()
+        if now - last_report < 10:
+            return
+        last_report = now
+        downloaded = block_num * block_size
+        if total_size > 0:
+            pct = min(100.0, downloaded * 100 / total_size)
+            print(f"  zig download: {downloaded / 1e6:.1f} / {total_size / 1e6:.1f} MB ({pct:.0f}%)")
+        else:
+            print(f"  zig download: {downloaded / 1e6:.1f} MB")
+
+    urllib.request.urlretrieve(url, archive_path, reporthook=_report)
 
     with tarfile.open(archive_path, "r:xz") as tar:
         tar.extractall(TOOLS_DIR, filter="data")
