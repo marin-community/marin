@@ -1395,6 +1395,19 @@ class ControllerTransitions:
         job_config_cache: dict[str, dict | None] = {}
 
         for update in req.updates:
+            # Clear the pending-kill registry entry as soon as the worker
+            # reports a terminal state for this attempt — even if we're about
+            # to drop the update below (because the controller already moved
+            # the attempt to terminal via requeue/cascade). The worker's
+            # confirmation that the container is stopped is what releases the
+            # scheduler-exclusion marker; the controller's own bookkeeping
+            # state is irrelevant. Hook fires only on a clean commit.
+            if int(update.new_state) in TERMINAL_TASK_STATES and self._kill_registry is not None:
+                registry = self._kill_registry
+                tid_wire = update.task_id.to_wire()
+                aid = update.attempt_id
+                cur.on_commit(lambda r=registry, t=tid_wire, a=aid: r.remove(t, a))
+
             task = self._store.tasks.get_detail(cur, update.task_id)
             if task is None:
                 continue
@@ -1590,14 +1603,6 @@ class ControllerTransitions:
                         now_ms,
                         kb,
                     )
-
-            # When the worker reports a terminal state, clear any pending-kill
-            # entry for this attempt: the StopTasks RPC's job is done.
-            if int(update.new_state) in TERMINAL_TASK_STATES and self._kill_registry is not None:
-                registry = self._kill_registry
-                tid_wire = update.task_id.to_wire()
-                aid = update.attempt_id
-                cur.on_commit(lambda r=registry, t=tid_wire, a=aid: r.remove(t, a))
 
             # Mark job for recomputation (deduplicated, done after the task loop).
             if task_state != prior_state:
