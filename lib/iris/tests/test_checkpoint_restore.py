@@ -2,17 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Checkpoint/restore test for Iris controller."""
 
-from pathlib import Path
-
 import time
+from pathlib import Path
 
 import pytest
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
 IRIS_ROOT = Path(__file__).resolve().parents[1]

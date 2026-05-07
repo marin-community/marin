@@ -53,7 +53,7 @@ echo $GH_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
 Fine-grained tokens do not support the Container Registry; use a classic token.
 
 In CI (GitHub Actions), use the automatic `GITHUB_TOKEN` secret instead — see
-`.github/workflows/marin-canary-ferry-cw.yaml` for an example. The workflow needs
+`.github/workflows/marin-canary-ferry-coreweave.yaml` for an example. The workflow needs
 `packages: write` permission.
 
 ## Infrastructure Setup

@@ -22,7 +22,7 @@ edition = "2023";
 package iris.cluster;
 
 import "job.proto";
-import "logging.proto";
+import "iris_logging.proto";
 import "query.proto";
 import "time.proto";
 import "vm.proto";
@@ -99,6 +99,21 @@ message Controller {
     // need a custom runtime (e.g. an image with runsc/skopeo for sandboxing
     // untrusted child workloads).
     string task_image = 34;
+
+    // Full argv of the CLI invocation that submitted this job (e.g. the
+    // user's `iris ... job run -- python train.py ...`). Captured from
+    // sys.argv at the client with secret-looking env var values redacted.
+    // Empty when submitted programmatically. Bookkeeping only; not
+    // interpreted by the controller.
+    repeated string submit_argv = 35;
+
+    // ISO date (YYYY-MM-DD) of the client's marin-iris build. For wheels this
+    // is stamped at build time by scripts/python_libs_package.py; for editable
+    // installs it's derived from `git log` on the iris source tree. Root
+    // submissions older than FRESHNESS_WINDOW (today - 14d) are rejected.
+    // Nested submissions (is_root == false) are exempt. Empty string is
+    // interpreted as FEATURE_INTRODUCTION_DATE — see service.py.
+    string client_revision_date = 36;
   }
 
   message LaunchJobResponse {
@@ -114,9 +129,8 @@ message Controller {
   message GetJobStatusResponse {
     iris.job.JobStatus job = 1;
     LaunchJobRequest request = 2;  // Original job request for debugging
-    // Min/max resource usage across currently-running tasks.
-    iris.job.ResourceUsage resource_min = 3;
-    iris.job.ResourceUsage resource_max = 4;
+    reserved 3;  // was: ResourceUsage resource_min (now derived from iris.task stats client-side)
+    reserved 4;  // was: ResourceUsage resource_max (now derived from iris.task stats client-side)
   }
 
   // Lightweight batch state query — returns only the state enum for each job,
@@ -172,22 +186,9 @@ message Controller {
   }
 
   message ListJobsRequest {
-    // Preferred typed query shape. When set, legacy fields are ignored.
+    reserved 1, 2, 3, 4, 5, 6, 7;
+    reserved offset, limit, sort_field, sort_direction, name_filter, state_filter, parent_job_id;
     JobQuery query = 9;
-
-    // DEPRECATED: legacy flat query fields kept for rolling compatibility
-    // with older clients (e.g. iris.cluster.client.remote_client, CLI).
-    // The server normalizes these into `query` once at ingestion; do not
-    // read them elsewhere. Remove together with the normalization shim
-    // tracked in https://github.com/marin-community/marin/issues/4573
-    // (~2 weeks after the JobQuery rollout).
-    int32 offset = 1;
-    int32 limit = 2;
-    JobSortField sort_field = 3;
-    SortDirection sort_direction = 4;
-    string name_filter = 5;
-    string state_filter = 6;
-    string parent_job_id = 7;
   }
 
   message ListJobsResponse {
@@ -247,13 +248,37 @@ message Controller {
     repeated string running_job_ids = 5;
     string address = 6;                    // Worker RPC address (host:port)
     iris.job.WorkerMetadata metadata = 7;           // Full worker metadata
-    string status_message = 8;             // Error or status message (e.g., "Heartbeat timeout", "Worker crashed")
+    string status_message = 8;             // Error or status message (e.g., "Ping timeout", "Worker crashed")
   }
 
-  message ListWorkersRequest {}
+  // Sort fields for worker listing
+  enum WorkerSortField {
+    WORKER_SORT_FIELD_UNSPECIFIED = 0;
+    WORKER_SORT_FIELD_WORKER_ID = 1;
+    WORKER_SORT_FIELD_LAST_HEARTBEAT = 2;
+    WORKER_SORT_FIELD_DEVICE_TYPE = 3;
+  }
+
+  message WorkerQuery {
+    // Case-insensitive substring match against worker_id (and address as
+    // fallback so address:port searches also work in the dashboard).
+    string contains = 1;
+    WorkerSortField sort_field = 2;
+    SortDirection sort_direction = 3;
+    int32 offset = 4;
+    // Max workers to return. 0 means unbounded (preserves CLI behavior);
+    // dashboard callers should always set an explicit page size.
+    int32 limit = 5;
+  }
+
+  message ListWorkersRequest {
+    WorkerQuery query = 1;
+  }
 
   message ListWorkersResponse {
     repeated WorkerHealthStatus workers = 1;
+    int32 total_count = 2;  // Total workers matching the query before paging.
+    bool has_more = 3;      // More workers available after this page.
   }
 
   message RegisterRequest {
@@ -315,22 +340,6 @@ message Controller {
 
   message GetAutoscalerStatusResponse {
     iris.vm.AutoscalerStatus status = 1;
-  }
-
-  // --- Transactions / Actions Log ---
-  message TransactionAction {
-    iris.time.Timestamp timestamp = 1;
-    string action = 2;
-    string entity_id = 3;
-    string details = 4;
-  }
-
-  message GetTransactionsRequest {
-    int32 limit = 1;  // 0 = default (50)
-  }
-
-  message GetTransactionsResponse {
-    repeated TransactionAction actions = 1;
   }
 
   // --- Checkpoint ---
@@ -403,19 +412,26 @@ message Controller {
     // Bootstrap logs (from VM init)
     string bootstrap_logs = 4;
 
-    // Worker daemon logs (proxied from worker via FetchLogs, empty if unhealthy/absent)
-    repeated iris.logging.LogEntry worker_log_entries = 9;
-
     reserved 5;  // was: repeated ProcessLogRecord worker_logs
+    reserved 6;  // was: repeated TaskStatus recent_tasks (replaced by recent_attempts)
+    reserved 7;  // was: WorkerResourceSnapshot current_resources (now in iris.worker stats)
+    reserved 8;  // was: repeated WorkerResourceSnapshot resource_history (now in iris.worker stats)
+    reserved 9;  // was: repeated LogEntry worker_log_entries (now fetched async via FetchLogs)
 
-    // Recent tasks that ran or are running on this worker (newest first)
-    repeated iris.job.TaskStatus recent_tasks = 6;
+    // Per-attempt history for this worker, newest first. Each retry of the
+    // same task gets its own entry — the dashboard needs distinct rows for
+    // distinct attempts so a failed attempt doesn't render with its
+    // successor's state/duration.
+    repeated WorkerTaskAttempt recent_attempts = 10;
+  }
 
-    // Current host-level resource snapshot (from latest heartbeat)
-    iris.job.WorkerResourceSnapshot current_resources = 7;
-
-    // Recent resource history (ring buffer of snapshots from heartbeats)
-    repeated iris.job.WorkerResourceSnapshot resource_history = 8;
+  // One attempt that ran (or is running) on a worker. Per-attempt projection
+  // for the worker-detail Task History view; embeds the canonical TaskAttempt
+  // alongside its parent task_id so the dashboard can render rows without
+  // re-deriving state from a sibling task.
+  message WorkerTaskAttempt {
+    string task_id = 1;
+    iris.job.TaskAttempt attempt = 2;
   }
 
   // --- Provider Status (for direct-dispatch providers like KubernetesProvider) ---
@@ -516,6 +532,14 @@ message Controller {
     repeated GetUserBudgetResponse users = 1;
   }
 
+  // --- Heartbeat Refactor: Worker pushes task state transitions ---
+  message UpdateTaskStatusRequest {
+    string worker_id = 1;
+    repeated iris.job.WorkerTaskStatus updates = 2;
+  }
+  message UpdateTaskStatusResponse {
+  }
+
   // --- Scheduler State ---
   message GetSchedulerStateRequest {}
 
@@ -592,9 +616,6 @@ service ControllerService {
   // Autoscaler
   rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);
 
-  // Transactions / Actions Log
-  rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
-
   rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 
   // DEPRECATED: use LogService.FetchLogs with regex patterns instead.
@@ -643,4 +664,10 @@ service ControllerService {
 
   // Scheduler state (dashboard)
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
+
+  // Worker-to-controller task status push
+  rpc UpdateTaskStatus(Controller.UpdateTaskStatusRequest) returns (Controller.UpdateTaskStatusResponse);
+
+  // Task-to-controller status text push
+  rpc SetTaskStatusText(iris.job.SetTaskStatusTextRequest) returns (iris.job.SetTaskStatusTextResponse);
 }

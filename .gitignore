@@ -234,3 +234,7 @@ scr/*
 .agents/tmp/
 .codex
 .entire
+
+.worktrees
+.obsidian
+.cw_env

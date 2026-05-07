@@ -126,3 +126,78 @@ def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):
     assert truncated is not None
     assert len(truncated) <= 128
     assert re.fullmatch(r".+-[0-9a-f]{7}", truncated)
+
+
+def test_wandb_tracker_suppressed_logging_materializes_after_resume_step(monkeypatch):
+    monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
+
+    import levanter.tracker.wandb as wandb_tracker_mod
+    from levanter.tracker.wandb import WandbTracker
+
+    converted = []
+
+    def fake_convert(value):
+        converted.append(value)
+        return value
+
+    class FakeSummary:
+        def update(self, metrics):
+            raise AssertionError("suppressed tracker should not update summary")
+
+    class FakeConfig:
+        def update(self, metrics, *, allow_val_change=False):
+            raise AssertionError("suppressed tracker should not update config")
+
+    class FakeRun:
+        step = 0
+        summary = FakeSummary()
+        config = FakeConfig()
+
+        def log(self, metrics, *, step=None, commit=None):
+            raise AssertionError("suppressed tracker should not log metrics")
+
+        def log_artifact(self, artifact_path, *, name=None, type=None):
+            raise AssertionError("suppressed tracker should not log artifacts")
+
+        def finish(self):
+            raise AssertionError("suppressed tracker should not finish the run")
+
+    monkeypatch.setattr(wandb_tracker_mod, "_convert_value_to_loggable_rec", fake_convert)
+    tracker = WandbTracker(FakeRun(), suppress_logging=True, minimum_log_step=10)
+
+    tracker.log({"metric": 1.0}, step=0)
+    assert converted == []
+
+    tracker.log({"metric": 2.0}, step=10)
+    assert converted == [2.0]
+
+    tracker.log_summary({"metric": 1.0})
+    tracker.log_hyperparameters({"param": 1.0})
+    tracker.log_artifact("/tmp/profile", type="profile")
+    tracker.finish()
+
+
+def test_wandb_tracker_materializes_before_dynamic_stale_step_check(monkeypatch):
+    monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
+
+    import levanter.tracker.wandb as wandb_tracker_mod
+    from levanter.tracker.wandb import WandbTracker
+
+    converted = []
+
+    def fake_convert(value):
+        converted.append(value)
+        return value
+
+    class FakeRun:
+        step = 11
+
+        def log(self, metrics, *, step=None, commit=None):
+            raise AssertionError("stale metrics should not reach wandb")
+
+    monkeypatch.setattr(wandb_tracker_mod, "_convert_value_to_loggable_rec", fake_convert)
+    tracker = WandbTracker(FakeRun(), minimum_log_step=10)
+
+    tracker.log({"metric": 2.0}, step=10)
+
+    assert converted == [2.0]

@@ -5,7 +5,6 @@
 
 import numpy as np
 import pytest
-
 from marin.rl.curriculum import (
     Curriculum,
     CurriculumConfig,
@@ -869,7 +868,7 @@ def test_rollout_stats_dataclass():
     assert rollout_stats.episode_reward == 1.5
     assert rollout_stats.env_example_id == "example_123"
 
-    # Test that it's serializable (important for Ray)
+    # Test that it's serializable for distributed execution.
     from dataclasses import asdict
 
     stats_dict = asdict(rollout_stats)

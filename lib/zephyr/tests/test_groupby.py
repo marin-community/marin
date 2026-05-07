@@ -2,12 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for deduplicate and group_by operations."""
-import pyarrow as pa
-
 import hashlib
 
+import pyarrow as pa
 import pytest
-
 from zephyr import Dataset
 
 
@@ -171,6 +169,39 @@ def test_deduplicate_with_num_output_shards(zephyr_ctx):
     assert len(results) == 3
     ids = sorted([r["id"] for r in results])
     assert ids == [0, 1, 2]
+
+
+def test_group_by_num_output_shards_smaller_than_input(zephyr_ctx, tmp_path):
+    """``num_output_shards`` is authoritative even when the input has more shards.
+
+    Regression test for marin#5162: scatter writes records into ``num_output_shards``
+    buckets (``hash(key) % num_output_shards``), but the reduce stage previously
+    spawned ``max(input_shards, num_output_shards)`` tasks. The "extra" reduce
+    tasks ran on a ``shard_idx`` that scatter never wrote to and emitted empty
+    output files.
+    """
+    output_dir = tmp_path / "out"
+    output_pattern = str(output_dir / "data-{shard:05d}-of-{total:05d}.parquet")
+
+    ds = (
+        Dataset.from_list([{"id": i, "val": i} for i in range(60)])
+        .reshard(10)
+        .group_by(
+            key=lambda x: x["id"],
+            reducer=lambda k, items: next(iter(items)),
+            num_output_shards=3,
+        )
+        .write_parquet(output_pattern)
+    )
+
+    output_files = zephyr_ctx.execute(ds).results
+
+    assert len(output_files) == 3, (
+        f"expected 3 output files (= num_output_shards), got {len(output_files)}; "
+        "extra files come from reduce tasks that ran on padding shards"
+    )
+    for p in output_files:
+        assert "of-00003" in p, f"unexpected total in {p}"
 
 
 def test_group_by_with_hash_key_large(zephyr_ctx, large_document_dataset):
@@ -361,26 +392,18 @@ def test_group_by_non_vortex_serializable(zephyr_ctx):
     assert results[1] == {"key": "b", "value": frozenset([2])}
 
 
-def test_scatter_parquet_iterator_pickle_roundtrip(tmp_path):
-    """ScatterParquetIterator with is_pickled=True round-trips non-Arrow-serializable items."""
-    import pyarrow.parquet as pq
-
-    from zephyr.shuffle import ScatterParquetIterator, _make_pickle_envelope
+def test_scatter_file_iterator_pickle_roundtrip(tmp_path):
+    """ScatterFileIterator round-trips non-Arrow-serializable items (e.g. frozenset)."""
+    from zephyr.shuffle import ScatterFileIterator, _write_chunk_frame
 
     items = [frozenset([1, 2]), frozenset([3, 4, 5])]
-    envelope = _make_pickle_envelope(items, target_shard=0, chunk_idx=0)
-    batch = pa.RecordBatch.from_pylist(envelope)
+    frame = _write_chunk_frame(items)
 
-    path = str(tmp_path / "test.parquet")
-    pq.write_table(pa.Table.from_batches([batch]), path)
+    path = str(tmp_path / "test.shuffle")
+    with open(path, "wb") as f:
+        f.write(frame)
 
-    it = ScatterParquetIterator(
-        path=path,
-        shard_idx=0,
-        chunk_count=1,
-        is_pickled=True,
-        filesystem=pa.fs.LocalFileSystem(),
-    )
+    it = ScatterFileIterator(path=path, chunks=((0, len(frame)),))
     chunks = [list(chunk_iter) for chunk_iter in it.get_chunk_iterators()]
     assert len(chunks) == 1
     assert chunks[0] == items

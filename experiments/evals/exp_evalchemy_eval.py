@@ -2,21 +2,58 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Example experiment for running Evalchemy reasoning benchmarks.
+Script to evaluate any checkpoint on reasoning tasks using Evalchemy.
 
-Evalchemy (https://github.com/mlfoundations/evalchemy) provides specialized
-reasoning tasks including AIME24/25, MATH500, HumanEval+, MBPP+, and more.
+Supports math, science, code, and all suites. Can evaluate HuggingFace models
+or GCS checkpoints. Submit via Iris to run on a TPU cluster.
+
+Here are a couple of examples:
+
+    # Evaluate Qwen3-4B base model on math benchmarks
+    uv run iris --cluster=marin job run --no-wait \
+        --job-name eval-qwen3-4b-math \
+        --zone us-east5-a \
+        --memory 4GB --enable-extra-resources \
+        -e WANDB_ENTITY stanford-mercury \
+        -e WANDB_PROJECT my-project \
+        -- python experiments/evals/exp_evalchemy_eval.py \
+        --experiment Qwen_Qwen3-4B --checkpoint Qwen/Qwen3-4B --suite math
+
+    # Evaluate a GCS checkpoint on science benchmarks
+    uv run iris --cluster=marin job run --no-wait \
+        --job-name eval-n1-vr5-step200-science \
+        --zone us-east5-a \
+        --memory 4GB --enable-extra-resources \
+        -e WANDB_ENTITY stanford-mercury \
+        -e WANDB_PROJECT my-project \
+        -- python experiments/evals/exp_evalchemy_eval.py \
+        --experiment exp_sft_qwen3_4b_selfinstill_ot3_math53k_n1_vr5_round1 \
+        --suite science \
+        --checkpoint gs://marin-us-east5/checkpoints/\
+    exp_sft_qwen3_4b_selfinstill_ot3_math53k_n1_vr5_round1-422aae/hf/step-200
 """
+import argparse
+import sys
 
-from experiments.evals.evals import run_evalchemy_experiment
+from fray.cluster import ResourceConfig
+
 from experiments.evals.evalchemy_task_configs import (
     AIME24,
     AIME25,
+    AIME26,
     AMC23,
+    GPQA_DIAMOND,
     HMMT,
+    HUMANITYS_LAST_EXAM,
+    JEEBENCH,
+    LIVECODEBENCH,
+    LIVECODEBENCH_V5_OFFICIAL,
+    LIVECODEBENCH_V6_OFFICIAL,
     MATH500,
+    OLYMPIADBENCH,
+    OLYMPIADBENCH_PHYSICS,
 )
-from fray.cluster import ResourceConfig
+from experiments.evals.evals import run_evalchemy_experiment
 
 # =============================================================================
 # Model Configuration
@@ -27,14 +64,12 @@ from fray.cluster import ResourceConfig
 #   Per-seed:  evalchemy-{base_eval_run_name}[-step{N}]-{task}-seed{S}
 #   Aggregate: evalchemy-{base_eval_run_name}[-step{N}]-{task}-avg{X}seeds
 # Step suffix is auto-extracted from each checkpoint path if it contains step-NNNN.
-CHECKPOINTS: dict[str, list[str]] = {
+#
+# These defaults are overridden when --exp_name and --checkpoint are provided via CLI.
+DEFAULT_CHECKPOINTS: dict[str, list[str]] = {
     "exp2262pt2-qwen2.5-7b-instruct-finetuned-ot4-30k-math-qwq-32b-32768tokens": [
         "gs://marin-us-east5/checkpoints/exp2262pt2_sft_qwen2pt5_ot4_30k_math_qwq_32b_32768tokens-aaa2fa/hf/step-234/",
     ],
-    # Here is another example with a publicly released checkpoint on HF:
-    # None: [
-    #     "Qwen/Qwen3-8B",
-    # ],
 }
 
 # Whether to auto-discover the latest checkpoint in a training run directory.
@@ -50,10 +85,27 @@ SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
 # Each entry: (list of tasks, list of seeds).
 # Tasks in the same group share the same set of seeds.
 # Compile steps are automatically created for groups with >1 seed.
-TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
-    ([AIME24, AIME25, AMC23, HMMT], SEEDS[:5]),  # 5 seeds
-    ([MATH500], SEEDS[:1]),  # 1 seed
+
+# Seed counts per benchmark follow OpenThoughts (https://arxiv.org/pdf/2506.04178).
+MATH_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
+    ([AIME24, AIME25, AIME26, AMC23, HMMT], SEEDS[:10]),
+    ([MATH500, OLYMPIADBENCH], SEEDS[:1]),
 ]
+
+SCIENCE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
+    ([GPQA_DIAMOND, JEEBENCH, HUMANITYS_LAST_EXAM, OLYMPIADBENCH_PHYSICS], SEEDS[:3]),
+]
+
+CODE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
+    ([LIVECODEBENCH, LIVECODEBENCH_V5_OFFICIAL, LIVECODEBENCH_V6_OFFICIAL], SEEDS[:6]),
+    # ([CODEFORCES, CODEELO], SEEDS[:3]),
+]
+
+SUITE_TO_TASK_SEED_GROUPS: dict[str, list[tuple[list, list[int]]]] = {
+    "math": MATH_TASK_SEED_GROUPS,
+    "science": SCIENCE_TASK_SEED_GROUPS,
+    "code": CODE_TASK_SEED_GROUPS,
+}
 
 # =============================================================================
 # Generation Parameters
@@ -74,15 +126,30 @@ BASE_GENERATION_PARAMS = {
 # =============================================================================
 # Engine Configuration
 # =============================================================================
-# tensor_parallel_size: Number of TPU chips to use for tensor parallelism
-# v5p-8 has 4 chips, so we use tensor_parallel_size=4 to utilize all chips
+# tensor_parallel_size is derived from the TPU type at runtime (see below).
 # max_num_seqs: Batch size for parallel generation
 BATCH_SIZE = 256
-ENGINE_KWARGS = {
-    "tensor_parallel_size": 4,
-    "max_num_seqs": BATCH_SIZE,  # For vLLM: Enable batched generation for better throughput
-    "batch_size": BATCH_SIZE,  # For lm-eval: Submit all requests at once for batched inference
+
+# TPU type -> number of chips for tensor parallelism
+TPU_CHIP_COUNT = {
+    "v4-8": 4,
+    "v4-16": 8,
+    "v4-32": 16,
+    "v4-64": 32,
+    "v5p-8": 4,
+    "v5p-16": 8,
+    "v5p-32": 16,
+    "v5p-64": 32,
 }
+
+
+def determine_tensor_parallel_size(tpu_type: str) -> int:
+    """Return the number of TPU chips for a given TPU type."""
+    tp_size = TPU_CHIP_COUNT.get(tpu_type)
+    if tp_size is None:
+        raise ValueError(f"Unknown TPU type: {tpu_type}. Known: {list(TPU_CHIP_COUNT)}")
+    return tp_size
+
 
 # =============================================================================
 # Parallel Job Limit
@@ -98,12 +165,51 @@ MAX_PARALLEL_JOBS = 3
 # Main Execution
 # =============================================================================
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run Evalchemy reasoning benchmarks")
+    parser.add_argument("--experiment", type=str, default=None, help="Base eval run name for output paths and wandb")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint path (GCS path or HF model name)")
+    parser.add_argument(
+        "--suite",
+        type=str,
+        default="math",
+        choices=["math", "science", "code", "all"],
+        help="Eval suite to run (default: math)",
+    )
+    parser.add_argument(
+        "--resource",
+        type=str,
+        default="v5p-8",
+        help="TPU type for eval jobs (default: v5p-8)",
+    )
+    args, remaining = parser.parse_known_args()
+    sys.argv = [sys.argv[0], *remaining]
+
+    if args.checkpoint:
+        checkpoints = {args.experiment: [args.checkpoint]}
+    else:
+        parser.error("--checkpoint must be provided.")
+
+    if args.suite == "all":
+        suites = ["math", "science", "code"]
+    else:
+        suites = [args.suite]
+
+    engine_kwargs = {
+        "tensor_parallel_size": determine_tensor_parallel_size(args.resource),
+        "max_num_seqs": BATCH_SIZE,
+        "batch_size": BATCH_SIZE,
+    }
+
+    task_seed_groups = []
+    for suite in suites:
+        task_seed_groups.extend(SUITE_TO_TASK_SEED_GROUPS[suite])
+
     run_evalchemy_experiment(
-        checkpoints=CHECKPOINTS,
-        task_seed_groups=TASK_SEED_GROUPS,
+        checkpoints=checkpoints,
+        task_seed_groups=task_seed_groups,
         base_generation_params=BASE_GENERATION_PARAMS,
-        resource_config=ResourceConfig.with_tpu("v5p-8"),
-        engine_kwargs=ENGINE_KWARGS,
+        resource_config=ResourceConfig.with_tpu(args.resource),
+        engine_kwargs=engine_kwargs,
         apply_chat_template=True,
         discover_latest_checkpoint=DISCOVER_LATEST_CHECKPOINT,
         max_parallel_jobs=MAX_PARALLEL_JOBS,

@@ -3,6 +3,7 @@
 
 """Utilities for ingesting and querying JAX/xprof profile artifacts."""
 
+from marin.profiling.compare_bundle import ComparisonBundleResult, run_profile_comparison_bundle
 from marin.profiling.ingest import (
     DEFAULT_ARTIFACT_ALIAS,
     download_latest_profile_artifact_for_run,
@@ -10,7 +11,6 @@ from marin.profiling.ingest import (
     summarize_profile_artifact,
     summarize_trace,
 )
-from marin.profiling.compare_bundle import ComparisonBundleResult, run_profile_comparison_bundle
 from marin.profiling.publish import (
     PROFILE_SUMMARY_ARTIFACT_TYPE,
     publish_profile_summary_artifact,

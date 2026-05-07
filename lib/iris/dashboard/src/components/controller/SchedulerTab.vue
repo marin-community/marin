@@ -2,10 +2,12 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
-import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import type {
   GetSchedulerStateResponse,
   SchedulerUserBudget,
+  SchedulerBandGroup,
+  SchedulerRunningTask,
   ListUsersResponse,
   UserSummary,
   ListJobsResponse,
@@ -13,6 +15,7 @@ import type {
   JobQuery,
 } from '@/types/rpc'
 import { timestampMs, formatRelativeTime, bandDisplayName, bandColor } from '@/utils/formatting'
+import { DIVERGING_COLORS } from '@/types/status'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 
@@ -87,7 +90,7 @@ async function refreshAll() {
   await Promise.all([refreshScheduler(), refreshUsers(), fetchUnscheduledJobs()])
 }
 
-useAutoRefresh(refreshAll, 15_000)
+useAutoRefresh(refreshAll, DEFAULT_REFRESH_MS)
 onMounted(refreshAll)
 
 // -- Scheduler computed --
@@ -97,6 +100,62 @@ const TERMINAL_JOB_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_fa
 const userBudgets = computed<SchedulerUserBudget[]>(() => schedulerData.value?.userBudgets ?? [])
 
 const users = computed<UserSummary[]>(() => usersData.value?.users ?? [])
+
+const BANDS = ['PRIORITY_BAND_PRODUCTION', 'PRIORITY_BAND_INTERACTIVE', 'PRIORITY_BAND_BATCH'] as const
+type Band = typeof BANDS[number]
+
+// Per-user task counts per effective band, split by running vs pending.
+// Derived from scheduler pendingQueue + runningTasks (task-level, since band
+// is a per-task attribute after downgrades).
+interface BandBreakdown {
+  running: Record<Band, number>
+  pending: Record<Band, number>
+}
+
+function emptyBandBreakdown(): BandBreakdown {
+  const running = Object.fromEntries(BANDS.map(b => [b, 0])) as Record<Band, number>
+  const pending = Object.fromEntries(BANDS.map(b => [b, 0])) as Record<Band, number>
+  return { running, pending }
+}
+
+function bandBreakdownTotal(b: BandBreakdown): number {
+  return BANDS.reduce((acc, band) => acc + b.running[band] + b.pending[band], 0)
+}
+
+const userBandCounts = computed<Map<string, BandBreakdown>>(() => {
+  const out = new Map<string, BandBreakdown>()
+  const pending: SchedulerBandGroup[] = schedulerData.value?.pendingQueue ?? []
+  for (const group of pending) {
+    for (const task of group.tasks) {
+      const band = task.effectiveBand as Band
+      if (!BANDS.includes(band)) continue
+      const entry = out.get(task.userId) ?? emptyBandBreakdown()
+      entry.pending[band] += 1
+      out.set(task.userId, entry)
+    }
+  }
+  const running: SchedulerRunningTask[] = schedulerData.value?.runningTasks ?? []
+  for (const task of running) {
+    const band = task.effectiveBand as Band
+    if (!BANDS.includes(band)) continue
+    const entry = out.get(task.userId) ?? emptyBandBreakdown()
+    entry.running[band] += 1
+    out.set(task.userId, entry)
+  }
+  return out
+})
+
+// jobId -> effective band, derived from pending task entries. Used to annotate
+// the Pending Jobs table with the scheduling band for each job.
+const pendingJobBand = computed<Map<string, string>>(() => {
+  const out = new Map<string, string>()
+  for (const group of schedulerData.value?.pendingQueue ?? []) {
+    for (const task of group.tasks) {
+      if (!out.has(task.jobId)) out.set(task.jobId, task.effectiveBand)
+    }
+  }
+  return out
+})
 
 // Merge user stats with budget data
 interface MergedUser {
@@ -112,6 +171,7 @@ interface MergedUser {
   maxBand: string
   effectiveBand: string
   hasBudget: boolean
+  bands: BandBreakdown
 }
 
 const mergedUsers = computed<MergedUser[]>(() => {
@@ -153,6 +213,7 @@ const mergedUsers = computed<MergedUser[]>(() => {
       maxBand: budget?.maxBand ?? '',
       effectiveBand: budget?.effectiveBand ?? '',
       hasBudget: !!budget,
+      bands: userBandCounts.value.get(userId) ?? emptyBandBreakdown(),
     })
   }
 
@@ -163,10 +224,11 @@ const mergedUsers = computed<MergedUser[]>(() => {
 
 // -- Helpers --
 
-function utilizationColor(pct: number): string {
-  if (pct >= 100) return 'text-status-danger font-semibold'
-  if (pct >= 75) return 'text-status-warning'
-  return 'text-text-primary'
+function utilizationStyle(pct: number): Record<string, string> {
+  const clamped = Math.min(pct, 120)
+  const idx = Math.round((clamped / 120) * (DIVERGING_COLORS.length - 1))
+  const colorIdx = DIVERGING_COLORS.length - 1 - Math.max(0, Math.min(idx, DIVERGING_COLORS.length - 1))
+  return { color: DIVERGING_COLORS[colorIdx] }
 }
 
 const loading = computed(() => (schedulerLoading.value || usersLoading.value) && !schedulerData.value && !usersData.value)
@@ -206,6 +268,7 @@ const hasData = computed(() => schedulerData.value || usersData.value)
               <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Running</th>
               <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Pending</th>
               <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Running Tasks</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary" title="Running / pending tasks per effective priority band">By Band</th>
               <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Total Tasks</th>
               <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Spent</th>
               <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Limit</th>
@@ -230,6 +293,21 @@ const hasData = computed(() => schedulerData.value || usersData.value)
               <td class="px-3 py-2 text-[13px] text-right tabular-nums">
                 <span :class="user.runningTasks > 0 ? 'text-accent font-semibold' : ''">{{ user.runningTasks }}</span>
               </td>
+              <td class="px-3 py-2 text-[13px] whitespace-nowrap">
+                <template v-for="band in BANDS" :key="band">
+                  <span
+                    v-if="user.bands.running[band] || user.bands.pending[band]"
+                    class="mr-2 tabular-nums"
+                    :title="bandDisplayName(band) + ': ' + user.bands.running[band] + ' running / ' + user.bands.pending[band] + ' pending'"
+                  >
+                    <span :class="bandColor(band)">{{ bandDisplayName(band).charAt(0) }}</span>
+                    <span class="text-accent">{{ user.bands.running[band] }}</span>
+                    <span class="text-text-muted">/</span>
+                    <span :class="user.bands.pending[band] > 0 ? 'text-status-warning' : 'text-text-muted'">{{ user.bands.pending[band] }}</span>
+                  </span>
+                </template>
+                <span v-if="bandBreakdownTotal(user.bands) === 0" class="text-text-muted">-</span>
+              </td>
               <td class="px-3 py-2 text-[13px] text-right tabular-nums">{{ user.totalTasks }}</td>
               <td class="px-3 py-2 text-[13px] text-right tabular-nums">
                 {{ user.hasBudget ? user.budgetSpent : '-' }}
@@ -237,7 +315,7 @@ const hasData = computed(() => schedulerData.value || usersData.value)
               <td class="px-3 py-2 text-[13px] text-right tabular-nums">
                 {{ !user.hasBudget ? '-' : user.budgetLimit === '0' ? 'Unlimited' : user.budgetLimit }}
               </td>
-              <td class="px-3 py-2 text-[13px] text-right tabular-nums" :class="user.hasBudget ? utilizationColor(user.utilizationPercent) : ''">
+              <td class="px-3 py-2 text-[13px] text-right tabular-nums font-semibold" :style="user.hasBudget ? utilizationStyle(user.utilizationPercent) : {}">
                 {{ !user.hasBudget ? '-' : user.budgetLimit === '0' ? '-' : user.utilizationPercent.toFixed(1) + '%' }}
               </td>
               <td class="px-3 py-2 text-[13px]">
@@ -315,6 +393,7 @@ const hasData = computed(() => schedulerData.value || usersData.value)
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Job</th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">User</th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">State</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Priority</th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Pending Reason</th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Submitted</th>
             </tr>
@@ -333,6 +412,12 @@ const hasData = computed(() => schedulerData.value || usersData.value)
               <td class="px-3 py-2 text-[13px]">{{ job.jobId.split('/')[0] }}</td>
               <td class="px-3 py-2 text-[13px]">
                 <StatusBadge :status="job.state" size="sm" />
+              </td>
+              <td class="px-3 py-2 text-[13px]">
+                <span v-if="pendingJobBand.get(job.jobId)" :class="bandColor(pendingJobBand.get(job.jobId))">
+                  {{ bandDisplayName(pendingJobBand.get(job.jobId)) }}
+                </span>
+                <span v-else class="text-text-muted">-</span>
               </td>
               <td class="px-3 py-2 text-[13px] text-status-warning max-w-md truncate" :title="job.pendingReason ?? ''">
                 {{ job.pendingReason || '-' }}

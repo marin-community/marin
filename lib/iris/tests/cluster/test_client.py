@@ -9,10 +9,8 @@ both GCP and K8s providers via the ServiceTestHarness.
 
 import pytest
 from connectrpc.errors import ConnectError
-
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 
 from .conftest import ServiceTestHarness
 
@@ -53,12 +51,17 @@ def test_list_jobs_filter_by_state(harness: ServiceTestHarness):
     harness.drive_job_to_completion(done_id)
     pending_id = harness.submit("stays-pending")
 
-    succeeded = harness.service.list_jobs(controller_pb2.Controller.ListJobsRequest(state_filter="succeeded"), None)
+    succeeded = harness.service.list_jobs(
+        controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(state_filter="succeeded")),
+        None,
+    )
     succeeded_ids = {j.job_id for j in succeeded.jobs}
     assert done_id.to_wire() in succeeded_ids
     assert pending_id.to_wire() not in succeeded_ids
 
-    pending = harness.service.list_jobs(controller_pb2.Controller.ListJobsRequest(state_filter="pending"), None)
+    pending = harness.service.list_jobs(
+        controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(state_filter="pending")), None
+    )
     pending_ids = {j.job_id for j in pending.jobs}
     assert pending_id.to_wire() in pending_ids
     assert done_id.to_wire() not in pending_ids
@@ -70,7 +73,9 @@ def test_list_jobs_filter_by_name(harness: ServiceTestHarness):
     harness.submit("exp-b-job")
     other_id = harness.submit("other-job")
 
-    resp = harness.service.list_jobs(controller_pb2.Controller.ListJobsRequest(name_filter="exp-"), None)
+    resp = harness.service.list_jobs(
+        controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(name_filter="exp-")), None
+    )
     job_ids = {j.job_id for j in resp.jobs}
 
     assert other_id.to_wire() not in job_ids

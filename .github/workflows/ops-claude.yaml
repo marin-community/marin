@@ -1,0 +1,227 @@
+name: "Ops - Claude"
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude:
+    # Only run if comment/issue is from a repo writer (OWNER, MEMBER, or COLLABORATOR) and contains @claude
+    if: |
+      (github.event_name == 'issue_comment' &&
+       (github.event.comment.author_association == 'OWNER' ||
+        github.event.comment.author_association == 'MEMBER' ||
+        github.event.comment.author_association == 'COLLABORATOR') &&
+       contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' &&
+       (github.event.comment.author_association == 'OWNER' ||
+        github.event.comment.author_association == 'MEMBER' ||
+        github.event.comment.author_association == 'COLLABORATOR') &&
+       contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' &&
+       (github.event.review.author_association == 'OWNER' ||
+        github.event.review.author_association == 'MEMBER' ||
+        github.event.review.author_association == 'COLLABORATOR') &&
+       contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' &&
+       (github.event.issue.author_association == 'OWNER' ||
+        github.event.issue.author_association == 'MEMBER' ||
+        github.event.issue.author_association == 'COLLABORATOR') &&
+       (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          allowed_bots: 'claude[bot]'
+
+          # This is an optional setting that allows Claude to read CI results on PRs
+          additional_permissions: |
+            actions: read
+
+          claude_args: |
+            --model opus
+            --max-turns 250
+            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
+            --system-prompt "Always read and follow the guidelines in AGENTS.md before starting work. You always have the ability to commit and push your changes. Use your MCP tools if available, falling back to git and gh (which you have authorization for) if needed. Before submitting any changes: 1) Run ./infra/pre-commit.py --all-files --fix and fix any issues. 2) Run uv run pytest on tests relevant to your changes. Report on the test status when you provide an update. Always commit and push changes, even if you couldn't get the tests to pass. In any follow-up comments on issues or PRs, state how you tested your changes (which tests you ran and their results)."
+
+  triage:
+    if: |
+      github.event_name == 'issues' &&
+      github.event.action == 'opened' &&
+      (github.event.issue.author_association == 'OWNER' ||
+       github.event.issue.author_association == 'MEMBER' ||
+       github.event.issue.author_association == 'COLLABORATOR') &&
+      !contains(github.event.issue.body, '@claude') &&
+      !contains(github.event.issue.title, '@claude')
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Triage Issue
+        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          allowed_bots: 'claude[bot]'
+          additional_permissions: |
+            actions: read
+          prompt: |
+            Read AGENTS.md, .agents/skills/fix-issue/SKILL.md, and .agents/skills/pull-request/SKILL.md.
+            Then analyze issue #${{ github.event.issue.number }}.
+
+            ## Actionability check (do this first)
+
+            Before doing anything else, read the issue and decide whether it is
+            actionable. An actionable issue states what is broken or what
+            needs to be done in concrete terms, names the affected area
+            (file, module, command, or feature), and (for bugs) gives enough
+            detail to reproduce or to locate the problem in code. For task
+            requests, there must be a clear definition of done.
+
+            If the issue is too vague, missing reproduction steps, or has no
+            clear acceptance criteria, do NOT open a PR. Post a
+            comment listing exactly what additional information you need
+            (concrete reproduction steps, error messages, expected vs actual
+            behavior, file/module pointers, or a definition of done) and
+            stop. Do not guess at intent.
+
+            ## Comment management (critical)
+
+            You must use a SINGLE comment for all your progress updates. Follow this exact pattern:
+
+            1. Post your initial plan as a new comment:
+               `gh issue comment ${{ github.event.issue.number }} --body '🤖 **Plan:** ...'`
+
+            2. For ALL subsequent updates, edit that same comment in place:
+               `gh issue comment ${{ github.event.issue.number }} --edit-last --body '🤖 **Plan:** ...'`
+
+            NEVER post a second comment to update progress. Always use --edit-last after the first comment.
+            Check off completed items and add status notes as you progress.
+
+            Use GitHub checkbox syntax for your plan:
+            ```
+            🤖 **Plan:**
+            - [x] Completed step
+            - [ ] Pending step
+            ```
+
+            ## Respond based on scope
+
+            - **Small, self-contained bug fixes (<100 lines changed)**: open a PR following the fix-issue skill workflow.
+            - **Anything larger** (new features, multi-module changes, design work, research questions, >100 lines):
+              do NOT open a PR. Instead, update your comment with root cause analysis, relevant code links,
+              and a proposed approach for a human to review before implementation begins.
+
+            ## PR format (critical)
+
+            When opening a PR, you MUST follow .agents/skills/pull-request/SKILL.md exactly.
+            PR descriptions are plain text — no markdown headers, no bullet lists, no emoji,
+            no "## Summary" or "## Test plan" sections. Violations will be rejected.
+
+            Always produce output — either a PR or an analysis comment. Never silently exit.
+          claude_args: |
+            --model opus
+            --max-turns 250
+            --permission-mode acceptEdits
+            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
+            --system-prompt "You can commit and push changes. Use MCP tools if available, falling back to git and gh. Always commit and push, even if tests fail. Never post multiple comments — post one comment, then use --edit-last for all updates."
+
+  autofix:
+    if: |
+      github.event_name == 'pull_request_review' &&
+      (github.event.review.author_association == 'OWNER' ||
+       github.event.review.author_association == 'MEMBER' ||
+       github.event.review.author_association == 'COLLABORATOR') &&
+      contains(github.event.review.body, 'autofix') &&
+      !contains(github.event.review.body, '@claude')
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Apply Autofix
+        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          allowed_bots: 'claude[bot]'
+          prompt: |
+            PR: #${{ github.event.pull_request.number }}
+            REVIEW: ${{ github.event.review.body }}
+
+            A reviewer has requested autofix. Read AGENTS.md.
+
+            1. Fetch the full review with inline comments: `gh pr view ${{ github.event.pull_request.number }} --json reviews,comments`
+            2. Fetch inline PR review comments: `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments`
+            3. Apply ALL actionable changes from the review comments to the code.
+            4. Run ./infra/pre-commit.py --all-files --fix
+            5. Run uv run pytest -m 'not slow' on affected tests
+            6. Commit and push changes to the PR branch
+            7. Post a comment summarizing what was changed, prefixed with "🤖 Autofix:"
+          claude_args: |
+            --model claude-sonnet-4-6
+            --max-turns 100
+            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"

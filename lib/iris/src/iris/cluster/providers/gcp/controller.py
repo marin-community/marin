@@ -16,21 +16,22 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 
+from rigging.timing import ExponentialBackoff, retry_with_backoff
+
 from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
-from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account, ssh_key_file
+from iris.cluster.providers.gcp.workers import GcpWorkerProvider
+from iris.cluster.providers.remote_exec import resolve_current_os_login_user
 from iris.cluster.providers.types import (
     Labels,
     default_stop_all,
     find_free_port,
     wait_for_port,
 )
-from iris.cluster.providers.remote_exec import resolve_current_os_login_user
 from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
-from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 

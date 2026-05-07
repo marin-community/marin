@@ -5,14 +5,14 @@ import tempfile
 from collections.abc import Sequence
 
 import pytest
+from levanter.data.text import ChatProcessor
+from levanter.tokenizers import load_tokenizer
 
 from experiments.create_marin_tokenizer import (
     create_marin_tokenizer,
     load_llama3_tokenizer,
     run_all_tests,
 )
-from levanter.data.text import ChatProcessor
-from levanter.tokenizers import load_tokenizer
 
 
 @pytest.fixture()

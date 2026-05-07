@@ -301,6 +301,7 @@ class Qwen3Config(LlamaConfig):
     """Qwen-3 configuration (Llama architecture + QK-norm + Sliding Window)."""
 
     # TODO: add sliding window attention implementation
+    reference_checkpoint: str = "Qwen/Qwen3-0.6B"
     use_sliding_window: bool = False
     sliding_window: int = 4096  # Qwen-3 uses sliding window by default
 

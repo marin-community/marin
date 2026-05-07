@@ -9,7 +9,7 @@ Use this skill when you want the standard fast TPU debugging loop without wiring
 
 `scripts/iris/dev_tpu.py` reserves a TPU-backed worker through Iris, waits for the worker VM to come up, and lets you SSH into it or run commands directly against it.
 
-This is the preferred dev TPU workflow. Unlike the legacy Ray path, it does not create a persistent `~/.ssh/config` alias. It uses `gcloud` SSH and SCP against the worker that Iris assigned to the holder job.
+It uses `gcloud` SSH and SCP against the worker that Iris assigned to the holder job. There is no persistent `~/.ssh/config` alias.
 
 ## Critical concurrency rule
 

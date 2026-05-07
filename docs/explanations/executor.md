@@ -9,7 +9,7 @@ learn more about the conventions.
 An **experiment** is a sequence (really, a DAG) of steps, where each **step** is
 specified by the following:
 - **name**: an identifier describing the function (and its version)
-- **function**: a normal Python function or a [Ray](https://docs.ray.io) remote function (which enables massive parallelism)
+- **function**: a normal Python function, or a function wrapped with `remote()` to run as a distributed [Fray](https://github.com/marin-community/marin/tree/main/lib/fray) sub-job (which enables massive parallelism across the cluster)
 - **config**: the single argument to the function, which is a dataclass; fields of the config can refer to previous steps.
 
 A key decision in Marin is that data gets passed between steps by reading and writing to the filesystem.
@@ -71,23 +71,20 @@ has it into the local marin prefix, respecting the per-path transfer budget.
 - To adjust the global mirror budget default, set the `MARIN_MIRROR_BUDGET_GB`
   environment variable before the process starts.
 
-## Ray
+## Distributed execution (Fray + Iris)
 
-Recall that a step's function can either be a normal Python function or in most realistic cases,
-a [Ray](https://docs.ray.io/) remote function.
-Ray allows us to run a large computation distributed over a cluster and is
-generally used for large data processing tasks.  For example, we can break a large
-dataset into shards and create a Ray function to process each shard.
+Each step's function runs either directly in the executor driver process or,
+when the step requests accelerators or a special environment, as a separate
+Fray sub-job. Fray is Marin's abstraction for job/task scheduling; on shared
+infrastructure it dispatches to [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md).
 
-Ray packages up the code from the local directory and ships it off to the appropriate machine.
-The environment will have the following packages installed:
-- **Default packages**: installed on the Ray cluster (`dependencies` in
-  [`pyproject.toml`](https://github.com/marin-community/marin/blob/main/pyproject.toml)), which include fsspec, draccus, etc.
-- **Step-specific packages**: remote steps can specify
-  `pip_dependency_groups` via the `remote()` wrapper, a list of either (i) a key from
-  `project.optional-dependencies` in [`lib/marin/pyproject.toml`](https://github.com/marin-community/marin/blob/main/lib/marin/pyproject.toml) (e.g., `rl`), or (2) a
-  specific pip package.  This allows each step to have its own environment and
-  not interfere with other steps.
+Steps can declare environment extras via `remote()`:
+- **Default packages**: installed into the driver job from
+  [`pyproject.toml`](https://github.com/marin-community/marin/blob/main/pyproject.toml) (fsspec, draccus, etc.).
+- **Step-specific packages**: `remote()` accepts `pip_dependency_groups` — a list
+  of either (1) a key from `project.optional-dependencies` in
+  [`lib/marin/pyproject.toml`](https://github.com/marin-community/marin/blob/main/lib/marin/pyproject.toml) (e.g., `rl`), or (2) a specific pip
+  package. Each step runs in its own environment without interfering with others.
 
 For example, to install the dependencies specified in the
 `rl` extra and also uv pip install `google-cloud-logging`,
@@ -101,16 +98,17 @@ number_of_restarts = ExecutorStep(
 )
 ```
 
-Finally, to launch an experiment, use [`ray_run.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/run/ray_run.py), which
-launches jobs to the Ray cluster:
+To launch an experiment on the shared Iris cluster, submit the executor script
+as the entrypoint of a CPU-only Iris job. The script then uses `executor_main`
+to spawn the accelerated sub-jobs via Fray:
 
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py -- python experiments/tutorials/hello_world.py
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+  -- python -m experiments.tutorials.hello_world
 ```
 
-This script ensure that:
-- All the relevant libraries (specified above) are installed.
-- The working directory is set appropriately.
-- Any subpaths under submodules are appended to PYTHONPATH.
+See [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
+for the full Iris CLI reference, including `--no-wait`, log streaming, and
+job lifecycle commands.
 
 > Agents can use the `add-dataset` skill for a guide to dataset schema inspection and addition.

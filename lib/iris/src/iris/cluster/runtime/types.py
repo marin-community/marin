@@ -16,10 +16,10 @@ tasks are in the BUILDING state per worker, preventing resource exhaustion from
 too many concurrent uv sync operations.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from collections.abc import Callable
 from typing import Protocol
 
 from iris.cluster.bundle import BundleStore

@@ -3,8 +3,8 @@
 
 """Tests for ActorPool round-robin and broadcast functionality."""
 
-from iris.actor.resolver import FixedResolver
 from iris.actor.pool import ActorPool
+from iris.actor.resolver import FixedResolver
 from iris.actor.server import ActorServer
 
 

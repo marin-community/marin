@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useControllerRpc } from '@/composables/useRpc'
-import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { timestampMs, formatRelativeTime } from '@/utils/formatting'
 import MetricCard from '@/components/shared/MetricCard.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import type { GetKubernetesClusterStatusResponse, NodePoolStatus } from '@/types/rpc'
 
 const { data, loading, error, refresh } = useControllerRpc<GetKubernetesClusterStatusResponse>('GetKubernetesClusterStatus')
-useAutoRefresh(refresh, 15_000)
+useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
 onMounted(refresh)
 
 // -- Pod phase styling --

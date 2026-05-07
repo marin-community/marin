@@ -13,8 +13,8 @@ Integration tests with real GcpWorkerProvider are in test_autoscaler_integration
 import time
 
 import pytest
-
-from iris.cluster.controller.autoscaler import Autoscaler, DEFAULT_UNRESOLVABLE_TIMEOUT
+from iris.cluster.constraints import DeviceType, WellKnownAttribute
+from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Autoscaler
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
@@ -23,23 +23,27 @@ from iris.cluster.providers.types import (
     QuotaExhaustedError,
     SliceStatus,
 )
+from iris.cluster.types import WorkerStatus
+from iris.rpc import config_pb2, vm_pb2
+from iris.time_proto import duration_to_proto
+from rigging.timing import Duration, Timestamp
+
 from tests.cluster.providers.conftest import (
     FakeSliceHandle,
     make_mock_platform,
     make_mock_slice_handle,
     make_mock_worker_handle,
 )
-from iris.cluster.constraints import DeviceType, WellKnownAttribute
-from iris.cluster.types import WorkerStatus
-from iris.rpc import config_pb2, vm_pb2
-from iris.time_proto import duration_to_proto
-from rigging.timing import Duration, Timestamp
 
 from .conftest import (
     make_autoscaler,
     make_demand_entries,
-    make_big_demand_entries as _make_big_demand_entries,
     make_scale_group_config,
+)
+from .conftest import (
+    make_big_demand_entries as _make_big_demand_entries,
+)
+from .conftest import (
     mark_discovered_ready as _mark_discovered_ready,
 )
 
@@ -645,6 +649,33 @@ class TestAutoscalerStatusReporting:
         assert status.HasField("last_routing_decision")
         assert "test-group" in status.last_routing_decision.routed_entries
 
+    def test_pending_hints_and_routing_proto_are_cached_between_evaluates(self):
+        """Dashboard polls reuse one proto + hint dict per evaluate() (#4844).
+
+        get_job_status calls this per pending job on every dashboard refresh.
+        Rebuilding the status proto each time was measurably slow on busy
+        clusters; repeated calls should return the same cached objects, and a
+        new evaluate() must invalidate the cache.
+        """
+        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
+        group = ScalingGroup(config, make_mock_platform())
+        autoscaler = make_autoscaler({"test-group": group})
+
+        autoscaler.evaluate(make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8"))
+
+        # Cached: repeated reads return the same objects without rebuilding.
+        proto_first = autoscaler.get_last_routing_decision_proto()
+        hints_first = autoscaler.get_pending_hints()
+        assert proto_first is autoscaler.get_last_routing_decision_proto()
+        assert hints_first is autoscaler.get_pending_hints()
+        # get_status() reuses the same cached routing-decision proto.
+        assert autoscaler.get_status().last_routing_decision == proto_first
+
+        # Invalidated on next evaluate().
+        autoscaler.evaluate(make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8"))
+        assert autoscaler.get_last_routing_decision_proto() is not proto_first
+        assert autoscaler.get_pending_hints() is not hints_first
+
 
 class TestAutoscalerBootstrapLogs:
     """Tests for bootstrap log reporting."""
@@ -1099,8 +1130,7 @@ class TestPerGroupWorkerConfig:
         )
         base_wc.task_env["MARIN_PREFIX"] = "s3://bucket/marin"
         sg_config = make_scale_group_config(name="west-group", max_slices=5)
-        sg_config.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
-        sg_config.worker.attributes[WellKnownAttribute.PREEMPTIBLE] = "true"
+        sg_config.worker.attributes["custom-label"] = "west-value"
 
         group = ScalingGroup(sg_config, make_mock_platform())
         autoscaler = make_autoscaler({"west-group": group}, base_worker_config=base_wc)
@@ -1109,8 +1139,7 @@ class TestPerGroupWorkerConfig:
 
         assert wc is not None
         assert wc.docker_image == "test:latest"
-        assert wc.worker_attributes[WellKnownAttribute.REGION] == "us-west4"
-        assert wc.worker_attributes[WellKnownAttribute.PREEMPTIBLE] == "true"
+        assert wc.worker_attributes["custom-label"] == "west-value"
         assert wc.task_env["MARIN_PREFIX"] == "s3://bucket/marin"
         assert wc.worker_attributes["scale-group"] == "west-group"
         assert wc.accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
@@ -1146,7 +1175,7 @@ class TestPerGroupWorkerConfig:
     def test_returns_none_without_base(self):
         """Without a base worker config, returns None."""
         sg_config = make_scale_group_config(name="test-group", max_slices=5)
-        sg_config.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
+        sg_config.worker.attributes["custom-label"] = "value"
         group = ScalingGroup(sg_config, make_mock_platform())
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=None)
 
@@ -1162,14 +1191,14 @@ class TestPerGroupWorkerConfig:
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="west-group", max_slices=5)
-        sg_config.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
+        sg_config.worker.attributes["custom-label"] = "value"
 
         group = ScalingGroup(sg_config, make_mock_platform())
         autoscaler = make_autoscaler({"west-group": group}, base_worker_config=base_wc)
 
         autoscaler._per_group_worker_config(group)
 
-        assert WellKnownAttribute.REGION not in base_wc.worker_attributes
+        assert "custom-label" not in base_wc.worker_attributes
 
     def test_worker_attributes_injected(self):
         """Worker attributes are injected into WorkerConfig."""
@@ -1179,7 +1208,7 @@ class TestPerGroupWorkerConfig:
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
-        sg_config.worker.attributes[WellKnownAttribute.REGION] = "europe-west4"
+        sg_config.worker.attributes["team"] = "euw4"
 
         group = ScalingGroup(sg_config, make_mock_platform())
         autoscaler = make_autoscaler({"eu-group": group}, base_worker_config=base_wc)
@@ -1187,7 +1216,65 @@ class TestPerGroupWorkerConfig:
         wc = autoscaler._per_group_worker_config(group)
 
         assert wc is not None
-        assert wc.worker_attributes[WellKnownAttribute.REGION] == "europe-west4"
+        assert wc.worker_attributes["team"] == "euw4"
+
+    def test_worker_cache_dir_override_applied(self):
+        """WorkerSettings.cache_dir overrides the base WorkerConfig.cache_dir."""
+        base_wc = config_pb2.WorkerConfig(
+            docker_image="test:latest",
+            port=10001,
+            controller_address="controller:10000",
+            cache_dir="/dev/shm/iris",
+        )
+        sg_config = make_scale_group_config(name="cpu-group", max_slices=5)
+        sg_config.worker.cache_dir = "/var/lib/iris-cache"
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"cpu-group": group}, base_worker_config=base_wc)
+
+        wc = autoscaler._per_group_worker_config(group)
+
+        assert wc is not None
+        assert wc.cache_dir == "/var/lib/iris-cache"
+        # base is unchanged
+        assert base_wc.cache_dir == "/dev/shm/iris"
+
+    def test_worker_cache_dir_falls_through_when_unset(self):
+        """When WorkerSettings.cache_dir is empty, base cache_dir is preserved."""
+        base_wc = config_pb2.WorkerConfig(
+            docker_image="test:latest",
+            port=10001,
+            controller_address="controller:10000",
+            cache_dir="/dev/shm/iris",
+        )
+        sg_config = make_scale_group_config(name="tpu-group", max_slices=5)
+        sg_config.worker.attributes["custom-label"] = "value"
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"tpu-group": group}, base_worker_config=base_wc)
+
+        wc = autoscaler._per_group_worker_config(group)
+
+        assert wc is not None
+        assert wc.cache_dir == "/dev/shm/iris"
+
+    def test_derives_region_and_zone_from_scale_group_when_missing(self):
+        """Derived region and zone are injected when worker attrs omit them."""
+        base_wc = config_pb2.WorkerConfig(
+            docker_image="ghcr.io/marin-community/iris-worker:latest",
+            port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="east-group", max_slices=5, zones=["us-east5-a"])
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"east-group": group}, base_worker_config=base_wc)
+
+        wc = autoscaler._per_group_worker_config(group)
+
+        assert wc is not None
+        assert wc.worker_attributes[WellKnownAttribute.REGION] == "us-east5"
+        assert wc.worker_attributes[WellKnownAttribute.ZONE] == "us-east5-a"
 
 
 class TestGpuScaleGroupBugs:

@@ -1,4 +1,4 @@
-name: Marin - Build documentation
+name: "Marin - Docs"
 
 on:
   push:
@@ -19,8 +19,8 @@ jobs:
     outputs:
       should_run: ${{ steps.filter.outputs.relevant }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590  # v3
         id: filter
         with:
           filters: |
@@ -29,13 +29,13 @@ jobs:
               - 'mkdocs.yml'
               - '.github/workflows/marin-docs.yaml'
 
-  build-docs:
+  marin-docs:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6

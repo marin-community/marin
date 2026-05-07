@@ -11,7 +11,7 @@ from levanter.data.text import ChatProcessor
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 
-MODEL_NAME = "stanford-crfm/marin-tokenizer"
+MODEL_NAME = "marin-community/marin-tokenizer"
 
 ALT_TEMPLATE = """{{ bos_token }}
 {%- if enable_thinking is defined -%}

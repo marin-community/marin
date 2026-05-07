@@ -16,8 +16,17 @@ import re
 import threading
 from dataclasses import dataclass
 
+from rigging.timing import Duration, Timestamp
+
+from iris.cluster.providers._worker_base import RemoteExecWorkerBase
 from iris.cluster.providers.gcp.service import GcpService
 from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account, ssh_key_file, uses_os_login
+from iris.cluster.providers.remote_exec import (
+    DirectSshRemoteExec,
+    GceRemoteExec,
+    GcloudRemoteExec,
+    resolve_current_os_login_user,
+)
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -27,16 +36,8 @@ from iris.cluster.providers.types import (
     WorkerStatus,
 )
 from iris.cluster.types import get_tpu_topology
-from iris.cluster.providers._worker_base import RemoteExecWorkerBase
-from iris.cluster.providers.remote_exec import (
-    DirectSshRemoteExec,
-    GceRemoteExec,
-    GcloudRemoteExec,
-    resolve_current_os_login_user,
-)
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -374,6 +375,11 @@ class GcpSliceHandle:
             logger.info("Terminating TPU (async): %s", self._slice_id)
             self._gcp_service.tpu_delete(self._slice_id, self._zone)
 
+    def cleanup_bootstrap_failure(self) -> None:
+        """Clean up provider state after bootstrap fails."""
+        if self.is_queued_resource:
+            self.terminate()
+
 
 class GcpVmSliceHandle:
     """Handle to a single-VM GCE-backed slice."""
@@ -481,3 +487,6 @@ class GcpVmSliceHandle:
     def terminate(self, *, wait: bool = False) -> None:
         logger.info("Terminating VM slice: %s (vm=%s)", self._slice_id, self._vm_name)
         self._gcp_service.vm_delete(self._vm_name, self._zone, wait=wait)
+
+    def cleanup_bootstrap_failure(self) -> None:
+        """Clean up provider state after bootstrap fails."""

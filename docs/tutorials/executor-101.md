@@ -166,4 +166,4 @@ The complete code for this tutorial is available at: [experiments/tutorials/hell
 ## Next Steps
 
 - Train a [tiny language model](first-experiment.md) using Marin.
-- Learn about the [Executor framework](../explanations/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
+- Learn about the [Executor framework](../explanations/executor.md): how to manage Python libraries, run big parallel jobs via Fray, how versioning works, etc.

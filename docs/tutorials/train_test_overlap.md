@@ -33,7 +33,7 @@ The system uses a two-step process:
 
 - Make sure you've followed the [installation guide](installation.md) to do the basic installation.
 - Access to your training and evaluation datasets
-- Ray cluster set up (if running distributed)
+- Iris cluster access (if running distributed)
 
 ### Running on Existing Datasets
 

@@ -43,7 +43,7 @@ from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tok
 from levanter.utils.tree_utils import inference_mode
 
 
-MODEL_NAME = "stanford-crfm/marin-tokenizer"
+MODEL_NAME = "marin-community/marin-tokenizer"
 
 
 @pytest.fixture(scope="module")

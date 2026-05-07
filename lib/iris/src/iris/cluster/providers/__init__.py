@@ -25,4 +25,6 @@ from iris.cluster.providers.types import (
     default_stop_all,
     find_free_port,
     generate_slice_suffix,
+    port_is_open,
+    resolve_external_host,
 )

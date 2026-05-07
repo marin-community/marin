@@ -14,6 +14,7 @@ from collections.abc import Iterable
 
 from google.protobuf import json_format
 
+from iris.cluster.constraints import Constraint
 from iris.rpc import controller_pb2, job_pb2
 
 # Shared kwargs for MessageToDict so every call site is consistent.
@@ -54,11 +55,18 @@ def constraints_to_json(constraints: Iterable[job_pb2.Constraint]) -> str | None
     return json.dumps(items) if items else None
 
 
-def constraints_from_json(constraints_json: str | None) -> list[job_pb2.Constraint]:
-    """Deserialize a JSON array of constraints back to proto objects."""
+def constraints_from_json(constraints_json: str | None) -> list[Constraint]:
+    """Deserialize a JSON array of constraints to native Constraint objects.
+
+    Goes through proto for JSON parsing, then normalizes via Constraint.from_proto
+    (which strips/lowercases string values for case-insensitive comparison).
+    Native Constraint is the canonical hot-path type — protos only at serialization.
+    """
     if not constraints_json:
         return []
-    return [json_format.ParseDict(item, job_pb2.Constraint()) for item in json.loads(constraints_json)]
+    return [
+        Constraint.from_proto(json_format.ParseDict(item, job_pb2.Constraint())) for item in json.loads(constraints_json)
+    ]
 
 
 def reservation_to_json(request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
