@@ -2315,7 +2315,7 @@ class Controller:
             building_counts=building_counts,
         )
 
-    def register_kills(self, kb: KillBuffer) -> None:
+    def _register_kills(self, kb: KillBuffer) -> None:
         """Flush a KillBuffer after a clean transaction commit.
 
         Non-K8s providers track kills in the in-memory ``KillRegistry``; the
