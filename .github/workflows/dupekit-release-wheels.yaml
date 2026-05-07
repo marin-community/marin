@@ -41,7 +41,15 @@ jobs:
       version: ${{ steps.resolved.outputs.version }}
     steps:
       - uses: actions/checkout@v5
+      # Hoist user-supplied inputs into env so they reach the shell as
+      # variables, not as `${{ ... }}` template substitutions. Per GitHub's
+      # actions hardening guide, free-form inputs interpolated into a shell
+      # script are an injection vector even when the trigger requires write
+      # access.
       - id: pick
+        env:
+          INPUT_MODE: ${{ github.event.inputs.mode }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/dupekit-v* ]]; then
@@ -51,8 +59,8 @@ jobs:
             echo "mode=nightly" >> "$GITHUB_OUTPUT"
             echo "input_version=" >> "$GITHUB_OUTPUT"
           elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
-            echo "input_version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "mode=${INPUT_MODE}" >> "$GITHUB_OUTPUT"
+            echo "input_version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
           else
             echo "mode=manual" >> "$GITHUB_OUTPUT"
             echo "input_version=" >> "$GITHUB_OUTPUT"
@@ -60,13 +68,15 @@ jobs:
 
       # Resolve the version exactly once for the whole workflow run. Matrix
       # legs and the publish job all consume this output, so wheels and the
-      # sdist agree on a single version even if PyPI's "latest" advances
-      # mid-run.
+      # sdist agree on a single value.
       - id: resolved
+        env:
+          MODE: ${{ steps.pick.outputs.mode }}
+          INPUT_VERSION: ${{ steps.pick.outputs.input_version }}
         run: |
           python rust/dupekit/build_package.py \
-            --mode "${{ steps.pick.outputs.mode }}" \
-            ${{ steps.pick.outputs.input_version && format('--version {0}', steps.pick.outputs.input_version) || '' }} \
+            --mode "$MODE" \
+            --version "$INPUT_VERSION" \
             --resolve-only
 
   build:
@@ -97,7 +107,9 @@ jobs:
           path: dist/*
 
   publish:
-    if: github.event_name != 'pull_request'
+    # Manual mode produces local-version identifiers (`X.Y.Z+<sha>`) which PyPI
+    # rejects, so it's a build-only smoke regardless of how it was triggered.
+    if: github.event_name != 'pull_request' && needs.resolve.outputs.mode != 'manual'
     needs: [resolve, build]
     runs-on: ubuntu-latest
     environment: pypi-publish

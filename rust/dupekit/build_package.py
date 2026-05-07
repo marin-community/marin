@@ -10,15 +10,16 @@ marin-libs wheels - same trigger shape (schedule + tag + workflow_dispatch +
 PR-smoke), no `push: branches: [main]` recursion.
 
 Modes:
-    nightly  -- date-stamped patch above the highest known version
-                (max of Cargo.toml and the latest version on PyPI). Each
-                schedule run produces a never-before-published version, so
-                Cargo.toml never needs to be committed back to the repo.
+    nightly  -- `<bump_patch(Cargo.toml)>-dev.<GITHUB_RUN_ID>`. Run id makes
+                the value globally unique, so concurrent nightly runs (or a
+                manual nightly dispatch racing the cron) cannot collide.
+                Cargo.toml stays frozen; subsequent runs read the same base.
     stable   -- version supplied via --version (extracted from the tag in CI).
                 Cargo.toml is rewritten on disk so maturin builds with that
                 version; the change is not committed.
-    manual   -- builds with the Cargo.toml version verbatim plus a +<sha>
-                local-version suffix. Used for PR smoke and ad-hoc dev builds.
+    manual   -- `<Cargo.toml>+<sha>` (PEP 440 local version). Build-only
+                smoke for PRs and ad-hoc dev; PyPI rejects local-version
+                identifiers, so the publish job declines to run in this mode.
 
 Usage:
     python rust/dupekit/build_package.py --mode nightly --build linux
@@ -27,7 +28,6 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import platform
 import re
@@ -36,7 +36,6 @@ import subprocess
 import sys
 import tarfile
 import time
-import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -45,8 +44,6 @@ REPO_ROOT = DUPEKIT_DIR.parent.parent
 MANIFEST_PATH = DUPEKIT_DIR / "Cargo.toml"
 DIST_DIR = REPO_ROOT / "dist"
 TOOLS_DIR = REPO_ROOT / ".tools"
-
-PYPI_JSON_URL = "https://pypi.org/pypi/marin-dupekit/json"
 
 ZIG_VERSION = "0.15.2"
 # ziglang.org's own server is very slow (<0.1 MB/s); use a community mirror
@@ -185,44 +182,30 @@ def _parse_semver(version: str) -> tuple[int, int, int]:
     return int(parts[0]), int(parts[1]), int(parts[2])
 
 
-def _max_version(a: str, b: str) -> str:
-    return a if _parse_semver(a) >= _parse_semver(b) else b
-
-
-def _query_pypi_latest_version() -> str | None:
-    """Return the highest released version from PyPI, or None if the project doesn't exist yet."""
-    try:
-        with urllib.request.urlopen(PYPI_JSON_URL, timeout=15) as resp:
-            data = json.load(resp)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return None
-        raise
-
-    # info.version reflects the latest *non-yanked* release per PyPI's convention.
-    return data.get("info", {}).get("version")
-
-
 def _bump_patch(version: str) -> str:
     major, minor, patch = _parse_semver(version)
     return f"{major}.{minor}.{patch + 1}"
 
 
 def _resolve_nightly_version() -> str:
-    """Bump patch above max(Cargo.toml, latest on PyPI).
+    """Build a never-collides nightly version off Cargo.toml.
 
-    Reading PyPI is what lets Cargo.toml stay frozen between releases without
-    bumping into "version already published" rejections - the script always
-    advances past whatever's actually published, so subsequent runs don't need
-    Cargo.toml to be committed back to the repo.
+    Format is `<bumped_patch>-dev.<run_id>`:
+      - `<bumped_patch>` anticipates the next stable so dev versions sort
+        between the current Cargo version (last cut stable) and the next one.
+      - `<run_id>` is `GITHUB_RUN_ID` (globally unique per workflow run on
+        GitHub). Two concurrent nightly runs cannot collide on the same value
+        the way a deterministic patch+1 scheme can, and we no longer need to
+        query PyPI to figure out what's safe.
 
-    Plain `X.Y.Z` (no date suffix, no prerelease tag) keeps Cargo and PEP 440
-    happy without relying on maturin's semver→PEP 440 translation rules.
+    Cargo accepts `-dev.N` as a semver prerelease; maturin emits the wheel as
+    PEP 440 `<bumped_patch>.devN`, which uv/pip both treat as a pre-release of
+    the upcoming stable (so the floor pin in root pyproject.toml continues to
+    resolve to a stable, not a nightly).
     """
-    cargo = _read_cargo_version()
-    pypi = _query_pypi_latest_version()
-    base = _max_version(cargo, pypi) if pypi else cargo
-    return _bump_patch(base)
+    bumped = _bump_patch(_read_cargo_version())
+    run_id = os.environ.get("GITHUB_RUN_ID", "0")
+    return f"{bumped}-dev.{run_id}"
 
 
 def _resolve_manual_version() -> str:
