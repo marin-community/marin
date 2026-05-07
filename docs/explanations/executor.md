@@ -111,4 +111,25 @@ See [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/i
 for the full Iris CLI reference, including `--no-wait`, log streaming, and
 job lifecycle commands.
 
+## Submitting training jobs
+
+The standard recipe — `default_train(...)` to build an `ExecutorStep`, then
+`executor_main(steps=[...])` — produces a step the driver walks and dispatches
+to a worker. The worker reads the already-resolved trainer config and starts
+training.
+
+For runs where you would rather have the executor walk happen *inside* the
+training worker, use `experiments.defaults.train(...)` instead. It builds the
+same Levanter config, computes the output path locally, then submits a
+single Iris training job that calls `materialize` on the worker to resolve
+any embedded `ExecutorStep`s and `InputName`s. This puts the upstream
+resolution (e.g. tokenization) under the worker's regional `marin_prefix()`,
+so a cross-region preempt-and-resume does not have to drag tokenized data
+back across regions: the new worker re-tokenizes locally.
+
+Use `default_train` + `executor_main` when you want a normal experiment
+graph; use `train` for one-shot launches and sweep trials (see the
+[sweep tutorial](../tutorials/executor-sweeps.md)) where each child job
+should resolve its own dependencies in-region.
+
 > Agents can use the `add-dataset` skill for a guide to dataset schema inspection and addition.
