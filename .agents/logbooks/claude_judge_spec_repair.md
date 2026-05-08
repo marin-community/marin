@@ -1101,3 +1101,132 @@ The Anthropic batch discount saved ~$30 vs running the 6,060 calls synchronously
 2. **Investigate the 3 pathological residues** (avoid_abuse, comply_with_laws, sexual_content_involving_minors). These are not generator or scale problems — likely irreducible spec ambiguity. Hand inspection of judge reasoning text would clarify whether the disagreement is mechanical (different score scales applied) or substantive (different interpretations of the spec).
 
 3. **Bootstrap CIs on Δα.** Population means are clean but individual-statement Δα values for non-extreme cases (e.g. +0.05 to +0.15) are within plausible sampling noise on n=80. Adding bootstrap CIs would let us flag which Δα claims are real vs noise.
+
+---
+
+# Bare vs rubric — qualitative analysis (2026-05-08)
+
+After the full 46-statement Claude-batch run completed and we had per-statement
+Δα(rubric − bare) for the 3-judge ensemble, the next question was: WHEN should
+we use bare vs rubric, and WHY does the rubric *lower* agreement on some
+statements?
+
+Method: 4 Opus-4 subagents (free per project rule) over ~3,600 cells with full
+reasoning text:
+
+- Layer 1 (per judge): 3 parallel subagents — `judge_gpt.md`, `judge_gemini.md`,
+  `judge_claude.md`. Each subagent reads its judge's reasoning across 46
+  statements × 2 conditions × 4 representative cells per (statement, cond),
+  produces a behavioral analysis.
+- Layer 2 (cross-judge): 1 subagent — `rubric_paradox_synthesis.md`. Diagnostic
+  cells (where bare judges agreed within ±1 but rubric judges spread ≥2) on the
+  6 strongly-hurt + 3 strongly-helped statements.
+
+Inputs prepared via `e9_build_qualitative_inputs.py`, with reasoning text
+extracted from raw API dumps via `e9_extract_reasoning_from_raw.py` (the old
+`per_judgment.jsonl` had stats but not reasoning prose).
+
+## Per-judge behavioral findings
+
+| dimension | GPT-5.1 | Gemini-3-flash | Claude Sonnet 4.6 |
+|---|---|---|---|
+| Distribution shape | More graded; commits decisively | Bimodal (66% 5s) | Bipolar (32-42% extremes, 11% at {3}) |
+| Reasoning depth | Specific, parses artifacts, quotes spec | Shallow ~50 words, surface heuristics | Verbose, hedged, weighs clauses |
+| "unless X" override clauses | **Systematically ignores them** | Over-honors "user authorized" framings | Reads spec spirit case-by-case |
+| Meta-task framing | Reads correctly | Often misses | Reads under bare, MISSES under rubric |
+| Self-preference bias | None detected (contradicts earlier finding) | n/a | n/a |
+| Hate-content nuance | Splits generation vs depiction (unique) | Surface-pattern only | Holistic context |
+| Truncation/artifact integrity | Catches it | Misses it | Catches it |
+| Distinctive failure under rubric | Hurts on override-bearing specs (Δα = −0.169 on `refusal_style`) | Literal first-anchor matching, ignoring competing anchors | Self-contradicts on meta-prompts (refusal_style scen=14: bare=5, rubric=1) |
+
+**Three distinct error modes per judge**, all activated differently by rubric language. This decomposition is the cleanest mechanistic explanation we have for cross-judge disagreement on this dataset.
+
+## Five mechanisms of "why rubric hurts agreement" (Layer 2 synthesis)
+
+| # | category | mechanism | type | exemplar |
+|---|---|---|---|---|
+| A | Carve-out narrowing | Rubric silently narrows "unless X" exceptions in the spec (e.g., adds "light-hearted" qualifier, over-reads "agenda of its own") | compilation drift | `avoid_abuse`, `no_agenda` |
+| B | Anchor-introduced gradient | Binary specs ("must not engage in illegal activity") forced onto 1-5; intermediate anchors invite disagreement | compilation drift | `comply_with_laws` |
+| C | Anchor-as-textual-feature checklist | Explicit anchor descriptors prime feature-matching cognition that flattens meta-task structure | interpretation drift | `refusal_style` (bad-example cell) |
+| D | Dimensionality reduction | Multi-criterion specs collapsed to a single 1-5 axis; when criteria contradict, judges pick differently | compilation drift | `be_empathetic`, `no_agenda` |
+| E | Latent ambiguity exposure | Rubric makes salient sub-criteria the spec mentions but doesn't weight | interpretation drift | `protect_privileged_messages` |
+
+A/B/D = the GPT-5.1 rubric compiler's fault (fixable by re-compiling). C/E = judges read the same anchor language differently (less fixable by rubric tweaks alone).
+
+## The "judge capture" finding
+
+**Different judges are differentially captured by different drift mechanisms.** GPT is captured by `avoid_abuse`'s "light-hearted" narrowing; Gemini by `no_agenda`'s "fully focused on the user's request"; Claude by `sexual_content_involving_minors`'s Anchor 5. There is no single "rubric-deferential" judge — capture is statement-specific, suggesting the rubric drifts interact with each model's idiomatic priors.
+
+This means "fix the judges" or "fix the rubric" are both wrong framings — it's the **interaction** that's pathological. Implication: even a tightened rubric won't eliminate interpretation drift entirely; we need interaction-aware design.
+
+## Decision rule
+
+Default to **bare**. Use a rubric only when the spec is:
+1. Single-dimensional (one criterion, not several competing ones)
+2. Naturally graded (a 1-5 spectrum exists in the underlying behavior)
+3. Concrete-example-rich (the spec already supplies anchors for the rubric to formalize)
+4. Free of "unless X" carve-outs (the rubric tends to silently narrow these)
+
+For binary specs and carve-out-bearing specs, judge bare or with manually-audited rubrics. The asymmetric severity of the rubric-hurts (Δα < −0.10 on 5 statements where they're most fragile) outweighs the +0.012 mean improvement.
+
+## Files
+
+- Inputs (~900KB × 3 + 200KB): `claude_subagents/bare_vs_rubric_2026_05_08/inputs/`
+- Per-judge analyses (~5.5-6.4K words each): `judge_<gpt|gemini|claude>.md`
+- Cross-judge synthesis (~7.2K words): `rubric_paradox_synthesis.md`
+- Reasoning enrichment script: `e9_extract_reasoning_from_raw.py` → `per_judgment_reasoning.jsonl` (11,032 rows)
+
+---
+
+# Reproducible rubric-poison cell detection (2026-05-08)
+
+The qualitative analysis (above) identified 5 mechanisms of "why rubric hurts agreement" but the diagnosis was per-cell anecdote-driven. To make rubric revision systematic and reproducible, we need a deterministic ranking of which cells contribute most to driving Δα negative on a given statement.
+
+## The metric — per-cell pairwise variance contribution
+
+Krippendorff α (interval) is built from within-cell pairwise squared deviations. Per-cell influence on Δα reduces to:
+
+```
+Δpwv(c) = rubric_pwv(c) − bare_pwv(c)
+where pwv(c) = Σ_{i<j} (score_i − score_j)²    over the 3 judges
+```
+
+Cells with the largest **positive** Δpwv are the ones where the rubric introduced disagreement that didn't exist under bare. Three integers per condition, one subtraction, one ranking.
+
+This metric is:
+- Fully deterministic (no randomness, no choice of test statistic)
+- Reproducible by any reviewer with the data
+- Equivalent up to a tiny correction (sub-1% on n=80) to the formal jackknife influence on α
+
+## The pipeline
+
+1. **Rank** all cells in statement s by Δpwv(c) descending. Take top-K (K=10-12).
+2. **Per-anchor diagnosis** — three signals identify which anchor language is differentially activated:
+   - **Modal score**: which rubric score did most judges land on?
+   - **Divergence pair**: in (gpt=4, gemini=1, claude=2), the boundary between Anchor 1 and Anchor 4 is the locus
+   - **Cited rubric quotes**: parse the `rubric_quotes` field — which anchor's text did each judge actually paste?
+3. **Outlier-judge analysis**: track which judge is the divergence source per cell. If one judge is the outlier in >70% of cells, the issue is judge-prior leakage, not rubric language alone.
+4. **Generator/scenario stratification**: confounder check — is Δpwv inflated by generator difficulty rather than rubric content?
+
+## The iterative loop (cost: ~$5 per statement to fix)
+
+```
+1. Compute Δpwv ranking + per-anchor table (free, deterministic)
+2. Subagent rewrites anchor language using top-K cells as inputs (free)
+3. Re-judge ONLY top-K with revised rubric (~$0.40 with batch)
+4. Recompute Δpwv on top-K. If down → continue. If new outliers → iterate.
+5. Once stable on top-K, full re-judge of statement (~$3 with batch)
+6. Verify population-level Δα improved
+```
+
+The killer feature: targeted re-judging of K=10 cells lets us validate fixes without paying for full-statement re-runs each iteration.
+
+## Confounders to control for
+
+- **Bare difficulty**: cells with high `bare_pwv` are inherently hard. Compute residualized Δpwv after regressing on bare_pwv to separate "rubric introduces NEW disagreement" from "this cell was always hard."
+- **Scenario stratum**: stratify by scenario_idx; if top-K is dominated by 2-3 scenarios, that's a corpus design issue, not the rubric.
+- **Judge prior leakage**: per-judge outlier rate within rubric-poison cells. >70% concentration on one judge = the rubric isn't being read uniformly.
+
+## Implementation
+
+`experiments/posttrain/disagreement_primitive/e9_rubric_poison_rank.py`. Outputs per-statement reports to `.agents/logbooks/rubric_poison_<sid>.md`. First-pass target: the 5 strongly-hurt statements (refusal_style, no_agenda, comply_with_laws, avoid_abuse, sexual_content_involving_minors).
