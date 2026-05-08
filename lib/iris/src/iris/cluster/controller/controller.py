@@ -2322,8 +2322,16 @@ class Controller:
                 req.attempt_id = row.attempt_id
                 starts[row.worker_id].append(req)
                 attempt_by_worker_task[(row.worker_id, row.task_id.to_wire())] = row.attempt_id
-            else:
-                expected[row.worker_id].append(RunningTaskEntry(task_id=row.task_id, attempt_id=row.attempt_id))
+            # ASSIGNED rows go into ``expected`` too so PollTasks reports
+            # current state. The worker's BUILDING push is best-effort
+            # (worker.py:_on_state_change drops RPC failures); poll is the
+            # only resilient recovery channel for ASSIGNED -> BUILDING.
+            # ``start_tasks`` runs synchronously before ``poll_workers`` in
+            # the same tick (``asyncio.run`` + serial calls below), so
+            # ``submit_task`` has populated the worker's task table by the
+            # time PollTasks lands and ``_missing_task_status`` cannot fire
+            # for rows we just sent in StartTasks.
+            expected[row.worker_id].append(RunningTaskEntry(task_id=row.task_id, attempt_id=row.attempt_id))
 
         # ── Phase 2: RPC fan-out ──────────────────────────────────────────
         start_jobs = [(wid, addresses[wid], reqs) for wid, reqs in starts.items() if reqs and addresses.get(wid)]

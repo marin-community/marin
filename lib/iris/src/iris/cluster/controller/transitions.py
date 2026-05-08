@@ -2420,10 +2420,18 @@ class ControllerTransitions:
     ) -> DirectProviderBatch:
         """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
-        Promotes up to ``max_promotions`` PENDING tasks to ASSIGNED (NULL
-        worker_id), builds RunTaskRequest for each, and collects:
-        - Newly promoted tasks -> tasks_to_run
-        - Already ASSIGNED/BUILDING/RUNNING tasks with NULL worker_id -> running_tasks
+        Builds RunTaskRequest for two row classes:
+        - Up to ``max_promotions`` PENDING rows, each promoted to ASSIGNED
+          with a fresh attempt_id.
+        - All ASSIGNED+null_worker rows whose pod creation may not have landed
+          (controller crashed between assign-commit and ``provider.sync``, or
+          the prior ``_apply_pod`` errored). ``kubectl apply`` is idempotent;
+          re-issuing for a row whose pod already exists is a no-op.
+
+        Already-executing rows (BUILDING/RUNNING with null worker) populate
+        ``running_tasks`` for poll. ASSIGNED rows are deliberately excluded
+        from the poll set so a not-yet-created pod doesn't trip the
+        ``Pod not found`` grace path.
 
         Kill targets are not enqueued: producing transitions move
         ``tasks.state`` directly to terminal, and the K8s provider's pod
@@ -2431,15 +2439,16 @@ class ControllerTransitions:
         next sync.
         """
         now_ms = Timestamp.now().epoch_ms()
-
-        newly_promoted: set[str] = set()
         tasks_to_run: list[job_pb2.RunTaskRequest] = []
 
-        pending_rows = self._store.tasks.list_pending_for_direct_provider(cur, max_promotions)
+        # Snapshot redrive set BEFORE the PENDING promotion loop so newly-
+        # promoted rows (which become ASSIGNED+null_worker mid-transaction)
+        # don't get dispatched twice.
+        redrive_rows = self._store.tasks.list_assigned_null_worker_for_direct_provider(cur)
 
+        pending_rows = self._store.tasks.list_pending_for_direct_provider(cur, max_promotions)
         for row in pending_rows:
             attempt_id = row.current_attempt_id + 1
-
             self._store.tasks.assign(
                 cur,
                 self._store.attempts,
@@ -2449,35 +2458,21 @@ class ControllerTransitions:
                 attempt_id,
                 now_ms,
             )
+            tasks_to_run.append(self._build_run_request(cur, row, attempt_id))
 
-            entrypoint = proto_from_json(row.entrypoint_json, job_pb2.RuntimeEntrypoint)
-            # Load inline workdir files from the job_workdir_files table.
-            for filename, data in self._store.jobs.get_workdir_files(cur, row.job_id).items():
-                entrypoint.workdir_files[filename] = data
+        # Redrive: pods for these rows may not exist yet (crash between
+        # assign-commit and apply, or apply errored last cycle). `kubectl
+        # apply` is idempotent so re-issuing for a row whose pod is already
+        # there is a no-op.
+        for row in redrive_rows:
+            tasks_to_run.append(self._build_run_request(cur, row, row.current_attempt_id))
 
-            run_req = job_pb2.RunTaskRequest(
-                task_id=row.task_id.to_wire(),
-                num_tasks=row.num_tasks,
-                entrypoint=entrypoint,
-                environment=proto_from_json(row.environment_json, job_pb2.EnvironmentConfig),
-                bundle_id=row.bundle_id,
-                resources=row.resources,
-                ports=json.loads(row.ports_json),
-                attempt_id=attempt_id,
-                constraints=[c.to_proto() for c in constraints_from_json(row.constraints_json)],
-                task_image=row.task_image,
-            )
-            # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
-            if row.timeout_ms is not None and row.timeout_ms > 0:
-                run_req.timeout.milliseconds = row.timeout_ms
-            tasks_to_run.append(run_req)
-            newly_promoted.add(row.task_id.to_wire())
-
-        # Snapshot already-running tasks with NULL worker_id (excluding newly promoted).
+        # Poll only EXECUTING rows. ASSIGNED rows go through dispatch above
+        # so we don't poll for a pod that may not exist yet.
         running_rows = self._store.tasks.list_active(
             cur,
             TaskScope(null_worker=True),
-            states=ACTIVE_TASK_STATES,
+            states=EXECUTING_TASK_STATES,
             order_by_task_id=True,
         )
         running_tasks = [
@@ -2486,13 +2481,41 @@ class ControllerTransitions:
                 attempt_id=row.current_attempt_id,
             )
             for row in running_rows
-            if row.task_id.to_wire() not in newly_promoted
         ]
 
         return DirectProviderBatch(
             tasks_to_run=tasks_to_run,
             running_tasks=running_tasks,
         )
+
+    def _build_run_request(
+        self,
+        cur: TransactionCursor,
+        row,
+        attempt_id: int,
+    ) -> job_pb2.RunTaskRequest:
+        """Assemble a RunTaskRequest for a direct-provider dispatch row."""
+        entrypoint = proto_from_json(row.entrypoint_json, job_pb2.RuntimeEntrypoint)
+        # Load inline workdir files from the job_workdir_files table.
+        for filename, data in self._store.jobs.get_workdir_files(cur, row.job_id).items():
+            entrypoint.workdir_files[filename] = data
+
+        run_req = job_pb2.RunTaskRequest(
+            task_id=row.task_id.to_wire(),
+            num_tasks=row.num_tasks,
+            entrypoint=entrypoint,
+            environment=proto_from_json(row.environment_json, job_pb2.EnvironmentConfig),
+            bundle_id=row.bundle_id,
+            resources=row.resources,
+            ports=json.loads(row.ports_json),
+            attempt_id=attempt_id,
+            constraints=[c.to_proto() for c in constraints_from_json(row.constraints_json)],
+            task_image=row.task_image,
+        )
+        # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
+        if row.timeout_ms is not None and row.timeout_ms > 0:
+            run_req.timeout.milliseconds = row.timeout_ms
+        return run_req
 
     def apply_direct_provider_updates(self, cur: TransactionCursor, updates: list[TaskUpdate]) -> TxResult:
         """Apply a batch of task state updates from a KubernetesProvider.

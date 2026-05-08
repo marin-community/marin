@@ -125,22 +125,57 @@ def test_drain_includes_workdir_files(state):
     assert run_req.entrypoint.workdir_files["_callable_runner.py"] == b"print('hello')"
 
 
-def test_drain_skips_already_assigned(state):
-    """Already ASSIGNED tasks appear in running_tasks, not tasks_to_run."""
-    [task_id] = submit_direct_job(state, "drain-skip")
+def test_drain_redrives_assigned_null_worker(state):
+    """ASSIGNED+null-worker rows are redriven into ``tasks_to_run`` on each
+    cycle (idempotent ``kubectl apply``), so a controller crash between the
+    promote-commit and the pod-apply still recovers. They are excluded from
+    ``running_tasks`` because their pod may not yet exist — polling would
+    otherwise trip the ``Pod not found`` grace path."""
+    [task_id] = submit_direct_job(state, "drain-redrive")
 
-    # First drain promotes to ASSIGNED.
+    # First drain promotes PENDING -> ASSIGNED, builds a RunTaskRequest.
     with state._store.transaction() as cur:
         batch1 = state.drain_for_direct_provider(cur)
     assert len(batch1.tasks_to_run) == 1
+    assert batch1.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch1.tasks_to_run[0].attempt_id == 0
     assert len(batch1.running_tasks) == 0
 
-    # Second drain: task is already ASSIGNED, so appears only in running_tasks.
+    # Second drain (simulates a crash between assign-commit and provider.sync,
+    # or a transient apply failure): task is still ASSIGNED+null-worker, so it
+    # is redriven in tasks_to_run with the same attempt_id and is NOT in
+    # running_tasks.
     with state._store.transaction() as cur:
         batch2 = state.drain_for_direct_provider(cur)
+    assert len(batch2.tasks_to_run) == 1
+    assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch2.tasks_to_run[0].attempt_id == 0
+    assert len(batch2.running_tasks) == 0
+
+
+def test_drain_executing_goes_to_running_tasks(state):
+    """BUILDING/RUNNING rows with null worker land in running_tasks (poll set),
+    not tasks_to_run."""
+    [task_id] = submit_direct_job(state, "drain-running")
+
+    with state._store.transaction() as cur:
+        batch1 = state.drain_for_direct_provider(cur)
+    attempt_id = batch1.tasks_to_run[0].attempt_id
+
+    # Provider reports the pod has reached RUNNING.
+    with state._store.transaction() as cur:
+        state.apply_direct_provider_updates(
+            cur,
+            [TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING)],
+        )
+
+    with state._store.transaction() as cur:
+        batch2 = state.drain_for_direct_provider(cur)
+
     assert len(batch2.tasks_to_run) == 0
     assert len(batch2.running_tasks) == 1
     assert batch2.running_tasks[0].task_id == task_id
+    assert batch2.running_tasks[0].attempt_id == attempt_id
 
 
 # =============================================================================

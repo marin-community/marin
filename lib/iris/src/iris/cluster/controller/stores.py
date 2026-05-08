@@ -597,13 +597,14 @@ def _decode_active_task_row(row) -> ActiveTaskRow:
 
 @dataclass(frozen=True, slots=True)
 class PendingDispatchRow:
-    """Scheduling payload for a pending task awaiting direct-provider promotion.
+    """Scheduling payload for a task being dispatched to a direct provider.
 
     Unlike :class:`ActiveTaskRow`, this row carries the full serialized
     runtime configuration (entrypoint / environment / ports / constraints
     / task_image / timeout) so the caller can assemble a
     ``RunTaskRequest``. Kept separate so other active-task queries don't
-    pay for loading these JSON blobs.
+    pay for loading these JSON blobs. Used for both PENDING-promotion and
+    ASSIGNED-redrive paths (see ``TaskStore.list_*_for_direct_provider``).
     """
 
     task_id: JobName
@@ -618,6 +619,37 @@ class PendingDispatchRow:
     constraints_json: str | None
     task_image: str
     timeout_ms: int | None
+
+
+_DISPATCH_PROJECTION = (
+    "t.task_id, t.job_id, t.current_attempt_id, j.num_tasks, "
+    "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
+    "jc.entrypoint_json, jc.environment_json, jc.bundle_id, jc.ports_json, "
+    "jc.constraints_json, jc.task_image, jc.timeout_ms"
+)
+
+
+def _decode_dispatch_row(row) -> PendingDispatchRow:
+    timeout_ms = row["timeout_ms"]
+    return PendingDispatchRow(
+        task_id=JobName.from_wire(str(row["task_id"])),
+        job_id=JobName.from_wire(str(row["job_id"])),
+        current_attempt_id=int(row["current_attempt_id"]),
+        num_tasks=int(row["num_tasks"]),
+        resources=resource_spec_from_scalars(
+            int(row["res_cpu_millicores"]),
+            int(row["res_memory_bytes"]),
+            int(row["res_disk_bytes"]),
+            row["res_device_json"],
+        ),
+        entrypoint_json=str(row["entrypoint_json"]),
+        environment_json=str(row["environment_json"]),
+        bundle_id=str(row["bundle_id"]),
+        ports_json=str(row["ports_json"]),
+        constraints_json=row["constraints_json"],
+        task_image=str(row["task_image"]),
+        timeout_ms=int(timeout_ms) if timeout_ms is not None else None,
+    )
 
 
 class JobStore:
@@ -1180,40 +1212,30 @@ class TaskStore:
         if limit <= 0:
             return []
         rows = tx.fetchall(
-            "SELECT t.task_id, t.job_id, t.current_attempt_id, j.num_tasks, "
-            "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
-            "jc.entrypoint_json, jc.environment_json, jc.bundle_id, jc.ports_json, "
-            "jc.constraints_json, jc.task_image, jc.timeout_ms "
+            f"SELECT {_DISPATCH_PROJECTION} "
             f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id {JOB_CONFIG_JOIN} "
             "WHERE t.state = ? AND j.is_reservation_holder = 0 "
             "LIMIT ?",
             (job_pb2.TASK_STATE_PENDING, limit),
         )
-        result: list[PendingDispatchRow] = []
-        for row in rows:
-            timeout_ms = row["timeout_ms"]
-            result.append(
-                PendingDispatchRow(
-                    task_id=JobName.from_wire(str(row["task_id"])),
-                    job_id=JobName.from_wire(str(row["job_id"])),
-                    current_attempt_id=int(row["current_attempt_id"]),
-                    num_tasks=int(row["num_tasks"]),
-                    resources=resource_spec_from_scalars(
-                        int(row["res_cpu_millicores"]),
-                        int(row["res_memory_bytes"]),
-                        int(row["res_disk_bytes"]),
-                        row["res_device_json"],
-                    ),
-                    entrypoint_json=str(row["entrypoint_json"]),
-                    environment_json=str(row["environment_json"]),
-                    bundle_id=str(row["bundle_id"]),
-                    ports_json=str(row["ports_json"]),
-                    constraints_json=row["constraints_json"],
-                    task_image=str(row["task_image"]),
-                    timeout_ms=int(timeout_ms) if timeout_ms is not None else None,
-                )
-            )
-        return result
+        return [_decode_dispatch_row(row) for row in rows]
+
+    def list_assigned_null_worker_for_direct_provider(self, tx: Tx) -> list[PendingDispatchRow]:
+        """Return ASSIGNED+null-worker rows with full runtime payload, for redrive.
+
+        Used by the direct-provider drain to rebuild ``RunTaskRequest`` for
+        rows whose pod creation never landed — the controller crashed between
+        the drain commit and ``provider.sync``, or the prior ``_apply_pod``
+        call errored out. ``kubectl apply`` is idempotent, so re-issuing for
+        a row whose pod already exists is a no-op.
+        """
+        rows = tx.fetchall(
+            f"SELECT {_DISPATCH_PROJECTION} "
+            f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id {JOB_CONFIG_JOIN} "
+            "WHERE t.state = ? AND t.current_worker_id IS NULL AND j.is_reservation_holder = 0",
+            (job_pb2.TASK_STATE_ASSIGNED,),
+        )
+        return [_decode_dispatch_row(row) for row in rows]
 
     # -- Writes --------------------------------------------------------------
 
@@ -1641,9 +1663,12 @@ class TaskAttemptStore:
 
         Yields one row per (worker, task) where the task is in
         ASSIGNED/BUILDING/RUNNING and the bound attempt is the task's current
-        attempt. The reconcile loop splits these into:
-          * task_state == ASSIGNED → start payload (excluded from expected_tasks)
-          * task_state IN (BUILDING, RUNNING) → expected_tasks entry
+        attempt. The reconcile loop uses these rows for both PollTasks
+        (every row goes into ``expected_tasks`` so the worker reports current
+        state) and StartTasks (only ASSIGNED rows produce a RunTaskRequest).
+        ASSIGNED rows are included in ``expected_tasks`` because the worker's
+        state-change push is best-effort; PollTasks is the only resilient
+        channel for ASSIGNED → BUILDING transitions.
 
         Drives from ``task_attempts`` via ``idx_task_attempts_live_workerbound``
         (partial index: ``worker_id IS NOT NULL AND finished_at_ms IS NULL``),

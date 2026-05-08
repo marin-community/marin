@@ -3426,51 +3426,80 @@ def test_drain_pending_creates_attempt_rows(state):
     assert int(row["state"]) == job_pb2.TASK_STATE_ASSIGNED
 
 
-def test_drain_skips_already_assigned(state):
-    """Already ASSIGNED tasks appear in running_tasks, not tasks_to_run."""
+def _count_pending(state: ControllerTransitions) -> int:
+    with state._db.snapshot() as q:
+        row = q.fetchone("SELECT COUNT(*) AS c FROM tasks WHERE state = ?", (job_pb2.TASK_STATE_PENDING,))
+    return int(row["c"])
+
+
+def test_drain_redrives_assigned_until_executing(state):
+    """ASSIGNED+null-worker rows are redriven each cycle so a missed pod-apply
+    is recovered. Once the task transitions to a poll-visible state
+    (BUILDING/RUNNING), it migrates from tasks_to_run to running_tasks."""
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
 
-    # First drain promotes to ASSIGNED.
+    # First drain: PENDING -> ASSIGNED, dispatched.
     with state._store.transaction() as cur:
         batch1 = state.drain_for_direct_provider(cur)
     assert len(batch1.tasks_to_run) == 1
+    assert len(batch1.running_tasks) == 0
 
-    # Second drain: no new tasks to run, but task appears in running_tasks.
+    # Second drain (e.g. previous _apply_pod failed or controller crashed):
+    # row is still ASSIGNED, redriven in tasks_to_run with same attempt_id.
     with state._store.transaction() as cur:
         batch2 = state.drain_for_direct_provider(cur)
-    assert len(batch2.tasks_to_run) == 0
-    assert len(batch2.running_tasks) == 1
-    assert batch2.running_tasks[0].task_id == task_id
-    assert batch2.running_tasks[0].attempt_id == 0
+    assert len(batch2.tasks_to_run) == 1
+    assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch2.tasks_to_run[0].attempt_id == 0
+    assert len(batch2.running_tasks) == 0
+
+    # Once the task reaches RUNNING it leaves the redrive set.
+    with state._store.transaction() as cur:
+        state.apply_direct_provider_updates(
+            cur, [TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)]
+        )
+    with state._store.transaction() as cur:
+        batch3 = state.drain_for_direct_provider(cur)
+    assert len(batch3.tasks_to_run) == 0
+    assert len(batch3.running_tasks) == 1
+    assert batch3.running_tasks[0].task_id == task_id
 
 
 def test_drain_caps_promotions_per_cycle(state):
-    """Promotions are capped by max_promotions per drain call."""
+    """``max_promotions`` caps how many PENDING rows are promoted per cycle.
+    Redrives of already-ASSIGNED rows do not count against the cap."""
     _submit_job_direct(state, "/user/big-job", replicas=200)
+    assert _count_pending(state) == 200
 
     with state._store.transaction() as cur:
         batch1 = state.drain_for_direct_provider(cur, max_promotions=128)
+    # All 128 dispatched are freshly promoted (no prior ASSIGNED rows).
     assert len(batch1.tasks_to_run) == 128
+    assert _count_pending(state) == 72
 
-    # Remaining tasks promoted with another budget.
+    # Second drain: 72 newly promoted, 128 redriven.
     with state._store.transaction() as cur:
         batch2 = state.drain_for_direct_provider(cur, max_promotions=128)
-    assert len(batch2.tasks_to_run) == 72
+    assert len(batch2.tasks_to_run) == 200
+    assert _count_pending(state) == 0
 
 
 def test_drain_max_promotions_limits_batch(state):
-    """max_promotions caps the number of tasks promoted per cycle."""
+    """``max_promotions`` is a per-cycle PENDING-promotion budget, not a cap
+    on total dispatch (which also includes ASSIGNED redrives)."""
     _submit_job_direct(state, "/user/cap-job", replicas=250)
 
     with state._store.transaction() as cur:
         batch1 = state.drain_for_direct_provider(cur, max_promotions=50)
     assert len(batch1.tasks_to_run) == 50
+    assert _count_pending(state) == 200
 
-    # Remaining tasks still available with a fresh budget.
+    # 50 newly promoted + 50 prior ASSIGNED redriven.
     with state._store.transaction() as cur:
         batch2 = state.drain_for_direct_provider(cur, max_promotions=50)
-    assert len(batch2.tasks_to_run) == 50
+    assert len(batch2.tasks_to_run) == 100
+    assert _count_pending(state) == 150
 
 
 def test_apply_running(state):
