@@ -239,7 +239,6 @@ class _LmEvalHarnessWorker:
         self.model = model
         self.axis_resources = axis_resources
         self.mp = mp
-        self.max_packed_segments = max_packed_segments
         self._generation_kwargs = generation_kwargs or {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
         self.sample_logging_config = sample_logging_config or SampleLoggingConfig()
         self.profiler_config = profiler_config or ProfilerConfig()
