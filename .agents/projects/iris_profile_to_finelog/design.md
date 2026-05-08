@@ -20,17 +20,17 @@ Before — controller fans out to every worker via a bounded thread pool, then w
 
 ```mermaid
 sequenceDiagram
-    participant LOOP as profile-loop (controller thread)
+    participant PLOOP as profile-loop (controller thread)
     participant PROV as Provider
     participant W as Worker
     participant DB as profiles.sqlite3
-    LOOP->>PROV: profile_task(worker_addr, request)
+    PLOOP->>PROV: profile_task(worker_addr, request)
     PROV->>W: WorkerService.ProfileTask
     W->>W: py-spy record 10s
     W-->>PROV: ProfileTaskResponse bytes
-    PROV-->>LOOP: bytes
-    LOOP->>DB: insert_task_profile
-    Note over LOOP,DB: every 600s, ThreadPool concurrency 8, all running tasks
+    PROV-->>PLOOP: bytes
+    PLOOP->>DB: insert_task_profile
+    Note over PLOOP,DB: every 600s, ThreadPool concurrency 8, all running tasks
     Note over DB: trigger caps 10 rows per task and kind
 ```
 
@@ -38,13 +38,13 @@ After — every worker runs its own loop, captures locally, writes finelog. No c
 
 ```mermaid
 sequenceDiagram
-    participant LOOP as profile-loop (worker thread)
+    participant PLOOP as profile-loop (worker thread)
     participant W as Worker
     participant FL as finelog iris.cpu_profile
-    LOOP->>W: list local _tasks
-    LOOP->>W: py-spy record 10s
-    LOOP->>FL: Table.write IrisCpuProfile trigger periodic
-    Note over LOOP,FL: every 600s, sequential per worker, parallel across workers
+    PLOOP->>W: list local _tasks
+    PLOOP->>W: py-spy record 10s
+    PLOOP->>FL: Table.write IrisCpuProfile trigger periodic
+    Note over PLOOP,FL: every 600s, sequential per worker, parallel across workers
 ```
 
 #### On-demand profile-now (dashboard button)
@@ -90,7 +90,7 @@ sequenceDiagram
     end
     PROV-->>CTL: bytes
     CTL-->>User: bytes
-    Note over User,FL: controller never writes; capturer is the writer
+    Note over User,FL: controller never writes - capturer is the writer
 ```
 
 #### History view
