@@ -35,6 +35,9 @@ iris job bug-report /user/job-name      # structured diagnostic dump
 
 ### `job run` gotchas
 
+- **Remote jobs only see env vars you put in the job spec.** The submitter's
+  shell env is not copied into the container. Pass required values explicitly:
+  `iris job run -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" -- python train.py`.
 - **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--gpu` requests hardware; `--extra gpu` requests the Python dependency extra.** Need both for GPU JAX jobs.
