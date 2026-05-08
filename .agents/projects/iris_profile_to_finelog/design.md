@@ -19,40 +19,40 @@ sequenceDiagram
     autonumber
     actor User as Dashboard
     participant CTL as Controller
-    participant LOOP as profile-loop<br/>(controller thread)
+    participant LOOP as profile-loop thread
     participant PROV as Provider
     participant W as Worker
-    participant DB as profiles.sqlite3<br/>(attached to CTL)
+    participant DB as profiles.sqlite3
 
-    rect rgba(180, 200, 240, 0.18)
-        Note over LOOP,DB: Periodic capture — every 600s, fan-out from controller
-        LOOP->>CTL: read healthy workers + running tasks
-        loop for each (task, worker) — bounded ThreadPool, concurrency=8
-            LOOP->>+PROV: profile_task(worker_addr, request)
+    rect rgb(228, 235, 248)
+        Note over LOOP,DB: Periodic capture - every 600s, fan-out from controller
+        LOOP->>CTL: read healthy workers and running tasks
+        loop each task-worker pair, bounded pool of 8
+            LOOP->>+PROV: profile_task with worker addr
             PROV->>+W: WorkerService.ProfileTask
-            W->>W: py-spy record (10s)
-            W-->>-PROV: ProfileTaskResponse(bytes)
+            W->>W: py-spy record 10s
+            W-->>-PROV: ProfileTaskResponse bytes
             PROV-->>-LOOP: bytes
-            LOOP->>DB: insert_task_profile(task_id, bytes)
-            Note right of DB: trigger caps to<br/>10 rows / (task, kind)
+            LOOP->>DB: insert_task_profile
+            Note right of DB: trigger caps 10 rows per task and kind
         end
     end
 
-    rect rgba(245, 220, 195, 0.25)
-        Note over User,DB: On-demand "profile now" — synchronous, NOT persisted
+    rect rgb(250, 235, 215)
+        Note over User,DB: On-demand profile-now - synchronous, NOT persisted
         User->>+CTL: profile_task RPC
-        CTL->>+PROV: provider.profile_task(...)
+        CTL->>+PROV: provider.profile_task
         PROV->>+W: WorkerService.ProfileTask
         W-->>-PROV: bytes
         PROV-->>-CTL: bytes
         CTL-->>-User: bytes
     end
 
-    rect rgba(200, 230, 200, 0.25)
-        Note over User,DB: History view — controller reads SQLite
+    rect rgb(225, 240, 225)
+        Note over User,DB: History view - controller reads SQLite
         User->>+CTL: GetTaskProfiles RPC
-        CTL->>DB: SELECT profile_data FROM task_profiles<br/>WHERE task_id = ? ORDER BY id DESC
-        DB-->>CTL: rows (≤ 10)
+        CTL->>DB: SELECT profile_data FROM task_profiles
+        DB-->>CTL: rows up to 10
         CTL-->>-User: profiles
     end
 ```
@@ -63,44 +63,44 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     actor User as Dashboard
-    participant CTL as Controller<br/>(pure dispatcher)
+    participant CTL as Controller dispatcher
     participant PROV as Provider
     participant W as Worker
-    participant LOOP as profile-loop<br/>(worker thread)
-    participant K8S as K8sTaskProvider<br/>(controller process)
-    participant FL as finelog<br/>iris.cpu_profile
+    participant LOOP as worker profile-loop
+    participant K8S as K8sTaskProvider
+    participant FL as finelog iris.cpu_profile
 
-    rect rgba(180, 200, 240, 0.18)
-        Note over W,FL: Periodic capture — runs independently in each worker
-        loop every 600s, sequential within worker, parallel across workers
-            LOOP->>W: list local _tasks
-            LOOP->>W: py-spy record (10s)
-            LOOP->>FL: Table.write(IrisCpuProfile,<br/>trigger="periodic")
+    rect rgb(228, 235, 248)
+        Note over W,FL: Periodic capture - runs independently in each worker
+        loop every 600s, sequential per worker
+            LOOP->>W: list local tasks
+            LOOP->>W: py-spy record 10s
+            LOOP->>FL: Table.write IrisCpuProfile trigger periodic
         end
     end
 
-    rect rgba(245, 220, 195, 0.25)
-        Note over User,FL: On-demand "profile now" — same dashboard path, provider abstraction routes
+    rect rgb(250, 235, 215)
+        Note over User,FL: On-demand profile-now - same dashboard path, provider routes
         User->>+CTL: profile_task RPC
-        CTL->>+PROV: provider.profile_task(...)
+        CTL->>+PROV: provider.profile_task
         alt worker-based provider
             PROV->>+W: WorkerService.ProfileTask
             W->>W: py-spy record
-            W->>FL: Table.write(trigger="on_demand")
+            W->>FL: Table.write trigger on_demand
             W-->>-PROV: bytes
         else K8sTaskProvider
             PROV->>+K8S: kubectl exec py-spy
-            K8S->>FL: Table.write(trigger="on_demand")
+            K8S->>FL: Table.write trigger on_demand
             K8S-->>-PROV: bytes
         end
         PROV-->>-CTL: bytes
-        CTL-->>-User: bytes (CTL never touches storage)
+        CTL-->>-User: bytes
     end
 
-    rect rgba(200, 230, 200, 0.25)
-        Note over User,FL: History view — dashboard reads finelog directly
-        User->>+FL: StatsService.Query<br/>SELECT … FROM "iris.cpu_profile" …
-        FL-->>-User: rows (Arrow IPC)
+    rect rgb(225, 240, 225)
+        Note over User,FL: History view - dashboard reads finelog directly
+        User->>+FL: StatsService.Query SELECT FROM iris.cpu_profile
+        FL-->>-User: rows as Arrow IPC
     end
 ```
 
