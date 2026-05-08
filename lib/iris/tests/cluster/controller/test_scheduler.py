@@ -125,7 +125,7 @@ def transition_task_to_state(state: ControllerTransitions, task, new_state: int)
 
 def _build_context(scheduler, state):
     pending_tasks = _schedulable_tasks(state)
-    workers = [w for w in healthy_active_workers(state) if w.healthy]
+    workers = list(healthy_active_workers(state))
     building_counts = _building_counts(state)
 
     task_ids = []

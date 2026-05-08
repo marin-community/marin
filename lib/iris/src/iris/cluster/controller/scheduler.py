@@ -75,7 +75,6 @@ class WorkerSnapshot(Protocol):
     total_tpu_count: int
     committed_tpu: int
     attributes: dict[str, AttributeValue]
-    healthy: bool
 
 
 class RejectionKind(StrEnum):
@@ -338,7 +337,6 @@ class SchedulingContext:
                 max_building_tasks=max_building_tasks,
             )
             for w in workers
-            if w.healthy
         }
 
         str_to_wid: dict[str, WorkerId] = {}

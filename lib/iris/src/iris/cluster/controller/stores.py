@@ -1779,17 +1779,47 @@ class WorkerStore:
 
     def add_committed_resources(
         self,
+        cur: TransactionCursor,
         worker_id: WorkerId,
         resources: job_pb2.ResourceSpecProto,
     ) -> None:
-        self._health.add_committed(worker_id, resources)
+        cur.execute(
+            "UPDATE workers SET "
+            "committed_cpu_millicores = committed_cpu_millicores + ?, "
+            "committed_mem_bytes      = committed_mem_bytes      + ?, "
+            "committed_gpu            = committed_gpu            + ?, "
+            "committed_tpu            = committed_tpu            + ? "
+            "WHERE worker_id = ?",
+            (
+                int(resources.cpu_millicores),
+                int(resources.memory_bytes),
+                int(get_gpu_count(resources.device)),
+                int(get_tpu_count(resources.device)),
+                str(worker_id),
+            ),
+        )
 
     def decommit_resources(
         self,
+        cur: TransactionCursor,
         worker_id: WorkerId,
         resources: job_pb2.ResourceSpecProto,
     ) -> None:
-        self._health.decommit(worker_id, resources)
+        cur.execute(
+            "UPDATE workers SET "
+            "committed_cpu_millicores = MAX(0, committed_cpu_millicores - ?), "
+            "committed_mem_bytes      = MAX(0, committed_mem_bytes      - ?), "
+            "committed_gpu            = MAX(0, committed_gpu            - ?), "
+            "committed_tpu            = MAX(0, committed_tpu            - ?) "
+            "WHERE worker_id = ?",
+            (
+                int(resources.cpu_millicores),
+                int(resources.memory_bytes),
+                int(get_gpu_count(resources.device)),
+                int(get_tpu_count(resources.device)),
+                str(worker_id),
+            ),
+        )
 
     def set_health_for_test(self, worker_id: WorkerId, healthy: bool) -> None:
         """Test helper: overwrite the in-memory health verdict."""
@@ -1921,41 +1951,27 @@ class ControllerStore:
         self.endpoints = EndpointStore(db)
         self.dispatch = DispatchQueueStore(db)
         self.reservations = ReservationStore(db)
-        self._prime_committed_tracker()
+        self._seed_liveness_from_workers()
         # Caches reload after a checkpoint restore via db.replace_from(). The
         # hook fires only in that flow; normal startup loads caches in the
         # store constructors above.
         db.register_reopen_hook(self.endpoints._load_all)
-        db.register_reopen_hook(self._prime_committed_tracker)
+        db.register_reopen_hook(self._seed_liveness_from_workers)
 
-    def _prime_committed_tracker(self) -> None:
-        """Reaggregate committed-resource totals from the active task rows on boot.
+    def _seed_liveness_from_workers(self) -> None:
+        """Optimistically mark every persisted worker healthy at boot.
 
-        Called both at process start and after a checkpoint restore. The
-        tracker is the runtime source of truth.
+        Liveness lives only in memory now, so without this seed a fresh tracker
+        hides every existing worker from the scheduler until its next ping. We
+        trust the durable workers table on boot; the watchdog times out anyone
+        who fails to ping within the heartbeat window.
         """
-        active_states = list(ACTIVE_TASK_STATES)
-        active_placeholders = ",".join("?" for _ in active_states)
-        totals: dict[WorkerId, WorkerLiveness] = {}
+        now_ms = Timestamp.now().epoch_ms()
         with self._db.read_snapshot() as q:
-            rows = q.fetchall(
-                "SELECT t.current_worker_id AS worker_id, "
-                "jc.res_cpu_millicores AS cpu, jc.res_memory_bytes AS mem, "
-                "jc.res_device_json AS device_json "
-                "FROM tasks t "
-                "JOIN job_config jc ON jc.job_id = t.job_id "
-                f"WHERE t.current_worker_id IS NOT NULL AND t.state IN ({active_placeholders})",
-                tuple(active_states),
-            )
-        for row in rows:
-            worker_id = WorkerId(str(row["worker_id"]))
-            spec = resource_spec_from_scalars(int(row["cpu"]), int(row["mem"]), 0, str(row["device_json"]))
-            entry = totals.setdefault(worker_id, WorkerLiveness())
-            entry.committed_cpu_millicores += int(spec.cpu_millicores)
-            entry.committed_mem += int(spec.memory_bytes)
-            entry.committed_gpu += int(get_gpu_count(spec.device))
-            entry.committed_tpu += int(get_tpu_count(spec.device))
-        self._health.reset_committed(totals)
+            rows = q.fetchall("SELECT worker_id FROM workers")
+        worker_ids = [WorkerId(str(row["worker_id"])) for row in rows]
+        if worker_ids:
+            self._health.heartbeat(worker_ids, now_ms)
 
     @property
     def health(self) -> WorkerHealthTracker:

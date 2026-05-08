@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""In-memory worker liveness and committed-resource tracking.
+"""In-memory worker liveness tracking.
 
-A single tracker owns every transient per-worker signal:
+Owns the transient per-worker signals only:
 
 - ``last_heartbeat_ms``: bumped on each successful heartbeat / ping.
 - ``healthy`` / ``active``: liveness verdict; flipped to false when the worker
@@ -12,19 +12,19 @@ A single tracker owns every transient per-worker signal:
   reset on success. Ten consecutive failures trip the termination threshold.
 - ``build_failures``: monotonic counter for BUILDING→FAILED transitions. Ten
   build failures trip the termination threshold independently.
-- ``committed_*``: sum of resources currently committed to the worker by
-  active tasks. Used by the scheduler for available-capacity arithmetic.
 
-The SQLite ``workers`` row only records durable identity / capability
-metadata; transient liveness lives here so heartbeats stay writer-free.
+Durable scheduling state — including ``committed_*`` resource totals — lives
+in the SQLite ``workers`` row and is mutated by the scheduler under a write
+transaction. The tracker intentionally does not own those numbers; they must
+survive a controller restart so worker capacity is correctly accounted for.
 
-Crash recovery: a fresh controller starts with an empty tracker. Until each
-worker re-establishes contact (one ping cycle, ~10s) it appears unhealthy /
-inactive. The committed-resource map is reaggregated from the active task
-rows on boot.
+Crash recovery: a fresh controller starts with an empty tracker. To avoid
+hiding existing workers from the scheduler until they ping back,
+:class:`~iris.cluster.controller.stores.ControllerStore` seeds the tracker
+from the durable ``workers`` table at boot.
 
-Thread-safe: written from ping/heartbeat and task-update threads, read from
-the reaper, scheduler, and RPC handler threads.
+Thread-safe: written from ping/heartbeat threads, read from the reaper,
+scheduler, and RPC handler threads.
 """
 
 import dataclasses
@@ -33,8 +33,7 @@ import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from iris.cluster.types import WorkerId, get_gpu_count, get_tpu_count
-from iris.rpc import job_pb2
+from iris.cluster.types import WorkerId
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +43,9 @@ BUILD_FAILURE_THRESHOLD = 10
 
 @dataclass(slots=True)
 class WorkerLiveness:
-    """Public snapshot of a worker's transient liveness + committed-resource state.
+    """Public snapshot of a worker's transient liveness state.
 
-    Mutated in place by the tracker under its lock during heartbeat/ping/commit
+    Mutated in place by the tracker under its lock during heartbeat/ping
     updates. Readers receive copies via :meth:`WorkerHealthTracker.liveness`.
     """
 
@@ -55,14 +54,10 @@ class WorkerLiveness:
     consecutive_failures: int = 0
     last_heartbeat_ms: int = 0
     build_failures: int = 0
-    committed_cpu_millicores: int = 0
-    committed_mem: int = 0
-    committed_gpu: int = 0
-    committed_tpu: int = 0
 
 
 class WorkerHealthTracker:
-    """In-memory source of truth for worker liveness and committed resources."""
+    """In-memory source of truth for worker liveness."""
 
     def __init__(
         self,
@@ -140,41 +135,6 @@ class WorkerHealthTracker:
             if state is None:
                 return
             state.healthy = False
-
-    # -- Committed resources -------------------------------------------------
-
-    def add_committed(self, worker_id: WorkerId, resources: job_pb2.ResourceSpecProto) -> None:
-        with self._lock:
-            state = self._states.setdefault(worker_id, WorkerLiveness())
-            state.committed_cpu_millicores += int(resources.cpu_millicores)
-            state.committed_mem += int(resources.memory_bytes)
-            state.committed_gpu += int(get_gpu_count(resources.device))
-            state.committed_tpu += int(get_tpu_count(resources.device))
-
-    def decommit(self, worker_id: WorkerId, resources: job_pb2.ResourceSpecProto) -> None:
-        with self._lock:
-            state = self._states.setdefault(worker_id, WorkerLiveness())
-            state.committed_cpu_millicores = max(0, state.committed_cpu_millicores - int(resources.cpu_millicores))
-            state.committed_mem = max(0, state.committed_mem - int(resources.memory_bytes))
-            state.committed_gpu = max(0, state.committed_gpu - int(get_gpu_count(resources.device)))
-            state.committed_tpu = max(0, state.committed_tpu - int(get_tpu_count(resources.device)))
-
-    def reset_committed(self, totals: dict[WorkerId, "WorkerLiveness"]) -> None:
-        """Replace committed-resource totals from a recomputed map (boot / restore)."""
-        with self._lock:
-            for wid, src in totals.items():
-                state = self._states.setdefault(wid, WorkerLiveness())
-                state.committed_cpu_millicores = src.committed_cpu_millicores
-                state.committed_mem = src.committed_mem
-                state.committed_gpu = src.committed_gpu
-                state.committed_tpu = src.committed_tpu
-            for wid, state in self._states.items():
-                if wid in totals:
-                    continue
-                state.committed_cpu_millicores = 0
-                state.committed_mem = 0
-                state.committed_gpu = 0
-                state.committed_tpu = 0
 
     # -- Reads --------------------------------------------------------------
 

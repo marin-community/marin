@@ -381,10 +381,10 @@ def _worker_view(row: WorkerRow, liveness) -> WorkerView:
         active=liveness.active,
         consecutive_failures=liveness.consecutive_failures,
         last_heartbeat_ms=liveness.last_heartbeat_ms,
-        committed_cpu_millicores=liveness.committed_cpu_millicores,
-        committed_mem=liveness.committed_mem,
-        committed_gpu=liveness.committed_gpu,
-        committed_tpu=liveness.committed_tpu,
+        committed_cpu_millicores=row.committed_cpu_millicores,
+        committed_mem=row.committed_mem,
+        committed_gpu=row.committed_gpu,
+        committed_tpu=row.committed_tpu,
     )
 
 

@@ -135,6 +135,10 @@
   "workers": [
     {
       "address": "w-happy:8080",
+      "committed_cpu_millicores": 0,
+      "committed_gpu": 0,
+      "committed_mem_bytes": 0,
+      "committed_tpu": 0,
       "device_type": "",
       "device_variant": "",
       "md_cpu_count": 8,

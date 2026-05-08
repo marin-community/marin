@@ -498,23 +498,35 @@ def _read_worker_detail(store: ControllerStore, worker_id: WorkerId) -> _WorkerD
 
 
 def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetailRow]:
-    """Load tasks for the list view without their full attempt history.
+    """Load tasks for the list view, attaching only the current attempt.
 
-    The list UI only renders the current attempt + ``failure_count`` /
-    ``preemption_count`` (already on the task row), so the per-task IN-clause
-    SELECT against ``task_attempts`` was pure waste — it dominated job-detail
-    page latency on jobs with many attempts. Full history is still fetched in
+    The list UI renders ``started_at`` / ``finished_at`` from the current
+    attempt and surfaces a single ``proto.attempts`` entry for retry context;
+    older attempts only matter on the task-detail page. Loading every attempt
+    via an IN clause was waste on jobs with many retries — it dominated
+    job-detail page latency. Full history is still fetched in
     ``get_task_status``.
     """
+    job_wire = job_id.to_wire()
     with db.read_snapshot() as q:
         tasks = TASK_DETAIL_PROJECTION.decode(
             q.fetchall(
                 f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "
                 "FROM tasks t WHERE t.job_id = ? ORDER BY t.job_id ASC, t.task_index ASC",
-                (job_id.to_wire(),),
+                (job_wire,),
             ),
         )
-    return tasks
+        attempts = ATTEMPT_PROJECTION.decode(
+            q.fetchall(
+                f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
+                "WHERE (ta.task_id, ta.attempt_id) IN ("
+                "    SELECT t.task_id, t.current_attempt_id FROM tasks t "
+                "    WHERE t.job_id = ? AND t.current_attempt_id >= 0"
+                ")",
+                (job_wire,),
+            ),
+        )
+    return tasks_with_attempts(tasks, attempts)
 
 
 def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[TaskDetailRow]) -> dict[WorkerId, str]:

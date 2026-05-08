@@ -1,12 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Drop the dormant liveness / committed-resource columns on ``workers``.
+"""Drop the dormant transient-liveness columns on ``workers``.
 
-The runtime source of truth for these signals is the in-memory
-``WorkerHealthTracker`` / ``WorkerCommitTracker``. This migration removes the
-unused columns along with the ``idx_workers_healthy_active`` index and the
+Liveness signals (heartbeat/health/failure counters) now live exclusively in
+the in-memory ``WorkerHealthTracker``. This migration removes those four
+columns along with the ``idx_workers_healthy_active`` index and the
 ``trg_task_attempt_active_worker`` trigger that referenced them.
+
+The ``committed_*`` columns are intentionally retained: they record durable
+scheduling state owned by the scheduler under a write transaction and must
+survive a controller restart.
 
 SQLite >= 3.35 supports ``ALTER TABLE ... DROP COLUMN`` directly.
 """
@@ -23,10 +27,6 @@ _COLUMNS_TO_DROP = (
     "healthy",
     "active",
     "consecutive_failures",
-    "committed_cpu_millicores",
-    "committed_mem_bytes",
-    "committed_gpu",
-    "committed_tpu",
 )
 
 

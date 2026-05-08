@@ -135,6 +135,10 @@
   "workers": [
     {
       "address": "w-endpoint:8080",
+      "committed_cpu_millicores": 1000,
+      "committed_gpu": 0,
+      "committed_mem_bytes": 1073741824,
+      "committed_tpu": 0,
       "device_type": "",
       "device_variant": "",
       "md_cpu_count": 8,
