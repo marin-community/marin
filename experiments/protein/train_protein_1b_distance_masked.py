@@ -24,42 +24,18 @@ Usage:
 
 import dataclasses
 
-import jax
-import jax.numpy as jnp
-from levanter.data.text import LmDataConfig, TextLmDatasetFormat
+from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
 
-from experiments.defaults import default_tokenize, default_train
-from experiments.protein.create_protein_tokenizer import create_protein_tokenizer
+from experiments.defaults import default_train
 from experiments.protein.protein_distogram_eval import distogram_eval_benchmark
+from experiments.protein.protein_train_common import (
+    PROTEIN_TOKENIZER,
+    distance_masked_components,
+)
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main, versioned
-from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
-
-# -- Tokenizer (must be pushed to HF Hub before running) --
-
-PROTEIN_TOKENIZER = "timodonnell/protein-docs-tokenizer"
-
-# Token id for the <distance> marker. Looked up locally via the canonical vocab
-# order so this matches what the pushed HF tokenizer produces.
-DISTANCE_TOKEN_ID: int = create_protein_tokenizer().convert_tokens_to_ids("<distance>")
-
-# A distance statement is 6 tokens: <distance> <p_i> <p_j> <atom_i> <atom_j> <d_value>.
-# For next-token prediction, loss_weight[i] weights the loss on predicting tokens[i+1].
-# We zero loss_weight at positions s..s+3 (where s is the <distance> index) so that only
-# the prediction of <d_value> (at loss_weight[s+4]) contributes inside a distance statement.
-_NUM_NON_BIN_STATEMENT_POSITIONS = 4
-
-
-def _distance_bin_only_loss_weight(tokens: jax.Array) -> jax.Array:
-    """Loss weight that keeps distance-bin predictions only inside distance statements."""
-    is_distance = tokens == DISTANCE_TOKEN_ID
-    mask_zero = is_distance
-    for shift in range(1, _NUM_NON_BIN_STATEMENT_POSITIONS):
-        mask_zero = mask_zero | jnp.roll(is_distance, shift)
-    return jnp.where(mask_zero, 0.0, 1.0).astype(jnp.float32)
-
 
 # -- Resources --
 
@@ -80,49 +56,17 @@ protein_llama_1b = LlamaConfig(
     num_heads=32,
     num_kv_heads=8,
     num_layers=16,
-)
-
-# -- Dataset (fsspec paths to HF Hub parquets) --
-
-HF_DATASET_BASE = "hf://datasets/timodonnell/protein-docs@main/contacts-and-distances-v1-5x"
-
-# -- Tokenize (shared cache with train_protein_1b.py since inputs are identical) --
-
-protein_docs_tokenized = default_tokenize(
-    name="protein-docs-cd",
-    dataset=f"{HF_DATASET_BASE}/train/",
-    tokenizer=PROTEIN_TOKENIZER,
-    format=TextLmDatasetFormat(text_key="document"),
-)
-
-protein_docs_val_tokenized = default_tokenize(
-    name="protein-docs-cd-val",
-    dataset=f"{HF_DATASET_BASE}/val/",
-    tokenizer=PROTEIN_TOKENIZER,
-    format=TextLmDatasetFormat(text_key="document"),
-    is_validation=True,
-)
-
-# Use pack=True to avoid concat-and-split, which would create partial documents.
-# Apply the distance-bin-only loss mask to both splits so eval metrics match
-# the training objective.
-train_component = dataclasses.replace(
-    step_to_lm_mixture_component(protein_docs_tokenized, include_raw_paths=True),
-    pack=True,
-    loss_weight_fn=_distance_bin_only_loss_weight,
-)
-val_component = dataclasses.replace(
-    step_to_lm_mixture_component(protein_docs_val_tokenized, include_raw_paths=True),
-    pack=True,
-    loss_weight_fn=_distance_bin_only_loss_weight,
+    # Vocab is small (2840 tokens) so the embedding table is tiny.
+    # Levanter rounds vocab_size for TPU partitioning at training time.
 )
 
 # -- Protein distogram benchmark (loss-based eval on specific PDB targets) --
 # See experiments/protein/protein_distogram_eval.py for how to add targets.
 # The eval components use `PrebuiltLmDatasetFormat` with a pre-computed
 # loss_weights column in the parquet, so the distance-mask loss_weight_fn
-# above does NOT apply to them — they see only the final GT distance-bin
-# position as their training target, which is what we want.
+# (applied to the train + val components) does NOT apply to them — they see
+# only the final GT distance-bin position as their training target, which is
+# what we want.
 PROTEIN_MPNN_REDESIGNS_SOURCE = "gs://marin-us-east5/protein-structure/protein-mpnn-redesigns/v1/redesigns.jsonl"
 # 100 pairs per (target, N) keeps a full eval pass fast. The default of 1000 made
 # eval take ~78 min on 132 datasets, longer than most training intervals. Drop
@@ -137,8 +81,7 @@ distogram_eval = distogram_eval_benchmark(
 
 protein_docs_data = LmDataConfig(
     components={
-        "protein-docs-cd": train_component,
-        "protein-docs-cd-val": val_component,
+        **distance_masked_components(),
         **distogram_eval.components,
     },
     # Only the main training corpus has non-zero train weight. The distogram
