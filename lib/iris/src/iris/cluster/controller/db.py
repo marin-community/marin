@@ -828,10 +828,7 @@ class ControllerDB:
 
 
 def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
-    """Return the set of currently-running task IDs for each worker.
-
-    Uses the denormalized current_worker_id column instead of joining task_attempts.
-    """
+    """Return the set of currently-running task IDs for each worker."""
     if not worker_ids:
         return {}
     placeholders = ",".join("?" for _ in worker_ids)

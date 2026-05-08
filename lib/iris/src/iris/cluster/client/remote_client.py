@@ -36,14 +36,12 @@ CONTROLLER_UNAVAILABLE_TOLERANCE = 3600.0
 
 # Upper bound on GetJobState polling cadence for long-running jobs. The loop
 # ramps 100ms -> 1s within a handful of polls (factor=1.5 in ExponentialBackoff)
-# and then caps here, so long jobs cost ~1 state RPC / 30s instead of hammering
-# the controller at the old ~2s ceiling.
+# and then caps here, so long jobs cost ~1 state RPC / 30s.
 MAX_STATE_POLL_INTERVAL = 30.0
 
 # Floor on the backoff cap. ``ExponentialBackoff`` requires ``maximum >= initial``
-# (currently 100ms), so we clamp the caller-supplied ``poll_interval`` up to this
-# value before handing it to the backoff. Callers asking for a sub-100ms cap end
-# up polling at 100ms instead of crashing with ValueError.
+# (currently 100ms), so callers asking for a sub-100ms cap are clamped to this
+# value before being handed to the backoff.
 MIN_STATE_POLL_INTERVAL = 0.1
 
 

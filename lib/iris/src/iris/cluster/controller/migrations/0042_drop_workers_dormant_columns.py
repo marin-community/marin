@@ -3,11 +3,9 @@
 
 """Drop the dormant liveness / committed-resource columns on ``workers``.
 
-These columns used to be rewritten on every heartbeat, ping, and assignment
-transaction. The runtime source of truth is now the in-memory
-``WorkerHealthTracker`` / ``WorkerCommitTracker``; production code stopped
-reading or writing these columns. This migration removes them along with the
-``idx_workers_healthy_active`` index and the
+The runtime source of truth for these signals is the in-memory
+``WorkerHealthTracker`` / ``WorkerCommitTracker``. This migration removes the
+unused columns along with the ``idx_workers_healthy_active`` index and the
 ``trg_task_attempt_active_worker`` trigger that referenced them.
 
 SQLite >= 3.35 supports ``ALTER TABLE ... DROP COLUMN`` directly.

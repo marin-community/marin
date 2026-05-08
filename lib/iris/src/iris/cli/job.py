@@ -1007,10 +1007,6 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
         click.echo("No jobs found.")
         return
 
-    # Build table rows. The ListJobs response no longer includes the resource
-    # spec (it required a per-row proto decode in service of a CLI column most
-    # users skim past); call ``iris job status <id>`` for a single job's
-    # resources.
     rows: list[list[str]] = []
     has_reasons = False
 

@@ -13,15 +13,12 @@ A single tracker owns every transient per-worker signal:
 - ``build_failures``: monotonic counter for BUILDING→FAILED transitions. Ten
   build failures trip the termination threshold independently.
 
-All four pieces of state used to live in dedicated columns on the ``workers``
-SQLite row, rewritten on every heartbeat / ping batch. That made the heartbeat
-path a SQLite writer transaction, bloating the WAL and starving dashboard
-reads. The tracker keeps that data in memory; the SQLite ``workers`` row only
-records durable identity / capability metadata.
+The SQLite ``workers`` row only records durable identity / capability
+metadata; transient liveness lives here so heartbeats stay writer-free.
 
 Crash recovery: a fresh controller starts with an empty tracker. Until each
 worker re-establishes contact (one ping cycle, ~10s) it appears unhealthy /
-inactive — the same trade-off the ping-failure counter has always made.
+inactive.
 
 Thread-safe: written from ping/heartbeat and task-update threads, read from
 the reaper, scheduler, and RPC handler threads.
@@ -55,11 +52,8 @@ class WorkerCommitTracker:
     """In-memory ``{worker_id: CommittedResources}`` map.
 
     The scheduler increments and decrements committed resources per
-    assignment / completion / preemption. Previously this was rewritten on
-    the ``workers`` SQLite row inside every assignment transaction, which
-    serialized all writes through the SQLite writer connection. Holding it
-    in memory keeps assignment hot paths writer-free while still providing
-    the available-capacity arithmetic the scheduler needs.
+    assignment / completion / preemption, providing the available-capacity
+    arithmetic without touching SQLite on the hot path.
 
     Crash recovery: the tracker is repopulated at controller boot from a
     single ``GROUP BY current_worker_id`` aggregation across active tasks.
@@ -70,7 +64,7 @@ class WorkerCommitTracker:
         self._committed: dict[WorkerId, CommittedResources] = {}
 
     def reset(self, committed: dict[WorkerId, CommittedResources]) -> None:
-        """Replace the entire map. Used on boot to prime from SQL."""
+        """Replace the entire map. Called on boot to prime from SQL."""
         with self._lock:
             self._committed = dict(committed)
 

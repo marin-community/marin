@@ -165,9 +165,9 @@ def task_status_to_json(task: job_pb2.TaskStatus) -> dict[str, Any]:
 def job_status_to_json(job: job_pb2.JobStatus, tasks: Iterable[job_pb2.TaskStatus] = ()) -> dict[str, Any]:
     """Serialize Iris job status into stable JSON.
 
-    The ListJobs RPC no longer returns ``resources`` / ``ports`` / ``tasks`` /
-    ``status_message``; callers that need per-job detail should hit
-    ``GetJobStatus`` and use :func:`_job_summary_payload` instead.
+    Callers that need per-job ``resources`` / ``ports`` / ``tasks`` /
+    ``status_message`` should hit ``GetJobStatus`` and use
+    :func:`_job_summary_payload`.
     """
     task_payloads = [task_status_to_json(task) for task in tasks]
     return {
