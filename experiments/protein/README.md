@@ -132,6 +132,84 @@ uv run python -m experiments.protein.plot_distogram \
     --output-pdf /Users/tim/Dropbox/OpenAthena/projects/202604-LlamaFold/reports/<run>-<variant>.pdf
 ```
 
+## ProteinGym DMS-substitutions zero-shot eval
+
+Treats the model as a (causal) protein language model and scores variants in
+ProteinGym's [DMS substitutions benchmark](https://proteingym.org/benchmarks)
+by log-likelihood ratio under the document prefix
+`<contacts-and-distances-v1> <begin_sequence> <AA_1>...<AA_n>`.
+
+- Single-mutant `score(i, ref->alt)` = `log P(<alt>|prefix_<i) - log P(<ref>|prefix_<i)`,
+  pulled from a single forward pass on the WT sequence.
+- Multi-mutant variants get an additional forward pass over the mutated
+  sequence and compute the joint LL difference (sum over positions).
+
+Position-bias caveat: this is a causal LM, so the model has no left context at
+the N-terminus and progressively more toward the C-terminus. The eval always
+emits per-position perplexity profiles and position-stratified Spearman so
+the bias is visible.
+
+Inference path: HuggingFace transformers + torch (CPU by default; GPU if
+`torch.cuda.is_available()`). vLLM's TPU backend doesn't yet support
+`prompt_logprobs` (vllm-project/tpu-inference#1333), and the 1B model fits in
+3 GB bf16, so a CPU forward pass on 16 vCPU is fine for ~hundreds of variants
+per dataset. For the bigger DMS (GFP/GRB2/PABP have 30k-60k variants), GPU
+makes sense.
+
+```bash
+# Data: ProteinGym v1.3 (217 datasets) is mirrored at
+#   gs://marin-us-east5/protein-structure/proteingym/v1.3/
+#     reference/DMS_substitutions.csv                  (target sequences + metadata)
+#     reference/DMS_substitutions_Spearman_DMS_level.csv  (leaderboard, 102 methods x 217 datasets)
+#     DMS_ProteinGym_substitutions/<DMS_id>.csv         (per-dataset variants with `mutant`, `mutated_sequence`, `DMS_score`)
+
+# 20-dataset representative subset (mix of size, organism, selection type):
+#   BLAT_ECOLX_Stiffler_2015 TPMT_HUMAN_Matreyek_2018 CALM1_HUMAN_Weile_2017
+#   GFP_AEQVI_Sarkisyan_2016 P53_HUMAN_Giacomelli_2018_Null_Etoposide
+#   PA_I34A1_Wu_2015 PABP_YEAST_Melamed_2013 GRB2_HUMAN_Faure_2021
+#   KKA2_KLEPN_Melnikov_2014 BRCA1_HUMAN_Findlay_2018 UBE4B_MOUSE_Starita_2013
+#   YAP1_HUMAN_Araya_2012 MK01_HUMAN_Brenan_2016 SUMO1_HUMAN_Weile_2017
+#   HSP82_YEAST_Mishra_2016 CCDB_ECOLI_Adkar_2012 A4_HUMAN_Seuma_2022
+#   ENV_HV1B9_DuenasDecamp_2016 BLAT_ECOLX_Jacquier_2013 NCAP_I34A1_Doud_2015
+
+# CPU run (one iris worker, ~minutes per dataset for single-mut, longer for multi-mut datasets):
+HF_TOKEN=... uv run iris --config=lib/iris/examples/marin.yaml job run \
+    --memory=32GB --disk=64GB --cpu=16 --extra=cpu --zone=us-east5-a \
+    --enable-extra-resources \
+    -e WANDB_API_KEY $WANDB_API_KEY -e HF_TOKEN $HF_TOKEN \
+    -- python -m experiments.protein.eval_protein_proteingym \
+        --model gs://marin-us-east5/checkpoints/protein-contacts-1b-3.5e-4-distance-masked-7d355e/hf/step-15049 \
+        --proteingym-dir gs://marin-us-east5/protein-structure/proteingym/v1.3 \
+        --datasets BLAT_ECOLX_Stiffler_2015 ... NCAP_I34A1_Doud_2015 \
+        --output-dir gs://marin-us-east5/eval/protein-proteingym/<run>/step-15049/subset20
+
+# GPU run (any single-GPU box, model auto-loads on cuda):
+python -m experiments.protein.eval_protein_proteingym \
+    --model gs://.../hf/step-15049 \
+    --proteingym-dir gs://marin-us-east5/protein-structure/proteingym/v1.3 \
+    --output-dir gs://.../full217 \
+    --device cuda
+
+# PDF report (run anywhere with matplotlib + fsspec):
+python -m experiments.protein.plot_protein_proteingym \
+    --input-dir gs://.../subset20 \
+    --proteingym-dir gs://marin-us-east5/protein-structure/proteingym/v1.3 \
+    --output /Users/tim/Dropbox/.../reports/proteingym-step-15049-subset20.pdf
+```
+
+Output layout per run:
+```
+<output-dir>/
+  summary.json                        # per-dataset Spearman + position-stratified
+  per_dataset/<DMS_id>/
+    aa_logprobs.npz                   # (n, 20) WT-conditioned logprobs at each AA position
+    per_variant.json                  # row-by-row: mutant string, model_score, position bucket
+```
+
+The plotter additionally pulls the leaderboard CSV (`DMS_substitutions_Spearman_DMS_level.csv`)
+and overlays 6 reference baselines (ESM-1v, ESM-2 650M/3B, Tranception L,
+ProGen2 medium, Site-Independent) on the headline bar chart.
+
 ## Continuing an existing training run
 
 When a training run is preempted or we want more steps past the current
