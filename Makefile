@@ -51,16 +51,6 @@ test:
 	export HF_HUB_TOKEN=$HF_TOKEN
 	RAY_ADDRESS= PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v
 
-# Target to configure GCP registry cleanup policy for all standard regions
-CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 us-east5 us-east1
-default_registry_name = marin
-configure_gcp_registry_all:
-	@echo "Configuring GCP registry cleanup policy for all standard regions..."
-	$(foreach region,$(CLUSTER_REPOS), \
-		python infra/configure_gcp_registry.py $(default_registry_name) --region=$(region) ; \
-	)
-	@echo "Cleanup policy configured for all regions."
-
 
 # stuff for setting up locally
 install_uv:
