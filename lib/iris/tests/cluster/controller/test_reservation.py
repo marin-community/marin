@@ -133,7 +133,6 @@ def _make_worker(
     worker_id: str,
     metadata: job_pb2.WorkerMetadata | None = None,
     attributes: dict[str, AttributeValue] | None = None,
-    healthy: bool = True,
 ) -> SchedulableWorker:
     meta = metadata or _cpu_metadata()
     # Workers always have device attributes from config (Stage 3).
@@ -161,7 +160,6 @@ def _make_worker(
         committed_mem=0,
         committed_gpu=0,
         committed_tpu=0,
-        healthy=healthy,
     )
 
 

@@ -103,7 +103,7 @@ def _job_requirements_from_job(job):
 
 def _build_context(scheduler, state):
     pending = _schedulable_tasks(state)
-    workers = [w for w in healthy_active_workers(state) if w.healthy]
+    workers = list(healthy_active_workers(state))
     bc = _building_counts(state)
     task_ids = []
     jobs = {}

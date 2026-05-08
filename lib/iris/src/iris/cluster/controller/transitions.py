@@ -407,7 +407,7 @@ def _terminate_task(
     delete_task_endpoints(cur, registry, task_id)
 
     if worker_id is not None and resources is not None:
-        workers.decommit_resources(WorkerId(worker_id), resources)
+        workers.decommit_resources(cur, WorkerId(worker_id), resources)
 
 
 def _kill_non_terminal_tasks(
@@ -1098,7 +1098,7 @@ class ControllerTransitions:
         # Direct-provider tasks have NULL worker_id — skip decommit for them.
         for row in running_rows:
             if row.current_worker_id is not None and not row.is_reservation_holder:
-                self._store.workers.decommit_resources(row.current_worker_id, row.resources)
+                self._store.workers.decommit_resources(cur, row.current_worker_id, row.resources)
         now_ms = Timestamp.now().epoch_ms()
         self._store.tasks.bulk_kill_non_terminal(cur, subtree, reason, now_ms, TERMINAL_TASK_STATES)
         # Without this, the current attempt row stays state=RUNNING forever
@@ -1283,7 +1283,7 @@ class ControllerTransitions:
                     job.res_disk_bytes,
                     job.res_device_json,
                 )
-                self._store.workers.add_committed_resources(assignment.worker_id, resources)
+                self._store.workers.add_committed_resources(cur, assignment.worker_id, resources)
                 entrypoint = proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint)
                 # Load inline workdir files from the job_workdir_files table.
                 for filename, data in self._store.jobs.get_workdir_files(cur, task.job_id).items():
@@ -1501,7 +1501,7 @@ class ControllerTransitions:
                         int(jc["res_disk_bytes"]),
                         jc["res_device_json"],
                     )
-                    self._store.workers.decommit_resources(worker_id, resources)
+                    self._store.workers.decommit_resources(cur, worker_id, resources)
 
             if update.new_state in TERMINAL_TASK_STATES:
                 delete_task_endpoints(cur, self._store.endpoints, update.task_id.to_wire())

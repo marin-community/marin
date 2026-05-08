@@ -920,11 +920,12 @@ def _worker_row_select() -> str:
 class SchedulableWorker:
     """Worker shape consumed by the scheduler.
 
-    Combines the durable :class:`WorkerRow` columns with the live committed-resource
-    totals from :class:`WorkerHealthTracker`. Returned by
-    :func:`healthy_active_workers_with_attributes` already filtered to healthy+active.
-    Mirrors the field names in the :class:`scheduler.WorkerSnapshot` protocol so it
-    can flow straight into ``Scheduler.create_scheduling_context`` without adapters.
+    Carries durable identity, capability, and committed-resource totals from
+    the ``workers`` row (decoded via :class:`WorkerRow`). Returned by
+    :func:`healthy_active_workers_with_attributes` already filtered to
+    healthy+active via the in-memory tracker. Mirrors the field names in the
+    :class:`scheduler.WorkerSnapshot` protocol so it flows straight into
+    ``Scheduler.create_scheduling_context`` without adapters.
     """
 
     worker_id: WorkerId
@@ -940,7 +941,6 @@ class SchedulableWorker:
     committed_mem: int
     committed_gpu: int
     committed_tpu: int
-    healthy: bool = True
 
 
 def healthy_active_workers_with_attributes(
@@ -949,10 +949,9 @@ def healthy_active_workers_with_attributes(
 ) -> list[SchedulableWorker]:
     """Fetch all healthy, active workers with their attributes and committed totals populated.
 
-    Health/active filtering reads the in-memory tracker. The returned
-    :class:`SchedulableWorker` rows include the live ``committed_*`` totals from
-    the same tracker so the scheduler can compute ``available_*`` without a
-    second lookup per worker.
+    Health/active filtering reads the in-memory tracker. ``committed_*`` totals
+    come straight from the durable ``workers`` row, which is the only writer
+    of those fields (mutated by the scheduler under a write transaction).
     """
     from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
 
@@ -973,7 +972,6 @@ def healthy_active_workers_with_attributes(
     attrs_by_worker = db.get_worker_attributes()
     out: list[SchedulableWorker] = []
     for w in rows:
-        l = liveness[w.worker_id]
         out.append(
             SchedulableWorker(
                 worker_id=w.worker_id,
@@ -985,10 +983,10 @@ def healthy_active_workers_with_attributes(
                 device_type=w.device_type,
                 device_variant=w.device_variant,
                 attributes=attrs_by_worker.get(w.worker_id, {}),
-                committed_cpu_millicores=l.committed_cpu_millicores,
-                committed_mem=l.committed_mem,
-                committed_gpu=l.committed_gpu,
-                committed_tpu=l.committed_tpu,
+                committed_cpu_millicores=w.committed_cpu_millicores,
+                committed_mem=w.committed_mem,
+                committed_gpu=w.committed_gpu,
+                committed_tpu=w.committed_tpu,
             )
         )
     return out

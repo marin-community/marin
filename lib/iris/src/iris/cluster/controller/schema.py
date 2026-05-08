@@ -862,6 +862,28 @@ WORKERS = Table(
         # Migration 0022
         Column("slice_id", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
         Column("scale_group", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        # Durable scheduling state — only mutated by the scheduler under a
+        # write transaction. Must survive controller restart so worker
+        # capacity is correctly accounted for.
+        Column(
+            "committed_cpu_millicores",
+            "INTEGER",
+            "NOT NULL DEFAULT 0",
+            python_type=int,
+            decoder=int,
+            default=0,
+        ),
+        Column(
+            "committed_mem_bytes",
+            "INTEGER",
+            "NOT NULL DEFAULT 0",
+            python_name="committed_mem",
+            python_type=int,
+            decoder=int,
+            default=0,
+        ),
+        Column("committed_gpu", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("committed_tpu", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
     ),
 )
 
@@ -1315,9 +1337,10 @@ class TaskDetailRow:
 class WorkerRow:
     """Worker row for scheduling and health checks.
 
-    Carries durable identity / capability columns straight from the ``workers``
-    table. Transient liveness and committed-resource data are queried directly
-    from :class:`~iris.cluster.controller.worker_health.WorkerHealthTracker`.
+    Carries durable identity / capability columns and the durable
+    ``committed_*`` scheduling state from the ``workers`` table. Transient
+    liveness lives in
+    :class:`~iris.cluster.controller.worker_health.WorkerHealthTracker`.
     """
 
     worker_id: WorkerId
@@ -1328,6 +1351,10 @@ class WorkerRow:
     total_tpu_count: int
     device_type: str
     device_variant: str
+    committed_cpu_millicores: int
+    committed_mem: int
+    committed_gpu: int
+    committed_tpu: int
     attributes: dict = dataclasses.field(default_factory=dict)
 
 
@@ -1346,6 +1373,10 @@ class WorkerDetailRow:
     total_tpu_count: int
     device_type: str
     device_variant: str
+    committed_cpu_millicores: int
+    committed_mem: int
+    committed_gpu: int
+    committed_tpu: int
     md_hostname: str
     md_ip_address: str
     md_cpu_count: int
@@ -1502,9 +1533,10 @@ JOB_SCHEDULING_PROJECTION = Projection(
     column_aliases=_job_sched_aliases,
 )
 
-# Worker row for scheduling and health checks. Liveness and committed-resource
-# data are queried separately from ``WorkerHealthTracker``; only ``attributes``
-# is hydrated post-decode, from the ``worker_attributes`` table.
+# Worker row for scheduling and health checks. Liveness data is queried
+# separately from ``WorkerHealthTracker``; ``committed_*`` columns come straight
+# from the ``workers`` row, and ``attributes`` is hydrated post-decode from the
+# ``worker_attributes`` table.
 WORKER_ROW_PROJECTION = WORKERS.projection(
     "worker_id",
     "address",
@@ -1514,6 +1546,10 @@ WORKER_ROW_PROJECTION = WORKERS.projection(
     "total_tpu_count",
     "device_type",
     "device_variant",
+    "committed_cpu_millicores",
+    "committed_mem_bytes",
+    "committed_gpu",
+    "committed_tpu",
     extra_fields=(ExtraField("attributes", dict, default_factory=dict),),
     row_cls=WorkerRow,
 )
@@ -1617,6 +1653,10 @@ WORKER_DETAIL_PROJECTION = WORKERS.projection(
     "total_tpu_count",
     "device_type",
     "device_variant",
+    "committed_cpu_millicores",
+    "committed_mem_bytes",
+    "committed_gpu",
+    "committed_tpu",
     "md_hostname",
     "md_ip_address",
     "md_cpu_count",

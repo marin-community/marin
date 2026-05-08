@@ -1499,6 +1499,39 @@ def test_set_task_status_text_persists_via_store(service):
     assert service._store.tasks.get_status_text_summary(task_id.to_wire()) == summary_text
 
 
+def test_list_tasks_returns_current_attempt_timing(service, state):
+    """ListTasks must surface the current attempt's started_at and exactly one attempt entry.
+
+    Regression target: ``_tasks_for_listing`` previously returned tasks with
+    empty ``attempts``, so the proto's ``started_at`` (read from the current
+    attempt) was never populated and retry status text was missing on the
+    dashboard. The fixed version JOINs the current attempt only — at most one
+    row per task — to avoid the IN-clause blowup on long histories.
+    """
+    request = make_job_request("list-tasks-timing")
+    service.launch_job(request, None)
+    job_id = JobName.root("test-user", "list-tasks-timing")
+    task_id = job_id.task(0)
+    worker_id = WorkerId("w-list-timing")
+    _register_worker(state, worker_id)
+    _assign_and_transition(state, task_id, worker_id, job_pb2.TASK_STATE_RUNNING)
+
+    response = service.list_tasks(
+        controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()),
+        None,
+    )
+
+    assert len(response.tasks) == 1
+    proto = response.tasks[0]
+    assert proto.task_id == task_id.to_wire()
+    assert proto.state == job_pb2.TASK_STATE_RUNNING
+    # current attempt is loaded -> started_at on the proto is populated
+    assert proto.started_at.epoch_ms > 0
+    # exactly one attempt entry — the current one — even if more existed
+    assert len(proto.attempts) == 1
+    assert proto.attempts[0].attempt_id == proto.current_attempt_id
+
+
 # =============================================================================
 # Direct-SQL load: ensure list_jobs scales under concurrent dashboard polling.
 # =============================================================================
