@@ -9,12 +9,15 @@ transitions.py and service.py import from here — this module has no dependency
 on any of them, sitting at the bottom of the import graph.
 """
 
+import functools
 import json
 from collections.abc import Iterable
+from typing import NamedTuple
 
 from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint
+from iris.cluster.types import get_gpu_count, get_tpu_count
 from iris.rpc import controller_pb2, job_pb2
 
 # Shared kwargs for MessageToDict so every call site is consistent.
@@ -89,3 +92,24 @@ def reservation_entries_from_json(reservation_json: str | None) -> list[job_pb2.
         return []
     data = json.loads(reservation_json)
     return [json_format.ParseDict(e, job_pb2.ReservationEntry()) for e in data.get("entries", [])]
+
+
+class DeviceCounts(NamedTuple):
+    """GPU and TPU counts parsed from a `job_config.res_device_json` string."""
+
+    gpu: int
+    tpu: int
+
+
+@functools.lru_cache(maxsize=8192)
+def device_counts_from_json(device_json: str | None) -> DeviceCounts:
+    """Cached parse of `job_config.res_device_json` into device counts.
+
+    Per-tick scheduler usage aggregation calls this once per attempt row;
+    the LRU amortizes the JSON parse across many rows that share the same
+    device JSON string.
+    """
+    if not device_json:
+        return DeviceCounts(gpu=0, tpu=0)
+    device = proto_from_json(device_json, job_pb2.DeviceConfig)
+    return DeviceCounts(gpu=get_gpu_count(device), tpu=get_tpu_count(device))

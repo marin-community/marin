@@ -143,22 +143,6 @@ def test_drain_skips_already_assigned(state):
     assert batch2.running_tasks[0].task_id == task_id
 
 
-def test_drain_kill_queue(state):
-    """Kill requests buffered via buffer_direct_kill appear in tasks_to_kill."""
-    [task_id] = submit_direct_job(state, "drain-kill")
-
-    # Promote to ASSIGNED first.
-    with state._store.transaction() as cur:
-        state.drain_for_direct_provider(cur)
-
-    with state._store.transaction() as cur:
-        state.buffer_direct_kill(cur, task_id.to_wire())
-
-    with state._store.transaction() as cur:
-        batch = state.drain_for_direct_provider(cur)
-    assert task_id.to_wire() in batch.tasks_to_kill
-
-
 # =============================================================================
 # Transition-level tests: apply_direct_provider_updates
 # =============================================================================
@@ -364,21 +348,6 @@ def test_apply_worker_failed_from_assigned(state):
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_PENDING
     assert task.preemption_count == 0
-
-
-def test_buffer_direct_kill(state):
-    """buffer_direct_kill inserts a kill entry with NULL worker_id."""
-    with state._store.transaction() as cur:
-        state.buffer_direct_kill(cur, "some-task-id")
-
-    rows = state._db.fetchall(
-        "SELECT worker_id, kind, task_id FROM dispatch_queue WHERE worker_id IS NULL",
-        (),
-    )
-    assert len(rows) == 1
-    assert rows[0]["kind"] == "kill"
-    assert rows[0]["task_id"] == "some-task-id"
-    assert rows[0]["worker_id"] is None
 
 
 # =============================================================================

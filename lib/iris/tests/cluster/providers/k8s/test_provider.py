@@ -84,24 +84,72 @@ def test_sync_catches_kubectl_error_and_returns_task_failure(provider, k8s):
 
 
 # ---------------------------------------------------------------------------
-# sync(): tasks_to_kill
+# sync(): stray pod deletion (kill via desired-set diff)
 # ---------------------------------------------------------------------------
 
 
-def test_sync_deletes_pods_for_tasks_to_kill(provider, k8s):
+def test_sync_deletes_pods_not_in_desired_set(provider, k8s):
+    """A managed pod whose (task_hash, attempt_id) is not in tasks_to_run|running_tasks
+    is considered a stray and gets deleted."""
     task_id = "/test-job/0"
     populate_pod(
         k8s,
         "iris-test-job-0-0",
         "Running",
-        labels={_LABEL_TASK_HASH: _task_hash(task_id), _LABEL_JOB_ID: _sanitize_label_value("/test-job")},
+        labels={
+            _LABEL_TASK_HASH: _task_hash(task_id),
+            "iris.attempt_id": "0",
+            _LABEL_JOB_ID: _sanitize_label_value("/test-job"),
+        },
     )
-    batch = make_batch(tasks_to_kill=[task_id])
+    # Empty batch: nothing desired → existing pod is stray.
+    batch = make_batch()
 
     result = provider.sync(batch)
 
     assert k8s.get_json(K8sResource.PODS, "iris-test-job-0-0") is None
     assert result.updates == []
+
+
+def test_sync_keeps_pods_in_desired_running_set(provider, k8s):
+    """A managed pod for a desired (task_hash, attempt_id) is kept across the diff."""
+    task_id = JobName.from_wire("/test-job/0")
+    pod_name = _pod_name(task_id, 0)
+    populate_pod(
+        k8s,
+        pod_name,
+        "Running",
+        labels={
+            _LABEL_TASK_HASH: _task_hash(task_id.to_wire()),
+            "iris.attempt_id": "0",
+        },
+    )
+    batch = make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)])
+
+    provider.sync(batch)
+
+    assert k8s.get_json(K8sResource.PODS, pod_name) is not None
+
+
+def test_sync_deletes_pod_for_stale_attempt(provider, k8s):
+    """A pod for an older attempt of a still-active task is a stray (attempt_id mismatch)."""
+    task_id = JobName.from_wire("/test-job/0")
+    old_pod = _pod_name(task_id, 0)
+    populate_pod(
+        k8s,
+        old_pod,
+        "Running",
+        labels={
+            _LABEL_TASK_HASH: _task_hash(task_id.to_wire()),
+            "iris.attempt_id": "0",
+        },
+    )
+    # Desired = attempt 1 (task was preempted and re-promoted).
+    batch = make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=1)])
+
+    provider.sync(batch)
+
+    assert k8s.get_json(K8sResource.PODS, old_pod) is None
 
 
 def test_delete_pods_uses_task_hash_label(provider, k8s):
@@ -880,8 +928,8 @@ def test_sync_creates_pdb_for_coordinator_task(provider, k8s):
     assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == _task_hash("/coord-job/0")
 
 
-def test_bulk_delete_defers_pdb_cleanup_to_gc(provider, k8s):
-    """_bulk_delete_task_pods deletes pods immediately but defers PDB/CM cleanup to GC."""
+def test_stray_delete_defers_pdb_cleanup_to_gc(provider, k8s):
+    """_delete_stray_pods deletes pods immediately but defers PDB/CM cleanup to GC."""
     task_id = "/coord-job/0"
     task_hash = _task_hash(task_id)
     labels = {
@@ -890,7 +938,12 @@ def test_bulk_delete_defers_pdb_cleanup_to_gc(provider, k8s):
         _LABEL_TASK_HASH: task_hash,
     }
 
-    populate_pod(k8s, "iris-coord-pod", "Running", labels={_LABEL_TASK_HASH: task_hash})
+    populate_pod(
+        k8s,
+        "iris-coord-pod",
+        "Running",
+        labels={_LABEL_TASK_HASH: task_hash, "iris.attempt_id": "0"},
+    )
     pdb = {
         "kind": "PodDisruptionBudget",
         "metadata": {"name": "iris-coord-pod-pdb", "labels": labels},
@@ -899,7 +952,8 @@ def test_bulk_delete_defers_pdb_cleanup_to_gc(provider, k8s):
     k8s.seed_resource(K8sResource.PDBS, "iris-coord-pod-pdb", pdb)
 
     cached_pods = k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
-    provider._bulk_delete_task_pods([task_id], cached_pods)
+    # Empty desired set → pod is stray.
+    provider._delete_stray_pods(cached_pods, desired_keys=set())
 
     # Pod deleted immediately.
     assert k8s.get_json(K8sResource.PODS, "iris-coord-pod") is None
@@ -1000,7 +1054,7 @@ def test_gc_respects_interval(provider, k8s):
 
 
 def test_gc_cleans_up_deferred_configmaps(provider, k8s):
-    """GC deletes configmaps for task hashes enqueued by _bulk_delete_task_pods."""
+    """GC deletes configmaps for task hashes enqueued by _delete_stray_pods."""
     task_id = "/deferred-job/0"
     task_hash = _task_hash(task_id)
     labels = {
@@ -1016,7 +1070,7 @@ def test_gc_cleans_up_deferred_configmaps(provider, k8s):
     }
     k8s.seed_resource(K8sResource.CONFIGMAPS, "deferred-cm", cm)
 
-    # Simulate _bulk_delete_task_pods enqueuing the hash.
+    # Simulate _delete_stray_pods enqueuing the hash.
     provider._pending_gc_hashes.add(task_hash)
 
     # GC picks it up and deletes the configmap.
@@ -1026,9 +1080,9 @@ def test_gc_cleans_up_deferred_configmaps(provider, k8s):
 
 def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
     """Deferred hashes must not be dropped when the killed pod is still in the
-    pre-delete managed_pods snapshot (the common tasks_to_kill path).
+    pre-delete managed_pods snapshot.
 
-    Reproduces: sync fetches managed_pods, _bulk_delete_task_pods deletes the pod
+    Reproduces: sync fetches managed_pods, _delete_stray_pods deletes the pod
     and enqueues hash, then _maybe_gc sees the hash as "active" from the stale
     snapshot. The hash must be retained for the next GC cycle.
     """
@@ -1037,7 +1091,7 @@ def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
     labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash}
 
     # Seed the pod and its configmap.
-    populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash})
+    populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash, "iris.attempt_id": "0"})
     cm = {"kind": "ConfigMap", "metadata": {"name": "iris-kill-me-0-0-wf", "labels": labels}}
     k8s.seed_resource(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf", cm)
 
@@ -1046,8 +1100,8 @@ def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
         K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE}
     )
 
-    # Kill the pod — hash goes into _pending_gc_hashes.
-    provider._bulk_delete_task_pods([task_id], pre_delete_pods)
+    # Kill the pod via stray-set diff (empty desired) — hash goes into _pending_gc_hashes.
+    provider._delete_stray_pods(pre_delete_pods, desired_keys=set())
     assert k8s.get_json(K8sResource.PODS, "iris-kill-me-0-0") is None
     assert task_hash in provider._pending_gc_hashes
 

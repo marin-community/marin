@@ -1111,7 +1111,14 @@ class K8sTaskProvider:
         return self._log_collector
 
     def sync(self, batch: DirectProviderBatch) -> DirectProviderSyncResult:
-        """Sync task state: apply new pods, delete killed pods, poll running pods."""
+        """Sync task state: apply new pods, delete strays, poll running pods.
+
+        Kill targets are derived here, not buffered in the controller: any
+        managed pod whose ``(task_hash, attempt_id)`` is not in the desired
+        set (``tasks_to_run`` union ``running_tasks``) is deleted on this tick.
+        Producing transitions only need to update ``tasks.state``; the next
+        sync sees the diff.
+        """
         apply_failures: list[TaskUpdate] = []
         for run_req in batch.tasks_to_run:
             try:
@@ -1134,7 +1141,12 @@ class K8sTaskProvider:
             field_selector=_ACTIVE_PODS_FIELD_SELECTOR,
         )
 
-        self._bulk_delete_task_pods(batch.tasks_to_kill, managed_pods)
+        desired_keys: set[tuple[str, int]] = set()
+        for run_req in batch.tasks_to_run:
+            desired_keys.add((_task_hash(run_req.task_id), int(run_req.attempt_id)))
+        for entry in batch.running_tasks:
+            desired_keys.add((_task_hash(entry.task_id.to_wire()), int(entry.attempt_id)))
+        self._delete_stray_pods(managed_pods, desired_keys)
         updates = apply_failures + self._poll_pods(batch.running_tasks, managed_pods)
         scheduling_events = self._fetch_scheduling_events(managed_pods)
 
@@ -1353,28 +1365,50 @@ class K8sTaskProvider:
             self.kubectl.apply_json(pdb)
             logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
 
-    def _bulk_delete_task_pods(self, task_ids: list[str], cached_pods: list[dict]) -> None:
-        """Delete pods for killed tasks. ConfigMaps and PDBs are cleaned up by the
-        periodic GC pass (_gc_terminal_resources) to avoid listing all configmaps/PDBs
-        on every sync cycle — which was an O(total_resources) scan on the hot path.
+    def _delete_stray_pods(self, cached_pods: list[dict], desired_keys: set[tuple[str, int]]) -> None:
+        """Delete pods that aren't in the desired ``(task_hash, attempt_id)`` set.
+
+        Stray = the controller no longer wants this attempt running (task is
+        terminal in ``tasks``, or the attempt has rolled to a newer one). The
+        producing transition has already updated ``tasks.state``; we observe
+        the absence here and tear the pod down.
+
+        ConfigMaps and PDBs are cleaned up by the periodic GC pass
+        (_gc_terminal_resources) to avoid listing all configmaps/PDBs on
+        every sync cycle — which was an O(total_resources) scan on the hot
+        path.
         """
-        if not task_ids:
+        stray_pod_names: list[str] = []
+        stray_hashes: set[str] = set()
+        for pod in cached_pods:
+            labels = pod.get("metadata", {}).get("labels", {})
+            task_hash = labels.get(_LABEL_TASK_HASH)
+            attempt_str = labels.get(_LABEL_ATTEMPT_ID)
+            if not task_hash or attempt_str is None:
+                continue
+            try:
+                attempt_id = int(attempt_str)
+            except (ValueError, TypeError):
+                continue
+            if (task_hash, attempt_id) in desired_keys:
+                continue
+            pod_name = pod.get("metadata", {}).get("name")
+            if pod_name:
+                stray_pod_names.append(pod_name)
+                stray_hashes.add(task_hash)
+
+        if not stray_pod_names:
             return
-        task_hashes = {_task_hash(tid) for tid in task_ids}
 
-        pod_names = [
-            p["metadata"]["name"]
-            for p in cached_pods
-            if p.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH) in task_hashes
-        ]
-
-        if pod_names:
-            self.kubectl.delete_many(K8sResource.PODS, pod_names, wait=False)
-
+        self.kubectl.delete_many(K8sResource.PODS, stray_pod_names, wait=False)
         # Enqueue task hashes for deferred configmap/PDB cleanup by the GC pass.
-        self._pending_gc_hashes.update(task_hashes)
+        self._pending_gc_hashes.update(stray_hashes)
 
-        logger.info("Deleted %d pods for %d tasks (CM/PDB cleanup deferred to GC)", len(pod_names), len(task_ids))
+        logger.info(
+            "Deleted %d stray pods for %d task hashes (CM/PDB cleanup deferred to GC)",
+            len(stray_pod_names),
+            len(stray_hashes),
+        )
 
     def _maybe_gc_terminal_resources(self, active_pods: list[dict]) -> None:
         """Periodically delete terminal (Succeeded/Failed) pods and their associated

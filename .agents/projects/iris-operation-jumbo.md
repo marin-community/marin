@@ -2,56 +2,64 @@
 
 ## TL;DR
 
-Delete `dispatch_queue`. Delete the kill dispatcher. Delete the start dispatcher's redispatch state machine. The whole control path is:
+Reorganize the controller around two invariants:
 
-1. **Scheduler** writes `tasks.state = ASSIGNED` (existing state) atomically with `INSERT INTO task_attempts`. The attempt row is the resource ledger: an attempt holds worker resources while `task_attempts.worker_id IS NOT NULL AND task_attempts.finished_at_ms IS NULL`.
-2. **Poll loop** every tick:
-   - For each worker `W`: compute the expected set `E_W = {(t, a) : current attempt is on W and state IN {BUILDING, RUNNING}}`. Send `Poll(E_W)`. **Worker auto-kills any local task not in `E_W`.**
-   - For each current attempt in `state=ASSIGNED`: send the start payload. Start is effectively fire-and-forget; the worker either starts/dedups the attempt or the normal heartbeat/liveness path catches failure.
-3. **Producing transitions** (cancel, preempt, gang-cascade, worker-death) update task/attempt state but do **not** enqueue and do **not** stamp `task_attempts.finished_at_ms` for a still-running worker-bound attempt.
-4. **Worker** auto-kills strays as a side effect of receiving `Poll(E_W)`. On terminal, it heartbeats; the heartbeat path stamps `task_attempts.finished_at_ms` and records the observed outcome. Resource release is derived from that timestamp. There is no separate decommit transition.
+1. **`tasks` and `task_attempts` are the only state that matters.** Scheduler availability, worker reconcile, K8s reconcile, and restart recovery are all derived from those two tables. No `workers.committed_*` cache. No `dispatch_queue`. No in-memory mirror of intent.
+2. **A `task_attempt` row holds worker resources iff `worker_id IS NOT NULL AND finished_at_ms IS NULL`.** Producing transitions write task/attempt state. The heartbeat path (and only the heartbeat path) stamps `finished_at_ms`.
 
-No `KILL_REQUESTED` state. No StopTasks RPC initiated by the controller. No `dispatch_queue`. No `pending_stop_resources`. No `workers.committed_*` cache in the correctness path. Scheduler availability is derived from unfinished `task_attempts`.
+The control path is:
 
-`current_attempt_id` (already exists, schema.py:737) is the per-task epoch. Job-name replacement uses soft-kill (state→terminal, prune later) — never CASCADE-delete a job whose tasks may still be running, because that destroys the `task_attempts` rows that describe resource ownership.
+1. **Scheduler** writes `tasks.state = ASSIGNED` atomically with `INSERT INTO task_attempts(state=ASSIGNED, worker_id=W)`. The new attempt row immediately holds W's resources in the scheduler's derived ledger.
+2. **Poll loop** every tick, for a bounded batch of healthy workers:
+   - Compute `E_W = {(t, a) : current attempt is on W and task state IN {BUILDING, RUNNING}}`.
+   - Compute `S_W = {(t, a, RunTaskRequest) : current attempt is on W and task state = ASSIGNED}`.
+   - Send `Reconcile(E_W, S_W)`. (Interim impl: `Poll(E_W)` + `StartTasks(S_W)`.)
+   - **Worker auto-kills any local task not in `E_W ∪ {start payload task_ids}`.**
+3. **Producing transitions** (cancel, preempt, gang cascade, worker death) update `tasks.state` and `task_attempts.state`. They do **not** stamp `task_attempts.finished_at_ms` for worker-bound attempts.
+4. **Worker** auto-kills strays as a side effect of `Reconcile`. On terminal, it heartbeats; the heartbeat path stamps `finished_at_ms`. Resource release is derived from that timestamp.
+
+`current_attempt_id` (schema.py:737) is the per-task epoch; worker dedup on `(task_id, attempt_id)` (worker.py:679-692) makes the rest follow.
+
+Job-name replacement uses soft-kill plus a drain wait — never CASCADE-delete a job whose tasks may still be running, because that destroys the `task_attempts` rows that describe resource ownership.
 
 ---
 
 ## 1. Goals / Non-goals
 
 ### Goals
-- One control-plane path for reconcile. V1 can use existing `Poll` + `StartTasks`; the intended endpoint is a single `Reconcile` RPC that carries both expected tasks and start payloads. No `StopTasks` from controller.
-- Worker auto-kills strays based on `Poll(expected)`. The kill is a worker-local operation, not a controller-driven RPC.
-- `tasks.state` selects the current attempt; `task_attempts` is the dispatch and resource ledger.
-- `available = total − SUM(resources for unfinished worker-bound attempts)`. No `pending_stop_resources` term and no `workers.committed_*` cache in the scheduler.
-- Same model for worker-bound and K8s-bound tasks. K8s controller-side reconcile diffs `tasks` against the pod listing.
-- Preserve all #5550 wins: heartbeat-confirmed resource release, single-snapshot scheduler read, three-phase RPC pattern (read → fan-out without lock → small write tx).
+- One control-plane path for reconcile, replacing today's split between `_dispatch_assignments_direct` (scheduler thread, controller.py:2270), `_stop_tasks_direct` (heartbeat-updater thread, controller.py:2349), and inline `_poll_all_workers` in the scheduling tick (controller.py:2422).
+- Worker auto-kill driven by reconcile expectation, not by a controller-issued `StopTasks` RPC.
+- Scheduler availability derived from unfinished worker-bound `task_attempts`. No `workers.committed_*`.
+- Single source of truth for state transitions: one `_terminate_task` helper, with explicit producer-vs-heartbeat parameterization controlling whether `finished_at_ms` is stamped.
+- K8s direct-provider has the same shape as worker provider: scheduler writes `ASSIGNED`, reconcile diffs `tasks` against pod listing, applies pod creates/deletes, heartbeat-equivalent confirmation finalizes attempts. No buffered K8s kill queue.
 
 ### Non-goals
-- A new worker reconcile RPC in the first cut. `Poll` already carries `expected_tasks` and `StartTasks` already carries payloads. Once the state model is stable, replace both with one `Reconcile` RPC.
-- New states. `ASSIGNED` (job.proto:205) and the existing terminals are enough.
-- New columns on `task_attempts` for dispatch metadata (the prior version of this doc proposed `dispatched_at_ms` / `kill_dispatched_at_ms`; not needed — see §3.4 idempotency).
+- A new worker reconcile RPC in the first cut. Interim wire shape: existing `Poll` + `StartTasks` (driven from one snapshot, one fan-out). Once the state model is stable, collapse them into a single `Reconcile` RPC.
+- New task states. `ASSIGNED` (job.proto:205) and the existing terminals are sufficient.
+- New columns on `task_attempts`. The current `(state, started_at_ms, finished_at_ms, exit_code, error)` set is enough.
+- Watchdogs for "worker accepted the RPC but didn't act on it." If the worker process is sick, heartbeat-fail-threshold reaps it. If the RPC fails, the next reconcile re-sends. We don't model "worker is fine, but doing the wrong thing."
 
 ---
 
-## 2. Background
+## 2. Background: where main is today
 
-The just-shipped PR (`agent/iris-kill-registry-refactor`, design `.agents/projects/scheduler-queue.md`) replaced direct dispatch with a SQLite `dispatch_queue` table, a kill dispatcher, a start dispatcher, and a `pending_stop_resources` join in the scheduler.
+Current main (commit `040f97585`, this branch adds only design docs):
 
-It closes #5470 by construction. It also carries complexity the design itself flags as not-strictly-load-bearing: after #5550, release is already supposed to wait for heartbeat-confirmed terminal state. The real canonical fact is the unfinished attempt row, not a second queue row or a mutable worker counter.
+- **Worker dispatch is direct.** Scheduling loop calls `_dispatch_assignments_direct` (controller.py:2270), which opens a transaction, calls `transitions.queue_assignments(direct_dispatch=True)`, commits, then fans out `provider.start_tasks` against the addresses captured in `start_requests`.
+- **Worker kill is direct.** `_process_heartbeat_updates` (controller.py:2443) collects `tasks_to_kill` from heartbeat-driven cascade transitions and calls `_stop_tasks_direct` (controller.py:2349).
+- **Polling is inline.** `_poll_all_workers` (controller.py:2422) runs at the end of each scheduling tick. It reads `tasks WHERE current_worker_id IN (active_healthy) AND state IN ACTIVE_TASK_STATES` (`get_running_tasks_for_poll` at transitions.py:2220) and fans out `provider.poll_workers`. The worker side (`_reconcile_expected_tasks` at worker.py:854) already auto-kills local tasks not in `expected`; the 30s `_recent_submissions` grace window covers the StartTasks→PollTasks race.
+- **`dispatch_queue` is K8s-only.** It exists in schema (schema.py:955) but only K8s uses it: `queue_assignments(direct_dispatch=False)` writes `enqueue_run` rows for K8s pods (transitions.py:1306), and `buffer_direct_kill` writes `enqueue_kill(worker_id=NULL)` rows for K8s task kills (transitions.py:2632). The K8s sync loop drains both. Worker-bound dispatch never touches the table.
+- **`workers.committed_cpu_millicores | committed_mem_bytes | committed_gpu | committed_tpu`** are durable counters maintained by `add_committed_resources` / `decommit_resources` (stores.py:1762-1787). The scheduler reads them every tick (scheduler.py:189-192).
+- **`_terminate_task` (transitions.py:353)** is the existing single helper for moving a task and its current attempt out of active state. It always stamps `task_attempts.finished_at_ms = now_ms` for terminal states (transitions.py:383-393), regardless of whether the worker is still holding the container. This is the source of the #5470 class of bug: capacity returns to the scheduler before the worker has actually exited.
 
-The reconcile design notices this and pushes further: if `task_attempts` is the source of truth for resource accounting, and worker auto-reconcile via `Poll` is the source of truth for "what should be running," then `dispatch_queue` is purely a redundant log of work that's also derivable from `tasks` and `task_attempts`. Drop it.
+The reconcile design takes the existing patterns at face value and rewires them around `task_attempts` as the resource ledger:
 
-The simplification compounds. Without the queue:
-- No kill dispatcher (controller never sends StopTasks; worker auto-kills).
-- No redispatch state machine (worker reconciles every tick; if a kill is dropped, the next Poll re-sends the expected set).
-- No CHECK constraint, no partial unique index, no `(worker_id, attempt_id)` discipline.
-- No `pending_stop_resources`.
-- No `workers.committed_*` cache in the scheduler. If scale tests need it later, reintroduce it as an in-memory scheduler abstraction derived from `task_attempts`, not as transition-maintained durable state.
-- No `KILL_REQUESTED` state.
-- No `task_attempts.dispatched_at_ms` columns.
-
-What remains: scheduler writes `ASSIGNED`, poll loop sends `Poll` + `StartTasks`, heartbeat finalizes attempts, and scheduler capacity is derived from unfinished attempts.
+- `_dispatch_assignments_direct` → folded into the polling tick, driven by `tasks.state=ASSIGNED` rows.
+- `_stop_tasks_direct` → deleted. Worker auto-kill via `Reconcile` is the only kill path.
+- `_poll_all_workers` → generalized into per-worker reconcile that carries both expected set and start payloads.
+- `workers.committed_*` → derived in the scheduler from unfinished worker-bound attempts.
+- `_terminate_task` → keep as the single helper, but split the `finished_at_ms` write so producers cannot release resources before the worker confirms.
+- K8s `dispatch_queue` rows + `buffer_direct_kill` → deleted. K8s reconcile reads `tasks` directly and diffs against pod listing.
 
 ---
 
@@ -76,71 +84,46 @@ TASK_STATE_PREEMPTED      = 10  terminal-for-this-attempt; new attempt may exist
 
 `ACTIVE_TASK_STATES = {ASSIGNED, BUILDING, RUNNING}` already exists (db.py:144-148).
 
-No new state is added.
+### 3.2 Cancel / preempt: `tasks.state` goes terminal directly
 
-### 3.2 Cancel / preempt: tasks.state goes terminal directly
+The producing transition writes `tasks.state=KILLED|PREEMPTED` immediately and updates the attempt's reporting state, but **does not stamp `task_attempts.finished_at_ms`** while the attempt is worker-bound.
 
-A "cancel" today writes a kill row to `dispatch_queue` and waits for heartbeat-confirmed terminal before flipping `tasks.state` to `KILLED`. Under reconcile, **the producing transition writes `tasks.state=KILLED` immediately**.
+- Worker still has the container running. Worker's next reconcile excludes this task from `E_W` (state ∉ ACTIVE for the current attempt, or the current attempt has rolled). Worker auto-kills.
+- Worker heartbeats `(t, a) → KILLED`. Heartbeat path stamps `finished_at_ms = now_ms`.
+- The attempt no longer contributes to the scheduler's derived worker usage. Capacity returns. Scheduler can place new work on W.
 
-This sounds aggressive, but it isn't:
-- The old attempt row remains unfinished. The producing transition does not stamp `task_attempts.finished_at_ms`.
-- Worker still has the container running. Worker's next `Poll` excludes this task from `expected` (since `state ∉ ACTIVE`). Worker auto-kills.
-- Worker heartbeats `(t, a) → KILLED`. Heartbeat path stamps `task_attempts.finished_at_ms = now_ms` and records the observed terminal state.
-- The attempt no longer contributes to the scheduler's derived worker usage. Capacity returns. Scheduler can place new work.
+The conservative-state property: `tasks.state=KILLED` means "the controller no longer wants this task to run"; it does **not** mean "resources released." `task_attempts.finished_at_ms IS NULL` on a worker-bound attempt is the release-pending signal. This is the same property #5550 attempted to enforce, sourced from `task_attempts` directly instead of via a kill queue or a mutable counter.
 
-The conservative-state property holds: `tasks.state=KILLED` does **not** mean "resources released." `task_attempts.finished_at_ms IS NULL` on a worker-bound attempt is the release-pending signal. Same property as #5550, just sourced from `task_attempts` instead of `dispatch_queue` or `workers.committed_*`.
+### 3.3 Preempt with retry
 
-### 3.3 Preempt with retry: old attempt stays unfinished until heartbeat
-
-For preempt-with-retry: the producing transition (`preempt_task`, `_requeue_coscheduled_siblings`) writes:
+For preempt-with-retry, the producing transition leaves the old attempt unfinished:
 
 ```python
-# Old attempt row stays with worker_id=W, attempt_id=N, finished_at_ms=NULL.
+# preempt_task / _requeue_coscheduled_siblings
 UPDATE task_attempts SET state=PREEMPTED
 WHERE task_id=t AND attempt_id=N
-# reconcile now excludes this attempt from the expected set
+# task_attempts(N).finished_at_ms stays NULL.
 
-# Task row — back to pending. The scheduler later creates N+1.
 UPDATE tasks
 SET state=PENDING, current_worker_id=NULL, current_worker_address=NULL
 WHERE task_id=t
 
-# Later scheduler transaction, after choosing W':
+# Later scheduler tx, after picking W':
 INSERT INTO task_attempts (task_id=t, attempt_id=N+1, worker_id=W', state=ASSIGNED)
 UPDATE tasks
 SET state=ASSIGNED, current_attempt_id=N+1, current_worker_id=W'
 WHERE task_id=t
 ```
 
-How does worker `W` learn to kill the old attempt? The expected-set query filters on the task's current attempt and active state:
+Worker W's reconcile expected-set query joins on `current_attempt_id`, so `(t, N)` is excluded once the task is back to PENDING and again once `current_attempt_id=N+1`. W auto-kills, heartbeats KILLED, heartbeat path stamps `finished_at_ms` on attempt N. Scheduler usage for W drops; W' already shows N+1 in its usage from the moment of insert.
 
-```sql
-SELECT t.task_id, t.current_attempt_id
-FROM tasks t
-JOIN task_attempts ta
-  ON ta.task_id = t.task_id AND ta.attempt_id = t.current_attempt_id
-WHERE ta.worker_id = :worker
-  AND t.state IN (TASK_STATE_ASSIGNED, TASK_STATE_BUILDING, TASK_STATE_RUNNING)
-```
+### 3.4 Idempotency
 
-Before the retry is reassigned, `t.state=PENDING`, so `(t, N)` is excluded. After reassignment, `t.current_attempt_id=N+1` with `worker_id=W'`, so `(t, N)` is still excluded from W's expected set.
+- **Start**: reconcile reads `task_attempts.state=ASSIGNED` for the worker batch and sends start payloads. If the RPC fails, `task_attempts.state` is still ASSIGNED, and the next reconcile for that worker re-sends. Worker dedup on `(task_id, attempt_id)` makes duplicates harmless. The controller advances to BUILDING when the heartbeat reports it. **No redispatch state machine, no `dispatched_at_ms`, no `attempts` counter.**
+- **Kill**: kills are not RPC'd. Worker auto-kills based on absence from `E_W`. Dropped reconcile → next tick re-sends.
+- **Worker dies / wedges**: heartbeat-fail-threshold trips and `_remove_failed_worker` synthesizes WORKER_FAILED for each non-terminal attempt on that worker, finalizing them. Tasks bounce back to PENDING (or to terminal, depending on retry budget).
 
-W's next Poll receives an expected set that excludes `(t, N)`. W auto-kills the container running `(t, N)`. Heartbeat path finalizes that attempt. The scheduler stops counting its resources because `finished_at_ms` is no longer NULL.
-
-`current_attempt_id` is the per-task epoch. Worker dedup on `(task_id, attempt_id)` (`worker.py:679-692`) correctly distinguishes old vs new. No new state, no new column.
-
-### 3.4 Idempotency: who handles redispatch?
-
-Today's design has a 5s redispatch timer + 16-attempt poison pill on `dispatch_queue`. Under reconcile:
-
-- **Start**: reconcile reads current `task_attempts.state=ASSIGNED` rows for the selected worker batch and sends start payloads. If the RPC is lost, the next reconcile for that worker re-sends the payload. Worker dedup on `(task_id, attempt_id)` makes duplicates harmless. The controller advances to BUILDING from the reconcile result or the normal worker status heartbeat. **No redispatch state machine needed** — worker-batch reconcile is the redispatch.
-- **Kill**: kills are not RPC'd by the controller. Worker auto-kills based on Poll. If a Poll is dropped, the next tick sends another Poll. Eventually worker sees the expected set excludes the stray and kills it.
-- **Stuck dispatch**: there is no meaningful `accepted=false` path. Start is delivered to the worker and either the worker starts/dedups it or the worker/task heartbeat path reports failure. If the worker is unreachable or wedged, heartbeat-fail-threshold trips and `_remove_failed_worker` synthesizes WORKER_FAILED. No `attempts` counter on the task; the worker-liveness check handles it.
-- **Stuck kill (worker won't terminate)**: worker auto-kill is local; if the worker process is wedged, heartbeat-fail-threshold trips and `_remove_failed_worker` runs. Same path.
-
-**Net: no `dispatched_at_ms` column. No `attempts` column. No poison-pill threshold on individual tasks.** The reconcile cadence + worker dedup gives idempotency for free; the heartbeat-fail-threshold gives liveness recovery for free.
-
-If we observe in production that a *single* worker is otherwise healthy but one task is stuck (wedged container that won't stop), we can add a per-attempt watchdog later. For v1 it isn't needed.
+We do not model "worker accepted the RPC but didn't perform the work." The RPC either fails (handled by reconcile retry) or succeeds (worker eventually reports state). A genuinely sick worker stops heartbeating and the failure-threshold path catches it.
 
 ---
 
@@ -152,120 +135,104 @@ POLLING_TICK_INTERVAL = Duration.from_seconds(0.25)
 RECONCILE_WORKER_BATCH_SIZE = 512
 
 def _polling_tick(self) -> None:
-    self._reconcile_worker_batch()  # Poll + starts from one DB snapshot.
-    self._sync_direct_provider()    # K8s: same model, controller does the diff.
+    self._reconcile_worker_batch()  # Phase 1-3 below.
+    self._sync_direct_provider()    # K8s, same shape.
     self._drain_heartbeats()
-    self._ping_worker_batch()
-    self._fail_workers_over_threshold()
 ```
 
-The controller does not have separate "start dispatcher", "kill dispatcher", and "full poll" stages. Each tick reconciles one bounded batch of active healthy workers. Over time the cursor rolls across the fleet, like the existing ping batching pattern. A wake can reset or prioritize the cursor for workers that just received assignments or terminal-producing transitions.
+The ping loop (`_run_ping_loop`, controller.py:2378) stays separate and on its own cadence; reconcile does not touch worker liveness.
 
 ### 4.1 Worker-batch reconcile
+
+Three-phase RPC pattern (preserved from #5550 work):
 
 ```python
 def _reconcile_worker_batch(self) -> None:
     # Phase 1: read snapshot, no write lock.
     with self._db.read_snapshot() as snap:
         workers = self._store.workers.next_reconcile_batch(
-            snap,
-            cursor=self._reconcile_cursor,
-            limit=RECONCILE_WORKER_BATCH_SIZE,
+            snap, cursor=self._reconcile_cursor, limit=RECONCILE_WORKER_BATCH_SIZE,
         )
-        worker_ids = [w.worker_id for w in workers]
-        rows = self._store.attempts.reconcile_rows_for_workers(snap, worker_ids)
-
+        rows = self._store.attempts.reconcile_rows_for_workers(snap, [w.worker_id for w in workers])
     actions = build_reconcile_actions(workers, rows)
-    # actions[W] = {
-    #   expected: list[(task_id, attempt_id)],  # BUILDING/RUNNING only
-    #   starts: list[RunTaskRequest],
-    # }
+    # actions[W] = ReconcileAction(expected=[(task_id, attempt_id)], starts=[RunTaskRequest])
 
-    # Phase 2: RPC fan-out. No DB lock. V1 may send Poll(E_W) and StartTasks;
-    # the intended endpoint is one Reconcile RPC carrying both fields.
+    # Phase 2: RPC fan-out, no DB lock.
     results = self._provider.reconcile_workers(actions)
 
-    # Phase 3: small write tx for Poll/status updates and start observations.
+    # Phase 3: small write tx for status updates and start observations.
     with self._store.transaction() as cur:
         self._apply_reconcile_results(cur, results)
 ```
 
-`reconcile_rows_for_workers` is the single task query for the worker batch:
+`reconcile_rows_for_workers`:
 
 ```sql
 SELECT
-  ta.worker_id,
-  t.task_id,
-  ta.attempt_id,
-  t.state AS task_state,
-  ta.state AS attempt_state,
-  j.num_tasks,
-  jc.*
+  ta.worker_id, t.task_id, ta.attempt_id,
+  t.state AS task_state, ta.state AS attempt_state,
+  t.job_id
 FROM tasks t
 JOIN task_attempts ta
   ON ta.task_id = t.task_id AND ta.attempt_id = t.current_attempt_id
-JOIN jobs j ON j.job_id = t.job_id
-JOIN job_config jc ON jc.job_id = t.job_id
 WHERE ta.worker_id IN (:worker_ids)
-  AND ta.worker_id IS NOT NULL
   AND t.state IN (TASK_STATE_ASSIGNED, TASK_STATE_BUILDING, TASK_STATE_RUNNING)
 ```
 
-Rows with `task_state IN {BUILDING, RUNNING}` become Poll `expected_tasks`. `ASSIGNED` rows do **not** go into Poll expected sets; they produce start payloads. This avoids the Poll-before-start race where a worker would report "task not found" for an attempt it has not received yet. Rows with `task_state=ASSIGNED AND attempt_state=ASSIGNED` become start payloads. `build_run_request(row)` reconstructs the `RunTaskRequest` from canonical tables (`jobs`, `job_config`, `job_workdir_files`) instead of relying on `dispatch_queue.payload_proto`. This is the same data currently serialized before `dispatch.enqueue_start`.
+Rows with `task_state IN {BUILDING, RUNNING}` go into Poll `expected_tasks`. Rows with `task_state=ASSIGNED` produce start payloads and are **excluded** from `expected_tasks`. This avoids the Poll-before-start race; once `ASSIGNED` is no longer reported in `expected`, the 30s `_recent_submissions` grace window in `worker.py` becomes redundant and can be dropped together with the unified `Reconcile` RPC.
 
-Every worker in the selected batch gets a Poll, including `Poll([])`. That is what kills local strays when the controller expects nothing on that worker.
+Every worker in the batch receives a reconcile action, including `Reconcile([], [])` for workers that should be empty — that is what kills strays.
 
-`mark_building_if_current` updates both tables with attempt guards. In the interim `Poll` + `StartTasks` implementation this can run after the start RPC returns successfully. In the single-`Reconcile` version it runs from the worker's reconcile/status result.
+### 4.2 RunTaskRequest cache
+
+`RunTaskRequest` is heavy (entrypoint, environment, workdir files). Building it per-attempt per-tick on every reconcile pass would re-serialize the same job-level config repeatedly. Cache by `job_id`:
+
+```python
+@functools.lru_cache(maxsize=4096)
+def _run_request_template(job_id_wire: str, snap_token: int) -> RunTaskRequestTemplate:
+    """Build the shared (job-level) portion of RunTaskRequest. Per-attempt
+    fields (task_id, attempt_id) are filled in at the call site.
+
+    snap_token is invalidated when the job's config changes. Same-name
+    replacement assigns a new job_id, so the cache key naturally rolls.
+    """
+    ...
+```
+
+The cache lives in the controller process and survives across ticks. Same-name replacement creates a new `job_id` (§6), so the cache key automatically rolls; no manual invalidation. Workdir files come from `job_workdir_files` and are stable for the life of a job.
+
+Per-attempt fields (`task_id`, `attempt_id`) are stamped onto the cached template at fan-out time. Resources come from the job_config and are part of the cached template.
+
+### 4.3 BUILDING transition
 
 ```sql
 UPDATE task_attempts
 SET state = TASK_STATE_BUILDING, started_at_ms = COALESCE(started_at_ms, :now)
-WHERE task_id = :task_id
-  AND attempt_id = :attempt_id
-  AND state = TASK_STATE_ASSIGNED;
+WHERE task_id = :task_id AND attempt_id = :attempt_id AND state = TASK_STATE_ASSIGNED;
 
 UPDATE tasks
 SET state = TASK_STATE_BUILDING
-WHERE task_id = :task_id
-  AND current_attempt_id = :attempt_id
-  AND state = TASK_STATE_ASSIGNED;
+WHERE task_id = :task_id AND current_attempt_id = :attempt_id AND state = TASK_STATE_ASSIGNED;
 ```
 
-Index: `idx_tasks_state_attempt` (schema.py:766) already covers `(state, task_id, current_attempt_id, job_id)`. Add an index on unfinished/assigned attempts if the join shows up in scale tests.
+Driven by the worker's first BUILDING/RUNNING heartbeat for the attempt. The current attempt guard makes this idempotent and racy-safe against scheduler-rolled attempts.
 
 ### 4.4 Wake events
 
-Same wake-event split as #5550:
+- `_scheduling_wake`: producing transitions that may free capacity (terminal heartbeats, attempt finalization).
+- `_polling_wake`: producing transitions that may need a fresh reconcile pass (any write to `tasks.state` that affects `expected_tasks` — primarily new ASSIGNED, plus bulk state changes from cancellation).
 
-- `_scheduling_wake`: producing transitions that may free capacity (terminal heartbeats).
-- `_polling_wake`: producing transitions that may produce new work to dispatch (any write to `tasks.state` that the dispatcher cares about — primarily new ASSIGNED, but also bulk state-changes like job cancellation).
-
-The poll loop waits on `_polling_wake` with `POLLING_TICK_INTERVAL` timeout; `wait → clear → tick` order preserved.
+The poll loop waits on `_polling_wake` with `POLLING_TICK_INTERVAL` timeout; `wait → clear → tick` order preserved. A wake can also push a worker to the front of the reconcile cursor so newly-assigned workers do not wait for a full rotation.
 
 ### 4.5 Heartbeat drain
 
-`_drain_heartbeats` (existing) does most of the work. The state-transition table gains no new entries — the path that takes RUNNING → KILLED on a terminal heartbeat already exists.
+`_drain_heartbeats` keeps its current shape. The state-transition table gains no new entries — RUNNING → KILLED on terminal heartbeat already exists.
 
-Two disciplines to enforce:
-
-1. **Producing transitions never stamp `task_attempts.finished_at_ms` for worker-bound attempts.** The heartbeat path is the sole writer. This is a behavior change from today (`_requeue_coscheduled_siblings` at transitions.py:601-655 stamps `finished_at_ms`). Refactor: those transitions update `task_attempts.state=PREEMPTED` (for reporting) but leave `finished_at_ms` NULL. The heartbeat path stamps `finished_at_ms` when the worker confirms terminal, refining the state if needed.
-
-2. **Attempt finalization is the resource-release transition.** There is no `decommit_resources` call. A worker-bound attempt holds resources while `finished_at_ms IS NULL`; once the heartbeat path sets `finished_at_ms`, scheduler usage derived from attempts drops automatically.
-
-3. **Keep `UpdateTaskStatus` push in v1.** `PollTasksResponse` is a supplemental observation path, not the sole heartbeat. Today Poll returns statuses for expected tasks; unexpected local tasks are killed as a side effect and may not be represented as terminal confirmations in the response. Removing worker-push heartbeat requires a separate wire change.
-
-The store API split should make this hard to misuse:
-
-```python
-attempts.mark_state(cur, task_id, attempt_id, state, error=None)
-attempts.finalize_from_worker(cur, task_id, attempt_id, observed_state, finished_at_ms, error=None)
-```
-
-Only `finalize_from_worker` writes `finished_at_ms`.
+The behavior change is in §5: producing transitions never stamp `task_attempts.finished_at_ms` for worker-bound attempts. The heartbeat path is the sole writer.
 
 ### 4.6 K8s direct-provider
 
-Same shape, controller-side:
+Same shape, controller-side instead of worker-side:
 
 ```python
 def _sync_direct_provider(self) -> None:
@@ -273,12 +240,11 @@ def _sync_direct_provider(self) -> None:
         return
     with self._db.read_snapshot() as snap:
         desired = self._store.attempts.list_active_direct_provider(snap)
-        # state IN ACTIVE, current attempt, worker_id IS NULL
-        to_start = [r for r in desired if r.state == TASK_STATE_ASSIGNED]
+        # tasks where current_worker_id IS NULL AND state IN ACTIVE
     pod_listing = self._provider.list_pods()
     actions = self._provider.diff(desired, pod_listing)
     # Pods in pod_listing but not in desired → DeletePod
-    # Tasks in to_start but not in pod_listing → CreatePod
+    # Tasks in desired+ASSIGNED not in pod_listing → CreatePod
     self._provider.apply(actions)
     with self._store.transaction() as cur:
         for (task_id, attempt_id), kind in actions:
@@ -288,13 +254,78 @@ def _sync_direct_provider(self) -> None:
                 self._store.attempts.finalize_from_worker(cur, task_id, attempt_id, TASK_STATE_KILLED, now_ms)
 ```
 
-The K8s direct-provider's existing sync (`_run_direct_provider_loop` at controller.py:1601-1610, `drain_for_direct_provider` at transitions.py:2465-2543) is already this shape. The change is purely the input source: read `tasks` instead of `dispatch_queue` rows.
-
-The pod-listing reconcile is the K8s analogue of `Poll(E_W)` for workers — controller diffs against external state to detect strays. Same model, controller is the actor instead of the worker.
+K8s reconcile is functionally identical to worker reconcile — start the pods that should exist, stop the pods that shouldn't, finalize attempts when pods exit. There is no buffered kill queue and no `dispatch_queue` rows. `buffer_direct_kill` is deleted; sites that called it (e.g. dispatch failure paths) instead update `tasks.state` directly, and the next sync diff picks up the change.
 
 ---
 
-## 5. Conservative scheduler state
+## 5. Producing transitions: single source of truth
+
+### 5.1 The contract
+
+Today's `_terminate_task` (transitions.py:353) is already the one helper that moves a task and its current attempt out of active state. The reconcile design keeps it as the single entry point, but makes the producer-vs-heartbeat distinction explicit:
+
+```python
+def _terminate_task(
+    cur,
+    attempts,
+    tasks,
+    workers,
+    registry,
+    task_id: str,
+    attempt_id: int | None,
+    state: int,
+    error: str | None,
+    now_ms: int,
+    *,
+    finalize_attempt: bool,            # see below
+    attempt_state: int | None = None,
+    failure_count: int | None = None,
+    preemption_count: int | None = None,
+) -> None:
+    """Single source of truth for moving a task out of active state.
+
+    Always:
+      - tasks.state, error, exit_code, finished_at_ms updated
+      - attempt's reporting state updated (PREEMPTED/KILLED/etc.)
+      - endpoints deleted
+
+    If finalize_attempt=True:
+      - task_attempts.finished_at_ms = now_ms (resource release)
+
+    Callers:
+      finalize_attempt=True  -> heartbeat path, _remove_failed_worker
+                                synthesis path, K8s pod-deleted observation
+      finalize_attempt=False -> producing transitions: cancel_job,
+                                cancel_tasks_for_timeout, preempt_task,
+                                _requeue_coscheduled_siblings,
+                                _terminate_coscheduled_siblings,
+                                _kill_non_terminal_tasks
+    """
+```
+
+`finalize_attempt` is not a stylistic flag; it directly controls whether the attempt's resources are released. Producers always pass `finalize_attempt=False` for worker-bound attempts. The heartbeat path and the worker-failure-synthesis path are the only `finalize_attempt=True` callers.
+
+`workers.decommit_resources` and `workers.add_committed_resources` are removed; the scheduler derives usage from unfinished attempts (§6). `_terminate_task` no longer takes a `resources` parameter.
+
+### 5.2 Call-site changes
+
+| Caller | `finalize_attempt` |
+|---|---|
+| `_apply_task_transitions` (heartbeat) | `True` |
+| `_remove_failed_worker` (synthesizes WORKER_FAILED for each non-terminal attempt on a dead worker) | `True` |
+| K8s sync — pod-deleted observation | `True` |
+| `cancel_job` / `_kill_non_terminal_tasks` / `cancel_tasks_for_timeout` | `False` |
+| `preempt_task` | `False` |
+| `_requeue_coscheduled_siblings` | `False` |
+| `_terminate_coscheduled_siblings` | `False` |
+
+Today's `_requeue_coscheduled_siblings` (transitions.py:592-642) and `_terminate_coscheduled_siblings` (transitions.py:548-589) both call `_terminate_task`, which today always stamps `finished_at_ms`. The change is the parameterization above.
+
+`_remove_failed_worker` already has heartbeat-equivalent semantics (it synthesizes the worker's missing terminal heartbeats); it stays `finalize_attempt=True`.
+
+---
+
+## 6. Conservative scheduler state
 
 ```python
 def _read_scheduling_state(self) -> SchedulingState:
@@ -305,17 +336,9 @@ def _read_scheduling_state(self) -> SchedulingState:
     return SchedulingState(tasks=tasks, workers=workers, usage=usage)
 ```
 
-`available_R(W) = total_R(W) − resource_usage_by_worker(W)`. No `pending_stop_resources` join. No `dispatch_queue` read. No durable `workers.committed_*` cache. `resource_usage_by_worker` is a derived aggregate over worker-bound attempts with `finished_at_ms IS NULL`; it is not separate state.
+`available_R(W) = total_R(W) − usage[W][R]`. The scheduler does not read `workers.committed_*`; those columns are removed.
 
-Why #5470 still holds:
-
-- Producing transition (preempt, cancel) writes `tasks.state=PREEMPTED|KILLED` on the to-be-stopped attempt's task. The old attempt row remains unfinished (`task_attempts.finished_at_ms IS NULL`).
-- Scheduler derives usage from unfinished attempts → `available = 0` on the still-busy worker → can't double-book.
-- Worker eventually heartbeats terminal → heartbeat tx finalizes the attempt → next scheduler tick can place.
-
-Worker reconcile via `Poll` is what *causes* the worker to terminate; the conservative-state property is independent of when reconcile fires. Even if reconcile is delayed by a tick, scheduler decisions are correct because they're keyed on unfinished attempts, not on "kill RPC sent."
-
-The usage query is the scheduler's resource ledger:
+`resource_usage_by_worker`:
 
 ```sql
 SELECT
@@ -331,15 +354,14 @@ WHERE ta.worker_id IS NOT NULL
 GROUP BY ta.worker_id
 ```
 
-The controller parses `devices` in Python with a small cached helper in `codec.py`:
+CPU/memory sum in SQL. Device counts are parsed in Python via a cached helper:
 
 ```python
 class DeviceCounts(NamedTuple):
     gpu: int
     tpu: int
 
-
-@lru_cache(maxsize=8192)
+@functools.lru_cache(maxsize=8192)
 def device_counts_from_json(device_json: str | None) -> DeviceCounts:
     if not device_json:
         return DeviceCounts(gpu=0, tpu=0)
@@ -347,56 +369,37 @@ def device_counts_from_json(device_json: str | None) -> DeviceCounts:
     return DeviceCounts(gpu=get_gpu_count(device), tpu=get_tpu_count(device))
 ```
 
-`resource_usage_by_worker()` should sum CPU/memory in SQL and use `device_counts_from_json()` for accelerator counts. This keeps JSON/proto parsing centralized and cached without introducing durable resource counters. If this is still too expensive at scale, reintroduce an in-memory per-scheduler-pass cache derived from this query. Do not reintroduce transition-maintained durable `committed_*` counters unless measurement shows the derived ledger is untenable.
+If at scale the per-tick aggregate becomes a hot path, cache it in process for the life of one scheduler pass. Do not reintroduce transition-maintained durable counters.
+
+### 6.1 Why #5470 holds
+
+- Producing transition (preempt, cancel) writes `tasks.state=PREEMPTED|KILLED` and updates the attempt's reporting state. The old attempt row remains unfinished (`finished_at_ms IS NULL`).
+- Scheduler derives usage from unfinished worker-bound attempts → `available = 0` on the still-busy worker → cannot double-book.
+- Worker eventually heartbeats terminal → heartbeat tx finalizes the attempt → next scheduler tick can place new work.
+
+The conservative property is independent of when reconcile fires. Even if reconcile is delayed by a tick, scheduler decisions are correct because they key on unfinished attempts, not on "kill RPC sent."
 
 ---
 
-## 6. Producing transitions: before/after
+## 7. Job replacement
 
-| Transition | Today (post-#5550) | Reconcile |
-|---|---|---|
-| `cancel_job(task)` (single) | enqueue_kill + state stays ACTIVE; heartbeat moves to KILLED | `UPDATE tasks SET state=KILLED WHERE task_id=t AND state IN ACTIVE` |
-| `_kill_non_terminal_tasks(job)` | loop: enqueue_kill | `UPDATE tasks SET state=KILLED WHERE job_id=j AND state IN ACTIVE` (bulk) |
-| `cancel_tasks_for_timeout` | loop: enqueue_kill | bulk UPDATE state=KILLED |
-| `preempt_task(t)` | state=PREEMPTED on attempt + retry to PENDING or terminal + enqueue_kill on old | UPDATE old `task_attempts.state=PREEMPTED` without `finished_at_ms`; task goes PENDING if retry remains. Scheduler later inserts the next attempt. |
-| `_requeue_coscheduled_siblings` | iterate: state=PREEMPTED + enqueue_kill per sibling | iterate: mark old attempt PREEMPTED without `finished_at_ms`; task goes PENDING. |
-| `_terminate_coscheduled_siblings` | state=FAILED + enqueue_kill per sibling | UPDATE tasks SET state=FAILED per sibling. (Per-attempt per-worker reconcile kills the container.) |
-| `_remove_failed_worker(W)` | synthesize WORKER_FAILED heartbeat for each non-terminal attempt; delete worker row | same |
-| `queue_assignments` | INSERT task_attempts + state=ASSIGNED + committed_*+= + enqueue_run | INSERT task_attempts + state=ASSIGNED. No committed counter update. |
+`jobs.job_id` is a `JobName`, which for root jobs is the user-facing name. CASCADE-deleting tasks while a worker still holds their containers destroys the `task_attempts` rows that the eventual heartbeat needs to find. The fix: block the launch RPC until the old job has drained.
 
-Every `dispatch.enqueue_*` call site collapses to a `tasks`/`task_attempts` UPDATE (or to nothing — if the existing UPDATE already happens, the enqueue was the only extra work). Incremental `add_committed_resources` and `decommit_resources` go away; scheduler usage is derived from unfinished attempts.
+`service.submit_job` for an existing job name, with `EXISTING_JOB_POLICY_RECREATE`:
 
-### 6.1 Subtle: producing transitions and `task_attempts.finished_at_ms`
+```python
+with self._store.transaction() as cur:
+    self._transitions.cancel_job(cur, job_id, "Replaced by new submission")
+    self._polling_wake.set()
 
-Today (#5550), `_requeue_coscheduled_siblings` (transitions.py:601-655) stamps `task_attempts.state=PREEMPTED, finished_at_ms=now_ms` on the old attempt. Under reconcile, this is wrong — `finished_at_ms` means "the worker no longer holds resources for this attempt." If a producing transition stamps it before the worker actually exits, the scheduler can double-book the worker.
+self._wait_until_job_drained(job_id, timeout=Duration.from_minutes(10))
 
-Refactor: producing transitions write `task_attempts.state` (for reporting) but never `finished_at_ms` for worker-bound attempts. The heartbeat path stamps `finished_at_ms` and confirms `task_attempts.state` when the worker confirms terminal.
+with self._store.transaction() as cur:
+    self._transitions.remove_finished_job(cur, job_id)
+    self._transitions.submit_job(cur, job_id, request, Timestamp.now())
+```
 
-This is a small but load-bearing change. Open question §10.3.
-
----
-
-## 7. Job replacement and CASCADE-delete
-
-You flagged: "when we cascade delete, we DELETE the task attempts. where do we store the KILL_REQUESTED in that case?"
-
-Right answer: **don't CASCADE-delete tasks while their attempts may still be running.** Today's `submit_job` flow at service.py:1261-1346 does cleanup-then-resubmit; if a worker has a container running and the controller deletes the task row, CASCADE drops the `task_attempts` row. The eventual KILLED heartbeat lands at a controller that has no record of the old attempt, so the scheduler can no longer derive correct usage.
-
-This is already a leak on today's design (independent of dispatch_queue). The reconcile design exposes it more clearly because reconcile is the only mechanism that tells the worker to stop.
-
-### 7.1 Block replacement until the old job drains
-
-When `submit_job` is called with an existing job name:
-
-1. Mark all non-terminal tasks of the old job as terminal: `UPDATE tasks SET state=KILLED WHERE job_id=:old_job AND state IN ACTIVE`.
-2. Workers running those tasks see them excluded from `Poll(E_W)` on the next tick. Workers auto-kill.
-3. Workers heartbeat KILLED. Heartbeat path stamps `task_attempts.finished_at_ms`.
-4. The launch RPC waits until the old job has no unfinished worker-bound attempts.
-5. `service.py` deletes the old job rows and inserts the replacement using the same `job_id`.
-
-Today `jobs.job_id` is not a UUID; it is a `JobName`, and for root jobs it is effectively the user-facing job name. Blocking the replacement RPC lets us keep that model. We do not need a `jobs.name` split for reconcile dispatch.
-
-`service.py` waits for this drain condition:
+Drain check (no write lock held):
 
 ```sql
 SELECT 1
@@ -408,14 +411,11 @@ WHERE t.job_id = :job_id
 LIMIT 1
 ```
 
-When this query returns no rows, CASCADE delete is safe for accounting because no live worker-bound attempt rows remain. The wait must not hold the SQLite write transaction. Commit the soft-kill, wake reconcile, then poll with `rigging.timing.ExponentialBackoff`:
-
 ```python
 def _wait_until_job_drained(self, job_id: JobName, timeout: Duration) -> None:
     def drained() -> bool:
         with self._store.read_snapshot() as snap:
             return not self._store.jobs.has_unfinished_worker_attempts(snap, job_id)
-
     ExponentialBackoff(initial=0.05, maximum=1.0, factor=1.5).wait_until_or_raise(
         drained,
         timeout=timeout,
@@ -423,287 +423,196 @@ def _wait_until_job_drained(self, job_id: JobName, timeout: Duration) -> None:
     )
 ```
 
-On timeout, return `DEADLINE_EXCEEDED` from the launch RPC. The old job remains soft-killed; a later retry can finish the replacement after workers report terminal or the worker-failure path finalizes the attempts.
+The launch RPC blocks until the old job's worker-bound attempts are all finalized. This is the desired UX: clients wait until the new job is the live job. On timeout (worker-failure finalization is broken or stuck), return `DEADLINE_EXCEEDED`.
+
+The blocking wait is also load-bearing for K8s — pods cannot be re-created with the same name until the prior generation has been observed deleted, and the scheduler cannot place the new job's tasks correctly until usage from the old job's attempts is gone.
 
 ---
 
 ## 8. Worker side
 
-### 8.1 `Poll(expected_tasks)` semantics
+### 8.1 `Reconcile(expected_tasks, start_tasks)` semantics
 
-Already implemented (`worker.py:851-882`, `_reconcile_expected_tasks`). The worker:
+Already implemented for the two halves separately:
 
-1. Receives `expected_tasks: list[(task_id, attempt_id)]` (plus current state hint per entry, but the hint isn't load-bearing — local state is authoritative).
-2. For every locally-running task not in `expected`: kill its container.
-3. For every entry in `expected` that the worker doesn't have running: report missing. `ASSIGNED` attempts are not in `expected`; start payloads deliver them.
-4. Reports back its current view of running tasks.
+- `_reconcile_expected_tasks` (worker.py:854-885): given `expected_tasks`, kills locally-running non-terminal tasks not in expected, returns status entries for expected tasks.
+- `handle_start_tasks` (worker.py:942+): dedups on `(task_id, attempt_id)` via `_tasks` (worker.py:679-692).
 
-The 30s grace window for the StartTasks→PollTasks race (`_recent_submissions` in `worker.py`) can stay during the interim `Poll` + `StartTasks` implementation. It should become unnecessary once `ASSIGNED` attempts are excluded from Poll expected sets and then disappear with the single `Reconcile` RPC.
+The only worker-side change for v1 is conceptual: the controller stops including `ASSIGNED` attempts in `expected_tasks`. With that, the `_recent_submissions` grace window in worker.py becomes redundant once the unified `Reconcile` RPC lands and can be dropped.
 
-### 8.2 Start payload semantics
+### 8.2 No new worker RPCs
 
-Interim wire shape: `StartTasks` carries `RunTaskRequest` payloads. Soon after, `StartTasks` and `Poll` collapse into a single `Reconcile` RPC with `expected_tasks` and `start_tasks` fields. Either way, start delivery is not a queue with accepted/rejected rows. The worker dedups on `(task_id, attempt_id)` (`worker.py:679-692`). The controller advances the selected attempt to `BUILDING` only if it is still the task's current attempt.
-
-### 8.3 No new RPCs
-
-The prior version of this doc proposed `GetTaskPayload(task_id, attempt_id)` for worker-pull-on-drift. It's not needed: the reconcile action carries start payloads and the next reconcile for that worker re-sends until the attempt leaves `ASSIGNED`. The only drift case is "worker has a container the controller doesn't know about" — and the worker's own auto-kill handles that (it's not in `expected`, so worker kills it).
+No `GetTaskPayload`, no per-task watchdog, no acceptance protocol. The reconcile action carries start payloads; reconcile is the redispatch.
 
 ---
 
-## 9. Migration plan
+## 9. Migration plan (delta from current main)
 
 Each step independently shippable and reversible.
 
-### Step 0: Attempt ledger + delete guard
+### Step 1 — `_terminate_task` parameterization
+- Add `finalize_attempt: bool` to `_terminate_task`.
+- Update call sites: producing transitions pass `False`; heartbeat path and `_remove_failed_worker` pass `True`.
+- Behavior change: producing transitions stop stamping `task_attempts.finished_at_ms` for worker-bound attempts.
+- Tests: existing transition replay tests should still pass. Add a regression for #5470: preempt + reassign on the same worker no longer sees freed capacity until heartbeat.
+
+### Step 2 — Scheduler reads from `task_attempts`
 - Add `TaskAttemptStore.resource_usage_by_worker()`.
-- Add cached `device_counts_from_json() -> DeviceCounts` in `codec.py`, where `DeviceCounts` is a `NamedTuple`.
-- Change scheduler state reads to derive worker usage from unfinished attempts instead of `workers.committed_*`.
-- Remove scheduler dependence on `workers.committed_cpu_millicores`, `workers.committed_mem_bytes`, `workers.committed_gpu`, and `workers.committed_tpu`.
-- Add the unfinished-attempt guard to `remove_finished_job`, pruning, replacement, and any admin delete path.
-- Keep the old columns only until the code no longer reads them; then drop them in a schema migration.
+- Add `device_counts_from_json` cache in `codec.py`.
+- Replace scheduler reads of `workers.committed_*` with the derived usage.
+- Drop `add_committed_resources` and `decommit_resources` calls (`_terminate_task` no longer takes a `resources` parameter).
+- Schema migration drops `committed_cpu_millicores`, `committed_mem_bytes`, `committed_gpu`, `committed_tpu` from `workers`.
 
-### Step 1: Same-name replacement policy
-Per §7. Land early; independent correctness improvement on today's design. `service.py` should soft-kill the old job, wait with `rigging.timing.ExponentialBackoff` until no unfinished worker-bound attempts remain, then delete the old rows and insert the replacement with the same `job_id`.
+### Step 3 — Drain guard for delete paths
+- `service.submit_job` `EXISTING_JOB_POLICY_RECREATE`: call `cancel_job`, commit, run `_wait_until_job_drained`, then `remove_finished_job`.
+- Audit `remove_finished_job` callers (pruning, admin delete) and gate the same way.
+- Reversible: revert the wait.
 
-### Step 2: Discipline producing transitions to never stamp `task_attempts.finished_at_ms`
-Per §6.1. Audit and refactor every call site that stamps `finished_at_ms` outside the heartbeat path. Split `attempts.mark_state` from `attempts.finalize_from_worker`. Reversible: revert the call-site changes.
+### Step 4 — Worker-batch reconcile
+- Add `_reconcile_worker_batch`: one snapshot read of `attempts.reconcile_rows_for_workers` for the next batch of healthy workers; build `expected_tasks` and `start_tasks` actions; fan out via existing `Poll` + `StartTasks` provider methods; apply results in a small write tx.
+- Add `_run_request_template` LRU cache.
+- Drop scheduler-thread `_dispatch_assignments_direct` once the reconcile path covers ASSIGNED attempts. `queue_assignments` no longer fans out RPCs; it only writes state.
+- Drop `_stop_tasks_direct` and the heartbeat-updater `tasks_to_kill` plumbing. Worker auto-kill is the only kill path.
+- Drop `_poll_all_workers`; reconcile subsumes it.
+- Reversible: re-enable old paths.
 
-### Step 3: Producing transitions write `tasks.state=KILLED|PREEMPTED|FAILED` directly (in addition to enqueue)
-Shadow mode. Existing dispatch_queue path still drives RPCs. Add an assertion-only check that the two paths agree. Logs only on mismatch.
+### Step 5 — K8s direct-provider on `tasks` / `task_attempts`
+- `_sync_direct_provider` reads active null-worker rows from `tasks`/`task_attempts`, diffs against pod listing, applies pod creates/deletes.
+- Drop K8s use of `dispatch_queue`: `queue_assignments(direct_dispatch=False)` no longer writes `enqueue_run`; `buffer_direct_kill` is deleted; sites that called it update `tasks.state` directly.
 
-### Step 4: Add worker-batch reconcile in shadow mode
-- Add `_reconcile_worker_batch` reading `attempts.reconcile_rows_for_workers` for the next `N` active healthy workers.
-- Build both `Poll(E_W)` and StartTasks payloads from that one snapshot.
-- Keep existing dispatch_queue-driven start/kill paths enabled while logging mismatches between queue rows and reconcile-derived actions.
-- Every worker in the selected batch receives `Poll(E_W)`, including `Poll([])` for workers with no expected tasks; auto-kill any local strays.
-- Exclude `ASSIGNED` attempts from Poll expected sets; they are represented only as start payloads.
-- Reversible: re-enable the queue-driven kill path.
-
-### Step 5: Promote worker-batch reconcile to authoritative dispatch
-- Disable `_dispatch_pending_kills_once` and `_dispatch_pending_starts_once`.
-- Stop calling `dispatch.enqueue_stop` in producing transitions.
-- Stop calling `dispatch.enqueue_start` in `queue_assignments`.
-- Starts are driven by current `task_attempts.state=ASSIGNED` rows in the selected worker batch.
-- Kills are driven by omission from `Poll(E_W)`.
-- Once stable, replace the interim `Poll` + `StartTasks` fan-out with a single worker `Reconcile` RPC.
-- Reversible: re-enable.
-
-### Step 6: K8s direct-provider switches to `tasks` / `task_attempts` reads
-- `_sync_direct_provider` reads active null-worker tasks/attempts, matching today's direct-provider identity.
-- Stop writing K8s rows to `dispatch_queue`.
-- Reversible: revert.
-
-### Step 7: Drop `dispatch_queue`
+### Step 6 — Drop `dispatch_queue`
 - `0044_drop_dispatch_queue.py`: `DROP TABLE dispatch_queue`.
-- Delete `DispatchQueueStore`, `pending_stop_resources_by_worker`, `enqueue_*`, `delete_*`, `mark_*`, `pending_*`.
-- Cumulative point of no return; revert requires reverting Steps 6/5/4 as a unit.
+- Delete `DispatchQueueStore`, `enqueue_run`, `enqueue_kill`, K8s drain helpers.
+
+### Step 7 — Collapse `Poll` + `StartTasks` into `Reconcile`
+- Single worker RPC carrying both fields.
+- Drop `_recent_submissions` grace window in worker.py.
 
 ---
 
-## 10. Compare/contrast vs shipped #5550
+## 10. Walkthroughs
 
-| Concern | #5550 | Reconcile |
-|---|---|---|
-| Schema | `dispatch_queue` (7 columns, 2 indexes, CHECK) | no dispatch schema; keep `job_id == name` for root jobs by blocking replacement until drain |
-| Store API | 9 worker-typed methods + `pending_stop_resources_by_worker` | no dispatch store; `attempts.reconcile_rows_for_workers`, `attempts.resource_usage_by_worker`, `tasks.bulk_set_state` |
-| Producing transitions | enqueue scattered through transitions.py | `UPDATE tasks.state` only |
-| Kill dispatch | controller fans out StopTasks via dispatcher loop | worker auto-kills based on `Poll(E_W)` |
-| Start dispatch | controller fans out StartTasks via dispatcher loop, redispatch state machine | reconcile action carries start payloads for ASSIGNED attempts; repeated reconcile is redispatch |
-| Scheduler read | tasks + workers + dispatch_queue (one snapshot) | tasks + workers + unfinished attempts (one snapshot) |
-| Heartbeat path | delete kill row + decommit | finalize attempt (`finished_at_ms`); resource release is derived |
-| K8s path | reads `dispatch_queue WHERE worker_id IS NULL` | reads active null-worker tasks/attempts |
-| Worker side | `PollTasks` reconcile plus `StartTasks` | interim uses both; target is one `Reconcile` RPC |
-| Wake events | `_scheduling_wake`, `_polling_wake` | same |
-| Three-phase RPC | yes | yes |
-| `pending_stop_resources` | subtracted from available | not needed (unfinished attempts are sufficient) |
-| `workers.committed_*` | durable mutable cache | removed from scheduler semantics; reintroduce only as measured in-memory scheduler cache if needed |
-| `KILL_REQUESTED` state | implied by kill row in queue | doesn't exist — kill is implied by absence from `expected` |
-| Redispatch state | `dispatched_at_ms`, `attempts`, poison threshold on each row | none — the loop itself is the redispatch |
-| Lines (estimated) | +1786 / −679, 6 new files | est. +600 / −1900: net negative vs main |
+### 10.1 #5470: preempt-then-reassign
 
-The reconcile design is structurally smaller than today's main *and* much smaller than #5550. The dominant savings come from deleting:
-- The kill dispatcher (controller never sends StopTasks).
-- The redispatch state machine (no `dispatched_at_ms`, no `attempts`, no poison-pill).
-- `pending_stop_resources_by_worker` and the second-snapshot scheduler read.
-- The `KILL_REQUESTED` state and its handling.
-- The CHECK constraint and the K8s/non-K8s row split.
-
----
-
-## 11. Walkthroughs
-
-### 11.1 #5470: preempt-then-reassign
-
-slice-3-w1 runs `gang-a-task-1` (attempt M), which requires 8 chips. Higher-priority job preempts. Producing transition fires:
+slice-3-w1 runs `gang-a-task-1` (attempt M), 8 chips. Higher-priority job preempts:
 
 ```python
-# preempt_task(gang-a-task-1)
-UPDATE task_attempts SET state=PREEMPTED
-  WHERE task_id='gang-a-task-1' AND attempt_id=M
-UPDATE tasks SET state=PENDING, current_worker_id=NULL
-  WHERE task_id='gang-a-task-1'
-# task_attempts(M).finished_at_ms is NULL.
+# preempt_task
+_terminate_task(..., state=PENDING, attempt_state=PREEMPTED, finalize_attempt=False)
+# tasks: state=PENDING, current_worker_id=NULL
+# task_attempts(M): state=PREEMPTED, finished_at_ms=NULL
 ```
 
-Scheduler derives `used_tpu(slice-3-w1) = 8` from unfinished attempts, so `available_tpu(slice-3-w1) = 8 - 8 = 0`. Cannot double-book.
+Scheduler derives `used_tpu(slice-3-w1) = 8` from M's unfinished attempt. `available_tpu(slice-3-w1) = 0`. Cannot double-book.
 
-slice-3-w1's next Poll excludes `(gang-a-task-1, M)` because the task is no longer active on that attempt. Worker kills the container.
+slice-3-w1's next reconcile: M not in `E_W` (task is PENDING; current attempt is M but task not ACTIVE). Worker auto-kills.
 
-Worker heartbeats: `(gang-a-task-1, M) → KILLED`. Heartbeat path:
+Worker heartbeats KILLED. Heartbeat path:
 
 ```python
-attempts.finalize_from_worker(cur, 'gang-a-task-1', M, KILLED, now_ms)
-# task_attempts.state stays PREEMPTED (not overwritten by heartbeat in this case;
-# the controller-set state is the higher-truth: this attempt was preempted.)
-# task_attempts.finished_at_ms = now_ms
+_terminate_task(..., state=KILLED, finalize_attempt=True)
+# task_attempts(M): state=PREEMPTED preserved (controller-set is higher truth),
+#                   finished_at_ms=now_ms
 ```
 
-Next scheduler tick: derived resource usage on slice-3-w1 is 0, so `available_tpu(slice-3-w1) = 8`. Can place new work.
+Next scheduler tick: derived usage on slice-3-w1 drops to 0. Can place new work.
 
-**Conservative state held throughout, identical to #5550.** Mechanism is simpler.
+### 10.2 Coscheduled gang kill
 
-### 11.2 Coscheduled gang kill
-
-Gang `gang-b` has 4 members on workers W1..W4. User cancels:
+Gang `gang-b` has 4 members on W1..W4. User cancels:
 
 ```python
-UPDATE tasks SET state=KILLED
-WHERE job_id IN (SELECT task_id FROM tasks WHERE parent_job_id=:job)
-  AND state IN ACTIVE_TASK_STATES
-# 4 rows updated, atomically. Attempt rows remain unfinished until worker terminal heartbeat.
+# cancel_job walks the parent_job_id subtree (existing recursive CTE)
+# Each non-terminal task → _terminate_task(state=KILLED, finalize_attempt=False)
 self._polling_wake.set()
 ```
 
-Next tick: each of W1..W4 receives `Poll(E_Wi)` where `E_Wi` excludes the killed task (since `state ∉ ACTIVE`). Each worker kills its container. Heartbeats trickle in independently. As each lands, the heartbeat path stamps `finished_at_ms`; the attempt drops out of scheduler usage.
+Each of W1..W4's next reconcile excludes the killed task. Each worker auto-kills its container. Heartbeats trickle in independently. As each lands, heartbeat path stamps `finished_at_ms`; attempt drops out of usage.
 
-All-or-nothing at request-level (single tx UPDATE). Per-worker independent at confirmation-level. Same as #5550.
+### 10.3 Worker death
 
-### 11.3 Worker death
-
-W3 misses N pings. Full-poll branch trips. `_remove_failed_worker(W3)`:
+W3 misses N pings. Ping-loop terminate path runs `_remove_failed_worker(W3)`:
 
 ```python
 for attempt in attempts_on_w3_active:
-    self._heartbeat_worker_failed(cur, attempt.task_id, attempt.attempt_id, now_ms)
-    # finalizes attempt and advances tasks.state to WORKER_FAILED
-    # (or triggers retry → state=ASSIGNED on a new worker)
+    _terminate_task(
+        ..., state=WORKER_FAILED,
+        finalize_attempt=True,  # heartbeat-equivalent synthesis
+    )
+    # task transitions per retry budget (back to PENDING or to terminal)
 self._store.workers.remove(cur, W3)
 ```
 
-W3's row gone. Tasks reassigned by next scheduler tick or terminal in WORKER_FAILED. No `dispatch_queue` rows to clean up. No `KILL_REQUESTED` rows to clean up. The `task_attempts.worker_id SET NULL` CASCADE is a no-op for finalized rows; only fires if the heartbeat synthesis missed a row, which the loop above prevents.
+`_remove_failed_worker` does **not** assign a new worker. It only marks the current attempt dead and lets the next scheduler tick pick up the now-PENDING task.
 
-### 11.4 Job replacement
+### 10.4 Job replacement
 
-User submits `experiment-foo` with new code. The existing `experiment-foo` job has 50 tasks running on workers.
+User submits `experiment-foo` with new code; existing `experiment-foo` has 50 tasks running:
 
 ```python
-# service.submit_job
+# service.submit_job EXISTING_JOB_POLICY_RECREATE
 with transaction() as cur:
-    self._transitions.cancel_job(cur, JobName.root(user, 'experiment-foo'), "Replaced by new submission")
-    self._polling_wake.set()
-
-_wait_until_job_drained(JobName.root(user, 'experiment-foo'), timeout=Duration.from_minutes(10))
-
+    cancel_job(cur, job_id, "Replaced by new submission")
+    polling_wake.set()
+_wait_until_job_drained(job_id, timeout=10min)  # blocks the launch RPC
 with transaction() as cur:
-    self._transitions.remove_finished_job(cur, JobName.root(user, 'experiment-foo'))
-    self._transitions.submit_job(cur, JobName.root(user, 'experiment-foo'), request, now)
+    remove_finished_job(cur, job_id)
+    submit_job(cur, job_id, request, now)
 ```
 
-Next Poll tick: the 50 workers see those tasks excluded from `expected`. They auto-kill. Heartbeats trickle in. Attempt finalization happens normally.
+Workers see the 50 tasks excluded from `E_W` on their next reconcile, auto-kill, heartbeat KILLED. Heartbeat path finalizes attempts. Once drained, the new job inserts and is scheduled normally.
 
-Once the old job's worker-bound attempts are all finalized, `service.py` deletes the old rows and inserts the replacement using the same `job_id`. The launch request blocks during the drain wait, but no SQLite write transaction is held while waiting.
+### 10.5 Controller restart mid-dispatch
 
-### 11.5 Controller restart mid-dispatch
-
-Controller restarts. `tasks.state=ASSIGNED, current_worker_id=W` for some `(t, a)`. Worker W may already have the container running because the start payload landed before the crash, but the controller did not persist BUILDING.
+Controller restarts while `tasks.state=ASSIGNED, current_attempt_id=N, current_worker_id=W`. Worker may already be running the container (start RPC landed before crash), or not.
 
 After restart:
-- When W's reconcile batch runs, `_reconcile_worker_batch` sees the current assigned attempt row and sends its start payload. W starts or dedups `(t, a)`.
-- The attempt is not included in Poll `expected_tasks` until it is BUILDING/RUNNING, so Poll-before-start cannot produce a false missing-task report.
-- Phase 3 small write: advance `tasks.state=ASSIGNED→BUILDING`.
+- Worker's reconcile batch fires. Reconcile sees ASSIGNED → sends start payload. Worker starts or dedups on `(t, N)`.
+- If the worker had already heartbeated BUILDING/RUNNING before crash, that write committed; reconcile sees the new state and produces no start payload, just an `expected` entry.
 
-Or, worker had already heartbeated BUILDING/RUNNING before crash:
-- Heartbeat write was committed → after restart, `tasks.state=BUILDING/RUNNING` already. Reconcile does not build a StartTasks payload for it.
-- Either way: convergence.
-
-No new state machine needed. Restart recovery is implicit in the per-tick read-and-dispatch loop.
+Either way, convergence. Restart recovery is implicit in the reconcile loop.
 
 ---
 
-## 12. Open questions
+## 11. Open questions
 
-1. **Does Poll include per-task state confirmation?** Resolved for v1: keep `UpdateTaskStatus` push as the canonical heartbeat path. Poll remains reconcile plus supplemental observation. Removing worker-push heartbeat requires changing `PollTasksResponse` to include unexpected tasks killed by reconciliation and their eventual terminal outcomes.
-
-2. **Single `Reconcile` RPC rollout.** Directionally resolved: collapse `Poll` and `StartTasks` into one RPC after the DB/state cleanup lands. The interim implementation can keep the existing wire methods to reduce blast radius, but the controller should already build one per-worker reconcile action containing both `expected_tasks` and start payloads.
-
-3. **`finished_at_ms` discipline rollout.** Step 1 of the migration. Audit every producing-transition call site (`_requeue_coscheduled_siblings:601-655`, `_terminate_coscheduled_siblings`, others) for stamping `finished_at_ms` and refactor to leave it NULL. This is a behavior change; needs careful review. The Step-1 shadow mode catches mismatches.
-
-4. **K8s pod-creation failure.** If `CreatePod` fails (image pull, namespace gone), what's the right state transition? Options: stay in ASSIGNED (next tick re-fires); transition to FAILED (gives up); transition to UNSCHEDULABLE. Today's K8s sync has its own retry; reconcile inherits it.
-
-5. **Worker-batch sizing.** `RECONCILE_WORKER_BATCH_SIZE` controls the tradeoff between reconcile latency and RPC volume. At 4K workers and a batch size of 512 every 250ms, the whole fleet is reconciled roughly every 2s. Wake-triggered workers can be pushed into a priority lane so new assignments and kills do not wait for a full cursor rotation.
-
-6. **Watchdog for wedged kills.** If a worker auto-kills but the container hangs in shutdown, what happens? Heartbeat-fail-threshold trips eventually (worker stops sending heartbeats because it's wedged on the kill); `_remove_failed_worker` synthesizes WORKER_FAILED. But that's catastrophic (loses the whole worker). For "container wedged but worker fine" — the worker process can implement its own per-container kill-with-timeout-then-SIGKILL. Existing worker behavior; out of scope for this doc.
-
-7. **Atomicity guarantees for gang-kill across workers.** Single tx UPDATE bulks the state changes. Per-worker Poll fan-out is independent. If one Poll RPC fails, the next tick retries. Worst case: gang sibling A is killed, B is still running for a tick. B's unfinished attempt keeps its worker usage high; scheduler doesn't double-book; B's worker eventually kills via the next Poll. No correctness issue, only latency.
-
-8. **Does `Poll(E_W)` need a sequence number?** For out-of-order delivery / split-brain detection. Today the client side is HTTP/2 over gRPC; ordering is per-stream. If worker process restarts mid-flight, the new process's local set is empty; first Poll auto-kills nothing; controller's expected set is delivered; worker pulls payloads via StartTasks dedup. No seq needed.
-
-9. **Replacement wait timeout.** Existing jobs use `job_id == name` for root jobs. We keep that model by blocking same-name replacement until the old job drains. The open question is the timeout and user-facing error: the default should be long enough for normal worker shutdown, but finite so a launch RPC does not hang forever if worker failure finalization is broken.
+1. **K8s pod-creation failure semantics.** If `CreatePod` fails (image pull, namespace gone), what's the right state transition? Options: stay ASSIGNED (next sync re-fires); transition to FAILED; transition to UNSCHEDULABLE. Today's K8s sync has its own retry; reconcile inherits it.
+2. **Replacement wait timeout.** Default 10 min is long enough for normal worker shutdown, finite enough that a stuck finalization doesn't hang launches forever. Should it be configurable per-launch?
+3. **Worker-batch sizing.** `RECONCILE_WORKER_BATCH_SIZE = 512` at 4K workers and 250ms tick gives ~2s full-fleet rotation. Wake-triggered workers should be pushed into a priority lane so newly-assigned workers do not wait for full rotation.
+4. **`reconcile_rows_for_workers` index.** Existing `idx_tasks_state_attempt` (schema.py:766) covers `(state, task_id, current_attempt_id, job_id)`. Add an index on `task_attempts(worker_id) WHERE finished_at_ms IS NULL` if the join shows up in scale tests.
 
 ---
 
-## 13. Tunables
+## 12. Tunables
 
 | Tunable | Default | Reasoning |
 |---|---|---|
-| `POLLING_TICK_INTERVAL` | 250ms | matches #5550 |
-| `RECONCILE_WORKER_BATCH_SIZE` | 512 | bounds per-tick Poll/Start fan-out while keeping full-fleet reconcile latency low |
+| `POLLING_TICK_INTERVAL` | 250ms | matches existing |
+| `RECONCILE_WORKER_BATCH_SIZE` | 512 | bounds per-tick fan-out; ~2s full-fleet rotation at 4K workers |
+| Replacement drain timeout | 10min | normal worker shutdown well under 1min; finite to surface stuck finalization |
 | heartbeat-fail-threshold | unchanged | sole liveness mechanism for stuck-RPC recovery |
-
-No `DISPATCH_REDISPATCH`. No `DISPATCH_POISON_THRESHOLD`. Removed by deleting the redispatch state machine.
-No durable `workers.committed_*` cache. If scheduling-state reads are too expensive, add an in-memory cache inside the scheduler read path after measurement.
 
 ---
 
-## 14. Test strategy
+## 13. Test strategy
 
 ### Unit
 - State-transition coverage: PENDING → ASSIGNED → BUILDING → RUNNING → terminal. Cancel from each non-terminal state goes directly to KILLED.
-- Producing transitions: assert `tasks.state` change post-cancel/preempt/gang-cascade.
+- `_terminate_task` parameterization: `finalize_attempt=True` stamps `finished_at_ms`; `finalize_attempt=False` does not.
 - Heartbeat path: terminal advances `tasks.state` (if not already terminal) and stamps `task_attempts.finished_at_ms`. Idempotent on second heartbeat.
-- Producing-transition `finished_at_ms` discipline: never stamped outside heartbeat path. Add a debug-build assertion.
 - Scheduler usage: unfinished worker-bound attempts contribute resources; finalized attempts do not.
-- Device count helper: `device_counts_from_json()` returns the expected `DeviceCounts(gpu, tpu)` for empty, GPU, TPU, and repeated JSON values.
+- `device_counts_from_json` returns expected `DeviceCounts(gpu, tpu)` for empty, GPU, TPU, repeated values.
 
 ### Integration
-- #5470 regression: rewrite around unfinished-attempt conservative state.
-- Counterfactual tripwire: prematurely stamp `finished_at_ms` in cascade and confirm the test fails.
-- Stop-after-reassignment: preempt + reassign + heartbeat-from-old-worker-for-old-attempt → old-worker usage drops only after finalization.
-- Three-phase RPC: writer lock available during fan-out.
+- #5470 regression: preempt + reassign on the same worker; available capacity stays 0 until heartbeat.
+- Three-phase RPC: writer lock available during reconcile fan-out.
 - Single-snapshot scheduler read: ==1 read_snapshot per tick.
-- Job replacement: old job's tasks reach KILLED; new job's tasks proceed independently; no leak; old job pruned after all-terminal.
+- Job replacement: launch RPC blocks until old job's tasks reach KILLED; new job's tasks proceed independently; no leak; old job pruned after drain.
 - Delete/prune guard: terminal job with unfinished worker-bound attempt is not deleted.
-- Controller restart with task in ASSIGNED: convergence to BUILDING on the next reconcile for that worker, with priority-lane coverage for newly assigned workers.
-- Worker auto-kill via Poll: insert "stray" task on worker, controller's expected set excludes it, next tick auto-kills.
-- Poll/Start race: ASSIGNED attempts are sent as start payloads but excluded from Poll expected sets until BUILDING/RUNNING.
+- Controller restart with task in ASSIGNED: convergence to BUILDING on the next reconcile.
+- Worker auto-kill via reconcile: insert "stray" task on worker, controller's expected set excludes it, next tick auto-kills.
+- `RunTaskRequest` LRU cache: same `job_id` across many ASSIGNED attempts hits the cache; new `job_id` (via replacement) misses and rebuilds.
 
 ### End-to-end
-- Replay-golden regeneration. Diff: `state=KILLED` rows replace `dispatch_queue` rows; `finished_at_ms` only stamped at heartbeat.
-- 4K-worker scale: Poll+Start RPC volume per tick. Confirm tick duration < 250ms in steady state.
-
-### Coverage gaps
-- Wake event shortens tick.
-- K8s pod-creation failure semantics.
-- Job replacement during in-flight scheduling tick.
-
----
-
-## 15. Summary of deltas vs the prior version of this doc
-
-The earlier draft of this doc proposed a `KILL_REQUESTED` state and a separate kill-dispatcher reading it. You correctly observed:
-
-1. **The kill dispatcher is unnecessary if `Poll(E_W)` makes the worker auto-kill.** Removing it deletes a whole code path: no `_dispatch_kill_requested_workers`, no kill-side redispatch state, no per-attempt `kill_dispatched_at_ms` column.
-2. **CASCADE delete of `task_attempts` destroys the row the heartbeat path needs to find.** The fix is soft-delete (state→terminal, prune later), not adding a column to track kill-pending across deletes.
-3. **The poll loop reads better as one grouping.** Both expected-task reconciliation and start payload delivery group by worker; they share Phase 1 and Phase 2.
-
-The result is meaningfully simpler than the prior draft, and structurally smaller than today's main. The control plane is: `tasks.state` selects the current attempt; `task_attempts` is the ledger; reconcile kills by omission and delivers starts; heartbeat closes the loop.
+- Replay-golden regeneration. Diff: producing transitions write `tasks.state` directly; `finished_at_ms` only stamped at heartbeat.
+- 4K-worker scale: reconcile RPC volume per tick. Confirm tick duration < 250ms in steady state.

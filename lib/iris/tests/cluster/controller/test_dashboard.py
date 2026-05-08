@@ -1221,7 +1221,7 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
     )
 
     # Sync to populate ClusterState.
-    provider.sync(DirectProviderBatch(tasks_to_run=[], running_tasks=[], tasks_to_kill=[]))
+    provider.sync(DirectProviderBatch(tasks_to_run=[], running_tasks=[]))
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",

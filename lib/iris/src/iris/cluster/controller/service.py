@@ -23,7 +23,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from rigging.timing import Timer, Timestamp
+from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
@@ -131,6 +131,12 @@ DEFAULT_MAX_TOTAL_LINES = 100000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+
+# Time the launch RPC blocks waiting for a replaced job's worker-bound attempts
+# to finalize before deleting them. Normal worker shutdown is well under one
+# minute; the bound is finite so a stuck finalization surfaces as
+# DEADLINE_EXCEEDED rather than hanging launches forever.
+_JOB_REPLACEMENT_DRAIN_TIMEOUT = Duration.from_minutes(10)
 
 # A root LaunchJob submission is rejected if its client_revision_date is more
 # than FRESHNESS_WINDOW older than today. Clients get exactly this long to
@@ -1048,6 +1054,44 @@ class ControllerServiceImpl:
             return
         authorize_resource_owner(job_id.user)
 
+    def _wait_until_job_drained(self, job_id: JobName, timeout: Duration) -> None:
+        """Block until ``job_id`` has no unfinished worker-bound attempts.
+
+        Polls the snapshot DB; the heartbeat path landing terminal updates is
+        what finally clears the predicate. Used to gate ``remove_finished_job``
+        on a replacement so we never CASCADE-delete tasks whose attempts the
+        worker is still racing to finalize. Raises ``ConnectError`` with
+        ``DEADLINE_EXCEEDED`` if the job hasn't drained within ``timeout``.
+        """
+
+        def drained() -> bool:
+            with self._db.read_snapshot() as snap:
+                return not self._store.jobs.has_unfinished_worker_attempts(snap, job_id)
+
+        try:
+            ExponentialBackoff(initial=0.05, maximum=1.0, factor=1.5).wait_until_or_raise(
+                drained,
+                timeout=timeout,
+                error_message=f"Timed out waiting for job {job_id} to drain before replacement",
+            )
+        except TimeoutError as exc:
+            raise ConnectError(Code.DEADLINE_EXCEEDED, str(exc)) from exc
+
+    def _remove_finished_job_safely(self, cur, job_id: JobName) -> None:
+        """``remove_finished_job`` gated on no unfinished worker-bound attempts.
+
+        CASCADE-deleting a job's tasks while its attempts are still worker-
+        bound destroys the rows the heartbeat path needs to find when it
+        stamps ``finished_at_ms``. Every replacement / prune / admin-delete
+        path goes through here so that contract is uniform.
+        """
+        if self._store.jobs.has_unfinished_worker_attempts(cur, job_id):
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Refusing to remove job {job_id}: worker-bound attempts have not finalized",
+            )
+        self._transitions.remove_finished_job(cur, job_id)
+
     def launch_job(
         self,
         request: controller_pb2.Controller.LaunchJobRequest,
@@ -1137,6 +1181,7 @@ class ControllerServiceImpl:
         # transaction further down — between the two txs another submitter
         # can race, but ``INSERT INTO jobs`` then PK-conflicts, which is a
         # legitimate error rather than a correctness bug.
+        needs_drain = False
         with self._store.transaction() as cur:
             existing_state = self._store.jobs.get_state(cur, job_id)
             if existing_state is not None:
@@ -1150,11 +1195,19 @@ class ControllerServiceImpl:
                     if not is_job_finished(existing_state):
                         return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
                     # Job finished, replace it (KEEP only preserves running jobs)
-                    self._transitions.remove_finished_job(cur, job_id)
+                    self._remove_finished_job_safely(cur, job_id)
                 elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
                     if not is_job_finished(existing_state):
                         self._transitions.cancel_job(cur, job_id, "Replaced by new submission")
-                    self._transitions.remove_finished_job(cur, job_id)
+                        # Cancel is a producer transition: attempts stay
+                        # unfinished until the worker confirms termination.
+                        # Defer remove_finished_job to a second tx after the
+                        # drain wait so we don't destroy task_attempts rows
+                        # whose finished_at_ms write the heartbeat path is
+                        # still racing to land.
+                        needs_drain = True
+                    else:
+                        self._remove_finished_job_safely(cur, job_id)
                 elif is_job_finished(existing_state):
                     # Default/UNSPECIFIED: replace finished jobs
                     logger.info(
@@ -1162,9 +1215,18 @@ class ControllerServiceImpl:
                         job_id,
                         job_pb2.JobState.Name(existing_state),
                     )
-                    self._transitions.remove_finished_job(cur, job_id)
+                    self._remove_finished_job_safely(cur, job_id)
                 else:
                     raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
+
+        if needs_drain:
+            # Nudge the polling loop so workers see the cancelled tasks excluded
+            # from their expected set on the next reconcile and auto-kill the
+            # containers; the heartbeat path then stamps finished_at_ms.
+            self._controller.wake()
+            self._wait_until_job_drained(job_id, _JOB_REPLACEMENT_DRAIN_TIMEOUT)
+            with self._store.transaction() as cur:
+                self._remove_finished_job_safely(cur, job_id)
 
         # Handle bundle_blob: upload to bundle store, then replace blob
         # with the resulting GCS path (preserving all other fields).

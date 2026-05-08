@@ -1218,12 +1218,18 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
         with state._store.transaction() as cur:
             state.preempt_task(cur, task.task_id, reason="Preempted by /bob/prod-job:0")
 
-        # Sanity: task went to PENDING (budget remains), attempt row is PREEMPTED-terminal.
+        # Sanity: task went to PENDING (budget remains), attempt row is in
+        # PREEMPTED reporting state. ``preempt_task`` is a producer transition
+        # (``finalize_attempt=False``), so ``finished_at_ms`` is intentionally
+        # left NULL — the worker still holds the chips until a terminal
+        # heartbeat (or worker-failure synthesis) lands.
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING
         attempt_after_preempt = query_attempt(state, task.task_id, dead_attempt_id)
         assert attempt_after_preempt is not None
         assert attempt_after_preempt.state == job_pb2.TASK_STATE_PREEMPTED
-        assert attempt_after_preempt.finished_at is not None
+        assert (
+            attempt_after_preempt.finished_at is None
+        ), "producer-side preempt must not stamp finished_at_ms; that is the heartbeat path's job"
         assert attempt_after_preempt.error == "Preempted by /bob/prod-job:0"
 
         # Late heartbeat for the (now-dead) attempt 0 arrives: worker still thinks
@@ -1243,8 +1249,9 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
                 ),
             )
 
-        # The attempt row must remain in a consistent terminal state — NOT flipped
-        # back to RUNNING with preemption error/finished_at still set.
+        # The attempt row must remain in a consistent state — NOT flipped
+        # back to RUNNING. ``finished_at`` may still be NULL because the
+        # producer-side preempt deliberately leaves it that way.
         attempt_final = query_attempt(state, task.task_id, dead_attempt_id)
         assert attempt_final is not None, "attempt row disappeared"
         assert attempt_final.state == job_pb2.TASK_STATE_PREEMPTED, (
@@ -1252,5 +1259,4 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
             f"(expected PREEMPTED={job_pb2.TASK_STATE_PREEMPTED}); "
             f"error={attempt_final.error!r}, finished_at={attempt_final.finished_at}"
         )
-        assert attempt_final.finished_at is not None
         assert attempt_final.error == "Preempted by /bob/prod-job:0"

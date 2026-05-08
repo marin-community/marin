@@ -139,8 +139,11 @@ def _build_context(scheduler, state):
             if job:
                 jobs[task.job_id] = _job_requirements_from_job(job)
 
+    with state._db.read_snapshot() as snap:
+        usage_by_worker = state._store.attempts.resource_usage_by_worker(snap)
     return scheduler.create_scheduling_context(
         workers,
+        usage_by_worker=usage_by_worker,
         building_counts=building_counts,
         pending_tasks=task_ids,
         jobs=jobs,

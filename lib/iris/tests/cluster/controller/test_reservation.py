@@ -156,10 +156,6 @@ def _make_worker(
         device_type=dt,
         device_variant=dv,
         attributes=default_attrs,
-        committed_cpu_millicores=0,
-        committed_mem=0,
-        committed_gpu=0,
-        committed_tpu=0,
     )
 
 
@@ -743,6 +739,7 @@ def _build_context_with_workers(
     scheduler = Scheduler()
     return scheduler.create_scheduling_context(
         workers,
+        usage_by_worker={},
         pending_tasks=pending_tasks,
         jobs=jobs,
     )

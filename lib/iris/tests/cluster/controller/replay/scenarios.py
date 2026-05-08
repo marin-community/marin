@@ -31,7 +31,6 @@ from tests.cluster.controller.replay.events import (
     AddEndpoint,
     ApplyDirectProviderUpdates,
     ApplyTaskUpdates,
-    BufferDirectKill,
     CancelJob,
     CancelTasksForTimeout,
     DrainForDirectProvider,
@@ -514,15 +513,7 @@ def scenario_replace_reservation_claims(transitions: ControllerTransitions, cloc
     apply_event(transitions, ReplaceReservationClaims(claims={}))
 
 
-def scenario_buffer_direct_kill(transitions: ControllerTransitions, clock: FrozenClock) -> None:
-    """Buffer a kill request for a direct-provider task."""
-    job_id = _submit(transitions, clock, "buffer-direct")
-    (task_id,) = _task_ids(transitions, job_id)
-    apply_event(transitions, BufferDirectKill(task_id=task_id.to_wire()))
-
-
 SCENARIOS: dict[str, Callable[[ControllerTransitions, FrozenClock], None]] = {
-    "buffer_direct_kill": scenario_buffer_direct_kill,
     "cancel_running_job": scenario_cancel_running_job,
     "coscheduled_failure_retry_bounces_siblings": scenario_coscheduled_failure_retry_bounces_siblings,
     "coscheduled_preempt_retry_bounces_siblings": scenario_coscheduled_preempt_retry_bounces_siblings,

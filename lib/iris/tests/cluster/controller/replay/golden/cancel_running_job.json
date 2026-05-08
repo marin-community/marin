@@ -1,22 +1,4 @@
 {
-  "dispatch_queue": [
-    {
-      "created_at_ms": 1704067200000,
-      "id": 1,
-      "kind": "run",
-      "payload_proto": "ChcvdGVzdC11c2VyL2NhbmNlbC1qb2IvMBACGhQSEgoGcHl0aG9uCgItYwoEcGFzcyIAKgAyDQjoByCAgICABCoASABIAFoA",
-      "task_id": null,
-      "worker_id": "w-cancel"
-    },
-    {
-      "created_at_ms": 1704067200000,
-      "id": 2,
-      "kind": "run",
-      "payload_proto": "ChcvdGVzdC11c2VyL2NhbmNlbC1qb2IvMRACGhQSEgoGcHl0aG9uCgItYwoEcGFzcyIAKgAyDQjoByCAgICABCoASABIAFoA",
-      "task_id": null,
-      "worker_id": "w-cancel"
-    }
-  ],
   "endpoints": [],
   "job_config": [
     {
@@ -89,7 +71,7 @@
       "created_at_ms": 1704067200000,
       "error": "user-cancel",
       "exit_code": null,
-      "finished_at_ms": 1704067200001,
+      "finished_at_ms": null,
       "started_at_ms": null,
       "state": 6,
       "task_id": "/test-user/cancel-job/0",
@@ -100,7 +82,7 @@
       "created_at_ms": 1704067200000,
       "error": "user-cancel",
       "exit_code": null,
-      "finished_at_ms": 1704067200001,
+      "finished_at_ms": null,
       "started_at_ms": null,
       "state": 6,
       "task_id": "/test-user/cancel-job/1",
@@ -177,10 +159,6 @@
   "workers": [
     {
       "address": "w-cancel:8080",
-      "committed_cpu_millicores": 0,
-      "committed_gpu": 0,
-      "committed_mem_bytes": 0,
-      "committed_tpu": 0,
       "device_type": "",
       "device_variant": "",
       "md_cpu_count": 8,

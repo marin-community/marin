@@ -30,6 +30,7 @@ from iris.cluster.constraints import (
     soft_constraint_score,
     split_hard_soft,
 )
+from iris.cluster.controller.stores import WorkerResourceUsage
 from iris.cluster.types import (
     JobName,
     WorkerId,
@@ -63,17 +64,17 @@ class WorkerSnapshot(Protocol):
     This protocol decouples the scheduler from a concrete worker row type. Any object
     exposing these fields can be used.  Fields mirror the DB column names so that
     projection row classes satisfy this protocol without computed properties.
+
+    Worker usage is no longer stored on the worker row; callers must pass a
+    ``WorkerResourceUsage`` (derived from unfinished worker-bound attempts via
+    ``TaskAttemptStore.resource_usage_by_worker``) into ``WorkerCapacity.from_worker``.
     """
 
     worker_id: WorkerId
     total_cpu_millicores: int
-    committed_cpu_millicores: int
     total_memory_bytes: int
-    committed_mem: int
     total_gpu_count: int
-    committed_gpu: int
     total_tpu_count: int
-    committed_tpu: int
     attributes: dict[str, AttributeValue]
 
 
@@ -174,6 +175,8 @@ class WorkerCapacity:
     @staticmethod
     def from_worker(
         worker: WorkerSnapshot,
+        *,
+        usage: WorkerResourceUsage,
         building_count: int = 0,
         max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
     ) -> "WorkerCapacity":
@@ -181,15 +184,18 @@ class WorkerCapacity:
 
         Args:
             worker: The worker to snapshot (any object satisfying WorkerSnapshot)
+            usage: Resources currently held by unfinished worker-bound attempts
+                on this worker. Derived per-tick from ``task_attempts`` by
+                ``TaskAttemptStore.resource_usage_by_worker``.
             building_count: Number of tasks currently in BUILDING state on this worker
             max_building_tasks: Maximum allowed building tasks per worker
         """
         return WorkerCapacity(
             worker_id=worker.worker_id,
-            available_cpu_millicores=worker.total_cpu_millicores - worker.committed_cpu_millicores,
-            available_memory=worker.total_memory_bytes - worker.committed_mem,
-            available_gpus=worker.total_gpu_count - worker.committed_gpu,
-            available_tpus=worker.total_tpu_count - worker.committed_tpu,
+            available_cpu_millicores=worker.total_cpu_millicores - usage.cpu_millicores,
+            available_memory=worker.total_memory_bytes - usage.memory_bytes,
+            available_gpus=worker.total_gpu_count - usage.gpu_count,
+            available_tpus=worker.total_tpu_count - usage.tpu_count,
             attributes=dict(worker.attributes),
             building_task_count=building_count,
             max_building_tasks=max_building_tasks,
@@ -309,6 +315,7 @@ class SchedulingContext:
     def from_workers(
         cls,
         workers: list[WorkerSnapshot],
+        usage_by_worker: dict[WorkerId, WorkerResourceUsage],
         building_counts: dict[WorkerId, int] | None = None,
         max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
         pending_tasks: list[JobName] | None = None,
@@ -322,6 +329,8 @@ class SchedulingContext:
 
         Args:
             workers: List of workers to include in scheduling context
+            usage_by_worker: Resources held by unfinished worker-bound attempts
+                per worker. Workers absent from this map default to zero usage.
             building_counts: Map of worker_id -> count of tasks in BUILDING state
             max_building_tasks: Maximum building tasks allowed per worker
             pending_tasks: Task IDs in scheduling priority order
@@ -329,10 +338,12 @@ class SchedulingContext:
             max_assignments_per_worker: Maximum task assignments per worker per cycle
         """
         building_counts = building_counts or {}
+        zero_usage = WorkerResourceUsage(0, 0, 0, 0)
 
         capacities = {
             w.worker_id: WorkerCapacity.from_worker(
                 w,
+                usage=usage_by_worker.get(w.worker_id, zero_usage),
                 building_count=building_counts.get(w.worker_id, 0),
                 max_building_tasks=max_building_tasks,
             )
@@ -738,6 +749,7 @@ class Scheduler:
     def create_scheduling_context(
         self,
         workers: list[WorkerSnapshot],
+        usage_by_worker: dict[WorkerId, WorkerResourceUsage] | None = None,
         building_counts: dict[WorkerId, int] | None = None,
         pending_tasks: list[JobName] | None = None,
         jobs: dict[JobName, JobRequirements] | None = None,
@@ -751,6 +763,10 @@ class Scheduler:
 
         Args:
             workers: Workers to include (any objects satisfying WorkerSnapshot)
+            usage_by_worker: Resources held by unfinished worker-bound attempts
+                per worker (derived from ``task_attempts``). Defaults to all-zero
+                usage for tests/diagnostics paths that operate on synthetic
+                worker lists with no live attempts.
             building_counts: Map of worker_id -> count of tasks in BUILDING state
             pending_tasks: Task IDs in scheduling priority order
             jobs: Job requirements indexed by job ID
@@ -765,6 +781,7 @@ class Scheduler:
         )
         return SchedulingContext.from_workers(
             workers,
+            usage_by_worker=usage_by_worker if usage_by_worker is not None else {},
             building_counts=building_counts,
             max_building_tasks=limit,
             pending_tasks=pending_tasks,

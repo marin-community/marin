@@ -100,13 +100,11 @@ def make_run_req(task_id: str, attempt_id: int = 0, cpu_mc: int = 1000) -> job_p
 
 def make_batch(
     tasks_to_run=None,
-    tasks_to_kill=None,
     running_tasks=None,
 ) -> DirectProviderBatch:
     return DirectProviderBatch(
         running_tasks=running_tasks or [],
         tasks_to_run=tasks_to_run or [],
-        tasks_to_kill=tasks_to_kill or [],
     )
 
 

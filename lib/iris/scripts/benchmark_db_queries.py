@@ -94,7 +94,6 @@ _CLONE_TABLES = [
     "task_attempts",
     "workers",
     "worker_attributes",
-    "dispatch_queue",
     "endpoints",
     "reservation_claims",
     "meta",
@@ -298,7 +297,6 @@ def benchmark_scheduling(db: ControllerDB) -> None:
                             "DELETE FROM task_attempts WHERE task_id=? AND attempt_id > ?",
                             (tid, aid),
                         )
-                    write_db.execute("DELETE FROM dispatch_queue")
 
                 bench(
                     f"queue_assignments ({n_assign} tasks, WRITE)",

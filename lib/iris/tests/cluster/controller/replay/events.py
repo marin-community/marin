@@ -54,7 +54,6 @@ class RegisterOrRefreshWorker:
 @dataclass(frozen=True, slots=True)
 class QueueAssignments:
     assignments: list[Assignment]
-    direct_dispatch: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,11 +110,6 @@ class ApplyDirectProviderUpdates:
 
 
 @dataclass(frozen=True, slots=True)
-class BufferDirectKill:
-    task_id: str
-
-
-@dataclass(frozen=True, slots=True)
 class AddEndpoint:
     endpoint: EndpointRow
 
@@ -145,7 +139,6 @@ IrisEvent = (
     | UpdateWorkerPings
     | DrainForDirectProvider
     | ApplyDirectProviderUpdates
-    | BufferDirectKill
     | AddEndpoint
     | RemoveEndpoint
     | ReplaceReservationClaims
@@ -178,8 +171,8 @@ def apply_event(transitions: ControllerTransitions, event: IrisEvent) -> Any:
                     slice_id=slice_id,
                     scale_group=scale_group,
                 )
-            case QueueAssignments(assignments, direct_dispatch):
-                return transitions.queue_assignments(cur, assignments, direct_dispatch=direct_dispatch)
+            case QueueAssignments(assignments):
+                return transitions.queue_assignments(cur, assignments)
             case ApplyTaskUpdates(request):
                 return transitions.apply_task_updates(cur, request)
             case ApplyHeartbeatsBatch(requests):
@@ -200,8 +193,6 @@ def apply_event(transitions: ControllerTransitions, event: IrisEvent) -> Any:
                 return transitions.drain_for_direct_provider(cur, max_promotions)
             case ApplyDirectProviderUpdates(updates):
                 return transitions.apply_direct_provider_updates(cur, updates)
-            case BufferDirectKill(task_id):
-                return transitions.buffer_direct_kill(cur, task_id)
             case AddEndpoint(endpoint):
                 return transitions.add_endpoint(cur, endpoint)
             case RemoveEndpoint(endpoint_id):

@@ -934,17 +934,13 @@ class SchedulableWorker:
     device_type: str
     device_variant: str
     attributes: dict[str, AttributeValue]
-    committed_cpu_millicores: int
-    committed_mem: int
-    committed_gpu: int
-    committed_tpu: int
 
 
 def healthy_active_workers_with_attributes(
     db: ControllerDB,
     health: WorkerHealthTracker,
 ) -> list[SchedulableWorker]:
-    """Return healthy + active workers with attributes and committed totals."""
+    """Return healthy + active workers with attributes."""
     from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
 
     liveness = health.all()
@@ -975,10 +971,6 @@ def healthy_active_workers_with_attributes(
                 device_type=w.device_type,
                 device_variant=w.device_variant,
                 attributes=attrs_by_worker.get(w.worker_id, {}),
-                committed_cpu_millicores=w.committed_cpu_millicores,
-                committed_mem=w.committed_mem,
-                committed_gpu=w.committed_gpu,
-                committed_tpu=w.committed_tpu,
             )
         )
     return out
