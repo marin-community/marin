@@ -11,7 +11,6 @@ import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from dataclasses import replace as dc_replace
 from pathlib import Path
 from threading import Lock, RLock
 from typing import Any
@@ -20,7 +19,7 @@ from rigging.timing import Deadline, Duration, Timestamp
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
-from iris.cluster.controller.worker_health import WorkerCommitTracker, WorkerHealthTracker
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
 from iris.rpc import job_pb2
 
@@ -917,16 +916,43 @@ def _worker_row_select() -> str:
     return WORKER_ROW_PROJECTION.select_clause()
 
 
+@dataclass(frozen=True, slots=True)
+class SchedulableWorker:
+    """Worker shape consumed by the scheduler.
+
+    Combines the durable :class:`WorkerRow` columns with the live committed-resource
+    totals from :class:`WorkerHealthTracker`. Returned by
+    :func:`healthy_active_workers_with_attributes` already filtered to healthy+active.
+    Mirrors the field names in the :class:`scheduler.WorkerSnapshot` protocol so it
+    can flow straight into ``Scheduler.create_scheduling_context`` without adapters.
+    """
+
+    worker_id: WorkerId
+    address: str
+    total_cpu_millicores: int
+    total_memory_bytes: int
+    total_gpu_count: int
+    total_tpu_count: int
+    device_type: str
+    device_variant: str
+    attributes: dict[str, AttributeValue]
+    committed_cpu_millicores: int
+    committed_mem: int
+    committed_gpu: int
+    committed_tpu: int
+    healthy: bool = True
+
+
 def healthy_active_workers_with_attributes(
     db: ControllerDB,
     health: WorkerHealthTracker,
-    committed: WorkerCommitTracker,
-) -> list:
-    """Fetch all healthy, active workers with their attributes populated.
+) -> list[SchedulableWorker]:
+    """Fetch all healthy, active workers with their attributes and committed totals populated.
 
-    Returns WorkerRow (scalar-only) so the scheduling loop avoids loading metadata columns.
-    Health/active filtering reads the in-memory tracker; committed-resource
-    arithmetic reads the in-memory commit tracker.
+    Health/active filtering reads the in-memory tracker. The returned
+    :class:`SchedulableWorker` rows include the live ``committed_*`` totals from
+    the same tracker so the scheduler can compute ``available_*`` without a
+    second lookup per worker.
     """
     from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
 
@@ -936,38 +962,36 @@ def healthy_active_workers_with_attributes(
         return []
     placeholders = ",".join("?" for _ in healthy_active)
     with db.read_snapshot() as q:
-        workers = WORKER_ROW_PROJECTION.decode(
+        rows = WORKER_ROW_PROJECTION.decode(
             q.fetchall(
                 f"SELECT {_worker_row_select()} FROM workers w WHERE w.worker_id IN ({placeholders})",
                 tuple(str(wid) for wid in healthy_active),
             ),
         )
-        if not workers:
+        if not rows:
             return []
     attrs_by_worker = db.get_worker_attributes()
-    hydrated = []
-    for w in workers:
-        commit = committed.get(w.worker_id)
-        l = liveness.get(w.worker_id)
-        hydrated.append(
-            dc_replace(
-                w,
-                healthy=True,
-                active=True,
-                consecutive_failures=l.consecutive_ping_failures if l is not None else 0,
-                last_heartbeat=Timestamp.from_ms(l.last_heartbeat_ms) if l is not None else w.last_heartbeat,
-                committed_cpu_millicores=commit.cpu_millicores,
-                committed_mem=commit.memory_bytes,
-                committed_gpu=commit.gpu,
-                committed_tpu=commit.tpu,
+    out: list[SchedulableWorker] = []
+    for w in rows:
+        l = liveness[w.worker_id]
+        out.append(
+            SchedulableWorker(
+                worker_id=w.worker_id,
+                address=w.address,
+                total_cpu_millicores=w.total_cpu_millicores,
+                total_memory_bytes=w.total_memory_bytes,
+                total_gpu_count=w.total_gpu_count,
+                total_tpu_count=w.total_tpu_count,
+                device_type=w.device_type,
+                device_variant=w.device_variant,
                 attributes=attrs_by_worker.get(w.worker_id, {}),
-                available_cpu_millicores=w.total_cpu_millicores - commit.cpu_millicores,
-                available_memory=w.total_memory_bytes - commit.memory_bytes,
-                available_gpus=w.total_gpu_count - commit.gpu,
-                available_tpus=w.total_tpu_count - commit.tpu,
+                committed_cpu_millicores=l.committed_cpu_millicores,
+                committed_mem=l.committed_mem,
+                committed_gpu=l.committed_gpu,
+                committed_tpu=l.committed_tpu,
             )
         )
-    return hydrated
+    return out
 
 
 def insert_task_profile(
