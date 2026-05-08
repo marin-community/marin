@@ -68,7 +68,7 @@ class RpcWorkerStubFactory:
                     address=f"http://{address}",
                     timeout_ms=self._timeout.to_ms(),
                     accept_compression=IRIS_RPC_COMPRESSIONS,
-                    send_compression=IRIS_RPC_COMPRESSIONS[0],
+                    send_compression=None,
                 )
                 self._stubs[address] = stub
             return stub

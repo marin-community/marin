@@ -125,7 +125,7 @@ def gather_bug_report(
         timeout_ms=30000,
         interceptors=interceptors,
         accept_compression=IRIS_RPC_COMPRESSIONS,
-        send_compression=IRIS_RPC_COMPRESSIONS[0],
+        send_compression=None,
     )
     log_client = LogClient.connect(controller_url, timeout_ms=30000, interceptors=interceptors)
     try:

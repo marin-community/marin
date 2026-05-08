@@ -273,7 +273,7 @@ class Worker:
                 timeout_ms=10_000,
                 interceptors=interceptors,
                 accept_compression=IRIS_RPC_COMPRESSIONS,
-                send_compression=IRIS_RPC_COMPRESSIONS[0],
+                send_compression=None,
             )
             # Register stats namespaces eagerly. Schema bugs surface here at
             # startup rather than silently producing empty namespaces.

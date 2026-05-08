@@ -130,7 +130,7 @@ def rpc_client(
         timeout_ms=timeout_ms,
         interceptors=interceptors,
         accept_compression=IRIS_RPC_COMPRESSIONS,
-        send_compression=IRIS_RPC_COMPRESSIONS[0],
+        send_compression=None,
     )
 
 

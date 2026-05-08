@@ -56,7 +56,7 @@ class ClusterResolver:
             address=self._address,
             timeout_ms=int(timeout * 1000),
             accept_compression=IRIS_RPC_COMPRESSIONS,
-            send_compression=IRIS_RPC_COMPRESSIONS[0],
+            send_compression=None,
         )
 
     def _namespace_prefix(self) -> str:
