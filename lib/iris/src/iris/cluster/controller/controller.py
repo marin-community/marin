@@ -115,6 +115,7 @@ from iris.cluster.controller.transitions import (
     log_event,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.worker_provider import WorkerReconcilePlan
 from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.types import find_free_port, resolve_external_host
@@ -129,7 +130,7 @@ from iris.cluster.types import (
 )
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider, TokenVerifier
 
 logger = logging.getLogger(__name__)
@@ -150,11 +151,6 @@ class SchedulingOutcome(enum.Enum):
 
 # Log a detailed per-phase scheduling trace every this many rounds.
 _SCHEDULING_TRACE_INTERVAL = 50
-
-# Polling reconcile cadence. The polling thread wakes every
-# POLLING_TICK_INTERVAL (or sooner if `_polling_wake` is set) and runs
-# ``_reconcile_worker_batch`` against the next slice of healthy workers.
-POLLING_TICK_INTERVAL = Duration.from_seconds(0.25)
 
 # Taint attribute injected onto claimed workers to prevent non-reservation
 # jobs from landing on them.  Non-reservation jobs get a NOT_EXISTS constraint
@@ -974,11 +970,12 @@ class ControllerConfig:
     heartbeat_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     """How often to send heartbeats to workers."""
 
-    poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
-    """How often to reconcile worker task state via PollTasks. Reconciliation runs
-    inline at the end of each scheduling iteration so it observes a post-commit DB
-    view, eliminating the StartTasks/PollTasks race that arose when poll ran in a
-    separate thread (issue #5041)."""
+    poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
+    """Polling reconcile cadence. The polling thread wakes every ``poll_interval``
+    (or sooner if ``_polling_wake`` is set) and runs ``_reconcile_worker_batch``
+    against every healthy worker. Workers push state changes themselves via
+    ``UpdateTaskStatus``; this loop is the recovery channel for ASSIGNED→BUILDING
+    when the push is dropped, plus the dispatch path for fresh ASSIGNED rows."""
 
     max_dispatch_parallelism: int = 32
     """Maximum number of concurrent RPC dispatch operations."""
@@ -1482,7 +1479,7 @@ class Controller:
                 backoff.reset()
 
     def _run_polling_loop(self, stop_event: threading.Event) -> None:
-        """Per-worker reconcile loop on its own ~250 ms cadence.
+        """Per-worker reconcile loop on the configured ``poll_interval`` cadence.
 
         Each tick:
           1. Snapshot every healthy active worker.
@@ -1494,7 +1491,7 @@ class Controller:
         Worker auto-kill is implicit: any task absent from the worker's
         ``expected_tasks`` set on the next poll is killed locally.
         """
-        tick_seconds = POLLING_TICK_INTERVAL.to_seconds()
+        tick_seconds = self._config.poll_interval.to_seconds()
         while not stop_event.is_set():
             self._polling_wake.wait(timeout=tick_seconds)
             self._polling_wake.clear()
@@ -1591,11 +1588,11 @@ class Controller:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
         result = provider.sync(batch)
         with self._store.transaction() as cur:
-            tx_result = self._transitions.apply_direct_provider_updates(cur, result.updates)
+            self._transitions.apply_direct_provider_updates(cur, result.updates)
         self._provider_scheduling_events = list(result.scheduling_events) if result.scheduling_events else []
         self._provider_capacity = result.capacity
-        if tx_result.tasks_to_kill:
-            self.kill_tasks_on_workers(tx_result.tasks_to_kill, tx_result.task_kill_workers)
+        # Worker-side kills are surfaced through the next K8s pod-diff sync;
+        # no immediate RPC fan-out here.
 
     def _run_profile_loop(self, stop_event: threading.Event) -> None:
         """Periodically capture CPU and memory profiles for all running tasks.
@@ -2133,15 +2130,12 @@ class Controller:
             preemptions = _run_preemption_pass(unscheduled, running_info, context)
             # Apply all preemptions in one transaction so slice evictions
             # (N siblings of a coscheduled preemptor) are all-or-nothing.
-            kills: set[JobName] = set()
             if preemptions:
                 with self._store.transaction() as cur:
                     for preemptor_name, victim_id in preemptions:
-                        preempt_result = self._transitions.preempt_task(
-                            cur, victim_id, reason=f"Preempted by {preemptor_name}"
-                        )
-                        kills |= preempt_result.tasks_to_kill
-                self.kill_tasks_on_workers(kills)
+                        self._transitions.preempt_task(cur, victim_id, reason=f"Preempted by {preemptor_name}")
+                # Killed-task RPCs land on the next polling tick via the
+                # worker's expected_tasks diff.
                 logger.info("Preemption pass: %d tasks preempted", len(preemptions))
         return preemptions
 
@@ -2210,9 +2204,7 @@ class Controller:
             logger.warning("Task %s exceeded execution timeout, killing", task.task_id)
         task_ids = {t.task_id for t in timed_out}
         with self._store.transaction() as cur:
-            result = self._transitions.cancel_tasks_for_timeout(cur, task_ids, reason="Execution timeout exceeded")
-        if result.tasks_to_kill:
-            self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
+            self._transitions.cancel_tasks_for_timeout(cur, task_ids, reason="Execution timeout exceeded")
 
     def _mark_task_unschedulable(self, task: TaskRow) -> None:
         """Mark a task as unschedulable due to timeout."""
@@ -2226,13 +2218,11 @@ class Controller:
             timeout = None
         logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout}), marking as UNSCHEDULABLE")
         with self._store.transaction() as cur:
-            result = self._transitions.mark_task_unschedulable(
+            self._transitions.mark_task_unschedulable(
                 cur,
                 task.task_id,
                 reason=f"Scheduling timeout exceeded ({timeout})",
             )
-        if result.tasks_to_kill:
-            self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
 
     def create_scheduling_context(self, workers: list[SchedulableWorker]) -> SchedulingContext:
         """Create a scheduling context for the given workers."""
@@ -2244,30 +2234,6 @@ class Controller:
             snapshots,
             building_counts=building_counts,
         )
-
-    def kill_tasks_on_workers(
-        self,
-        task_ids: set[JobName],
-        task_kill_workers: dict[JobName, WorkerId] | None = None,
-    ) -> None:
-        """Drive worker-side termination for the given tasks.
-
-        Both providers reconcile from ``tasks.state``: producing transitions
-        have already moved the affected tasks out of ``ACTIVE_TASK_STATES``
-        by the time we land here, so the next reconcile (worker poll or
-        K8s sync) observes the change and tears the runtime down.
-
-        For the worker provider, we nudge the polling rotation so the
-        relevant workers reconcile on the very next tick. For K8s, the
-        sync loop runs on its own cadence and will pick up the diff —
-        no buffered kill queue is involved.
-        """
-        if self._config.dry_run:
-            logger.info("[DRY-RUN] Would kill %d tasks on workers: %s", len(task_ids), list(task_ids)[:5])
-            return
-        if isinstance(self._provider, K8sTaskProvider):
-            return
-        self._polling_wake.set()
 
     # =========================================================================
     # Worker lifecycle RPC dispatch (Reconcile / Ping)
@@ -2326,39 +2292,40 @@ class Controller:
             # current state. The worker's BUILDING push is best-effort
             # (worker.py:_on_state_change drops RPC failures); poll is the
             # only resilient recovery channel for ASSIGNED -> BUILDING.
-            # ``start_tasks`` runs synchronously before ``poll_workers`` in
-            # the same tick (``asyncio.run`` + serial calls below), so
-            # ``submit_task`` has populated the worker's task table by the
-            # time PollTasks lands and ``_missing_task_status`` cannot fire
-            # for rows we just sent in StartTasks.
+            # Per-worker reconcile (see ``WorkerProvider._reconcile_one``)
+            # sends StartTasks then PollTasks under one stub, so by the time
+            # PollTasks lands the worker's task table already contains the
+            # rows we just dispatched and ``_missing_task_status`` cannot
+            # auto-kill them.
             expected[row.worker_id].append(RunningTaskEntry(task_id=row.task_id, attempt_id=row.attempt_id))
 
-        # ── Phase 2: RPC fan-out ──────────────────────────────────────────
-        start_jobs = [(wid, addresses[wid], reqs) for wid, reqs in starts.items() if reqs and addresses.get(wid)]
-        poll_running = {wid: entries for wid, entries in expected.items() if entries}
-        # Workers with no rows at all still need an empty Poll so they
-        # auto-kill strays. ``poll_workers`` takes the running map and a
-        # parallel address map; insert empty entries for those workers.
-        for wid in worker_ids:
-            if wid not in poll_running:
-                poll_running[wid] = []
+        # ── Phase 2: per-worker reconcile under a single asyncio loop ────
+        plans = [
+            WorkerReconcilePlan(
+                worker_id=wid,
+                address=addresses.get(wid),
+                start_tasks=starts.get(wid, []),
+                expected_tasks=expected.get(wid, []),
+            )
+            for wid in worker_ids
+        ]
+        results = self._provider.reconcile_workers(plans)
 
         heartbeats: list[HeartbeatApplyRequest] = []
-
-        if start_jobs:
-            for wid, response, error in self._provider.start_tasks(start_jobs):
+        for result in results:
+            if result.start_error is not None or result.start_response is not None:
                 self._collect_start_tasks_result(
-                    heartbeats, wid, response, error, starts.get(wid, []), attempt_by_worker_task
+                    heartbeats,
+                    result.worker_id,
+                    result.start_response,
+                    result.start_error,
+                    starts.get(result.worker_id, []),
+                    attempt_by_worker_task,
                 )
-
-        if poll_running:
-            poll_results = self._provider.poll_workers(poll_running, addresses)
-            for worker_id, updates, error in poll_results:
-                if error is not None:
-                    logger.debug("PollTasks failed for worker %s: %s", worker_id, error)
-                    continue
-                if updates:
-                    heartbeats.append(HeartbeatApplyRequest(worker_id=worker_id, updates=updates))
+            if result.poll_error is not None:
+                logger.debug("PollTasks failed for worker %s: %s", result.worker_id, result.poll_error)
+            elif result.poll_updates:
+                heartbeats.append(HeartbeatApplyRequest(worker_id=result.worker_id, updates=result.poll_updates))
 
         # ── Phase 3: apply heartbeat-style results in one write txn ──────
         if heartbeats:
@@ -2368,7 +2335,7 @@ class Controller:
         self,
         heartbeats: list[HeartbeatApplyRequest],
         worker_id: WorkerId,
-        response: object,
+        response: worker_pb2.Worker.StartTasksResponse | None,
         error: str | None,
         sent: list[job_pb2.RunTaskRequest],
         attempt_by_worker_task: dict[tuple[WorkerId, str], int],
@@ -2403,7 +2370,7 @@ class Controller:
             )
             return
         assert response is not None
-        for ack in response.acks:  # type: ignore[attr-defined]
+        for ack in response.acks:
             if ack.accepted:
                 continue
             log_event(
@@ -2479,21 +2446,18 @@ class Controller:
     def _process_heartbeat_updates(self, requests: list[HeartbeatApplyRequest]) -> None:
         """Apply heartbeat-driven state transitions in one write txn.
 
-        Cascades and gang requeues surface ``tasks_to_kill`` /
-        ``task_kill_workers`` so the polling thread (or, for K8s, the sync
-        loop) can pick up the kills on the next tick. A terminal heartbeat
-        finalizes at least one attempt, so this also wakes the scheduler.
+        Cascades and gang requeues surface ``tasks_to_kill`` so the next
+        polling tick (or, for K8s, the sync loop) picks up the kills.
+
+        Deliberately does **not** wake the scheduling loop. The scheduler
+        re-evaluates capacity on its own backoff cadence; the worker push
+        path (``update_task_status``) is the only writer that wakes
+        scheduling, since it can free capacity by stamping ``finished_at_ms``
+        on the heartbeat. Polling-thread heartbeats firing every tick used
+        to short-circuit the backoff entirely.
         """
         with self._store.transaction() as cur:
-            results = self._transitions.apply_heartbeats_batch(cur, requests)
-        all_tasks_to_kill: set[JobName] = set()
-        all_task_kill_workers: dict[JobName, WorkerId] = {}
-        for result in results:
-            all_tasks_to_kill.update(result.tasks_to_kill)
-            all_task_kill_workers.update(result.task_kill_workers)
-        if all_tasks_to_kill:
-            self.kill_tasks_on_workers(all_tasks_to_kill, all_task_kill_workers)
-        self._scheduling_wake.set()
+            self._transitions.apply_heartbeats_batch(cur, requests)
 
     def _terminate_workers(self, worker_ids: list[str], reason: str, sibling_reason: str) -> list[WorkerId]:
         """Fail the given workers, terminate their slice siblings, and kill running tasks.
@@ -2523,8 +2487,9 @@ class Controller:
                 removed.append(wid)
             failure_result.tasks_to_kill.update(sibling_failures.tasks_to_kill)
             failure_result.task_kill_workers.update(sibling_failures.task_kill_workers)
-        if failure_result.tasks_to_kill:
-            self.kill_tasks_on_workers(failure_result.tasks_to_kill, failure_result.task_kill_workers)
+        # Surviving-slice siblings get killed on the next polling tick via
+        # the worker's expected_tasks diff; the failed workers themselves
+        # are already gone from the worker table.
         return removed
 
     def _run_autoscaler_once(self) -> None:

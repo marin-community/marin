@@ -921,12 +921,6 @@ class ControllerProtocol(Protocol):
 
     def wake(self) -> None: ...
 
-    def kill_tasks_on_workers(
-        self,
-        task_ids: set[JobName],
-        task_kill_workers: dict[JobName, WorkerId] | None = None,
-    ) -> None: ...
-
     def create_scheduling_context(self, workers: list[SchedulableWorker]) -> SchedulingContext: ...
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
@@ -1379,9 +1373,11 @@ class ControllerServiceImpl:
         # cancel_job uses a recursive CTE to walk the full subtree in a single
         # transaction, so there is no need to recurse manually.
         with self._store.transaction() as cur:
-            result = self._transitions.cancel_job(cur, job_id, reason="Terminated by user")
-        if result.tasks_to_kill:
-            self._controller.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
+            self._transitions.cancel_job(cur, job_id, reason="Terminated by user")
+        # The next polling tick reconciles each affected worker and sends
+        # StopTasks via the expected_tasks diff; wake the loops so it lands
+        # within one tick rather than waiting on the next backoff.
+        self._controller.wake()
         return job_pb2.Empty()
 
     def _job_to_proto(
