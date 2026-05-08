@@ -25,7 +25,7 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 
 ```bash
 # Unit tests (run from lib/iris/)
-cd lib/iris && uv run --group dev python -m pytest -n1 --tb=short -m 'not slow and not docker and not e2e' tests/
+cd lib/iris && uv run --group dev python -m pytest --tb=short -m 'not slow and not docker and not e2e' tests/
 ```
 
 See `TESTING.md` for the complete testing policy, E2E test commands, and markers.

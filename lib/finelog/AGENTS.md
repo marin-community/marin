@@ -38,7 +38,7 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 
 ```bash
 cd lib/finelog
-uv run --group dev pytest -n1 --tb=short tests/
+uv run --group dev pytest --tb=short tests/
 ```
 
 Regenerate protos after editing `proto/logging.proto`:
