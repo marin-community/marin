@@ -164,32 +164,31 @@ def profile_task(
 - Memory and threads on task targets call `profile_local_process` against the task's pid and return inline. No finelog write.
 - `/system/process` (worker self) does not write to finelog regardless of profile kind. The intent is to keep `iris.cpu_profile` semantically "task profiles" — worker-process diagnostics are ephemeral.
 
-## 4. Controller deletions and slim k8s-only RPC
+## 4. Controller changes
 
-### 4.1 Code removed (worker-based providers)
+### 4.1 Code removed
 
-| Symbol | File | Lines (at SHA `24ebc3b1`) |
-|---|---|---|
-| `_run_profile_loop` | `lib/iris/src/iris/cluster/controller/controller.py` | 1607-1626 |
-| `_profile_all_running_tasks` | same | 1627-1651 |
-| `_dispatch_profiles` | same | 1653-1670 |
-| `_capture_one_profile` | same | 1672-1704 |
-| `_profile_thread` spawn | same | 1351 |
-| `profile_interval` config field | same | 1028 |
-| `profile_duration` config field | same | 1031 |
-| `profile_concurrency` config field | same | 1046 |
-| `insert_task_profile` | `lib/iris/src/iris/cluster/controller/db.py` | 987 |
-| `get_task_profiles` | same | 1000-1022 |
-| `task_profiles_table` property | same | 628-629 |
-| `PROFILES_DB_FILENAME`, `_profiles_db_path`, `ATTACH … profiles` | same | 297, 306, 314, 394 |
-| `TASK_PROFILES = Table(...)` | `lib/iris/src/iris/cluster/controller/schema.py` | 1031-1071 |
-| `Provider.profile_task` interface (non-k8s providers) | `lib/iris/src/iris/cluster/providers/*` | grep `profile_task` |
+| Symbol | File | Lines (at SHA `24ebc3b1`) | Reason |
+|---|---|---|---|
+| `_run_profile_loop` | `lib/iris/src/iris/cluster/controller/controller.py` | 1607-1626 | periodic loop |
+| `_profile_all_running_tasks` | same | 1627-1651 | periodic loop |
+| `_dispatch_profiles` | same | 1653-1670 | periodic loop |
+| `_capture_one_profile` | same | 1672-1704 | periodic loop |
+| `_profile_thread` spawn | same | 1351 | periodic loop |
+| `profile_interval` config field | same | 1028 | unused after loop removed |
+| `profile_duration` config field | same | 1031 | unused after loop removed |
+| `profile_concurrency` config field | same | 1046 | unused after loop removed |
+| `insert_task_profile` | `lib/iris/src/iris/cluster/controller/db.py` | 987 | DB persistence gone |
+| `get_task_profiles` | same | 1000-1022 | DB persistence gone |
+| `task_profiles_table` property | same | 628-629 | DB persistence gone |
+| `PROFILES_DB_FILENAME`, `_profiles_db_path`, `ATTACH … profiles` | same | 297, 306, 314, 394 | DB persistence gone |
+| `TASK_PROFILES = Table(...)` | `lib/iris/src/iris/cluster/controller/schema.py` | 1031-1071 | DB persistence gone |
 
-`WorkerService.ProfileTask` ([`worker.proto:111`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/rpc/worker.proto#L111)) and the `CpuProfile`/`MemoryProfile`/`ThreadsProfile`/`ProfileType`/`ProfileTaskRequest`/`ProfileTaskResponse` messages in `job.proto` are kept — workers still use them.
+The controller's `profile_task` RPC handler **stays** — it is the dashboard-facing entry. `WorkerService.ProfileTask` ([`worker.proto:111`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/rpc/worker.proto#L111)) and the `CpuProfile` / `MemoryProfile` / `ThreadsProfile` / `ProfileType` / `ProfileTaskRequest` / `ProfileTaskResponse` proto messages also stay. The provider abstraction's `profile_task` method on both worker-based providers and `K8sTaskProvider` stays.
 
-### 4.2 Slim controller RPC retained for k8s mode
+### 4.2 Controller `profile_task` RPC handler (rewrite)
 
-Edit `lib/iris/src/iris/cluster/controller/service.py:1893-1968`. Replace the existing handler with:
+Edit `lib/iris/src/iris/cluster/controller/service.py:1893-1968`. The new handler dispatches via the provider abstraction without writing to any DB:
 
 ```python
 def profile_task(
@@ -197,28 +196,33 @@ def profile_task(
     request: job_pb2.ProfileTaskRequest,
     ctx: RequestContext,
 ) -> job_pb2.ProfileTaskResponse:
-    """K8s-only on-demand profile dispatch.
+    """Dashboard-facing on-demand profile dispatch.
 
-    On clusters using K8sTaskProvider there is no worker process to host
-    the profile RPC; the controller dispatches directly to the provider.
-    On worker-based providers, this RPC raises UNIMPLEMENTED — the dashboard
-    routes those requests at the worker proxy.
+    Resolves the target, locates the responsible provider, and delegates
+    via `provider.profile_task(...)`:
+      - worker-based providers forward the request to the task's worker;
+        the worker captures, writes to iris.cpu_profile (CPU-task only),
+        returns bytes inline.
+      - K8sTaskProvider captures via kubectl exec, writes to iris.cpu_profile
+        (CPU-task only), returns bytes inline.
 
-    Does not persist results — k8s mode has no periodic profile loop and
-    no finelog writes for profiles.
+    The controller process never writes profile data itself.
+
+    Targets:
+      /job/.../task/N[:attempt_id] — task profile (worker or k8s).
+      /system/worker/<id>          — worker self-profile, forwarded via worker
+                                     ProfileTask RPC. Not persisted.
+      /system/process              — REMOVED. The controller no longer
+                                     self-profiles. INVALID_ARGUMENT.
     """
-    if not self._controller.has_direct_provider:
-        raise ConnectError(Code.UNIMPLEMENTED, "Use the worker proxy for profile requests")
-    target = parse_profile_target(request.target)
-    target.task_id.require_task()
-    task = _read_task_with_attempts(self._db, target.task_id)
-    if not task:
-        raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
-    attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
-    return self._controller.provider.profile_task(task.task_id.to_wire(), attempt_id, request)
 ```
 
-The `/system/process` and `/system/worker/<id>` target branches in the existing handler are **removed**. The controller no longer self-profiles or proxies worker self-profiles; dashboard worker-self-profile goes through the worker proxy directly.
+**Contracts:**
+
+- The controller is a pure dispatcher. It does *not* hold a `LogClient` reference for `iris.cpu_profile` and does *not* call `Table.write` for profile rows.
+- The `/system/process` (controller-self) target is removed — returns `INVALID_ARGUMENT`. Dashboard `StatusTab.vue` button is dropped.
+- `/system/worker/<id>` is preserved: forwarded as `/system/process` to the named worker via `WorkerService.ProfileTask`. Result returned inline; not persisted (matches today's worker-self semantics).
+- All existing target-resolution and worker-liveness checks ([`service.py:1939-1968`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/controller/service.py#L1939)) are preserved.
 
 ### 4.3 SQLite migration
 
@@ -241,10 +245,20 @@ The `/system/process` and `/system/worker/<id>` target branches in the existing 
 - Migrations 0005, 0014, 0020, 0023 stay on disk as no-op chain links once 0024 has run on a given DB. Their `upgrade()` bodies still execute on first-run upgrades from old snapshots; 0024 immediately reverses them. The path-resolver helper for `profiles_db_path` stays in `db.py` as a one-line method consumed only by 0024.
 - **Commit ordering inside the migration step:** delete *all* call sites of `task_profiles_table` / `insert_task_profile` / `get_task_profiles` in the same commit as adding 0024. Otherwise a stale read after `DETACH` would 500.
 
-### 4.4 Dashboard
+### 4.4 K8s provider write path
 
-- `lib/iris/dashboard/src/components/controller/StatusTab.vue` — remove the "profile this controller" button (`useProfileAction(controllerRpcCall, '/system/process')`).
-- `lib/iris/dashboard/src/composables/useProfileAction.ts` — keep only the worker-RPC variant. Update call sites in `TaskDetail.vue`, `WorkerStatusPage.vue`, `WorkerTaskDetail.vue` to route through the worker proxy: `useRpc('proxy/worker/<worker_id>/iris.cluster.WorkerService', 'ProfileTask', body)`.
+Edit `lib/iris/src/iris/cluster/providers/k8s/tasks.py:1155-1180` (`K8sTaskProvider.profile_task`):
+
+- On CPU-target success (after `_profile_cpu` returns non-empty bytes), write one `IrisCpuProfile` row with `trigger="on_demand"` and `worker_id="<k8s>"` (or the pod's host node label — see Open Questions). Use the controller-process `LogClient` (already available to `K8sTaskProvider` via constructor injection — confirm during implementation; if not, add it).
+- Memory and threads paths return inline only (no finelog write).
+- Errors: existing behaviour — `ProfileTaskResponse(error=str(e))` on capture failure, no row written.
+
+The k8s provider does not host a periodic loop in v1. Adding one is out of scope (see design Open Questions).
+
+### 4.5 Dashboard
+
+- `lib/iris/dashboard/src/components/controller/StatusTab.vue` — remove the "profile this controller" button (the controller `/system/process` target now returns INVALID_ARGUMENT).
+- `lib/iris/dashboard/src/composables/useProfileAction.ts` — **unchanged**. Continues to call the controller `profile_task` RPC. The controller now silently delegates through the provider abstraction; the dashboard does not need to know whether the cluster is k8s or worker-based.
 - `lib/iris/dashboard/src/components/controller/TaskDetail.vue` — add a "Profile history" panel that uses `useStatsRpc('Query', { sql: ... })` against `iris.cpu_profile`.
 
 ## 5. Dashboard SQL surface
@@ -282,8 +296,9 @@ Both queries go through the existing `useStatsRpc` composable, which posts to `p
 No new error types. Existing behaviour:
 
 - Worker `_capture_and_log_cpu_profile` raises `RuntimeError` from `profile_local_process` (py-spy missing, py-spy non-zero exit) and from the pid/state precondition. The periodic loop catches; the RPC handler returns `error=str(e)` in `ProfileTaskResponse`.
-- Finelog write failures (`Table.write` errors) are logged by the LogClient bg-flush thread and surface in metrics — no change from today's `IrisTaskStat` write semantics.
-- Controller k8s-only `profile_task` raises `UNIMPLEMENTED` on worker-based providers (clear signal to clients to use the worker proxy).
+- K8s `_profile_cpu` raises on `kubectl exec` failure; `K8sTaskProvider.profile_task` catches and returns `error=str(e)` (existing behaviour).
+- Finelog write failures (`Table.write` errors) are logged by the LogClient bg-flush thread and surface in metrics — no change from today's `IrisTaskStat` write semantics. A failed finelog write does not fail the RPC; the bytes still return inline.
+- Controller `profile_task` returns `INVALID_ARGUMENT` for `/system/process` (controller-self profile is removed).
 
 ## 7. Out of scope
 
@@ -304,15 +319,14 @@ The following are **not** committed by this design and stay for follow-up PRs:
 |---|---|
 | New | `lib/iris/src/iris/cluster/worker/profile_loop.py` |
 | Edit (extend) | `lib/iris/src/iris/cluster/worker/stats.py` (+ `IrisCpuProfile`, `CpuProfileFormat`, `CpuProfileTrigger`, `CPU_PROFILE_NAMESPACE`) |
-| Edit | `lib/iris/src/iris/cluster/worker/worker.py` (spawn loop, register table, capture+log helper) |
-| Edit | `lib/iris/src/iris/cluster/worker/service.py` (RPC writes finelog on CPU-task target) |
+| Edit | `lib/iris/src/iris/cluster/worker/worker.py` (spawn loop, register table, `_capture_and_log_cpu_profile` helper) |
+| Edit | `lib/iris/src/iris/cluster/worker/service.py` (`ProfileTask` writes finelog on CPU-task target) |
+| Edit | `lib/iris/src/iris/cluster/providers/k8s/tasks.py` (`profile_task` writes finelog on CPU-task success) |
 | Delete (large) | `lib/iris/src/iris/cluster/controller/controller.py` (profile loop + helpers + config) |
-| Edit (slim) | `lib/iris/src/iris/cluster/controller/service.py` (`profile_task` becomes k8s-only dispatcher) |
+| Edit (rewrite) | `lib/iris/src/iris/cluster/controller/service.py` (`profile_task` becomes a pure provider-dispatcher; no DB writes) |
 | Delete | `lib/iris/src/iris/cluster/controller/schema.py` (`TASK_PROFILES`) |
 | Delete | `lib/iris/src/iris/cluster/controller/db.py` (profile helpers + ATTACH; keep `profiles_db_path` method for 0024) |
-| Delete | non-k8s provider `profile_task` interface implementations |
 | New | `lib/iris/src/iris/cluster/controller/migrations/0024_drop_profiles_db.py` |
-| Edit | `lib/iris/dashboard/src/components/controller/TaskDetail.vue` (history panel + worker-proxy route) |
-| Edit | `lib/iris/dashboard/src/composables/useProfileAction.ts` (worker route only) |
+| Edit | `lib/iris/dashboard/src/components/controller/TaskDetail.vue` (Profile history panel) |
 | Edit | `lib/iris/dashboard/src/components/controller/StatusTab.vue` (remove profile-controller button) |
-| Edit | `lib/iris/AGENTS.md`, `lib/iris/OPS.md` (document `iris.cpu_profile` retention + k8s exception) |
+| Edit | `lib/iris/AGENTS.md`, `lib/iris/OPS.md` (document `iris.cpu_profile` retention + k8s write path) |
