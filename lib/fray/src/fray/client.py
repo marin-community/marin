@@ -1,0 +1,199 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Client protocol and helpers for fray."""
+
+from __future__ import annotations
+
+import contextlib
+import contextvars
+import logging
+import time
+from collections.abc import Generator, Sequence
+from typing import Any, Protocol
+
+from fray.actor import ActorGroup, ActorHandle, HostedActor
+from fray.types import ActorConfig, JobRequest, JobStatus, ResourceConfig
+
+logger = logging.getLogger(__name__)
+
+
+class JobHandle(Protocol):
+    @property
+    def job_id(self) -> str: ...
+
+    def wait(self, timeout: float | None = None, *, raise_on_failure: bool = True) -> JobStatus:
+        """Block until job completes."""
+        ...
+
+    def status(self) -> JobStatus: ...
+
+    def terminate(self) -> None: ...
+
+
+class Client(Protocol):
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> JobHandle:
+        """Submit a job for execution. Returns immediately.
+
+        Args:
+            request: The job request to submit.
+            adopt_existing: If True (default), return existing job handle when name conflicts.
+                          If False, raise JobAlreadyExists on duplicate names.
+        """
+        ...
+
+    def host_actor(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> HostedActor:
+        """Host an actor in the current process with RPC serving.
+
+        Unlike create_actor, this does not spawn a separate job/process.
+        The actor runs in the caller's process and is reachable via the
+        returned handle. Call shutdown() on the result to stop the server.
+        """
+        ...
+
+    def create_actor(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> ActorHandle:
+        """Create a named actor instance. Returns a handle immediately."""
+        ...
+
+    def create_actor_group(
+        self,
+        actor_class: type,
+        *args: Any,
+        name: str,
+        count: int,
+        resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
+        **kwargs: Any,
+    ) -> ActorGroup:
+        """Create N instances of an actor, returning a group handle."""
+        ...
+
+    def shutdown(self, wait: bool = True) -> None:
+        """Shutdown the client and all managed resources."""
+        ...
+
+
+class JobFailed(RuntimeError):
+    """Raised when a job fails during wait_all with raise_on_failure=True."""
+
+    def __init__(self, job_id: str, status: JobStatus):
+        self.job_id = job_id
+        self.failed_status = status
+        super().__init__(f"Job {job_id} finished with status {status}")
+
+
+class JobAlreadyExists(RuntimeError):
+    """Raised when submitting a job whose name is already in use.
+
+    When ``handle`` is set the caller can adopt the running job instead of
+    failing.
+    """
+
+    def __init__(self, job_name: str, handle: JobHandle | None = None):
+        self.job_name = job_name
+        self.handle = handle
+        super().__init__(f"Job {job_name} already exists")
+
+
+def wait_all(
+    jobs: Sequence[JobHandle],
+    *,
+    timeout: float | None = None,
+    raise_on_failure: bool = True,
+) -> list[JobStatus]:
+    """Wait for all jobs to complete, monitoring concurrently.
+
+    Args:
+        jobs: Job handles to wait for.
+        timeout: Maximum seconds to wait. None means wait forever.
+        raise_on_failure: If True, raise JobFailed on the first failed job.
+
+    Returns:
+        Final status for each job, in the same order as the input.
+    """
+    if not jobs:
+        return []
+
+    results: list[JobStatus | None] = [None] * len(jobs)
+    remaining = set(range(len(jobs)))
+    start = time.monotonic()
+    sleep_secs = 0.05
+    max_sleep_secs = 2.0
+
+    while remaining:
+        if timeout is not None and (time.monotonic() - start) > timeout:
+            raise TimeoutError(f"wait_all timed out after {timeout}s with {len(remaining)} jobs remaining")
+
+        for i in list(remaining):
+            s = jobs[i].status()
+            if JobStatus.finished(s):
+                results[i] = s
+                remaining.discard(i)
+                if raise_on_failure and s in (JobStatus.FAILED, JobStatus.STOPPED):
+                    raise JobFailed(jobs[i].job_id, s)
+
+        if remaining:
+            time.sleep(sleep_secs)
+            sleep_secs = min(sleep_secs * 1.5, max_sleep_secs)
+
+    return results  # type: ignore[return-value]
+
+
+_current_client_var: contextvars.ContextVar[Client | None] = contextvars.ContextVar("_current_client_var", default=None)
+
+
+def current_client() -> Client:
+    """Return the current fray Client.
+
+    Resolution order:
+        1. Explicitly set client (via set_current_client)
+        2. Auto-detect Iris environment (get_iris_ctx() returns context)
+        3. LocalClient() default
+    """
+
+    client = _current_client_var.get()
+    if client is not None:
+        logger.info("current_client: using explicitly set client")
+        return client
+
+    try:
+        from iris.client.client import get_iris_ctx
+
+        ctx = get_iris_ctx()
+        if ctx is not None:
+            from fray.iris_backend import FrayIrisClient
+
+            logger.info("current_client: using Iris backend (auto-detected)")
+            return FrayIrisClient.from_iris_client(ctx.client)
+    except ImportError:
+        logger.warning("current_client: iris not installed")
+
+    from fray.local_backend import LocalClient
+
+    logger.info("current_client: using LocalClient (fallback)")
+    return LocalClient()
+
+
+@contextlib.contextmanager
+def set_current_client(client: Client) -> Generator[Client, None, None]:
+    """Context manager that sets the current client and restores on exit."""
+    token = _current_client_var.set(client)
+    try:
+        yield client
+    finally:
+        _current_client_var.reset(token)

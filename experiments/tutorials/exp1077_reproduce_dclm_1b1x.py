@@ -11,15 +11,17 @@ Author: Will Held
 
 Example usage:
   # Run the training job with wandb logging enabled
-  python marin/run/ray_run.py --env_vars WANDB_API_KEY YOUR_WANDB_API_KEY -- python experiments/howto/dclm_1b1x.py
+  uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+    -e WANDB_API_KEY "$WANDB_API_KEY" \
+    -- python -m experiments.tutorials.exp1077_reproduce_dclm_1b1x
 """
 
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
+from marin.execution.executor import executor_main
 
 from experiments.defaults import SimpleTrainConfig, default_train
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
-from marin.execution.executor import executor_main
 
 # Define the LlamaConfig for a 1.4B parameter model
 # This follows the 1B-1x competition scale in the DCLM benchmark

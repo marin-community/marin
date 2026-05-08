@@ -18,12 +18,9 @@ import logging
 import uuid
 from pathlib import Path
 
-from iris.cluster.providers.types import (
-    InfraError,
-    Labels,
-    QuotaExhaustedError,
-    find_free_port,
-)
+from rigging.timing import Duration, Timestamp
+
+from iris.cluster.providers.gcp.local import LocalSliceHandle
 from iris.cluster.providers.gcp.service import (
     KNOWN_GCP_ZONES,
     KNOWN_TPU_TYPES,
@@ -37,12 +34,16 @@ from iris.cluster.providers.gcp.service import (
     validate_tpu_create,
     validate_vm_create,
 )
-from iris.cluster.providers.gcp.local import LocalSliceHandle
+from iris.cluster.providers.types import (
+    InfraError,
+    Labels,
+    QuotaExhaustedError,
+    find_free_port,
+)
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -464,7 +465,6 @@ class InMemoryGcpService:
                 for k, v in worker_config.worker_attributes.items():
                     extra_attrs.setdefault(k, v)
 
-            extra_attrs.setdefault("region", "local")
             # Use the canonical capacity_type from the slice config proto.
             capacity_type_val = config.capacity_type or config_pb2.CAPACITY_TYPE_ON_DEMAND
 

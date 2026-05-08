@@ -10,13 +10,13 @@ Fineweb2 dataset.
 
 import os.path
 
-
-from experiments.llama import llama3_tokenizer
-from experiments.multilingual_fineweb2_hq.constants import FINEWEB2_DATASETS
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
+
+from experiments.llama import llama3_tokenizer
+from experiments.multilingual_fineweb2_hq.constants import FINEWEB2_DATASETS
 
 fineweb2_raw = ExecutorStep(
     name="raw/fineweb2_hq",

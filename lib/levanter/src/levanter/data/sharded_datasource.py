@@ -70,10 +70,10 @@ class ShardedDataSource(Generic[T_co]):
         path: str,
     ) -> AsyncDataset[T]:
         """
-        Constructs a shard cache version of this dataset using Ray.
+        Constructs a shard cache version of this dataset.
 
         Levanter's preprocessing pipeline offers the following features/guarantees:
-        * distributed, sharded preprocessing using Ray
+        * distributed, sharded preprocessing using Zephyr
         * deterministic ordering of data
         * interruptible and resumable
         * streaming results (no need to wait for everything to finish)
@@ -116,9 +116,9 @@ class ShardedDataSource(Generic[T_co]):
         Args:
             fn:  A function that takes a list of data and returns an iterable of results
             batch_size: The batch size to use
-            num_cpus: passed to ray
-            num_gpus: passed to ray
-            **resources: Resources to pass to Ray
+            num_cpus: CPU resources to request for each batch-map worker
+            num_gpus: GPU resources to request for each batch-map worker
+            **resources: Extra resource hints forwarded to the preprocessing executor
 
         Returns:
             A new ShardedDataset.
@@ -213,8 +213,8 @@ class WrappedHFDataSource(ShardedDataSource[dict]):
             idx += 1
 
     def _load_dataset(self):
-        # obnoxiously, the dataset loading stuff doesn't work with ray because of multiprocessing
-        # so we have to do this hacky thing where we load the dataset in the worker
+        # HF dataset loading has historically not been multiprocessing-safe, so we load
+        # lazily in the worker rather than sharing a dataset handle across processes.
         return datasets.load_dataset(self.id, split=self.split, streaming=self.streaming, **self.kwargs)
 
 
@@ -291,34 +291,9 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
                         else:
                             yield doc
             case ".parquet":
-                # TODO: fix this duplication
                 with open_url(url, "rb", compression=compression) as f:
                     parquet_file = pq.ParquetFile(f)
-                    total_rows = parquet_file.metadata.num_rows
-                    if row >= total_rows:
-                        return
-
-                    num_row_groups = parquet_file.metadata.num_row_groups
-
-                    # Compute cumulative row counts
-                    row_counts = [parquet_file.metadata.row_group(i).num_rows for i in range(num_row_groups)]
-                    cumulative_rows = [0]
-                    for count in row_counts:
-                        cumulative_rows.append(cumulative_rows[-1] + count)
-
-                    # Find the starting row group and row within it
-                    for idx, cum_row in enumerate(cumulative_rows):
-                        if cum_row > row:
-                            row_group_index = idx - 1
-                            start_row_in_group = row - cumulative_rows[row_group_index]
-                            break
-
-                    # Read from the starting row group onwards
-                    for rg_idx in range(row_group_index, parquet_file.num_row_groups):
-                        table = parquet_file.read_row_group(rg_idx, columns=self.columns)
-                        if rg_idx == row_group_index:
-                            table = table.slice(start_row_in_group)
-                        yield from table.to_pylist()
+                    yield from _iter_parquet_from_row(parquet_file, row, columns=self.columns)
             case _:
                 raise ValueError(f"Unknown format {format}")
 
@@ -436,6 +411,38 @@ def _sniff_format_for_dataset(url):
     return format_from_url
 
 
+def _iter_parquet_from_row(parquet_file: pq.ParquetFile, row: int, columns=None) -> Iterator[dict]:
+    """Iterate over rows in a ParquetFile starting from a given row offset.
+
+    Seeks to the correct row group and yields dicts for each row from ``row`` onward.
+    """
+    total_rows = parquet_file.metadata.num_rows
+    if row >= total_rows:
+        return
+
+    num_row_groups = parquet_file.metadata.num_row_groups
+
+    # Compute cumulative row counts to find the starting row group
+    row_counts = [parquet_file.metadata.row_group(i).num_rows for i in range(num_row_groups)]
+    cumulative_rows = [0]
+    for count in row_counts:
+        cumulative_rows.append(cumulative_rows[-1] + count)
+
+    row_group_index = 0
+    start_row_in_group = row
+    for idx, cum_row in enumerate(cumulative_rows):
+        if cum_row > row:
+            row_group_index = idx - 1
+            start_row_in_group = row - cumulative_rows[row_group_index]
+            break
+
+    for rg_idx in range(row_group_index, num_row_groups):
+        table = parquet_file.read_row_group(rg_idx, columns=columns)
+        if rg_idx == row_group_index:
+            table = table.slice(start_row_in_group)
+        yield from table.to_pylist()
+
+
 class JsonlDataSource(UrlBackedShardedDataSource[dict]):
     def __init__(self, urls):
         super().__init__(urls)
@@ -456,14 +463,9 @@ class JsonDataSource(UrlBackedShardedDataSource[dict]):
     def __init__(self, urls):
         super().__init__(urls)
 
-    @property
-    def shard_names(self) -> Sequence[str]:
-        return list(self._shard_name_to_url_mapping.keys())
-
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
         with open_url(url, "r", compression="infer") as f:
-            # TODO: would be nice if we could seek faster than this. Can't even skip json parsing
             data = json.load(f)
             return iter(data[row:])
 
@@ -477,34 +479,7 @@ class ParquetDataSource(UrlBackedShardedDataSource[dict]):
         url = self._shard_name_to_url_mapping[shard_name]
         with open_url(url, "rb", compression="infer") as f:
             parquet_file = pq.ParquetFile(f)
-            total_rows = parquet_file.metadata.num_rows
-            if row >= total_rows:
-                return
-
-            num_row_groups = parquet_file.metadata.num_row_groups
-
-            # Compute cumulative row counts
-            row_counts = [parquet_file.metadata.row_group(i).num_rows for i in range(num_row_groups)]
-            cumulative_rows = [0]
-            for count in row_counts:
-                cumulative_rows.append(cumulative_rows[-1] + count)
-
-            # find starting row group and also find the row within it
-            for idx, cum_row in enumerate(cumulative_rows):
-                if cum_row > row:
-                    row_group_index = idx - 1
-                    start_row_in_group = row - cumulative_rows[row_group_index]
-                    break
-
-            # read from the starting row group onwards
-            for rg_idx in range(row_group_index, parquet_file.num_row_groups):
-                table = parquet_file.read_row_group(rg_idx, columns=self.columns)
-
-                # if we're in the row group we want, slice the table at/from the row we want
-                if rg_idx == row_group_index:
-                    table = table.slice(start_row_in_group)
-
-                yield from table.to_pylist()
+            yield from _iter_parquet_from_row(parquet_file, row, columns=self.columns)
 
 
 def _mk_shard_name_mapping(urls):

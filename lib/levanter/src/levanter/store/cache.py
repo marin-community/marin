@@ -20,7 +20,7 @@ import numpy as np
 import pyarrow as pa
 import tensorstore as ts
 from dataclasses_json import dataclass_json
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from fsspec import AbstractFileSystem
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
@@ -219,7 +219,7 @@ class CacheMetadata:
 
 class SerialCacheWriter:
     """
-    Writes TreeCache-compatible caches to disk without Ray. Mostly for scripts and debugging.
+    Writes TreeCache-compatible caches to disk directly. Mostly for scripts and debugging.
     """
 
     def __init__(
@@ -328,7 +328,7 @@ def build_cache(
         max_workers=min(128, len(shard_jobs)),
         name="levanter-cache-build",
     )
-    shard_results = ctx.execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False)
+    shard_results = ctx.execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False).results
     shard_results = sorted(shard_results, key=lambda r: r["index"])
 
     shard_cache_paths = [s["path"] for s in shard_results]
@@ -449,11 +449,9 @@ def consolidate_shard_caches(
         max_workers=min(CONSOLIDATE_DATA_SIZE_WORKERS, len(shard_cache_paths)),
         name="levanter-cache-probe",
     )
-    probe_results = list(
-        probe_ctx.execute(
-            Dataset.from_list(shard_cache_paths).map(_probe_shard),
-        )
-    )
+    probe_results = probe_ctx.execute(
+        Dataset.from_list(shard_cache_paths).map(_probe_shard),
+    ).results
     per_shard_sizes = [r[0] for r in probe_results]
     shard_ledgers = [r[1] for r in probe_results]
 

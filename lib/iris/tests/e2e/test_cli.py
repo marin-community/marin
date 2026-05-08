@@ -19,10 +19,9 @@ import yaml
 from click.testing import CliRunner
 from iris.cli import iris
 from iris.client import IrisClient
-from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.providers.local.cluster import LocalCluster
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.cluster.types import Entrypoint, ResourceSpec
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
 pytestmark = pytest.mark.e2e
@@ -54,7 +53,7 @@ def cluster_config_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
                 },
                 "scale_groups": {
                     "local-cpu": {
-                        "min_slices": 1,
+                        "buffer_slices": 1,
                         "max_slices": 1,
                         "num_vms": 1,
                         "resources": {

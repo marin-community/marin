@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from unittest.mock import Mock
 
 import pytest
-
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerPhase, ContainerStats, ContainerStatus
@@ -104,7 +103,7 @@ class FakeContainerHandle:
         return FakeLogReader()
 
     def stats(self) -> ContainerStats:
-        return ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True)
+        return ContainerStats(memory_mb=100, cpu_millicores=500, process_count=5, available=True)
 
     def disk_usage_mb(self) -> int:
         return 0
@@ -167,6 +166,7 @@ def create_run_task_request(
     num_tasks: int = 1,
     ports: list[str] | None = None,
     attempt_id: int = 0,
+    task_image: str = "",
 ):
     def test_fn():
         print("Hello from test")
@@ -193,6 +193,7 @@ def create_run_task_request(
         bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         resources=resources,
         ports=ports or [],
+        task_image=task_image,
     )
     request.timeout.CopyFrom(duration_to_proto(Duration.from_seconds(300)))
     return request

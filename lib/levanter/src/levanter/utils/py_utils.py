@@ -10,7 +10,6 @@ import json
 import os
 import pathlib
 import sys
-import time
 import uuid
 from dataclasses import asdict, dataclass, is_dataclass
 
@@ -25,12 +24,6 @@ def logical_cpu_core_count() -> int:
         return os.cpu_count() or 1
     except NotImplementedError:
         return 1
-
-
-def non_caching_cycle(iterable):
-    """Like itertools.cycle, but doesn't cache the iterable."""
-    while True:
-        yield from iterable
 
 
 # https://stackoverflow.com/a/58336722/1736826 CC-BY-SA 4.0
@@ -82,40 +75,6 @@ def actual_sizeof(obj):
                 need_to_see.extend(obj)
         objects = need_to_see
     return size
-
-
-class Stopwatch:
-    """Resumable stop watch for tracking time per call"""
-
-    def __init__(self):
-        self._start_time = time.time()
-        self._elapsed = 0.0
-        self._n = 0
-
-    def start(self):
-        self._start_time = time.time()
-        self._n += 1
-
-    def stop(self):
-        self._elapsed += time.time() - self._start_time
-
-    def reset(self):
-        self._elapsed = 0.0
-
-    def elapsed(self):
-        return self._elapsed
-
-    def average(self):
-        if self._n == 0:
-            return 0.0
-        return self._elapsed / self._n
-
-    def __enter__(self):
-        self.start()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.stop()
 
 
 @contextlib.contextmanager

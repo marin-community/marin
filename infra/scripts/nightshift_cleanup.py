@@ -138,24 +138,27 @@ If no scouts produced changes, exit cleanly — no branch, no PR.
 """
 
 
-def run_scout(subproject: str, date: str, repo_root: Path) -> tuple[str, dict, str]:
-    """Run a single scout agent in a git worktree. Returns (subproject, result_dict, worktree_path)."""
+def setup_scout_worktree(subproject: str, date: str, repo_root: Path) -> Path:
+    """Create a fresh worktree for a scout. Must run sequentially — `git worktree add`
+    serializes on repo metadata and races when called from multiple threads."""
     worktree_name = f"nightshift-scout-{subproject.replace('/', '-')}"
     worktree_path = repo_root / ".claude" / "nightshift-worktrees" / worktree_name
     branch_name = f"nightshift/scout-{subproject.replace('/', '-')}-{date}"
 
-    # Clean up any stale worktree
     subprocess.run(["git", "worktree", "remove", "--force", str(worktree_path)], capture_output=True, cwd=repo_root)
     subprocess.run(["git", "branch", "-D", branch_name], capture_output=True, cwd=repo_root)
 
-    # Create worktree on a fresh branch (origin/main already fetched by main())
     subprocess.run(
         ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "origin/main"],
         check=True,
         cwd=repo_root,
     )
+    return worktree_path
 
-    with tempfile.NamedTemporaryFile(suffix=".json", prefix=f"nightshift-{worktree_name}-", delete=False) as f:
+
+def run_scout(subproject: str, worktree_path: Path) -> tuple[str, dict, str]:
+    """Run a single scout agent in a pre-created git worktree."""
+    with tempfile.NamedTemporaryFile(suffix=".json", prefix=f"nightshift-{worktree_path.name}-", delete=False) as f:
         result_file = f.name
     haiku_seed = secrets.token_hex(4)
 
@@ -175,12 +178,11 @@ def run_scout(subproject: str, date: str, repo_root: Path) -> tuple[str, dict, s
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
             "--max-turns",
             "400",
-            "--cwd",
-            str(worktree_path),
             "--",
             prompt,
         ],
         check=False,
+        cwd=worktree_path,
     )
 
     result = {"subproject": subproject, "status": "error", "summary": "Scout did not produce a result file"}
@@ -251,8 +253,13 @@ def main() -> None:
     scout_results: list[dict] = []
     worktree_info: list[tuple[str, str]] = []
 
+    # Create worktrees sequentially, then run claude in parallel. `git worktree add`
+    # serializes on repo metadata, so concurrent creation races and some invocations
+    # fail with exit 255.
+    subproject_worktrees = [(sp, setup_scout_worktree(sp, date, repo_root)) for sp in SUBPROJECTS]
+
     with ThreadPoolExecutor(max_workers=len(SUBPROJECTS)) as pool:
-        futures = {pool.submit(run_scout, sp, date, repo_root): sp for sp in SUBPROJECTS}
+        futures = {pool.submit(run_scout, sp, wt): sp for sp, wt in subproject_worktrees}
         for future in as_completed(futures):
             sp = futures[future]
             try:

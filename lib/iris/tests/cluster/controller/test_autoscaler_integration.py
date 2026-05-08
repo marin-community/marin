@@ -10,13 +10,10 @@ backed by in-memory fakes rather than MagicMock.
 
 import threading
 
-
-from iris.cluster.controller.autoscaler import (
-    Autoscaler,
-    ScalingAction,
-)
-from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup
 from iris.cluster.constraints import DeviceType
+from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.models import DemandEntry, ScalingAction
+from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import CloudSliceState
@@ -28,10 +25,14 @@ from rigging.timing import Duration, Timestamp
 from tests.cluster.controller.conftest import (
     advance_all_tpus,
     make_autoscaler,
-    make_big_demand_entries as _make_big_demand_entries,
     make_demand_entries,
     make_gcp_provider,
     make_scale_group_config,
+)
+from tests.cluster.controller.conftest import (
+    make_big_demand_entries as _make_big_demand_entries,
+)
+from tests.cluster.controller.conftest import (
     mark_all_slices_ready as _mark_all_slices_ready,
 )
 
@@ -208,7 +209,6 @@ class TestAutoscalerWaterfallEndToEnd:
         )
 
         from iris.cluster.constraints import PlacementRequirements
-        from iris.cluster.controller.autoscaler import DemandEntry
         from iris.rpc import job_pb2
 
         big_resources = job_pb2.ResourceSpecProto(cpu_millicores=128000, memory_bytes=128 * 1024**3)
@@ -289,7 +289,7 @@ def test_bootstrap_state_with_worker_config():
     """With worker_config, the slice enters BOOTSTRAPPING state when cloud is READY."""
     sg_config = make_scale_group_config(
         name="test-group",
-        min_slices=0,
+        buffer_slices=0,
         max_slices=4,
         zones=["us-central1-a"],
     )
@@ -336,7 +336,7 @@ def test_no_bootstrap_without_worker_config():
     """Without worker_config, slices go directly to READY when cloud is READY."""
     sg_config = make_scale_group_config(
         name="test-group",
-        min_slices=0,
+        buffer_slices=0,
         max_slices=4,
         zones=["us-central1-a"],
     )
@@ -392,7 +392,7 @@ def test_pending_counter_prevents_double_scaleup():
 
     sg_config = make_scale_group_config(
         name="test-group",
-        min_slices=1,
+        buffer_slices=0,
         max_slices=4,
         zones=["us-central1-a"],
     )
@@ -413,7 +413,7 @@ def test_pending_counter_prevents_double_scaleup():
     demand = make_demand_entries(1)
     t0 = Timestamp.from_ms(1_000_000)
 
-    # First run_once: demand=1, current=0, below min_slices -> scale up.
+    # First run_once: demand=1, current=0 -> scale up.
     decisions1 = autoscaler.run_once(demand, {}, t0)
     assert len(decisions1) == 1
     assert decisions1[0].action == ScalingAction.SCALE_UP
@@ -526,7 +526,7 @@ def test_marin_style_lifecycle():
             _mark_all_slices_ready(g)
 
     def routed(group_name):
-        return len(autoscaler._last_routing_decision.routed_entries.get(group_name, []))
+        return len(autoscaler._last_scale_plan.routing_decision.routed_entries.get(group_name, []))
 
     def assert_no_load_on_last():
         assert routed("tpu-16vm") == 0, "tpu-16vm should never receive load"

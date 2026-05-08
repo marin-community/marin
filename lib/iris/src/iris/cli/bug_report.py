@@ -11,14 +11,16 @@ import logging
 import subprocess
 from dataclasses import dataclass, field
 
-from iris.cluster.log_store import build_log_source
+from finelog.client import LogClient
+from finelog.rpc import logging_pb2
+
+from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.types import JobName
-from iris.rpc import logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
+from iris.rpc.proto_utils import format_resources, job_state_friendly, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -118,8 +120,14 @@ def gather_bug_report(
 ) -> BugReport:
     """Gather all diagnostic data for a job into a BugReport."""
     interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
-    client = ControllerServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
-    log_client = LogServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
+    client = ControllerServiceClientSync(
+        controller_url,
+        timeout_ms=30000,
+        interceptors=interceptors,
+        accept_compression=IRIS_RPC_COMPRESSIONS,
+        send_compression=None,
+    )
+    log_client = LogClient.connect(controller_url, timeout_ms=30000, interceptors=interceptors)
     try:
         return _gather(client, log_client, job_id, tail=tail)
     finally:
@@ -129,7 +137,7 @@ def gather_bug_report(
 
 def _gather(
     client: ControllerServiceClientSync,
-    log_client: LogServiceClientSync,
+    log_client: LogClient,
     job_id: JobName,
     *,
     tail: int,
@@ -187,7 +195,7 @@ def _gather(
             worker_reports[w.worker_id] = _build_worker_report(w)
 
     # 8. Assemble — prefer ListTasks count over the JobStatus convenience field
-    state_name = _job_state_name(job.state)
+    state_name = job_state_friendly(job.state)
     error = job.error or ""
     failed_descendants = [descendant for descendant in descendant_jobs if descendant.state in _FAILED_JOB_STATES]
     if error:
@@ -208,7 +216,7 @@ def _gather(
         started_at=_format_timestamp(job.started_at),
         finished_at=_format_timestamp(job.finished_at),
         duration=_compute_duration(job.started_at, job.finished_at),
-        resources=_format_resources(job.resources if job.HasField("resources") else None),
+        resources=format_resources(job.resources if job.HasField("resources") else None),
         task_count=task_count,
         completed_count=job.completed_count,
         failure_count=job.failure_count,
@@ -232,7 +240,7 @@ def _build_task_report(task: job_pb2.TaskStatus, logs: list[str]) -> TaskReport:
         AttemptReport(
             attempt_id=a.attempt_id,
             worker_id=a.worker_id,
-            state=_task_state_name(a.state),
+            state=task_state_friendly(a.state),
             exit_code=a.exit_code,
             error=a.error,
             is_worker_failure=a.is_worker_failure,
@@ -243,7 +251,7 @@ def _build_task_report(task: job_pb2.TaskStatus, logs: list[str]) -> TaskReport:
     ]
     return TaskReport(
         task_id=task.task_id,
-        state=_task_state_name(task.state),
+        state=task_state_friendly(task.state),
         worker_id=task.worker_id,
         worker_address=task.worker_address,
         exit_code=task.exit_code,
@@ -294,25 +302,25 @@ def _list_descendant_jobs(
         return []
 
     try:
-        log_resp = client.get_task_logs(
-            controller_pb2.Controller.GetTaskLogsRequest(
-                id=job_id.to_wire(),
-                include_children=True,
-                max_total_lines=1,
-                tail=True,
+        list_resp = client.list_jobs(
+            controller_pb2.Controller.ListJobsRequest(
+                query=controller_pb2.Controller.JobQuery(
+                    parent_job_id=job_id.to_wire(),
+                    scope=controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN,
+                )
             )
         )
     except Exception:
         logger.warning("Failed to fetch descendant job statuses for %s", job_id, exc_info=True)
         return []
 
-    return [_build_descendant_job_report(job) for job in log_resp.child_job_statuses]
+    return [_build_descendant_job_report(job) for job in list_resp.jobs]
 
 
 def _build_descendant_job_report(job: job_pb2.JobStatus) -> DescendantJobReport:
     return DescendantJobReport(
         job_id=job.job_id,
-        state=_job_state_name(job.state),
+        state=job_state_friendly(job.state),
         exit_code=job.exit_code,
         error=job.error,
         finished_at=_format_timestamp(job.finished_at),
@@ -322,14 +330,6 @@ def _build_descendant_job_report(job: job_pb2.JobStatus) -> DescendantJobReport:
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
-
-
-def _job_state_name(state: job_pb2.JobState) -> str:
-    return job_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
-
-
-def _task_state_name(state: job_pb2.TaskState) -> str:
-    return job_pb2.TaskState.Name(state).replace("TASK_STATE_", "").lower()
 
 
 def _format_timestamp(ts) -> str:
@@ -364,26 +364,6 @@ def _format_exit_code(code: int) -> str:
         sig_name = signals.get(signal_num, f"signal {signal_num}")
         return f"{code} ({sig_name})"
     return str(code)
-
-
-def _format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
-    if not resources:
-        return "-"
-    parts: list[str] = []
-    if resources.cpu_millicores:
-        parts.append(f"{resources.cpu_millicores / 1000:g} cpu")
-    if resources.memory_bytes:
-        gib = resources.memory_bytes / (1024**3)
-        parts.append(f"{gib:.0f} GiB")
-    if resources.HasField("device"):
-        device = resources.device
-        if device.HasField("tpu"):
-            parts.append(device.tpu.variant)
-        elif device.HasField("gpu"):
-            gpu = device.gpu
-            gpu_str = f"{gpu.count}x {gpu.variant}" if gpu.variant else f"{gpu.count} gpu"
-            parts.append(gpu_str)
-    return ", ".join(parts) if parts else "-"
 
 
 # ---------------------------------------------------------------------------

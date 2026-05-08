@@ -8,14 +8,24 @@ installed are skipped gracefully. The test model is meta-llama/Llama-3.1-8B,
 which requires HF authentication (tests skip if auth is missing).
 """
 
+import json
+import os
+import pathlib
+import re
+import shutil
 from unittest.mock import patch
 
 import pytest
+from huggingface_hub import __version__ as _hf_hub_version
 
 from levanter.tokenizers import (
     MarinTokenizer,
     TokenizerBackend,
     _load_tokenizer_config,
+    _stage_from_hf,
+    _stage_from_mirror,
+    _stage_tokenizer,
+    _try_load_tokenizer_from_dir,
     load_tokenizer,
 )
 
@@ -632,6 +642,168 @@ def test_add_special_tokens_false_no_bos(backend_tokenizer):
         assert ids[0] != backend_tokenizer.bos_token_id
 
 
+def _longest_homogeneous_run(s: str) -> int:
+    """Return the length of the longest run of consecutive whitespace OR
+    consecutive non-whitespace characters in ``s``."""
+    if not s:
+        return 0
+    longest = 1
+    current = 1
+    is_space = s[0].isspace()
+    for ch in s[1:]:
+        ch_is_space = ch.isspace()
+        if ch_is_space == is_space:
+            current += 1
+            if current > longest:
+                longest = current
+        else:
+            current = 1
+            is_space = ch_is_space
+    return longest
+
+
+@requires_model
+def test_multi_chunk_path_preserves_bos(backend_tokenizer, monkeypatch):
+    """When the safe-split path activates, BOS handling must still match the
+    single-chunk path (BOS prepended exactly once when add_special_tokens=True,
+    absent otherwise) and the decoded text must round-trip.
+
+    Forces the multi-chunk path by feeding text with a long run of whitespace
+    and capping the homogeneous-run limit so the splitter cuts it up.
+    """
+    import levanter.tokenizers as tk
+
+    if backend_tokenizer.bos_token_id is None:
+        pytest.skip("Backend has no BOS token to verify against")
+
+    # Pathological-ish: real text bracketing a 1k-space run. With the default
+    # 25k cap this stays one part; with the patched 100-char cap below it
+    # gets split into ~10 parts.
+    text = "The quick brown fox jumps. " + (" " * 1_000) + "And then the lazy dog naps."
+
+    # Sanity: this text should NOT trigger the split path with default limits.
+    assert len(tk._safe_split_for_tokenizer(text)) == 1
+
+    # Force the multi-chunk path by capping homogeneous runs at 100 chars.
+    monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", 100)
+    monkeypatch.setattr(tk, "_OVERLONG_RUN_RE", re.compile(r"\s{100,}|\S{100,}"))
+    parts = tk._safe_split_for_tokenizer(text)
+    assert len(parts) > 1, "Expected multi-chunk path to activate"
+    assert "".join(parts) == text
+    # Each part respects the run cap (the cap is on max consecutive run length
+    # within a part, not on part length itself).
+    for p in parts:
+        assert _longest_homogeneous_run(p) <= 100
+
+    multi_plain = backend_tokenizer.encode(text, add_special_tokens=False)
+    multi_special = backend_tokenizer.encode(text, add_special_tokens=True)
+
+    # BOS handling: present iff add_special_tokens=True, exactly once at the front.
+    assert multi_plain[0] != backend_tokenizer.bos_token_id
+    assert multi_special[0] == backend_tokenizer.bos_token_id
+    assert multi_special.count(backend_tokenizer.bos_token_id) == 1
+    assert backend_tokenizer.bos_token_id not in multi_plain
+
+    # The multi-chunk add_special_tokens=True path must equal the
+    # add_special_tokens=False path with a single BOS prepended.
+    assert multi_special == [backend_tokenizer.bos_token_id] + multi_plain
+
+    # Decoded text must round-trip losslessly even with broken BPE merges.
+    assert backend_tokenizer.decode(multi_plain) == text
+    assert backend_tokenizer.decode(multi_special, skip_special_tokens=True) == text
+
+
+@requires_model
+def test_normal_text_unchanged_by_splitter(backend_tokenizer):
+    """For text where no homogeneous run exceeds the cap, the splitter must
+    not change tokenization at all. ``encode(text)`` should return exactly
+    what a single direct call to the underlying Rust tokenizer would.
+
+    A regex like ``\\s{1,N}|\\S{1,N}`` splits at every whitespace transition,
+    which severs leading-space-prefix BPE merges (e.g. " world" → 1 token vs
+    " " + "world" → 2 different tokens) and roughly doubles the token count
+    on normal English text. This test guards against that regression.
+    """
+    text = "The quick brown fox jumps over the lazy dog."
+
+    via_split = backend_tokenizer.encode(text, add_special_tokens=False)
+
+    # Bypass our splitter and call the underlying Rust tokenizer directly.
+    inner = backend_tokenizer._tokenizer
+    if hasattr(inner, "encode_batch"):
+        # HF tokenizers backend
+        direct = inner.encode(text, add_special_tokens=False).ids
+    else:
+        # kitoken backend: encode(text, encode_specials=True)
+        direct = inner.encode(text, True)
+
+    assert via_split == direct, (
+        f"splitter changed tokenization on normal text: "
+        f"{len(via_split)} tokens via splitter vs {len(direct)} direct"
+    )
+
+
+@requires_model
+def test_encode_batch_scatters_parts_back_to_originals(backend_tokenizer, monkeypatch):
+    """encode_batch must reassemble per-text token sequences correctly when
+    some texts are split into multiple parts and others aren't."""
+    import levanter.tokenizers as tk
+
+    monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", 100)
+    monkeypatch.setattr(tk, "_OVERLONG_RUN_RE", re.compile(r"\s{100,}|\S{100,}"))
+
+    short = "The quick brown fox."
+    pathological = "start" + (" " * 500) + "end"
+    texts = [short, pathological, short, pathological, short]
+
+    # Sanity: with the patched cap, the pathological text gets split.
+    assert len(tk._safe_split_for_tokenizer(pathological)) > 1
+    assert len(tk._safe_split_for_tokenizer(short)) == 1
+
+    batch_ids = backend_tokenizer.encode_batch(texts, add_special_tokens=False)
+    assert len(batch_ids) == len(texts)
+
+    # Each row must equal the per-text encode result (ground truth).
+    for got, original in zip(batch_ids, texts, strict=True):
+        expected = backend_tokenizer.encode(original, add_special_tokens=False)
+        assert got == expected
+        # And every row must round-trip losslessly.
+        assert backend_tokenizer.decode(got) == original
+
+    # add_special_tokens=True must prepend BOS to every row exactly once.
+    if backend_tokenizer.bos_token_id is not None:
+        batch_special = backend_tokenizer.encode_batch(texts, add_special_tokens=True)
+        for row in batch_special:
+            assert row[0] == backend_tokenizer.bos_token_id
+            assert row.count(backend_tokenizer.bos_token_id) == 1
+
+
+def test_safe_split_caps_runs_and_roundtrips(monkeypatch):
+    """The splitter must cap homogeneous runs within each part and round-trip
+    losslessly on a pathological all-whitespace input."""
+    import levanter.tokenizers as tk
+
+    # 1 MB of spaces with two real words at the ends — the realistic shape of
+    # the FDLP/lps47065 OOM document.
+    text = "hello" + (" " * 1_000_000) + "world"
+
+    parts = tk._safe_split_for_tokenizer(text)
+    assert "".join(parts) == text
+    assert len(parts) > 1
+    for p in parts:
+        run = _longest_homogeneous_run(p)
+        assert run <= tk._MAX_HOMOGENEOUS_RUN_CHARS, f"run {run} exceeds cap {tk._MAX_HOMOGENEOUS_RUN_CHARS}"
+
+    # Also confirm the outer 400k chunking is respected when the input has no
+    # long homogeneous runs (so only the outer cap fires).
+    no_runs = "abcde" * 200_000  # 1M chars, longest run = 1
+    parts2 = tk._safe_split_for_tokenizer(no_runs)
+    assert "".join(parts2) == no_runs
+    assert len(parts2) > 1
+    for p in parts2:
+        assert len(p) <= tk._MAX_ENCODE_CHARS
+
+
 @requires_model
 def test_decode_skip_special_tokens(backend_tokenizer):
     text = "hello"
@@ -981,21 +1153,27 @@ def test_load_tokenizer_caching():
 
 
 @requires_model
-def test_local_tokenizer_encode_batch():
+def test_local_tokenizer_encode_batch(tmp_path):
     """Ensure encode_batch works with local tokenizer paths (no hub round-trip)."""
-    from huggingface_hub import hf_hub_download
-    import os
-
-    path = hf_hub_download(MODEL_NAME, "tokenizer.json")
-    local_dir = os.path.dirname(path)
+    staged_dir = _stage_tokenizer(MODEL_NAME)
+    local_dir = tmp_path / "tokenizer"
+    local_dir.mkdir()
+    for fname in os.listdir(staged_dir):
+        src = os.path.join(staged_dir, fname)
+        if os.path.isfile(src):
+            shutil.copy2(src, local_dir / fname)
 
     load_tokenizer.cache_clear()
-    tok = load_tokenizer(local_dir)
+    with patch(
+        "levanter.tokenizers.hf_hub_download",
+        side_effect=AssertionError("Local tokenizer paths should not hit HF Hub"),
+    ):
+        tok = load_tokenizer(os.fspath(local_dir))
 
-    texts = [f"sentence number {i}" for i in range(20)]
-    batch_result = tok.encode_batch(texts)
-    individual = [tok.encode(t) for t in texts]
-    assert batch_result == individual
+        texts = [f"sentence number {i}" for i in range(20)]
+        batch_result = tok.encode_batch(texts)
+        individual = [tok.encode(t) for t in texts]
+        assert batch_result == individual
 
 
 # ---------------------------------------------------------------------------
@@ -1188,3 +1366,218 @@ def test_encode_batch_correctness_many_strings(backend_tokenizer):
     batch = backend_tokenizer.encode_batch(non_empty)
     individual = [backend_tokenizer.encode(t) for t in non_empty]
     assert batch == individual
+
+
+# ---------------------------------------------------------------------------
+# 15. Staging / mirror fallback tests
+# ---------------------------------------------------------------------------
+
+# Minimal tokenizer.json accepted by HfBaseTokenizer.from_file.
+_MINIMAL_TOKENIZER_JSON = {
+    "version": "1.0",
+    "truncation": None,
+    "padding": None,
+    "added_tokens": [],
+    "normalizer": None,
+    "pre_tokenizer": None,
+    "post_processor": None,
+    "decoder": None,
+    "model": {
+        "type": "BPE",
+        "dropout": None,
+        "unk_token": None,
+        "continuing_subword_prefix": None,
+        "end_of_word_suffix": None,
+        "fuse_unk": False,
+        "byte_fallback": False,
+        "vocab": {},
+        "merges": [],
+    },
+}
+
+
+@pytest.fixture
+def fake_tokenizer_dir(tmp_path):
+    """Local directory with a minimal valid tokenizer.json + tokenizer_config.json."""
+    d = tmp_path / "tokenizer_src"
+    d.mkdir()
+    (d / "tokenizer.json").write_text(json.dumps(_MINIMAL_TOKENIZER_JSON))
+    (d / "tokenizer_config.json").write_text("{}")
+    return d
+
+
+@pytest.fixture(autouse=False)
+def clear_stage_cache():
+    _stage_tokenizer.cache_clear()
+    yield
+    _stage_tokenizer.cache_clear()
+
+
+def test_try_load_tokenizer_from_dir_valid(fake_tokenizer_dir):
+    assert _try_load_tokenizer_from_dir(str(fake_tokenizer_dir))
+
+
+def test_try_load_tokenizer_from_dir_empty(tmp_path):
+    assert not _try_load_tokenizer_from_dir(str(tmp_path))
+
+
+def test_try_load_tokenizer_from_dir_corrupt(tmp_path):
+    (tmp_path / "tokenizer.json").write_text("not json")
+    assert not _try_load_tokenizer_from_dir(str(tmp_path))
+
+
+def test_stage_from_hf_copies_files_and_populates_mirror(tmp_path, fake_tokenizer_dir):
+    """_stage_from_hf copies snapshot files to local_dir and pushes each to the mirror."""
+    local_dir = tmp_path / "staged"
+    local_dir.mkdir()
+    mirror_calls: list[str] = []
+
+    with (
+        patch("levanter.tokenizers.snapshot_download", return_value=str(fake_tokenizer_dir)),
+        patch("levanter.tokenizers._populate_mirror_file", side_effect=lambda _p, url: mirror_calls.append(url)),
+    ):
+        _stage_from_hf("org/model", str(local_dir))
+
+    assert (local_dir / "tokenizer.json").exists()
+    assert (local_dir / "tokenizer_config.json").exists()
+    assert len(mirror_calls) == 2
+    assert all("org/model" in u for u in mirror_calls)
+    assert all(f"hf-hub-{_hf_hub_version}" in u for u in mirror_calls)
+
+
+def test_stage_from_mirror_copies_files(tmp_path, fake_tokenizer_dir):
+    """_stage_from_mirror fetches files from the mirror filesystem into local_dir."""
+    local_dir = tmp_path / "staged"
+    local_dir.mkdir()
+    mirror_dir = f"tokenizers/org/model/hf-hub-{_hf_hub_version}"
+    fake_entries = [f"{mirror_dir}/tokenizer.json", f"{mirror_dir}/tokenizer_config.json"]
+
+    class FakeMirrorFS:
+        def exists(self, path):
+            return path == mirror_dir
+
+        def ls(self, path, detail=False):
+            return fake_entries
+
+    def fake_fetch(src_url, dest_path):
+        fname = os.path.basename(dest_path)
+        src = fake_tokenizer_dir / fname
+        if src.exists():
+            shutil.copy2(src, dest_path)
+            return True
+        return False
+
+    with (
+        patch("levanter.tokenizers.fsspec.filesystem", return_value=FakeMirrorFS()),
+        patch("levanter.tokenizers._fetch_file_atomic", side_effect=fake_fetch),
+    ):
+        result = _stage_from_mirror("org/model", str(local_dir))
+
+    assert result is True
+    assert (local_dir / "tokenizer.json").exists()
+
+
+def test_stage_from_mirror_absent(tmp_path):
+    """_stage_from_mirror returns False when the mirror dir does not exist."""
+    local_dir = tmp_path / "staged"
+    local_dir.mkdir()
+
+    class FakeMirrorFS:
+        def exists(self, path):
+            return False
+
+        def ls(self, path, detail=False):
+            return []
+
+    with patch("levanter.tokenizers.fsspec.filesystem", return_value=FakeMirrorFS()):
+        result = _stage_from_mirror("org/model", str(local_dir))
+
+    assert result is False
+    assert not list(local_dir.iterdir())
+
+
+def test_stage_tokenizer_local_cache_hit(tmp_path, fake_tokenizer_dir, clear_stage_cache):
+    """_stage_tokenizer returns immediately when the local cache is already valid."""
+    local_dir = tmp_path / "levanter_tokenizers" / "org" / "model" / f"hf-hub-{_hf_hub_version}"
+    local_dir.mkdir(parents=True)
+    shutil.copy2(fake_tokenizer_dir / "tokenizer.json", local_dir / "tokenizer.json")
+
+    with (
+        patch("levanter.tokenizers.tempfile.gettempdir", return_value=str(tmp_path)),
+        patch("levanter.tokenizers._stage_from_mirror") as mock_mirror,
+        patch("levanter.tokenizers._stage_from_hf") as mock_hf,
+    ):
+        result = _stage_tokenizer("org/model")
+
+    assert result == str(local_dir)
+    mock_mirror.assert_not_called()
+    mock_hf.assert_not_called()
+
+
+def test_stage_tokenizer_mirror_hit(tmp_path, fake_tokenizer_dir, clear_stage_cache):
+    """_stage_tokenizer uses mirror files and skips HF Hub when mirror is populated."""
+
+    def fake_stage_from_mirror(name_or_path, local_dir):
+        shutil.copy2(fake_tokenizer_dir / "tokenizer.json", os.path.join(local_dir, "tokenizer.json"))
+        return True
+
+    with (
+        patch("levanter.tokenizers.tempfile.gettempdir", return_value=str(tmp_path)),
+        patch("levanter.tokenizers._stage_from_mirror", side_effect=fake_stage_from_mirror),
+        patch("levanter.tokenizers._stage_from_hf") as mock_hf,
+    ):
+        _stage_tokenizer("org/model")
+
+    mock_hf.assert_not_called()
+
+
+def test_stage_tokenizer_falls_through_to_hf(tmp_path, fake_tokenizer_dir, clear_stage_cache):
+    """_stage_tokenizer calls HF Hub when both local cache and mirror are empty."""
+
+    def fake_stage_from_hf(name_or_path, local_dir):
+        shutil.copy2(fake_tokenizer_dir / "tokenizer.json", os.path.join(local_dir, "tokenizer.json"))
+
+    with (
+        patch("levanter.tokenizers.tempfile.gettempdir", return_value=str(tmp_path)),
+        patch("levanter.tokenizers._stage_from_mirror", return_value=False),
+        patch("levanter.tokenizers._stage_from_hf", side_effect=fake_stage_from_hf) as mock_hf,
+    ):
+        _stage_tokenizer("org/model")
+
+    mock_hf.assert_called_once()
+
+
+def test_stage_tokenizer_corrupt_mirror_falls_through_to_hf(tmp_path, fake_tokenizer_dir, clear_stage_cache):
+    """_stage_tokenizer falls through to HF Hub when mirror returns a corrupt tokenizer."""
+
+    def corrupt_mirror(name_or_path, local_dir):
+        pathlib.Path(local_dir, "tokenizer.json").write_text("not json")
+        return True
+
+    def fake_stage_from_hf(name_or_path, local_dir):
+        shutil.copy2(fake_tokenizer_dir / "tokenizer.json", os.path.join(local_dir, "tokenizer.json"))
+
+    with (
+        patch("levanter.tokenizers.tempfile.gettempdir", return_value=str(tmp_path)),
+        patch("levanter.tokenizers._stage_from_mirror", side_effect=corrupt_mirror),
+        patch("levanter.tokenizers._stage_from_hf", side_effect=fake_stage_from_hf) as mock_hf,
+    ):
+        _stage_tokenizer("org/model")
+
+    mock_hf.assert_called_once()
+
+
+def test_stage_from_mirror_tolerates_broken_fs(tmp_path):
+    """_stage_from_mirror returns False (does not raise) when the mirror FS throws."""
+    local_dir = tmp_path / "staged"
+    local_dir.mkdir()
+
+    class BrokenMirrorFS:
+        def exists(self, path):
+            raise OSError("mirror unreachable")
+
+    with patch("levanter.tokenizers.fsspec.filesystem", return_value=BrokenMirrorFS()):
+        result = _stage_from_mirror("org/model", str(local_dir))
+
+    assert result is False
+    assert not list(local_dir.iterdir())

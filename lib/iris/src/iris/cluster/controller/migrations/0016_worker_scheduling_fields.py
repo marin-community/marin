@@ -22,6 +22,9 @@ def migrate(conn: sqlite3.Connection) -> None:
         if not _has_column(conn, "workers", column):
             conn.execute(f"ALTER TABLE workers ADD COLUMN {column} {ddl}")
 
+    if not _has_column(conn, "workers", "metadata_proto"):
+        return  # Column already removed by later migration; backfill not needed.
+
     from iris.cluster.types import get_gpu_count, get_tpu_count
     from iris.rpc import job_pb2
 

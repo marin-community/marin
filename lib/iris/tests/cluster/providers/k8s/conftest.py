@@ -1,36 +1,47 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared fixtures and helpers for Kubernetes provider tests."""
-
 from __future__ import annotations
 
 import pytest
-
+from finelog.rpc import logging_pb2
+from finelog.server import LogServiceImpl
 from iris.cluster.controller.transitions import DirectProviderBatch
-from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.providers.k8s.fake import InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import (
-    K8sTaskProvider,
-    PodConfig,
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
     _RUNTIME_LABEL_VALUE,
+    K8sTaskProvider,
+    PodConfig,
 )
-from iris.log_server.server import LogServiceImpl
-from iris.rpc import logging_pb2
+from iris.cluster.providers.k8s.types import K8sResource
+from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
 
 
-class InProcessLogPusher:
-    """Test-friendly log pusher that calls LogServiceImpl directly."""
+class InProcessLogClient:
+    """LogClient stand-in that calls LogServiceImpl directly (no RPC plumbing)."""
 
     def __init__(self, log_service: LogServiceImpl) -> None:
         self._log_service = log_service
 
-    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        if entries:
-            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries), ctx=None)
+    def write_batch(self, key: str, messages: list[logging_pb2.LogEntry]) -> None:
+        if messages:
+            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=messages), ctx=None)
+
+    def close(self) -> None:
+        pass
+
+
+class FakeStatsTable:
+    """Records every Table.write call so tests can assert on emitted rows."""
+
+    def __init__(self) -> None:
+        self.writes: list[list[object]] = []
+
+    def write(self, rows) -> None:
+        self.writes.append(list(rows))
 
 
 @pytest.fixture
@@ -44,18 +55,24 @@ def log_service() -> LogServiceImpl:
 
 
 @pytest.fixture
-def log_pusher(log_service) -> InProcessLogPusher:
-    return InProcessLogPusher(log_service)
+def log_client(log_service) -> InProcessLogClient:
+    return InProcessLogClient(log_service)
 
 
 @pytest.fixture
-def provider(k8s, log_pusher):
+def task_stats_table() -> FakeStatsTable:
+    return FakeStatsTable()
+
+
+@pytest.fixture
+def provider(k8s, log_client, task_stats_table):
     p = K8sTaskProvider(
         kubectl=k8s,
         namespace="iris",
         default_image="myrepo/iris:latest",
         cache_dir="/cache",
-        log_pusher=log_pusher,
+        log_client=log_client,
+        task_stats_table=task_stats_table,
         log_poll_interval=1.0,
     )
     yield p
@@ -130,7 +147,7 @@ def populate_pod(
     pod = make_pod(name, phase, exit_code=exit_code, reason=reason)
     pod["kind"] = "Pod"
     pod["metadata"]["labels"] = base_labels
-    k8s.seed_resource("pod", name, pod)
+    k8s.seed_resource(K8sResource.PODS, name, pod)
 
 
 def populate_node(
@@ -147,7 +164,7 @@ def populate_node(
         "spec": {"taints": taints or []},
         "status": {"allocatable": {"cpu": cpu, "memory": memory}},
     }
-    k8s.seed_resource("node", name, node)
+    k8s.seed_resource(K8sResource.NODES, name, node)
 
 
 def populate_running_pod_resource(
@@ -178,7 +195,7 @@ def populate_running_pod_resource(
             ]
         },
     }
-    k8s.seed_resource("pod", name, pod)
+    k8s.seed_resource(K8sResource.PODS, name, pod)
 
 
 def add_eq_constraint(req: job_pb2.RunTaskRequest, key: str, value: str) -> None:

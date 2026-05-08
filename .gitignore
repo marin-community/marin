@@ -33,6 +33,9 @@ __pycache__/
 # C extensions
 *.so
 
+# pypa/gh-action-pypi-publish caches its Docker action manifest here.
+.github/.tmp/
+
 # Distribution / packaging
 .Python
 build/
@@ -212,9 +215,6 @@ archive/
 # wandb logs
 wandb
 
-# Generated leaderboard data
-marin/speedrun/static/data/runs.json
-
 # Ignore generated credentials from google-github-actions/auth
 gha-creds-*.json
 
@@ -238,3 +238,7 @@ scr/*
 .agents/tmp/
 .codex
 .entire
+
+.worktrees
+.obsidian
+.cw_env

@@ -120,11 +120,6 @@ def estimate_flop_proxy(family: str, shape_signature: str | None) -> float | Non
     return None
 
 
-def estimate_work_proxy(family: str, shape_signature: str | None) -> float | None:
-    """Backward-compatible alias for estimate_flop_proxy."""
-    return estimate_flop_proxy(family, shape_signature)
-
-
 def _normalize_shape_token(token: str) -> str:
     return ",".join(part.strip() for part in token.split(",") if part.strip())
 
@@ -147,7 +142,6 @@ __all__ = [
     "canonical_op_name",
     "classify_semantic_family",
     "estimate_flop_proxy",
-    "estimate_work_proxy",
     "extract_shape_signature",
     "parse_shape_signature",
 ]

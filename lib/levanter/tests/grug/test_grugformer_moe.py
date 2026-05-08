@@ -9,7 +9,14 @@ import jax.numpy as jnp
 from jax._src import config as jax_config
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
-from levanter.grug.grug_moe import MoeImplementation, _shard_a2a_params, moe_mlp
+import levanter.grug.grug_moe as grug_moe
+from levanter.grug.grug_moe import (
+    MoeImplementation,
+    _compact_by_keep_mask,
+    _expand_from_keep_mask,
+    _shard_a2a_params,
+    moe_mlp,
+)
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -103,6 +110,7 @@ def test_moe_mlp_runs_without_ep_axis():
         )
         assert out.shape == (tokens, hidden_dim)
         assert jnp.isfinite(out).all()
+        assert getattr(out.sharding, "spec", None) == P("data")
 
         jit_fn = jax.jit(
             lambda x, sel, cw, up_gate, down: moe_mlp(
@@ -186,7 +194,7 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
         assert lowered is not None
 
 
-def test_shard_a2a_params_uses_receive_axis_for_output_offsets():
+def test_shard_a2a_params_uses_sender_side_output_offsets():
     shard_counts = jnp.array(
         [
             [1, 7, 2],
@@ -203,7 +211,65 @@ def test_shard_a2a_params_uses_receive_axis_for_output_offsets():
     np.testing.assert_array_equal(np.asarray(send_sizes), np.array([3, 5, 4], dtype=np.int32))
     np.testing.assert_array_equal(np.asarray(input_offsets), np.array([0, 3, 8], dtype=np.int32))
     np.testing.assert_array_equal(np.asarray(recv_sizes), np.array([7, 5, 8], dtype=np.int32))
-    np.testing.assert_array_equal(np.asarray(output_offsets), np.array([0, 7, 12], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(output_offsets), np.array([1, 7, 2], dtype=np.int32))
+
+
+def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires an even number of >=2 devices")
+    if jax.devices()[0].platform == "cpu":
+        pytest.skip("ragged_all_to_all is not implemented on XLA:CPU")
+
+    tokens = len(jax.devices()) * 8
+    hidden_dim = 16
+    intermediate_dim = 24
+    num_experts = 4
+    topk = 2
+
+    with jax.set_mesh(mesh):
+        x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+            key=jax.random.key(23),
+            tokens=tokens,
+            hidden_dim=hidden_dim,
+            intermediate_dim=intermediate_dim,
+            num_experts=num_experts,
+            topk=topk,
+        )
+
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        x = jax.sharding.reshard(x, batch_sharding)
+        selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+        combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+        w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
+        w_down = jax.sharding.reshard(w_down, expert_sharding)
+
+        ring_out, ring_dropped = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="ring",
+            mesh=None,
+            report_capacity_overflow=True,
+            capacity_factor=1.0,
+        )
+        ragged_out, ragged_dropped = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="ragged_all_to_all",
+            mesh=None,
+            report_capacity_overflow=True,
+            capacity_factor=1.0,
+        )
+
+    np.testing.assert_allclose(np.asarray(ragged_out), np.asarray(ring_out), rtol=1e-5, atol=1e-5)
+    assert int(ragged_dropped) == int(ring_dropped)
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
@@ -298,7 +364,65 @@ def test_functional_moe_mlp_accepts_enum_and_callable_activation():
     np.testing.assert_allclose(np.asarray(y_callable), np.asarray(y_enum), rtol=1e-5, atol=1e-5)
 
 
-def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():
+def test_compact_and_expand_from_keep_mask_roundtrip():
+    inputs = jnp.array(
+        [
+            [1.0, 10.0],
+            [2.0, 20.0],
+            [3.0, 30.0],
+            [4.0, 40.0],
+            [5.0, 50.0],
+        ],
+        dtype=jnp.float32,
+    )
+    keep_mask = jnp.array([True, False, True, True, False])
+
+    compacted = _compact_by_keep_mask(inputs, keep_mask)
+    expanded = _expand_from_keep_mask(compacted, keep_mask)
+
+    np.testing.assert_allclose(
+        np.asarray(compacted),
+        np.asarray(
+            [
+                [1.0, 10.0],
+                [3.0, 30.0],
+                [4.0, 40.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+            ],
+        ),
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(expanded),
+        np.asarray(
+            [
+                [1.0, 10.0],
+                [0.0, 0.0],
+                [3.0, 30.0],
+                [4.0, 40.0],
+                [0.0, 0.0],
+            ],
+        ),
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(expanded)[np.asarray(keep_mask)],
+        np.asarray(inputs)[np.asarray(keep_mask)],
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(expanded)[~np.asarray(keep_mask)],
+        np.zeros((2, 2), dtype=np.float32),
+        rtol=0,
+        atol=0,
+    )
+
+
+def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
@@ -333,6 +457,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():
             combine_weights,
             w_up_gate,
             w_down,
+            implementation="ring",
             mesh=None,
             report_capacity_overflow=True,
         )
@@ -340,3 +465,76 @@ def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():
     assert out.shape == (tokens, hidden_dim)
     assert dropped.shape == ()
     assert int(dropped) > 0
+
+
+def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires an even number of >=2 devices")
+
+    tokens = len(jax.devices()) * 8
+    hidden_dim = 16
+    intermediate_dim = 24
+    num_experts = 4
+    topk = 2
+
+    key = jax.random.key(15)
+    x = jax.random.normal(key, (tokens, hidden_dim), dtype=jnp.float32)
+    selected_experts = jnp.zeros((tokens, topk), dtype=jnp.int32)
+    combine_weights = jnp.full((tokens, topk), 0.5, dtype=jnp.float32)
+    w_up_gate = jax.random.normal(
+        jax.random.key(16), (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.float32
+    )
+    w_down = jax.random.normal(jax.random.key(17), (num_experts, intermediate_dim, hidden_dim), dtype=jnp.float32)
+
+    with jax.set_mesh(mesh):
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        x = jax.sharding.reshard(x, batch_sharding)
+        selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+        combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+        w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
+        w_down = jax.sharding.reshard(w_down, expert_sharding)
+
+        out, dropped = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="ragged_all_to_all",
+            mesh=None,
+            report_capacity_overflow=True,
+        )
+
+    assert out.shape == (tokens, hidden_dim)
+    assert dropped.shape == ()
+    assert int(dropped) > 0
+
+
+def test_ragged_a2a_receiver_clipping_respects_capacity():
+    group_sizes = jnp.array(
+        [
+            [3, 1, 0, 0],
+            [2, 0, 4, 1],
+        ],
+        dtype=jnp.int32,
+    )
+
+    clipped = grug_moe._clip_receiver_group_sizes(
+        group_sizes,
+        local_expert_size=2,
+        receiver_capacity=3,
+    )
+
+    np.testing.assert_array_equal(
+        np.asarray(clipped),
+        np.asarray(
+            [
+                [3, 0, 0, 0],
+                [0, 0, 3, 0],
+            ],
+            dtype=np.int32,
+        ),
+    )
+    assert int(jnp.sum(clipped)) < int(jnp.sum(group_sizes))

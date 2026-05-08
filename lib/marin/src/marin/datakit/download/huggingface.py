@@ -15,21 +15,48 @@ import time
 from dataclasses import dataclass, field
 
 import huggingface_hub
-from huggingface_hub import HfFileSystem
-from rigging.filesystem import open_url, url_to_fs
+from fray import ResourceConfig
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
+from rigging.filesystem import open_url, url_to_fs
+from rigging.log_setup import configure_logging
+from zephyr import Dataset, ZephyrContext, atomic_rename
+
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.execution.step_spec import StepSpec
 from marin.utilities.validation_utils import write_provenance_json
-from zephyr import Dataset, ZephyrContext
-from zephyr.writers import atomic_rename
-from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
 HF_PROTOCOL_PREFIX = "hf://"
 HF_BUCKET_PATH_PREFIX = "buckets/"
+
+# HF returns 401 when no credentials are sent and 403 when the caller's token
+# lacks access (e.g. gated dataset, accept-license required). Neither is fixed
+# by retrying — fail fast so the worker surfaces an actionable error instead of
+# stalling for hours behind exponential backoff.
+_HF_AUTH_ERROR_STATUSES = frozenset({401, 403})
+
+
+def _hf_auth_error(exc: BaseException, file_path: str) -> str | None:
+    """Return an actionable error message if `exc` is an unrecoverable HF auth failure, else None."""
+    if not isinstance(exc, HfHubHTTPError) or exc.response is None:
+        return None
+    status_code = exc.response.status_code
+    if status_code not in _HF_AUTH_ERROR_STATUSES:
+        return None
+    if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+        hint = (
+            "HF_TOKEN is set but lacks access — confirm the token's account has accepted "
+            "the dataset license and has read access."
+        )
+    else:
+        hint = (
+            "HF_TOKEN is not set in the worker environment. `huggingface-cli login` only "
+            "writes ~/.cache/huggingface/token, which iris does not forward to workers; "
+            "export HF_TOKEN before submitting the job."
+        )
+    return f"HuggingFace returned HTTP {status_code} for {file_path} (gated/auth-required). {hint}"
 
 
 @dataclass(frozen=True)
@@ -72,6 +99,15 @@ class DownloadConfig:
 
     read_chunk_size_mib: int = 8
     """Chunk size for each streaming read from HF."""
+
+    source_url_override: str | None = None
+    """Optional fsspec URL to read from instead of HuggingFace. Bypasses HF-specific
+    listing and revision handling; mainly intended for hermetic tests."""
+
+    worker_resources: ResourceConfig | None = None
+    """Per-worker resources for the Zephyr download workers. None falls back to
+    ZephyrContext defaults (1 CPU / 1 GB RAM). Bump for large parquet shards or
+    when HF streaming buffers spike memory."""
 
 
 def _strip_hf_protocol(path: str) -> str:
@@ -158,7 +194,6 @@ def stream_file_to_fsspec(
         expected_size: Expected file size in bytes for validation. If provided,
             the download will fail if the downloaded size doesn't match.
     """
-    hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
     target_fs, _ = url_to_fs(gcs_output_path)
     chunk_size = max(1, int(read_chunk_size_mib)) * 1024 * 1024
     max_retries = 20
@@ -178,7 +213,7 @@ def stream_file_to_fsspec(
                 socket.setdefaulttimeout(read_timeout_seconds)
                 try:
                     with (
-                        hf_fs.open(file_path, "rb", block_size=chunk_size) as src_file,
+                        open_url(file_path, "rb", block_size=chunk_size) as src_file,
                         open_url(temp_path, "wb") as dest_file,
                     ):
                         start_time = time.monotonic()
@@ -216,6 +251,10 @@ def stream_file_to_fsspec(
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path} ({bytes_written} bytes)")
             return {"file_path": file_path, "status": "success", "size": bytes_written}
         except Exception as e:
+            auth_error = _hf_auth_error(e, file_path)
+            if auth_error:
+                raise RuntimeError(auth_error) from e
+
             last_exception = e
             # Base wait: min 5s, then exponential: 5, 10, 20, 40, 80, 160, 320, 600 (capped)
             wait_base = max(min_base_wait, min_base_wait * (2**attempt))
@@ -267,21 +306,27 @@ def download_hf(cfg: DownloadConfig) -> None:
         logger.exception(f"Output path validation failed: {e}")
         raise e
 
-    # Initialize Hugging Face filesystem
-    logger.info("Identifying files to download from HuggingFace...")
-    hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
-    hf_source_path = _resolve_hf_source_path(cfg)
-    _assert_bucket_support_available(hf_source_path)
+    # Resolve source URL and filesystem. For production this is an hf:// URL backed
+    # by HfFileSystem; tests can set source_url_override to a local/fsspec path.
+    logger.info("Identifying files to download...")
+    if cfg.source_url_override is not None:
+        source_url = cfg.source_url_override
+        source_fs, source_root = url_to_fs(source_url)
+        list_kwargs: dict = {}
+    else:
+        hf_source_path = _resolve_hf_source_path(cfg)
+        _assert_bucket_support_available(hf_source_path)
+        source_url = f"hf://{hf_source_path}"
+        source_fs, source_root = url_to_fs(source_url)
+        list_kwargs = {"revision": cfg.revision}
 
     if not cfg.hf_urls_glob:
-        # We get all the files using find
-        files = hf_fs.find(hf_source_path, revision=cfg.revision)
+        files = source_fs.find(source_root, **list_kwargs)
     else:
-        # Get list of files directly from HfFileSystem matching the pattern
         files = []
-        for hf_url_glob in cfg.hf_urls_glob:
-            pattern = os.path.join(hf_source_path, hf_url_glob)
-            files += hf_fs.glob(pattern, revision=cfg.revision)
+        for url_glob in cfg.hf_urls_glob:
+            pattern = os.path.join(source_root, url_glob)
+            files += source_fs.glob(pattern, **list_kwargs)
 
     if not files:
         raise ValueError(f"No files found for dataset `{cfg.hf_dataset_id}. Used glob patterns: {cfg.hf_urls_glob}")
@@ -291,7 +336,7 @@ def download_hf(cfg: DownloadConfig) -> None:
     file_sizes: dict[str, int | None] = {}
     for file in files:
         try:
-            info = hf_fs.info(file, revision=cfg.revision)
+            info = source_fs.info(file, **list_kwargs)
             file_sizes[file] = info.get("size") or None
         except Exception as e:
             logger.warning(f"Could not get size for {file}: {e}")
@@ -301,15 +346,18 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     for file in files:
         try:
-            relative_file_path = _relative_path_in_source(file, hf_source_path)
+            relative_file_path = _relative_path_in_source(file, source_root)
             if relative_file_path.startswith(".."):
                 raise ValueError(f"Computed path escapes source root: source={hf_source_path}, file={file}")
             fsspec_file_path = os.path.join(output_path, relative_file_path)
             expected_size = file_sizes.get(file)
+            # Fully-qualify the source URL so subprocess workers can open it via fsspec
+            # without having to reconstruct HfFileSystem / revision state.
+            worker_source_url = file if cfg.source_url_override is not None else f"hf://{file}"
             download_tasks.append(
                 (
                     output_path,
-                    file,
+                    worker_source_url,
                     fsspec_file_path,
                     expected_size,
                     cfg.read_timeout_seconds,
@@ -331,7 +379,10 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    ctx = ZephyrContext(name="download-hf", max_workers=cfg.zephyr_max_parallelism)
+    ctx_kwargs: dict = {"name": "download-hf", "max_workers": cfg.zephyr_max_parallelism}
+    if cfg.worker_resources is not None:
+        ctx_kwargs["resources"] = cfg.worker_resources
+    ctx = ZephyrContext(**ctx_kwargs)
     ctx.execute(pipeline)
 
     # Write Provenance JSON
@@ -353,6 +404,7 @@ def download_hf_step(
     zephyr_max_parallelism: int = 8,
     deps: list[StepSpec] | None = None,
     override_output_path: str | None = None,
+    worker_resources: ResourceConfig | None = None,
 ) -> StepSpec:
     """Create a StepSpec that downloads a HuggingFace dataset.
 
@@ -382,6 +434,7 @@ def download_hf_step(
                 gcs_output_path=output_path,
                 append_sha_to_path=append_sha_to_path,
                 zephyr_max_parallelism=zephyr_max_parallelism,
+                worker_resources=worker_resources,
             )
         )
 

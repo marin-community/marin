@@ -111,12 +111,13 @@ def test_projection_decode() -> None:
     conn.execute("INSERT INTO users (user_id, created_at_ms) VALUES ('u1', 1000)")
     conn.execute(
         "INSERT INTO jobs ("
-        "  job_id, user_id, root_job_id, depth, request_proto, state,"
+        "  job_id, user_id, root_job_id, depth, state,"
         "  submitted_at_ms, root_submitted_at_ms, num_tasks, is_reservation_holder"
         ") VALUES ("
-        "  '/u1/test-job', 'u1', '/u1/test-job', 0, X'', 1, 2000, 2000, 5, 0"
+        "  '/u1/test-job', 'u1', '/u1/test-job', 0, 1, 2000, 2000, 5, 0"
         ")"
     )
+    conn.execute("INSERT INTO job_config (job_id, name) VALUES ('/u1/test-job', 'test-job')")
     conn.commit()
 
     proj = JOBS.projection("job_id", "state", "num_tasks")

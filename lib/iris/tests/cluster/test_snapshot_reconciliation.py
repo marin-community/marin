@@ -11,7 +11,7 @@ lost slice inventory (capacity gaps).
 
 from dataclasses import dataclass, field
 
-from iris.cluster.controller.scaling_group import (
+from iris.cluster.controller.autoscaler.scaling_group import (
     GroupSnapshot,
     SliceLifecycleState,
     SliceSnapshot,

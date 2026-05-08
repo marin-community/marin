@@ -68,24 +68,17 @@ class BackgroundIterator(Iterator[Ex]):
         if self._stop_event.is_set():
             raise StopIteration
         if self.thread is not None:
-            while not self._stop_event.is_set():
-                batch = self.q.get()
-                if batch is _SENTINEL:
-                    raise StopIteration
-                elif isinstance(batch, _ExceptionWrapper):
-                    batch.reraise()
-                return batch
-        else:
-            # Consume the iterator directly on demand
-            try:
-                return next(self.iterator)
-            except StopIteration:
-                raise
-            except StopAsyncIteration:
+            batch = self.q.get()
+            if batch is _SENTINEL:
                 raise StopIteration
-            except Exception as e:
-                raise e
-        raise StopIteration
+            if isinstance(batch, _ExceptionWrapper):
+                batch.reraise()
+            return batch
+        # No background thread; consume the iterator on demand.
+        try:
+            return next(self.iterator)
+        except StopAsyncIteration:
+            raise StopIteration
 
     def __del__(self):
         self.stop()

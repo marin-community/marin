@@ -9,9 +9,12 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import levanter.callbacks as callbacks
+import levanter.tracker
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
@@ -19,9 +22,6 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
-
-import levanter.callbacks as callbacks
-import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data import AsyncDataset, DataLoader
@@ -37,7 +37,6 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-import equinox as eqx
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
@@ -410,12 +409,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state = _init_state(model_key)
 
         checkpointer = trainer.checkpointer.create(run_id)
-        checkpoint_path = trainer.load_checkpoint_path
-        if checkpoint_path is None and checkpointer is not None:
-            checkpoint_path = trainer.checkpointer.expanded_path(run_id)
         state = restore_grug_state_from_checkpoint(
             state,
-            checkpoint_path=checkpoint_path,
+            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
             load_checkpoint_setting=trainer.load_checkpoint,
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,

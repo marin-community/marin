@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.chaos import reset_chaos
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import connect_cluster, load_config, make_local_config
@@ -36,11 +38,8 @@ from iris.cluster.types import (
     ResourceSpec,
     is_job_finished,
 )
-from iris.rpc import config_pb2, logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
 from rigging.timing import Duration
 
 from .chronos import VirtualClock
@@ -330,7 +329,7 @@ def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
     sg = config.scale_groups["tpu_cosched_2"]
     sg.name = "tpu_cosched_2"
     sg.num_vms = 2
-    sg.min_slices = 1
+    sg.buffer_slices = 1
     sg.max_slices = 2
     sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024 * 1024 * 1024
@@ -367,7 +366,7 @@ def _make_multi_worker_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     sg = config.scale_groups["local-cpu"]
     sg.name = "local-cpu"
     sg.num_vms = 1
-    sg.min_slices = num_workers
+    sg.buffer_slices = num_workers
     sg.max_slices = num_workers
     sg.resources.cpu_millicores = 8000
     sg.resources.memory_bytes = 16 * 1024**3

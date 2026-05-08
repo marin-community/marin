@@ -85,10 +85,8 @@ def save_xla_dumps_to_wandb(initial_time: float):
 class LoadingTimeTrackerIterator(Iterator[T]):
     def __init__(self, items: Iterable[T]):
         self.total_time = 0.0
-        start = time.perf_counter()
-        self.items = iter(items)
-        self.total_time += time.perf_counter() - start
         self.this_load_time = 0.0
+        self.items = iter(items)
 
     def __next__(self) -> T:
         start = time.perf_counter()

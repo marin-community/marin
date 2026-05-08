@@ -9,12 +9,12 @@ This module provides the `tulu3_llama_data_old` dataset configuration and
 """
 
 from fray.cluster import ResourceConfig
+from marin.processing.tokenize import lm_data_config
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_instruct_chat_format, llama3_instruct_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
-from marin.processing.tokenize import lm_data_config
 
 # Get instruction dataset
 tulu_3_dataset = get_instruction_dataset("allenai/tulu-3-sft-mixture")

@@ -27,11 +27,12 @@ import uvicorn
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
-from rigging.timing import Duration, ExponentialBackoff, Timestamp
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +298,7 @@ class ActorServer:
         return op.to_proto()
 
     def _create_app(self) -> ActorServiceASGIApplication:
-        return ActorServiceASGIApplication(service=self)
+        return ActorServiceASGIApplication(service=self, compressions=IRIS_RPC_COMPRESSIONS)
 
     def serve_background(self, port: int | None = None) -> int:
         """Start server in background thread.

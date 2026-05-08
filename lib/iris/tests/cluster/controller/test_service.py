@@ -7,24 +7,44 @@ These tests verify the RPC contract (input -> output) of the ControllerServiceIm
 State changes are verified via RPC calls rather than internal state inspection.
 """
 
+import concurrent.futures
+import time
+from datetime import date, timedelta
+
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-
-from iris.cluster.constraints import WellKnownAttribute, device_variant_constraint
-from iris.cluster.controller.service import ControllerServiceImpl
-from iris.log_server.server import LogServiceImpl
-from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
+from finelog.server import LogServiceImpl
+from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
+from iris.cluster.controller.codec import constraints_from_json
+from iris.cluster.controller.service import (
+    FEATURE_INTRODUCTION_DATE,
+    FRESHNESS_WINDOW,
+    MAX_LIST_JOBS_OFFSET,
+    ControllerServiceImpl,
+    _check_client_freshness,
+)
+from iris.cluster.controller.transitions import (
+    Assignment,
+    ControllerTransitions,
+    HeartbeatApplyRequest,
+    TaskUpdate,
+)
 from iris.cluster.types import JobName, WorkerId, tpu_device
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
+
+from tests.cluster.conftest import fake_log_client_from_service
 
 from .conftest import (
     make_job_request,
     make_test_entrypoint,
     make_worker_metadata,
+)
+from .conftest import (
     query_job as _query_job,
+)
+from .conftest import (
     query_tasks_with_attempts as _query_tasks_with_attempts,
 )
 
@@ -41,12 +61,14 @@ def _register_worker(state: ControllerTransitions, worker_id: WorkerId) -> None:
         memory_bytes=16 * 1024**3,
         disk_bytes=100 * 1024**3,
     )
-    state.register_or_refresh_worker(
-        worker_id=worker_id,
-        address=f"{worker_id}:8080",
-        metadata=metadata,
-        ts=Timestamp.now(),
-    )
+    with state._store.transaction() as cur:
+        state.register_or_refresh_worker(
+            cur,
+            worker_id=worker_id,
+            address=f"{worker_id}:8080",
+            metadata=metadata,
+            ts=Timestamp.now(),
+        )
 
 
 def _set_job_state(state: ControllerTransitions, job_id: JobName, state_value: int) -> None:
@@ -64,22 +86,25 @@ def _assign_and_transition(
     *,
     error: str | None = None,
 ) -> None:
-    state.queue_assignments([Assignment(task_id=task_id, worker_id=worker_id)])
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=worker_id,
-            worker_resource_snapshot=None,
-            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-        )
-    )
-    if target_state != job_pb2.TASK_STATE_RUNNING:
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)])
+    with state._store.transaction() as cur:
         state.apply_task_updates(
+            cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
-                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=target_state, error=error)],
-            )
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+            ),
         )
+    if target_state != job_pb2.TASK_STATE_RUNNING:
+        with state._store.transaction() as cur:
+            state.apply_task_updates(
+                cur,
+                HeartbeatApplyRequest(
+                    worker_id=worker_id,
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=target_state, error=error)],
+                ),
+            )
 
 
 @pytest.fixture
@@ -115,8 +140,66 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state)
 
     job = _query_job(state, JobName.root("test-user", "bundle-job"))
     assert job is not None
-    assert job.request.bundle_blob == b""
-    assert len(job.request.bundle_id) == 64
+    assert len(job.bundle_id) == 64
+
+
+def test_launch_job_rejects_tpu_chip_count_mismatch(service):
+    """A job requesting fewer chips than the variant's chips_per_vm is rejected."""
+    request = make_job_request("bad-tpu-chip-count")
+    request.resources.device.CopyFrom(tpu_device("v6e-8", count=4))
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    assert "chip count mismatch" in exc_info.value.message
+
+
+def test_launch_job_rejects_mixed_vm_shape_alternatives(service):
+    """device-variant IN constraint with mismatched chips_per_vm is rejected."""
+    request = make_job_request("mixed-tpu-variants")
+    request.resources.device.CopyFrom(tpu_device("v6e-4"))
+    # User-provided IN constraint that mixes a 4-chip/VM and an 8-chip/VM variant.
+    request.constraints.append(device_variant_constraint(["v6e-4", "v6e-8"]).to_proto())
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    # Mismatched shapes necessarily imply a chip-count mismatch for at least one
+    # candidate, so the per-candidate count check fires first.
+    assert "chip count mismatch" in exc_info.value.message
+    assert "v6e-8" in exc_info.value.message
+
+
+def test_launch_job_rejects_variant_override_with_smaller_primary(service):
+    """Explicit device-variant constraint overrides the primary; chip count must match it.
+
+    Regression for Codex review: primary v6e-4 (chips_per_vm=4) with an explicit
+    `device-variant EQ v6e-8` constraint would schedule onto a single v6e-8 VM
+    while reserving only 4 of its 8 chips — the exact partial-VM collision we
+    want to block. The validator must check chip count against every effective
+    candidate, not just the primary.
+    """
+    request = make_job_request("variant-override-mismatch")
+    request.resources.device.CopyFrom(tpu_device("v6e-4"))
+    request.constraints.append(device_variant_constraint(["v6e-8"]).to_proto())
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    assert "chip count mismatch" in exc_info.value.message
+
+
+def test_launch_job_accepts_same_shape_alternatives(service):
+    """Alternatives sharing vm_count/chips_per_vm (e.g. v4-8 + v5p-8) are accepted."""
+    request = make_job_request("matched-tpu-variants")
+    request.resources.device.CopyFrom(tpu_device("v4-8"))
+    request.constraints.append(device_variant_constraint(["v4-8", "v5p-8"]).to_proto())
+
+    response = service.launch_job(request, None)
+    assert response.job_id == JobName.root("test-user", "matched-tpu-variants").to_wire()
 
 
 def test_launch_job_rejects_duplicate_name(service):
@@ -301,6 +384,29 @@ def test_get_job_status_returns_status(service):
     assert response.job.state == job_pb2.JOB_STATE_PENDING
 
 
+def test_get_job_status_reports_has_children(service, state):
+    """GetJobStatus sets has_children so the dashboard can render the expand toggle."""
+    service.launch_job(make_job_request("parent-job"), None)
+    parent_id = JobName.root("test-user", "parent-job")
+
+    child_id = JobName.from_wire(parent_id.to_wire() + "/child")
+    child_req = controller_pb2.Controller.LaunchJobRequest(
+        name=child_id.to_wire(),
+        entrypoint=job_pb2.RuntimeEntrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+    )
+    child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
+    with state._store.transaction() as cur:
+        state.submit_job(cur, child_id, child_req, Timestamp.now())
+
+    parent = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=parent_id.to_wire()), None)
+    assert parent.job.has_children is True
+
+    child = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=child_id.to_wire()), None)
+    assert child.job.has_children is False
+
+
 def test_get_job_status_not_found(service):
     """Verify get_job_status raises ConnectError for unknown job."""
     request = controller_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-user", "nonexistent").to_wire())
@@ -314,7 +420,7 @@ def test_get_job_status_not_found(service):
 
 def test_redact_request_env_vars_does_not_mutate_original():
     """Verify redact_request_env_vars returns a copy and does not mutate the input."""
-    from iris.cluster.controller.service import REDACTED_VALUE, redact_request_env_vars
+    from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 
     original = controller_pb2.Controller.LaunchJobRequest(
         name="/test-user/job",
@@ -328,9 +434,48 @@ def test_redact_request_env_vars_does_not_mutate_original():
     assert redacted.environment.env_vars["SAFE"] == "ok"
 
 
+def test_submit_argv_roundtrips_through_get_job_status(service):
+    """submit_argv set on LaunchJob must survive storage and reconstruction."""
+    job_name = JobName.root("test-user", "submit-argv-test")
+    launch_req = controller_pb2.Controller.LaunchJobRequest(
+        name=job_name.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        submit_argv=["iris", "job", "run", "-e", "LOG_LEVEL", "info", "--", "python", "t.py"],
+    )
+    service.launch_job(launch_req, None)
+
+    response = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_name.to_wire()), None)
+    assert list(response.request.submit_argv) == [
+        "iris",
+        "job",
+        "run",
+        "-e",
+        "LOG_LEVEL",
+        "info",
+        "--",
+        "python",
+        "t.py",
+    ]
+
+
+def test_submit_argv_empty_when_omitted(service):
+    """Programmatic submissions without submit_argv should reconstruct as empty."""
+    job_name = JobName.root("test-user", "submit-argv-empty")
+    launch_req = controller_pb2.Controller.LaunchJobRequest(
+        name=job_name.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+    )
+    service.launch_job(launch_req, None)
+
+    response = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_name.to_wire()), None)
+    assert list(response.request.submit_argv) == []
+
+
 def test_get_job_status_redacts_sensitive_env_vars(service):
     """Verify get_job_status redacts env var values whose keys match sensitive patterns."""
-    from iris.cluster.controller.service import REDACTED_VALUE
+    from iris.cluster.redaction import REDACTED_VALUE
 
     job_name = JobName.root("test-user", "redact-test")
     launch_req = controller_pb2.Controller.LaunchJobRequest(
@@ -524,7 +669,7 @@ def test_terminate_job_skips_already_finished_children(service, state):
 
 def test_terminate_job_allowed_by_owner(service):
     """Job owner can terminate their own job."""
-    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     service.launch_job(make_job_request("/alice/my-job"), None)
 
@@ -543,14 +688,14 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
-    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     auth_service = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -574,14 +719,14 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
     """Cannot submit a child job under another user's hierarchy."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
-    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     auth_service = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -671,6 +816,21 @@ def test_launch_job_rejects_child_of_failed_parent(service, state):
     assert "terminated" in exc_info.value.message.lower() or "failed" in exc_info.value.message.lower()
 
 
+def test_launch_job_rejects_child_of_absent_parent(service):
+    """Reject child submissions when the parent row is missing from the DB.
+
+    Simulates a controller restart where the checkpoint did not capture the
+    parent row but running processes keep submitting descendants. Previously
+    the guard only rejected terminated parents, leaving absent-parent children
+    inserted with `parent_job_id = NULL` and an orphaned `depth`.
+    """
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(make_job_request("/test-user/absent-parent/new-child"), None)
+
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+    assert "absent" in exc_info.value.message.lower() or "not found" in exc_info.value.message.lower()
+
+
 # =============================================================================
 # Job List Tests
 # =============================================================================
@@ -710,7 +870,7 @@ def test_list_jobs_sql_pagination(service):
         service.launch_job(make_job_request(f"job-{i}"), None)
 
     # Request page of 2
-    request = controller_pb2.Controller.ListJobsRequest(offset=0, limit=2)
+    request = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(offset=0, limit=2))
     response = service.list_jobs(request, None)
 
     assert len(response.jobs) == 2
@@ -718,7 +878,7 @@ def test_list_jobs_sql_pagination(service):
     assert response.has_more is True
 
     # Second page
-    request2 = controller_pb2.Controller.ListJobsRequest(offset=2, limit=2)
+    request2 = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(offset=2, limit=2))
     response2 = service.list_jobs(request2, None)
 
     assert len(response2.jobs) == 2
@@ -731,11 +891,21 @@ def test_list_jobs_sql_pagination(service):
     assert page1_ids.isdisjoint(page2_ids)
 
     # Last page
-    request3 = controller_pb2.Controller.ListJobsRequest(offset=4, limit=2)
+    request3 = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(offset=4, limit=2))
     response3 = service.list_jobs(request3, None)
 
     assert len(response3.jobs) == 1
     assert response3.has_more is False
+
+
+def test_list_jobs_rejects_deep_offset(service):
+    """Offsets past MAX_LIST_JOBS_OFFSET are rejected to force callers to filter."""
+    request = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(offset=MAX_LIST_JOBS_OFFSET + 1, limit=500)
+    )
+    with pytest.raises(ConnectError) as exc_info:
+        service.list_jobs(request, None)
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
 
 
 def test_list_jobs_state_filter(service):
@@ -747,7 +917,9 @@ def test_list_jobs_state_filter(service):
     )
 
     # Filter to killed only
-    request = controller_pb2.Controller.ListJobsRequest(state_filter="killed", limit=10)
+    request = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(state_filter="killed", limit=10)
+    )
     response = service.list_jobs(request, None)
 
     assert len(response.jobs) == 1
@@ -759,17 +931,16 @@ def test_list_jobs_name_filter(service):
     service.launch_job(make_job_request("alpha-job"), None)
     service.launch_job(make_job_request("beta-job"), None)
 
-    request = controller_pb2.Controller.ListJobsRequest(name_filter="alpha")
+    request = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(name_filter="alpha"))
     response = service.list_jobs(request, None)
 
     assert len(response.jobs) == 1
     assert "alpha" in response.jobs[0].name.lower()
 
 
-def test_list_jobs_includes_descendants(service, state):
-    """list_jobs returns top-level jobs plus their descendants for tree display."""
+def test_list_jobs_all_scope_includes_descendants(service, state):
+    """Legacy ListJobs behavior returns all jobs, including descendants."""
     service.launch_job(make_job_request("parent-job"), None)
-    # Submit child job directly via transitions
     parent_id = JobName.root("test-user", "parent-job")
     child_id = JobName.from_wire(parent_id.to_wire() + "/child")
     child_req = controller_pb2.Controller.LaunchJobRequest(
@@ -779,16 +950,53 @@ def test_list_jobs_includes_descendants(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    state.submit_job(child_id, child_req, Timestamp.now())
+    with state._store.transaction() as cur:
+        state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     request = controller_pb2.Controller.ListJobsRequest()
     response = service.list_jobs(request, None)
 
-    # Both parent and child should appear; pagination counts only top-level jobs
+    # Both parent and child should appear; total_count counts all matching jobs.
     job_ids = [j.job_id for j in response.jobs]
     assert parent_id.to_wire() in job_ids
     assert child_id.to_wire() in job_ids
-    assert response.total_count == 1
+    assert response.total_count == 2
+
+
+def test_list_jobs_job_query_roots_and_children(service, state):
+    """JobQuery supports roots-only and direct-children scopes."""
+    service.launch_job(make_job_request("parent-job"), None)
+    parent_id = JobName.root("test-user", "parent-job")
+    child_id = JobName.from_wire(parent_id.to_wire() + "/child")
+    child_req = controller_pb2.Controller.LaunchJobRequest(
+        name=child_id.to_wire(),
+        entrypoint=job_pb2.RuntimeEntrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+    )
+    child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
+    with state._store.transaction() as cur:
+        state.submit_job(cur, child_id, child_req, Timestamp.now())
+
+    roots_response = service.list_jobs(
+        controller_pb2.Controller.ListJobsRequest(
+            query=controller_pb2.Controller.JobQuery(scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS)
+        ),
+        None,
+    )
+    assert [job.job_id for job in roots_response.jobs] == [parent_id.to_wire()]
+    assert roots_response.jobs[0].has_children is True
+
+    children_response = service.list_jobs(
+        controller_pb2.Controller.ListJobsRequest(
+            query=controller_pb2.Controller.JobQuery(
+                scope=controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN,
+                parent_job_id=parent_id.to_wire(),
+            )
+        ),
+        None,
+    )
+    assert [job.job_id for job in children_response.jobs] == [child_id.to_wire()]
 
 
 # =============================================================================
@@ -804,7 +1012,8 @@ def test_task_summaries_sql_group_by(state, service):
     service.launch_job(make_job_request("multi-task", replicas=3), None)
 
     job_id = JobName.root("test-user", "multi-task")
-    summaries = _task_summaries_for_jobs(state._db, {job_id})
+    with state._db.read_snapshot() as q:
+        summaries = _task_summaries_for_jobs(q, {job_id})
 
     assert job_id in summaries
     s = summaries[job_id]
@@ -852,7 +1061,8 @@ def test_worker_addresses_for_tasks(state, service):
     service.launch_job(make_job_request("assigned-job"), None)
     job_id = JobName.root("test-user", "assigned-job")
     task_id = JobName.from_wire(job_id.to_wire() + "/0")
-    state.queue_assignments([Assignment(task_id=task_id, worker_id=WorkerId("w-1"))])
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=WorkerId("w-1"))])
 
     # Get tasks with attempts
     tasks = _query_tasks_with_attempts(state, job_id)
@@ -870,7 +1080,7 @@ def test_worker_addresses_for_tasks(state, service):
 
 def test_list_workers_returns_all(service, state):
     """Verify list_workers returns all registered workers."""
-    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
     db.ensure_user("system:worker", Timestamp.now(), role="worker")
@@ -890,10 +1100,106 @@ def test_list_workers_returns_all(service, state):
     response = service.list_workers(request, None)
 
     assert len(response.workers) == 3
+    assert response.total_count == 3
+    assert response.has_more is False
 
     # All workers should be healthy after registration
     for w in response.workers:
         assert w.healthy is True
+
+
+def _register_workers_for_query(service, state, *, count_cpu: int, count_gpu: int) -> None:
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
+
+    state._db.ensure_user("system:worker", Timestamp.now(), role="worker")
+    token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
+    try:
+        for i in range(count_cpu):
+            service.register(
+                controller_pb2.Controller.RegisterRequest(
+                    address=f"cpu-host{i}:8080",
+                    metadata=make_worker_metadata(),
+                    worker_id=f"cpu-worker-{i:02d}",
+                ),
+                None,
+            )
+        for i in range(count_gpu):
+            service.register(
+                controller_pb2.Controller.RegisterRequest(
+                    address=f"gpu-host{i}:8080",
+                    metadata=make_worker_metadata(gpu_count=1, gpu_name="h100"),
+                    worker_id=f"gpu-worker-{i:02d}",
+                ),
+                None,
+            )
+    finally:
+        _verified_identity.reset(token)
+
+
+def test_list_workers_pagination(service, state):
+    """list_workers respects offset/limit and reports total_count + has_more."""
+    _register_workers_for_query(service, state, count_cpu=7, count_gpu=0)
+
+    page1 = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(offset=0, limit=3),
+        ),
+        None,
+    )
+    assert [w.worker_id for w in page1.workers] == ["cpu-worker-00", "cpu-worker-01", "cpu-worker-02"]
+    assert page1.total_count == 7
+    assert page1.has_more is True
+
+    page2 = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(offset=3, limit=3),
+        ),
+        None,
+    )
+    assert [w.worker_id for w in page2.workers] == ["cpu-worker-03", "cpu-worker-04", "cpu-worker-05"]
+    assert page2.has_more is True
+
+    page3 = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(offset=6, limit=3),
+        ),
+        None,
+    )
+    assert [w.worker_id for w in page3.workers] == ["cpu-worker-06"]
+    assert page3.has_more is False
+
+
+def test_list_workers_filter_by_contains(service, state):
+    """contains matches worker_id substring (case-insensitive) and address."""
+    _register_workers_for_query(service, state, count_cpu=2, count_gpu=2)
+
+    by_id = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(contains="GPU-WORKER"),
+        ),
+        None,
+    )
+    assert by_id.total_count == 2
+    assert all(w.worker_id.startswith("gpu-worker-") for w in by_id.workers)
+
+    by_address = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(contains="cpu-host1"),
+        ),
+        None,
+    )
+    assert by_address.total_count == 1
+    assert by_address.workers[0].worker_id == "cpu-worker-01"
+
+    # Substring (not just prefix): a token that appears in the middle of
+    # worker_id should still match.
+    by_substring = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(contains="worker-0"),
+        ),
+        None,
+    )
+    assert by_substring.total_count == 4
 
 
 # =============================================================================
@@ -914,15 +1220,15 @@ def test_launch_job_injects_device_constraints_from_tpu_resource(service, state)
     service.launch_job(request, None)
 
     job = _query_job(state, JobName.root("test-user", "tpu-job"))
-    stored_constraints = list(job.request.constraints)
+    stored_constraints = constraints_from_json(job.constraints_json)
     keys = {c.key for c in stored_constraints}
     assert WellKnownAttribute.DEVICE_TYPE in keys
     assert WellKnownAttribute.DEVICE_VARIANT in keys
 
     dt = next(c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_TYPE)
-    assert dt.value.string_value == "tpu"
+    assert dt.values[0].value == "tpu"
     dv = next(c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_VARIANT)
-    assert dv.value.string_value == "v5litepod-16"
+    assert dv.values[0].value == "v5litepod-16"
 
 
 def test_launch_job_user_constraints_override_auto(service, state):
@@ -941,17 +1247,17 @@ def test_launch_job_user_constraints_override_auto(service, state):
     service.launch_job(request, None)
 
     job = _query_job(state, JobName.root("test-user", "multi-variant-job"))
-    stored_constraints = list(job.request.constraints)
+    stored_constraints = constraints_from_json(job.constraints_json)
 
     # device-variant should be the user's IN constraint, not the auto EQ
     dv_constraints = [c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_VARIANT]
     assert len(dv_constraints) == 1
-    assert dv_constraints[0].op == job_pb2.CONSTRAINT_OP_IN
+    assert dv_constraints[0].op == ConstraintOp.IN
 
     # device-type should still be auto-injected
     dt_constraints = [c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_TYPE]
     assert len(dt_constraints) == 1
-    assert dt_constraints[0].value.string_value == "tpu"
+    assert dt_constraints[0].values[0].value == "tpu"
 
 
 def test_launch_job_cpu_resource_no_constraints_injected(service, state):
@@ -966,7 +1272,7 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
     service.launch_job(request, None)
 
     job = _query_job(state, JobName.root("test-user", "cpu-job"))
-    assert len(job.request.constraints) == 0
+    assert len(constraints_from_json(job.constraints_json)) == 0
 
 
 # =============================================================================
@@ -978,7 +1284,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
     """Non-worker user gets PERMISSION_DENIED on register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
-    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
     now = Timestamp.now()
@@ -987,10 +1293,10 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=auth,
     )
 
@@ -1014,7 +1320,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
     """Worker-role user can call register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
-    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
     now = Timestamp.now()
@@ -1023,10 +1329,10 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        db,
+        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=auth,
     )
 
@@ -1046,10 +1352,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
 
 
 def test_get_scheduler_state_with_running_task(controller_service, state):
-    """get_scheduler_state must not crash when there are running tasks.
-
-    Regression: JobName has no `.job` attribute — the code must use `.parent`.
-    """
+    """get_scheduler_state aggregates a running task into a (band, user, worker, job) bucket."""
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     # Submit a job and move a task to RUNNING
@@ -1061,21 +1364,24 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    state.submit_job(job_id, request, Timestamp.now())
+    with state._store.transaction() as cur:
+        state.submit_job(cur, job_id, request, Timestamp.now())
 
     w1 = WorkerId("w1")
-    state.register_or_refresh_worker(
-        worker_id=w1,
-        address="w1:8080",
-        metadata=job_pb2.WorkerMetadata(
-            hostname="w1",
-            ip_address="127.0.0.1",
-            cpu_count=8,
-            memory_bytes=16 * 1024**3,
-            disk_bytes=100 * 1024**3,
-        ),
-        ts=Timestamp.now(),
-    )
+    with state._store.transaction() as cur:
+        state.register_or_refresh_worker(
+            cur,
+            worker_id=w1,
+            address="w1:8080",
+            metadata=job_pb2.WorkerMetadata(
+                hostname="w1",
+                ip_address="127.0.0.1",
+                cpu_count=8,
+                memory_bytes=16 * 1024**3,
+                disk_bytes=100 * 1024**3,
+            ),
+            ts=Timestamp.now(),
+        )
     task_id = job_id.task(0)
     _assign_and_transition(state, task_id, w1, job_pb2.TASK_STATE_RUNNING)
 
@@ -1086,7 +1392,202 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
             None,
         )
         assert resp.total_running == 1
-        assert resp.running_tasks[0].job_id == job_id.to_wire()
-        assert resp.running_tasks[0].user_id == "alice"
+        assert len(resp.running_buckets) == 1
+        bucket = resp.running_buckets[0]
+        assert bucket.job_id == job_id.to_wire()
+        assert bucket.user_id == "alice"
+        assert bucket.worker_id == "w1"
+        assert bucket.count == 1
+        # alice has no explicit user_budgets row but has an active task — the
+        # scheduler state must report her spend using UserBudgetDefaults so the
+        # dashboard renders Spent/Limit/Utilization instead of '-'.
+        alice_budget = next((b for b in resp.user_budgets if b.user_id == "alice"), None)
+        assert alice_budget is not None
+        assert alice_budget.budget_spent > 0
+        assert alice_budget.budget_limit == controller_service._user_budget_defaults.budget_limit
     finally:
         _verified_identity.reset(token)
+
+
+# =============================================================================
+# Client freshness tests
+# =============================================================================
+
+
+# Fixed reference point for helper unit tests so freshness behavior is
+# reproducible regardless of wall-clock date. Pick something far enough in the
+# future that FEATURE_INTRODUCTION_DATE has aged out for the past-grace test.
+_REF_NOW = date(2026, 6, 1)
+
+
+def test_check_client_freshness_accepts_today():
+    """A client built today is inside the window (upper edge)."""
+    _check_client_freshness(_REF_NOW.isoformat(), _REF_NOW)
+
+
+def test_check_client_freshness_accepts_at_window_edge():
+    """A client exactly FRESHNESS_WINDOW old is still accepted (lower edge)."""
+    edge = _REF_NOW - FRESHNESS_WINDOW
+    _check_client_freshness(edge.isoformat(), _REF_NOW)
+
+
+def test_check_client_freshness_rejects_over_window():
+    """A client one day past the window is rejected."""
+    stale = _REF_NOW - FRESHNESS_WINDOW - timedelta(days=1)
+    with pytest.raises(ConnectError) as exc_info:
+        _check_client_freshness(stale.isoformat(), _REF_NOW)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+    assert stale.isoformat() in exc_info.value.message
+
+
+def test_check_client_freshness_empty_is_introduction_date():
+    """Empty string is substituted with FEATURE_INTRODUCTION_DATE."""
+    # Right at ship time: empty clients still inside window, succeed.
+    _check_client_freshness("", FEATURE_INTRODUCTION_DATE)
+    # Well past the grace period: empty clients fail.
+    well_past = FEATURE_INTRODUCTION_DATE + FRESHNESS_WINDOW + timedelta(days=1)
+    with pytest.raises(ConnectError) as exc_info:
+        _check_client_freshness("", well_past)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+
+
+def test_check_client_freshness_rejects_malformed():
+    """Non-ISO strings are rejected as INVALID_ARGUMENT."""
+    with pytest.raises(ConnectError) as exc_info:
+        _check_client_freshness("not-a-date", _REF_NOW)
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
+def test_launch_job_root_with_fresh_client_date(service):
+    """Root submission with today's date succeeds end-to-end through launch_job."""
+    request = make_job_request("fresh-client")
+    request.client_revision_date = date.today().isoformat()
+    response = service.launch_job(request, object())
+    assert response.job_id == JobName.root("test-user", "fresh-client").to_wire()
+
+
+def test_launch_job_root_with_stale_client_date(service):
+    """Root submission with an ancient date is rejected end-to-end."""
+    request = make_job_request("stale-client")
+    request.client_revision_date = "2000-01-01"
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, object())
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+
+
+def test_launch_job_nested_with_stale_client_date_is_exempt(service):
+    """Nested submissions bypass the freshness check (parent already running)."""
+    service.launch_job(make_job_request("parent-job"), None)
+    parent_id = JobName.root("test-user", "parent-job")
+
+    child_id = JobName.from_wire(parent_id.to_wire() + "/child")
+    assert not child_id.is_root
+    child_req = controller_pb2.Controller.LaunchJobRequest(
+        name=child_id.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+    )
+    child_req.client_revision_date = "2000-01-01"
+
+    response = service.launch_job(child_req, None)
+    assert response.job_id == child_id.to_wire()
+
+
+def test_set_task_status_text_persists_via_store(service):
+    """set_task_status_text persists the supplied markdown via the store."""
+    service.launch_job(make_job_request("stats-job"), None)
+    task_id = JobName.root("test-user", "stats-job").task(0)
+    detail_text = "Physical stages:\n→ 1. Map\n\nShards: 3/10 complete, 2 in-flight, 5 queued"
+    summary_text = "**Map** 30% (3/10) 1.2 MiB/s"
+    request = job_pb2.SetTaskStatusTextRequest(
+        task_id=task_id.to_wire(),
+        status_text_detail_md=detail_text,
+        status_text_summary_md=summary_text,
+    )
+    service.set_task_status_text(request, None)
+    assert service._store.tasks.get_status_text_detail(task_id.to_wire()) == detail_text
+    assert service._store.tasks.get_status_text_summary(task_id.to_wire()) == summary_text
+
+
+def test_list_tasks_returns_current_attempt_timing(service, state):
+    """ListTasks must surface the current attempt's started_at and exactly one attempt entry.
+
+    Regression target: ``_tasks_for_listing`` previously returned tasks with
+    empty ``attempts``, so the proto's ``started_at`` (read from the current
+    attempt) was never populated and retry status text was missing on the
+    dashboard. The fixed version JOINs the current attempt only — at most one
+    row per task — to avoid the IN-clause blowup on long histories.
+    """
+    request = make_job_request("list-tasks-timing")
+    service.launch_job(request, None)
+    job_id = JobName.root("test-user", "list-tasks-timing")
+    task_id = job_id.task(0)
+    worker_id = WorkerId("w-list-timing")
+    _register_worker(state, worker_id)
+    _assign_and_transition(state, task_id, worker_id, job_pb2.TASK_STATE_RUNNING)
+
+    response = service.list_tasks(
+        controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()),
+        None,
+    )
+
+    assert len(response.tasks) == 1
+    proto = response.tasks[0]
+    assert proto.task_id == task_id.to_wire()
+    assert proto.state == job_pb2.TASK_STATE_RUNNING
+    # current attempt is loaded -> started_at on the proto is populated
+    assert proto.started_at.epoch_ms > 0
+    # exactly one attempt entry — the current one — even if more existed
+    assert len(proto.attempts) == 1
+    assert proto.attempts[0].attempt_id == proto.current_attempt_id
+
+
+# =============================================================================
+# Direct-SQL load: ensure list_jobs scales under concurrent dashboard polling.
+# =============================================================================
+
+
+def test_list_jobs_concurrent_load_p99_under_threshold(service):
+    """100 concurrent ``list_jobs`` calls against ~1k jobs must hit p99 < 500ms.
+
+    The previous implementation amortized this fan-out behind ``SnapshotView``;
+    direct SQL replaces that with per-request reads from the 32-slot reader
+    pool. This test would have failed if the reader pool were starving on the
+    GIL-unfriendly path or if the EXPLAIN-verified indexes were not being
+    used. The threshold is generous on purpose — we want to detect regressions
+    on the order of seconds, not micro-jitter.
+    """
+    for i in range(1000):
+        service.launch_job(make_job_request(f"load-job-{i:04d}"), None)
+
+    request = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(limit=50),
+    )
+
+    # Warm one call so the SQLite page cache is populated.
+    service.list_jobs(request, None)
+
+    n_requests = 100
+    latencies_ms: list[float] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+
+        def call() -> float:
+            start = time.perf_counter()
+            response = service.list_jobs(request, None)
+            assert response.total_count == 1000
+            return (time.perf_counter() - start) * 1000.0
+
+        futures = [pool.submit(call) for _ in range(n_requests)]
+        for f in concurrent.futures.as_completed(futures):
+            latencies_ms.append(f.result())
+
+    latencies_ms.sort()
+    p50 = latencies_ms[len(latencies_ms) // 2]
+    p99 = latencies_ms[int(len(latencies_ms) * 0.99)]
+    # 500ms is well above expected steady-state (in-process measurement was
+    # ~100-120ms; production should be cheaper since the test fixture's DB has
+    # transaction overhead from thousands of launch_job inserts) but tight
+    # enough that read-pool starvation or accidental N+1 query growth would
+    # trip it.
+    assert p99 < 500.0, f"list_jobs concurrent p99 too high: p50={p50:.1f}ms p99={p99:.1f}ms"

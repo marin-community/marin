@@ -1,5 +1,6 @@
-# Persistent CoreWeave CI cluster. Both scale groups are pinned at min=max=1
-# so nodes stay warm between runs — only controller and worker pods are reset.
+# Persistent CoreWeave CI cluster. The CPU pool and the first H100 node stay
+# warm between runs; the H100 pool may autoscale to a second node for manual
+# multi-host canary runs.
 
 platform:
   label_prefix: iris-ci
@@ -38,6 +39,8 @@ defaults:
       milliseconds: 1200000    # 20 min — nodes are pinned warm so this rarely fires
   task_env:
     MARIN_PREFIX: s3://marin-na/marin
+    # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces.
+    NCCL_SOCKET_IFNAME: =enp157s0np0
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001
@@ -56,9 +59,8 @@ scale_groups:
       capacity_type: on-demand
     worker:
       attributes:
-        region: US-WEST-04A
         pool: cpu-erapids
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 1
     priority: 50
     slice_template:
@@ -79,10 +81,9 @@ scale_groups:
       capacity_type: on-demand
     worker:
       attributes:
-        region: US-WEST-04A
         pool: h100-8x
-    min_slices: 1
-    max_slices: 1
+    buffer_slices: 1
+    max_slices: 2
     priority: 100
     slice_template:
       num_vms: 1

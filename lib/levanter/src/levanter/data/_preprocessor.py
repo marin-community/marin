@@ -48,7 +48,7 @@ class BatchProcessor(Generic[T_contra, U_co], ABC):
 
     @property
     def resources(self) -> Dict[str, float]:
-        """Any resources that this processor needs to run. Ray uses this to schedule tasks."""
+        """Any resources that this processor needs to run."""
         return {}
 
     @property

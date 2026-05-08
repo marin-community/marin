@@ -75,9 +75,29 @@ class PreparedBatch:
         return len(self.offsets)
 
     @staticmethod
-    def from_batch(items: Sequence[np.ndarray], item_rank: Optional[int] = None) -> "PreparedBatch":
+    def from_batch(items: Sequence, item_rank: Optional[int] = None) -> "PreparedBatch":
+        if items and not hasattr(items[0], "ndim"):
+            if (item_rank or 1) == 1:
+                return PreparedBatch._from_sequences(items)
+            items = [np.asarray(x) for x in items]
         data, offsets, shapes = _prepare_batch(items, item_rank)
         return PreparedBatch(data, offsets, shapes)
+
+    @staticmethod
+    def _from_sequences(items: Sequence[Sequence]) -> "PreparedBatch":
+        """Build from Python sequences without per-item numpy conversion.
+        Pre-allocates a single flat array and copies each sequence into it."""
+        lengths = np.array([len(item) for item in items], dtype=np.int64)
+        offsets = np.cumsum(lengths)
+        total = int(offsets[-1]) if len(offsets) else 0
+        dtype = np.result_type(items[0][0]) if items and len(items[0]) > 0 else np.int64
+        data = np.empty(total, dtype=dtype)
+        pos = 0
+        for item, length in zip(items, lengths):
+            end = pos + int(length)
+            data[pos:end] = item
+            pos = end
+        return PreparedBatch(data, offsets, None)
 
     @staticmethod
     def concat(batches: Sequence["PreparedBatch"]) -> "PreparedBatch":
@@ -205,10 +225,10 @@ class JaggedArrayStore:
             self._cached_data_size = result
         return result
 
-    async def append_async(self, data: np.ndarray):
+    async def append_async(self, data: Sequence):
         await self.extend_async([data])
 
-    def append(self, data: np.ndarray):
+    def append(self, data: Sequence):
         self.extend([data])
 
     async def trim_to_size_async(self, size: int):
@@ -282,7 +302,7 @@ class JaggedArrayStore:
             self._cached_num_rows = size
             self._cached_data_size = new_max
 
-    async def extend_async(self, arrays: Sequence[np.ndarray] | PreparedBatch):
+    async def extend_async(self, arrays: Sequence[Sequence] | PreparedBatch):
         if isinstance(arrays, PreparedBatch):
             prepared = arrays
         else:
@@ -313,7 +333,7 @@ class JaggedArrayStore:
             self._cached_num_rows = num_rows + num_added
             self._cached_data_size = current_data_size + len(data)
 
-    def extend(self, arrays: Sequence[np.ndarray] | PreparedBatch):
+    def extend(self, arrays: Sequence[Sequence] | PreparedBatch):
         if isinstance(arrays, PreparedBatch):
             prepared = arrays
         else:
@@ -389,16 +409,6 @@ class JaggedArrayStore:
     async def get_item_async(self, item):
         if isinstance(item, slice):
             raise NotImplementedError("Slicing not supported")
-            len_self = await self.num_rows_async()
-            start, stop, step = item.indices(len_self)
-            if step != 1:
-                raise ValueError("JaggedArrayStore doesn't support slicing with step != 1")
-            shapes = None if self.shapes is None else self.shapes[start:stop]
-            # NB: JaggedArray not JaggedArrayStore
-            # TODO: use a transformed TS?
-            data_start, data_stop, offsets = await self._bounds_for_rows_async(start, stop)
-            new_offsets = offsets - offsets[0]
-            return JaggedArray(new_offsets, await self.data[data_start:data_stop].read(), shapes)
         else:
             try:
                 start, stop, _ = await self._bounds_for_rows_async(item, item + 1)
@@ -412,8 +422,7 @@ class JaggedArrayStore:
                 # ts raises a value error for an index out of bounds OUT_OF_RANGE
                 if "OUT_OF_RANGE" in str(e):
                     raise IndexError(f"JaggedArrayStore index out of range: {item}") from e
-                else:
-                    raise e
+                raise
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
         # get indices
@@ -459,20 +468,7 @@ class JaggedArrayStore:
 
     def __getitem__(self, item):
         if isinstance(item, slice):
-            # raise NotImplementedError("Slicing not supported")
-            # # TODO: do we need to avoid reading len(self)?
-            # start, stop, step = item.indices(len(self))
-            # if step != 1:
-            #     raise ValueError("JaggedArrayStore doesn't support slicing with step != 1")
-            # shapes = None if self.shapes is None else self.shapes[start:stop]
-            # # NB: JaggedArray not JaggedArrayStore
-            # # TODO: use a transformed TS?
-            # data_start, data_stop, offsets = self._bounds_for_rows(start, stop)
-            # new_offsets = offsets - offsets[0]
-            # return JaggedArray(new_offsets, self.data[data_start:data_stop].read().result(), shapes)
             start, stop, step = item.indices(len(self))
-            # for now, just read the data into a list
-
             return self.get_batch_sync(list(range(start, stop, step)))
         else:
             try:
@@ -487,8 +483,7 @@ class JaggedArrayStore:
                 # ts raises a value error for an index out of bounds OUT_OF_RANGE
                 if "OUT_OF_RANGE" in str(e):
                     raise IndexError(f"JaggedArrayStore index out of range: {item}") from e
-                else:
-                    raise e
+                raise
 
     def _bounds_for_rows(self, start, stop):
         num_rows = self.num_rows

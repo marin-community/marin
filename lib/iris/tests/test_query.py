@@ -39,16 +39,15 @@ def _seed_test_data(db: ControllerDB) -> None:
         ):
             job_id = f"/user/job-{i}"
             cur.execute(
-                "INSERT INTO jobs (job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state,"
+                "INSERT INTO jobs (job_id, user_id, parent_job_id, root_job_id, depth, state,"
                 " submitted_at_ms, root_submitted_at_ms, started_at_ms, finished_at_ms, error, exit_code,"
-                " num_tasks, is_reservation_holder) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " num_tasks, is_reservation_holder) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id,
                     user,
                     None,
                     job_id,
                     0,
-                    b"fake-proto",
                     state,
                     1000 + i * 100,
                     1000 + i * 100,
@@ -59,6 +58,10 @@ def _seed_test_data(db: ControllerDB) -> None:
                     2,
                     0,
                 ),
+            )
+            cur.execute(
+                "INSERT INTO job_config (job_id, name) VALUES (?, ?)",
+                (job_id, f"job-{i}"),
             )
             for t in range(2):
                 cur.execute(

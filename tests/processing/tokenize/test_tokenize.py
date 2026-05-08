@@ -18,6 +18,8 @@ from marin.processing.tokenize.tokenize import (
     _compute_target_group_bytes,
     tokenize,
 )
+from zephyr.dataset import FileEntry
+from zephyr.readers import InputFileSpec
 
 # Dummy values for other required TokenizeConfig fields
 DUMMY_CACHE_PATH = "/dummy/cache"
@@ -139,14 +141,18 @@ def test_compute_target_group_bytes(total_bytes, max_workers, expected):
     assert _compute_target_group_bytes(total_bytes, max_workers) == expected
 
 
+def _fe(path: str, size: int) -> FileEntry:
+    return FileEntry(spec=InputFileSpec(path=path), size=size)
+
+
 def test_bundle_files_produces_expected_groups():
     """Auto-computed grouping should produce approximately max_workers groups."""
-    file_infos = [{"filename": f"file_{i}.jsonl", "size": 500_000_000} for i in range(20)]
-    total_bytes = sum(f["size"] for f in file_infos)  # 10 GB total
+    files = [_fe(f"file_{i}.jsonl", 500_000_000) for i in range(20)]
+    total_bytes = sum(f.size for f in files)  # 10 GB total
     max_workers = 4
     target = _compute_target_group_bytes(total_bytes, max_workers)  # 2.5 GB per group
 
-    groups = list(_bundle_files_by_size(file_infos, target))
+    groups = list(_bundle_files_by_size(files, target))
     # _bundle_files_by_size yields a group when adding the next file would reach
     # the target (uses >=). With target=2.5 GB and 500 MB files, each group fits
     # 4 files (2 GB < 2.5 GB), yielding 5 groups.
@@ -157,13 +163,13 @@ def test_bundle_files_produces_expected_groups():
 
 def test_bundle_files_single_large_file():
     """A single file larger than target_group_bytes gets its own group."""
-    file_infos = [
-        {"filename": "big.jsonl", "size": 5_000_000_000},
-        {"filename": "small1.jsonl", "size": 100_000_000},
-        {"filename": "small2.jsonl", "size": 100_000_000},
+    files = [
+        _fe("big.jsonl", 5_000_000_000),
+        _fe("small1.jsonl", 100_000_000),
+        _fe("small2.jsonl", 100_000_000),
     ]
     target = 1_000_000_000  # 1 GB
-    groups = list(_bundle_files_by_size(file_infos, target))
+    groups = list(_bundle_files_by_size(files, target))
     assert groups[0] == ["big.jsonl"]
     assert groups[1] == ["small1.jsonl", "small2.jsonl"]
 
