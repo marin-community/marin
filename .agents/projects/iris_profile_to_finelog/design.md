@@ -12,96 +12,110 @@ The controller spawns a `profile-loop` thread that ticks every 10 minutes, fans 
 
 ## Architecture
 
-### Before — controller-driven fan-out, SQLite storage
+Three flows in each side: the periodic loop, the on-demand "profile now" RPC, and the history view. Three diagrams per side keeps each one readable.
+
+#### Periodic capture
+
+Before — controller fans out to every worker via a bounded thread pool, then writes the bytes to its own SQLite:
 
 ```mermaid
 sequenceDiagram
-    autonumber
-    actor User as Dashboard
-    participant CTL as Controller
-    participant LOOP as profile-loop thread
+    participant LOOP as profile-loop (controller thread)
     participant PROV as Provider
     participant W as Worker
     participant DB as profiles.sqlite3
-
-    rect rgb(228, 235, 248)
-        Note over LOOP,DB: Periodic capture - every 600s, fan-out from controller
-        LOOP->>CTL: read healthy workers and running tasks
-        loop each task-worker pair, bounded pool of 8
-            LOOP->>+PROV: profile_task with worker addr
-            PROV->>+W: WorkerService.ProfileTask
-            W->>W: py-spy record 10s
-            W-->>-PROV: ProfileTaskResponse bytes
-            PROV-->>-LOOP: bytes
-            LOOP->>DB: insert_task_profile
-            Note right of DB: trigger caps 10 rows per task and kind
-        end
-    end
-
-    rect rgb(250, 235, 215)
-        Note over User,DB: On-demand profile-now - synchronous, NOT persisted
-        User->>+CTL: profile_task RPC
-        CTL->>+PROV: provider.profile_task
-        PROV->>+W: WorkerService.ProfileTask
-        W-->>-PROV: bytes
-        PROV-->>-CTL: bytes
-        CTL-->>-User: bytes
-    end
-
-    rect rgb(225, 240, 225)
-        Note over User,DB: History view - controller reads SQLite
-        User->>+CTL: GetTaskProfiles RPC
-        CTL->>DB: SELECT profile_data FROM task_profiles
-        DB-->>CTL: rows up to 10
-        CTL-->>-User: profiles
-    end
+    LOOP->>PROV: profile_task(worker_addr, request)
+    PROV->>W: WorkerService.ProfileTask
+    W->>W: py-spy record 10s
+    W-->>PROV: ProfileTaskResponse bytes
+    PROV-->>LOOP: bytes
+    LOOP->>DB: insert_task_profile
+    Note over LOOP,DB: every 600s, ThreadPool concurrency 8, all running tasks
+    Note over DB: trigger caps 10 rows per task and kind
 ```
 
-### After — worker-driven loop, finelog storage, controller is a pure dispatcher
+After — every worker runs its own loop, captures locally, writes finelog. No controller involvement:
 
 ```mermaid
 sequenceDiagram
-    autonumber
+    participant LOOP as profile-loop (worker thread)
+    participant W as Worker
+    participant FL as finelog iris.cpu_profile
+    LOOP->>W: list local _tasks
+    LOOP->>W: py-spy record 10s
+    LOOP->>FL: Table.write IrisCpuProfile trigger periodic
+    Note over LOOP,FL: every 600s, sequential per worker, parallel across workers
+```
+
+#### On-demand profile-now (dashboard button)
+
+Before — controller dispatches via provider, returns bytes to dashboard, nothing persisted:
+
+```mermaid
+sequenceDiagram
+    actor User as Dashboard
+    participant CTL as Controller
+    participant PROV as Provider
+    participant W as Worker
+    User->>CTL: profile_task RPC
+    CTL->>PROV: provider.profile_task
+    PROV->>W: WorkerService.ProfileTask
+    W-->>PROV: bytes
+    PROV-->>CTL: bytes
+    CTL-->>User: bytes
+    Note over User,W: synchronous, NOT persisted
+```
+
+After — same dashboard path, provider abstraction routes to worker or K8s; the capturer also writes finelog:
+
+```mermaid
+sequenceDiagram
     actor User as Dashboard
     participant CTL as Controller dispatcher
     participant PROV as Provider
     participant W as Worker
-    participant LOOP as worker profile-loop
     participant K8S as K8sTaskProvider
     participant FL as finelog iris.cpu_profile
-
-    rect rgb(228, 235, 248)
-        Note over W,FL: Periodic capture - runs independently in each worker
-        loop every 600s, sequential per worker
-            LOOP->>W: list local tasks
-            LOOP->>W: py-spy record 10s
-            LOOP->>FL: Table.write IrisCpuProfile trigger periodic
-        end
+    User->>CTL: profile_task RPC
+    CTL->>PROV: provider.profile_task
+    alt worker-based provider
+        PROV->>W: WorkerService.ProfileTask
+        W->>W: py-spy record
+        W->>FL: Table.write trigger on_demand
+        W-->>PROV: bytes
+    else K8sTaskProvider
+        PROV->>K8S: kubectl exec py-spy
+        K8S->>FL: Table.write trigger on_demand
+        K8S-->>PROV: bytes
     end
+    PROV-->>CTL: bytes
+    CTL-->>User: bytes
+    Note over User,FL: controller never writes; capturer is the writer
+```
 
-    rect rgb(250, 235, 215)
-        Note over User,FL: On-demand profile-now - same dashboard path, provider routes
-        User->>+CTL: profile_task RPC
-        CTL->>+PROV: provider.profile_task
-        alt worker-based provider
-            PROV->>+W: WorkerService.ProfileTask
-            W->>W: py-spy record
-            W->>FL: Table.write trigger on_demand
-            W-->>-PROV: bytes
-        else K8sTaskProvider
-            PROV->>+K8S: kubectl exec py-spy
-            K8S->>FL: Table.write trigger on_demand
-            K8S-->>-PROV: bytes
-        end
-        PROV-->>-CTL: bytes
-        CTL-->>-User: bytes
-    end
+#### History view
 
-    rect rgb(225, 240, 225)
-        Note over User,FL: History view - dashboard reads finelog directly
-        User->>+FL: StatsService.Query SELECT FROM iris.cpu_profile
-        FL-->>-User: rows as Arrow IPC
-    end
+Before — dashboard reads SQLite via a controller RPC:
+
+```mermaid
+sequenceDiagram
+    actor User as Dashboard
+    participant CTL as Controller
+    participant DB as profiles.sqlite3
+    User->>CTL: GetTaskProfiles RPC
+    CTL->>DB: SELECT profile_data FROM task_profiles
+    DB-->>CTL: rows up to 10
+    CTL-->>User: profiles
+```
+
+After — dashboard reads finelog directly via the existing StatsService SQL surface:
+
+```mermaid
+sequenceDiagram
+    actor User as Dashboard
+    participant FL as finelog iris.cpu_profile
+    User->>FL: StatsService.Query SELECT from iris.cpu_profile
+    FL-->>User: rows as Arrow IPC
 ```
 
 The two diagrams share the on-demand RPC shape — only the storage and the periodic loop's ownership change. Workers gain one new thread (`profile-loop`); the controller loses the loop, the table, and any `Table.write` for profile data.
@@ -156,7 +170,7 @@ def run_profile_loop(*, stop_event, interval, list_running_attempts, capture_one
 1. Introduce `IrisCpuProfile` schema + namespace registration in `Worker.start()`. No writers yet — table exists but is empty.
 2. Worker `ProfileTask` RPC handler writes to `iris.cpu_profile` on CPU-task success; `K8sTaskProvider.profile_task` does the same. On-demand captures now persist; periodic captures still go through the controller loop into `task_profiles`. Dual-write window.
 3. Add worker `_run_profile_loop`. Add "Profile history" panel on `TaskDetail.vue`. Periodic captures land in finelog.
-4. Delete controller `_run_profile_loop` / helpers / config / DB helpers. Strip the controller `profile_task` RPC handler down to "dispatch via provider; return bytes." Drop the `task_profiles` table and `profiles.sqlite3` via migration `0024_drop_profiles_db.py`.
+4. Delete controller `_run_profile_loop` / helpers / config / DB helpers, the prune sweep (`profile_retention` config, `prune_old_data` arg, `prune_stale_profiles` / `prune_orphan_profiles` store helpers, `PruneResult.profiles_deleted`), and the checkpoint snapshot/restore branches that include `profiles.sqlite3`. Strip the controller `profile_task` RPC handler down to "dispatch via provider; return bytes." Drop the `task_profiles` table and `profiles.sqlite3` via migration `0024_drop_profiles_db.py`. **All of these must land in one commit** — splitting the prune deletion from the migration crashes the controller on the next 1h tick.
 5. Document in `lib/iris/AGENTS.md` and `OPS.md`.
 
 ## Testing

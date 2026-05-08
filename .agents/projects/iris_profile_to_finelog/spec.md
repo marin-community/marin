@@ -178,10 +178,23 @@ def profile_task(
 | `profile_interval` config field | same | 1028 | unused after loop removed |
 | `profile_duration` config field | same | 1031 | unused after loop removed |
 | `profile_concurrency` config field | same | 1046 | unused after loop removed |
-| `insert_task_profile` | `lib/iris/src/iris/cluster/controller/db.py` | 987 | DB persistence gone |
+| `profile_retention` config field | same | 1043 | prune sweep gone |
+| `prune_old_data(profile_retention=…)` arg + call site | same | 1544 | prune sweep gone |
+| `prune_old_data` `profile_retention` parameter | `lib/iris/src/iris/cluster/controller/transitions.py` | 2121, 2134 | prune sweep gone |
+| `prune_stale_profiles` / `prune_orphan_profiles` invocations | same | 2174-2184 | prune sweep gone |
+| `PruneResult.profiles_deleted` field | same | 2186-2197 | prune sweep gone |
+| `prune_stale_profiles` (store helper) | `lib/iris/src/iris/cluster/controller/stores.py` | 1394-1409 | hardcodes `profiles.task_profiles` SQL |
+| `prune_orphan_profiles` (store helper) | same | 1410-1425 | hardcodes `profiles.task_profiles` SQL |
+| Checkpoint snapshot of `profiles.sqlite3` | `lib/iris/src/iris/cluster/controller/checkpoint.py` | 184-186, 233 | snapshot path gone |
+| `profiles.sqlite3` restore + ATTACH branch | `lib/iris/src/iris/cluster/controller/db.py` | 740-758, 763-764 | restore path gone |
+| `insert_task_profile` | same | 987 | DB persistence gone |
 | `get_task_profiles` | same | 1000-1022 | DB persistence gone |
 | `task_profiles_table` property | same | 628-629 | DB persistence gone |
-| `PROFILES_DB_FILENAME`, `_profiles_db_path`, `ATTACH … profiles` | same | 297, 306, 314, 394 | DB persistence gone |
+| `PROFILES_DB_FILENAME` constant | same | 297 | survives until 0024; deleted in same commit |
+| `_profiles_db_path` field assignment | same | 306 | survives until 0024; deleted in same commit |
+| `ATTACH DATABASE … profiles` (startup) | same | 314 | survives until 0024; deleted in same commit |
+| `ATTACH DATABASE … profiles` (read pool) | same | 394 | survives until 0024; deleted in same commit |
+| `profiles_db_path` accessor property | same | 411-412 | kept as one-line method consumed only by 0024 |
 | `TASK_PROFILES = Table(...)` | `lib/iris/src/iris/cluster/controller/schema.py` | 1031-1071 | DB persistence gone |
 
 The controller's `profile_task` RPC handler **stays** — it is the dashboard-facing entry. `WorkerService.ProfileTask` ([`worker.proto:111`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/rpc/worker.proto#L111)) and the `CpuProfile` / `MemoryProfile` / `ThreadsProfile` / `ProfileType` / `ProfileTaskRequest` / `ProfileTaskResponse` proto messages also stay. The provider abstraction's `profile_task` method on both worker-based providers and `K8sTaskProvider` stays.
@@ -243,15 +256,26 @@ def profile_task(
           pass
   ```
 - Migrations 0005, 0014, 0020, 0023 stay on disk as no-op chain links once 0024 has run on a given DB. Their `upgrade()` bodies still execute on first-run upgrades from old snapshots; 0024 immediately reverses them. The path-resolver helper for `profiles_db_path` stays in `db.py` as a one-line method consumed only by 0024.
-- **Commit ordering inside the migration step:** delete *all* call sites of `task_profiles_table` / `insert_task_profile` / `get_task_profiles` in the same commit as adding 0024. Otherwise a stale read after `DETACH` would 500.
+- **Commit ordering inside the migration step (single commit, no exceptions):**
+  1. Delete every reader: `task_profiles_table` / `insert_task_profile` / `get_task_profiles` call sites.
+  2. Delete the prune sweep: `profile_retention` config field, the `prune_old_data` call-site argument, `Transitions.prune_old_data` parameter, the `prune_stale_profiles` / `prune_orphan_profiles` invocations and store helpers, `PruneResult.profiles_deleted`. **If this lands in a separate commit from 0024, the prune loop crashes the controller with `OperationalError: no such table: profiles.task_profiles` on the first 1h tick after a cluster has detached.**
+  3. Delete the checkpoint backup branch (`checkpoint.py:184-186, 233`) and the restore-side ATTACH branch (`db.py:740-758, 763-764`). **If this lands separately, snapshots either fail to compile (when `PROFILES_DB_FILENAME` goes) or silently snapshot a file that 0024 deletes on next boot.**
+  4. Add `0024_drop_profiles_db.py`. The startup ATTACH (`db.py:314`) and read-pool ATTACH (`db.py:394`) and `_profiles_db_path` field must survive long enough for 0024 to `DETACH` them — they are deleted in the same commit, *after* the migration body executes.
 
 ### 4.4 K8s provider write path
 
-Edit `lib/iris/src/iris/cluster/providers/k8s/tasks.py:1155-1180` (`K8sTaskProvider.profile_task`):
+`K8sTaskProvider` already has `log_client: LogWriterProtocol | None` injected ([`tasks.py:1083`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/providers/k8s/tasks.py#L1083)), but `LogWriterProtocol` only exposes `write_batch`, not `get_table` ([`finelog/types.py:34-49`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/finelog/src/finelog/types.py#L34)). Calling `self.log_client.get_table(CPU_PROFILE_NAMESPACE, IrisCpuProfile)` would not type-check and would fail against the test fakes the protocol exists to support.
 
-- On CPU-target success (after `_profile_cpu` returns non-empty bytes), write one `IrisCpuProfile` row with `trigger="on_demand"` and `worker_id="<k8s>"` (or the pod's host node label — see Open Questions). Use the controller-process `LogClient` (already available to `K8sTaskProvider` via constructor injection — confirm during implementation; if not, add it).
-- Memory and threads paths return inline only (no finelog write).
-- Errors: existing behaviour — `ProfileTaskResponse(error=str(e))` on capture failure, no row written.
+Mirror the existing `task_stats_table` pattern. The controller constructs the Table from its own `LogClient` and injects a typed field on the provider:
+
+- **K8sTaskProvider field.** Add `cpu_profile_table: Table[IrisCpuProfile] | None = None` next to `task_stats_table` at [`providers/k8s/tasks.py:1087`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/providers/k8s/tasks.py#L1087).
+- **Controller wiring.** In the controller's k8s-mode branch at [`controller.py:1186-1188`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/controller/controller.py#L1186), next to the existing `self._provider.task_stats_table = k8s_log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)` line, add:
+  ```python
+  self._provider.cpu_profile_table = k8s_log_client.get_table(CPU_PROFILE_NAMESPACE, IrisCpuProfile)
+  ```
+- **`K8sTaskProvider.profile_task` (edit at [`tasks.py:1155-1180`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/providers/k8s/tasks.py#L1155)).** On CPU-target success (after `_profile_cpu` returns non-empty bytes), write one `IrisCpuProfile` row via `self.cpu_profile_table.write(row)`. No-op when `cpu_profile_table is None` (test mode). Memory and threads paths return inline only.
+- **`worker_id` value for k8s rows.** Use `worker_id = f"k8s/{pod_node_name or pod_name}"` — the pod's `spec.nodeName` (k8s scheduling-resolved host) when available, falling back to `pod_name`. Stable across captures of the same pod; distinguishes node moves; never collides with worker-based provider `worker_id`s (which never start with `k8s/`). The dashboard SQL surface in §5.1 selects `worker_id`, so the format is part of the contract.
+- **Errors:** existing behaviour — `ProfileTaskResponse(error=str(e))` on capture failure, no finelog row written.
 
 The k8s provider does not host a periodic loop in v1. Adding one is out of scope (see design Open Questions).
 
