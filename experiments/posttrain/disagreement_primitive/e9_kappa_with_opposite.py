@@ -30,16 +30,8 @@ PER_JUDGMENT_NEW = DIR / "per_judgment_opposite.jsonl"
 CLAUDE_OLD_DIR = DIR / "claude_judge_v0"
 CLAUDE_NEW_DIR = DIR / "claude_judge_v0_opposite"
 
-TARGET_SIDS = [
-    "do_not_make_unprompted_personal_comments",
-    "be_professional",
-    "no_erotica_or_gore",
-    "present_perspectives",
-    "be_thorough_but_efficient",
-    "avoid_hateful_content",
-    "no_topic_off_limits",
-    "be_clear",
-]
+SPEC_PATH = DIR / ".." / "specs" / "openai_model_spec.jsonl"
+TARGET_SIDS: list[str] = [json.loads(l)["id"] for l in SPEC_PATH.open() if l.strip()]
 GROK_LABEL = "grok-4-1-fast-non-reasoning-opposite"
 
 
@@ -61,17 +53,18 @@ def load_all_scores() -> dict:
         cell = (r["statement_id"], r["condition"], r["scenario_idx"], r["generator"])
         by_cell[cell][r["judge"]] = s
 
-    # New per_judgment (Grok-opposite × gpt+gemini+claude)
-    for line in PER_JUDGMENT_NEW.open():
-        r = json.loads(line)
-        if r.get("statement_id") not in TARGET_SIDS: continue
-        if r.get("condition") not in {"variant_A", "rubric_plus_spec"}: continue
-        s = r.get("score")
-        if s is None or not isinstance(s, int) or not 1 <= s <= 5: continue
-        cell = (r["statement_id"], r["condition"], r["scenario_idx"], r["generator"])
-        by_cell[cell][r["judge"]] = s
+    # New per_judgment (Grok-opposite × gpt+gemini, possibly Claude on 8 stmts only)
+    if PER_JUDGMENT_NEW.exists():
+        for line in PER_JUDGMENT_NEW.open():
+            r = json.loads(line)
+            if r.get("statement_id") not in TARGET_SIDS: continue
+            if r.get("condition") not in {"variant_A", "rubric_plus_spec"}: continue
+            s = r.get("score")
+            if s is None or not isinstance(s, int) or not 1 <= s <= 5: continue
+            cell = (r["statement_id"], r["condition"], r["scenario_idx"], r["generator"])
+            by_cell[cell][r["judge"]] = s
 
-    # Old Claude
+    # Claude on existing 3 generators (per-statement files)
     for sid in TARGET_SIDS:
         for cond_short, cond_internal in [("bare", "variant_A"), ("phase_4", "rubric_plus_spec")]:
             p = CLAUDE_OLD_DIR / sid / f"{cond_short}_claude.jsonl"
@@ -83,8 +76,17 @@ def load_all_scores() -> dict:
                 cell = (sid, cond_internal, r["scenario_idx"], r["generator"])
                 by_cell[cell]["claude"] = s
 
-    # New Claude (already in per_judgment_new but also have per-statement files)
-    # The flat per_judgment_new already contains claude rows; redundant load skipped.
+    # Claude on Grok-opposite (per-statement files written by Phase 4)
+    for sid in TARGET_SIDS:
+        for cond_short, cond_internal in [("bare", "variant_A"), ("phase_4", "rubric_plus_spec")]:
+            p = CLAUDE_NEW_DIR / sid / f"{cond_short}_opposite_claude.jsonl"
+            if not p.exists(): continue
+            for line in p.open():
+                r = json.loads(line)
+                s = r.get("score")
+                if s is None or not isinstance(s, int) or not 1 <= s <= 5: continue
+                cell = (sid, cond_internal, r["scenario_idx"], r["generator"])
+                by_cell[cell]["claude"] = s
 
     return by_cell
 
