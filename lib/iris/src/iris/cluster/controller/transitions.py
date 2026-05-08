@@ -1550,7 +1550,7 @@ class ControllerTransitions:
             if task_state != prior_state:
                 jobs_to_recompute.add(task.job_id)
 
-        # Recompute job states once per job instead of once per task.
+        # Recompute job states once per job (deduplicated above).
         for job_id in jobs_to_recompute:
             if job_id in cascaded_jobs:
                 continue
@@ -1796,7 +1796,7 @@ class ControllerTransitions:
         Each ``(worker_id, worker_address, reason)`` tuple triggers a
         worker-removal transaction. Chunks commit between themselves so the
         SQLite writer is released and other RPCs (register, apply_heartbeats_batch,
-        ...) can interleave instead of stalling behind a zone-wide failure.
+        ...) can interleave during a zone-wide failure.
         """
         if not failures:
             return WorkerFailureBatchResult()

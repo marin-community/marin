@@ -49,7 +49,7 @@ class WorkerStubFactory(Protocol):
 
 class RpcWorkerStubFactory:
     """Caches async WorkerServiceClient stubs by address so each worker gets
-    one persistent async HTTP client instead of a new one per RPC."""
+    one persistent async HTTP client across RPCs."""
 
     def __init__(self, timeout: Duration = DEFAULT_WORKER_RPC_TIMEOUT) -> None:
         self._timeout = timeout

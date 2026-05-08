@@ -218,10 +218,10 @@ def _active_worker_id(task: TaskDetailRow) -> WorkerId | None:
 def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.TaskStatus:
     """Convert a task row to a TaskStatus proto.
 
-    Handles attempt conversion and timestamps. ``resource_usage`` is no longer
-    populated by the controller — per-attempt samples live in the ``iris.task``
-    stats namespace. The caller is responsible for resolving worker_address
-    from worker_id if needed.
+    Handles attempt conversion and timestamps. Per-attempt resource samples
+    live in the ``iris.task`` stats namespace and are not populated here. The
+    caller is responsible for resolving worker_address from worker_id if
+    needed.
     """
     current_attempt = _current_attempt(task)
 
@@ -712,20 +712,15 @@ def _query_jobs(
 def _query_from_list_jobs_request(
     request: controller_pb2.Controller.ListJobsRequest,
 ) -> controller_pb2.Controller.JobQuery:
-    """Return the request's ``JobQuery`` with paging clamped to safe bounds.
-
-    The legacy flat fields on ``ListJobsRequest`` were removed in #4573;
-    callers must now always submit a ``JobQuery``.
-    """
+    """Return the request's ``JobQuery`` with paging clamped to safe bounds."""
     query = controller_pb2.Controller.JobQuery()
     if request.HasField("query"):
         query.CopyFrom(request.query)
 
-    # Clamp paging: 0 (unset) defaults to MAX; explicit values are capped at MAX.
-    # We no longer support unbounded listing — callers that previously relied on
-    # limit=0 must paginate. Unbounded queries scale poorly because downstream
-    # per-page work (_task_summaries_for_jobs, _parent_ids_with_children) grows
-    # an IN-clause with one placeholder per returned row.
+    # Clamp paging: 0 (unset) or out-of-range values default to MAX. Unbounded
+    # listing is not supported because downstream per-page work
+    # (_task_summaries_for_jobs, _parent_ids_with_children) grows an IN-clause
+    # with one placeholder per returned row.
     if query.limit <= 0 or query.limit > MAX_LIST_JOBS_LIMIT:
         query.limit = MAX_LIST_JOBS_LIMIT
     if query.offset < 0:
@@ -754,7 +749,7 @@ def _parent_ids_with_children(q: QuerySnapshot, job_ids: list[JobName]) -> set[J
 
 
 def _task_summaries_for_jobs(q: QuerySnapshot, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
-    """Aggregate task counts per job using SQL GROUP BY instead of Python-side iteration."""
+    """Aggregate task counts per job via a SQL GROUP BY."""
     if job_ids is not None:
         placeholders = ",".join("?" for _ in job_ids)
         where = f"WHERE t.job_id IN ({placeholders})"
@@ -1292,9 +1287,6 @@ class ControllerServiceImpl:
         if job.submitted_at:
             proto_job_status.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at))
 
-        # Per-task resource samples now live in the ``iris.task`` stats
-        # namespace; the controller no longer aggregates min/max from a
-        # local table. Dashboard panels that need this should query stats.
         reconstructed_request = _reconstruct_launch_job_request(job)
         return controller_pb2.Controller.GetJobStatusResponse(
             job=proto_job_status,
@@ -1421,9 +1413,8 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.ListJobsResponse:
         """List jobs with filtering, sorting, and pagination.
 
-        Served directly from indexed SQL — see ``_query_jobs`` for the
-        EXPLAIN-verified index assignments per request shape. Per-page task
-        summaries and parent→child flags are looked up against the same read
+        Served directly from indexed SQL via ``_query_jobs``. Per-page task
+        summaries and parent->child flags are looked up against the same read
         snapshot so the whole RPC observes a single transactionally-consistent
         view.
         """
@@ -1513,9 +1504,6 @@ class ControllerServiceImpl:
         tasks = _tasks_for_listing(self._db, job_id=job_id)
         worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
 
-        # Per-task latest resource usage now lives in the ``iris.task`` stats
-        # namespace; dashboard list views should query it there instead of
-        # the controller attaching it to every TaskStatus row.
         task_statuses = []
         for task in tasks:
             twid = _task_worker_id(task)
@@ -2419,12 +2407,10 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.GetSchedulerStateResponse:
         """Return aggregated scheduler state for the dashboard.
 
-        The dashboard SchedulerTab + AutoscalerTab only consume rolled-up
-        counts: per-(band, user, job) for pending and per-(band, user, worker,
-        job) for running. We aggregate server-side instead of streaming one
-        proto entry per task. This drops the per-task ``job_config`` lookup,
-        the running-tasks ``JOIN job_config``, and the resource-value /
-        preemption / interleave computations the old shape required.
+        The dashboard SchedulerTab + AutoscalerTab consume rolled-up counts:
+        per-(band, user, job) for pending and per-(band, user, worker, job)
+        for running. Aggregation runs server-side and emits one proto entry
+        per bucket rather than per task.
         """
         require_identity()
 
@@ -2435,9 +2421,8 @@ class ControllerServiceImpl:
             user_spend = compute_user_spend(snap)
 
             # Pending tasks: full TASK_ROW_PROJECTION so ``task_row_can_be_scheduled``
-            # can match the previous handler's "schedulable" filter (excludes
-            # retry-exhausted PENDING tasks). No ORDER BY — we aggregate,
-            # not display.
+            # can apply the schedulable filter (excludes retry-exhausted
+            # PENDING tasks). No ORDER BY — we aggregate, not display.
             pending_rows = TASK_ROW_PROJECTION.decode(
                 snap.fetchall(
                     f"SELECT {TASK_ROW_PROJECTION.select_clause()} FROM tasks t WHERE t.state = ?",
@@ -2446,7 +2431,7 @@ class ControllerServiceImpl:
             )
 
             # Running tasks: only task_id, priority_band, and worker — no
-            # job_config join (resource_value / coscheduling were dropped).
+            # job_config join is needed for the rolled-up counts below.
             running_rows = snap.raw(
                 "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id "
                 "FROM tasks t "
@@ -2585,9 +2570,7 @@ class ControllerServiceImpl:
 
         Status text lives entirely in the in-memory ``TaskStore`` dict; the
         write is idempotent and stale task IDs are evicted by
-        ``remove_status_text_by_job_ids`` during pruning. No validation read
-        is needed here — the prior precheck added a SQLite snapshot per call
-        on a path the dashboard hits hundreds of times a minute.
+        ``remove_status_text_by_job_ids`` during pruning.
         """
         task_id = JobName.from_wire(request.task_id)
         self._transitions.record_task_status_text(task_id, request.status_text_detail_md, request.status_text_summary_md)
