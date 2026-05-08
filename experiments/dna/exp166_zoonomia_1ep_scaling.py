@@ -47,6 +47,7 @@ from dataclasses import dataclass, replace
 from datetime import timedelta
 
 import jmp
+from fray.cluster import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import DNALmDatasetFormat
 from levanter.eval_harness import LmEvalHarnessConfig
@@ -55,16 +56,15 @@ from levanter.optim import AdamHConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.remote import remote
+from marin.processing.tokenize import lm_mixture_data_config
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 from experiments.defaults import default_tokenize
 from experiments.dna.defaults import dna_effective_seq_len
 from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2_255, convert_to_levanter_task_config
 from experiments.scaling_law_sweeps.completed_adamh import CompletedAdamHHeuristic
-from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.execution.remote import remote
-from marin.processing.tokenize import lm_mixture_data_config
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 # =============================================================================
 # Constants
@@ -114,8 +114,18 @@ MODEL_HIDDEN_SIZES: tuple[int, ...] = (1920, 2944)
 # scaling sweep, so 1B and 4B are directly comparable on wall-clock,
 # throughput, and sample efficiency.
 BATCH_SIZE = 8192
-PER_DEVICE_PARALLELISM = 1024  # revisit for 4B if it OOMs
 TPU_TYPES: tuple[str, ...] = ("v6e-4",)
+
+# Per-device parallelism per hidden size. 4B at PDP=1024 OOMed on v6e-4 in the
+# first prod-v0.2 launch (allocation 41.7 GB for the bf16[29, 1024, 256, 2944]
+# activations tensor exceeded the 31.5 GB per-chip HBM); halve to 512. 1B fits
+# at 1024. Gradient accumulation absorbs the difference (4B: 4 microbatches/step
+# vs 1B: 2 microbatches/step) — effective batch size is BATCH_SIZE for both, so
+# training dynamics are unchanged; only per-step wall-clock differs slightly.
+PER_DEVICE_PARALLELISM_BY_HIDDEN: dict[int, int] = {
+    1920: 1024,
+    2944: 512,
+}
 
 
 # =============================================================================
@@ -396,7 +406,7 @@ def _build_train_step(hidden_size: int) -> ExecutorStep:
             checkpointer=_checkpointer(num_train_steps),
             mesh=MeshConfig(axes={"replica": 1, "data": -1, "model": 1}),
             allow_nondivisible_batch_size=True,
-            per_device_parallelism=PER_DEVICE_PARALLELISM,
+            per_device_parallelism=PER_DEVICE_PARALLELISM_BY_HIDDEN[hidden_size],
         ),
     )
     pod_config = TrainLmOnPodConfig(
@@ -424,7 +434,8 @@ def _print_preview(selected: tuple[int, ...]) -> None:
     print("=" * 78)
     print(f"DNA Bolinas exp166 zoonomia 1-epoch scaling {VERSION} — preview")
     print(f"  train_dataset={TRAIN_DATASET}  samples={TRAIN_SAMPLE_COUNT:,}")
-    print(f"  batch_size={BATCH_SIZE}  seq_len={_model_seq_len()}  per_device_parallelism={PER_DEVICE_PARALLELISM}")
+    pdp_str = ", ".join(f"h={h}:pdp={p}" for h, p in PER_DEVICE_PARALLELISM_BY_HIDDEN.items())
+    print(f"  batch_size={BATCH_SIZE}  seq_len={_model_seq_len()}  per_device_parallelism={{ {pdp_str} }}")
     print(f"  full_num_train_steps={full_steps}  target_tokens={target_tokens:.3e}")
     if _warmup_mode():
         print(f"  WARMUP_MODE=yes -> num_train_steps clamped to {WARMUP_NUM_TRAIN_STEPS}")
