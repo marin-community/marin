@@ -678,7 +678,14 @@ def resolve_executor_step(
     if original is not None:
         return dataclasses.replace(original, deps=deps or [])
 
-    import ray
+    # ray was removed from marin's deps on main (post-#5279); make the
+    # legacy RemoteFunction dispatch optional so dna-dev's executor still
+    # works under the bumped pyproject. We don't use ray RemoteFunctions
+    # in DNA experiments — only RemoteCallable via marin.execution.remote.
+    try:
+        import ray  # type: ignore
+    except ImportError:
+        ray = None  # type: ignore
 
     remote_callable = step.fn if isinstance(step.fn, RemoteCallable) else None
     if remote_callable is not None:
@@ -693,7 +700,7 @@ def resolve_executor_step(
         )
 
     step_fn = remote_callable.fn if remote_callable is not None else step.fn
-    if isinstance(step_fn, ray.remote_function.RemoteFunction):
+    if ray is not None and isinstance(step_fn, ray.remote_function.RemoteFunction):
         ray_remote_fn = step_fn
 
         def step_fn(*args, **kw):
@@ -1559,10 +1566,15 @@ def get_fn_name(fn: ExecutorFunction, short: bool = False):
     """Just for debugging: get the name of the function."""
     if fn is None:
         return "None"
-    import ray
+    # ray was removed from marin's deps on main; fall through to non-ray paths
+    # when it isn't installed. See sibling import-guard in this file.
+    try:
+        import ray  # type: ignore
 
-    if isinstance(fn, ray.remote_function.RemoteFunction):
-        return fn._function.__name__
+        if isinstance(fn, ray.remote_function.RemoteFunction):
+            return fn._function.__name__
+    except ImportError:
+        pass
     if short:
         return f"{fn.__name__}"
     else:
