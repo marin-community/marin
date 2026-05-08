@@ -71,6 +71,7 @@ def tokenize_nemotron(
     tokenizer: str | None = None,
     max_workers: int = 4096,
     cache_copy_max_workers: int = 128,
+    input_paths_by_split: dict[str, list] | None = None,
 ) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Nemotron CC dataset splits.
 
@@ -78,6 +79,12 @@ def tokenize_nemotron(
     its own Fray job (see ``NEMOTRON_SPLIT_TOKENIZE_RESOURCES``). This keeps the
     entrypoint pod lightweight and lets the tokenize+consolidate work survive
     entrypoint restarts.
+
+    When ``input_paths_by_split`` is provided, those paths replace the raw
+    ``data-jsonl`` glob inputs for the matching splits — used by callers that
+    want to tokenize from a normalized parquet upstream. The ``hq_actual``-style
+    llama3 cache overrides are pinned to raw-input caches, so they're skipped
+    for any split whose inputs are overridden here.
     """
     if tokenizer is None:
         from experiments.llama import llama3_tokenizer
@@ -86,10 +93,12 @@ def tokenize_nemotron(
 
     tokenize_fn = remote(tokenize, resources=NEMOTRON_SPLIT_TOKENIZE_RESOURCES)
 
+    overrides = input_paths_by_split or {}
+
     nemotron_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for split in NEMOTRON_DATASETS:
         nemotron_split_output_path = os.path.join("tokenized", "nemotron_cc", split)
-        nemotron_split_paths = _get_nemotron_split_paths(split)
+        nemotron_split_paths = overrides.get(split) or _get_nemotron_split_paths(split)
         step = ExecutorStep(
             name=nemotron_split_output_path,
             fn=tokenize_fn,
@@ -106,7 +115,7 @@ def tokenize_nemotron(
         # Check if we need to use override path for llama3
         from experiments.llama import llama3_tokenizer as _llama3_tokenizer
 
-        if tokenizer == _llama3_tokenizer and split in NEMOTRON_LLAMA3_OVERRIDES:
+        if tokenizer == _llama3_tokenizer and split in NEMOTRON_LLAMA3_OVERRIDES and split not in overrides:
             step = step.with_output_path(NEMOTRON_LLAMA3_OVERRIDES[split])
 
         nemotron_steps[os.path.join("nemotron_cc", split)] = step

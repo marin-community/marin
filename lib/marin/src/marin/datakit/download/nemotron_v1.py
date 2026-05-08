@@ -142,7 +142,12 @@ NEMOTRON_V1_SPLITS: dict[str, str] = {
 }
 
 
-def normalize_nemotron_v1_step(download: StepSpec, *, split: str) -> StepSpec:
+def normalize_nemotron_v1_step(
+    download: StepSpec,
+    *,
+    split: str,
+    max_workers: int | None = None,
+) -> StepSpec:
     """Normalize one Nemotron-CC v1 split.
 
     The download writes dolma-format records ``{id, text, source, format,
@@ -160,4 +165,6 @@ def normalize_nemotron_v1_step(download: StepSpec, *, split: str) -> StepSpec:
         id_field="id",
         file_extensions=(".jsonl.zst",),
         relative_input_path=f"{_NEMOTRON_V1_DATA_ROOT}/{rel_path}",
+        max_workers=max_workers,
+        version="v2",
     )
