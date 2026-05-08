@@ -8407,3 +8407,102 @@ The remaining 3 (all 1e22) are blocked on GCP restoring v5p-256/128/512 to the i
 ### Inference handoff doc
 
 `.agents/handoffs/delphi-midtrain-finished-runs.md` (kept up to date) — has all wandb URLs and HF checkpoint paths in inference-ready form for labmate consumption.
+
+## 2026-05-07 19:07–19:14 UTC — v5p-64 interactive submission, all 3 cells died from placement-collision recurrence
+
+### Setup that landed
+
+- Switched this worktree (`.claude/worktrees/midtrain`) from `worktree-midtrain` to `midtrain_data` branch (the actual experiment branch). Recovered the stashed cron-monitor tick-1-to-35 logbook entries via `git stash pop` and committed them locally as `[logbook] Restore monitor log tick-1-to-35 entries`.
+- Did NOT merge `origin/main` into `midtrain_data`. The placement-bug fix #5490 is server-side (controller binary), so no client-side merge is needed; the 5 conflicts that came up (`experiments/defaults.py`, `lib/iris/src/iris/runtime/jax_init.py`, `lib/marin/src/marin/execution/{executor.py,training/training.py}`, `tests/execution/test_executor.py`) were unrelated churn from main and not worth resolving for this purpose.
+- Added `V5PComputeConfig("v5p-64", per_device_parallelism=4)` to the `1e22-v5` base in `experiments/exp_delphi_math_10b_midtrain.py` (matching the existing `per_device_parallelism=4` pattern → gradient accumulation factor 4 on the 64-chip slice). Committed locally as `[midtrain] Add v5p-64 to 1e22-v5 v5p_compute allowlist`.
+- Did NOT push any of these local commits to `origin/midtrain_data`.
+
+### Submitted at ~19:07–19:11 UTC, all on v5p-64 / us-east5 / interactive priority
+
+| Cell | Job ID | Resume from | RESUME_MIN_STEP |
+|---|---|---|---|
+| p33m67-lr0.83 | `/ahmedah/delphi-1e22-p33m67-lr0p83-v5p64-resume-20260507-190726` | `delphi-1e22-p33m67-32p07b-lr0.83-78fd44` | 6876 |
+| p50m50-lr0.5  | `/ahmedah/delphi-1e22-p50m50-lr0p5-v5p64-resume-20260507-190908`  | `delphi-1e22-p50m50-32p07b-lr0.5-ecfa99`  | 4584 |
+| p50m50-lr0.67 | `/ahmedah/delphi-1e22-p50m50-lr0p67-v5p64-resume-20260507-191041` | `delphi-1e22-p50m50-32p07b-lr0.67-e78260` | 3056 |
+
+Coordinator log on the first job confirmed `Using output path` and `Using run ID` matched the expected namespace, so the resume contract was correct. No new permanent checkpoints were written — train_lm tasks died at JAX init (~20 s in) before checkpoint load, so original temp/perm checkpoints are intact.
+
+### What happened: placement-collision bug fired again, despite #5490 supposedly being live
+
+Lead engineer told us the controller had been restarted with #5490, so we should be safe to submit concurrently. We were not.
+
+All 3 train_lm children FAILED with the **exact** v5p-64 8-task fingerprint from `.agents/ops/iris_placement_bug.md`:
+
+```
+state=failed  failures=1  preemptions=707  worker_failed=7/8
+```
+
+Smoking gun — host overlap between two of the three:
+
+```
+lr0.83 ∩ lr0.5: 8/8 hosts identical:
+  10.202.0.182, 10.202.0.222, 10.202.0.225, 10.202.0.240,
+  10.202.0.255, 10.202.1.8, 10.202.1.9, 10.202.1.11
+lr0.83 ∩ lr0.67: 0 shared
+lr0.5  ∩ lr0.67: 0 shared
+```
+
+Timeline (UTC, 2026-05-07) — this is the dispatch-after-failure race that #5490's commit message describes:
+
+```
+19:11:56.883  lr0.83 train_lm submitted
+19:13:06.097  lr0.83 train_lm started        (host set A)
+19:13:17.967  lr0.67 train_lm submitted
+19:13:22.767  lr0.5  train_lm submitted
+19:13:26.097  lr0.83 task 0 SIGSEGV (+20s)   (failure window opens)
+19:15:38.518  lr0.5  train_lm started        (re-uses host set A → collision)
+19:17:40.975  lr0.67 train_lm started        (host set B; clean)
+```
+
+There is a 2.3-min gap between lr0.83's task 0 SIGSEGV and lr0.5's dispatch. That should have been more than enough for `StopTasks` RPCs to evict lr0.83's still-running cohort siblings, but iris re-allocated the same 8 hosts to lr0.5, which immediately hit the JAX-coordinator port-8476 collision and thrashed for 707 cycles. So either the running controller doesn't actually have #5490 in its binary, or the fix has a gap.
+
+Per-task root errors (consistent with #5470 + possibly #5258 co-firing):
+
+- lr0.83 task 0: `Exit code 139: killed by SIGSEGV. stderr: @ 0x564903bbbcc7 _PyEval_EvalFrameDefault`
+- lr0.5  parent: `connectrpc.errors.ConnectError: Request timed out`
+- lr0.67 task 1: `RPC: /tensorflow.Coordination...` (matches #5258's `PollForError` symptom)
+- All other tasks on each job: `Coscheduled sibling /…/train_lm/0 failed`
+
+Wrote up the comment-ready text in `.agents/ops/iris_op_issue.md` for posting to **#5470 (reopen + comment)** and **#5258 (comment)**. Both start with 🤖 per repo convention; the `agent-generated` label should be applied after posting.
+
+### Plan (per senior engineer): bump `max_task_failures` to gain resiliency
+
+The senior engineer noted he likely won't get to the controller fix tonight and suggested we bump `max_task_failures` on the train_lm child to absorb individual task crashes without killing the parent.
+
+Current state of the code:
+
+- `max_task_failures` is in the iris controller proto (`controller.proto`) and the controller honors it (`max_task_failures=N` lets up to N task failures within a coscheduled gang before the parent is killed; default 0 means "die on the first task failure"). That's why we keep losing the parent on the very first SIGSEGV in a sibling.
+- **None of the client-side code currently exposes it.** `fray.JobRequest` has `max_retries_failure` and `max_retries_preemption` but not `max_task_failures`. `iris.Client.submit()` and `iris.cluster.client.remote_client.submit_job()` don't accept it either, so the field is always sent as 0 on the wire.
+
+Patch plan (LOCAL ONLY — no `git push`):
+
+1. `lib/fray/src/fray/types.py` — add `max_task_failures: int = 0` to `JobRequest`.
+2. `lib/fray/src/fray/iris_backend.py` — forward `max_task_failures=request.max_task_failures` into the iris client `submit()` call (~line 569).
+3. `lib/iris/src/iris/client/client.py:Client.submit` — accept `max_task_failures: int = 0` kwarg, pass through to `_cluster_client.submit_job(...)`.
+4. `lib/iris/src/iris/cluster/client/remote_client.py:submit_job` — accept the kwarg, set `request.max_task_failures = max_task_failures` on the `LaunchJobRequest` proto.
+5. `lib/iris/src/iris/cluster/client/protocol.py` — update Protocol if needed for typing parity.
+6. `lib/marin/src/marin/training/training.py:_submit_training_job` — read new env var `MIDTRAIN_MAX_TASK_FAILURES` (default 0) and pass it as `max_task_failures=...` on the `JobRequest`.
+
+Per-launch tunable: `-e MIDTRAIN_MAX_TASK_FAILURES 100` on the next `iris job run` invocations. Setting it high (100) is intentional — we want to ride out as many task-level crashes as possible while the controller-side fix lands.
+
+Resubmission plan after the patch lands locally:
+
+- Serialize submissions one-at-a-time (don't trust the server fix is in until the engineer confirms).
+- Same RESUME_OUTPUT_PATH / RESUME_MIN_STEP as the 19:07 attempts (steps 6876, 4584, 3056).
+- Add `-e MIDTRAIN_MAX_TASK_FAILURES 100` to each.
+- Wait for `train_lm` child to be `running` with `preemptions=0` for ≥30 s before submitting the next.
+
+### Branch / commit hygiene reminder
+
+- Working on local branch `midtrain_data`. Local commits ahead of `origin/midtrain_data`:
+  1. `[logbook] Restore monitor log tick-1-to-35 entries`
+  2. `[midtrain] Add v5p-64 to 1e22-v5 v5p_compute allowlist`
+  3. (next) iris+fray plumbing for `max_task_failures`
+  4. (next) marin `MIDTRAIN_MAX_TASK_FAILURES` env-var hook
+  5. (this) logbook entry
+- Nothing has been pushed to origin and per the user's instruction nothing should be until the engineer signs off and a real PR cycle happens.
