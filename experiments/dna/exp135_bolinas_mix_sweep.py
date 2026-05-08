@@ -9,13 +9,16 @@ See https://github.com/Open-Athena/bolinas-dna/issues/135 for full context.
 Compares CDS / upstream / downstream training mixture weights at hidden=1920
 (~1.12B params), with optimizer hparams transferred from the v0.6 reference
 sweep via ``CompletedAdamHHeuristic``. Hparams are recomputed per-mix because
-each mix trains on a different total token count (active regions x
-``MAX_EXAMPLES_PER_COMPONENT``).
+each mix trains on a different total token count: region-only mixes
+(``cds_only`` / ``upstream_only`` / ``downstream_only``) train on the full
+per-region dataset (``MAX_TRAIN_EXAMPLES_PER_REGION``), while the uniform mix
+caps each active component at ``UNIFORM_MAX_EXAMPLES_PER_COMPONENT``.
 
-Each active component is capped at ``MAX_EXAMPLES_PER_COMPONENT`` examples (the
-size of the smallest component, ``downstream``). Tokenization names use the
-``-5149`` suffix to create fresh cache keys for the post-issue-5149 fix
-(https://github.com/marin-community/marin/issues/5149).
+Region-only mixes consume the full per-region dataset (the size of the smallest
+component, ``downstream``, is also the uniform-mix per-component cap, so
+``downstream_only`` and uniform-per-region see the same token budget).
+Tokenization names use the ``-5149`` suffix to create fresh cache keys for the
+post-issue-5149 fix (https://github.com/marin-community/marin/issues/5149).
 
 Validation adds 6 metrics on top of the existing 3: each region tokenized with
 functional (uppercase-only) and nonfunctional (lowercase-only) masks per
@@ -38,6 +41,7 @@ from dataclasses import dataclass, replace
 from datetime import timedelta
 
 import jmp
+from fray.cluster import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import DNALmDatasetFormat
 from levanter.eval_harness import LmEvalHarnessConfig
@@ -46,29 +50,37 @@ from levanter.optim import AdamHConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-
-from experiments.defaults import default_tokenize
-from experiments.dna.defaults import dna_effective_seq_len
-from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2_255, convert_to_levanter_task_config
-from experiments.scaling_law_sweeps.completed_adamh import CompletedAdamHHeuristic
-from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.execution.remote import remote
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
+from experiments.defaults import default_tokenize
+from experiments.dna.defaults import dna_effective_seq_len
+from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2_255, convert_to_levanter_task_config
+from experiments.scaling_law_sweeps.completed_adamh import CompletedAdamHHeuristic
+
 # =============================================================================
 # Constants
 # =============================================================================
 
-VERSION = "v0.5"
+VERSION = "v0.9"
 TOKENIZER = "bolinas-dna/tokenizer-char-bos"
 DNA_BASE_SEQ_LEN = 255  # bp (256 - 1 for BOS)
 
-# Smallest training component (``downstream``) has ~20.5M examples; cap each
-# active component at this size for one effective epoch per active region.
+# Uniform mix: cap each active component at the size of the smallest training
+# component (``downstream``, ~20.5M) for one effective epoch per active region.
 # See https://github.com/Open-Athena/bolinas-dna/issues/109.
-MAX_EXAMPLES_PER_COMPONENT = 20_501_856
+UNIFORM_MAX_EXAMPLES_PER_COMPONENT = 20_501_856
+
+# Region-only mixes train on the full per-region dataset; values are the
+# training-example counts of each per-region dataset, so the cap is exactly
+# one epoch over that region.
+MAX_TRAIN_EXAMPLES_PER_REGION: dict[str, int] = {
+    "cds": 242_334_716,
+    "upstream": 68_286_166,
+    "downstream": 20_501_856,
+}
 
 TRAIN_DATASETS = {
     "cds": "bolinas-dna/genomes-v5-genome_set-animals-intervals-v5_255_128",
@@ -309,13 +321,26 @@ def _tokenize(key: str, dataset: str, dataset_format: DNALmDatasetFormat) -> Exe
     )
 
 
-def _max_batches_per_component() -> int:
-    return MAX_EXAMPLES_PER_COMPONENT // BATCH_SIZE
+def _train_example_caps(mix: MixConfig) -> dict[str, int]:
+    """Per-region training-example cap for this mix.
+
+    Region-only mixes (single active region) cap at the region's full dataset
+    size (``MAX_TRAIN_EXAMPLES_PER_REGION``). Multi-region mixes (uniform) cap
+    each active component at ``UNIFORM_MAX_EXAMPLES_PER_COMPONENT``.
+    """
+    if len(mix.active_regions) == 1:
+        region = mix.active_regions[0]
+        return {region: MAX_TRAIN_EXAMPLES_PER_REGION[region]}
+    return {region: UNIFORM_MAX_EXAMPLES_PER_COMPONENT for region in mix.active_regions}
+
+
+def _train_batch_caps(mix: MixConfig) -> dict[str, int]:
+    return {region: cap // BATCH_SIZE for region, cap in _train_example_caps(mix).items()}
 
 
 def _full_num_train_steps(mix: MixConfig) -> int:
     """Steps for one effective epoch over active regions, ignoring warmup truncation."""
-    return len(mix.active_regions) * _max_batches_per_component()
+    return sum(_train_batch_caps(mix).values())
 
 
 def _num_train_steps(mix: MixConfig) -> int:
@@ -342,11 +367,10 @@ def _build_data_mixture(mix: MixConfig):
             key = f"{region_key}_{spec.suffix}" if spec.suffix else region_key
             components[key] = _tokenize(key, dataset, spec.format)
     train_weights = {region: mix.weights[region] for region in mix.active_regions}
-    cap = _max_batches_per_component()
     return lm_mixture_data_config(
         components=components,
         weights=train_weights,
-        max_train_batches={region: cap for region in mix.active_regions},
+        max_train_batches=_train_batch_caps(mix),
     )
 
 
