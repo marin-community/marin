@@ -110,18 +110,24 @@ VAL_SPECS: tuple[tuple[str, DNALmDatasetFormat], ...] = (
 # endpoints of the AdamH-calibrated regime.
 MODEL_HIDDEN_SIZES: tuple[int, ...] = (1920, 2944)
 
-# Resources & batching. v6e-4 / europe-west4-a matches exp109's parameter
-# scaling sweep, so 1B and 4B are directly comparable on wall-clock,
-# throughput, and sample efficiency.
+# Resources & batching. Originally targeted v6e-4 to match exp109's parameter
+# scaling sweep, but on v6e-4 (~31 GB HBM/chip) both 1B@PDP=1024 and 4B@PDP=512
+# OOM on this dataset (HBM requirement ~46-49 GB after XLA padding/fragmentation
+# even though unpadded tensors are <26 GB). Switched to v5p-8 (us-east5-a), the
+# same shape exp135 ran 1B on successfully. v5p-8 has ~95 GB HBM/chip, so the
+# current PDP map (below) fits comfortably with room to spare.
+# Trade-off: we lose direct wall-clock / throughput comparability with exp109,
+# but the science (loss curves, eval AUPRC, LL gap) is identical.
 BATCH_SIZE = 8192
-TPU_TYPES: tuple[str, ...] = ("v6e-4",)
+TPU_TYPES: tuple[str, ...] = ("v5p-8",)
 
-# Per-device parallelism per hidden size. 4B at PDP=1024 OOMed on v6e-4 in the
-# first prod-v0.2 launch (allocation 41.7 GB for the bf16[29, 1024, 256, 2944]
-# activations tensor exceeded the 31.5 GB per-chip HBM); halve to 512. 1B fits
-# at 1024. Gradient accumulation absorbs the difference (4B: 4 microbatches/step
-# vs 1B: 2 microbatches/step) — effective batch size is BATCH_SIZE for both, so
-# training dynamics are unchanged; only per-step wall-clock differs slightly.
+# Per-device parallelism per hidden size. Conservative settings that fit on
+# v6e-4 once the cap stops applying — kept as-is for v5p-8 (which has 3x the
+# HBM/chip), giving comfortable headroom. Could be raised on v5p-8 to 1024
+# for both for slightly better throughput, but no science reason to.
+# Gradient accumulation absorbs the difference (4B: 4 microbatches/step vs
+# 1B: 2 microbatches/step) — effective batch size is BATCH_SIZE for both,
+# so training dynamics are mathematically identical regardless of PDP.
 PER_DEVICE_PARALLELISM_BY_HIDDEN: dict[int, int] = {
     1920: 1024,
     2944: 512,
