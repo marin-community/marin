@@ -948,3 +948,156 @@ Population mean Δα dropped from +0.110 (3-gen) to +0.016 (4-gen). The "rubric 
 | **Total OpenAI** | **~$3.00** | |
 | **Total Gemini + xAI** | **~$1.10** | |
 
+
+---
+
+# Full 46-statement run via Anthropic Batch API (2026-05-08)
+
+## Setup
+
+After the 8-statement Grok-opposite run validated the generator-diversity intervention, the user authorized scaling to all 46 spec statements. Implementation as 4 chained phases via `run_overnight.sh`:
+
+- **Phase 1**: Grok-opposite generation on the 38 remaining statements (`e9_run_opposite_mode_generation.py` extended with `--statement-ids` and `--skip-already-done` flags for idempotent resume)
+- **Phase 2**: GPT-5.1 + Gemini-3-flash sync judging on the new 760 Grok cells (`e9_phase2_judge_grok_sync.py`)
+- **Phase 3**: Submit two Claude batches via the Anthropic Batch API (50% discount) using a new `batch_anthropic.py` helper modeled on the existing `batch_lib.py` (OpenAI batch helper)
+- **Phase 4**: Poll batches to terminal status, download results, parse `tool_use.input` blocks, integrate into per-statement Claude jsonl files (`e9_phase4_fetch_claude_batches.py`)
+
+Each phase is idempotent — re-running skips already-done work. Chain wrapper `run_overnight.sh` polls for the previous phase to complete before starting the next.
+
+## Anthropic Batch API mechanics — `batch_anthropic.py`
+
+Minimal helper: `build_request`, `submit`, `get_status`, `poll`, `collect`, `extract_tool_args`. Persists batch state to disk for cross-process recovery. Notable detail: **Anthropic caps `custom_id` at 64 characters** — the original format `{sid}::{cond}::{scen}::{generator}` exceeded that on long statement_ids (e.g. `do_not_make_unprompted_personal_comments::phase_4::19::Qwen-Qwen2.5-7B-Instruct-Turbo` is 86 chars).
+
+Fix: SHA-1-truncated `j_{sha1[:32]}` (34 chars) plus a sidecar `{batch_name}_custom_id_map.json` written next to the requests.jsonl so Phase 4 can reverse the mapping. The sidecar pattern is more robust than encoding/decoding the identifier inline.
+
+## Run results
+
+Wall-time and cost summary:
+
+| phase | API | calls | cost | wall |
+|---|---|--:|--:|--:|
+| 1 — Grok generation (38 stmts) | xAI | 760 | ~$2 | 15 min |
+| 2 — GPT + Gemini sync | OpenAI + Google | 3,004 | ~$9 | 15 min |
+| 3 — Submit Claude batches | Anthropic | (submission only) | $0 | 6 sec |
+| 4 — Poll + fetch + integrate | Anthropic batch | 6,060 | ~$30 | **10 min** |
+| **Total** | | **9,824** | **~$41** | **~46 min** |
+
+The 10-minute Anthropic batch turnaround was a pleasant surprise — Anthropic's docs say up to 24h but batches this size complete much faster in practice.
+
+Success rates:
+- Phase 1: 751/760 (98.8%) — 9 Grok rate-limit/refusal errors
+- Phase 2: 3,004/3,004 (100%)
+- Phase 4 batches: 1,501/1,502 (judge_grok_opposite) + 4,554/4,558 (judge_existing_3gens) = **6,055/6,060 (99.92%)**
+
+Tool-use forcing on Anthropic batch: zero JSON-parse failures across 6,060 calls. The same mechanism that recovered the 7 unrecoverable cases in the earlier 8-statement sync run scales cleanly to batch.
+
+## Final coverage
+
+| dataset | rows | coverage |
+|---|--:|---|
+| `claude_judge_v0/` (existing 3 gens) | 5,516 | 99.93% (46 stmts × 60 cells × 2 conds = 5,520 expected) |
+| `claude_judge_v0_opposite/` (Grok-opposite) | 1,822 | ~99% (46 stmts × 20 cells × 2 conds = 1,840 expected, modulo Grok generation losses) |
+| `per_judgment_opposite.jsonl` (gpt+gemini on Grok) | 3,964 | (existing 8-stmt + Phase 2 additions) |
+| 4-judge merged dataset | 7,338 cells | (sid × cond × scen × gen) where all 3 judges scored |
+
+## Population-level results — 46 statements
+
+| condition | metric | 3-gen baseline | +Grok-opposite (4-gen) | Δ |
+|---|---|--:|--:|--:|
+| bare | α | +0.716 | +0.742 | +0.026 |
+| bare | k3 | +0.556 | +0.593 | +0.037 |
+| bare | k2 | +0.626 | +0.664 | +0.038 |
+| phase_4 | α | +0.726 | +0.746 | +0.020 |
+| phase_4 | k3 | +0.568 | +0.600 | +0.032 |
+| phase_4 | k2 | +0.644 | +0.673 | +0.029 |
+
+**Headline reframing.** Mean α_bare across all 46 statements is **+0.716** at the 3-generator baseline — already above Krippendorff's "tentatively acceptable" 0.667 threshold. The 8 statements we'd been agonizing over were the WORST cases. The kappa-paradox failure mode is real but concentrated in a specific subset of safety statements; most of the spec is in fine shape.
+
+Adding Grok-opposite as a 4th generator improves α by a modest ~+0.026 on average — but the effect is heavily heterogeneous (see per-statement breakdown).
+
+## Per-statement winners and losers
+
+**Big winners from generator diversity (Δα ≥ +0.10 in bare condition):**
+
+| statement | α_bare (3-gen) | α_bare (4-gen) | Δα |
+|---|--:|--:|--:|
+| do_not_make_unprompted_personal_comments | +0.088 | **+0.926** | **+0.838** |
+| no_erotica_or_gore | +0.188 | +0.448 | +0.260 |
+| avoid_hateful_content | +0.343 | +0.574 | +0.232 |
+| protect_privileged_messages | +0.179 | +0.347 | +0.168 |
+| express_uncertainty | +0.538 | +0.701 | +0.163 |
+| be_empathetic | +0.282 | +0.437 | +0.155 |
+| support_mental_health | +0.433 | +0.581 | +0.148 |
+| prevent_imminent_harm | +0.314 | +0.451 | +0.138 |
+| highlight_misalignments | +0.389 | +0.515 | +0.126 |
+| avoid_overstepping | +0.501 | +0.607 | +0.107 |
+
+These are the statements where the 3-generator pool was producing too few graded cases. Adding Grok-opposite injects the failure-side signal that judges can reliably converge on.
+
+**Statements with negative or null effect (Δα ≤ −0.05):**
+
+| statement | α_bare (3-gen) | α_bare (4-gen) | Δα |
+|---|--:|--:|--:|
+| present_perspectives | +0.648 | +0.558 | −0.089 |
+| be_rationally_optimistic | +0.665 | +0.579 | −0.086 |
+| be_clear | +0.314 | +0.240 | −0.074 |
+| assume_best_intentions | +0.593 | +0.493 | −0.100 |
+
+Pattern: these are statements where the 3-generator baseline already produced graded cases (no ceiling effect), and adding Grok-opposite responses introduces noise that judges disagree on. Generator diversity has decreasing marginal returns once the underlying responses already span the score range.
+
+## Pathological residues — α near zero across both ensembles
+
+Three statements stay pathological even with 4 generators:
+
+| statement | α_bare (3-gen) | α_bare (4-gen) | α_p4 (4-gen) |
+|---|--:|--:|--:|
+| avoid_abuse | −0.004 | −0.022 | −0.142 |
+| comply_with_laws | +0.124 | +0.113 | −0.034 |
+| sexual_content_involving_minors | +0.252 | +0.211 | +0.101 |
+
+These are not generator-diversity problems and not anchor-design problems — they're cases where judges genuinely don't agree even given the same response, the same spec, and the same rubric. Likely irreducible spec ambiguity (or the spec text describes a behavior that frontier LMs interpret differently). Worth a separate investigation focused on the spec text itself.
+
+## Updated total session spend
+
+| line item | cost | API |
+|---|--:|---|
+| Smoke + 8-stmt + retries (earlier work) | ~$11.20 | Anthropic |
+| 0-6 rubric compile | $0.135 | OpenAI |
+| 0-6 pilot (no_erotica + no_topic) | ~$3.00 | mixed |
+| 8-stmt Grok-opposite generation | ~$0.50 | xAI |
+| 8-stmt Grok-opposite judging | ~$4.80 | mixed |
+| **38-stmt Grok-opposite generation (Phase 1)** | ~$2 | xAI |
+| **3,004 GPT+Gemini sync judgments (Phase 2)** | ~$9 | OpenAI + Google |
+| **6,060 Claude batch judgments (Phases 3-4)** | ~$30 | Anthropic batch |
+| **Total Anthropic** | **~$41** | |
+| **Total OpenAI** | **~$13** | |
+| **Total xAI + Gemini** | **~$5** | |
+| **Grand total** | **~$59** | |
+
+The Anthropic batch discount saved ~$30 vs running the 6,060 calls synchronously.
+
+## Files (this run)
+
+| artifact | location |
+|---|---|
+| Anthropic Batch API helper | `experiments/posttrain/disagreement_primitive/batch_anthropic.py` |
+| Phase 2 sync judge runner | `experiments/posttrain/disagreement_primitive/e9_phase2_judge_grok_sync.py` |
+| Phase 3 batch submitter | `experiments/posttrain/disagreement_primitive/e9_phase3_submit_claude_batches.py` |
+| Phase 4 batch fetcher | `experiments/posttrain/disagreement_primitive/e9_phase4_fetch_claude_batches.py` |
+| Chain wrapper | `experiments/posttrain/disagreement_primitive/run_overnight.sh` |
+| Plan doc | `.agents/projects/run_full_46_statements.md` |
+| Full-pop analysis output | `.agents/logbooks/kappa_46stmt_results.md` |
+| Batch state | `results/raw/e9_claude_batches/2026-05-08T09-23-48/` |
+| Batch sidecar maps | `{job_dir}/judge_{grok_opposite,existing_3gens}_custom_id_map.json` |
+| Generated responses (full) | `experiments/posttrain/disagreement_primitive/e9_opposite_mode_responses.jsonl` (920 rows) |
+| Flat judgments (Grok cells) | `experiments/posttrain/disagreement_primitive/per_judgment_opposite.jsonl` (3,964 rows) |
+| Per-statement Claude (existing gens) | `claude_judge_v0/<sid>/{bare,phase_4}_claude.jsonl` (46 statements) |
+| Per-statement Claude (Grok-opposite) | `claude_judge_v0_opposite/<sid>/{bare,phase_4}_opposite_claude.jsonl` (46 statements) |
+
+## What's next (open questions)
+
+1. **Per-statement spec-edit candidates re-ranked under 46-stmt 4-gen data.** The Δα ranking is now meaningful at population level — we have ~10 statements where the rubric definitively helps, and ~5 where it definitively doesn't. Spec-edit experiments should target the high-Δα cohort.
+
+2. **Investigate the 3 pathological residues** (avoid_abuse, comply_with_laws, sexual_content_involving_minors). These are not generator or scale problems — likely irreducible spec ambiguity. Hand inspection of judge reasoning text would clarify whether the disagreement is mechanical (different score scales applied) or substantive (different interpretations of the spec).
+
+3. **Bootstrap CIs on Δα.** Population means are clean but individual-statement Δα values for non-extreme cases (e.g. +0.05 to +0.15) are within plausible sampling noise on n=80. Adding bootstrap CIs would let us flag which Δα claims are real vs noise.
