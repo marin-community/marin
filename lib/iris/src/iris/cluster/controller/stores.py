@@ -1658,17 +1658,22 @@ class WorkerStore:
         post-commit hook registers the worker in the liveness tracker so
         memory state advances with the DB row.
         """
+        # ``committed_*`` are scheduler-owned but listed here so legacy DBs (where
+        # the columns were originally created NOT NULL with no DEFAULT, before
+        # MAIN_TABLES gained "DEFAULT 0") accept the INSERT. ON CONFLICT DO UPDATE
+        # does not touch them, so re-registration never clobbers running totals.
         cur.execute(
             "INSERT INTO workers("
             "worker_id, address, "
+            "committed_cpu_millicores, committed_mem_bytes, committed_gpu, committed_tpu, "
             "total_cpu_millicores, total_memory_bytes, total_gpu_count, total_tpu_count, "
             "device_type, device_variant, slice_id, scale_group, "
             "md_hostname, md_ip_address, md_cpu_count, md_memory_bytes, md_disk_bytes, "
             "md_tpu_name, md_tpu_worker_hostnames, md_tpu_worker_id, md_tpu_chips_per_host_bounds, "
             "md_gpu_count, md_gpu_name, md_gpu_memory_mb, "
             "md_gce_instance_name, md_gce_zone, md_git_hash, md_device_json"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            ") VALUES (?, ?, 0, 0, 0, 0, ?, ?, ?, ?, "
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(worker_id) DO UPDATE SET "
             "address=excluded.address, "
             "total_cpu_millicores=excluded.total_cpu_millicores, total_memory_bytes=excluded.total_memory_bytes, "
