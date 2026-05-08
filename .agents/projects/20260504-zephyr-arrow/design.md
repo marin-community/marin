@@ -76,5 +76,23 @@ We should move to using Arrow as the internal format for Zephyr and expose Arrow
 - **User-code needs to be migrated to Polars**. To get the bulk of the speedup, we'll need to migrate user-code in the pipelines to Polars. Representing things in Polars is more cumbersome than raw Python.
 - **Change in the hashing function**. The Polars hash function is different than the one currently implemented. This means we can't change this while a job is running or read old scatter files, which should be totally fine (but Claude is very worried about).
 - **Per-buffer zstd vs whole-file zstd compression ratio.** PyArrow IPC's `compression='zstd'` is worse than the current whole-batch `cloudpickle.dump → zstd.compress` flow. Could increase shuffle bytes 1.2-1.5x in the worst case. We should benchmark this. See [research §11.1](./research.md#11-surprise-areas-worth-a-small-benchmark-before-committing).
+- **Polars and Arrow Compatibility** any Polars IPC write consumed by PyArrow must pass `compat_level=pl.CompatLevel.oldest()`. Without it, Polars emits `string_view`/`binary_view` types that PyArrow 22 cannot sort, filter, or compare on. (This is also faster — 19ms vs 31ms — and slightly smaller.) Also, `string` columns roundtripped through Polars come back as `large_string`; use `promote_options='permissive'` on any subsequent `pa.concat_tables`.
+
+## PyArrow vs Polars
+
+
+From the research in [pyarrow_vs_polars.md](pyarrow_vs_polars.md) (summarized in the table below) Polars seems like a better fit for our use case, since the bulk of the time is spent processing data versus reading and writing it. The Lazy API also opens up some possible improvements for streaming data as well.
+
+| Criterion | PyArrow | Polars |
+|---|---|---|
+| Efficiency (sort, filter) | 391ms / 6ms | ✅ 20ms / 1ms |
+| Efficiency (group-by, string ops) | ✅ ~equal | ✅ ~equal |
+| API: scatter routing (`partition_by`, `hash`) | ❌ no API | ✅ built-in |
+| API: join | ❌ no sorted-merge join | ✅ built-in |
+| API: expression ergonomics | functional (`pc.and_(...)`) | ✅ operator overloading |
+| IPC read/write speed | ✅ faster (9ms uncompressed) | slower (19–31ms) |
+| IPC type safety (no `string_view` trap) | ✅ always safe | ⚠️ needs `compat_level=oldest()` |
+| Zero-copy with Arrow (numerics) | ✅ is Arrow | ✅ yes |
+| Zero-copy with Arrow (strings) | ✅ is Arrow | ❌ copies to StringView |
 ## Future work
 Once this is complete, we can return to [zephyr-performance](../20260430-zephyr-performance/design.md) and implement the parallelization improvements there and actually realize the benefit, since the GIL will not limit multithreading in *Arrow-native* stages.
