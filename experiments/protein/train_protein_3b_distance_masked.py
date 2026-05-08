@@ -29,7 +29,7 @@ Usage::
         python -m experiments.protein.train_protein_3b_distance_masked
 """
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from levanter.models.llama import LlamaConfig
 
 from experiments.protein.protein_train_common import build_distance_masked_train_step

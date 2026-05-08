@@ -110,52 +110,72 @@ class EvalVariant:
 
 # ---- Configuration ----
 
-# Add an entry per training run as its HF export completes. ``hf_checkpoint_path``
-# is the directory written by ``export_protein_<size>_distance_masked.py``
-# (i.e. the marin auto-computed `hf/...-step-50000-<hash>` path), or any other
-# HF checkpoint (e.g. an intermediate-step export).
+# Add an entry per training run. Each entry can specify either an HF checkpoint
+# directory (legacy snapshot-1 path) or a Levanter checkpoint directory (the
+# eval container converts it to HF in-place on CPU before vLLM loads).
+# ``model_label`` includes the rough training step at the time of submission;
+# the actual checkpoint loaded is the latest one found by
+# ``discover_latest_checkpoint`` when the eval container starts.
 #
-# The existing 1B run's HF checkpoint already exists at the path below; the
-# rest are placeholders to be filled in once exports finish.
-# Snapshot timestamp: 2026-05-01 13:30 UTC. Each ``model_label`` includes the
-# rough training step where the HF export was taken, so multiple snapshots per
-# size can coexist as we re-export at later checkpoints.
+# Snapshot 7 (2026-05-08 ~15:40 UTC): bumped 4 still-training models to latest
+# checkpoints. Focus question: are the unmasked variants catching up to the
+# masked variants? Critical for the 1b_all_docs run (which is unmasked) — if
+# unmasked never catches up at any size, the all-docs experiment is a long
+# shot. Step numbers in ``model_label`` are approximate;
+# ``discover_latest_checkpoint`` resolves whatever's loadable at submit time.
 EVAL_RUNS: list[EvalRunEntry] = [
     EvalRunEntry(
-        model_label="1b-step-31337",
-        hf_checkpoint_path=(
-            "gs://marin-us-east5/checkpoints/protein-contacts-1b-3.5e-4-distance-masked-7d355e/hf/step-31337"
-        ),
-    ),
-    EvalRunEntry(
-        # Already exported successfully on 2026-05-01 at the older 153e41 hash
-        # (before the checkpoint_path_override change). Reusing it directly.
+        # Finished at step-50000. Unchanged.
         model_label="30m-step-50000",
-        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-30m-distance-masked-step-50000-153e41",
+        levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-30m-distance-masked-a7457a/checkpoints",
+        levanter_model_spec="experiments.protein.train_protein_30m_distance_masked.protein_llama_30m",
     ),
     EvalRunEntry(
-        model_label="100m-step-20000",
-        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-100m-distance-masked-step-20000-b5539f",
+        # Finished at step-50000. Unchanged.
+        model_label="100m-step-50000",
+        levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-100m-distance-masked-917586/checkpoints",
+        levanter_model_spec="experiments.protein.train_protein_100m_distance_masked.protein_llama_100m",
     ),
     EvalRunEntry(
-        model_label="400m-step-7000",
-        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-400m-distance-masked-step-7000-91fa33",
+        # Finished at step-49999. Final eval loss=1.0455, bpb=0.1115.
+        model_label="400m-step-50000",
+        levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-400m-distance-masked-0de2c1/checkpoints",
+        levanter_model_spec="experiments.protein.train_protein_400m_distance_masked.protein_llama_400m",
     ),
     EvalRunEntry(
-        model_label="420m_deep-step-5000",
-        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-420m-deep-distance-masked-step-5000-81fbbb",
+        # Recovered fully from divergence; eval@47000 loss=1.232.
+        model_label="420m_deep-step-47000",
+        levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-420m-deep-distance-masked-81e865/checkpoints",
+        levanter_model_spec="experiments.protein.train_protein_420m_deep_distance_masked.protein_llama_420m_deep",
     ),
     EvalRunEntry(
-        model_label="1_5b-step-2500",
-        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-1_5b-distance-masked-step-2500-91d41a",
+        # Latest eval@26500 loss=1.075.
+        model_label="1_5b-step-27000",
+        levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-1_5b-distance-masked-70f8f5/checkpoints",
+        levanter_model_spec="experiments.protein.train_protein_1_5b_distance_masked.protein_llama_1_5b",
     ),
     EvalRunEntry(
-        model_label="3b-step-1000",
-        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-3b-distance-masked-step-1000-bd8398",
+        # Latest eval@11500 loss=1.244 — slow but progressing.
+        model_label="3b-step-11500",
+        levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-3b-distance-masked-ef3aa5/checkpoints",
+        levanter_model_spec="experiments.protein.train_protein_3b_distance_masked.protein_llama_3b",
     ),
     EvalRunEntry(
-        model_label="1b_unmasked-step-3500",
-        hf_checkpoint_path="gs://marin-us-east5/hf/protein-contacts-1b-3.5e-4-unmasked-step-3500-d6a8ed",
+        # 1B distance-masked finished at step-49999. Final eval loss=1.029.
+        model_label="1b-step-49999",
+        hf_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-1b-3.5e-4-distance-masked-7d355e/hf/step-49999",
+    ),
+    EvalRunEntry(
+        # Latest eval@40000 loss=2.531.
+        model_label="1b_unmasked-step-40000",
+        levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-1b-3.5e-4-unmasked-8efbcb/checkpoints",
+        levanter_model_spec="experiments.protein.train_protein_1b_unmasked.protein_llama_1b",
+    ),
+    EvalRunEntry(
+        # Run finished at step-50000. Unchanged.
+        model_label="100m_unmasked-step-50000",
+        levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-100m-3.5e-4-unmasked-7c3ef7/checkpoints",
+        levanter_model_spec="experiments.protein.train_protein_100m_unmasked.protein_llama_100m",
     ),
 ]
 
@@ -231,6 +251,7 @@ def build_iris_command(run: EvalRunEntry, target: EvalTarget, variant: EvalVaria
         f"--config={IRIS_CONFIG}",
         "job",
         "run",
+        "--enable-extra-resources",
         "--tpu=v5p-8",
         "--memory=64GB",
         "--disk=64GB",

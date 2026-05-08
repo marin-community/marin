@@ -699,6 +699,21 @@ def _try_load_tokenizer_from_dir(local_dir: str) -> bool:
         return False
 
 
+def _parse_repo_revision(name_or_path: str) -> tuple[str, str | None]:
+    """Split ``"repo@revision"`` into ``("repo", "revision")``.
+
+    Without ``@``, returns ``(name_or_path, None)``. Used to support pinning
+    HF Hub repos to a specific commit/branch/tag while keeping the public
+    ``load_tokenizer(name)`` API string-based: the revision is encoded in the
+    name and propagates into the local cache key, so different revisions of
+    the same repo don't share a stale cache entry.
+    """
+    if "@" not in name_or_path:
+        return name_or_path, None
+    repo, _, revision = name_or_path.partition("@")
+    return repo, revision or None
+
+
 def _stage_from_mirror(name_or_path: str, local_dir: str) -> bool:
     """Copy tokenizer files from mirror:// to *local_dir*.
 
@@ -740,7 +755,12 @@ def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
     Raises ``RepositoryNotFoundError`` / ``OSError`` if the repo or
     network is unreachable (matches pre-mirror behaviour).
     """
-    snapshot_dir = snapshot_download(name_or_path, allow_patterns=_TOKENIZER_ALLOW_PATTERNS)
+    repo, revision = _parse_repo_revision(name_or_path)
+    snapshot_dir = snapshot_download(
+        repo,
+        revision=revision,
+        allow_patterns=_TOKENIZER_ALLOW_PATTERNS,
+    )
 
     mirror_base = f"mirror://{_MIRROR_TOKENIZER_PREFIX}/{name_or_path}/hf-hub-{_hf_hub_version}"
 

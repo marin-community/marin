@@ -31,12 +31,22 @@ from levanter.trainer import TrainerConfig
 from experiments.defaults import default_tokenize, default_train
 from experiments.protein.create_protein_tokenizer import create_protein_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from marin.execution.executor import ExecutorStep, output_path_of, versioned
 from marin.export import convert_checkpoint_to_hf_step
 from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
-PROTEIN_TOKENIZER = "timodonnell/protein-docs-tokenizer"
+# Pinned to the legacy 2840-vocab revision of protein-docs-tokenizer. Required
+# because the all-doc-types training run (see ``train_protein_1b_all_docs_unmasked``)
+# briefly pushed a 2849-vocab version to this same repo URL on 2026-05-06,
+# poisoning the local tokenizer cache on iris workers; pinning a specific
+# commit forces a fresh fetch into a revision-keyed cache dir, sidestepping
+# the stale-cache problem. The 2849 vocab now lives at
+# ``timodonnell/protein-docs-all-doc-types-tokenizer`` for the new run.
+#
+# Pinning is supported by levanter's load_tokenizer via a ``repo@revision``
+# suffix; cache key includes the revision so different revs don't collide.
+PROTEIN_TOKENIZER = "timodonnell/protein-docs-tokenizer@83f597d88e9b"
 DISTANCE_TOKEN_ID: int = create_protein_tokenizer().convert_tokens_to_ids("<distance>")
 
 # A distance statement is 6 tokens: <distance> <p_i> <p_j> <atom_i> <atom_j> <d_value>.
@@ -70,18 +80,32 @@ PROTEIN_RESOURCES_USE5 = ResourceConfig.with_tpu(
     zone="us-east5-a",
 )
 
-protein_docs_tokenized = default_tokenize(
-    name="protein-docs-cd",
-    dataset=f"{HF_DATASET_BASE}/train/",
-    tokenizer=PROTEIN_TOKENIZER,
-    format=TextLmDatasetFormat(text_key="document"),
+# Pin the tokenize-step output paths to the EXISTING cache directories so
+# that pinning ``PROTEIN_TOKENIZER`` to a specific revision (which changes
+# the executor hash for these steps) doesn't force a from-scratch retokenize
+# of ~125M sequences. The existing caches were tokenized with the same
+# vocab content (legacy 2840) so the bytes are reusable.
+_PROTEIN_DOCS_CD_CACHE = "gs://marin-us-east5/tokenized/protein-docs-cd-763252"
+_PROTEIN_DOCS_CD_VAL_CACHE = "gs://marin-us-east5/tokenized/protein-docs-cd-val-33837a"
+
+protein_docs_tokenized = dataclasses.replace(
+    default_tokenize(
+        name="protein-docs-cd",
+        dataset=f"{HF_DATASET_BASE}/train/",
+        tokenizer=PROTEIN_TOKENIZER,
+        format=TextLmDatasetFormat(text_key="document"),
+    ),
+    override_output_path=_PROTEIN_DOCS_CD_CACHE,
 )
-protein_docs_val_tokenized = default_tokenize(
-    name="protein-docs-cd-val",
-    dataset=f"{HF_DATASET_BASE}/val/",
-    tokenizer=PROTEIN_TOKENIZER,
-    format=TextLmDatasetFormat(text_key="document"),
-    is_validation=True,
+protein_docs_val_tokenized = dataclasses.replace(
+    default_tokenize(
+        name="protein-docs-cd-val",
+        dataset=f"{HF_DATASET_BASE}/val/",
+        tokenizer=PROTEIN_TOKENIZER,
+        format=TextLmDatasetFormat(text_key="document"),
+        is_validation=True,
+    ),
+    override_output_path=_PROTEIN_DOCS_CD_VAL_CACHE,
 )
 
 

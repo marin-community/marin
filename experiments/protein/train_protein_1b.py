@@ -23,13 +23,14 @@ from levanter.models.llama import LlamaConfig
 from experiments.defaults import default_tokenize, default_train
 from experiments.protein.protein_distogram_eval import distogram_eval_benchmark
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from marin.execution.executor import executor_main, versioned
 from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 # -- Tokenizer (must be pushed to HF Hub before running) --
 
-PROTEIN_TOKENIZER = "timodonnell/protein-docs-tokenizer"
+# See protein_train_common.PROTEIN_TOKENIZER for the pinning rationale.
+PROTEIN_TOKENIZER = "timodonnell/protein-docs-tokenizer@83f597d88e9b"
 
 # -- Resources --
 

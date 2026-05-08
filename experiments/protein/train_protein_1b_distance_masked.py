@@ -34,7 +34,7 @@ from experiments.protein.protein_train_common import (
     distance_masked_components,
 )
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from marin.execution.executor import executor_main, versioned
 
 # -- Resources --
