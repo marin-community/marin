@@ -729,8 +729,9 @@ def _resolve_task_failure_state(
 
 # Per-job RunTaskRequest templates are cached on ``ControllerTransitions``.
 # 4096 templates ~= worst-case concurrent job count we expect in a single
-# controller process. New job_ids (including replacements that pick a fresh
-# id) push old entries out via LRU; manual invalidation is unnecessary.
+# controller process. Same-name replacement reuses the original ``job_id``,
+# so ``submit_job`` evicts the cached entry before inserting the new row to
+# prevent serving the prior submission's payload.
 RUN_REQUEST_TEMPLATE_CACHE_SIZE = 4096
 
 
@@ -765,6 +766,10 @@ class _LRUCache(Generic[_K, _V]):
                 self._items.popitem(last=False)
             return value
 
+    def pop(self, key: _K) -> None:
+        with self._lock:
+            self._items.pop(key, None)
+
 
 class ControllerTransitions:
     """State machine for controller entities.
@@ -784,9 +789,6 @@ class ControllerTransitions:
     ):
         self._store = store
         self._health = health or WorkerHealthTracker()
-        # Per-job RunTaskRequest templates. Same-name replacement assigns a
-        # new ``job_id`` so the cache key naturally rolls; no manual
-        # invalidation needed.
         self._run_template_cache: _LRUCache[str, job_pb2.RunTaskRequest] = _LRUCache(RUN_REQUEST_TEMPLATE_CACHE_SIZE)
 
     def run_request_template(
@@ -902,6 +904,10 @@ class ControllerTransitions:
         ts: Timestamp,
     ) -> SubmitJobResult:
         """Insert the job row and expand its tasks. Caller owns the transaction."""
+        # Same-name replacement reuses ``job_id``; drop any stale cached
+        # template before the new row's fields land in the DB.
+        self._run_template_cache.pop(job_id.to_wire())
+
         submitted_ms = ts.epoch_ms()
         created_task_ids: list[JobName] = []
 
