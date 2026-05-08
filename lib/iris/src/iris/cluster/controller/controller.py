@@ -67,6 +67,7 @@ from iris.cluster.controller.codec import (
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
     ControllerDB,
+    SchedulableWorker,
     healthy_active_workers_with_attributes,
     insert_task_profile,
     job_scheduling_deadline,
@@ -80,7 +81,6 @@ from iris.cluster.controller.scheduler import (
     Scheduler,
     SchedulingContext,
     WorkerCapacity,
-    WorkerSnapshot,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
@@ -96,7 +96,6 @@ from iris.cluster.controller.schema import (
     TaskDetailRow,
     TaskRow,
     WorkerDetailRow,
-    WorkerRow,
     proto_decoder,
     tasks_with_attempts,
 )
@@ -114,7 +113,7 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
     log_event,
 )
-from iris.cluster.controller.worker_health import WorkerCommitTracker, WorkerHealthTracker
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.types import find_free_port, resolve_external_host
@@ -201,7 +200,7 @@ class _SchedulingStateRead:
     """Snapshot of pending tasks and workers read at the start of a scheduling cycle."""
 
     pending_tasks: list[TaskRow]
-    workers: list[WorkerRow]
+    workers: list[SchedulableWorker]
     state_read_ms: int
 
 
@@ -245,7 +244,7 @@ def job_requirements_from_job(job: JobSchedulingRow) -> JobRequirements:
 def compute_demand_entries(
     queries: ControllerDB,
     scheduler: Scheduler | None = None,
-    workers: list[WorkerSnapshot] | None = None,
+    workers: list[SchedulableWorker] | None = None,
     reservation_claims: dict[WorkerId, ReservationClaim] | None = None,
 ) -> list[DemandEntry]:
     """Compute demand entries for the autoscaler from controller state.
@@ -708,7 +707,7 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
     return {task.task_id: task for task in tasks_with_attempts(tasks, attempts)}
 
 
-def _building_counts(queries: ControllerDB, workers: list[WorkerRow]) -> dict[WorkerId, int]:
+def _building_counts(queries: ControllerDB, workers: list[SchedulableWorker]) -> dict[WorkerId, int]:
     """Count tasks in BUILDING or ASSIGNED state per worker, excluding reservation-holder jobs."""
     if not workers:
         return {}
@@ -763,7 +762,7 @@ def _task_worker_mapping(queries: ControllerDB, task_ids: set[JobName]) -> dict[
 
 
 def _worker_matches_reservation_entry(
-    worker: WorkerRow,
+    worker: SchedulableWorker,
     res_entry: job_pb2.ReservationEntry,
 ) -> bool:
     """Check if a worker is eligible for a reservation entry.
@@ -785,9 +784,9 @@ def _worker_matches_reservation_entry(
 
 
 def _inject_reservation_taints(
-    workers: list[WorkerRow],
+    workers: list[SchedulableWorker],
     claims: dict[WorkerId, ReservationClaim],
-) -> list[WorkerRow]:
+) -> list[SchedulableWorker]:
     """Create modified worker copies with reservation taints and prioritization.
 
     Claimed workers receive a ``reservation-job`` attribute set to the claiming
@@ -800,8 +799,8 @@ def _inject_reservation_taints(
     if not claims:
         return workers
 
-    claimed: list[WorkerRow] = []
-    unclaimed: list[WorkerRow] = []
+    claimed: list[SchedulableWorker] = []
+    unclaimed: list[SchedulableWorker] = []
     for worker in workers:
         claim = claims.get(worker.worker_id)
         if claim is not None:
@@ -882,7 +881,6 @@ def _reservation_region_constraints(
     claims: dict[WorkerId, ReservationClaim],
     queries: ControllerDB,
     health: WorkerHealthTracker,
-    committed: WorkerCommitTracker,
     existing_constraints: list[Constraint],
 ) -> list[Constraint]:
     """Derive region constraints from claimed reservation workers.
@@ -899,7 +897,7 @@ def _reservation_region_constraints(
     claimed_worker_ids = {worker_id for worker_id, claim in claims.items() if claim.job_id == job_id_wire}
     workers_by_id = {
         worker.worker_id: worker
-        for worker in healthy_active_workers_with_attributes(queries, health, committed)
+        for worker in healthy_active_workers_with_attributes(queries, health)
         if worker.worker_id in claimed_worker_ids
     }
     regions: set[str] = set()
@@ -1632,13 +1630,13 @@ class Controller:
         Memory profiling via memray is currently disabled because memray attach
         has been triggering segfaults in target processes.
         """
-        workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.committed)
+        workers = healthy_active_workers_with_attributes(self._db, self._health)
         if not workers:
             return
         workers_by_id = {w.worker_id: w for w in workers}
         tasks_by_worker = running_tasks_by_worker(self._db, set(workers_by_id.keys()))
 
-        profile_targets: list[tuple[JobName, WorkerRow]] = []
+        profile_targets: list[tuple[JobName, SchedulableWorker]] = []
         for worker_id, task_ids in tasks_by_worker.items():
             worker = workers_by_id[worker_id]
             for task_id in task_ids:
@@ -1656,7 +1654,7 @@ class Controller:
 
     def _dispatch_profiles(
         self,
-        targets: list[tuple[JobName, WorkerRow]],
+        targets: list[tuple[JobName, SchedulableWorker]],
         profile_type: job_pb2.ProfileType,
         profile_kind: str,
         duration: int,
@@ -1674,7 +1672,7 @@ class Controller:
     def _capture_one_profile(
         self,
         task_id: JobName,
-        worker: WorkerRow,
+        worker: SchedulableWorker,
         profile_type: job_pb2.ProfileType,
         profile_kind: str,
         duration: int,
@@ -1776,7 +1774,7 @@ class Controller:
             persisted = True
         claimed_entries: set[tuple[str, int]] = {(c.job_id, c.entry_idx) for c in claims.values()}
         claimed_worker_ids: set[WorkerId] = set(claims.keys())
-        all_workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.committed)
+        all_workers = healthy_active_workers_with_attributes(self._db, self._health)
         changed = False
 
         reservable_states = (
@@ -1793,8 +1791,6 @@ class Controller:
 
                 for worker in all_workers:
                     if worker.worker_id in claimed_worker_ids:
-                        continue
-                    if not worker.healthy:
                         continue
                     if not _worker_matches_reservation_entry(worker, res_entry):
                         continue
@@ -1914,7 +1910,7 @@ class Controller:
         timer = Timer()
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
             pending_tasks = _schedulable_tasks(self._db)
-            workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.committed)
+            workers = healthy_active_workers_with_attributes(self._db, self._health)
         return _SchedulingStateRead(
             pending_tasks=pending_tasks,
             workers=workers,
@@ -2238,7 +2234,7 @@ class Controller:
         if result.tasks_to_kill:
             self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
 
-    def create_scheduling_context(self, workers: list[WorkerRow]) -> SchedulingContext:
+    def create_scheduling_context(self, workers: list[SchedulableWorker]) -> SchedulingContext:
         """Create a scheduling context for the given workers."""
         building_counts = _building_counts(self._db, workers)
         return self._scheduler.create_scheduling_context(
@@ -2376,7 +2372,7 @@ class Controller:
 
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""
-        workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.committed)
+        workers = healthy_active_workers_with_attributes(self._db, self._health)
         return [(w.worker_id, w.address) for w in workers]
 
     def _run_ping_loop(self, stop_event: threading.Event) -> None:
@@ -2531,7 +2527,7 @@ class Controller:
 
         worker_status_map = self._build_worker_status_map()
         self._autoscaler.refresh(worker_status_map)
-        workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.committed)
+        workers = healthy_active_workers_with_attributes(self._db, self._health)
         demand_entries = compute_demand_entries(
             self._db,
             self._scheduler,

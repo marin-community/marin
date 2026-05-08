@@ -1769,8 +1769,8 @@ class ControllerTransitions:
         now_ms: int | None = None,
     ) -> WorkerFailureResult:
         """Remove a failed worker inside an existing transaction."""
-        liveness = self._store.workers.get_liveness(worker_id)
-        if liveness is None or not liveness.active:
+        liveness = self._store.workers.liveness(worker_id)
+        if not liveness.active:
             return WorkerFailureResult(worker_removed=True)
 
         now_ms = now_ms or Timestamp.now().epoch_ms()

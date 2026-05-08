@@ -1315,10 +1315,9 @@ class TaskDetailRow:
 class WorkerRow:
     """Worker row for scheduling and health checks.
 
-    Liveness fields (``healthy``, ``active``, ``consecutive_failures``,
-    ``last_heartbeat``) and ``committed_*`` are populated from the in-memory
-    :class:`WorkerHealthTracker` / :class:`WorkerCommitTracker` rather than the
-    ``workers`` SQLite row.
+    Carries durable identity / capability columns straight from the ``workers``
+    table. Transient liveness and committed-resource data are queried directly
+    from :class:`~iris.cluster.controller.worker_health.WorkerHealthTracker`.
     """
 
     worker_id: WorkerId
@@ -1329,19 +1328,7 @@ class WorkerRow:
     total_tpu_count: int
     device_type: str
     device_variant: str
-    healthy: bool = False
-    active: bool = False
-    consecutive_failures: int = 0
-    last_heartbeat: Timestamp = dataclasses.field(default_factory=lambda: Timestamp.from_ms(0))
-    committed_cpu_millicores: int = 0
-    committed_mem: int = 0
-    committed_gpu: int = 0
-    committed_tpu: int = 0
     attributes: dict = dataclasses.field(default_factory=dict)
-    available_cpu_millicores: int = 0
-    available_memory: int = 0
-    available_gpus: int = 0
-    available_tpus: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1375,19 +1362,7 @@ class WorkerDetailRow:
     md_gce_zone: str
     md_git_hash: str
     md_device_json: str
-    healthy: bool = False
-    active: bool = False
-    consecutive_failures: int = 0
-    last_heartbeat: Timestamp = dataclasses.field(default_factory=lambda: Timestamp.from_ms(0))
-    committed_cpu_millicores: int = 0
-    committed_mem: int = 0
-    committed_gpu: int = 0
-    committed_tpu: int = 0
     attributes: dict = dataclasses.field(default_factory=dict)
-    available_cpu_millicores: int = 0
-    available_memory: int = 0
-    available_gpus: int = 0
-    available_tpus: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1528,9 +1503,8 @@ JOB_SCHEDULING_PROJECTION = Projection(
 )
 
 # Worker row for scheduling and health checks. Liveness and committed-resource
-# fields are populated from in-memory trackers via ``_hydrate_worker_detail`` /
-# ``healthy_active_workers_with_attributes``; they live on the dataclass as
-# extras so call sites can read them without touching the trackers directly.
+# data are queried separately from ``WorkerHealthTracker``; only ``attributes``
+# is hydrated post-decode, from the ``worker_attributes`` table.
 WORKER_ROW_PROJECTION = WORKERS.projection(
     "worker_id",
     "address",
@@ -1540,21 +1514,7 @@ WORKER_ROW_PROJECTION = WORKERS.projection(
     "total_tpu_count",
     "device_type",
     "device_variant",
-    extra_fields=(
-        ExtraField("healthy", bool, default=False),
-        ExtraField("active", bool, default=False),
-        ExtraField("consecutive_failures", int, default=0),
-        ExtraField("last_heartbeat", Timestamp, default_factory=lambda: Timestamp.from_ms(0)),
-        ExtraField("committed_cpu_millicores", int, default=0),
-        ExtraField("committed_mem", int, default=0),
-        ExtraField("committed_gpu", int, default=0),
-        ExtraField("committed_tpu", int, default=0),
-        ExtraField("attributes", dict, default_factory=dict),
-        ExtraField("available_cpu_millicores", int, default=0),
-        ExtraField("available_memory", int, default=0),
-        ExtraField("available_gpus", int, default=0),
-        ExtraField("available_tpus", int, default=0),
-    ),
+    extra_fields=(ExtraField("attributes", dict, default_factory=dict),),
     row_cls=WorkerRow,
 )
 
@@ -1648,8 +1608,6 @@ TASK_DETAIL_PROJECTION = TASKS.projection(
 )
 
 # Full worker detail — superset of WorkerRow, adds metadata scalar columns.
-# Liveness/committed fields come from in-memory trackers and are exposed on the
-# row class as extras (see ``_hydrate_worker_detail``).
 WORKER_DETAIL_PROJECTION = WORKERS.projection(
     "worker_id",
     "address",
@@ -1675,21 +1633,7 @@ WORKER_DETAIL_PROJECTION = WORKERS.projection(
     "md_gce_zone",
     "md_git_hash",
     "md_device_json",
-    extra_fields=(
-        ExtraField("healthy", bool, default=False),
-        ExtraField("active", bool, default=False),
-        ExtraField("consecutive_failures", int, default=0),
-        ExtraField("last_heartbeat", Timestamp, default_factory=lambda: Timestamp.from_ms(0)),
-        ExtraField("committed_cpu_millicores", int, default=0),
-        ExtraField("committed_mem", int, default=0),
-        ExtraField("committed_gpu", int, default=0),
-        ExtraField("committed_tpu", int, default=0),
-        ExtraField("attributes", dict, default_factory=dict),
-        ExtraField("available_cpu_millicores", int, default=0),
-        ExtraField("available_memory", int, default=0),
-        ExtraField("available_gpus", int, default=0),
-        ExtraField("available_tpus", int, default=0),
-    ),
+    extra_fields=(ExtraField("attributes", dict, default_factory=dict),),
     row_cls=WorkerDetailRow,
 )
 

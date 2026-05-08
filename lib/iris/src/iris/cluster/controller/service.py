@@ -52,6 +52,7 @@ from iris.cluster.controller.db import (
     ControllerDB,
     EndpointQuery,
     QuerySnapshot,
+    SchedulableWorker,
     TaskJobSummary,
     UserStats,
     attempt_is_worker_failure,
@@ -76,15 +77,15 @@ from iris.cluster.controller.schema import (
     JobRow,
     TaskDetailRow,
     WorkerDetailRow,
-    WorkerRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.stores import AddEndpointOutcome, ControllerStore, _hydrate_worker_detail
+from iris.cluster.controller.stores import AddEndpointOutcome, ControllerStore
 from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
     task_updates_from_proto,
 )
+from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
@@ -268,12 +269,12 @@ def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.Task
     return proto
 
 
-def worker_status_message(w: WorkerDetailRow) -> str:
+def worker_status_message(liveness: WorkerLiveness) -> str:
     """Build a human-readable status message for unhealthy workers."""
-    if w.healthy:
+    if liveness.healthy:
         return ""
-    age = w.last_heartbeat.age_ms()
-    return f"Unhealthy (last seen {age // 1000}s ago)"
+    age_ms = max(0, Timestamp.now().epoch_ms() - liveness.last_heartbeat_ms)
+    return f"Unhealthy (last seen {age_ms // 1000}s ago)"
 
 
 _WORKER_TARGET_PREFIX = "/system/worker/"
@@ -564,6 +565,7 @@ MAX_LIST_WORKERS_LIMIT = 1000
 
 def _filter_and_sort_workers(
     workers: list[WorkerDetailRow],
+    liveness_by_id: dict[WorkerId, WorkerLiveness],
     query: controller_pb2.Controller.WorkerQuery,
 ) -> list[WorkerDetailRow]:
     """Apply the ``WorkerQuery`` contains filter and sort the cached roster.
@@ -583,7 +585,7 @@ def _filter_and_sort_workers(
     sort_field = query.sort_field or controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID
     descending = query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC
     if sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT:
-        workers = sorted(workers, key=lambda w: w.last_heartbeat.epoch_ms(), reverse=descending)
+        workers = sorted(workers, key=lambda w: liveness_by_id[w.worker_id].last_heartbeat_ms, reverse=descending)
     elif sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE:
         # CPU workers persist with ``device_type == ""``; under ascending sort
         # they group first (treating CPU as the no-accelerator baseline).
@@ -793,13 +795,7 @@ def _worker_roster(store: ControllerStore) -> list[WorkerDetailRow]:
             wid = str(row["worker_id"])
             key, value = _decode_attribute_value(row)
             attrs_by_worker.setdefault(wid, {})[key] = value
-    # Overlay liveness + commit-tracker values; the dormant SQLite columns are
-    # not the source of truth for these fields anymore.
-    workers = []
-    for w in decoded:
-        hydrated = _hydrate_worker_detail(w, store.health, store.committed)
-        workers.append(dataclasses.replace(hydrated, attributes=attrs_by_worker.get(str(w.worker_id), {})))
-    return workers
+    return [dataclasses.replace(w, attributes=attrs_by_worker.get(str(w.worker_id), {})) for w in decoded]
 
 
 def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetailRow]:
@@ -926,7 +922,7 @@ class ControllerProtocol(Protocol):
         task_kill_workers: dict[JobName, WorkerId] | None = None,
     ) -> None: ...
 
-    def create_scheduling_context(self, workers: list[WorkerRow]) -> SchedulingContext: ...
+    def create_scheduling_context(self, workers: list[SchedulableWorker]) -> SchedulingContext: ...
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
@@ -1555,11 +1551,11 @@ class ControllerServiceImpl:
         """List workers with their running task counts.
 
         Served directly from the workers table (cluster size is in the low
-        thousands at most), with the in-memory health / commit overlay applied
-        via :func:`_hydrate_worker_detail` and a single per-page running-task
-        lookup. ``query.limit == 0`` disables paging (preserves CLI callers
-        that fetch the whole roster); ``limit > 0`` is clamped to
-        ``MAX_LIST_WORKERS_LIMIT``.
+        thousands at most), with liveness queried from
+        :class:`~iris.cluster.controller.worker_health.WorkerHealthTracker` and
+        a single per-page running-task lookup. ``query.limit == 0`` disables
+        paging (preserves CLI callers that fetch the whole roster); ``limit > 0``
+        is clamped to ``MAX_LIST_WORKERS_LIMIT``.
         """
         if self._controller.has_direct_provider:
             return controller_pb2.Controller.ListWorkersResponse()
@@ -1569,7 +1565,8 @@ class ControllerServiceImpl:
             query.CopyFrom(request.query)
 
         workers_all = _worker_roster(self._store)
-        filtered = _filter_and_sort_workers(workers_all, query)
+        liveness_by_id = self._store.health.liveness_many(w.worker_id for w in workers_all)
+        filtered = _filter_and_sort_workers(workers_all, liveness_by_id, query)
         total_count = len(filtered)
 
         offset = max(query.offset, 0)
@@ -1584,19 +1581,21 @@ class ControllerServiceImpl:
             has_more = False
 
         running = running_tasks_by_worker(self._db, {w.worker_id for w in page_rows}) if page_rows else {}
-        workers = [
-            controller_pb2.Controller.WorkerHealthStatus(
-                worker_id=worker.worker_id,
-                healthy=worker.healthy,
-                consecutive_failures=worker.consecutive_failures,
-                last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
-                running_job_ids=[task_id.to_wire() for task_id in running.get(worker.worker_id, set())],
-                address=worker.address,
-                metadata=_worker_metadata_to_proto(worker),
-                status_message=worker_status_message(worker),
+        workers = []
+        for worker in page_rows:
+            liveness = liveness_by_id[worker.worker_id]
+            workers.append(
+                controller_pb2.Controller.WorkerHealthStatus(
+                    worker_id=worker.worker_id,
+                    healthy=liveness.healthy,
+                    consecutive_failures=liveness.consecutive_failures,
+                    last_heartbeat=timestamp_to_proto(Timestamp.from_ms(liveness.last_heartbeat_ms)),
+                    running_job_ids=[task_id.to_wire() for task_id in running.get(worker.worker_id, set())],
+                    address=worker.address,
+                    metadata=_worker_metadata_to_proto(worker),
+                    status_message=worker_status_message(liveness),
+                )
             )
-            for worker in page_rows
-        ]
         return controller_pb2.Controller.ListWorkersResponse(
             workers=workers,
             total_count=total_count,
@@ -1738,7 +1737,8 @@ class ControllerServiceImpl:
         status = autoscaler.get_status()
 
         workers = _worker_roster(self._store)
-        worker_id_to_health: dict[str, bool] = {str(w.worker_id): w.healthy for w in workers}
+        liveness_by_id = self._store.health.liveness_many(w.worker_id for w in workers)
+        worker_id_to_health: dict[str, bool] = {str(w.worker_id): liveness_by_id[w.worker_id].healthy for w in workers}
 
         # The vm_ids appearing in the autoscaler status are the only candidates
         # for the running-task lookup; restrict to those known to be in the
@@ -1894,13 +1894,13 @@ class ControllerServiceImpl:
                 return job_pb2.ProfileTaskResponse(error=str(e))
 
         # /system/worker/<worker_id>: proxy profile to the worker's own process
-        worker_id = _parse_worker_target(request.target)
-        if worker_id is not None:
-            worker = self._transitions.get_worker(WorkerId(worker_id))
+        worker_id_str = _parse_worker_target(request.target)
+        if worker_id_str is not None:
+            worker = _read_worker(self._store, WorkerId(worker_id_str))
             if not worker:
-                raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
-            if not worker.healthy:
-                raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+                raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id_str} not found")
+            if not self._store.health.liveness(worker.worker_id).healthy:
+                raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id_str} is unavailable")
             forwarded = job_pb2.ProfileTaskRequest(
                 target="/system/process",
                 duration_seconds=request.duration_seconds,
@@ -1936,7 +1936,7 @@ class ControllerServiceImpl:
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
 
         worker = _read_worker(self._store, task_worker_id)
-        if not worker or not worker.healthy:
+        if not worker or not self._store.health.liveness(task_worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
 
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
@@ -1995,15 +1995,16 @@ class ControllerServiceImpl:
             raise ConnectError(Code.NOT_FOUND, f"No worker found for '{request.id}'")
 
         worker = detail.worker
+        liveness = self._store.health.liveness(worker.worker_id)
         worker_health = controller_pb2.Controller.WorkerHealthStatus(
             worker_id=worker.worker_id,
-            healthy=worker.healthy,
-            consecutive_failures=worker.consecutive_failures,
-            last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
+            healthy=liveness.healthy,
+            consecutive_failures=liveness.consecutive_failures,
+            last_heartbeat=timestamp_to_proto(Timestamp.from_ms(liveness.last_heartbeat_ms)),
             running_job_ids=[tid.to_wire() for tid in detail.running_tasks],
             address=worker.address,
             metadata=_worker_metadata_to_proto(worker),
-            status_message=worker_status_message(worker),
+            status_message=worker_status_message(liveness),
         )
 
         # Worker daemon logs are NOT inlined here — when the worker is
@@ -2054,10 +2055,10 @@ class ControllerServiceImpl:
         if worker_id is None:
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}")
 
-        worker = self._transitions.get_worker(WorkerId(worker_id))
+        worker = _read_worker(self._store, WorkerId(worker_id))
         if not worker:
             raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
-        if not worker.healthy:
+        if not self._store.health.liveness(worker.worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
 
         try:
@@ -2257,7 +2258,7 @@ class ControllerServiceImpl:
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
 
         worker = _read_worker(self._store, task_worker_id)
-        if not worker or not worker.healthy:
+        if not worker or not self._store.health.liveness(task_worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
 
         # Proxy to worker

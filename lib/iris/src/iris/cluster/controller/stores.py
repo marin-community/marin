@@ -33,7 +33,6 @@ import logging
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from dataclasses import replace as dc_replace
 from enum import StrEnum
 from threading import RLock
 
@@ -61,12 +60,7 @@ from iris.cluster.controller.schema import (
     TaskDetailRow,
     WorkerDetailRow,
 )
-from iris.cluster.controller.worker_health import (
-    CommittedResources,
-    WorkerCommitTracker,
-    WorkerHealthTracker,
-    WorkerLiveness,
-)
+from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.types import TERMINAL_JOB_STATES, TERMINAL_TASK_STATES, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
 
@@ -493,9 +487,8 @@ class WorkerAttributeParams:
 class WorkerUpsertParams:
     """All scalar columns written by a worker registration/refresh.
 
-    The upsert leaves ``committed_*`` counters dormant in the schema —
-    resource commitment lives in :class:`WorkerCommitTracker` now. Liveness
-    state lives in :class:`WorkerHealthTracker`. Attributes are replaced via
+    Liveness state and committed-resource counters live in
+    :class:`WorkerHealthTracker`. Attributes are replaced via
     :meth:`WorkerStore.replace_attributes`.
     """
 
@@ -1574,41 +1567,14 @@ class TaskAttemptStore:
         )
 
 
-def _hydrate_worker_detail(
-    row: WorkerDetailRow,
-    health: WorkerHealthTracker,
-    committed: WorkerCommitTracker,
-) -> WorkerDetailRow:
-    """Overlay in-memory liveness + committed-resource values onto a decoded row."""
-    liveness = health.get(row.worker_id)
-    commit = committed.get(row.worker_id)
-    healthy = bool(liveness.healthy) if liveness is not None else False
-    active = bool(liveness.active) if liveness is not None else False
-    last_heartbeat_ms = liveness.last_heartbeat_ms if liveness is not None else 0
-    consecutive_failures = liveness.consecutive_ping_failures if liveness is not None else 0
-    return dc_replace(
-        row,
-        healthy=healthy,
-        active=active,
-        consecutive_failures=consecutive_failures,
-        last_heartbeat=Timestamp.from_ms(last_heartbeat_ms),
-        committed_cpu_millicores=commit.cpu_millicores,
-        committed_mem=commit.memory_bytes,
-        committed_gpu=commit.gpu,
-        committed_tpu=commit.tpu,
-    )
-
-
 class WorkerStore:
     """Workers and worker_attributes.
 
-    Liveness state (``last_heartbeat_ms``, ``healthy``, ``active``,
-    ``consecutive_ping_failures``, ``build_failures``) lives in the in-memory
+    Liveness state and committed-resource counters live in the in-memory
     :class:`WorkerHealthTracker` rather than the SQLite ``workers`` row —
     rewriting those columns on every heartbeat batch would otherwise serialize
-    every Ping/PollTasks RPC through the writer connection. Resource commits
-    similarly live in :class:`WorkerCommitTracker`. The SQLite ``workers``
-    row only stores durable identity / capability metadata.
+    every Ping/PollTasks RPC through the writer connection. The SQLite
+    ``workers`` row only stores durable identity / capability metadata.
     """
 
     # Minimum delay after controller boot before orphan DB worker rows (rows
@@ -1616,28 +1582,18 @@ class WorkerStore:
     # workers a window to re-register after a checkpoint restore.
     ORPHAN_PRUNE_GRACE_MS = 5 * 60 * 1000
 
-    def __init__(
-        self,
-        db: ControllerDB,
-        health: WorkerHealthTracker,
-        committed: WorkerCommitTracker,
-    ) -> None:
+    def __init__(self, db: ControllerDB, health: WorkerHealthTracker) -> None:
         self._db = db
         self._health = health
-        self._committed = committed
         self._boot_ms = Timestamp.now().epoch_ms()
 
     @property
     def health(self) -> WorkerHealthTracker:
         return self._health
 
-    @property
-    def committed(self) -> WorkerCommitTracker:
-        return self._committed
-
     def active_healthy_address(self, tx: Tx, worker_id: WorkerId) -> str | None:
-        liveness = self._health.get(worker_id)
-        if liveness is None or not (liveness.healthy and liveness.active):
+        liveness = self._health.liveness(worker_id)
+        if not (liveness.healthy and liveness.active):
             return None
         return self.address(tx, worker_id)
 
@@ -1652,13 +1608,10 @@ class WorkerStore:
         )
         if row is None:
             return None
-        worker = WORKER_DETAIL_PROJECTION.decode_one([row])
-        if worker is None:
-            return None
-        return _hydrate_worker_detail(worker, self._health, self._committed)
+        return WORKER_DETAIL_PROJECTION.decode_one([row])
 
-    def get_liveness(self, worker_id: WorkerId) -> WorkerLiveness | None:
-        return self._health.get(worker_id)
+    def liveness(self, worker_id: WorkerId) -> WorkerLiveness:
+        return self._health.liveness(worker_id)
 
     def list_active_healthy(self, tx: Tx) -> dict[WorkerId, str]:
         """Return ``{worker_id: address}`` for all active+healthy workers."""
@@ -1691,8 +1644,7 @@ class WorkerStore:
             f"FROM workers w WHERE w.worker_id IN ({placeholders})",
             tuple(ids),
         )
-        decoded = WORKER_DETAIL_PROJECTION.decode(rows)
-        return [_hydrate_worker_detail(w, self._health, self._committed) for w in decoded]
+        return WORKER_DETAIL_PROJECTION.decode(rows)
 
     def filter_existing(self, tx: Tx, worker_ids: Iterable[WorkerId]) -> set[str]:
         """Return the subset of ``worker_ids`` (as strings) that have a ``workers`` row."""
@@ -1830,14 +1782,14 @@ class WorkerStore:
         worker_id: WorkerId,
         resources: job_pb2.ResourceSpecProto,
     ) -> None:
-        self._committed.add(worker_id, resources)
+        self._health.add_committed(worker_id, resources)
 
     def decommit_resources(
         self,
         worker_id: WorkerId,
         resources: job_pb2.ResourceSpecProto,
     ) -> None:
-        self._committed.subtract(worker_id, resources)
+        self._health.decommit(worker_id, resources)
 
     def set_health_for_test(self, worker_id: WorkerId, healthy: bool) -> None:
         """Test helper: overwrite the in-memory health verdict."""
@@ -1890,11 +1842,7 @@ class WorkerStore:
         cur.execute("DELETE FROM dispatch_queue WHERE worker_id = ?", (str(worker_id),))
         cur.execute("DELETE FROM workers WHERE worker_id = ?", (str(worker_id),))
 
-        def _forget() -> None:
-            self._health.forget(worker_id)
-            self._committed.forget(worker_id)
-
-        cur.on_commit(_forget)
+        cur.on_commit(lambda: self._health.forget(worker_id))
 
 
 class DispatchQueueStore:
@@ -1963,19 +1911,13 @@ class ReservationStore:
 class ControllerStore:
     """Bundle of per-entity stores with direct access to transactions/snapshots."""
 
-    def __init__(
-        self,
-        db: ControllerDB,
-        health: WorkerHealthTracker | None = None,
-        committed: WorkerCommitTracker | None = None,
-    ) -> None:
+    def __init__(self, db: ControllerDB, health: WorkerHealthTracker | None = None) -> None:
         self._db = db
         self._health = health or WorkerHealthTracker()
-        self._committed = committed or WorkerCommitTracker()
         self.jobs = JobStore(db)
         self.tasks = TaskStore(db)
         self.attempts = TaskAttemptStore(db)
-        self.workers = WorkerStore(db, self._health, self._committed)
+        self.workers = WorkerStore(db, self._health)
         self.endpoints = EndpointStore(db)
         self.dispatch = DispatchQueueStore(db)
         self.reservations = ReservationStore(db)
@@ -1987,15 +1929,14 @@ class ControllerStore:
         db.register_reopen_hook(self._prime_committed_tracker)
 
     def _prime_committed_tracker(self) -> None:
-        """Reaggregate ``committed_*`` from the active task rows on boot.
+        """Reaggregate committed-resource totals from the active task rows on boot.
 
         Called both at process start and after a checkpoint restore. The
-        tracker is the runtime source of truth; the stale ``committed_*``
-        SQLite columns are not consulted.
+        tracker is the runtime source of truth.
         """
         active_states = list(ACTIVE_TASK_STATES)
         active_placeholders = ",".join("?" for _ in active_states)
-        committed: dict[WorkerId, CommittedResources] = {}
+        totals: dict[WorkerId, WorkerLiveness] = {}
         with self._db.read_snapshot() as q:
             rows = q.fetchall(
                 "SELECT t.current_worker_id AS worker_id, "
@@ -2009,20 +1950,16 @@ class ControllerStore:
         for row in rows:
             worker_id = WorkerId(str(row["worker_id"]))
             spec = resource_spec_from_scalars(int(row["cpu"]), int(row["mem"]), 0, str(row["device_json"]))
-            entry = committed.setdefault(worker_id, CommittedResources())
-            entry.cpu_millicores += int(spec.cpu_millicores)
-            entry.memory_bytes += int(spec.memory_bytes)
-            entry.gpu += int(get_gpu_count(spec.device))
-            entry.tpu += int(get_tpu_count(spec.device))
-        self._committed.reset(committed)
+            entry = totals.setdefault(worker_id, WorkerLiveness())
+            entry.committed_cpu_millicores += int(spec.cpu_millicores)
+            entry.committed_mem += int(spec.memory_bytes)
+            entry.committed_gpu += int(get_gpu_count(spec.device))
+            entry.committed_tpu += int(get_tpu_count(spec.device))
+        self._health.reset_committed(totals)
 
     @property
     def health(self) -> WorkerHealthTracker:
         return self._health
-
-    @property
-    def committed(self) -> WorkerCommitTracker:
-        return self._committed
 
     def transaction(self):
         return self._db.transaction()
