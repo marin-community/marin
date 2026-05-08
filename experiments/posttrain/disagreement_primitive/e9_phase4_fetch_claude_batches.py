@@ -55,39 +55,31 @@ def load_user_q_response_index() -> dict[tuple[str, int, str], dict[str, Any]]:
     return out
 
 
-def parse_custom_id(cid: str) -> tuple[str, str, int, str]:
-    sid, cond, scen, safe_gen = cid.split("::")
-    return sid, cond, int(scen), safe_gen
+def load_custom_id_map(job_dir: Path, batch_name: str) -> dict[str, tuple[str, str, int, str]]:
+    """Read sidecar custom_id → (sid, cond_short, scen, gen) map written by Phase 3."""
+    p = job_dir / f"{batch_name}_custom_id_map.json"
+    if not p.exists():
+        raise FileNotFoundError(f"sidecar map missing at {p}")
+    raw = json.loads(p.read_text())
+    return {cid: (vals[0], vals[1], int(vals[2]), vals[3]) for cid, vals in raw.items()}
 
 
-def gen_unsafe_to_safe_map() -> dict[str, str]:
-    return {"gpt-5.1": "gpt-5.1",
-            "Qwen/Qwen2.5-7B-Instruct-Turbo": "Qwen-Qwen2.5-7B-Instruct-Turbo",
-            "gemini-3-flash-preview": "gemini-3-flash-preview",
-            "grok-4-1-fast-non-reasoning-opposite": "grok-4-1-fast-non-reasoning-opposite"}
-
-
-def safe_to_unsafe_gen() -> dict[str, str]:
-    m = gen_unsafe_to_safe_map()
-    return {v: k for k, v in m.items()}
-
-
-def integrate(entries: list[dict[str, Any]], out_dir: Path, response_idx: dict, batch_label: str) -> dict[str, int]:
+def integrate(entries: list[dict[str, Any]], out_dir: Path, response_idx: dict, batch_label: str,
+              cid_map: dict[str, tuple[str, str, int, str]]) -> dict[str, int]:
     """Convert batch result entries into per-statement Claude jsonl rows.
 
     Appends to existing files; deduplicates by (scenario_idx, generator).
+    Uses the sidecar custom_id map (Phase 3 writes; Phase 4 reads).
     """
-    safe2unsafe = safe_to_unsafe_gen()
     by_path: dict[Path, list[dict[str, Any]]] = defaultdict(list)
     n_ok = n_fail = n_other = 0
     for entry in entries:
         cid = entry.get("custom_id", "")
-        try:
-            sid, cond_short, scen, safe_gen = parse_custom_id(cid)
-        except Exception:
+        meta = cid_map.get(cid)
+        if meta is None:
             n_other += 1
             continue
-        gen = safe2unsafe.get(safe_gen, safe_gen)
+        sid, cond_short, scen, gen = meta
         args = ba.extract_tool_args(entry)
         if args is None:
             n_fail += 1
@@ -174,7 +166,8 @@ def main() -> int:
         print(f"  collecting...")
         entries = ba.collect(api_key, job_dir, name=name)
         out_dir = CLAUDE_OPPOSITE_DIR if "opposite" in name else CLAUDE_EXISTING_DIR
-        result = integrate(entries, out_dir, response_idx, batch_label=name)
+        cid_map = load_custom_id_map(job_dir, name)
+        result = integrate(entries, out_dir, response_idx, batch_label=name, cid_map=cid_map)
         print(f"  result: {result}")
         summary[name] = result
 

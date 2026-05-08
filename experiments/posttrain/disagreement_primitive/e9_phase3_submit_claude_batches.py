@@ -111,8 +111,15 @@ def already_done_set_for_dir(claude_dir: Path) -> set[tuple[str, str, int, str]]
 
 
 def custom_id_for(sid: str, cond: str, scen: int, gen: str) -> str:
-    safe_gen = gen.replace("/", "-")
-    return f"{sid}::{cond}::{scen}::{safe_gen}"
+    """Anthropic caps custom_id at 64 chars. Use a deterministic SHA-1 prefix.
+
+    Companion sidecar map (custom_id -> (sid, cond, scen, gen)) is persisted
+    next to the requests.jsonl so Phase 4 can reverse it.
+    """
+    import hashlib
+    raw = f"{sid}::{cond}::{scen}::{gen}"
+    h = hashlib.sha1(raw.encode()).hexdigest()[:32]
+    return f"j_{h}"  # 34 chars, well under 64
 
 
 def main() -> int:
@@ -128,6 +135,7 @@ def main() -> int:
     done_opposite = already_done_set_for_dir(CLAUDE_OPPOSITE_DIR)
 
     requests_a: list[dict[str, Any]] = []
+    cells_a_meta: list[tuple[str, str, int, str]] = []  # parallel to requests_a
     for r in opposite_rows:
         sid = r["statement_id"]
         if sid not in spec_by_id:
@@ -153,12 +161,14 @@ def main() -> int:
                 thinking={"type": "disabled"},
                 temperature=0,
             ))
+            cells_a_meta.append((sid, cond_short, r["scenario_idx"], r["generator"]))
 
     # ---- Build Batch B: Claude on existing 3 generators × 38 statements ----
     done_existing = already_done_set_for_dir(CLAUDE_EXISTING_DIR)
     existing_rows = load_jsonl(EXISTING_RESPONSES)
 
     requests_b: list[dict[str, Any]] = []
+    cells_b_meta: list[tuple[str, str, int, str]] = []
     for r in existing_rows:
         sid = r.get("statement_id")
         if sid not in spec_by_id:
@@ -190,6 +200,7 @@ def main() -> int:
                     thinking={"type": "disabled"},
                     temperature=0,
                 ))
+                cells_b_meta.append((sid, cond_short, scen, gen_label))
 
     # ---- Submit ----
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
@@ -202,13 +213,25 @@ def main() -> int:
     print(f"  Batch B (judge_existing_3gens): {len(requests_b)} requests")
     print(f"  Total: {len(requests_a) + len(requests_b)} requests\n")
 
+    # Build sidecar custom_id → (sid, cond, scen, gen) maps. Phase 4 needs this
+    # because Anthropic limits custom_id to 64 chars (we hash to fit).
+    def build_map(reqs: list[dict[str, Any]], cells: list[tuple[str, str, int, str]]) -> dict[str, list]:
+        # cells must be in same order as reqs
+        return {r["custom_id"]: list(c) for r, c in zip(reqs, cells)}
+
     state_a = ba.submit(api_key, requests_a, job_dir, name="judge_grok_opposite") if requests_a else None
     if state_a:
         print(f"  Batch A submitted: id={state_a['batch_id']}")
+        (job_dir / "judge_grok_opposite_custom_id_map.json").write_text(
+            json.dumps(build_map(requests_a, cells_a_meta), indent=2)
+        )
 
     state_b = ba.submit(api_key, requests_b, job_dir, name="judge_existing_3gens") if requests_b else None
     if state_b:
         print(f"  Batch B submitted: id={state_b['batch_id']}")
+        (job_dir / "judge_existing_3gens_custom_id_map.json").write_text(
+            json.dumps(build_map(requests_b, cells_b_meta), indent=2)
+        )
 
     # Write a top-level pointer for Phase 4 to find
     pointer_path = DIR / "e9_claude_batch_pointer.json"
