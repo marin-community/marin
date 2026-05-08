@@ -229,7 +229,12 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def call_gpt_json(log: RawAPILogger, oai: OpenAI, role: str, key: dict[str, Any],
                   system: str, user: str, max_tokens: int = 4000) -> dict[str, Any]:
-    """JSON-mode GPT-5.1 call (compiler / scenario_gen / judge). Temp=0, reasoning=none."""
+    """JSON-mode GPT-5.1 call (compiler / scenario_gen / judge). Temp=0, reasoning=none.
+
+    NOTE: reasoning_effort="none" is a HARD project rule for ALL gpt-5.x calls.
+    Do not raise it. A single "medium" override on 2026-05-04 caused $53 of $140
+    daily spend. If you need higher quality, switch model, do not raise effort.
+    """
     raw = log.call(
         role=role,
         key=key,
@@ -247,7 +252,10 @@ def call_gpt_json(log: RawAPILogger, oai: OpenAI, role: str, key: dict[str, Any]
 
 def call_gpt_text(log: RawAPILogger, oai: OpenAI, role: str, key: dict[str, Any],
                   user: str, max_tokens: int = 1000, temp: float = 1.0) -> str:
-    """Free-text GPT-5.1 generator call. Temp=1, reasoning=none."""
+    """Free-text GPT-5.1 generator call. Temp=1, reasoning=none.
+
+    NOTE: reasoning_effort="none" is a HARD project rule. See call_gpt_json above.
+    """
     raw = log.call(
         role=role,
         key=key,
