@@ -58,9 +58,13 @@ def _convert_one(task: dict) -> dict:
     dst = task["dst"]
 
     src_fs, _ = url_to_fs(src)
+    # rigging wraps GCS filesystems in CrossRegionGuardedFS, which DuckDB
+    # rejects (its register_filesystem isinstance-checks for fsspec.AbstractFileSystem).
+    # The guard's job is done at url_to_fs time; we unwrap to hand DuckDB the raw fs.
+    raw_src_fs = getattr(src_fs, "_fs", src_fs)
     con = duckdb.connect(":memory:")
     try:
-        con.register_filesystem(src_fs)
+        con.register_filesystem(raw_src_fs)
         result = con.execute("SELECT * FROM read_parquet(?)", [src])
         reader = result.fetch_record_batch(rows_per_batch=_REWRITE_ROWS_PER_BATCH)
         first = next(reader, None)
