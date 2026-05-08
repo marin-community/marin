@@ -1550,27 +1550,37 @@ class TaskAttemptStore:
         each worker's totals to get available capacity, replacing the durable
         ``workers.committed_*`` counters.
 
-        Reservation-holder jobs are excluded: their tasks reserve the worker's
-        attribute space (via the reservation taint mechanism) but consume zero
-        capacity, matching the pre-refactor ``add_committed_resources`` skip.
+        Reservation-holder jobs are excluded: their tasks anchor the worker
+        for taint-injection but consume zero capacity, matching the
+        pre-refactor ``add_committed_resources`` skip. The exclusion is done
+        in Python using a small set fetched once per call: an inline ``JOIN
+        jobs ON is_reservation_holder = 0`` causes SQLite to drive from the
+        ``jobs`` table (full scan over ~24k rows on production), blowing the
+        query from ~3 ms to ~380 ms. Reservation-holder rows are typically a
+        handful (~200), so the dedicated lookup + Python filter is cheap.
+
+        Drives from ``task_attempts`` via ``idx_task_attempts_live_
+        workerbound`` (partial index added by migration 0045).
 
         Device counts are parsed in Python (cached) because device_json is a
         proto-as-JSON blob and SQLite has no first-class JSON aggregation.
         """
+        holder_rows = tx.fetchall("SELECT job_id FROM jobs WHERE is_reservation_holder = 1")
+        holder_jobs = {str(r["job_id"]) for r in holder_rows}
         rows = tx.fetchall(
-            "SELECT ta.worker_id, jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_device_json "
+            "SELECT ta.worker_id, t.job_id, jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_device_json "
             "FROM task_attempts ta "
             "JOIN tasks t ON t.task_id = ta.task_id "
-            "JOIN jobs j ON j.job_id = t.job_id "
             "JOIN job_config jc ON jc.job_id = t.job_id "
-            "WHERE ta.worker_id IS NOT NULL AND ta.finished_at_ms IS NULL "
-            "  AND j.is_reservation_holder = 0"
+            "WHERE ta.worker_id IS NOT NULL AND ta.finished_at_ms IS NULL"
         )
         cpu: dict[WorkerId, int] = {}
         mem: dict[WorkerId, int] = {}
         gpu: dict[WorkerId, int] = {}
         tpu: dict[WorkerId, int] = {}
         for row in rows:
+            if str(row["job_id"]) in holder_jobs:
+                continue
             wid = WorkerId(str(row["worker_id"]))
             cpu[wid] = cpu.get(wid, 0) + int(row["res_cpu_millicores"])
             mem[wid] = mem.get(wid, 0) + int(row["res_memory_bytes"])
@@ -1599,26 +1609,33 @@ class TaskAttemptStore:
         attempt. The reconcile loop splits these into:
           * task_state == ASSIGNED → start payload (excluded from expected_tasks)
           * task_state IN (BUILDING, RUNNING) → expected_tasks entry
+
+        Drives from ``task_attempts`` via ``idx_task_attempts_live_workerbound``
+        (partial index: ``worker_id IS NOT NULL AND finished_at_ms IS NULL``),
+        which keeps the read at ~3 ms regardless of cluster size. A previous
+        ``worker_id IN (?, …)`` filter caused SQLite to drop to ``SCAN ta``
+        once the IN-list passed ~128 elements, blowing per-tick cost from
+        ~10 ms to ~70 ms. ``worker_ids`` is now a Python-side filter applied
+        to the small result set.
         """
         if not worker_ids:
             return []
-        placeholders = ",".join("?" for _ in worker_ids)
-        wire_ids = [str(w) for w in worker_ids]
+        wire_ids = {str(w) for w in worker_ids}
         rows = tx.fetchall(
             "SELECT ta.worker_id, t.task_id, ta.attempt_id, t.state AS task_state, "
             "ta.state AS attempt_state, t.job_id "
-            "FROM tasks t "
-            "JOIN task_attempts ta "
-            "  ON ta.task_id = t.task_id AND ta.attempt_id = t.current_attempt_id "
-            f"WHERE ta.worker_id IN ({placeholders}) "
+            "FROM task_attempts ta "
+            "JOIN tasks t "
+            "  ON t.task_id = ta.task_id AND t.current_attempt_id = ta.attempt_id "
+            "WHERE ta.worker_id IS NOT NULL AND ta.finished_at_ms IS NULL "
             "  AND t.state IN (?, ?, ?)",
             (
-                *wire_ids,
                 job_pb2.TASK_STATE_ASSIGNED,
                 job_pb2.TASK_STATE_BUILDING,
                 job_pb2.TASK_STATE_RUNNING,
             ),
         )
+        rows = [r for r in rows if str(r["worker_id"]) in wire_ids]
         return [
             ReconcileRow(
                 worker_id=WorkerId(str(row["worker_id"])),

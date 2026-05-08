@@ -602,6 +602,11 @@ JOBS = Table(
         "CREATE INDEX IF NOT EXISTS idx_jobs_name ON jobs(name)",
         "CREATE INDEX IF NOT EXISTS idx_jobs_has_reservation"
         " ON jobs(has_reservation, state) WHERE has_reservation = 1",
+        # Migration 0045: feeds the per-tick reservation-holder filter in
+        # ``TaskAttemptStore.resource_usage_by_worker``. ~200 rows on a
+        # production-scale DB; full table scan would otherwise dominate the
+        # scheduling-tick read.
+        "CREATE INDEX IF NOT EXISTS idx_jobs_reservation_holder" " ON jobs(job_id) WHERE is_reservation_holder = 1",
     ),
 )
 
@@ -825,8 +830,14 @@ TASK_ATTEMPTS = Table(
     table_constraints=("PRIMARY KEY (task_id, attempt_id)",),
     indexes=(
         # Migration 0007 (recreated in 0019 after table rebuild)
-        "CREATE INDEX IF NOT EXISTS idx_task_attempts_worker_task"
-        " ON task_attempts(worker_id, task_id, attempt_id)",
+        "CREATE INDEX IF NOT EXISTS idx_task_attempts_worker_task" " ON task_attempts(worker_id, task_id, attempt_id)",
+        # Migration 0045: feeds ``resource_usage_by_worker`` and
+        # ``reconcile_rows_for_workers`` — the per-tick reads that derive
+        # capacity and drive the polling reconcile. Without this the planner
+        # falls back to scanning ~24k jobs as the driving table; with it the
+        # scheduling tick stays at ~3 ms.
+        "CREATE INDEX IF NOT EXISTS idx_task_attempts_live_workerbound"
+        " ON task_attempts(worker_id) WHERE worker_id IS NOT NULL AND finished_at_ms IS NULL",
     ),
 )
 
