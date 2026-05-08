@@ -38,6 +38,7 @@ dependencies = [
     "openai",
     "pandas>=2.0",
     "plotly",
+    "ray==2.53.0",
     "pyarrow>=22",
     "regex",
     "requests>=2.33.0",
@@ -70,6 +71,7 @@ test = [
     "openai-responses",
     # for scaling law plotting tests
     "plotly",
+    "ray==2.53.0",
 ]
 lint = [
     "ruff==0.14.3",
