@@ -543,6 +543,9 @@ class JobRequest:
         replicas: Gang-scheduled replicas (e.g. TPU slices for multislice training)
         max_retries_failure: Max retries on failure
         max_retries_preemption: Max retries on preemption
+        max_task_failures: Number of within-gang task failures tolerated before
+            the parent job is killed. Default 0 = die on first task failure.
+            Maps to Iris's ``LaunchJobRequest.max_task_failures``.
     """
 
     name: str
@@ -552,6 +555,7 @@ class JobRequest:
     replicas: int | None = None
     max_retries_failure: int = 0
     max_retries_preemption: int = 100
+    max_task_failures: int = 0
 
     def __post_init__(self):
         if " " in self.name:

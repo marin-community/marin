@@ -560,6 +560,7 @@ class IrisClient:
         replicas: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
+        max_task_failures: int = 0,
         timeout: Duration | None = None,
         user: str | None = None,
         reservation: list[ReservationEntry] | None = None,
@@ -583,6 +584,9 @@ class IrisClient:
             replicas: Number of tasks to create for gang scheduling (default: 1)
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
+            max_task_failures: Number of within-gang task failures tolerated
+                before the parent job is killed (default: 0 = die on first
+                task failure). Maps to ``LaunchJobRequest.max_task_failures``.
             timeout: Per-task timeout (None = no timeout)
             user: Optional explicit user override for top-level jobs
             reservation: Resource entries to pre-provision before scheduling (None = no reservation)
@@ -678,6 +682,7 @@ class IrisClient:
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
+                max_task_failures=max_task_failures,
                 timeout=timeout,
                 reservation=reservation_proto,
                 preemption_policy=preemption_policy,
