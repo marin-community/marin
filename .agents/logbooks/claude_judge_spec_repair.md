@@ -1367,3 +1367,62 @@ Hypothesis: if the v2 rubric fix works, GPT-as-judge's score distribution should
 - Δpwv on top-K poison cells should drop ≥50% on the 3 Pattern-1 statements
 - GPT outlier rate within those cells should drop below 30%
 - Population Δα should improve by +0.10 to +0.15 on the Pattern-1 statements
+
+---
+
+# Rubric v2 — validation experiment results (2026-05-08)
+
+Targeted re-judge: GPT-5.1 only, phase_4 only, 5 statements with v2 rubrics. Existing Gemini + Claude phase_4 judgments reused as-is. 396/400 GPT calls succeeded (~$2 OpenAI sync, ~10 min wall).
+
+## Per-statement Δα (phase_4, v2 − v1)
+
+| statement | α_p4 (v1) | α_p4 (v2) | Δα | top-12 Δpwv drop | verdict |
+|---|--:|--:|--:|--:|---|
+| **`avoid_abuse`** | **−0.138** | **+0.647** | **+0.785** | **99%** | ✅ methodology works |
+| `refusal_style` | +0.213 | +0.330 | +0.117 | 17% | 🟡 modest improvement |
+| `no_agenda` | +0.761 | +0.756 | −0.005 | 0% | ❌ no change |
+| `comply_with_laws` | −0.034 | −0.055 | −0.021 | 14% | ❌ slightly worse |
+| `sexual_content_involving_minors` | +0.101 | +0.084 | −0.016 | 3% | ❌ no change (predicted Pattern 3) |
+
+**Mean Δα = +0.172** across 5 statements (dominated by avoid_abuse).
+
+## What this validates
+
+The methodology works on **`avoid_abuse`**. This was the worst statement in the dataset (α phase_4 = −0.138, judges actively disagreeing) and v2 recovered it to α = +0.647 — just under Krippendorff's "tentatively acceptable" threshold. The mechanism predicted (restating spec carve-outs structurally in low-score anchors closes the GPT-vs-others gap) was confirmed: 99% of the top-K poison-cell Δpwv evaporated.
+
+## What this falsifies
+
+The methodology does NOT generalize automatically to non-symmetric-carve-out problems. The 3 unchanged statements had richer Layer-2 patterns:
+
+- **`no_agenda`**: GPT-5.1's v2 diagnosis was substantively correct (the issue is "agenda of its own" being misread to permit user's manipulative agenda) but fixing the rubric language doesn't help if GPT-as-judge doesn't apply the new conceptual frame. The diagnosis was right; the structural fix wasn't sufficient.
+- **`comply_with_laws`**: v2 tried to separate "operational facilitation" from "educational/fictional context." GPT-as-judge isn't drawing that line either.
+- **`sexual_content_involving_minors`**: predicted Pattern 3 (multi-anchor instability) — confirmed unfixable by anchor-language tweaks alone.
+
+## Clean rule extracted
+
+**v2-style rubric revision works when**:
+- Top-12 Δpwv share is ≥80% of total (highly concentrated)
+- Outlier-judge concentration is >70% on one judge (consistent failure mode)
+- Divergence pair is dominantly (1, 5) — i.e., one judge to extreme low, others to extreme high
+- The diagnosed pattern is **carve-out asymmetry between low and high anchors**
+
+`avoid_abuse` met all 4 conditions cleanly. The 3 unchanged statements met some but not all. Future application: filter by these 4 conditions before investing in v2 rewrite.
+
+## Files
+
+- `experiments/posttrain/disagreement_primitive/e9_rejudge_gpt_v2.py` (re-judge runner)
+- `experiments/posttrain/disagreement_primitive/e9_recompute_agreement_v2.py` (analysis)
+- `experiments/posttrain/disagreement_primitive/per_judgment_v2.jsonl` (396 new GPT phase_4 rows tagged `rubric_version: "v2"`)
+- `.agents/logbooks/rubric_v2_validation_results.md` (full output table)
+- `results/raw/e9_rejudge_gpt_v2/2026-05-08T23-48-06/` (raw API audit trail)
+
+## Total session spend (running tally)
+
+| line item | cost | API |
+|---|--:|---|
+| (previous tally) | ~$59 | mixed |
+| Rubric v2 compile (5 statements) | $0.20 | OpenAI |
+| Rubric v2 GPT-5.1 phase_4 re-judge (~400 calls) | ~$2.00 | OpenAI |
+| **Total session** | **~$61.20** | |
+
+Anthropic spend unchanged at ~$41 (per the user's "no new API calls for Gemini or Claude" instruction).
