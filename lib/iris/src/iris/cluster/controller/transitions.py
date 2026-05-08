@@ -2159,9 +2159,7 @@ class ControllerTransitions:
             jobs_deleted += 1
             time.sleep(pause_between_s)
 
-        # 2. Workers: one at a time (CASCADE to attributes). The in-memory
-        # liveness tracker is the source of truth — find_prunable scans the
-        # tracker, not SQLite columns.
+        # 2. Workers: one at a time (CASCADE to attributes).
         workers_deleted = 0
         while not _stopped():
             worker_id = self._store.workers.find_prunable(worker_cutoff_ms)

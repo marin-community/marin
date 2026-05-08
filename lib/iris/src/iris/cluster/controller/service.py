@@ -500,12 +500,9 @@ def _read_worker_detail(store: ControllerStore, worker_id: WorkerId) -> _WorkerD
 def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetailRow]:
     """Load tasks for the list view, attaching only the current attempt.
 
-    The list UI renders ``started_at`` / ``finished_at`` from the current
-    attempt and surfaces a single ``proto.attempts`` entry for retry context;
-    older attempts only matter on the task-detail page. Loading every attempt
-    via an IN clause was waste on jobs with many retries — it dominated
-    job-detail page latency. Full history is still fetched in
-    ``get_task_status``.
+    The list UI only needs the current attempt's ``started_at`` /
+    ``finished_at`` and a single ``proto.attempts`` entry. Full history is
+    fetched separately by ``get_task_status``.
     """
     job_wire = job_id.to_wire()
     with db.read_snapshot() as q:

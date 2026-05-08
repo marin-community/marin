@@ -1570,22 +1570,15 @@ class TaskAttemptStore:
 class WorkerStore:
     """Workers and worker_attributes.
 
-    Liveness state and committed-resource counters live in the in-memory
-    :class:`WorkerHealthTracker` rather than the SQLite ``workers`` row —
-    rewriting those columns on every heartbeat batch would otherwise serialize
-    every Ping/PollTasks RPC through the writer connection. The SQLite
-    ``workers`` row only stores durable identity / capability metadata.
+    The ``workers`` row holds durable identity, capability, and committed
+    scheduling totals. Transient liveness (heartbeat / health / failure
+    counters) lives in :class:`WorkerHealthTracker` to avoid funneling every
+    ping through the writer connection.
     """
-
-    # Minimum delay after controller boot before orphan DB worker rows (rows
-    # without a tracker entry) become eligible for prune. Gives surviving
-    # workers a window to re-register after a checkpoint restore.
-    ORPHAN_PRUNE_GRACE_MS = 5 * 60 * 1000
 
     def __init__(self, db: ControllerDB, health: WorkerHealthTracker) -> None:
         self._db = db
         self._health = health
-        self._boot_ms = Timestamp.now().epoch_ms()
 
     @property
     def health(self) -> WorkerHealthTracker:
@@ -1659,11 +1652,11 @@ class WorkerStore:
         return {str(r["worker_id"]) for r in rows}
 
     def upsert(self, cur: TransactionCursor, params: WorkerUpsertParams, now_ms: int) -> None:
-        """Insert a new worker row or refresh every metadata field of an existing one.
+        """Insert or refresh durable identity/capability metadata for a worker.
 
-        Durable identity / capability metadata only — liveness and
-        committed-resource state live in the in-memory trackers. The
-        post-commit hook is what registers the worker in the health tracker.
+        ``committed_*`` columns are written by the scheduler, not here. A
+        post-commit hook registers the worker in the liveness tracker so
+        memory state advances with the DB row.
         """
         cur.execute(
             "INSERT INTO workers("
@@ -1732,34 +1725,15 @@ class WorkerStore:
         self._health.mark_unhealthy(worker_id)
 
     def find_prunable(self, before_ms: int) -> WorkerId | None:
-        """Return one worker eligible for prune, or ``None``.
+        """Return one tracker-known worker that is unhealthy/inactive with a stale heartbeat.
 
-        Two cases produce a prunable worker:
-
-        1. A tracker entry is unhealthy / inactive and its last heartbeat is
-           older than ``before_ms``. The failure path normally deletes both
-           the DB row and the tracker entry together, so this case fires only
-           for entries that were marked unhealthy without yet being removed.
-        2. A SQLite ``workers`` row exists with no corresponding tracker
-           entry and the controller has been up for at least
-           :attr:`ORPHAN_PRUNE_GRACE_MS`. This catches survivors of a
-           checkpoint restore that never re-registered. The grace window
-           gives in-flight workers time to ping back before we delete them.
+        Every persisted ``workers`` row has a tracker entry by construction
+        (seeded at boot/restore, registered on commit of ``upsert``, removed
+        on commit of :meth:`remove`), so scanning the tracker is sufficient.
         """
-        liveness = self._health.all()
-        for worker_id, l in liveness.items():
+        for worker_id, l in self._health.all().items():
             if (not l.healthy or not l.active) and l.last_heartbeat_ms < before_ms:
                 return worker_id
-
-        if Timestamp.now().epoch_ms() - self._boot_ms < self.ORPHAN_PRUNE_GRACE_MS:
-            return None
-        tracked_ids = set(liveness.keys())
-        with self._db.read_snapshot() as q:
-            rows = q.fetchall("SELECT worker_id FROM workers")
-        for row in rows:
-            wid = WorkerId(str(row["worker_id"]))
-            if wid not in tracked_ids:
-                return wid
         return None
 
     def heartbeat(self, worker_ids: Sequence[WorkerId], now_ms: int, *, reset_health: bool) -> None:
@@ -1959,12 +1933,11 @@ class ControllerStore:
         db.register_reopen_hook(self._seed_liveness_from_workers)
 
     def _seed_liveness_from_workers(self) -> None:
-        """Optimistically mark every persisted worker healthy at boot.
+        """Mark every persisted worker healthy so the scheduler sees them before they ping back.
 
-        Liveness lives only in memory now, so without this seed a fresh tracker
-        hides every existing worker from the scheduler until its next ping. We
-        trust the durable workers table on boot; the watchdog times out anyone
-        who fails to ping within the heartbeat window.
+        Workers that fail to ping within the heartbeat window are timed out
+        by the ping loop. ``find_prunable`` relies on this seed to maintain
+        the invariant that every ``workers`` row has a tracker entry.
         """
         now_ms = Timestamp.now().epoch_ms()
         with self._db.read_snapshot() as q:

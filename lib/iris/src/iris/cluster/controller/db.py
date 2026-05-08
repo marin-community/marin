@@ -920,12 +920,9 @@ def _worker_row_select() -> str:
 class SchedulableWorker:
     """Worker shape consumed by the scheduler.
 
-    Carries durable identity, capability, and committed-resource totals from
-    the ``workers`` row (decoded via :class:`WorkerRow`). Returned by
-    :func:`healthy_active_workers_with_attributes` already filtered to
-    healthy+active via the in-memory tracker. Mirrors the field names in the
-    :class:`scheduler.WorkerSnapshot` protocol so it flows straight into
-    ``Scheduler.create_scheduling_context`` without adapters.
+    Field names mirror the :class:`scheduler.WorkerSnapshot` protocol so
+    instances flow into ``Scheduler.create_scheduling_context`` without
+    an adapter.
     """
 
     worker_id: WorkerId
@@ -947,12 +944,7 @@ def healthy_active_workers_with_attributes(
     db: ControllerDB,
     health: WorkerHealthTracker,
 ) -> list[SchedulableWorker]:
-    """Fetch all healthy, active workers with their attributes and committed totals populated.
-
-    Health/active filtering reads the in-memory tracker. ``committed_*`` totals
-    come straight from the durable ``workers`` row, which is the only writer
-    of those fields (mutated by the scheduler under a write transaction).
-    """
+    """Return healthy + active workers with attributes and committed totals."""
     from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
 
     liveness = health.all()

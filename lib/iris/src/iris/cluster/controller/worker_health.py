@@ -3,25 +3,16 @@
 
 """In-memory worker liveness tracking.
 
-Owns the transient per-worker signals only:
+Per-worker signals:
 
 - ``last_heartbeat_ms``: bumped on each successful heartbeat / ping.
 - ``healthy`` / ``active``: liveness verdict; flipped to false when the worker
   is marked unhealthy or removed.
-- ``consecutive_ping_failures``: incremented by failed ping/heartbeat RPCs,
-  reset on success. Ten consecutive failures trip the termination threshold.
-- ``build_failures``: monotonic counter for BUILDING→FAILED transitions. Ten
-  build failures trip the termination threshold independently.
-
-Durable scheduling state — including ``committed_*`` resource totals — lives
-in the SQLite ``workers`` row and is mutated by the scheduler under a write
-transaction. The tracker intentionally does not own those numbers; they must
-survive a controller restart so worker capacity is correctly accounted for.
-
-Crash recovery: a fresh controller starts with an empty tracker. To avoid
-hiding existing workers from the scheduler until they ping back,
-:class:`~iris.cluster.controller.stores.ControllerStore` seeds the tracker
-from the durable ``workers`` table at boot.
+- ``consecutive_failures``: incremented by failed ping/heartbeat RPCs, reset
+  on success. ``PING_FAILURE_THRESHOLD`` consecutive failures trip
+  termination.
+- ``build_failures``: monotonic counter for BUILDING→FAILED transitions.
+  ``BUILD_FAILURE_THRESHOLD`` build failures trip termination independently.
 
 Thread-safe: written from ping/heartbeat threads, read from the reaper,
 scheduler, and RPC handler threads.

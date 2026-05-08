@@ -862,9 +862,7 @@ WORKERS = Table(
         # Migration 0022
         Column("slice_id", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
         Column("scale_group", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
-        # Durable scheduling state — only mutated by the scheduler under a
-        # write transaction. Must survive controller restart so worker
-        # capacity is correctly accounted for.
+        # Committed-resource totals — only the scheduler writes these.
         Column(
             "committed_cpu_millicores",
             "INTEGER",
@@ -1335,13 +1333,7 @@ class TaskDetailRow:
 
 @dataclass(frozen=True, slots=True)
 class WorkerRow:
-    """Worker row for scheduling and health checks.
-
-    Carries durable identity / capability columns and the durable
-    ``committed_*`` scheduling state from the ``workers`` table. Transient
-    liveness lives in
-    :class:`~iris.cluster.controller.worker_health.WorkerHealthTracker`.
-    """
+    """Durable worker columns: identity, capability, and committed scheduling totals."""
 
     worker_id: WorkerId
     address: str
@@ -1360,10 +1352,7 @@ class WorkerRow:
 
 @dataclass(frozen=True, slots=True)
 class WorkerDetailRow:
-    """Full worker detail — superset of WorkerRow, adds metadata scalar columns.
-
-    See :class:`WorkerRow` for liveness / committed-resource provenance.
-    """
+    """Full worker detail — superset of WorkerRow, adds metadata scalar columns."""
 
     worker_id: WorkerId
     address: str
@@ -1533,10 +1522,7 @@ JOB_SCHEDULING_PROJECTION = Projection(
     column_aliases=_job_sched_aliases,
 )
 
-# Worker row for scheduling and health checks. Liveness data is queried
-# separately from ``WorkerHealthTracker``; ``committed_*`` columns come straight
-# from the ``workers`` row, and ``attributes`` is hydrated post-decode from the
-# ``worker_attributes`` table.
+# ``attributes`` is hydrated post-decode from the ``worker_attributes`` table.
 WORKER_ROW_PROJECTION = WORKERS.projection(
     "worker_id",
     "address",
