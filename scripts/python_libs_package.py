@@ -4,9 +4,9 @@
 
 """Build and publish marin-* lib wheels.
 
-Builds the seven pure-Python marin-* lib packages (marin, marin-iris,
-marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr) into
-dist/, then optionally publishes them as GitHub Releases.
+Builds the eight pure-Python marin-* lib packages (marin, marin-iris,
+marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr,
+marin-finelog) into dist/, then optionally publishes them as GitHub Releases.
 
 Four modes:
     nightly  -- version becomes <base>.dev<YYYYMMDD>; overwrites the rolling
@@ -63,6 +63,7 @@ PACKAGES: dict[str, dict[str, str]] = {
     "marin-zephyr": {"path": "lib/zephyr", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-levanter": {"path": "lib/levanter", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-haliax": {"path": "lib/haliax", "version_file": "src/haliax/__about__.py", "kind": "about_py"},
+    "marin-finelog": {"path": "lib/finelog", "version_file": "pyproject.toml", "kind": "pyproject"},
 }
 
 SIBLING_NAMES = sorted(PACKAGES.keys(), key=len, reverse=True)
