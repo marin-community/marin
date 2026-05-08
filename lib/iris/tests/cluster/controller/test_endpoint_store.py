@@ -10,7 +10,7 @@ import threading
 import pytest
 from iris.cluster.controller.db import EndpointQuery
 from iris.cluster.controller.schema import ENDPOINT_PROJECTION, EndpointRow
-from iris.cluster.controller.stores import EndpointStore
+from iris.cluster.controller.stores import AddEndpointOutcome, EndpointStore
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
@@ -110,7 +110,7 @@ def test_rollback_leaves_memory_untouched(state):
 
 
 def test_add_rejects_terminal_task(state):
-    """Writing an endpoint for a terminal task should return False and not mutate memory."""
+    """Writing an endpoint for a terminal task should return TERMINAL and not mutate memory."""
     tasks = submit_job(state, "j", make_job_request("j"))
     task_id = tasks[0].task_id
     # Drive the task to SUCCEEDED to mark it terminal.
@@ -120,7 +120,8 @@ def test_add_rejects_terminal_task(state):
     )
 
     with state._db.transaction() as cur:
-        assert state._store.endpoints.add(cur, _make_row("e1", "alpha", task_id)) is False
+        outcome = state._store.endpoints.add(cur, _make_row("e1", "alpha", task_id))
+        assert outcome is AddEndpointOutcome.TERMINAL
 
     assert state._store.endpoints.get("e1") is None
 

@@ -114,7 +114,7 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
     log_event,
 )
-from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.worker_health import WorkerCommitTracker, WorkerHealthTracker
 from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.types import find_free_port, resolve_external_host
@@ -881,6 +881,8 @@ def _reservation_region_constraints(
     job_id_wire: str,
     claims: dict[WorkerId, ReservationClaim],
     queries: ControllerDB,
+    health: WorkerHealthTracker,
+    committed: WorkerCommitTracker,
     existing_constraints: list[Constraint],
 ) -> list[Constraint]:
     """Derive region constraints from claimed reservation workers.
@@ -897,7 +899,7 @@ def _reservation_region_constraints(
     claimed_worker_ids = {worker_id for worker_id, claim in claims.items() if claim.job_id == job_id_wire}
     workers_by_id = {
         worker.worker_id: worker
-        for worker in healthy_active_workers_with_attributes(queries)
+        for worker in healthy_active_workers_with_attributes(queries, health, committed)
         if worker.worker_id in claimed_worker_ids
     }
     regions: set[str] = set()
@@ -1153,7 +1155,8 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        self._store = ControllerStore(self._db)
+        self._health = WorkerHealthTracker()
+        self._store = ControllerStore(self._db, health=self._health)
 
         # ThreadContainer must be initialized before the log service setup
         # because _start_local_log_server spawns a uvicorn thread.
@@ -1194,7 +1197,6 @@ class Controller:
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_handler)
 
-        self._health = WorkerHealthTracker()
         self._transitions = ControllerTransitions(
             store=self._store,
             health=self._health,
@@ -1630,7 +1632,7 @@ class Controller:
         Memory profiling via memray is currently disabled because memray attach
         has been triggering segfaults in target processes.
         """
-        workers = healthy_active_workers_with_attributes(self._db)
+        workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.committed)
         if not workers:
             return
         workers_by_id = {w.worker_id: w for w in workers}
@@ -1742,11 +1744,7 @@ class Controller:
         if claims is None:
             claims = _read_reservation_claims(self._db)
             persisted = True
-        with self._db.read_snapshot() as snapshot:
-            active_worker_ids = {
-                WorkerId(str(row[0]))
-                for row in snapshot.fetchall("SELECT w.worker_id FROM workers w WHERE w.active = 1")
-            }
+        active_worker_ids = {wid for wid, l in self._health.all().items() if l.active}
         claimed_job_ids = {JobName.from_wire(claim.job_id) for claim in claims.values()}
         claimed_jobs = list(_jobs_by_id(self._db, claimed_job_ids).values()) if claimed_job_ids else []
         jobs_by_id = {job.job_id.to_wire(): job for job in claimed_jobs}
@@ -1778,7 +1776,7 @@ class Controller:
             persisted = True
         claimed_entries: set[tuple[str, int]] = {(c.job_id, c.entry_idx) for c in claims.values()}
         claimed_worker_ids: set[WorkerId] = set(claims.keys())
-        all_workers = healthy_active_workers_with_attributes(self._db)
+        all_workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.committed)
         changed = False
 
         reservable_states = (
@@ -1916,7 +1914,7 @@ class Controller:
         timer = Timer()
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
             pending_tasks = _schedulable_tasks(self._db)
-            workers = healthy_active_workers_with_attributes(self._db)
+            workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.committed)
         return _SchedulingStateRead(
             pending_tasks=pending_tasks,
             workers=workers,
@@ -2378,7 +2376,7 @@ class Controller:
 
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""
-        workers = healthy_active_workers_with_attributes(self._db)
+        workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.committed)
         return [(w.worker_id, w.address) for w in workers]
 
     def _run_ping_loop(self, stop_event: threading.Event) -> None:
@@ -2406,8 +2404,7 @@ class Controller:
                         self._health.ping(result.worker_id, healthy=True)
                         live_worker_ids.append(result.worker_id)
 
-                with self._store.transaction() as cur:
-                    self._transitions.update_worker_pings(cur, live_worker_ids)
+                self._transitions.update_worker_pings(live_worker_ids)
 
                 unhealthy = self._health.workers_over_threshold()
                 if unhealthy:
@@ -2534,7 +2531,7 @@ class Controller:
 
         worker_status_map = self._build_worker_status_map()
         self._autoscaler.refresh(worker_status_map)
-        workers = healthy_active_workers_with_attributes(self._db)
+        workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.committed)
         demand_entries = compute_demand_entries(
             self._db,
             self._scheduler,
@@ -2546,12 +2543,7 @@ class Controller:
     def _build_worker_status_map(self) -> WorkerStatusMap:
         """Build a map of worker_id to worker status for autoscaler idle tracking."""
         result: WorkerStatusMap = {}
-        with self._db.read_snapshot() as snapshot:
-            rows = snapshot.raw(
-                "SELECT worker_id FROM workers WHERE active = 1",
-                decoders={"worker_id": WorkerId},
-            )
-        worker_ids = {row.worker_id for row in rows}
+        worker_ids = {wid for wid, l in self._health.all().items() if l.active}
         running_by_worker = running_tasks_by_worker(self._db, worker_ids)
         for wid in worker_ids:
             result[wid] = WorkerStatus(

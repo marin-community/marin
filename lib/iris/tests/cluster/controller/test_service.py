@@ -7,6 +7,8 @@ These tests verify the RPC contract (input -> output) of the ControllerServiceIm
 State changes are verified via RPC calls rather than internal state inspection.
 """
 
+import concurrent.futures
+import time
 from datetime import date, timedelta
 
 import pytest
@@ -1495,3 +1497,53 @@ def test_set_task_status_text_persists_via_store(service):
     service.set_task_status_text(request, None)
     assert service._store.tasks.get_status_text_detail(task_id.to_wire()) == detail_text
     assert service._store.tasks.get_status_text_summary(task_id.to_wire()) == summary_text
+
+
+# =============================================================================
+# Direct-SQL load: ensure list_jobs scales under concurrent dashboard polling.
+# =============================================================================
+
+
+def test_list_jobs_concurrent_load_p99_under_threshold(service):
+    """100 concurrent ``list_jobs`` calls against ~1k jobs must hit p99 < 500ms.
+
+    The previous implementation amortized this fan-out behind ``SnapshotView``;
+    direct SQL replaces that with per-request reads from the 32-slot reader
+    pool. This test would have failed if the reader pool were starving on the
+    GIL-unfriendly path or if the EXPLAIN-verified indexes were not being
+    used. The threshold is generous on purpose — we want to detect regressions
+    on the order of seconds, not micro-jitter.
+    """
+    for i in range(1000):
+        service.launch_job(make_job_request(f"load-job-{i:04d}"), None)
+
+    request = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(limit=50),
+    )
+
+    # Warm one call so the SQLite page cache is populated.
+    service.list_jobs(request, None)
+
+    n_requests = 100
+    latencies_ms: list[float] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+
+        def call() -> float:
+            start = time.perf_counter()
+            response = service.list_jobs(request, None)
+            assert response.total_count == 1000
+            return (time.perf_counter() - start) * 1000.0
+
+        futures = [pool.submit(call) for _ in range(n_requests)]
+        for f in concurrent.futures.as_completed(futures):
+            latencies_ms.append(f.result())
+
+    latencies_ms.sort()
+    p50 = latencies_ms[len(latencies_ms) // 2]
+    p99 = latencies_ms[int(len(latencies_ms) * 0.99)]
+    # 500ms is well above expected steady-state (in-process measurement was
+    # ~100-120ms; production should be cheaper since the test fixture's DB has
+    # transaction overhead from thousands of launch_job inserts) but tight
+    # enough that read-pool starvation or accidental N+1 query growth would
+    # trip it.
+    assert p99 < 500.0, f"list_jobs concurrent p99 too high: p50={p50:.1f}ms p99={p99:.1f}ms"

@@ -20,6 +20,7 @@ from rigging.timing import Deadline, Duration, Timestamp
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
+from iris.cluster.controller.worker_health import WorkerCommitTracker, WorkerHealthTracker
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
 from iris.rpc import job_pb2
 
@@ -919,32 +920,57 @@ def _worker_row_select() -> str:
     return WORKER_ROW_PROJECTION.select_clause()
 
 
-def healthy_active_workers_with_attributes(db: ControllerDB) -> list:
+def healthy_active_workers_with_attributes(
+    db: ControllerDB,
+    health: WorkerHealthTracker,
+    committed: WorkerCommitTracker,
+) -> list:
     """Fetch all healthy, active workers with their attributes populated.
 
     Returns WorkerRow (scalar-only) so the scheduling loop avoids loading metadata columns.
-    Uses the in-memory attribute cache to avoid a per-cycle SQL join.
+    Health/active filtering reads the in-memory tracker; committed-resource
+    arithmetic reads the in-memory commit tracker.
     """
     from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
 
+    liveness = health.all()
+    healthy_active = {wid for wid, l in liveness.items() if l.healthy and l.active}
+    if not healthy_active:
+        return []
+    placeholders = ",".join("?" for _ in healthy_active)
     with db.read_snapshot() as q:
         workers = WORKER_ROW_PROJECTION.decode(
-            q.fetchall(f"SELECT {_worker_row_select()} FROM workers w WHERE w.healthy = 1 AND w.active = 1"),
+            q.fetchall(
+                f"SELECT {_worker_row_select()} FROM workers w WHERE w.worker_id IN ({placeholders})",
+                tuple(str(wid) for wid in healthy_active),
+            ),
         )
         if not workers:
             return []
     attrs_by_worker = db.get_worker_attributes()
-    return [
-        dc_replace(
-            w,
-            attributes=attrs_by_worker.get(w.worker_id, {}),
-            available_cpu_millicores=w.total_cpu_millicores - w.committed_cpu_millicores,
-            available_memory=w.total_memory_bytes - w.committed_mem,
-            available_gpus=w.total_gpu_count - w.committed_gpu,
-            available_tpus=w.total_tpu_count - w.committed_tpu,
+    hydrated = []
+    for w in workers:
+        commit = committed.get(w.worker_id)
+        l = liveness.get(w.worker_id)
+        hydrated.append(
+            dc_replace(
+                w,
+                healthy=True,
+                active=True,
+                consecutive_failures=l.consecutive_ping_failures if l is not None else 0,
+                last_heartbeat=Timestamp.from_ms(l.last_heartbeat_ms) if l is not None else w.last_heartbeat,
+                committed_cpu_millicores=commit.cpu_millicores,
+                committed_mem=commit.memory_bytes,
+                committed_gpu=commit.gpu,
+                committed_tpu=commit.tpu,
+                attributes=attrs_by_worker.get(w.worker_id, {}),
+                available_cpu_millicores=w.total_cpu_millicores - commit.cpu_millicores,
+                available_memory=w.total_memory_bytes - commit.memory_bytes,
+                available_gpus=w.total_gpu_count - commit.gpu,
+                available_tpus=w.total_tpu_count - commit.tpu,
+            )
         )
-        for w in workers
-    ]
+    return hydrated
 
 
 def insert_task_profile(
