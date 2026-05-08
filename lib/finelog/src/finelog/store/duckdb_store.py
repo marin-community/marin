@@ -240,6 +240,14 @@ class DuckDBLogStore:
 
         self._namespace_registered_at: dict[str, int] = {}
         self._namespaces: dict[str, LogNamespaceProtocol] = {}
+        # Names currently being dropped. ``drop_table`` reserves the name
+        # here under ``_insertion_lock`` so a concurrent ``register_table``
+        # cannot recreate the namespace in the window between popping
+        # ``_namespaces`` and the late ``catalog.delete`` /
+        # ``remove_local_storage``. Without this, the late steps would
+        # delete the freshly registered namespace's catalog row and wipe
+        # its on-disk directory.
+        self._dropping: set[str] = set()
 
         # Disk-only kwargs; ignored by memory namespaces. ``duckdb_memory_limit``
         # in this dict feeds the per-namespace compaction connection in
@@ -320,6 +328,16 @@ class DuckDBLogStore:
         stored_schema = with_implicit_seq(schema)
 
         with self._insertion_lock:
+            if name in self._dropping:
+                # A concurrent ``drop_table`` has already removed the
+                # namespace from ``_namespaces`` but has not yet finished
+                # its catalog/storage cleanup. Recreating the namespace
+                # now would let that cleanup wipe the new state. Surface
+                # this as a transient validation error; the caller can
+                # retry once the drop completes.
+                raise InvalidNamespaceError(
+                    f"namespace {name!r} is currently being dropped; retry once drop_table completes"
+                )
             existing_ns = self._namespaces.get(name)
             if existing_ns is None:
                 self._catalog.upsert(name, stored_schema)
@@ -469,7 +487,11 @@ class DuckDBLogStore:
         thread itself takes it every iteration; joining under the mutex
         would deadlock. The order is:
 
-          1. Remove from the registry under the mutex (new ops fail fast).
+          1. Under the mutex: remove from the registry *and* mark ``name``
+             as ``_dropping`` (new ops fail fast — including a concurrent
+             ``register_table``, which would otherwise recreate the
+             namespace and have its state wiped by the cleanup steps
+             below).
           2. Stop and join the bg thread — *before* dropping catalog rows,
              because ``_sync_step`` would otherwise see an empty catalog
              plus a populated bucket and ``fs.rm`` every remote file as
@@ -477,6 +499,8 @@ class DuckDBLogStore:
           3. Drop the catalog rows now that no concurrent reader can act
              on them.
           4. Take the rwlock write side and delete the segment directory.
+          5. Clear the ``_dropping`` reservation under the mutex; the name
+             is now free to be re-registered.
 
         GCS-archived data is intentionally preserved; the bucket is the
         caller's to clean up.
@@ -490,17 +514,22 @@ class DuckDBLogStore:
                 raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
             del self._namespaces[name]
             self._namespace_registered_at.pop(name, None)
+            self._dropping.add(name)
 
-        ns.stop_and_join()
-
-        with self._insertion_lock:
-            self._catalog.delete(name)
-
-        self._query_visibility_lock.write_acquire()
         try:
-            ns.remove_local_storage()
+            ns.stop_and_join()
+
+            with self._insertion_lock:
+                self._catalog.delete(name)
+
+            self._query_visibility_lock.write_acquire()
+            try:
+                ns.remove_local_storage()
+            finally:
+                self._query_visibility_lock.write_release()
         finally:
-            self._query_visibility_lock.write_release()
+            with self._insertion_lock:
+                self._dropping.discard(name)
 
     def append(self, key: str, entries: list) -> None:
         if not entries:

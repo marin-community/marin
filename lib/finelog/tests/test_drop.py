@@ -100,6 +100,58 @@ def test_drop_table_does_not_delete_remote_objects(tmp_path: Path):
         store.close()
 
 
+def test_drop_table_rejects_concurrent_register(tmp_path: Path):
+    """register_table during a drop must fail rather than recreate the namespace.
+
+    After ``drop_table`` removes the namespace from ``_namespaces`` and
+    releases ``_insertion_lock``, the bg thread is still being joined and
+    the late ``catalog.delete`` / ``remove_local_storage`` have not run
+    yet. A concurrent ``register_table(name)`` for the same name would
+    create a fresh namespace whose catalog row and on-disk directory
+    would then be wiped by those cleanup steps. The fix reserves the name
+    in ``_dropping`` while the drop runs; this test pins that contract.
+    """
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    store = DuckDBLogStore(log_dir=tmp_path / "data", remote_log_dir=str(remote))
+    try:
+        schema = _worker_schema()
+        store.register_table("iris.worker", schema)
+        store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
+        ns = store._namespaces["iris.worker"]
+        ns._flush_step()
+        ns._force_compact_l0()
+        ns._sync_step()
+
+        # Spy on ``stop_and_join`` to attempt a same-name ``register_table``
+        # at the exact point of the prior race. ``_dropping`` should make
+        # it fail.
+        observed: dict[str, BaseException | None] = {"register_error": None}
+        original_stop = ns.stop_and_join
+
+        def spy() -> None:
+            try:
+                store.register_table("iris.worker", schema)
+            except BaseException as exc:
+                observed["register_error"] = exc
+            original_stop()
+
+        ns.stop_and_join = spy  # type: ignore[method-assign]
+
+        store.drop_table("iris.worker")
+
+        err = observed["register_error"]
+        assert isinstance(err, InvalidNamespaceError), f"expected InvalidNamespaceError, got {err!r}"
+
+        # Once the drop has fully completed the reservation is cleared
+        # and the name is re-registrable.
+        store.register_table("iris.worker", schema)
+        assert "iris.worker" in store._namespaces
+        assert "iris.worker" not in store._dropping
+    finally:
+        store.close()
+
+
 def test_drop_table_stops_bg_thread_before_dropping_catalog_rows(tmp_path: Path):
     """drop_table joins the bg thread *before* dropping catalog rows.
 
