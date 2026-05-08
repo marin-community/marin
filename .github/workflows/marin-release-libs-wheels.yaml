@@ -66,7 +66,7 @@ jobs:
           uv run python scripts/python_libs_package.py \
             --mode "${{ needs.resolve.outputs.mode }}" \
             ${{ needs.resolve.outputs.version && format('--version {0}', needs.resolve.outputs.version) || '' }} \
-            --skip-publish
+            --skip-gh-release
 
       - uses: actions/upload-artifact@v4
         with:

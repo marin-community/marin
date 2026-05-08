@@ -22,12 +22,21 @@ Four modes:
                 find-links. The timestamp guarantees rebuilt wheels beat any
                 nightly already published earlier the same day.
 
+Two publish targets, independent of each other:
+    GitHub Releases  -- on by default; suppress with --skip-gh-release.
+    PyPI             -- off by default; opt in with --publish-pypi
+                        (requires UV_PUBLISH_TOKEN).
+
 Usage:
     python scripts/python_libs_package.py --mode nightly
     python scripts/python_libs_package.py --mode stable --version 1.0.0
-    python scripts/python_libs_package.py --mode nightly --skip-publish
+    python scripts/python_libs_package.py --mode nightly --skip-gh-release
     python scripts/python_libs_package.py --skip-build --publish-only
     python scripts/python_libs_package.py --mode vendor --vendor ../tiny-tpu/vendor
+
+    # First-time PyPI registration (PyPI only, no GH Release):
+    UV_PUBLISH_TOKEN=pypi-xxx python scripts/python_libs_package.py \
+        --mode stable --version 0.99 --publish-pypi --skip-gh-release
 
 The build is done from a temporary in-place patch of each package's version
 file plus a cross-pin rewrite of every sibling dependency. Mutations are
@@ -39,10 +48,13 @@ exact version the build job produced, even if the run straddles midnight UTC.
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,6 +148,21 @@ def _rewrite_sibling_pins(text: str, version: str) -> str:
     )
 
 
+# Match dependency list items that use PEP 440 direct URL form
+# (`"pkg @ git+https://..."` or `"pkg @ https://..."`). PyPI rejects these in
+# uploaded metadata, so we strip the entire list item from pyproject.toml at
+# build time. Local dev installs that consume the workspace tree still see the
+# original git pin (patched_tree reverts on exit).
+_DIRECT_URL_DEP_RE = re.compile(
+    r'^\s+"[^"]+?\s*@\s*(?:git\+|https?://)[^"]+",?[ \t]*\n',
+    re.MULTILINE,
+)
+
+
+def _strip_direct_url_deps(text: str) -> str:
+    return _DIRECT_URL_DEP_RE.sub("", text)
+
+
 # Path of the marin-iris build-info module that gets stamped with the build
 # date during wheel builds. iris.version reads BUILD_DATE from this file to
 # populate LaunchJobRequest.client_revision_date so the controller can reject
@@ -173,10 +200,14 @@ def patched_tree(version: str):
             patched_version = _set_version(originals[version_path], info["kind"], version)
             version_path.write_text(patched_version)
 
-            # Then sibling-pin rewrite always targets pyproject.toml. Re-read
-            # in case version patch already wrote pyproject.
+            # Then sibling-pin rewrite + direct-URL strip on pyproject.toml.
+            # Re-read in case the version patch already wrote pyproject.
+            # The strip pass keeps PyPI-uploaded metadata PEP 440 compliant by
+            # removing entries like `lm-eval @ git+https://...` from optional
+            # extras; those extras become empty in the published artifacts.
             current_pyproject = pyproject_path.read_text()
             new_pyproject = _rewrite_sibling_pins(current_pyproject, version)
+            new_pyproject = _strip_direct_url_deps(new_pyproject)
             if new_pyproject != current_pyproject:
                 pyproject_path.write_text(new_pyproject)
 
@@ -265,17 +296,22 @@ def build_wheels(version: str, mode: str) -> None:
             pkg_dir = REPO_ROOT / info["path"]
             print(f"\n--- Building {name} ({version}) ---")
             subprocess.run(
-                ["uv", "build", "--wheel", "--out-dir", str(DIST_DIR), str(pkg_dir)],
+                ["uv", "build", "--wheel", "--sdist", "--out-dir", str(DIST_DIR), str(pkg_dir)],
                 check=True,
                 cwd=REPO_ROOT,
             )
 
     wheels = sorted(DIST_DIR.glob("*.whl"))
-    print(f"\nBuilt {len(wheels)} wheel(s):")
+    sdists = sorted(DIST_DIR.glob("*.tar.gz"))
+    print(f"\nBuilt {len(wheels)} wheel(s) and {len(sdists)} sdist(s):")
     for w in wheels:
         print(f"  {w.name}")
+    for s in sdists:
+        print(f"  {s.name}")
     if len(wheels) != len(PACKAGES):
         raise RuntimeError(f"Expected {len(PACKAGES)} wheels, got {len(wheels)}")
+    if len(sdists) != len(PACKAGES):
+        raise RuntimeError(f"Expected {len(PACKAGES)} sdists, got {len(sdists)}")
 
     write_build_info(version, mode)
 
@@ -417,6 +453,73 @@ def _gh_release_replace(tag: str, files: list[Path], title: str, notes: str, pre
     _verify_release(tag, asset_names, prerelease)
 
 
+def _package_exists_on_pypi(name: str) -> bool:
+    try:
+        urllib.request.urlopen(f"https://pypi.org/pypi/{name}/json", timeout=10)
+        return True
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return False
+        raise
+
+
+def _artifacts_for(pkg: str) -> list[Path]:
+    """Return all wheel+sdist artifacts in DIST_DIR matching pkg."""
+    stem = pkg.replace("-", "_")
+    return sorted(DIST_DIR.glob(f"{stem}-*.whl")) + sorted(DIST_DIR.glob(f"{stem}-*.tar.gz"))
+
+
+def publish_pypi() -> None:
+    """Upload every wheel + sdist in DIST_DIR to PyPI via `uv publish`.
+
+    Reads the token from UV_PUBLISH_TOKEN (uv's standard env var). Run from
+    the same invocation that produced dist/ so the version stamped into
+    BUILD_INFO.json matches the artifacts being uploaded. PyPI rejects
+    re-uploads of an existing (name, version) tuple, so first claim runs use
+    a stable version and future cuts must bump it.
+
+    Idempotent on package name: a project that already exists on PyPI is
+    skipped (this script's purpose is first-time name registration, not
+    publishing new versions of existing projects).
+    """
+    if not os.environ.get("UV_PUBLISH_TOKEN"):
+        raise SystemExit(
+            "UV_PUBLISH_TOKEN is required for --publish-pypi. "
+            "Create a PyPI API token at https://pypi.org/manage/account/token/"
+        )
+
+    registered: list[str] = []
+    skipped: list[str] = []
+    failed: list[str] = []
+
+    for pkg in PACKAGES:
+        print(f"\n--- PyPI: {pkg} ---")
+        if _package_exists_on_pypi(pkg):
+            print("  Already on PyPI — skipping")
+            skipped.append(pkg)
+            continue
+        artifacts = _artifacts_for(pkg)
+        if not artifacts:
+            print(f"  No artifacts found for {pkg} in {DIST_DIR}")
+            failed.append(pkg)
+            continue
+        print(f"  Uploading {len(artifacts)} artifact(s)...")
+        try:
+            subprocess.run(["uv", "publish", *[str(a) for a in artifacts]], check=True)
+            registered.append(pkg)
+        except subprocess.CalledProcessError:
+            failed.append(pkg)
+
+    print("\nPyPI summary:")
+    if skipped:
+        print(f"  Already on PyPI: {', '.join(skipped)}")
+    if registered:
+        print(f"  Registered: {', '.join(registered)}")
+    if failed:
+        print(f"  Failed: {', '.join(failed)}")
+        raise SystemExit(1)
+
+
 def publish_releases(version: str, mode: str) -> None:
     """Per-package GH release.
 
@@ -473,8 +576,17 @@ def main() -> None:
         help="Target directory to drop wheels into (required for --mode vendor)",
     )
     parser.add_argument("--skip-build", action="store_true", help="Reuse existing dist/")
-    parser.add_argument("--skip-publish", action="store_true", help="Build only")
+    parser.add_argument(
+        "--skip-gh-release",
+        action="store_true",
+        help="Skip the GitHub Releases publish (default is to publish there)",
+    )
     parser.add_argument("--publish-only", action="store_true", help="Same as --skip-build")
+    parser.add_argument(
+        "--publish-pypi",
+        action="store_true",
+        help="Also upload built wheels + sdists to PyPI (requires UV_PUBLISH_TOKEN)",
+    )
     args = parser.parse_args()
 
     if args.publish_only:
@@ -510,7 +622,10 @@ def main() -> None:
             version = resolve_version(args.mode, args.version)
             print(f"Mode:        {args.mode}\nVersion:     {version} (re-resolved; no BUILD_INFO.json)")
 
-    if args.skip_publish or args.mode == "manual":
+    if args.publish_pypi:
+        publish_pypi()
+
+    if args.skip_gh_release or args.mode == "manual":
         print(f"\nBuild complete. Wheels in {DIST_DIR}/")
         return
 
