@@ -177,8 +177,7 @@ def _assigned_workers_by_job(assignments):
 def _mark_slice_unhealthy(state, prefix):
     for i in range(VMS_PER_SLICE):
         wid = WorkerId(f"{prefix}-w{i}")
-        with state._store.transaction() as cur:
-            state._store.workers.set_health_for_test(cur, wid, healthy=False)
+        state._store.workers.set_health_for_test(wid, healthy=False)
 
 
 @pytest.fixture

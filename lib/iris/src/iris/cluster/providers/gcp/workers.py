@@ -18,7 +18,7 @@ import urllib.request
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
-from rigging.timing import Deadline, Duration, Timestamp
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.cluster.providers.gcp.bootstrap import (
     build_worker_bootstrap_script,
@@ -845,6 +845,7 @@ def _run_tpu_bootstrap(
     # Phase 1: once the QR is ACTIVE (or immediately for non-queued TPUs),
     # wait for the TPU VM to reach READY with all worker IPs.
     cloud_deadline = Deadline.from_now(Duration.from_seconds(effective_cloud_ready_timeout))
+    cloud_backoff = ExponentialBackoff(initial=1.0, maximum=30.0, factor=1.5)
 
     while not cloud_deadline.expired():
         cloud_status = handle._describe_cloud()
@@ -860,7 +861,7 @@ def _run_tpu_bootstrap(
                 sum(1 for w in cloud_status.workers if w.internal_address),
                 cloud_status.worker_count,
             )
-        time.sleep(poll_interval)
+        time.sleep(cloud_backoff.next_interval())
     else:
         raise InfraError(f"Slice {handle.slice_id} did not reach cloud READY within {effective_cloud_ready_timeout}s")
 

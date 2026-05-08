@@ -195,7 +195,7 @@ def apply_event(transitions: ControllerTransitions, event: IrisEvent) -> Any:
             case RemoveWorker(worker_id):
                 return transitions.remove_worker(cur, worker_id)
             case UpdateWorkerPings(worker_ids):
-                return transitions.update_worker_pings(cur, worker_ids)
+                return transitions.update_worker_pings(worker_ids)
             case DrainForDirectProvider(max_promotions):
                 return transitions.drain_for_direct_provider(cur, max_promotions)
             case ApplyDirectProviderUpdates(updates):

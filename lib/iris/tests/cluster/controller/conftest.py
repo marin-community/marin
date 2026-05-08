@@ -342,9 +342,25 @@ def query_job_row(state: ControllerTransitions, job_id: JobName):
 
 def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerRow | None:
     with state._db.read_snapshot() as q:
-        return WORKER_ROW_PROJECTION.decode_one(
+        decoded = WORKER_ROW_PROJECTION.decode_one(
             q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", (str(worker_id),)),
         )
+    if decoded is None:
+        return None
+    health = state._store.health
+    committed = state._store.committed
+    liveness = health.get(decoded.worker_id)
+    commit = committed.get(decoded.worker_id)
+    return _replace(
+        decoded,
+        healthy=bool(liveness.healthy) if liveness is not None else False,
+        active=bool(liveness.active) if liveness is not None else False,
+        consecutive_failures=liveness.consecutive_ping_failures if liveness is not None else 0,
+        committed_cpu_millicores=commit.cpu_millicores,
+        committed_mem=commit.memory_bytes,
+        committed_gpu=commit.gpu,
+        committed_tpu=commit.tpu,
+    )
 
 
 def query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list[TaskDetailRow]:
@@ -404,8 +420,8 @@ def register_worker(
             slice_id=slice_id,
             scale_group=scale_group,
         )
-        if not healthy:
-            state._store.workers.set_health_for_test(cur, wid, healthy=False)
+    if not healthy:
+        state._store.workers.set_health_for_test(wid, healthy=False)
     return wid
 
 
@@ -574,6 +590,8 @@ def worker_running_tasks(state: ControllerTransitions, worker_id: WorkerId) -> f
 def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> list:
     if not workers:
         return workers
+    health = state._store.health
+    committed = state._store.committed
     worker_ids = [str(w.worker_id) for w in workers]
     placeholders = ",".join("?" for _ in worker_ids)
     with state._db.read_snapshot() as q:
@@ -583,22 +601,43 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> li
             tuple(worker_ids),
         )
     attrs_by_worker = _decode_attribute_rows(attrs)
-    return [
-        _replace(
-            w,
-            attributes=attrs_by_worker.get(w.worker_id, {}),
-            available_cpu_millicores=w.total_cpu_millicores - w.committed_cpu_millicores,
-            available_memory=w.total_memory_bytes - w.committed_mem,
-            available_gpus=w.total_gpu_count - w.committed_gpu,
-            available_tpus=w.total_tpu_count - w.committed_tpu,
+    out = []
+    for w in workers:
+        commit = committed.get(w.worker_id)
+        liveness = health.get(w.worker_id)
+        out.append(
+            _replace(
+                w,
+                healthy=bool(liveness.healthy) if liveness is not None else False,
+                active=bool(liveness.active) if liveness is not None else False,
+                consecutive_failures=liveness.consecutive_ping_failures if liveness is not None else 0,
+                committed_cpu_millicores=commit.cpu_millicores,
+                committed_mem=commit.memory_bytes,
+                committed_gpu=commit.gpu,
+                committed_tpu=commit.tpu,
+                attributes=attrs_by_worker.get(w.worker_id, {}),
+                available_cpu_millicores=w.total_cpu_millicores - commit.cpu_millicores,
+                available_memory=w.total_memory_bytes - commit.memory_bytes,
+                available_gpus=w.total_gpu_count - commit.gpu,
+                available_tpus=w.total_tpu_count - commit.tpu,
+            )
         )
-        for w in workers
-    ]
+    return out
 
 
 def healthy_active_workers(state: ControllerTransitions) -> list[WorkerRow]:
+    health = state._store.health
+    healthy_active_ids = {wid for wid, l in health.all().items() if l.healthy and l.active}
+    if not healthy_active_ids:
+        return []
+    placeholders = ",".join("?" for _ in healthy_active_ids)
     with state._db.read_snapshot() as q:
-        workers = WORKER_ROW_PROJECTION.decode(q.fetchall("SELECT * FROM workers WHERE healthy = 1 AND active = 1"))
+        workers = WORKER_ROW_PROJECTION.decode(
+            q.fetchall(
+                f"SELECT * FROM workers WHERE worker_id IN ({placeholders})",
+                tuple(str(wid) for wid in healthy_active_ids),
+            )
+        )
     return hydrate_worker_attributes(state, workers)
 
 

@@ -20,6 +20,7 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2, worker_pb2
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.worker_connect import WorkerServiceClient
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,8 @@ class RpcWorkerStubFactory:
                 stub = WorkerServiceClient(
                     address=f"http://{address}",
                     timeout_ms=self._timeout.to_ms(),
+                    accept_compression=IRIS_RPC_COMPRESSIONS,
+                    send_compression=IRIS_RPC_COMPRESSIONS[0],
                 )
                 self._stubs[address] = stub
             return stub

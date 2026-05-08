@@ -14,7 +14,6 @@ import logging
 import re
 import secrets
 import uuid
-from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Protocol
@@ -80,7 +79,7 @@ from iris.cluster.controller.schema import (
     WorkerRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.stores import ControllerStore, SnapshotView
+from iris.cluster.controller.stores import AddEndpointOutcome, ControllerStore, _hydrate_worker_detail
 from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
@@ -349,14 +348,9 @@ def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRo
     return tasks_with_attempts([task], attempts)[0]
 
 
-def _read_worker(db: ControllerDB, worker_id: WorkerId) -> WorkerDetailRow | None:
-    with db.read_snapshot() as q:
-        return WORKER_DETAIL_PROJECTION.decode_one(
-            q.fetchall(
-                f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} FROM workers w WHERE w.worker_id = ?",
-                (str(worker_id),),
-            )
-        )
+def _read_worker(store: ControllerStore, worker_id: WorkerId) -> WorkerDetailRow | None:
+    with store.read_snapshot() as q:
+        return store.workers.get_detail(q, worker_id)
 
 
 def _job_state(db: ControllerDB, job_id: JobName) -> int | None:
@@ -477,14 +471,9 @@ class _WorkerDetail:
     running_tasks: frozenset[JobName]
 
 
-def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail | None:
-    with db.read_snapshot() as q:
-        worker = WORKER_DETAIL_PROJECTION.decode_one(
-            q.fetchall(
-                f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} FROM workers w WHERE w.worker_id = ?",
-                (str(worker_id),),
-            ),
-        )
+def _read_worker_detail(store: ControllerStore, worker_id: WorkerId) -> _WorkerDetail | None:
+    with store.read_snapshot() as q:
+        worker = store.workers.get_detail(q, worker_id)
         if worker is None:
             return None
         attr_rows = q.fetchall(
@@ -508,6 +497,14 @@ def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail 
 
 
 def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetailRow]:
+    """Load tasks for the list view without their full attempt history.
+
+    The list UI only renders the current attempt + ``failure_count`` /
+    ``preemption_count`` (already on the task row), so the per-task IN-clause
+    SELECT against ``task_attempts`` was pure waste — it dominated job-detail
+    page latency on jobs with many attempts. Full history is still fetched in
+    ``get_task_status``.
+    """
     with db.read_snapshot() as q:
         tasks = TASK_DETAIL_PROJECTION.decode(
             q.fetchall(
@@ -516,19 +513,7 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetailR
                 (job_id.to_wire(),),
             ),
         )
-        if not tasks:
-            return []
-        task_wires = [t.task_id.to_wire() for t in tasks]
-        placeholders = ",".join("?" for _ in task_wires)
-        attempts = ATTEMPT_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
-                f"WHERE ta.task_id IN ({placeholders}) "
-                "ORDER BY ta.task_id ASC, ta.attempt_id ASC",
-                tuple(task_wires),
-            ),
-        )
-    return tasks_with_attempts(tasks, attempts)
+    return tasks
 
 
 def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[TaskDetailRow]) -> dict[WorkerId, str]:
@@ -546,9 +531,8 @@ def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[TaskDetailRow]) ->
     return {WorkerId(str(row.worker_id)): row.address for row in rows}
 
 
-# State display order for sorting (active states first). Used both by the SQL
-# path (rendered as a CASE expression) and the Python snapshot path (used as a
-# direct dict lookup). Keep the two in sync.
+# State display order for sorting (active states first). Rendered into
+# ``_STATE_SORT_EXPR`` as a CASE expression for the JOB_SORT_FIELD_STATE path.
 _STATE_SORT_ORDER: dict[int, int] = {
     job_pb2.JOB_STATE_RUNNING: 0,
     job_pb2.JOB_STATE_BUILDING: 1,
@@ -725,48 +709,6 @@ def _query_jobs(
     return JOB_ROW_PROJECTION.decode(rows), total
 
 
-def _job_matches_query(
-    job: JobRow,
-    query: controller_pb2.Controller.JobQuery,
-    state_ids: tuple[int, ...],
-) -> bool:
-    """Python equivalent of the WHERE clause in :func:`_query_jobs`.
-
-    Used by the snapshot path; the SQL path uses ``_query_jobs`` directly.
-    """
-    if job.state not in state_ids:
-        return False
-    scope = query.scope or controller_pb2.Controller.JOB_QUERY_SCOPE_ALL
-    if scope == controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS:
-        if job.depth != 1:
-            return False
-    elif scope == controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN:
-        parent = job.job_id.parent
-        if parent is None or parent.to_wire() != query.parent_job_id:
-            return False
-    if query.name_filter and query.name_filter.lower() not in job.name.lower():
-        return False
-    return True
-
-
-def _job_sort_key(
-    sort_field: int,
-    summaries: Mapping[JobName, TaskJobSummary],
-) -> Callable[[JobRow], object]:
-    """Return a key function for Python-side sorting equivalent to ``_SORT_FIELD_TO_SQL``."""
-    if sort_field == controller_pb2.Controller.JOB_SORT_FIELD_NAME:
-        return lambda j: j.name
-    if sort_field == controller_pb2.Controller.JOB_SORT_FIELD_STATE:
-        # Same priority order as ``_STATE_SORT_EXPR``; unknown states sink to 99.
-        return lambda j: _STATE_SORT_ORDER.get(j.state, 99)
-    if sort_field == controller_pb2.Controller.JOB_SORT_FIELD_FAILURES:
-        return lambda j: summaries.get(j.job_id, TaskJobSummary(job_id=j.job_id)).failure_count
-    if sort_field == controller_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS:
-        return lambda j: summaries.get(j.job_id, TaskJobSummary(job_id=j.job_id)).preemption_count
-    # JOB_SORT_FIELD_DATE (default).
-    return lambda j: j.submitted_at.epoch_ms()
-
-
 def _query_from_list_jobs_request(
     request: controller_pb2.Controller.ListJobsRequest,
 ) -> controller_pb2.Controller.JobQuery:
@@ -848,27 +790,32 @@ def _task_summaries_for_jobs(q: QuerySnapshot, job_ids: set[JobName] | None = No
     return summaries
 
 
-def _worker_roster(db: ControllerDB) -> list[WorkerDetailRow]:
-    with db.read_snapshot() as q:
-        workers = WORKER_DETAIL_PROJECTION.decode(
+def _worker_roster(store: ControllerStore) -> list[WorkerDetailRow]:
+    with store.read_snapshot() as q:
+        decoded = WORKER_DETAIL_PROJECTION.decode(
             q.fetchall(f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} FROM workers w")
         )
-        # Populate attributes from worker_attributes table.
-        if workers:
-            worker_ids = tuple(str(w.worker_id) for w in workers)
-            placeholders = ",".join("?" for _ in worker_ids)
-            attr_rows = q.fetchall(
-                f"SELECT worker_id, key, value_type, str_value, int_value, float_value "
-                f"FROM worker_attributes WHERE worker_id IN ({placeholders})",
-                worker_ids,
-            )
-            attrs_by_worker: dict[str, dict[str, str | int | float]] = {}
-            for row in attr_rows:
-                wid = str(row["worker_id"])
-                key, value = _decode_attribute_value(row)
-                attrs_by_worker.setdefault(wid, {})[key] = value
-            workers = [dataclasses.replace(w, attributes=attrs_by_worker.get(str(w.worker_id), {})) for w in workers]
-        return workers
+        if not decoded:
+            return []
+        worker_ids = tuple(str(w.worker_id) for w in decoded)
+        placeholders = ",".join("?" for _ in worker_ids)
+        attr_rows = q.fetchall(
+            f"SELECT worker_id, key, value_type, str_value, int_value, float_value "
+            f"FROM worker_attributes WHERE worker_id IN ({placeholders})",
+            worker_ids,
+        )
+        attrs_by_worker: dict[str, dict[str, str | int | float]] = {}
+        for row in attr_rows:
+            wid = str(row["worker_id"])
+            key, value = _decode_attribute_value(row)
+            attrs_by_worker.setdefault(wid, {})[key] = value
+    # Overlay liveness + commit-tracker values; the dormant SQLite columns are
+    # not the source of truth for these fields anymore.
+    workers = []
+    for w in decoded:
+        hydrated = _hydrate_worker_detail(w, store.health, store.committed)
+        workers.append(dataclasses.replace(hydrated, attributes=attrs_by_worker.get(str(w.worker_id), {})))
+    return workers
 
 
 def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetailRow]:
@@ -1043,39 +990,6 @@ def _inject_resource_constraints(
     return new_request
 
 
-# Dashboard list/aggregate RPCs (ListJobs, ListWorkers) are dominated by polling
-# traffic. The data they read is already a few seconds stale by the time the
-# browser renders it, so we serve them from periodic in-memory snapshots
-# instead of a per-request DB fan-out. Each snapshot is rebuilt at most once
-# per ``SnapshotView`` TTL and shared across concurrent readers.
-
-# How long ListJobs/ListWorkers may serve stale rows. Picked to be short enough
-# that a user clicking "kill" then refreshing sees the change within a poll or
-# two, and long enough to absorb dashboard fan-out.
-DASHBOARD_SNAPSHOT_TTL_S = 2.0
-
-
-@dataclass(frozen=True, slots=True)
-class JobsSnapshot:
-    """Full job set with per-job task summaries and parent-child flags.
-
-    ListJobs filters/sorts/paginates ``rows`` in Python and looks up the
-    accompanying ``summaries`` / ``child_parent_ids`` per page.
-    """
-
-    rows: tuple[JobRow, ...]
-    summaries: Mapping[JobName, TaskJobSummary]
-    child_parent_ids: frozenset[JobName]
-
-
-@dataclass(frozen=True, slots=True)
-class WorkersSnapshot:
-    """Worker roster plus running-task assignments per worker."""
-
-    workers: tuple[WorkerDetailRow, ...]
-    running_by_worker: Mapping[WorkerId, frozenset[JobName]]
-
-
 class ControllerServiceImpl:
     """ControllerService RPC implementation.
 
@@ -1108,45 +1022,6 @@ class ControllerServiceImpl:
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
-        # Dashboard polling RPCs are served from periodic snapshots instead of
-        # per-request SQL. ListJobs filters its snapshot in Python; ListWorkers
-        # and GetAutoscalerStatus share one workers snapshot so back-to-back
-        # dashboard polls only do one SELECT/JOIN.
-        self._jobs_snapshot = SnapshotView[JobsSnapshot](
-            name="jobs", ttl_s=DASHBOARD_SNAPSHOT_TTL_S, build=self._build_jobs_snapshot
-        )
-        self._workers_snapshot = SnapshotView[WorkersSnapshot](
-            name="workers", ttl_s=DASHBOARD_SNAPSHOT_TTL_S, build=self._build_workers_snapshot
-        )
-
-    def _build_jobs_snapshot(self) -> JobsSnapshot:
-        """Materialize every job row plus its task summary and child-presence flag.
-
-        One read snapshot, three queries: SELECT jobs (with the standard
-        ``JOB_CONFIG_JOIN``), GROUP BY tasks for state counts, DISTINCT on
-        parent_job_id for parent→child membership.
-        """
-        with self._db.read_snapshot() as q:
-            rows = JOB_ROW_PROJECTION.decode(
-                q.fetchall(f"SELECT {JOB_ROW_PROJECTION.select_clause()} FROM jobs j {JOB_CONFIG_JOIN}")
-            )
-            ids = {j.job_id for j in rows}
-            summaries = _task_summaries_for_jobs(q, ids)
-            children = _parent_ids_with_children(q, list(ids))
-        return JobsSnapshot(
-            rows=tuple(rows),
-            summaries=summaries,
-            child_parent_ids=frozenset(children),
-        )
-
-    def _build_workers_snapshot(self) -> WorkersSnapshot:
-        """Materialize the worker roster plus running-task assignments per worker."""
-        workers = _worker_roster(self._db)
-        running = running_tasks_by_worker(self._db, {w.worker_id for w in workers}) if workers else {}
-        return WorkersSnapshot(
-            workers=tuple(workers),
-            running_by_worker={wid: frozenset(tasks) for wid, tasks in running.items()},
-        )
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -1499,8 +1374,6 @@ class ControllerServiceImpl:
                 scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
                 pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
-        resources = _resource_spec_from_job_row(j)
-
         proto_job = job_pb2.JobStatus(
             job_id=j.job_id.to_wire(),
             state=j.state,
@@ -1509,7 +1382,6 @@ class ControllerServiceImpl:
             failure_count=task_summary.failure_count if task_summary else 0,
             preemption_count=task_summary.preemption_count if task_summary else 0,
             name=job_name,
-            resources=resources,
             task_state_counts=task_state_counts,
             task_count=task_summary.task_count if task_summary else 0,
             completed_count=task_summary.completed_count if task_summary else 0,
@@ -1547,12 +1419,13 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.ListJobsRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.ListJobsResponse:
-        """List jobs with filtering, sorting, and pagination served from snapshot.
+        """List jobs with filtering, sorting, and pagination.
 
-        The dashboard polls this on every refresh cycle; serving it from the
-        per-process ``_jobs_snapshot`` cuts the per-request DB fan-out (SELECT
-        + COUNT + GROUP BY tasks + DISTINCT parents) down to one in-memory
-        scan plus a Python sort.
+        Served directly from indexed SQL — see ``_query_jobs`` for the
+        EXPLAIN-verified index assignments per request shape. Per-page task
+        summaries and parent→child flags are looked up against the same read
+        snapshot so the whole RPC observes a single transactionally-consistent
+        view.
         """
         query = _query_from_list_jobs_request(request)
 
@@ -1565,34 +1438,17 @@ class ControllerServiceImpl:
                 "query.parent_job_id is required for JOB_QUERY_SCOPE_CHILDREN",
             )
 
-        snap = self._jobs_snapshot.read()
-        matched = [j for j in snap.rows if _job_matches_query(j, query, state_ids)]
-
-        sort_field = query.sort_field or controller_pb2.Controller.JOB_SORT_FIELD_DATE
-        sort_direction = query.sort_direction
-        if sort_direction == controller_pb2.Controller.SORT_DIRECTION_UNSPECIFIED:
-            sort_direction = (
-                controller_pb2.Controller.SORT_DIRECTION_DESC
-                if sort_field == controller_pb2.Controller.JOB_SORT_FIELD_DATE
-                else controller_pb2.Controller.SORT_DIRECTION_ASC
-            )
-        descending = sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC
-        matched.sort(key=_job_sort_key(sort_field, snap.summaries), reverse=descending)
-
-        total_count = len(matched)
-        offset = query.offset
-        limit = query.limit
-        page = matched[offset : offset + limit] if limit > 0 else matched[offset:]
+        with self._db.read_snapshot() as q:
+            page, total_count = _query_jobs(q, query, state_ids)
+            page_ids = [j.job_id for j in page]
+            summaries = _task_summaries_for_jobs(q, set(page_ids)) if page_ids else {}
+            children = _parent_ids_with_children(q, page_ids) if page_ids else set()
 
         has_pending = any(j.state == job_pb2.JOB_STATE_PENDING for j in page)
         autoscaler_pending_hints = self._get_autoscaler_pending_hints() if has_pending else {}
-        page_children = {j.job_id for j in page if j.job_id in snap.child_parent_ids}
-        all_jobs = self._jobs_to_protos(
-            page,
-            {jid: snap.summaries[jid] for jid in (j.job_id for j in page) if jid in snap.summaries},
-            autoscaler_pending_hints,
-            has_children=page_children,
-        )
+        all_jobs = self._jobs_to_protos(page, summaries, autoscaler_pending_hints, has_children=children)
+        limit = query.limit
+        offset = query.offset
         has_more = limit > 0 and offset + limit < total_count
         return controller_pb2.Controller.ListJobsResponse(
             jobs=all_jobs,
@@ -1708,7 +1564,6 @@ class ControllerServiceImpl:
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
             )
-
         logger.info("Worker registered: %s at %s", worker_id, request.address)
         return controller_pb2.Controller.RegisterResponse(
             worker_id=str(worker_id),
@@ -1722,13 +1577,12 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.ListWorkersResponse:
         """List workers with their running task counts.
 
-        Served from ``_workers_snapshot``. The dashboard polls this together
-        with ``GetAutoscalerStatus`` (which reads the same snapshot), so
-        adjacent calls are fused into one rebuild per TTL window. ``running_tasks_by_worker``
-        is captured into the snapshot so the per-page fan-out is replaced by
-        an in-memory dict lookup. ``query.limit == 0`` disables paging
-        (preserves CLI callers that fetch the whole roster); ``limit > 0`` is
-        clamped to ``MAX_LIST_WORKERS_LIMIT``.
+        Served directly from the workers table (cluster size is in the low
+        thousands at most), with the in-memory health / commit overlay applied
+        via :func:`_hydrate_worker_detail` and a single per-page running-task
+        lookup. ``query.limit == 0`` disables paging (preserves CLI callers
+        that fetch the whole roster); ``limit > 0`` is clamped to
+        ``MAX_LIST_WORKERS_LIMIT``.
         """
         if self._controller.has_direct_provider:
             return controller_pb2.Controller.ListWorkersResponse()
@@ -1737,8 +1591,8 @@ class ControllerServiceImpl:
         if request.HasField("query"):
             query.CopyFrom(request.query)
 
-        snap = self._workers_snapshot.read()
-        filtered = _filter_and_sort_workers(list(snap.workers), query)
+        workers_all = _worker_roster(self._store)
+        filtered = _filter_and_sort_workers(workers_all, query)
         total_count = len(filtered)
 
         offset = max(query.offset, 0)
@@ -1752,15 +1606,14 @@ class ControllerServiceImpl:
             page_rows = filtered[offset:] if offset else filtered
             has_more = False
 
+        running = running_tasks_by_worker(self._db, {w.worker_id for w in page_rows}) if page_rows else {}
         workers = [
             controller_pb2.Controller.WorkerHealthStatus(
                 worker_id=worker.worker_id,
                 healthy=worker.healthy,
                 consecutive_failures=worker.consecutive_failures,
                 last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
-                running_job_ids=[
-                    task_id.to_wire() for task_id in snap.running_by_worker.get(worker.worker_id, frozenset())
-                ],
+                running_job_ids=[task_id.to_wire() for task_id in running.get(worker.worker_id, set())],
                 address=worker.address,
                 metadata=_worker_metadata_to_proto(worker),
                 status_message=worker_status_message(worker),
@@ -1794,20 +1647,7 @@ class ControllerServiceImpl:
         endpoint_id = request.endpoint_id or str(uuid.uuid4())
 
         task_id = JobName.from_wire(request.task_id)
-        job_id, _task_index = task_id.require_task()
-
-        if _job_state(self._db, job_id) is None:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.task_id} not found")
-
-        task = _read_task_with_attempts(self._db, task_id)
-        if not task:
-            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
-        if request.attempt_id != task.current_attempt_id:
-            raise ConnectError(
-                Code.FAILED_PRECONDITION,
-                f"Stale attempt: task {request.task_id} attempt {request.attempt_id} "
-                f"!= current {task.current_attempt_id}",
-            )
+        task_id.require_task()
 
         endpoint = EndpointRow(
             endpoint_id=endpoint_id,
@@ -1818,9 +1658,19 @@ class ControllerServiceImpl:
             registered_at=Timestamp.now(),
         )
 
+        # Validation runs inside the writer transaction in
+        # :meth:`EndpointStore.add`: NOT_FOUND if the task row is missing,
+        # FAILED_PRECONDITION if the task is terminal or the attempt is stale.
         with self._store.transaction() as cur:
-            added = self._transitions.add_endpoint(cur, endpoint)
-        if not added:
+            outcome = self._transitions.add_endpoint(cur, endpoint, expected_attempt_id=request.attempt_id)
+        if outcome is AddEndpointOutcome.NOT_FOUND:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+        if outcome is AddEndpointOutcome.STALE_ATTEMPT:
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Stale attempt for task {request.task_id} (attempt {request.attempt_id})",
+            )
+        if outcome is AddEndpointOutcome.TERMINAL:
             raise ConnectError(
                 Code.FAILED_PRECONDITION,
                 f"Task {request.task_id} is already terminal; endpoint not registered",
@@ -1910,21 +1760,25 @@ class ControllerServiceImpl:
 
         status = autoscaler.get_status()
 
-        # ListWorkers and GetAutoscalerStatus share the workers snapshot — the
-        # roster + running-task fan-out is built once per TTL window and reused.
-        snap = self._workers_snapshot.read()
-        worker_id_to_info: dict[str, tuple[str, bool]] = {w.worker_id: (w.worker_id, w.healthy) for w in snap.workers}
+        workers = _worker_roster(self._store)
+        worker_id_to_health: dict[str, bool] = {str(w.worker_id): w.healthy for w in workers}
 
-        # Enrich VmInfo objects with worker information by matching vm_id to worker_id
+        # The vm_ids appearing in the autoscaler status are the only candidates
+        # for the running-task lookup; restrict to those known to be in the
+        # roster to keep the IN-clause bounded by visible VMs, not roster size.
+        vm_ids = {vm.vm_id for group in status.groups for slice_info in group.slices for vm in slice_info.vms}
+        candidate_ids = {WorkerId(vid) for vid in vm_ids if vid in worker_id_to_health}
+        running = running_tasks_by_worker(self._db, candidate_ids) if candidate_ids else {}
+
         for group in status.groups:
             for slice_info in group.slices:
                 for vm in slice_info.vms:
-                    worker_info = worker_id_to_info.get(vm.vm_id)
-                    if worker_info:
-                        vm.worker_id = worker_info[0]
-                        vm.worker_healthy = worker_info[1]
-                        wid = WorkerId(vm.worker_id)
-                        vm.running_task_count = len(snap.running_by_worker.get(wid, frozenset()))
+                    healthy = worker_id_to_health.get(vm.vm_id)
+                    if healthy is None:
+                        continue
+                    vm.worker_id = vm.vm_id
+                    vm.worker_healthy = healthy
+                    vm.running_task_count = len(running.get(WorkerId(vm.vm_id), set()))
 
         return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 
@@ -2104,7 +1958,7 @@ class ControllerServiceImpl:
                 )
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
 
-        worker = _read_worker(self._db, task_worker_id)
+        worker = _read_worker(self._store, task_worker_id)
         if not worker or not worker.healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
 
@@ -2159,7 +2013,7 @@ class ControllerServiceImpl:
         if not request.id:
             raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
 
-        detail = _read_worker_detail(self._db, WorkerId(str(request.id)))
+        detail = _read_worker_detail(self._store, WorkerId(str(request.id)))
         if not detail:
             raise ConnectError(Code.NOT_FOUND, f"No worker found for '{request.id}'")
 
@@ -2425,7 +2279,7 @@ class ControllerServiceImpl:
                 )
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
 
-        worker = _read_worker(self._db, task_worker_id)
+        worker = _read_worker(self._store, task_worker_id)
         if not worker or not worker.healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
 
@@ -2727,7 +2581,14 @@ class ControllerServiceImpl:
         request: job_pb2.SetTaskStatusTextRequest,
         _ctx: Any,
     ) -> job_pb2.SetTaskStatusTextResponse:
-        """Task pushes a markdown status string to the coordinator."""
+        """Task pushes a markdown status string to the coordinator.
+
+        Status text lives entirely in the in-memory ``TaskStore`` dict; the
+        write is idempotent and stale task IDs are evicted by
+        ``remove_status_text_by_job_ids`` during pruning. No validation read
+        is needed here — the prior precheck added a SQLite snapshot per call
+        on a path the dashboard hits hundreds of times a minute.
+        """
         task_id = JobName.from_wire(request.task_id)
         self._transitions.record_task_status_text(task_id, request.status_text_detail_md, request.status_text_summary_md)
         return job_pb2.SetTaskStatusTextResponse()

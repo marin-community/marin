@@ -44,6 +44,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.stores import (
     ActiveTaskRow,
+    AddEndpointOutcome,
     ControllerStore,
     EndpointStore,
     JobConfigInsertParams,
@@ -406,7 +407,7 @@ def _terminate_task(
     delete_task_endpoints(cur, registry, task_id)
 
     if worker_id is not None and resources is not None:
-        workers.decommit_resources(cur, WorkerId(worker_id), resources)
+        workers.decommit_resources(WorkerId(worker_id), resources)
 
 
 def _kill_non_terminal_tasks(
@@ -1097,7 +1098,7 @@ class ControllerTransitions:
         # Direct-provider tasks have NULL worker_id — skip decommit for them.
         for row in running_rows:
             if row.current_worker_id is not None and not row.is_reservation_holder:
-                self._store.workers.decommit_resources(cur, row.current_worker_id, row.resources)
+                self._store.workers.decommit_resources(row.current_worker_id, row.resources)
         now_ms = Timestamp.now().epoch_ms()
         self._store.tasks.bulk_kill_non_terminal(cur, subtree, reason, now_ms, TERMINAL_TASK_STATES)
         # Without this, the current attempt row stays state=RUNNING forever
@@ -1165,7 +1166,6 @@ class ControllerTransitions:
             WorkerUpsertParams(
                 worker_id=worker_id,
                 address=address,
-                last_heartbeat_ms=now_ms,
                 total_cpu_millicores=metadata.cpu_count * 1000,
                 total_memory_bytes=metadata.memory_bytes,
                 total_gpu_count=gpu_count,
@@ -1191,6 +1191,7 @@ class ControllerTransitions:
                 md_git_hash=metadata.git_hash,
                 md_device_json=proto_to_json(metadata.device),
             ),
+            now_ms=now_ms,
         )
         self._store.workers.replace_attributes(cur, worker_id, attrs)
         # Update in-memory attribute cache only after commit so a rolled-back tx
@@ -1282,7 +1283,7 @@ class ControllerTransitions:
                     job.res_disk_bytes,
                     job.res_device_json,
                 )
-                self._store.workers.add_committed_resources(cur, assignment.worker_id, resources)
+                self._store.workers.add_committed_resources(assignment.worker_id, resources)
                 entrypoint = proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint)
                 # Load inline workdir files from the job_workdir_files table.
                 for filename, data in self._store.jobs.get_workdir_files(cur, task.job_id).items():
@@ -1319,19 +1320,14 @@ class ControllerTransitions:
         )
 
     def _update_worker_health(self, cur: TransactionCursor, req: HeartbeatApplyRequest, now_ms: int) -> bool:
-        """Update worker health, resource snapshot, and history.
+        """Update worker health in the in-memory tracker.
 
         Returns False if the worker doesn't exist (caller should bail).
         """
         existing = self._store.workers.filter_existing(cur, [req.worker_id])
         if str(req.worker_id) not in existing:
             return False
-        self._store.workers.apply_snapshots(
-            cur,
-            [req.worker_id],
-            now_ms,
-            reset_health=True,
-        )
+        self._store.workers.heartbeat([req.worker_id], now_ms, reset_health=True)
         return True
 
     def _apply_task_transitions(
@@ -1505,7 +1501,7 @@ class ControllerTransitions:
                         int(jc["res_disk_bytes"]),
                         jc["res_device_json"],
                     )
-                    self._store.workers.decommit_resources(cur, worker_id, resources)
+                    self._store.workers.decommit_resources(worker_id, resources)
 
             if update.new_state in TERMINAL_TASK_STATES:
                 delete_task_endpoints(cur, self._store.endpoints, update.task_id.to_wire())
@@ -1601,8 +1597,7 @@ class ControllerTransitions:
 
         # ── Batch worker health updates ───────────────────────────────
         existing_workers = self._store.workers.filter_existing(cur, [req.worker_id for req in requests])
-        self._store.workers.apply_snapshots(
-            cur,
+        self._store.workers.heartbeat(
             [req.worker_id for req in requests if str(req.worker_id) in existing_workers],
             now_ms,
             reset_health=True,
@@ -1774,13 +1769,14 @@ class ControllerTransitions:
         now_ms: int | None = None,
     ) -> WorkerFailureResult:
         """Remove a failed worker inside an existing transaction."""
-        status = self._store.workers.get_active_status(cur, worker_id)
-        if status is None:
+        liveness = self._store.workers.get_liveness(worker_id)
+        if liveness is None or not liveness.active:
             return WorkerFailureResult(worker_removed=True)
 
         now_ms = now_ms or Timestamp.now().epoch_ms()
-        last_contact_age_ms = None if status.last_heartbeat_ms is None else max(0, now_ms - status.last_heartbeat_ms)
-        self._store.workers.mark_unhealthy(cur, worker_id)
+        last_hb = liveness.last_heartbeat_ms
+        last_contact_age_ms = None if not last_hb else max(0, now_ms - last_hb)
+        self._store.workers.mark_unhealthy(worker_id)
         removal = self._remove_failed_worker(cur, worker_id, error, now_ms=now_ms)
         return WorkerFailureResult(
             tasks_to_kill=removal.tasks_to_kill,
@@ -2163,11 +2159,12 @@ class ControllerTransitions:
             jobs_deleted += 1
             time.sleep(pause_between_s)
 
-        # 2. Workers: one at a time (CASCADE to attributes)
+        # 2. Workers: one at a time (CASCADE to attributes). The in-memory
+        # liveness tracker is the source of truth — find_prunable scans the
+        # tracker, not SQLite columns.
         workers_deleted = 0
         while not _stopped():
-            with self._store.read_snapshot() as snap:
-                worker_id = self._store.workers.find_prunable(snap, worker_cutoff_ms)
+            worker_id = self._store.workers.find_prunable(worker_cutoff_ms)
             if worker_id is None:
                 break
             with self._store.transaction() as cur:
@@ -2208,25 +2205,19 @@ class ControllerTransitions:
     # Split Heartbeat Helpers
     # =========================================================================
 
-    def update_worker_pings(
-        self,
-        cur: TransactionCursor,
-        worker_ids: Iterable[WorkerId],
-    ) -> None:
-        """Apply a batch of Ping RPC results within the caller's transaction.
+    def update_worker_pings(self, worker_ids: Iterable[WorkerId]) -> None:
+        """Apply a batch of Ping RPC results into the in-memory health tracker.
 
-        Bumps ``last_heartbeat_ms`` for each successfully-pinged worker.
-        Per-tick host utilization is no longer persisted in the controller DB —
-        workers emit it directly to the ``iris.worker`` stats namespace.
-        Does not touch healthy/active/consecutive_failures — the ping loop
-        tracks failures in-memory and uses ``fail_workers_batch`` to remove
-        workers past threshold.
+        Bumps ``last_heartbeat_ms`` for each successfully-pinged worker. Does
+        not touch healthy/active/consecutive_failures — the ping loop tracks
+        failures via :meth:`WorkerHealthTracker.ping` and reaps workers via
+        :meth:`fail_workers_batch`.
         """
         ids = list(worker_ids)
         if not ids:
             return
         now_ms = Timestamp.now().epoch_ms()
-        self._store.workers.apply_snapshots(cur, ids, now_ms, reset_health=False)
+        self._store.workers.heartbeat(ids, now_ms, reset_health=False)
 
     def get_running_tasks_for_poll(
         self,
@@ -2317,13 +2308,19 @@ class ControllerTransitions:
 
     # --- Endpoint Management ---
 
-    def add_endpoint(self, cur: TransactionCursor, endpoint: EndpointRow) -> bool:
+    def add_endpoint(
+        self,
+        cur: TransactionCursor,
+        endpoint: EndpointRow,
+        *,
+        expected_attempt_id: int | None = None,
+    ) -> AddEndpointOutcome:
         """Add an endpoint row through the store's endpoint cache.
 
-        Returns True if the endpoint was inserted, False if the task is already
-        terminal (to prevent orphaned endpoints that would never be cleaned up).
+        Validation (existence, terminal-state, stale-attempt) runs inside the
+        write transaction so the RPC handler can drop its precheck reads.
         """
-        return self._store.endpoints.add(cur, endpoint)
+        return self._store.endpoints.add(cur, endpoint, expected_attempt_id=expected_attempt_id)
 
     def remove_endpoint(self, cur: TransactionCursor, endpoint_id: str) -> EndpointRow | None:
         return self._store.endpoints.remove(cur, endpoint_id)
@@ -2333,9 +2330,8 @@ class ControllerTransitions:
     # ---------------------------------------------------------------------
 
     def set_worker_health_for_test(self, worker_id: WorkerId, healthy: bool) -> None:
-        """Test helper: set worker health in DB."""
-        with self._store.transaction() as cur:
-            self._store.workers.set_health_for_test(cur, worker_id, healthy)
+        """Test helper: set worker health in the in-memory tracker."""
+        self._store.workers.set_health_for_test(worker_id, healthy)
 
     def set_worker_attribute_for_test(self, worker_id: WorkerId, key: str, value: AttributeValue) -> None:
         """Test helper: upsert one worker attribute in DB."""
@@ -2642,9 +2638,8 @@ class ControllerTransitions:
     # =========================================================================
 
     def set_worker_consecutive_failures_for_test(self, worker_id: WorkerId, consecutive_failures: int) -> None:
-        """Test helper: set worker consecutive failure count in DB."""
-        with self._store.transaction() as cur:
-            self._store.workers.set_consecutive_failures_for_test(cur, worker_id, consecutive_failures)
+        """Test helper: set worker consecutive failure count in the in-memory tracker."""
+        self._store.workers.set_consecutive_failures_for_test(worker_id, consecutive_failures)
 
     def set_task_state_for_test(
         self,

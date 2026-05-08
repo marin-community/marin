@@ -3268,17 +3268,18 @@ def test_prune_evicts_status_text_cache(state):
 
 
 def test_prune_old_inactive_workers(state):
-    """Inactive workers with stale heartbeats are pruned; active workers are kept."""
+    """Inactive workers with stale heartbeats are pruned; active workers are kept.
 
-    # Register two workers: one healthy, one that we'll make inactive
+    Liveness state lives in :class:`WorkerHealthTracker` rather than the
+    SQLite ``workers`` row, so the test mutates the tracker directly to age
+    out the stale worker.
+    """
     active_wid = register_worker(state, "active-w", "host:8080", make_worker_metadata())
     stale_wid = register_worker(state, "stale-w", "host:8081", make_worker_metadata())
 
-    # Mark the stale worker as unhealthy with an old heartbeat
-    state._db.execute(
-        "UPDATE workers SET healthy = 0, last_heartbeat_ms = ? WHERE worker_id = ?",
-        (1000, str(stale_wid)),
-    )
+    # Mark the stale worker as unhealthy with an old heartbeat in the tracker.
+    state._store.health.set_health_for_test(stale_wid, healthy=False)
+    state._store.health.set_last_heartbeat_for_test(stale_wid, last_heartbeat_ms=1000)
 
     assert _query_worker(state, active_wid) is not None
     assert _query_worker(state, stale_wid) is not None

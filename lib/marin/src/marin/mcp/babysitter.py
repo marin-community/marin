@@ -22,6 +22,7 @@ from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider, TokenProvider
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
 from mcp.server.fastmcp import FastMCP
@@ -162,7 +163,12 @@ def task_status_to_json(task: job_pb2.TaskStatus) -> dict[str, Any]:
 
 
 def job_status_to_json(job: job_pb2.JobStatus, tasks: Iterable[job_pb2.TaskStatus] = ()) -> dict[str, Any]:
-    """Serialize Iris job status into stable JSON."""
+    """Serialize Iris job status into stable JSON.
+
+    The ListJobs RPC no longer returns ``resources`` / ``ports`` / ``tasks`` /
+    ``status_message``; callers that need per-job detail should hit
+    ``GetJobStatus`` and use :func:`_job_summary_payload` instead.
+    """
     task_payloads = [task_status_to_json(task) for task in tasks]
     return {
         "job_id": job.job_id,
@@ -174,7 +180,6 @@ def job_status_to_json(job: job_pb2.JobStatus, tasks: Iterable[job_pb2.TaskStatu
         "started_at_ms": _timestamp_ms(job.started_at),
         "finished_at_ms": _timestamp_ms(job.finished_at),
         "duration_ms": _duration_ms(job.started_at, job.finished_at),
-        "status_message": job.status_message,
         "pending_reason": job.pending_reason,
         "failure_count": int(job.failure_count),
         "preemption_count": int(job.preemption_count),
@@ -182,8 +187,6 @@ def job_status_to_json(job: job_pb2.JobStatus, tasks: Iterable[job_pb2.TaskStatu
         "completed_count": int(job.completed_count),
         "task_state_counts": dict(job.task_state_counts),
         "has_children": bool(job.has_children),
-        "resource_requests": _resource_spec_to_json(job.resources),
-        "ports": dict(job.ports),
         "tasks": task_payloads,
     }
 
@@ -405,6 +408,8 @@ class IrisBabysitter:
             config.controller_url,
             timeout_ms=config.timeout_ms,
             interceptors=interceptors,
+            accept_compression=IRIS_RPC_COMPRESSIONS,
+            send_compression=IRIS_RPC_COMPRESSIONS[0],
         )
         self.logs = LogServiceClientSync(
             config.controller_url,

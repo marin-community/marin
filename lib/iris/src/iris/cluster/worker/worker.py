@@ -49,6 +49,7 @@ from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2, controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import timestamp_to_proto
 
@@ -271,6 +272,8 @@ class Worker:
                 address=self._config.controller_address,
                 timeout_ms=10_000,
                 interceptors=interceptors,
+                accept_compression=IRIS_RPC_COMPRESSIONS,
+                send_compression=IRIS_RPC_COMPRESSIONS[0],
             )
             # Register stats namespaces eagerly. Schema bugs surface here at
             # startup rather than silently producing empty namespaces.

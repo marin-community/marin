@@ -57,8 +57,10 @@ def load_autoscaler_checkpoint(db: ControllerDB) -> AutoscalerCheckpoint:
                 "last_active_ms": decode_timestamp_ms,
             },
         )
+        # Failed workers have their DB row deleted (WorkerStore.remove), so
+        # surviving rows with a slice are by definition the live tracked set.
         tracked_rows = snapshot.raw(
-            "SELECT worker_id, slice_id, scale_group, address FROM workers WHERE slice_id != '' AND active = 1",
+            "SELECT worker_id, slice_id, scale_group, address FROM workers WHERE slice_id != ''",
         )
 
     slices_by_group: dict[str, list[SliceSnapshot]] = {}
