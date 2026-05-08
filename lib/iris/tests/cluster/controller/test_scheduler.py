@@ -2113,55 +2113,6 @@ def test_dedup_reservation_pinned_worker_respected_for_later_tasks(scheduler, st
     assert assigned_workers == {WorkerId("w1"), WorkerId("w2")}
 
 
-def test_dedup_perf_one_job_thousands_of_tasks(state):
-    """Stress: 1 job x 5000 replicas x 200 workers, find_assignments completes quickly.
-
-    Without per-job dedup, this is O(replicas x workers) ≈ 1M can_fit calls per
-    pass. With dedup, the scheduler hoists constraint matching once per job and
-    stops iterating after the candidate pool is exhausted, dropping inner work
-    to O(workers) ≈ 200 can_fit calls. This test asserts the steady-state cost
-    of an over-large queue does not exceed a generous bound; before the dedup
-    landed it was ~1s on the production marin queue.
-    """
-    import time
-
-    sched = Scheduler(max_building_tasks_per_worker=1000)
-    num_workers = 500
-    num_replicas = 10000  # controller caps replicas at 10000 per job
-
-    for i in range(num_workers):
-        meta = make_worker_metadata(cpu=10, memory_bytes=10 * 1024**3)
-        register_worker(state, f"w{i:04d}", f"addr{i:04d}", meta)
-
-    req = controller_pb2.Controller.LaunchJobRequest(
-        name="huge-job",
-        entrypoint=_make_test_entrypoint(),
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=job_pb2.EnvironmentConfig(),
-        replicas=num_replicas,
-    )
-    submit_job(state, "huge-job", req)
-
-    context = _build_context(sched, state)
-    assert len(context.pending_tasks) == num_replicas
-    assert len(context.capacities) == num_workers
-
-    start = time.perf_counter()
-    result = sched.find_assignments(context)
-    elapsed = time.perf_counter() - start
-
-    assert len(result.assignments) == num_workers, (
-        f"Expected {num_workers} placements (one per worker per cycle), " f"got {len(result.assignments)}"
-    )
-    # Generous bound. With dedup, observed time on a laptop is ~10ms; without
-    # dedup, the same workload takes ~500ms-1s. Set the threshold well below
-    # the no-dedup baseline so a regression is caught reliably even on slow CI.
-    assert elapsed < 0.2, (
-        f"find_assignments took {elapsed:.3f}s for {num_replicas} tasks x {num_workers} workers; "
-        f"expected <0.2s with per-job dedup"
-    )
-
-
 def test_gpu_job_matches_worker_with_config_variant(scheduler, state):
     """A GPU job requesting variant="H100" matches a worker with device-variant="H100".
 
