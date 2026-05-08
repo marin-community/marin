@@ -13,7 +13,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import Generic, NamedTuple, TypeVar
 
 from rigging.timing import Duration, Timestamp
 
@@ -675,7 +675,7 @@ def _finalize_terminal_job(
     state. Kills the job's own non-terminal tasks and, depending on preemption
     policy, cascades to descendant jobs.
 
-    Succeeded jobs always cascade (children are no longer needed).
+    Succeeded jobs always cascade — their children are not needed.
     Non-succeeded jobs cascade only if the preemption policy is TERMINATE_CHILDREN.
     """
     reason = _TERMINAL_STATE_REASONS.get(terminal_state, "Job finalized")
@@ -734,6 +734,38 @@ def _resolve_task_failure_state(
 RUN_REQUEST_TEMPLATE_CACHE_SIZE = 4096
 
 
+_K = TypeVar("_K")
+_V = TypeVar("_V")
+
+
+class _LRUCache(Generic[_K, _V]):
+    """Thread-safe LRU cache with a fixed maximum size."""
+
+    def __init__(self, max_size: int):
+        self._max_size = max_size
+        self._lock = threading.Lock()
+        self._items: OrderedDict[_K, _V] = OrderedDict()
+
+    def get(self, key: _K) -> _V | None:
+        with self._lock:
+            value = self._items.get(key)
+            if value is None:
+                return None
+            self._items.move_to_end(key)
+            return value
+
+    def put(self, key: _K, value: _V) -> _V:
+        with self._lock:
+            existing = self._items.get(key)
+            if existing is not None:
+                self._items.move_to_end(key)
+                return existing
+            self._items[key] = value
+            while len(self._items) > self._max_size:
+                self._items.popitem(last=False)
+            return value
+
+
 class ControllerTransitions:
     """State machine for controller entities.
 
@@ -754,11 +786,8 @@ class ControllerTransitions:
         self._health = health or WorkerHealthTracker()
         # Per-job RunTaskRequest templates. Same-name replacement assigns a
         # new ``job_id`` so the cache key naturally rolls; no manual
-        # invalidation. ``_template_cache_lock`` guards concurrent writes
-        # from the polling reconcile thread.
-        self._run_template_cache: OrderedDict[str, job_pb2.RunTaskRequest] = OrderedDict()
-        self._run_template_cache_lock = threading.Lock()
-        self._run_template_cache_max = RUN_REQUEST_TEMPLATE_CACHE_SIZE
+        # invalidation needed.
+        self._run_template_cache: _LRUCache[str, job_pb2.RunTaskRequest] = _LRUCache(RUN_REQUEST_TEMPLATE_CACHE_SIZE)
 
     def run_request_template(
         self,
@@ -772,12 +801,9 @@ class ControllerTransitions:
         worker-bound dispatch (e.g. reservation holders, missing rows).
         """
         wire = job_id.to_wire()
-        with self._run_template_cache_lock:
-            cached = self._run_template_cache.get(wire)
-            if cached is not None:
-                # LRU touch
-                self._run_template_cache.move_to_end(wire)
-                return cached
+        cached = self._run_template_cache.get(wire)
+        if cached is not None:
+            return cached
 
         job = self._store.jobs.get_detail(snap, job_id)
         if job is None or job.is_reservation_holder:
@@ -802,15 +828,7 @@ class ControllerTransitions:
             constraints=[c.to_proto() for c in constraints_from_json(job.constraints_json)],
             task_image=job.task_image,
         )
-        with self._run_template_cache_lock:
-            existing = self._run_template_cache.get(wire)
-            if existing is not None:
-                self._run_template_cache.move_to_end(wire)
-                return existing
-            self._run_template_cache[wire] = template
-            while len(self._run_template_cache) > self._run_template_cache_max:
-                self._run_template_cache.popitem(last=False)
-        return template
+        return self._run_template_cache.put(wire, template)
 
     @property
     def _db(self) -> "ControllerDB":
@@ -1159,15 +1177,14 @@ class ControllerTransitions:
         # heartbeat or the worker-failure synthesis path stamps finished_at_ms.
         now_ms = Timestamp.now().epoch_ms()
         self._store.tasks.bulk_kill_non_terminal(cur, subtree, reason, now_ms, TERMINAL_TASK_STATES)
-        # Roll the attempt's reporting state to KILLED so dashboards don't show
-        # the task as still RUNNING on its old worker, but leave finished_at_ms
-        # NULL so the scheduler keeps treating the attempt as a live resource
-        # holder until the worker confirms termination via heartbeat.
+        # Roll the attempt to KILLED for dashboard accuracy; leave
+        # ``finished_at_ms`` NULL so the scheduler counts the worker's
+        # resources as held until the heartbeat path confirms termination.
         self._store.attempts.bulk_apply_attempt_state(
             cur, subtree, job_pb2.TASK_STATE_KILLED, reason, set(ACTIVE_TASK_STATES)
         )
-        # Deliberately excludes JOB_STATE_WORKER_FAILED from the guard set:
-        # worker-failed jobs should still be cancellable (transitioned to KILLED).
+        # Allow worker-failed jobs to transition to KILLED on cancel —
+        # exclude that state from the cancel guard.
         cancel_guard_states = TERMINAL_JOB_STATES - {job_pb2.JOB_STATE_WORKER_FAILED}
         self._store.jobs.bulk_update_state(
             cur,
@@ -1897,10 +1914,9 @@ class ControllerTransitions:
             row.max_retries_preemption,
             job_pb2.TASK_STATE_PREEMPTED,
         )
-        # We still need attempt_worker_id below to populate task_kill_workers
-        # for the StopTask RPC, but we no longer pass it to _terminate_task —
-        # capacity release is now driven by the heartbeat that finalizes the
-        # attempt.
+        # Retrieve the attempt's worker_id to populate ``task_kill_workers``
+        # for the StopTask RPC. ``_terminate_task`` does not release capacity
+        # — heartbeat finalization does.
         attempt_worker = self._store.attempts.get_worker_id(cur, task_id, row.current_attempt_id)
         attempt_worker_id = str(attempt_worker) if attempt_worker is not None else None
 
@@ -1960,12 +1976,10 @@ class ControllerTransitions:
                 tasks_to_kill.update(child_kills)
                 task_kill_workers.update(child_workers)
 
-        # Always send a StopTask RPC to the worker that was running this attempt:
-        # _terminate_task no longer releases capacity (the heartbeat does that)
-        # and the worker keeps running the old code unless we tell it to stop.
-        # Without the kill RPC the worker would keep running while the scheduler
-        # reuses the freed slot once the heartbeat finalizes the attempt,
-        # producing two concurrent processes on the same TPU.
+        # Send a StopTask RPC to the worker running the attempt. Capacity
+        # release happens at heartbeat finalization, so without this RPC the
+        # worker keeps the process running while the scheduler reuses the
+        # freed slot.
         if attempt_worker_id is not None:
             tasks_to_kill.add(task_id)
             task_kill_workers[task_id] = WorkerId(attempt_worker_id)

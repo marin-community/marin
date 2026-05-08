@@ -3,22 +3,11 @@
 
 """Regression test for issue #5470: TPU placement collision after preemption.
 
-Original failure mode: when a coscheduled TPU gang failed during BUILDING,
-``_requeue_coscheduled_siblings`` decommitted ``committed_tpu`` on all workers
-in the same DB transaction. Kill RPCs for the still-running sibling processes
-were sent AFTER the transaction committed (async). The scheduling thread
-could run a tick between the decommit and the kills, see the freed capacity,
-and assign a second gang to workers that still had stale processes.
-
-The Operation Jumbo refactor makes that race impossible: scheduler capacity
-is now derived from unfinished worker-bound ``task_attempts``
-(``worker_id IS NOT NULL AND finished_at_ms IS NULL``). Producing transitions
-such as ``_requeue_coscheduled_siblings`` set ``task_attempts.state`` but
-deliberately leave ``finished_at_ms`` NULL, so the attempt keeps holding the
-worker's chips until the worker confirms termination via heartbeat (or the
-worker-failure synthesis path stamps it). That means the scheduler cannot
-double-book a worker on the next tick — and it cannot reassign to a slice
-whose old processes are still being killed.
+Verify the scheduler does not reassign a TPU slice while sibling kill RPCs
+for the slice are still in flight. Worker capacity is derived from
+unfinished worker-bound attempts (``finished_at_ms IS NULL``), so
+producer-side cancel/preempt does not free the slice — only the heartbeat
+path's terminal finalization does.
 
 Production incident timeline (Incident B, v5p-256):
   09:14:31  lr0.5  assigned -> slice 389585fe
@@ -32,7 +21,7 @@ import pytest
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.controller import SchedulingOutcome
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
 from iris.cluster.controller.stores import WorkerResourceUsage
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -133,9 +122,8 @@ def _build_context(scheduler, state):
             if job:
                 jobs[task.job_id] = _job_requirements_from_job(job)
     usage = _read_usage_by_worker(state)
-    return scheduler.create_scheduling_context(
-        workers, usage_by_worker=usage, building_counts=bc, pending_tasks=task_ids, jobs=jobs
-    )
+    snapshots = [worker_snapshot_from_row(w, usage.get(w.worker_id)) for w in workers]
+    return scheduler.create_scheduling_context(snapshots, building_counts=bc, pending_tasks=task_ids, jobs=jobs)
 
 
 def _schedulable_tasks_for_test(state):

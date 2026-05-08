@@ -1785,65 +1785,6 @@ class WorkerStore:
         )
         return {WorkerId(str(row["worker_id"])): str(row["address"]) for row in rows}
 
-    def next_reconcile_batch(
-        self,
-        tx: Tx,
-        cursor: WorkerId | None,
-        limit: int,
-        priority: Sequence[WorkerId] = (),
-    ) -> tuple[list[tuple[WorkerId, str]], WorkerId | None]:
-        """Return up to ``limit`` (worker_id, address) tuples for the next reconcile pass.
-
-        Healthy active workers are walked round-robin starting after ``cursor``.
-        ``priority`` workers are placed at the front of the batch (deduped) so
-        freshly-assigned workers don't have to wait for a full rotation.
-
-        Returns ``(batch, next_cursor)``. ``next_cursor`` is the last worker_id
-        in the rotation portion of the batch (excluding priority entries) and
-        should be passed back on the next call. If the rotation portion is
-        empty (e.g. the batch is entirely priority entries, or no rotation
-        workers are healthy), the cursor is left unchanged.
-        """
-        addresses = self.list_active_healthy(tx)
-        if not addresses:
-            return [], cursor
-
-        ordered_ids = sorted(addresses.keys(), key=str)
-        # Find the start index just after ``cursor``.
-        start_idx = 0
-        if cursor is not None:
-            cursor_str = str(cursor)
-            for i, wid in enumerate(ordered_ids):
-                if str(wid) > cursor_str:
-                    start_idx = i
-                    break
-            else:
-                start_idx = 0
-
-        rotated = ordered_ids[start_idx:] + ordered_ids[:start_idx]
-
-        seen: set[WorkerId] = set()
-        batch: list[tuple[WorkerId, str]] = []
-
-        # Priority workers first (only those that are still healthy/active).
-        for wid in priority:
-            if wid in addresses and wid not in seen:
-                batch.append((wid, addresses[wid]))
-                seen.add(wid)
-                if len(batch) >= limit:
-                    return batch, cursor
-
-        next_cursor = cursor
-        for wid in rotated:
-            if wid in seen:
-                continue
-            batch.append((wid, addresses[wid]))
-            seen.add(wid)
-            next_cursor = wid
-            if len(batch) >= limit:
-                break
-        return batch, next_cursor
-
     def list_active_by_ids(self, tx: Tx, worker_ids: Iterable[str]) -> list[WorkerDetailRow]:
         """Return :class:`WorkerDetailRow` for all active workers whose id is in ``worker_ids``."""
         liveness = self._health.all()

@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -81,6 +81,8 @@ from iris.cluster.controller.scheduler import (
     Scheduler,
     SchedulingContext,
     WorkerCapacity,
+    WorkerSnapshot,
+    worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
@@ -98,7 +100,7 @@ from iris.cluster.controller.schema import (
     tasks_with_attempts,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.stores import ControllerStore, TaskAttemptStore, WorkerResourceUsage
+from iris.cluster.controller.stores import ControllerStore, TaskAttemptStore
 from iris.cluster.controller.transitions import (
     DIRECT_PROVIDER_PROMOTION_RATE,
     RESERVATION_HOLDER_JOB_NAME,
@@ -154,11 +156,6 @@ _SCHEDULING_TRACE_INTERVAL = 50
 # ``_reconcile_worker_batch`` against the next slice of healthy workers.
 POLLING_TICK_INTERVAL = Duration.from_seconds(0.25)
 
-# Maximum number of healthy workers reconciled per polling tick. Combined
-# with POLLING_TICK_INTERVAL this bounds the per-tick RPC fan-out and the
-# full-fleet rotation period.
-RECONCILE_WORKER_BATCH_SIZE = 512
-
 # Taint attribute injected onto claimed workers to prevent non-reservation
 # jobs from landing on them.  Non-reservation jobs get a NOT_EXISTS constraint
 # for this key; reservation jobs do not, so they naturally prefer claimed
@@ -197,8 +194,7 @@ class _SchedulingStateRead:
     """Snapshot of pending tasks and workers read at the start of a scheduling cycle."""
 
     pending_tasks: list[TaskRow]
-    workers: list[SchedulableWorker]
-    usage_by_worker: dict[WorkerId, WorkerResourceUsage]
+    workers: list[WorkerSnapshot]
     state_read_ms: int
 
 
@@ -314,14 +310,14 @@ def compute_demand_entries(
         building_counts = _building_counts(queries, workers)
         with queries.read_snapshot() as snap:
             usage_by_worker = TaskAttemptStore(queries).resource_usage_by_worker(snap)
+        snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         task_ids = [t.task_id for t in all_schedulable]
         claims = reservation_claims or {}
-        dry_run_workers = _inject_reservation_taints(workers, claims)
+        dry_run_workers = _inject_reservation_taints(snapshots, claims)
         dry_run_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
         context = scheduler.create_scheduling_context(
             dry_run_workers,
-            usage_by_worker=usage_by_worker,
             building_counts=building_counts,
             pending_tasks=task_ids,
             jobs=dry_run_jobs,
@@ -708,7 +704,10 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
     return {task.task_id: task for task in tasks_with_attempts(tasks, attempts)}
 
 
-def _building_counts(queries: ControllerDB, workers: list[SchedulableWorker]) -> dict[WorkerId, int]:
+def _building_counts(
+    queries: ControllerDB,
+    workers: Sequence[SchedulableWorker] | Sequence[WorkerSnapshot],
+) -> dict[WorkerId, int]:
     """Count tasks in BUILDING or ASSIGNED state per worker, excluding reservation-holder jobs."""
     if not workers:
         return {}
@@ -754,23 +753,23 @@ def _worker_matches_reservation_entry(
 
 
 def _inject_reservation_taints(
-    workers: list[SchedulableWorker],
+    workers: list[WorkerSnapshot],
     claims: dict[WorkerId, ReservationClaim],
-) -> list[SchedulableWorker]:
-    """Create modified worker copies with reservation taints and prioritization.
+) -> list[WorkerSnapshot]:
+    """Create modified worker snapshots with reservation taints and prioritization.
 
     Claimed workers receive a ``reservation-job`` attribute set to the claiming
     job's ID.  The returned list is ordered with claimed workers first so that
     reservation jobs (which have no NOT_EXISTS constraint) naturally pick from
     their claimed workers before unclaimed ones.
 
-    Workers are never mutated — ``dataclasses.replace`` produces shallow copies.
+    Snapshots are never mutated — ``dataclasses.replace`` produces shallow copies.
     """
     if not claims:
         return workers
 
-    claimed: list[SchedulableWorker] = []
-    unclaimed: list[SchedulableWorker] = []
+    claimed: list[WorkerSnapshot] = []
+    unclaimed: list[WorkerSnapshot] = []
     for worker in workers:
         claim = claims.get(worker.worker_id)
         if claim is not None:
@@ -1215,14 +1214,6 @@ class Controller:
         self._prune_thread: ManagedThread | None = None
         self._ping_thread: ManagedThread | None = None
 
-        # Round-robin reconcile cursor. Each polling tick reads the next batch
-        # of healthy workers starting after this cursor; ``_priority_workers``
-        # is consumed before rotation so freshly-assigned workers do not have
-        # to wait for a full sweep.
-        self._reconcile_cursor: WorkerId | None = None
-        self._priority_workers: set[WorkerId] = set()
-        self._priority_workers_lock = threading.Lock()
-
         self._autoscaler: Autoscaler | None = autoscaler
 
         self._last_timeout_check_ms: int = 0
@@ -1262,15 +1253,6 @@ class Controller:
         waiting for a full polling rotation.
         """
         self._scheduling_wake.set()
-        self._polling_wake.set()
-
-    def _wake_polling_for_workers(self, worker_ids: Iterable[WorkerId]) -> None:
-        """Push workers to the front of the next polling rotation."""
-        worker_ids = list(worker_ids)
-        if not worker_ids:
-            return
-        with self._priority_workers_lock:
-            self._priority_workers.update(worker_ids)
         self._polling_wake.set()
 
     @property
@@ -1501,11 +1483,10 @@ class Controller:
         """Per-worker reconcile loop on its own ~250 ms cadence.
 
         Each tick:
-          1. Read a bounded slice of healthy workers (priority lane first,
-             then round-robin via ``_reconcile_cursor``).
+          1. Snapshot every healthy active worker.
           2. Fan out ``StartTasks`` for ASSIGNED rows and ``PollTasks`` for
-             BUILDING/RUNNING rows in that slice.
-          3. Apply heartbeat-style results via the heartbeat queue.
+             BUILDING/RUNNING rows.
+          3. Apply heartbeat-style results in one write txn.
 
         The polling thread is the sole path that pushes work to a worker.
         Worker auto-kill is implicit: any task absent from the worker's
@@ -1916,17 +1897,22 @@ class Controller:
         return claims
 
     def _read_scheduling_state(self) -> _SchedulingStateRead:
-        """Fetch pending tasks and healthy workers from the DB."""
+        """Fetch pending tasks and healthy workers from the DB.
+
+        Projects worker rows + per-cycle held-resource usage (from
+        ``task_attempts``) into bundled ``WorkerSnapshot``s at the boundary so
+        downstream scheduling code only sees the scheduler's input type.
+        """
         timer = Timer()
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
             pending_tasks = _schedulable_tasks(self._db)
             workers = healthy_active_workers_with_attributes(self._db, self._health)
             with self._db.read_snapshot() as snap:
                 usage_by_worker = self._store.attempts.resource_usage_by_worker(snap)
+            snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         return _SchedulingStateRead(
             pending_tasks=pending_tasks,
-            workers=workers,
-            usage_by_worker=usage_by_worker,
+            workers=snapshots,
             state_read_ms=timer.elapsed_ms(),
         )
 
@@ -2057,7 +2043,6 @@ class Controller:
             building_counts = _building_counts(self._db, workers=state.workers)
         context = self._scheduler.create_scheduling_context(
             modified_workers,
-            usage_by_worker=state.usage_by_worker,
             building_counts=building_counts,
             pending_tasks=order.ordered_task_ids,
             jobs=modified_jobs,
@@ -2110,9 +2095,9 @@ class Controller:
         command = [Assignment(task_id=task_id, worker_id=worker_id) for task_id, worker_id in assignments]
         with self._store.transaction() as cur:
             self._transitions.queue_assignments(cur, command)
-        # Push the affected workers to the front of the polling rotation so
-        # ASSIGNED rows turn into StartTasks RPCs on the very next tick.
-        self._wake_polling_for_workers({worker_id for _, worker_id in assignments})
+        # Wake the polling thread; every tick reconciles every healthy worker,
+        # so the new ASSIGNED rows turn into StartTasks RPCs on the next tick.
+        self._polling_wake.set()
 
     def _apply_preemptions(
         self,
@@ -2252,9 +2237,9 @@ class Controller:
         building_counts = _building_counts(self._db, workers)
         with self._db.read_snapshot() as snap:
             usage_by_worker = self._store.attempts.resource_usage_by_worker(snap)
+        snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         return self._scheduler.create_scheduling_context(
-            workers,
-            usage_by_worker=usage_by_worker,
+            snapshots,
             building_counts=building_counts,
         )
 
@@ -2280,10 +2265,7 @@ class Controller:
             return
         if isinstance(self._provider, K8sTaskProvider):
             return
-        if task_kill_workers:
-            self._wake_polling_for_workers(task_kill_workers.values())
-        else:
-            self._polling_wake.set()
+        self._polling_wake.set()
 
     # =========================================================================
     # Worker lifecycle RPC dispatch (Reconcile / Ping)
@@ -2308,21 +2290,12 @@ class Controller:
         if self._config.dry_run:
             return
 
-        with self._priority_workers_lock:
-            priority = list(self._priority_workers)
-            self._priority_workers.clear()
-
-        # ── Phase 1: snapshot the batch ───────────────────────────────────
+        # ── Phase 1: snapshot every healthy worker ───────────────────────
         with self._db.read_snapshot() as snap:
-            batch, next_cursor = self._store.workers.next_reconcile_batch(
-                snap,
-                cursor=self._reconcile_cursor,
-                limit=RECONCILE_WORKER_BATCH_SIZE,
-                priority=priority,
-            )
-            if not batch:
+            addresses = self._store.workers.list_active_healthy(snap)
+            if not addresses:
                 return
-            worker_ids = [wid for wid, _ in batch]
+            worker_ids = list(addresses)
             rows = self._store.attempts.reconcile_rows_for_workers(snap, worker_ids)
             templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
             for row in rows:
@@ -2330,7 +2303,6 @@ class Controller:
                     continue
                 if row.job_id not in templates_by_job:
                     templates_by_job[row.job_id] = self._transitions.run_request_template(snap, row.job_id)
-        self._reconcile_cursor = next_cursor
 
         expected: dict[WorkerId, list[RunningTaskEntry]] = {wid: [] for wid in worker_ids}
         starts: dict[WorkerId, list[job_pb2.RunTaskRequest]] = {wid: [] for wid in worker_ids}
@@ -2350,8 +2322,6 @@ class Controller:
                 attempt_by_worker_task[(row.worker_id, row.task_id.to_wire())] = row.attempt_id
             else:
                 expected[row.worker_id].append(RunningTaskEntry(task_id=row.task_id, attempt_id=row.attempt_id))
-
-        addresses = {wid: addr for wid, addr in batch}
 
         # ── Phase 2: RPC fan-out ──────────────────────────────────────────
         start_jobs = [(wid, addresses[wid], reqs) for wid, reqs in starts.items() if reqs and addresses.get(wid)]
@@ -2497,16 +2467,12 @@ class Controller:
                 logger.exception("Ping loop iteration failed")
 
     def _process_heartbeat_updates(self, requests: list[HeartbeatApplyRequest]) -> None:
-        """Apply heartbeat-driven transitions to the DB.
+        """Apply heartbeat-driven state transitions in one write txn.
 
-        Worker-side kills are no longer issued from this path. The polling
-        reconcile thread excludes finalized tasks from each worker's
-        ``expected_tasks`` set, and the worker auto-kills any local task not
-        in that set. We only need to nudge the polling rotation to the
-        affected workers so the kill diff is visible on the next tick.
-        Cascades and gang requeues do still surface ``tasks_to_kill`` /
-        ``task_kill_workers`` so the heartbeat path can wake the relevant
-        workers (and, for K8s, defer to the sync-loop diff).
+        Cascades and gang requeues surface ``tasks_to_kill`` /
+        ``task_kill_workers`` so the polling thread (or, for K8s, the sync
+        loop) can pick up the kills on the next tick. A terminal heartbeat
+        finalizes at least one attempt, so this also wakes the scheduler.
         """
         with self._store.transaction() as cur:
             results = self._transitions.apply_heartbeats_batch(cur, requests)
@@ -2517,8 +2483,6 @@ class Controller:
             all_task_kill_workers.update(result.task_kill_workers)
         if all_tasks_to_kill:
             self.kill_tasks_on_workers(all_tasks_to_kill, all_task_kill_workers)
-        # Capacity-return: a terminal heartbeat finalized at least one
-        # attempt, so the scheduler may now be able to place new work.
         self._scheduling_wake.set()
 
     def _terminate_workers(self, worker_ids: list[str], reason: str, sibling_reason: str) -> list[WorkerId]:

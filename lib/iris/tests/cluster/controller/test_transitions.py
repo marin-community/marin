@@ -22,7 +22,7 @@ from iris.cluster.controller.db import (
     EndpointQuery,
     attempt_is_terminal,
 )
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
     JOB_DETAIL_PROJECTION,
@@ -127,9 +127,9 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
                 )
     with state._db.read_snapshot() as snap:
         usage = state._store.attempts.resource_usage_by_worker(snap)
+    snapshots = [worker_snapshot_from_row(w, usage.get(w.worker_id)) for w in workers]
     return scheduler.create_scheduling_context(
-        workers,
-        usage_by_worker=usage,
+        snapshots,
         building_counts=_building_counts(state),
         pending_tasks=task_ids,
         jobs=jobs,
@@ -269,14 +269,10 @@ def test_job_cancellation_kills_all_tasks(harness):
 
 
 def test_cancel_job_holds_resources_until_heartbeat_finalization(harness):
-    """cancel_job is a producer transition: it leaves attempt finished_at_ms
-    NULL so the worker keeps "owning" its slice in the scheduler's derived
-    usage view until the heartbeat path stamps the timestamp.
-
-    The previous regression (committed_tpu never decommitted on cancel) is
-    no longer reachable because committed_* columns are gone — usage is
-    derived from unfinished worker-bound attempts, and the heartbeat path
-    is the sole writer of finished_at_ms.
+    """Verify ``cancel_job`` is a producer transition: the attempt's
+    ``finished_at_ms`` stays NULL so the worker keeps owning its slice in
+    the scheduler's derived usage view until the heartbeat path stamps the
+    timestamp.
     """
     w1 = harness.add_worker("w1")
     w2 = harness.add_worker("w2")
@@ -296,22 +292,16 @@ def test_cancel_job_holds_resources_until_heartbeat_finalization(harness):
     assert _usage_for_worker(harness.state, w1).cpu_millicores == 1000
     assert _usage_for_worker(harness.state, w2).cpu_millicores == 1000
 
-    # Tasks are no longer surfaced as running (state moved to KILLED).
+    # Tasks transition to KILLED, removing them from the running-task view.
     assert len(worker_running_tasks(harness.state, w1)) == 0
     assert len(worker_running_tasks(harness.state, w2)) == 0
 
 
 def test_cancel_job_rolls_attempt_state_without_finalizing(harness):
-    """cancel_job moves the in-flight attempt's reporting state to terminal so
-    dashboards don't see a "killed but still RUNNING" row, but leaves
-    finished_at_ms NULL because the worker may still be running the container.
-
-    Regression: bulk_kill_non_terminal updated the tasks table but not
-    task_attempts, so the dashboard query (which reads attempts) reported
-    KILLED tasks as still RUNNING on their old worker. Producer-side state
-    update via bulk_apply_attempt_state covers that without releasing
-    capacity early — the heartbeat path stamps finished_at_ms once the
-    worker confirms termination.
+    """Verify ``cancel_job`` rolls the in-flight attempt's reporting state to
+    KILLED so dashboards don't see a "killed but still RUNNING" row, while
+    leaving ``finished_at_ms`` NULL so the scheduler retains capacity for
+    the worker until heartbeat finalization.
     """
     from iris.cluster.controller.db import attempt_is_terminal
 
@@ -1317,8 +1307,9 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(state):
 
 def test_coscheduled_retriable_failure_bounces_siblings_to_pending(state):
     """A retriable failure of one coscheduled task bounces all siblings to
-    PENDING so the job re-coschedules atomically. Sibling preemption budgets
-    are preserved — only the originally-failing task pays its retry budget."""
+    PENDING so the job re-coschedules atomically. Only the preempted task
+    uses its retry budget; sibling preemption and failure counts are
+    unchanged."""
 
     for i in range(4):
         meta = make_worker_metadata()
