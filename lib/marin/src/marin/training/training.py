@@ -304,6 +304,11 @@ def _submit_training_job(
 ) -> None:
     """Submit a Levanter training job to Fray and block until completion."""
     client = current_client()
+    # MIDTRAIN_MAX_TASK_FAILURES lets users tolerate within-gang task crashes
+    # without killing the parent job. Used to ride out the iris placement-
+    # collision bug (#5470) and vfio-busy host reuse (#5258) until both are
+    # solidly fixed server-side. Default 0 = die on first task failure.
+    max_task_failures = int(os.environ.get("MIDTRAIN_MAX_TASK_FAILURES", "0"))
     # Using a constant job name allows restarts to adopt the existing job handle
     # instead of raising a duplicate name error (adopt_existing=True is the default).
     job_request = JobRequest(
@@ -312,6 +317,7 @@ def _submit_training_job(
         resources=resources,
         environment=create_environment(env_vars=env, extras=extras),
         max_retries_failure=0,
+        max_task_failures=max_task_failures,
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
