@@ -486,8 +486,8 @@ class ControllerDashboard:
             Route("/auth/config", self._auth_config),
             Route("/auth/session", self._auth_session, methods=["POST"]),
             Route("/auth/logout", self._auth_logout, methods=["POST"]),
-            Route("/job/{job_id:path}", self._job_detail_page),
-            Route("/worker/{worker_id:path}", self._worker_detail_page),
+            Route("/job/{job_id:path}", self._dashboard),
+            Route("/worker/{worker_id:path}", self._dashboard),
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
             Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
@@ -545,7 +545,8 @@ class ControllerDashboard:
         return wrapped
 
     @public
-    def _dashboard(self, request: Request) -> Response:
+    def _dashboard(self, _request: Request) -> HTMLResponse:
+        # Vue Router handles client-side routing, so every SPA path serves the same shell.
         return HTMLResponse(html_shell("controller"))
 
     @public
@@ -568,14 +569,6 @@ class ControllerDashboard:
             path="/",
         )
         return response
-
-    @public
-    def _job_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("controller"))
-
-    @public
-    def _worker_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("controller"))
 
     @public
     def _auth_config(self, request: Request) -> JSONResponse:
@@ -684,11 +677,12 @@ class ProxyControllerDashboard:
         return self._app
 
     def _create_app(self) -> Starlette:
+        # Vue Router handles client-side routing, so every SPA path serves the same shell.
         routes = [
             Route("/", self._dashboard),
             favicon_route(),
-            Route("/job/{job_id:path}", self._job_detail_page),
-            Route("/worker/{worker_id:path}", self._worker_detail_page),
+            Route("/job/{job_id:path}", self._dashboard),
+            Route("/worker/{worker_id:path}", self._dashboard),
             Route("/bundles/{bundle_id:str}.zip", self._proxy_bundle),
             Route("/blobs/{blob_id:str}", self._proxy_blob),
             Route("/health", self._health),
@@ -700,8 +694,8 @@ class ProxyControllerDashboard:
 
         return Starlette(routes=routes, lifespan=on_shutdown(self._client.aclose))
 
-    def _proxy_html(self, dashboard_type: str) -> HTMLResponse:
-        html = html_shell(dashboard_type)
+    def _dashboard(self, _request: Request) -> HTMLResponse:
+        html = html_shell("controller")
         banner = (
             '<div style="background:#f59e0b;color:#000;text-align:center;'
             "padding:4px 8px;font-size:13px;font-weight:600;position:fixed;"
@@ -710,15 +704,6 @@ class ProxyControllerDashboard:
         )
         html = html.replace('<div id="app">', banner + '<div id="app">')
         return HTMLResponse(html)
-
-    def _dashboard(self, _request: Request) -> HTMLResponse:
-        return self._proxy_html("controller")
-
-    def _job_detail_page(self, _request: Request) -> HTMLResponse:
-        return self._proxy_html("controller")
-
-    def _worker_detail_page(self, _request: Request) -> HTMLResponse:
-        return self._proxy_html("controller")
 
     def _health(self, _request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
