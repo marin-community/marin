@@ -1,33 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared helpers for redacting secrets from job submissions and responses.
+"""Iris-specific redaction wrappers around :mod:`rigging.redaction`.
 
-Used on both the client (before capturing argv for bookkeeping) and the
-controller (when returning job requests via RPC).
+The actual secret-pattern matching lives in ``rigging``; this module only
+adapts iris-specific shapes (the ``LaunchJobRequest`` proto and Click argv
+for ``iris job run``) into a form the shared redactor can consume.
 """
 
-import json
-import logging
-import re
+from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
 from iris.rpc import controller_pb2
-
-logger = logging.getLogger(__name__)
-
-SENSITIVE_ENV_KEY_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
-REDACTED_VALUE = "**REDACTED**"
 
 # CLI flags on `iris job run` that take a (KEY, VALUE) pair via Click's
 # type=(str, str). Keep in sync with the Click option definition in
 # iris/cli/job.py; see the `-e/--env-vars` option on the `run` command.
 _ENV_VAR_LONG_FLAG = "--env-vars"
 _ENV_VAR_SHORT_FLAG = "-e"
-
-
-def is_sensitive_env_key(key: str) -> bool:
-    """Return True if *key* looks like a secret env var name."""
-    return bool(SENSITIVE_ENV_KEY_RE.search(key))
 
 
 def _env_var_flag_key(token: str, next_token: str | None) -> str | None:
@@ -58,39 +47,10 @@ def redact_request_env_vars(
     redacted = controller_pb2.Controller.LaunchJobRequest()
     redacted.CopyFrom(request)
     env_vars = redacted.environment.env_vars
-    for key in list(env_vars):
-        if is_sensitive_env_key(key):
-            env_vars[key] = REDACTED_VALUE
+    redacted_env = redact_value(dict(env_vars))
+    env_vars.clear()
+    env_vars.update(redacted_env)
     return redacted
-
-
-def _redact_tree(node):
-    """Walk a parsed-JSON tree, redacting values under sensitive-looking keys."""
-    if isinstance(node, dict):
-        return {k: REDACTED_VALUE if is_sensitive_env_key(k) else _redact_tree(v) for k, v in node.items()}
-    if isinstance(node, list):
-        return [_redact_tree(v) for v in node]
-    return node
-
-
-def redact_json_preview(rendered: str) -> str:
-    """Return *rendered* with values under sensitive-looking keys replaced.
-
-    The input is arbitrary JSON (typically a protobuf rendered via
-    ``MessageToJson``). Any key matching :data:`SENSITIVE_ENV_KEY_RE` at
-    any depth has its value replaced with :data:`REDACTED_VALUE`; this also
-    covers map<string,string> fields like ``env_vars`` where secrets tend
-    to live. Unparseable input is returned unchanged so callers never lose
-    the preview entirely.
-    """
-    if not rendered:
-        return rendered
-    try:
-        tree = json.loads(rendered)
-    except ValueError:
-        logger.debug("redact_json_preview: input was not valid JSON, returning as-is")
-        return rendered
-    return json.dumps(_redact_tree(tree), separators=(",", ":"))
 
 
 def redact_submit_argv(argv: list[str]) -> list[str]:
@@ -102,8 +62,9 @@ def redact_submit_argv(argv: list[str]) -> list[str]:
       * ``--env-vars=KEY VALUE`` — attached long form
       * ``-eKEY VALUE`` — attached short form
 
-    When KEY matches SENSITIVE_ENV_KEY_RE, VALUE is replaced with
-    REDACTED_VALUE. Other tokens pass through unchanged.
+    When KEY matches the shared sensitive-key regex, VALUE is replaced with
+    REDACTED_VALUE. Values under benign keys still pass through the shared
+    string redactor so prefixed or high-entropy tokens do not leak.
     """
     out = list(argv)
     n = len(out)
@@ -126,7 +87,7 @@ def redact_submit_argv(argv: list[str]) -> list[str]:
             i += 1
             continue
 
-        if is_sensitive_env_key(key):
-            out[val_idx] = REDACTED_VALUE
+        value = out[val_idx]
+        out[val_idx] = REDACTED_VALUE if is_sensitive_key_name(key) else redact_string(value)
         i = val_idx + 1
     return out

@@ -27,12 +27,11 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 import click
-
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     _building_counts,
@@ -53,6 +52,7 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
+    EndpointRow,
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
@@ -71,18 +71,16 @@ from iris.cluster.controller.service import (
     _worker_addresses_for_tasks,
     _worker_roster,
 )
-from iris.cluster.controller.schema import EndpointRow
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
-    DispatchBatch,
     HeartbeatApplyRequest,
     ReservationClaim,
     TaskUpdate,
 )
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, WorkerId
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
 _results: list[tuple[str, float, float, int]] = []
@@ -97,13 +95,8 @@ _CLONE_TABLES = [
     "workers",
     "worker_attributes",
     "dispatch_queue",
-    "worker_task_history",
-    "worker_resource_history",
-    "task_resource_history",
     "endpoints",
     "reservation_claims",
-    "txn_log",
-    "txn_actions",
     "meta",
     "schema_migrations",
 ]
@@ -255,7 +248,8 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # --- Write-path benchmarks (use a lightweight clone) ---
     write_db = clone_db(db)
-    write_txns = ControllerTransitions(write_db)
+    write_store = ControllerStore(write_db)
+    write_txns = ControllerTransitions(store=write_store)
 
     try:
         # queue_assignments: the main write-lock holder in scheduling.
@@ -401,36 +395,36 @@ def benchmark_dashboard(db: ControllerDB) -> None:
     jobs = _bench_jobs_in_states(db)
     job_ids = {j.job_id for j in jobs}
 
-    bench("_task_summaries_for_jobs (all)", lambda: _task_summaries_for_jobs(db, job_ids))
+    def _bench_task_summaries():
+        with db.read_snapshot() as q:
+            return _task_summaries_for_jobs(q, job_ids)
+
+    bench("_task_summaries_for_jobs (all)", _bench_task_summaries)
 
     roots_by_date = controller_pb2.Controller.JobQuery(
         scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
         limit=50,
     )
-    bench(
-        "_query_jobs (roots, by date)",
-        lambda: _query_jobs(db, roots_by_date, USER_JOB_STATES),
-    )
+
+    def _bench_query(query):
+        with db.read_snapshot() as q:
+            return _query_jobs(q, query, USER_JOB_STATES)
+
+    bench("_query_jobs (roots, by date)", lambda: _bench_query(roots_by_date))
 
     roots_by_name = controller_pb2.Controller.JobQuery(
         scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
         name_filter="test",
         limit=50,
     )
-    bench(
-        "_query_jobs (roots, name filter)",
-        lambda: _query_jobs(db, roots_by_name, USER_JOB_STATES),
-    )
+    bench("_query_jobs (roots, name filter)", lambda: _bench_query(roots_by_name))
 
     roots_by_failures = controller_pb2.Controller.JobQuery(
         scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
         sort_field=controller_pb2.Controller.JOB_SORT_FIELD_FAILURES,
         limit=50,
     )
-    bench(
-        "_query_jobs (roots, sort failures)",
-        lambda: _query_jobs(db, roots_by_failures, USER_JOB_STATES),
-    )
+    bench("_query_jobs (roots, sort failures)", lambda: _bench_query(roots_by_failures))
 
     sample_job = jobs[0] if jobs else None
     if sample_job:
@@ -466,13 +460,16 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
         limit=50,
     )
-    paginated_jobs, _ = _query_jobs(db, roots_query, USER_JOB_STATES)
+    with db.read_snapshot() as q:
+        paginated_jobs, _ = _query_jobs(q, roots_query, USER_JOB_STATES)
     root_job_ids = [j.job_id for j in paginated_jobs]
     if root_job_ids:
-        bench(
-            f"_parent_ids_with_children ({len(root_job_ids)} roots)",
-            lambda: _parent_ids_with_children(db, root_job_ids),
-        )
+
+        def _bench_parents():
+            with db.read_snapshot() as q:
+                return _parent_ids_with_children(q, root_job_ids)
+
+        bench(f"_parent_ids_with_children ({len(root_job_ids)} roots)", _bench_parents)
     else:
         print("  _parent_ids_with_children                         (skipped, no jobs)")
 
@@ -499,10 +496,11 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         bench("_tasks_for_worker", lambda: _tasks_for_worker(db, sample_worker_id))
 
     def _list_jobs_full(db):
-        paginated_jobs, _total = _query_jobs(db, roots_query, USER_JOB_STATES)
-        root_ids = [j.job_id for j in paginated_jobs]
-        _task_summaries_for_jobs(db, {j.job_id for j in paginated_jobs})
-        _parent_ids_with_children(db, root_ids)
+        with db.read_snapshot() as q:
+            paginated_jobs, _total = _query_jobs(q, roots_query, USER_JOB_STATES)
+            root_ids = [j.job_id for j in paginated_jobs]
+            _task_summaries_for_jobs(q, {j.job_id for j in paginated_jobs})
+            _parent_ids_with_children(q, root_ids)
 
     bench("list_jobs_full (composite)", lambda: _list_jobs_full(db))
 
@@ -529,7 +527,7 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
                 (sample_worker_id, *active_states),
             )
 
-    bench("drain_dispatch (1 worker)", _single_worker_running_tasks)
+    bench("running_tasks (1 worker)", _single_worker_running_tasks)
 
     def _all_workers_running_tasks():
         with db.read_snapshot() as q:
@@ -541,14 +539,14 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
                 active_states,
             )
 
-    bench(f"drain_dispatch ({len(workers)} workers)", _all_workers_running_tasks)
+    bench(f"running_tasks ({len(workers)} workers)", _all_workers_running_tasks)
 
     bench("running_tasks_by_worker", lambda: running_tasks_by_worker(db, worker_ids))
 
-    transitions = ControllerTransitions(db)
+    transitions = ControllerTransitions(store=ControllerStore(db))
     bench(
-        f"drain_dispatch_all ({len(workers)} workers)",
-        lambda: transitions.drain_dispatch_all(),
+        f"get_running_tasks_for_poll ({len(workers)} workers)",
+        lambda: transitions.get_running_tasks_for_poll(),
     )
 
     # Collect running tasks per worker for apply_heartbeats_batch benchmark.
@@ -597,32 +595,13 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
         )
 
     hb_db = clone_db(db)
-    hb_transitions = ControllerTransitions(hb_db)
+    hb_transitions = ControllerTransitions(store=ControllerStore(hb_db))
 
     try:
         bench(
             f"apply_heartbeats_batch ({len(heartbeat_requests)}w, {total_tasks}t)",
             lambda: hb_transitions.apply_heartbeats_batch(heartbeat_requests),
         )
-
-        # prune_worker_resource_history runs in the background prune loop every
-        # 10 minutes. It was previously inlined into apply_heartbeats_batch as
-        # a per-worker SELECT+DELETE pair, adding ~N*2 queries to each sync
-        # cycle's write transaction. Benchmark it here so we can track its cost
-        # as a background operation.
-        workers_over_limit = hb_db.fetchall(
-            "SELECT COUNT(DISTINCT worker_id) as cnt FROM worker_resource_history "
-            "GROUP BY worker_id HAVING COUNT(*) >= ?",
-            (500,),
-        )
-        n_over = len(workers_over_limit)
-        if n_over:
-            bench(
-                f"prune_worker_resource_history ({n_over} workers over limit)",
-                lambda: hb_transitions.prune_worker_resource_history(),
-            )
-        else:
-            print("  prune_worker_resource_history                     (skipped, no workers over limit)")
     finally:
         hb_db.close()
         shutil.rmtree(hb_db._db_dir, ignore_errors=True)
@@ -668,7 +647,7 @@ def _measure_tail_latency(
     another thread, and report the per-call latency distribution of the
     probe. This is the metric that matches the production symptom —
     RegisterEndpoint RPCs stalling for seconds while a large
-    fail_heartbeats_batch holds the SQLite writer — not the batch's own
+    fail_workers holds the SQLite writer — not the batch's own
     wall time.
     """
     print(f"  {name:50s}  ", end="", flush=True)
@@ -731,92 +710,27 @@ def _measure_tail_latency(
     )
 
 
-def _measure_drain_tail_latency(
-    *,
-    name: str,
-    write_db: ControllerDB,
-    write_txns: ControllerTransitions,
-    batch_fn: Callable[[], Any],
-    reset: Callable[[], Any],
-) -> None:
-    """Measure drain_dispatch_all latency while ``batch_fn`` holds the writer.
-
-    Same pattern as ``_measure_tail_latency`` but probes drain_dispatch_all
-    (provider-sync phase 1) instead of add_endpoint.
-    """
-    print(f"  {name:50s}  ", end="", flush=True)
-
-    def _run() -> tuple[list[float], float]:
-        drain_latencies: list[float] = []
-        errors: list[BaseException] = []
-        stop = threading.Event()
-
-        def _batch() -> None:
-            try:
-                batch_fn()
-            except BaseException as e:
-                errors.append(e)
-            finally:
-                stop.set()
-
-        def _probe() -> None:
-            try:
-                while not stop.is_set():
-                    start = time.perf_counter()
-                    write_txns.drain_dispatch_all()
-                    drain_latencies.append((time.perf_counter() - start) * 1000)
-            except BaseException as e:
-                errors.append(e)
-
-        t_batch = threading.Thread(target=_batch)
-        t_probe = threading.Thread(target=_probe)
-        wall_start = time.perf_counter()
-        t_batch.start()
-        t_probe.start()
-        t_batch.join()
-        t_probe.join()
-        wall_ms = (time.perf_counter() - wall_start) * 1000
-        if errors:
-            raise errors[0]
-        return drain_latencies, wall_ms
-
-    latencies, wall_ms = _run()
-    reset()
-
-    if not latencies:
-        print("(no probe samples)")
-        return
-
-    latencies.sort()
-    p50 = latencies[len(latencies) // 2]
-    p95 = latencies[int(len(latencies) * 0.95)]
-    max_ms = latencies[-1]
-    _results.append((name, p50, p95, len(latencies)))
-    print(
-        f"probes={len(latencies):4d} p50={p50:7.1f}ms  p95={p95:7.1f}ms  "
-        f"max={max_ms:7.1f}ms  batch_wall={wall_ms:7.0f}ms"
-    )
-
-
 def benchmark_endpoints(db: ControllerDB) -> None:
     """Benchmark registration RPC hot paths: RegisterEndpoint and Register (worker).
 
     Covers:
       - add_endpoint: single write, burst-per-txn, burst-in-one-txn
-      - fail_heartbeats_batch: provider-sync "apply results" failure path
+      - fail_workers: slice-reaping failure path
       - endpoint burst contending with apply_heartbeats_batch on a thread
       - register_worker: single, burst of 100, and burst under heartbeat
         contention (matches the production Register p95 of 3-4s)
     """
     # Read-path queries run against the source DB (cheap, no clone needed).
-    bench("endpoint_registry.query (all)", lambda: db.endpoints.query())
+    read_store = ControllerStore(db)
+    bench("endpoint_store.query (all)", lambda: read_store.endpoints.query())
     bench(
-        "endpoint_registry.query (prefix)",
-        lambda: db.endpoints.query(EndpointQuery(name_prefix="test")),
+        "endpoint_store.query (prefix)",
+        lambda: read_store.endpoints.query(EndpointQuery(name_prefix="test")),
     )
 
     write_db = clone_db(db)
-    write_txns = ControllerTransitions(write_db)
+    write_store = ControllerStore(write_db)
+    write_txns = ControllerTransitions(store=write_store)
 
     try:
         sample = _active_task_sample(write_db, limit=300)
@@ -832,7 +746,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
 
         def _reset_single():
             write_db.execute("DELETE FROM endpoints WHERE name LIKE '/bench/endpoint/%'")
-            write_db.endpoints._load_all()
+            write_store.endpoints._load_all()
 
         bench("add_endpoint (1 write)", _do_single, reset=_reset_single)
 
@@ -863,7 +777,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
             def _do_burst_one_txn(tasks=tasks_for_burst):
                 with write_db.transaction() as cur:
                     for t in tasks:
-                        write_db.endpoints.add(cur, _make_endpoint(t))
+                        write_store.endpoints.add(cur, _make_endpoint(t))
 
             bench(
                 f"add_endpoint burst x{burst_n} (1 txn)",
@@ -873,10 +787,9 @@ def benchmark_endpoints(db: ControllerDB) -> None:
                 min_time_s=1.0,
             )
 
-        # Provider-sync "apply results" failure path: mark ~N workers failed
-        # in one fail_heartbeats_batch call (force_remove=True matches slice
-        # reaping). This is the exact code path the controller log attributes
-        # the 29s "apply results" phase to.
+        # Slice-reaping failure path: mark ~N workers failed in one
+        # fail_workers call. This is the exact code path the controller log
+        # attributes the 29s "apply results" phase to.
         # x50 is enough to show the contention pattern (~5s batch, plenty of
         # headroom to observe starved RPCs). x300 is instructive but 6x longer
         # and doesn't change the conclusion.
@@ -888,18 +801,15 @@ def benchmark_endpoints(db: ControllerDB) -> None:
                 )
             if len(worker_rows) < fail_n:
                 print(
-                    f"  fail_heartbeats_batch x{fail_n}                      "
+                    f"  fail_workers x{fail_n}                      "
                     f"(skipped, only {len(worker_rows)} active workers)"
                 )
                 continue
 
-            failures = [
+            failures: list[tuple[WorkerId, str | None, str]] = [
                 (
-                    DispatchBatch(
-                        worker_id=WorkerId(str(r["worker_id"])),
-                        worker_address=str(r["address"]) if r["address"] is not None else None,
-                        running_tasks=[],
-                    ),
+                    WorkerId(str(r["worker_id"])),
+                    str(r["address"]) if r["address"] is not None else None,
                     "benchmark: simulated provider-sync failure",
                 )
                 for r in worker_rows
@@ -943,19 +853,19 @@ def benchmark_endpoints(db: ControllerDB) -> None:
                     )
 
             bench(
-                f"fail_heartbeats_batch x{fail_n} (force_remove)",
-                lambda f=failures: write_txns.fail_heartbeats_batch(f, force_remove=True),
+                f"fail_workers x{fail_n}",
+                lambda f=failures: write_txns.fail_workers(f),
                 reset=_reset_fail,
                 min_runs=3,
                 min_time_s=1.0,
             )
 
             # Tail-latency: what does a concurrent RegisterEndpoint see while
-            # fail_heartbeats_batch is running? This is the metric that
-            # matches the production symptom (2-6s RegisterEndpoint RPCs
-            # during a zone-wide worker failure burst), not the batch's own
-            # wall time. One thread runs the failure batch; another thread
-            # fires add_endpoint calls back-to-back and records each one's
+            # fail_workers is running? This is the metric that matches the
+            # production symptom (2-6s RegisterEndpoint RPCs during a
+            # zone-wide worker failure burst), not the batch's own wall
+            # time. One thread runs the failure batch; another thread fires
+            # add_endpoint calls back-to-back and records each one's
             # latency. Report p50/p95/max of the endpoint adds.
             endpoint_tasks = [t for t, _ in sample[:200]] if len(sample) >= 200 else None
             if endpoint_tasks:
@@ -965,9 +875,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
                     name=f"add_endpoint tail latency during fail x{fail_n} (1 txn)",
                     write_db=write_db,
                     write_txns=write_txns,
-                    batch_fn=lambda f=failures, n=fail_n: write_txns.fail_heartbeats_batch(
-                        f, force_remove=True, chunk_size=n
-                    ),
+                    batch_fn=lambda f=failures, n=fail_n: write_txns.fail_workers(f, chunk_size=n),
                     endpoint_tasks=endpoint_tasks,
                     reset=_reset_fail,
                 )
@@ -975,33 +883,10 @@ def benchmark_endpoints(db: ControllerDB) -> None:
                     name=f"add_endpoint tail latency during fail x{fail_n} (chunk=10)",
                     write_db=write_db,
                     write_txns=write_txns,
-                    batch_fn=lambda f=failures: write_txns.fail_heartbeats_batch(f, force_remove=True, chunk_size=10),
+                    batch_fn=lambda f=failures: write_txns.fail_workers(f, chunk_size=10),
                     endpoint_tasks=endpoint_tasks,
                     reset=_reset_fail,
                 )
-
-            # Tail-latency for drain_dispatch_all — controller's
-            # "provider sync phase 1 (snapshot)" path. Its phase-2
-            # dispatch_queue drain opens a write transaction; if
-            # fail_heartbeats_batch is holding the writer, phase 1 waits
-            # for the full batch. This is the "81s phase 1" you see in the
-            # log — it's a victim of writer starvation, not slow itself.
-            _measure_drain_tail_latency(
-                name=f"drain_dispatch_all tail latency during fail x{fail_n} (1 txn)",
-                write_db=write_db,
-                write_txns=write_txns,
-                batch_fn=lambda f=failures, n=fail_n: write_txns.fail_heartbeats_batch(
-                    f, force_remove=True, chunk_size=n
-                ),
-                reset=_reset_fail,
-            )
-            _measure_drain_tail_latency(
-                name=f"drain_dispatch_all tail latency during fail x{fail_n} (chunk=10)",
-                write_db=write_db,
-                write_txns=write_txns,
-                batch_fn=lambda f=failures: write_txns.fail_heartbeats_batch(f, force_remove=True, chunk_size=10),
-                reset=_reset_fail,
-            )
 
         # Contention: run an add_endpoint burst concurrently with an
         # apply_heartbeats_batch call on two Python threads sharing the clone
@@ -1261,18 +1146,15 @@ def _build_heartbeat_requests(db: ControllerDB) -> list[HeartbeatApplyRequest]:
     return requests
 
 
-def _build_failure_batch(db: ControllerDB, n: int) -> list[tuple[DispatchBatch, str]]:
+def _build_failure_batch(db: ControllerDB, n: int) -> list[tuple[WorkerId, str | None, str]]:
     rows = db.fetchall(
         "SELECT worker_id, address FROM workers WHERE active = 1 LIMIT ?",
         (n,),
     )
     return [
         (
-            DispatchBatch(
-                worker_id=WorkerId(str(r["worker_id"])),
-                worker_address=str(r["address"]) if r["address"] is not None else None,
-                running_tasks=[],
-            ),
+            WorkerId(str(r["worker_id"])),
+            str(r["address"]) if r["address"] is not None else None,
             "benchmark: simulated provider-sync failure",
         )
         for r in rows
@@ -1348,7 +1230,7 @@ def _run_apply_under_contention(
             while not stop.is_set():
                 failures = _build_failure_batch(write_db, fail_n)
                 if failures:
-                    write_txns.fail_heartbeats_batch(failures, force_remove=True, chunk_size=fail_chunk)
+                    write_txns.fail_workers(failures, chunk_size=fail_chunk)
                 stop.wait(fail_interval_s)
         except BaseException as e:
             errors.append(e)
@@ -1429,7 +1311,7 @@ def benchmark_apply_contention(db: ControllerDB) -> None:
 
     scenarios = [
         dict(name="apply @ baseline (no contention)"),
-        dict(name="apply + 1x fail_heartbeats_batch", fail_threads=1),
+        dict(name="apply + 1x fail_workers", fail_threads=1),
         dict(name="apply + 1x register_worker burst", register_threads=1),
         dict(name="apply + 1x add_endpoint storm", endpoint_threads=1),
         dict(
@@ -1467,7 +1349,7 @@ def benchmark_apply_contention(db: ControllerDB) -> None:
     ]
 
     write_db = clone_db(db)
-    write_txns = ControllerTransitions(write_db)
+    write_txns = ControllerTransitions(store=ControllerStore(write_db))
     try:
         for scenario in scenarios:
             _run_apply_under_contention(

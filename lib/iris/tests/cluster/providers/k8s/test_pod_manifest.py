@@ -6,7 +6,7 @@
 import json
 
 import pytest
-
+from iris.cluster.controller.transitions import RunningTaskEntry
 from iris.cluster.providers.k8s.tasks import (
     _INFRASTRUCTURE_FAILURE_REASONS,
     _LABEL_JOB_ID,
@@ -26,7 +26,6 @@ from iris.cluster.providers.k8s.tasks import (
     _task_update_from_pod,
 )
 from iris.cluster.providers.k8s.types import parse_k8s_quantity
-from iris.cluster.controller.transitions import RunningTaskEntry
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
@@ -97,9 +96,12 @@ def test_build_pod_manifest_fields():
     assert container["command"][1] == "-lc"
     assert "exec python train.py" in container["command"][2]
 
-    resources = container["resources"]["limits"]
-    assert resources["cpu"] == "1000m"
-    assert resources["memory"] == str(4 * 1024**3)
+    # CPU is requested only (no limit) so containers can burst onto idle node
+    # CPU; memory is both requested and limited (overshoot is fatal).
+    assert container["resources"]["requests"]["cpu"] == "1000m"
+    assert "cpu" not in container["resources"].get("limits", {})
+    assert container["resources"]["limits"]["memory"] == str(4 * 1024**3)
+    assert container["resources"]["requests"]["memory"] == str(4 * 1024**3)
 
 
 def test_build_pod_manifest_env_vars():
@@ -122,6 +124,16 @@ def test_build_pod_manifest_gpu():
     manifest = _build_pod_manifest(req, pod_config())
     limits = manifest["spec"]["containers"][0]["resources"]["limits"]
     assert limits["nvidia.com/gpu"] == "4"
+    assert "rdma/ib" not in limits
+
+
+def test_build_pod_manifest_gpu_host_network_requests_rdma():
+    req = make_run_req("/test-job/0")
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
+    manifest = _build_pod_manifest(req, pod_config(host_network=True))
+    limits = manifest["spec"]["containers"][0]["resources"]["limits"]
+    assert limits["nvidia.com/gpu"] == "4"
+    assert limits["rdma/ib"] == "4"
 
 
 def test_build_pod_manifest_runtime_label():

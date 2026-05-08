@@ -11,7 +11,7 @@ requires-python = ">=3.11,<3.13"
 dependencies = [
     "marin-iris",
     "marin-rigging",
-    "marin-fray[ray]",
+    "marin-fray",
     "typing-extensions>=4.0",
     "click>=8.0",
     "cloudpickle>=3.0",

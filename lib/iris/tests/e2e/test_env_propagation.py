@@ -13,7 +13,6 @@ import json
 from unittest.mock import patch
 
 import pytest
-
 from iris.client import IrisContext, iris_ctx_scope
 from iris.client.client import IrisClient, LocalClientConfig
 from iris.cluster.client.job_info import JobInfo
@@ -32,7 +31,6 @@ def _parent_job_info(env: dict[str, str]) -> JobInfo:
         task_id=JobName.from_wire("/parent-job/0"),
         env=env,
         constraints=[],
-        worker_region=None,
     )
 
 

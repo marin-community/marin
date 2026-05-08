@@ -5,7 +5,6 @@
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-
 from iris.rpc.errors import (
     call_with_retry,
     connect_error_sanitized,

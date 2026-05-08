@@ -23,16 +23,16 @@ from pathlib import Path
 
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
+from rigging.timing import Duration
 
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.types import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, parse_memory_string, tpu_variant_name
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto, duration_to_proto
-from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
 

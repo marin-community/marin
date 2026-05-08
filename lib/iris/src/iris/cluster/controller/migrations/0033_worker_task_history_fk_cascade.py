@@ -14,12 +14,21 @@ SQLite can't add a FK via ALTER TABLE, so follow the standard
 create-new/copy/drop/rename dance, dropping orphan rows in the copy (that's
 the whole point; otherwise the FK would be violated the moment we turn it on)
 and recreating every index that existed on the old table.
+
+Superseded by migration 0041 (``worker_task_history`` is dropped wholesale).
+On fresh DBs the table is no longer created by 0001, so this migration
+short-circuits.
 """
 
 import sqlite3
 
 
 def migrate(conn: sqlite3.Connection) -> None:
+    table_present = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'worker_task_history'"
+    ).fetchone()
+    if table_present is None:
+        return
     conn.execute(
         """
         CREATE TABLE worker_task_history_new (

@@ -27,9 +27,6 @@ class WorkerService(Protocol):
     async def health_check(self, request: job__pb2.Empty, ctx: RequestContext) -> worker__pb2.Worker.HealthResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def heartbeat(self, request: job__pb2.HeartbeatRequest, ctx: RequestContext) -> job__pb2.HeartbeatResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
     async def profile_task(self, request: job__pb2.ProfileTaskRequest, ctx: RequestContext) -> job__pb2.ProfileTaskResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -86,16 +83,6 @@ class WorkerServiceASGIApplication(ConnectASGIApplication[WorkerService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.health_check,
-                ),
-                "/iris.cluster.WorkerService/Heartbeat": Endpoint.unary(
-                    method=MethodInfo(
-                        name="Heartbeat",
-                        service_name="iris.cluster.WorkerService",
-                        input=job__pb2.HeartbeatRequest,
-                        output=job__pb2.HeartbeatResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.heartbeat,
                 ),
                 "/iris.cluster.WorkerService/ProfileTask": Endpoint.unary(
                     method=MethodInfo(
@@ -234,26 +221,6 @@ class WorkerServiceClient(ConnectClient):
                 service_name="iris.cluster.WorkerService",
                 input=job__pb2.Empty,
                 output=worker__pb2.Worker.HealthResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def heartbeat(
-        self,
-        request: job__pb2.HeartbeatRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.HeartbeatResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="Heartbeat",
-                service_name="iris.cluster.WorkerService",
-                input=job__pb2.HeartbeatRequest,
-                output=job__pb2.HeartbeatResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -408,8 +375,6 @@ class WorkerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def health_check(self, request: job__pb2.Empty, ctx: RequestContext) -> worker__pb2.Worker.HealthResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def heartbeat(self, request: job__pb2.HeartbeatRequest, ctx: RequestContext) -> job__pb2.HeartbeatResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def profile_task(self, request: job__pb2.ProfileTaskRequest, ctx: RequestContext) -> job__pb2.ProfileTaskResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_process_status(self, request: job__pb2.GetProcessStatusRequest, ctx: RequestContext) -> job__pb2.GetProcessStatusResponse:
@@ -459,16 +424,6 @@ class WorkerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.health_check,
-                ),
-                "/iris.cluster.WorkerService/Heartbeat": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="Heartbeat",
-                        service_name="iris.cluster.WorkerService",
-                        input=job__pb2.HeartbeatRequest,
-                        output=job__pb2.HeartbeatResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.heartbeat,
                 ),
                 "/iris.cluster.WorkerService/ProfileTask": EndpointSync.unary(
                     method=MethodInfo(
@@ -607,26 +562,6 @@ class WorkerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.WorkerService",
                 input=job__pb2.Empty,
                 output=worker__pb2.Worker.HealthResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def heartbeat(
-        self,
-        request: job__pb2.HeartbeatRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.HeartbeatResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="Heartbeat",
-                service_name="iris.cluster.WorkerService",
-                input=job__pb2.HeartbeatRequest,
-                output=job__pb2.HeartbeatResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

@@ -17,8 +17,9 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Generic, TypeVar
 
-from iris.cluster.types import JobName, WorkerId
 from rigging.timing import Timestamp
+
+from iris.cluster.types import JobName, WorkerId
 
 T = TypeVar("T")
 RowDecoder = Callable[[sqlite3.Row], Any]
@@ -827,25 +828,6 @@ TASK_ATTEMPTS = Table(
         "CREATE INDEX IF NOT EXISTS idx_task_attempts_worker_task"
         " ON task_attempts(worker_id, task_id, attempt_id)",
     ),
-    triggers=(
-        # From 0001_init
-        """CREATE TRIGGER IF NOT EXISTS trg_task_attempt_active_worker
-BEFORE INSERT ON task_attempts
-FOR EACH ROW
-WHEN NEW.worker_id IS NOT NULL
-BEGIN
-  SELECT
-    CASE
-      WHEN NOT EXISTS(
-        SELECT 1 FROM workers w
-        WHERE w.worker_id = NEW.worker_id
-          AND w.active = 1
-          AND w.healthy = 1
-      )
-      THEN RAISE(ABORT, 'task attempt worker must be active and healthy')
-    END;
-END;""",
-    ),
 )
 
 WORKERS = Table(
@@ -870,44 +852,6 @@ WORKERS = Table(
         Column("md_gce_zone", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
         Column("md_git_hash", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
         Column("md_device_json", "TEXT", "NOT NULL DEFAULT '{}'", python_type=str, decoder=str, default="{}"),
-        Column("healthy", "INTEGER", "NOT NULL CHECK (healthy IN (0, 1))", python_type=bool, decoder=_decode_bool_int),
-        Column(
-            "active",
-            "INTEGER",
-            "NOT NULL CHECK (active IN (0, 1))",
-            python_type=bool,
-            decoder=_decode_bool_int,
-            default=True,
-        ),
-        Column("consecutive_failures", "INTEGER", "NOT NULL", python_type=int, decoder=int),
-        Column(
-            "last_heartbeat_ms",
-            "INTEGER",
-            "NOT NULL",
-            python_name="last_heartbeat",
-            python_type=Timestamp,
-            decoder=decode_timestamp_ms,
-        ),
-        Column("committed_cpu_millicores", "INTEGER", "NOT NULL", python_type=int, decoder=int),
-        Column(
-            "committed_mem_bytes",
-            "INTEGER",
-            "NOT NULL",
-            python_name="committed_mem",
-            python_type=int,
-            decoder=int,
-        ),
-        Column("committed_gpu", "INTEGER", "NOT NULL", python_type=int, decoder=int),
-        Column("committed_tpu", "INTEGER", "NOT NULL", python_type=int, decoder=int),
-        Column("snapshot_host_cpu_percent", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_memory_used_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_memory_total_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_disk_used_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_disk_total_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_running_task_count", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_total_process_count", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_net_recv_bps", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_net_sent_bps", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
         # Migration 0016
         Column("total_cpu_millicores", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("total_memory_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
@@ -918,10 +862,26 @@ WORKERS = Table(
         # Migration 0022
         Column("slice_id", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
         Column("scale_group", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
-    ),
-    indexes=(
-        # Migration 0004_worker_indexes
-        "CREATE INDEX IF NOT EXISTS idx_workers_healthy_active ON workers(healthy, active)",
+        # Committed-resource totals — only the scheduler writes these.
+        Column(
+            "committed_cpu_millicores",
+            "INTEGER",
+            "NOT NULL DEFAULT 0",
+            python_type=int,
+            decoder=int,
+            default=0,
+        ),
+        Column(
+            "committed_mem_bytes",
+            "INTEGER",
+            "NOT NULL DEFAULT 0",
+            python_name="committed_mem",
+            python_type=int,
+            decoder=int,
+            default=0,
+        ),
+        Column("committed_gpu", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("committed_tpu", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
     ),
 )
 
@@ -949,100 +909,6 @@ WORKER_ATTRIBUTES = Table(
         Column("float_value", "REAL", "", python_type=float | None, decoder=_identity),
     ),
     table_constraints=("PRIMARY KEY (worker_id, key)",),
-)
-
-WORKER_TASK_HISTORY = Table(
-    "worker_task_history",
-    "wth",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column(
-            "worker_id",
-            "TEXT",
-            "NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE",
-            python_type=WorkerId,
-            decoder=decode_worker_id,
-        ),
-        Column(
-            "task_id",
-            "TEXT",
-            "NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE",
-            python_type=str,
-            decoder=str,
-        ),
-        Column(
-            "assigned_at_ms",
-            "INTEGER",
-            "NOT NULL",
-            python_name="assigned_at",
-            python_type=Timestamp,
-            decoder=decode_timestamp_ms,
-        ),
-    ),
-    indexes=(
-        "CREATE INDEX IF NOT EXISTS idx_worker_task_history_worker"
-        " ON worker_task_history(worker_id, assigned_at_ms DESC)",
-        # Probed on task delete by the new FK cascade; without it each delete
-        # scans the full history table.
-        "CREATE INDEX IF NOT EXISTS idx_worker_task_history_task" " ON worker_task_history(task_id)",
-    ),
-)
-
-WORKER_RESOURCE_HISTORY = Table(
-    "worker_resource_history",
-    "wrh",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column(
-            "worker_id",
-            "TEXT",
-            "NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE",
-            python_type=WorkerId,
-            decoder=decode_worker_id,
-        ),
-        Column("snapshot_host_cpu_percent", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_memory_used_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_memory_total_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_disk_used_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_disk_total_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_running_task_count", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_total_process_count", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_net_recv_bps", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("snapshot_net_sent_bps", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
-        Column("timestamp_ms", "INTEGER", "NOT NULL", python_type=Timestamp, decoder=decode_timestamp_ms),
-    ),
-    indexes=(
-        "CREATE INDEX IF NOT EXISTS idx_worker_resource_history_worker"
-        " ON worker_resource_history(worker_id, id DESC)",
-        # Migration 0010_dashboard
-        "CREATE INDEX IF NOT EXISTS idx_worker_resource_history_ts"
-        " ON worker_resource_history(worker_id, timestamp_ms DESC)",
-    ),
-)
-
-TASK_RESOURCE_HISTORY = Table(
-    "task_resource_history",
-    "trh",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column(
-            "task_id",
-            "TEXT",
-            "NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE",
-            python_type=JobName,
-            decoder=JobName.from_wire,
-        ),
-        Column("attempt_id", "INTEGER", "NOT NULL"),
-        Column("cpu_millicores", "INTEGER", "NOT NULL DEFAULT 0"),
-        Column("memory_mb", "INTEGER", "NOT NULL DEFAULT 0"),
-        Column("disk_mb", "INTEGER", "NOT NULL DEFAULT 0"),
-        Column("memory_peak_mb", "INTEGER", "NOT NULL DEFAULT 0"),
-        Column("timestamp_ms", "INTEGER", "NOT NULL", python_type=Timestamp, decoder=decode_timestamp_ms),
-    ),
-    indexes=(
-        "CREATE INDEX IF NOT EXISTS idx_task_resource_history_task_attempt"
-        " ON task_resource_history(task_id, attempt_id, id DESC)",
-    ),
 )
 
 ENDPOINTS = Table(
@@ -1110,62 +976,6 @@ DISPATCH_QUEUE = Table(
         ),
     ),
     indexes=("CREATE INDEX IF NOT EXISTS idx_dispatch_worker ON dispatch_queue(worker_id, id)",),
-)
-
-TXN_LOG = Table(
-    "txn_log",
-    "tl",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column("kind", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("payload_json", "TEXT", "NOT NULL", python_name="payload", python_type=dict, decoder=_decode_json_dict),
-        Column(
-            "created_at_ms",
-            "INTEGER",
-            "NOT NULL",
-            python_name="created_at",
-            python_type=Timestamp,
-            decoder=decode_timestamp_ms,
-        ),
-    ),
-    triggers=(
-        # Migration 0004_worker_indexes rewrote the trigger from 0001
-        """CREATE TRIGGER IF NOT EXISTS trg_txn_log_retention
-AFTER INSERT ON txn_log
-WHEN (SELECT COUNT(*) FROM txn_log) > 1100
-BEGIN
-  DELETE FROM txn_log WHERE id <= (
-    SELECT id FROM txn_log ORDER BY id DESC LIMIT 1 OFFSET 1000
-  );
-END;""",
-    ),
-)
-
-TXN_ACTIONS = Table(
-    "txn_actions",
-    "ta2",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column(
-            "txn_id",
-            "INTEGER",
-            "NOT NULL REFERENCES txn_log(id) ON DELETE CASCADE",
-            python_type=int,
-            decoder=int,
-        ),
-        Column("action", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("entity_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("details_json", "TEXT", "NOT NULL", python_name="details", python_type=dict, decoder=_decode_json_dict),
-        Column(
-            "created_at_ms",
-            "INTEGER",
-            "NOT NULL",
-            python_name="timestamp",
-            python_type=Timestamp,
-            decoder=decode_timestamp_ms,
-        ),
-    ),
-    indexes=("CREATE INDEX IF NOT EXISTS idx_txn_actions_txn ON txn_actions(txn_id, id)",),
 )
 
 # Migration 0003: restructured scaling_groups
@@ -1365,13 +1175,8 @@ MAIN_TABLES: tuple[Table, ...] = (
     TASK_ATTEMPTS,
     WORKERS,
     WORKER_ATTRIBUTES,
-    WORKER_TASK_HISTORY,
-    WORKER_RESOURCE_HISTORY,
-    TASK_RESOURCE_HISTORY,
     ENDPOINTS,
     DISPATCH_QUEUE,
-    TXN_LOG,
-    TXN_ACTIONS,
     SCALING_GROUPS,
     SLICES,
     RESERVATION_CLAIMS,
@@ -1402,25 +1207,16 @@ class JobRow:
     job_id: JobName
     state: int
     submitted_at: Timestamp
-    root_submitted_at: Timestamp
     started_at: Timestamp | None
     finished_at: Timestamp | None
-    scheduling_deadline_epoch_ms: int | None
     error: str | None
     exit_code: int | None
-    num_tasks: int
-    is_reservation_holder: bool
-    has_reservation: bool
     name: str
     depth: int
     res_cpu_millicores: int
     res_memory_bytes: int
     res_disk_bytes: int
     res_device_json: str | None
-    has_coscheduling: bool
-    coscheduling_group_by: str
-    scheduling_timeout_ms: int | None
-    max_task_failures: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -1537,29 +1333,21 @@ class TaskDetailRow:
 
 @dataclass(frozen=True, slots=True)
 class WorkerRow:
-    """Worker row for scheduling and health checks."""
+    """Durable worker columns: identity, capability, and committed scheduling totals."""
 
     worker_id: WorkerId
     address: str
-    healthy: bool
-    active: bool
-    consecutive_failures: int
-    last_heartbeat: Timestamp
-    committed_cpu_millicores: int
-    committed_mem: int
-    committed_gpu: int
-    committed_tpu: int
     total_cpu_millicores: int
     total_memory_bytes: int
     total_gpu_count: int
     total_tpu_count: int
     device_type: str
     device_variant: str
+    committed_cpu_millicores: int
+    committed_mem: int
+    committed_gpu: int
+    committed_tpu: int
     attributes: dict = dataclasses.field(default_factory=dict)
-    available_cpu_millicores: int = 0
-    available_memory: int = 0
-    available_gpus: int = 0
-    available_tpus: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1568,20 +1356,16 @@ class WorkerDetailRow:
 
     worker_id: WorkerId
     address: str
-    healthy: bool
-    active: bool
-    consecutive_failures: int
-    last_heartbeat: Timestamp
-    committed_cpu_millicores: int
-    committed_mem: int
-    committed_gpu: int
-    committed_tpu: int
     total_cpu_millicores: int
     total_memory_bytes: int
     total_gpu_count: int
     total_tpu_count: int
     device_type: str
     device_variant: str
+    committed_cpu_millicores: int
+    committed_mem: int
+    committed_gpu: int
+    committed_tpu: int
     md_hostname: str
     md_ip_address: str
     md_cpu_count: int
@@ -1599,10 +1383,6 @@ class WorkerDetailRow:
     md_git_hash: str
     md_device_json: str
     attributes: dict = dataclasses.field(default_factory=dict)
-    available_cpu_millicores: int = 0
-    available_memory: int = 0
-    available_gpus: int = 0
-    available_tpus: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1630,16 +1410,6 @@ class EndpointRow:
     task_id: JobName
     metadata: dict
     registered_at: Timestamp
-
-
-@dataclass(frozen=True, slots=True)
-class TransactionActionRow:
-    """Transaction action log entry."""
-
-    timestamp: Timestamp
-    action: str
-    entity_id: str
-    details: dict
 
 
 @dataclass(frozen=True, slots=True)
@@ -1701,25 +1471,16 @@ _job_row_cols, _job_row_aliases = _job_columns(
     "job_id",
     "state",
     "submitted_at_ms",
-    "root_submitted_at_ms",
     "started_at_ms",
     "finished_at_ms",
-    "scheduling_deadline_epoch_ms",
     "error",
     "exit_code",
-    "num_tasks",
-    "is_reservation_holder",
-    "has_reservation",
     "name",
     "depth",
     "res_cpu_millicores",
     "res_memory_bytes",
     "res_disk_bytes",
     "res_device_json",
-    "has_coscheduling",
-    "coscheduling_group_by",
-    "scheduling_timeout_ms",
-    "max_task_failures",
 )
 JOB_ROW_PROJECTION = Projection(
     JOBS,
@@ -1761,31 +1522,21 @@ JOB_SCHEDULING_PROJECTION = Projection(
     column_aliases=_job_sched_aliases,
 )
 
-# Worker row for scheduling and health checks.
+# ``attributes`` is hydrated post-decode from the ``worker_attributes`` table.
 WORKER_ROW_PROJECTION = WORKERS.projection(
     "worker_id",
     "address",
-    "healthy",
-    "active",
-    "consecutive_failures",
-    "last_heartbeat_ms",
-    "committed_cpu_millicores",
-    "committed_mem_bytes",
-    "committed_gpu",
-    "committed_tpu",
     "total_cpu_millicores",
     "total_memory_bytes",
     "total_gpu_count",
     "total_tpu_count",
     "device_type",
     "device_variant",
-    extra_fields=(
-        ExtraField("attributes", dict, default_factory=dict),
-        ExtraField("available_cpu_millicores", int, default=0),
-        ExtraField("available_memory", int, default=0),
-        ExtraField("available_gpus", int, default=0),
-        ExtraField("available_tpus", int, default=0),
-    ),
+    "committed_cpu_millicores",
+    "committed_mem_bytes",
+    "committed_gpu",
+    "committed_tpu",
+    extra_fields=(ExtraField("attributes", dict, default_factory=dict),),
     row_cls=WorkerRow,
 )
 
@@ -1882,20 +1633,16 @@ TASK_DETAIL_PROJECTION = TASKS.projection(
 WORKER_DETAIL_PROJECTION = WORKERS.projection(
     "worker_id",
     "address",
-    "healthy",
-    "active",
-    "consecutive_failures",
-    "last_heartbeat_ms",
-    "committed_cpu_millicores",
-    "committed_mem_bytes",
-    "committed_gpu",
-    "committed_tpu",
     "total_cpu_millicores",
     "total_memory_bytes",
     "total_gpu_count",
     "total_tpu_count",
     "device_type",
     "device_variant",
+    "committed_cpu_millicores",
+    "committed_mem_bytes",
+    "committed_gpu",
+    "committed_tpu",
     "md_hostname",
     "md_ip_address",
     "md_cpu_count",
@@ -1912,13 +1659,7 @@ WORKER_DETAIL_PROJECTION = WORKERS.projection(
     "md_gce_zone",
     "md_git_hash",
     "md_device_json",
-    extra_fields=(
-        ExtraField("attributes", dict, default_factory=dict),
-        ExtraField("available_cpu_millicores", int, default=0),
-        ExtraField("available_memory", int, default=0),
-        ExtraField("available_gpus", int, default=0),
-        ExtraField("available_tpus", int, default=0),
-    ),
+    extra_fields=(ExtraField("attributes", dict, default_factory=dict),),
     row_cls=WorkerDetailRow,
 )
 
@@ -1945,15 +1686,6 @@ ENDPOINT_PROJECTION = ENDPOINTS.projection(
     "metadata_json",
     "registered_at_ms",
     row_cls=EndpointRow,
-)
-
-# Transaction action row.
-TXN_ACTION_PROJECTION = TXN_ACTIONS.projection(
-    "created_at_ms",
-    "action",
-    "entity_id",
-    "details_json",
-    row_cls=TransactionActionRow,
 )
 
 # API key row.

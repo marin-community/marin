@@ -1,0 +1,11 @@
+name: finelog-marin
+port: 10001
+image: ghcr.io/marin-community/finelog:latest
+remote_log_dir: gs://marin-us-central2/finelog/marin
+deployment:
+  gcp:
+    project: hai-gcp-models
+    zone: us-central1-a
+    machine_type: n2-standard-4
+    boot_disk_size_gb: 200
+    service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com

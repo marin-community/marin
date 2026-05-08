@@ -11,13 +11,14 @@ import sys
 from pathlib import Path
 
 import click
-
-from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
 from rigging.config_discovery import resolve_cluster_config
 from rigging.log_setup import configure_logging
+
+from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
 from iris.rpc import config_pb2, job_pb2
 from iris.rpc import controller_pb2 as _controller_pb2
 from iris.rpc.auth import AuthTokenInjector, GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
@@ -124,7 +125,13 @@ def rpc_client(
 ) -> ControllerServiceClientSync:
     """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``."""
     interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
-    return ControllerServiceClientSync(address, timeout_ms=timeout_ms, interceptors=interceptors)
+    return ControllerServiceClientSync(
+        address,
+        timeout_ms=timeout_ms,
+        interceptors=interceptors,
+        accept_compression=IRIS_RPC_COMPRESSIONS,
+        send_compression=None,
+    )
 
 
 def require_controller_url(ctx: click.Context) -> str:
@@ -176,7 +183,9 @@ def require_controller_url(ctx: click.Context) -> str:
             f"Could not connect to controller (config: {config_file}). "
             "Check that the controller is running and reachable."
         )
-    raise click.ClickException("Either --controller-url or --config is required")
+    raise click.ClickException(
+        "No controller specified. Pass --cluster=<name> (see `iris cluster list`), --controller-url, or --config."
+    )
 
 
 @click.group()
@@ -217,7 +226,9 @@ def iris(
             logger.info("Resolved cluster %r to config: %s", cluster_name, resolved)
             config_file = str(resolved)
         except FileNotFoundError:
-            pass  # Fall through to token-only mode; error will surface if a command needs a controller
+            raise click.UsageError(
+                f"Unknown cluster {cluster_name!r}. Run `iris cluster list` to see available clusters."
+            ) from None
 
     # Validate mutually exclusive options
     if controller_url and config_file:
@@ -456,10 +467,10 @@ def budget_list(ctx):
 
 # Register subcommand groups — imported at module level to ensure they are
 # always available when the ``iris`` group is used.
+from iris.cli.actor import actor as actor_cmd  # noqa: E402
 from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
 from iris.cli.job import job  # noqa: E402
-from iris.cli.actor import actor as actor_cmd  # noqa: E402
 from iris.cli.process_status import register_process_status_commands  # noqa: E402
 from iris.cli.query import query_cmd  # noqa: E402
 from iris.cli.rpc import register_rpc_commands  # noqa: E402

@@ -51,6 +51,10 @@ class Labels:
         self.iris_controller = f"iris-{prefix}-controller"
         self.iris_controller_address = f"iris-{prefix}-controller-address"
         self.iris_slice_id = f"iris-{prefix}-slice-id"
+        # Marks a slice as operator-created via `iris cluster create-slice`.
+        # The autoscaler ignores these: they don't count toward demand, don't
+        # participate in scale-down, and survive `iris cluster stop`.
+        self.iris_manual = f"iris-{prefix}-manual"
 
 
 def find_free_port(start: int = -1) -> int:

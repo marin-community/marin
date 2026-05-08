@@ -24,8 +24,7 @@ from dataclasses import dataclass
 from enum import Enum, IntEnum, StrEnum
 from typing import Any, ClassVar
 
-from iris.rpc import config_pb2
-from iris.rpc import job_pb2
+from iris.rpc import config_pb2, job_pb2
 
 
 class WellKnownAttribute(StrEnum):

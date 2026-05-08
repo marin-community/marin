@@ -10,10 +10,10 @@ backed by in-memory fakes rather than MagicMock.
 
 import threading
 
+from iris.cluster.constraints import DeviceType
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry, ScalingAction
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
-from iris.cluster.constraints import DeviceType
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import CloudSliceState
@@ -25,10 +25,14 @@ from rigging.timing import Duration, Timestamp
 from tests.cluster.controller.conftest import (
     advance_all_tpus,
     make_autoscaler,
-    make_big_demand_entries as _make_big_demand_entries,
     make_demand_entries,
     make_gcp_provider,
     make_scale_group_config,
+)
+from tests.cluster.controller.conftest import (
+    make_big_demand_entries as _make_big_demand_entries,
+)
+from tests.cluster.controller.conftest import (
     mark_all_slices_ready as _mark_all_slices_ready,
 )
 

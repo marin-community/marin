@@ -5,7 +5,6 @@ import os
 
 import fsspec
 import pytest
-
 from rigging.filesystem import (
     MirrorFileSystem,
     TransferBudget,
