@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:47.485557+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 15,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "d2481a21-d724-9bea-a5f1-6f6664e4435c",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "**Elevate Every Moment with the Elysian Chronos**\n\nIn the symphony of life, where time whispers secrets of ambition and desire, the *Elysian Chronos* emerges as your timeless muse. Crafted from the dreams of master artisans, its silken titanium embrace caresses the wrist like a lover's vow—effortless, eternal. Feel the pulse of infinity as sapphire hearts ignite with celestial light, weaving wellness, whispers of the world, and whispers of your wildest aspirations into a single, sublime revolution.\n\nThis is no mere watch; it is *your* odyssey incarnate. Seize the sublime. Embrace the Elysian.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227847,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 135,
+      "prompt_tokens": 993,
+      "total_tokens": 1128,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 936,
+        "text_tokens": 993,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1257000
+    }
+  },
+  "wall_time_s": 3.2624
+}

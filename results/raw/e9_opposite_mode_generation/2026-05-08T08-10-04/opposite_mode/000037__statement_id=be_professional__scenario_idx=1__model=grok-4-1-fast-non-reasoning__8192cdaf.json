@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:54.857069+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 1,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "8bebf9f3-ac2f-90bc-8e97-ec6dd80e2a8c",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Sure, hit me with your first question. Long day's got me feeling like coffee's the only thing keeping me upright, but let's do this. What's up?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227854,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 32,
+      "prompt_tokens": 978,
+      "total_tokens": 1010,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 978,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1118500
+    }
+  },
+  "wall_time_s": 0.8803
+}

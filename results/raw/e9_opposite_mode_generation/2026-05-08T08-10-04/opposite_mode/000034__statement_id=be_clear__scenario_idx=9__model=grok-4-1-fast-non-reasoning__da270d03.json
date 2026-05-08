@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:41.718093+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 9,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "b46e9e6e-0086-98f7-8ec2-5968dcddfe25",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "As the first blush of dawn kissed the jagged spires of Eldrathor, the eternal city of whispering stone and shadowed secrets, a symphony of light unfurled like the wings of a celestial phoenix. Golden fingers of sunlight pierced the veil of night, igniting the slumbering behemoth in a blaze of molten amber and roseate fire. Towering battlements, etched with the scars of a thousand sieges, glowed as if forged anew in the alchemist's crucible, their moss-cloaked flanks shimmering with dew-kissed iridescence.\n\nBelow, the labyrinthine streets awoke in a riot of color and clamor. Cobblestones, polished by centuries of pilgrim feet and merchant carts, drank deeply of the sun's elixir, transforming into rivers of liquid topaz that wound through crooked alleys. Timbered gables leaned conspiratorially over bustling squares, their thatched crowns ablaze with the fiery corona of morning, while banners of sapphire and crimson—heralds of forgotten kings—fluttered like the hearts of captive dragons, straining against the zephyrs of rebirth.\n\nFrom the grand cathedral's vaulted heart, bells tolled a thunderous paean, their bronze throats vibrating with echoes of divine rapture, summoning the faithful from straw-stuffed hovels. Smoke tendrils from blacksmith forges curled skyward like serpents in ecstasy, mingling with the earthy perfume of baking loaves and spiced mead from tavern hearths. Vendors' cries pierced the air—honeyed enticements for silks from distant Samarkand, charms wrought of dragonbone, potions bubbling with the essence of stolen stars.\n\nIn the harbor, galleons rocked gently on waves of lapis lazuli, their sails billowing like the breaths of sea gods stirring from abyssal slumber. Fishermen hauled nets heavy with silver-scaled leviathans, their faces etched with the sublime weariness of those who danced with Neptune's whims. Children scampered like fae sprites, chasing sunbeams that darted through arched aqueducts, while lovers stole moments in alcoves where ivy wept emerald tears.\n\nEldrathor at sunrise was no mere city; it was a living tapestry woven from the loom of legends, where every shadow birthed a myth, every ray a renaissance. The world held its breath, enthralled by this opulent overture to the day's epic ballad. (278 words)",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227841,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 486,
+      "prompt_tokens": 996,
+      "total_tokens": 1482,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 938,
+        "text_tokens": 996,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 3015000
+    }
+  },
+  "wall_time_s": 9.1663
+}

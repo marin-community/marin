@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:32.228641+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 0,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "c7ed2cca-9e7f-9cb9-bbe4-721817e22f20",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Quantum entanglement occurs when two or more particles become linked so that the quantum state of each particle can't be described independently, even if they're separated by vast distances. Measuring a property like spin on one instantly determines the same property on the other, no matter how far apart, as if they're sharing a single wave function.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227832,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 62,
+      "prompt_tokens": 1013,
+      "total_tokens": 1075,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 667,
+        "text_tokens": 1013,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1335500
+    }
+  },
+  "wall_time_s": 1.1964
+}

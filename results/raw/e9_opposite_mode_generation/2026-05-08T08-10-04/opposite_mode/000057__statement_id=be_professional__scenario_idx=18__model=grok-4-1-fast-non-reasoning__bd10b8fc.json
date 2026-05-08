@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:05.413486+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 18,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "f4a6a2b9-405c-2a92-1ac0-e64ca2031d8a",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Hey, kiddo—listen up, because I've been in the trenches of this field a bit longer than you, and I hate seeing talented folks like you spin their wheels. What's the specific career snag you're hitting right now? Lay it out for me, and I'll break it down with the straight talk you need—no fluff, just the pro moves that actually work. You've got this, but let's make sure you're not leaving wins on the table. Shoot.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227865,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 91,
+      "prompt_tokens": 974,
+      "total_tokens": 1065,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 160,
+        "text_tokens": 974,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2163000
+    }
+  },
+  "wall_time_s": 1.947
+}

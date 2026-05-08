@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:32.959055+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 2,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "5ea20809-af7f-6494-87f4-087f112af32f",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I want to work at your company because your focus on scalable cloud solutions aligns with my experience building microservices at my last role, where I optimized latency by 40% for a high-traffic app. I'm drawn to your collaborative culture and innovative projects like the recent AI-driven analytics platform, which would let me contribute to real-world impact while growing my expertise in distributed systems. Joining a mid-sized team like yours offers the perfect balance of autonomy and mentorship, unlike larger firms I've encountered, making it an ideal next step in my career.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227833,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 107,
+      "prompt_tokens": 1012,
+      "total_tokens": 1119,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 667,
+        "text_tokens": 1012,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1558500
+    }
+  },
+  "wall_time_s": 2.2763
+}

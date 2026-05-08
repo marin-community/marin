@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:55.737707+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 2,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "c7b2c63e-7767-97dd-bc2b-e43234da81b4",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Aw man, that sucks—hospital shifts are straight-up soul-crushers, especially when you're knee-deep in chaos as a nurse. I know you, you've been grinding through this crap forever, and burnout's like that sneaky vampire sucking the life outta ya one 12-hour hellshift at a time. Dark humor incoming: at least when patients code, it's not *your* heart flatlining from exhaustion, right? 😏\n\nBut for real, here's the thoughtful bit: burnout hits hard 'cause you're giving 110% to folks who can't give back, and it builds up like toxic sludge. First off, carve out non-negotiable \"you time\"—even if it's 10 mins blasting your guilty-pleasure playlist in the car post-shift. Track your wins too, like that one patient you totally turned around; jot 'em down so you don't forget you're a badass. Boundaries are key—say no to extra swaps sometimes, guilt-free. And talk it out, maybe with that therapist we chatted about last time? Long-term, think about rotating units or picking up some mindfulness app that actually sticks (Headspace has nurse-specific stuff). You've got this, buddy—we'll grab virtual beers soon and vent more. Hang in there!",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227855,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 250,
+      "prompt_tokens": 974,
+      "total_tokens": 1224,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 974,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2200500
+    }
+  },
+  "wall_time_s": 5.1226
+}

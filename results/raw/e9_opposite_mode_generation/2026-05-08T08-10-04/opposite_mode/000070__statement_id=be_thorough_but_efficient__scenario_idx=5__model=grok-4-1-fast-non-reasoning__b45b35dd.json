@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:10.245305+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 5,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "5d4011e6-bad4-0fdb-c798-3b0f9146ffbe",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Linear Algebra Final Study Sheet\n\n## 1. Key Definitions\n- **Vector Space (V)**: Set closed under addition & scalar mult. (ℝ or ℂ); axioms: assoc/comm/ident/inverses/distrib/scale.\n- **Subspace**: Subset W ⊆ V closed under + & scalar mult.; {0}, V, spans, kernels, images.\n- **Linear Independence**: {v₁,...,vₙ} lin ind if c₁v₁+...+cₙvₙ=0 ⇒ all cᵢ=0.\n- **Basis**: Lin ind spanning set; dim(V) = |basis|.\n- **Linear Transformation T: V→W**: T(u+v)=T(u)+T(v), T(cu)=cT(u).\n- **Kernel**: ker(T) = {v | T(v)=0}; nullity = dim(ker).\n- **Image**: im(T) = {T(v)}; rank = dim(im).\n- **Matrix Representation**: [T]_B^C for bases B (dom), C (codom).\n- **Eigenvalue λ, Eigenvector v**: Tv = λv (v≠0).\n- **Diagonalizable**: Exists P invertible, D diag, A=PDP⁻¹.\n- **Inner Product ⟨u,v⟩**: Bilinear, sym, pos def; norm ||v||=√⟨v,v⟩.\n- **Orthogonal**: ⟨u,v⟩=0; Orthonormal basis: ortho + unit norms.\n- **Singular Value Decomposition (SVD)**: A= UΣV^*, U/V unitary, Σ diag ≥0.\n- **Determinant**: det(A) = prod eigenvalues; vol scaling factor.\n- **Trace**: tr(A) = sum diag = sum eigenvalues.\n\n## 2. Main Theorems (Short Statements)\n- **Dim Thm (Rank-Nullity)**: rank(T) + nullity(T) = dim(V).\n- **Basis Extension**: Lin ind set extends to basis; subspace basis to space basis.\n- **Row Rank = Col Rank**: For any matrix.\n- **Invertible Matrix Thm**: Aⁿ×n inv ⇔ det≠0 ⇔ full rank ⇔ rows/cols lin ind ⇔ null=0 ⇔ eigenvalues ≠0.\n- **Change of Basis**: [T]_B^C = P^{-1} [T]_std P (P=change matrix).\n- **Spectral Thm (Real Sym)**: A sym ⇒ ortho diag: A=Q D Q^T, D real diag eigvals.\n- **Cayley-Hamilton**: If p(λ)=char poly, p(A)=0.\n- **Gram-Schmidt**: Orthonormal basis from lin ind set: q₁=u₁/||u₁||, qⱼ = (uⱼ - proj_{span(q1..qj-1)}) / norm.\n- **QR Decomp**: A=QR, Q ortho cols, R upper tri (via Gram-Schmidt).\n- **Polar Decomp**: A=QP, Q ortho, P pos semidef (for sq).\n- **Rank(A^T A)=rank(A)**; pseudoinverse via SVD.\n\n## 3. Important Example Problems with Worked Solutions\n\n### 3.1 Find basis/dim for subspace\n**Prob**: W = span{(1,0,1), (0,1,-1), (2,1,0)} ⊆ ℝ³. Basis? dim?\n**Sol**: Row reduce A=[1 0 1; 0 1 -1; 2 1 0] → [1 0 1; 0 1 -1; 0 0 -2] → pivot cols 1,2 → basis {(1,0,1),(0,1,-1)}; dim=2.\n\n### 3.2 Kernel/Image of T\n**Prob**: T:ℝ³→ℝ², [T(x)] = [x1+x2; x2+x3]. ker(T), rank.\n**Sol**: Solve [1 1 0; 0 1 1] [x1;x2;x3]=0 → x2=-x3, x1=-x2=x3 → ker basis {(1,-1,1)}; nullity=1. rank=2 (row rank). im=ℝ².\n\n### 3.3 Diagonalize Matrix\n**Prob**: A=[0 1; -2 -3]. Eigvals/vecs? Diag?\n**Sol**: char poly λ²+3λ+2=(λ+1)(λ+2). Evec λ=-1: [1; -1]; λ=-2: [2;1]. P=[1 2; -1 1], D=diag(-1,-2). Check PDP⁻¹=A.\n\n### 3.4 Gram-Schmidt\n**Prob**: Orthonorm {v1=(1,1,0), v2=(1,0,1)} in ℝ³.\n**Sol**: u1=v1=(1,1,0), q1=u1/√2. proj_q1 v2 = ⟨(1,0,1),q1⟩ q1 = (1/√2) q1. u2=(1,0,1) - (1/√2)(1/√2,1/√2,0)=(0,-1/2,1); ||u2||=√(1/4+1)=√(5/4)=√5 /2. q2=(0,-1/√5, 2/√5).\n\n### 3.5 Least Squares\n**Prob**: Solve Ax=b min ||Ax-b||, A=[1 1;1 2;1 3], b=[1;2;3].\n**Sol**: Normal eq: A^T A x = A^T b. A^T A=[3 6;6 14], det=6; inv=(1/6)[14 -6; -6 3]. A^T b=[6;14]. x=(1/6)[14-36; -36+42/ wait: solve [3 6;6 14][x1;x2]=[6;14] → row red → x=(2/3, 2/3).\n\n### 3.6 Determinant & Inverse\n**Prob**: det([1 2 0; 3 1 2; 0 4 1])? Adj for inv?\n**Sol**: Exp: 1*det([1 2;4 1])-2*det([3 2;0 1])+0=1(1-8)-2(3)= -7-6=-13. Inv=(1/det) adj (cof^T).\n\n### 3.7 SVD Example\n**Prob**: SVD of A=[1 0; 0 2].\n**Sol**: Eig A^T A=diag(1,4) → σ=1,2. U=Id (sym), V=Id. A=U Σ V^T=Id diag(1,2) Id.\n\n### 3.8 Jordan Form (Non-Diag)\n**Prob**: A=[1 1; 0 1]. Jordan?\n**Sol**: Char (λ-1)²=0. Geom mult=1<alg=2. J=[1 1; 0 1]. P=[1 0; 1 1] (gen evec solves (A-I)v=w evec).\n\n### 3.9 Orthogonal Projection\n**Prob**: Proj of b=(1,1,1) onto span{(1,0,0),(0,1,0)} in ℝ³.\n**Sol**: A=[1 0;0 1;0 0]^T wait cols u1,u2. x=A^T A^{-1} A^T b → A=[1 0 0; 0 1 0], A^T A=Id2, x=(1,1), proj=(1,1,0).\n\n**Quick Ref Formulas**:\n- Char poly: det(A-λI)\n- Proj_U v = A (A^T A)^{-1} A^T v (A cols basis U)\n- Min poly divides char; annihilates A\n- dim E_λ = geom mult λ\n\n*Print Tip: 10pt font, 2-col layout fits ~2.5 pages.*",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227870,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 1776,
+      "prompt_tokens": 1064,
+      "total_tokens": 2840,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 992,
+        "text_tokens": 1064,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 9520000
+    }
+  },
+  "wall_time_s": 27.3502
+}

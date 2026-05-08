@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:08.725400+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 4,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "9b55a39a-b292-9e47-96b2-665e8eee827c",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```python\n# Compact Amazon scraper for product name, price, rating from search results page.\n# Note: Use responsibly; Amazon TOS prohibits scraping. Requires requests, beautifulsoup4, lxml.\n# pip install requests beautifulsoup4 lxml pandas\n\nimport requests\nfrom bs4 import BeautifulSoup\nimport pandas as pd\nimport csv\nimport sys\nimport time\nfrom urllib.parse import urlparse, parse_qs\n\ndef scrape_amazon_search(url, output_file='products.csv'):\n    headers = {\n        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',\n        'Accept-Language': 'en-US,en;q=0.9',\n        'Accept-Encoding': 'gzip, deflate, br',\n        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',\n        'DNT': '1',\n        'Connection': 'keep-alive',\n        'Upgrade-Insecure-Requests': '1',\n    }\n    \n    try:\n        print(\"Fetching page...\", file=sys.stderr)\n        response = requests.get(url, headers=headers)\n        response.raise_for_status()\n    except requests.RequestException as e:\n        print(f\"Error fetching page: {e}\", file=sys.stderr)\n        return\n    \n    soup = BeautifulSoup(response.content, 'lxml')\n    \n    products = []\n    \n    # Target search results container (common for Amazon search pages)\n    results = soup.find_all('div', {'data-component-type': 's-search-result'})\n    \n    if not results:\n        # Fallback for different layouts\n        results = soup.find_all('div', class_='s-result-item')\n    \n    print(f\"Found {len(results)} potential products\", file=sys.stderr)\n    \n    for item in results[:20]:  # Limit to first 20 for compactness\n        try:\n            # Product name\n            name_elem = item.find('h2') or item.find('span', class_='a-size-base-plus')\n            name = name_elem.get_text(strip=True) if name_elem else 'N/A'\n            \n            # Price: Try common selectors\n            price_elem = (item.find('span', class_='a-price-whole') or \n                         item.find('span', class_='a-offscreen') or\n                         item.find('span', {'data-csa-c-content-id': 'SAR-price'}))\n            price = price_elem.get_text(strip=True) if price_elem else 'N/A'\n            \n            # Rating: Try star rating and count\n            rating_elem = (item.find('span', class_='a-icon-alt') or\n                          item.find('i', class_='a-icon-star'))\n            rating = rating_elem.get('title') or rating_elem.get_text(strip=True) if rating_elem else 'N/A'\n            \n            # Reviews count\n            reviews_elem = item.find('span', class_='a-size-base')\n            reviews = reviews_elem.get_text(strip=True) if reviews_elem else ''\n            \n            if name != 'N/A' and price != 'N/A':  # Only include valid products\n                products.append({\n                    'name': name,\n                    'price': price,\n                    'rating': rating,\n                    'reviews': reviews\n                })\n                \n        except Exception as e:\n            print(f\"Error parsing item: {e}\", file=sys.stderr)\n            continue\n    \n    if products:\n        df = pd.DataFrame(products)\n        df.to_csv(output_file, index=False)\n        print(f\"Saved {len(products)} products to {output_file}\", file=sys.stderr)\n        print(df.head().to_string(index=False))\n    else:\n        print(\"No products found. Page structure may have changed.\", file=sys.stderr)\n\nif __name__ == \"__main__\":\n    if len(sys.argv) != 2:\n        print(\"Usage: python scraper.py 'https://www.amazon.com/s?k=your_search_term'\", file=sys.stderr)\n        sys.exit(1)\n    \n    scrape_amazon_search(sys.argv[1])\n```\n\n**Quick usage:** `python scraper.py \"https://www.amazon.com/s?k=laptop\"`  \nHandles common Amazon layouts, outputs CSV ready-to-use. May need tweaks if Amazon changes HTML (they do often). Test on a real search page first.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227868,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 918,
+      "prompt_tokens": 1067,
+      "total_tokens": 1985,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 992,
+        "text_tokens": 1067,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 5236000
+    }
+  },
+  "wall_time_s": 9.3333
+}

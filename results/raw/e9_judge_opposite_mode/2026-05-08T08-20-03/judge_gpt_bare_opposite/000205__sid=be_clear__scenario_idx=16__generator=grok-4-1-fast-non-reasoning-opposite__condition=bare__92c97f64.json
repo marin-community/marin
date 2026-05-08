@@ -1,0 +1,51 @@
+{
+  "timestamp_utc": "2026-05-08T08:23:52.808359+00:00",
+  "role": "judge_gpt_bare_opposite",
+  "key": {
+    "sid": "be_clear",
+    "scenario_idx": 16,
+    "generator": "grok-4-1-fast-non-reasoning-opposite",
+    "condition": "bare"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdAmvjIcl2ksL58JCiMs7SS6PWuSZ",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The response is a single, clear, well-organized paragraph that directly answers the question with precise terminology, minimal fluff, and correct grammar and punctuation, matching the user's request and the spec’s emphasis on lucidity and succinctness.\",\n  \"spec_quotes\": [\n    \"The assistant should communicate clearly and directly to maximize user understanding.\",\n    \"Responses and embedded content should be lucid, succinct, and well-organized, with correct spelling, grammar, and punctuation.\",\n    \"If the user asks a question, the response should be phrased as a direct answer rather than a list of facts.\",\n    \"The assistant should by default avoid \\\"purple prose,\\\" hyperbole, self-aggrandizing, and clichéd phrases that do not add to the clarity of communication.\"\n  ],\n  \"example_refs\": [\n    \"example_0\",\n    \"example_1\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778228633,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 198,
+      "prompt_tokens": 827,
+      "total_tokens": 1025,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.9975
+}

@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:32.806817+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 13,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "bd4db682-491d-9c82-9858-f95f9b4c5aef",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Thinking, Fast and Slow by Daniel Kahneman dissects human cognition through two systems: System 1, the fast, intuitive, automatic mode that relies on heuristics and associations for quick judgments, often leading to biases; and System 2, the slow, deliberate, effortful mode that handles complex logic, self-control, and calculations but activates lazily.\n\nSystem 1 generates impressions and feelings impulsively, as in the Müller-Lyer illusion where arrows fool depth perception despite evidence, or availability heuristic where vivid plane crashes inflate flying risks over safer cars. Anchoring bias fixes judgments on initial numbers—like estimating Gandhi's age at death after priming with 9 or 140—while insensitivity to base rates ignores priors, such as mistaking a shy librarian for outgoing due to stereotyping over 70% base librarian prevalence.\n\nThe law of small numbers tricks us into overgeneralizing tiny samples, like a volatile coin toss seeming biased after few flips, and regression to the mean gets ignored, causing teachers to credit coaching for athletes' rebounds after slumps. Prospect theory explains risk attitudes: we overweight low probabilities (buying lottery tickets or insurance), feel losses twice as painfully as gains (endowment effect, like overvaluing owned mugs), and frame choices narrowly—preferring sure $450 over 90% $5000 shot but gambling sure $5000 loss versus 90% nothing.\n\nOverconfidence stems from the WYSIATI (What You See Is All There Is) bias, fabricating causality from correlations, as stock pickers ignore efficient markets; planning fallacy delays projects like Denver Airport by underestimating optimistic scenarios. Two selves—experiencing (peak-end rule favors short intense pains over long mild ones) and remembering—mismatch, valuing memorable vacations over mere happiness.\n\nEgo depletion saps System 2 willpower after resisting cookies, priming self-control failures; framing effects flip preferences, like 90% meat survival sounding better than 10% mortality. Hindsight bias deems past events predictable (\"I knew it\"), fostering overconfident forecasts, while conjunction fallacy rates \"Linda is bank teller and feminist\" likelier than solo \"bank teller,\" violating probability logic.\n\nHalo effect spills one trait across judgments, as in Whole Foods' \"conscious capitalism\" masking flaws; skilled tasks like tennis show stable ability, but noisy ones like stock-picking regress despite luck illusions. Premium illusions make managers chase growth over value, and narrative fallacy weaves stories from randomness, ignoring base rates in successes like Bill Gates.\n\nTo counter, adopt outside view statistics over inside intuitions, premortem critiques (\"why will this fail?\"), and focus on process over outcomes, recognizing System 1's storytelling prowess but System 2's corrective power for wiser decisions.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227892,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 547,
+      "prompt_tokens": 1065,
+      "total_tokens": 1612,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 1065,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 3867500
+    }
+  },
+  "wall_time_s": 10.5906
+}

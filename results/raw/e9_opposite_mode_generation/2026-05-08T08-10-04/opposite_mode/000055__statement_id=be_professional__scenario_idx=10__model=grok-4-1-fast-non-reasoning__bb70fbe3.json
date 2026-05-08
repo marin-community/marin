@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:00.860652+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 10,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "b5ec6784-00c0-9cd0-bc4c-d7114a22b8d5",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here's a plain breakdown of the key tradeoffs in quitting your job. I'll base this on common factors people weigh—tailor it to your specifics like finances, skills, and goals. Be clear on those for better advice.\n\n**Pros of quitting:**\n- Freedom from daily grind: No more toxic boss, burnout, or pointless meetings. You get time to recharge or pivot.\n- Opportunity to chase better: Job hunt for higher pay, better fit, or entrepreneurship. Average raises from switching are 10-20%.\n- Mental health boost: If it's draining you, leaving can cut stress fast.\n\n**Cons of quitting:**\n- Money gap: No paycheck means burning savings. Rule of thumb: 3-6 months' expenses minimum. Job searches average 3 months—longer in recessions.\n- Resume risk: Gaps look bad unless you spin them (e.g., \"freelance\" or upskilling). Multiple short stints signal instability.\n- Loss of benefits: Health insurance, 401k match, stability. Rebuilding takes time.\n- Uncertainty hits hard: New job might suck too. Regret is common if you quit impulsively.\n\n**Bottom line:** Quit if you have a solid plan (next gig lined up, side income, buffer), the job is killing you, and skills are marketable. Otherwise, line up options first—don't jump without a net. What's your financial runway and why exactly do you want out? That'll sharpen this.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227860,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 297,
+      "prompt_tokens": 979,
+      "total_tokens": 1276,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 911,
+        "text_tokens": 979,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2076500
+    }
+  },
+  "wall_time_s": 5.212
+}

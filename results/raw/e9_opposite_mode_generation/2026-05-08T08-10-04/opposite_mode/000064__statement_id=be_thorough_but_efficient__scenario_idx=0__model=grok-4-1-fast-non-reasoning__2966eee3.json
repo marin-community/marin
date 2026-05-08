@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:06.073045+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 0,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "d6516417-717f-d711-b3f4-aa8da8accf26",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```javascript\n// Complete production-ready Task Manager REST API\n// Run with: npm init -y && npm i express mongoose bcryptjs jsonwebtoken dotenv cors helmet morgan\n// Create .env with: PORT=3000, JWT_SECRET=your-super-secret-key, MONGO_URI=mongodb://localhost:27017/taskmanager\n// Start MongoDB locally or use MongoDB Atlas, then: node server.js\n\nconst express = require('express');\nconst mongoose = require('mongoose');\nconst bcrypt = require('bcryptjs');\nconst jwt = require('jsonwebtoken');\nconst cors = require('cors');\nconst helmet = require('helmet');\nconst morgan = require('morgan');\nrequire('dotenv').config();\n\nconst app = express();\nconst PORT = process.env.PORT || 3000;\nconst JWT_SECRET = process.env.JWT_SECRET;\n\n// Middleware\napp.use(helmet()); // Security headers\napp.use(cors()); // Enable CORS\napp.use(morgan('combined')); // Logging\napp.use(express.json({ limit: '10mb' }));\n\n// MongoDB connection\nmongoose.connect(process.env.MONGO_URI, { \n  useNewUrlParser: true, \n  useUnifiedTopology: true \n})\n.then(() => console.log('✅ MongoDB connected'))\n.catch(err => console.error('❌ MongoDB connection error:', err));\n\n// === MODELS ===\n\n// User Schema\nconst userSchema = new mongoose.Schema({\n  username: { type: String, required: true, unique: true, trim: true },\n  email: { type: String, required: true, unique: true, lowercase: true },\n  password: { type: String, required: true, minlength: 6 },\n}, { timestamps: true });\n\nuserSchema.pre('save', async function(next) {\n  if (!this.isModified('password')) return next();\n  this.password = await bcrypt.hash(this.password, 12);\n  next();\n});\n\nuserSchema.methods.comparePassword = async function(password) {\n  return bcrypt.compare(password, this.password);\n};\n\nconst User = mongoose.model('User', userSchema);\n\n// Project Schema\nconst projectSchema = new mongoose.Schema({\n  name: { type: String, required: true, trim: true },\n  description: { type: String, trim: true },\n  owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }\n}, { timestamps: true });\n\nconst Project = mongoose.model('Project', projectSchema);\n\n// Task Schema\nconst taskSchema = new mongoose.Schema({\n  title: { type: String, required: true, trim: true },\n  description: { type: String, trim: true },\n  status: { type: String, enum: ['todo', 'in-progress', 'done'], default: 'todo' },\n  project: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', required: true },\n  assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }\n}, { timestamps: true });\n\nconst Task = mongoose.model('Task', taskSchema);\n\n// === MIDDLEWARE ===\n\n// JWT Authentication middleware\nconst authMiddleware = async (req, res, next) => {\n  try {\n    const token = req.header('Authorization')?.replace('Bearer ', '');\n    if (!token) return res.status(401).json({ error: 'Access denied. No token provided.' });\n    \n    const decoded = jwt.verify(token, JWT_SECRET);\n    req.user = decoded;\n    next();\n  } catch (error) {\n    res.status(401).json({ error: 'Invalid token.' });\n  }\n};\n\n// === CONTROLLERS ===\n\n// Auth Controller\nconst register = async (req, res) => {\n  try {\n    const { username, email, password } = req.body;\n    \n    // Basic validation (you might want to add more robust validation)\n    if (!username || !email || !password) {\n      return res.status(400).json({ error: 'Username, email, and password are required.' });\n    }\n\n    const existingUser = await User.findOne({ $or: [{ email }, { username }] });\n    if (existingUser) {\n      return res.status(400).json({ error: 'User already exists.' });\n    }\n\n    const user = new User({ username, email, password });\n    await user.save();\n\n    const token = jwt.sign(\n      { id: user._id, username: user.username },\n      JWT_SECRET,\n      { expiresIn: '7d' }\n    );\n\n    res.status(201).json({\n      message: 'User created successfully',\n      token,\n      user: { id: user._id, username: user.username, email: user.email }\n    });\n  } catch (error) {\n    res.status(500).json({ error: 'Server error during registration.' });\n  }\n};\n\nconst login = async (req, res) => {\n  try {\n    const { email, password } = req.body;\n    \n    const user = await User.findOne({ email });\n    if (!user || !(await user.comparePassword(password))) {\n      return res.status(401).json({ error: 'Invalid credentials.' });\n    }\n\n    const token = jwt.sign(\n      { id: user._id, username: user.username },\n      JWT_SECRET,\n      { expiresIn: '7d' }\n    );\n\n    res.json({\n      token,\n      user: { id: user._id, username: user.username, email: user.email }\n    });\n  } catch (error) {\n    res.status(500).json({ error: 'Server error during login.' });\n  }\n};\n\n// Projects Controller\nconst createProject = async (req, res) => {\n  try {\n    const project = new Project({ ...req.body, owner: req.user.id });\n    await project.save();\n    await project.populate('owner', 'username');\n    res.status(201).json(project);\n  } catch (error) {\n    res.status(400).json({ error: error.message });\n  }\n};\n\nconst getProjects = async (req, res) => {\n  try {\n    const projects = await Project.find({ owner: req.user.id })\n      .populate('owner', 'username')\n      .sort({ createdAt: -1 });\n    res.json(projects);\n  } catch (error) {\n    res.status(500).json({ error: error.message });\n  }\n};\n\nconst getProject = async (req, res) => {\n  try {\n    const project = await Project.findOne({ \n      _id: req.params.id, \n      owner: req.user.id \n    }).populate('owner', 'username');\n    \n    if (!project) {\n      return res.status(404).json({ error: 'Project not found.' });\n    }\n    res.json(project);\n  } catch (error) {\n    res.status(500).json({ error: error.message });\n  }\n};\n\n// Tasks Controller\nconst createTask = async (req, res) => {\n  try {\n    const task = new Task({ ...req.body, project: req.params.projectId });\n    await task.save();\n    await task.populate(['project', 'assignedTo'], 'name username');\n    res.status(201).json(task);\n  } catch (error) {\n    res.status(400).json({ error: error.message });\n  }\n};\n\nconst getTasks = async (req, res) => {\n  try {\n    const tasks = await Task.find({ project: req.params.projectId })\n      .populate(['project', 'assignedTo'], 'name username')\n      .sort({ createdAt: -1 });\n    res.json(tasks);\n  } catch (error) {\n    res.status(500).json({ error: error.message });\n  }\n};\n\nconst updateTask = async (req, res) => {\n  try {\n    const task = await Task.findByIdAndUpdate(\n      req.params.id,\n      req.body,\n      { new: true, runValidators: true }\n    ).populate(['project', 'assignedTo'], 'name username');\n    \n    if (!task) {\n      return res.status(404).json({ error: 'Task not found.' });\n    }\n    res.json(task);\n  } catch (error) {\n    res.status(400).json({ error: error.message });\n  }\n};\n\nconst deleteTask = async (req, res) => {\n  try {\n    const task = await Task.findByIdAndDelete(req.params.id);\n    if (!task) {\n      return res.status(404).json({ error: 'Task not found.' });\n    }\n    res.json({ message: 'Task deleted successfully.' });\n  } catch (error) {\n    res.status(500).json({ error: error.message });\n  }\n};\n\n// === ROUTES ===\n\n// Auth routes (public)\napp.post('/api/auth/register', register);\napp.post('/api/auth/login', login);\n\n// Protected routes\napp.use('/api', authMiddleware);\n\n// Projects routes\napp.post('/api/projects', createProject);\napp.get('/api/projects', getProjects);\napp.get('/api/projects/:id', getProject);\n\n// Tasks routes\napp.post('/api/projects/:projectId/tasks', createTask);\napp.get('/api/projects/:projectId/tasks', getTasks);\napp.put('/api/tasks/:id', updateTask);\napp.delete('/api/tasks/:id', deleteTask);\n\n// Health check\napp.get('/api/health', (req, res) => res.json({ status: 'OK', timestamp: new Date() }));\n\n// 404 handler\napp.use('*', (req, res) => {\n  res.status(404).json({ error: 'Route not found.' });\n});\n\n// Global error handler\napp.use((error, req, res, next) => {\n  console.error(error.stack);\n  res.status(500).json({ error: '",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227866,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 2000,
+      "prompt_tokens": 1088,
+      "total_tokens": 3088,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 1088,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 11178500
+    }
+  },
+  "wall_time_s": 16.8058
+}

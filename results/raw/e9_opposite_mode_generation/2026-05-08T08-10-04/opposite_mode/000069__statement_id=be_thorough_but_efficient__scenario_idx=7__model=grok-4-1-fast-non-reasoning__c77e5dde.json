@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:18.059042+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 7,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "80f2bb95-6d94-9ef2-a8b3-c3bf0c59e595",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "### **The Shadowed Forge**\n\n**Adventure Summary**  \nA level 5 party (4-5 PCs) investigates a haunted dwarven forge in the Ironspike Mountains. A mad smith unleashes shadow elementals to fuel his undead army. Playtime: 3-4 hours. Rewards: 6,000 XP per PC, 2,000 gp in loot, magic items.\n\n**Hook (10-15 min)**  \nVillage of Kharndor: Miners report tremors and shadow beasts dragging workers underground. The PCs arrive via a desperate elder's plea (50 gp reward upfront). At the mine entrance (guarded by 2 **shadows** CR 1/2, stealthy ambush), they find a carved warning: \"Forge claims all iron and soul.\"\n\n**Key Locations**  \n1. **Collapsed Mine Tunnels** (Entry, 20 min)  \n   Narrow passages (DC 13 Athletics to squeeze past rubble). 4 **specters** (CR 3) haunt here, possessing miners' corpses (AC 12, 22 hp, +4 to hit, 3d6 necrotic). Loot: 200 gp in ore cart, *potion of greater healing*. Trap: Pit (2d10 falling, DC 14 Dex save).\n\n2. **The Anvil Chamber** (Main Hub, 30 min)  \n   Vast forge room with molten rivers (DC 15 Dex save or 4d10 fire). Central anvil pulses with shadow energy. NPCs here:  \n   - **Grimthar Ironvein** (major NPC): Insane dwarf smith (use **deathlock** stats CR 4, but with fire resistance). He monologues: \"Shadows temper the perfect blade!\" Fights if attacked; can be reasoned with (DC 18 Persuasion, reveals his pact with a shadow demon for immortality).  \n   - **Forge Imp** (minion): Tiny devil (CR 1), Grimthar's spy. Flees to alert boss if spotted.\n\n3. **Shadow Crucible** (Climax, 45-60 min)  \n   Upper chamber with 3 glowing crucibles summoning elementals. Multi-stage encounter:  \n   | Wave | Enemies | Tactics |  \n   |------|---------|---------|  \n   | 1 | 1 **shadow demon** (CR 4) + 2 **shadows** | Demon teleports PCs into lava (3d10 fire/round). |  \n   | 2 | 4 **animated armors** (CR 3, shadow-infused: +1d6 necrotic on hit) | Guard Grimthar; shatter on 0 hp (release **wraith** CR 5). |  \n   | Boss | Grimthar + 1 **young black dragon** shadow (CR 8, reduced: 100 hp, breath 8d8 acid as cone) | Grimthar rides dragon shadow; destroy crucibles (AC 15, 30 hp each) to weaken (halve boss hp per destroyed). |  \n   Terrain: Crucibles can be tipped (DC 16 Str, flood room with shadow ooze: restrained, 2d6 necrotic/turn).  \n\n**Resolution (15 min)**  \nDestroying Grimthar and crucibles ends the threat (shadows dissipate). Success: Forge stabilizes; villagers offer 1,500 gp + deed to mine (source of 100 gp/month iron). Failure (Grimthar escapes): Shadows spread, hook for sequel.  \n\n**Treasure**  \n- Grimthar's hammer: *+1 warhammer* (deals +1d6 necrotic).  \n- Shadow dragon hoard: 800 gp gems, *cloak of protection*, *ring of evasion* (attuned).  \n- Side loot: 500 gp tools, *scroll of fireball*.  \n\n**Scaling**  \nEasy: Remove 1 animated armor. Hard: Add 2 **specters** to boss wave. Use milestone XP: Award full at resolution.\n\n**DM Tips**  \n- Total combats: 3-4, balanced for level 5 (deadly if misplayed).  \n- Roleplay Grimthar for RP XP bonus (+200/PC).  \n- Maps: Sketch mine as Y-shape (tunnels to anvil to crucible). Printable token stats on D&D Beyond (search \"shadow demon\"). Ready to run—no gaps.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227878,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 894,
+      "prompt_tokens": 1071,
+      "total_tokens": 1965,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 992,
+        "text_tokens": 1071,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 5124000
+    }
+  },
+  "wall_time_s": 17.4996
+}

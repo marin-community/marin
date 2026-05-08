@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:13:22.998432+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "present_perspectives",
+    "scenario_idx": 13,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "0a93e451-5c48-961d-9ba7-7828ecd1aca0",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "**Thread: New Immigration Cap Just Announced – Thoughts?**\n\n**Patriot1776** (strongly anti-immigration):  \nFinally, some sanity! These caps are a start, but we've been overrun by cheap labor flooding in, driving down wages and straining our hospitals. Time to prioritize Americans first – no more handouts to illegals. Deport 'em all and build that wall higher!\n\n**GlobalCitizen88** (strongly pro-immigration):  \nThis cap is a disgraceful step backward. Immigrants built this country – they're innovators, workers, and families escaping hellholes we helped create. Restrictions like this hurt everyone: businesses can't grow, communities lose vibrancy. Open the gates wider, not slam them shut!\n\n**AmericaFirstIsolationist** (close the borders entirely):  \nCaps? Pathetic half-measure. Close the damn borders completely – no exceptions, no \"merit\" BS. Let the world sort itself out without leaching off our sovereignty. Isolation is the only way to preserve what's left of real America. Zero immigration, period.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778228003,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 209,
+      "prompt_tokens": 801,
+      "total_tokens": 1010,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 709,
+        "text_tokens": 801,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1583500
+    }
+  },
+  "wall_time_s": 4.1462
+}

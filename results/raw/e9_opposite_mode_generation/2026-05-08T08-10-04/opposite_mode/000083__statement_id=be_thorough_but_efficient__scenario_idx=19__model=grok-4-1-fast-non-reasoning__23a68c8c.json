@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:45.746316+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 19,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "fa917b01-63ff-969e-a6d6-cc0cb9ce75ea",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "### Dijkstra’s Shortest Path Algorithm\n\nDijkstra’s algorithm finds the shortest paths from a single source vertex to all other vertices in a weighted graph with non-negative edge weights. It uses a priority queue to always expand the least-cost path first, maintaining a distance estimate for each vertex that relaxes as better paths are found.\n\n#### Key Steps\n1. Initialize distances: Set source distance to 0, others to infinity.\n2. Use a priority queue to select the unvisited vertex with the smallest tentative distance.\n3. For the selected vertex, update distances to its neighbors if a shorter path is found via this vertex.\n4. Repeat until all vertices are processed or the queue is empty.\n\nThe algorithm guarantees optimality due to non-negative weights, as the first time a vertex is selected, its shortest path is finalized.\n\n#### Pseudocode\n```\nfunction Dijkstra(Graph G, source S):\n    dist[S] ← 0                          // Distance array\n    for each vertex V in G:\n        dist[V] ← ∞\n    priority_queue Q                      // Min-heap by distance\n    Q.insert((0, S))\n    \n    while Q is not empty:\n        u ← Q.extract_min()               // Vertex with smallest dist\n        if dist[u] == ∞: break            // Early termination if disconnected\n        \n        for each neighbor V of u:\n            alt ← dist[u] + weight(u, V)\n            if alt < dist[V]:\n                dist[V] ← alt\n                Q.decrease_key(V, alt)    // Update priority if supported\n    \n    return dist                           // Shortest distances from S\n```\n\n#### Worked Example\nConsider this graph with vertices A–E, source A:\n\n```\n    2\nA ---- B ---- 3 ---- D\n |     |       |      |\n 7     1       2      1\n |     |       |      |\n C ---- E ---- 5 ---- F\n    4     3\n```\n\n- Start: dist[A]=0, others ∞. Queue: (0,A)\n- Extract A: Update B=2, C=7. Queue: (2,B), (7,C)\n- Extract B: Update D=5 (2+3), E=3 (2+1). Queue: (3,E), (5,D), (7,C)\n- Extract E: Update C=6 (3+3, better than 7→6), F=4 (3+1). Queue: (4,F), (5,D), (6,C)\n- Extract F: No better paths.\n- Extract D: Update F=6 (5+1, no change).\n- Extract C: No better paths.\n\nFinal distances: A=0, B=2, C=6, D=5, E=3, F=4.\n\n#### Complexity\n- Time: O((V+E) log V) with binary heap (V=vertices, E=edges).\n- Space: O(V) for distances and queue.\n\nThis implementation assumes adjacency list and a priority queue supporting decrease-key (e.g., Fibonacci heap for O(E + V log V)). For dense graphs, use adjacency matrix.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227905,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 644,
+      "prompt_tokens": 1060,
+      "total_tokens": 1704,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 994,
+        "text_tokens": 1060,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 3849000
+    }
+  },
+  "wall_time_s": 7.8693
+}

@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:35.235661+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 4,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "f0de64e0-b868-fc50-d115-0b83593eb19e",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "In the shadowed bowels of Nantucket's whaling haunts, where the sea's abyssal heart pulsed with primal fury, Captain Ahab ascended like a thunder-wrought titan from the forge of forgotten gods. His soul, scarred by the alabaster fang of the White Whale—Moby Dick, that spectral leviathan of cosmic malice—ignited an unquenchable vendetta against the indifferent deep.\n\nFrom the *Pequod*'s storm-lashed decks, Ishmael, the wandering oracle, chronicled the odyssey: a polyglot crew of harpooners—Queequeg, the tattooed cannibal-savant; Tashtego, the Wampanoag arrow-spirit; Daggoo, ebony colossus—bound to Ahab's monomaniacal quest. They chased the great white scourge across equatorial tempests and polar ice-veils, plumbing the ocean's eldritch mysteries: ambergris aphrodisiacs, squid-krakens coiling from lightless chasms, the blasphemous theology of cetacean enormity.\n\nAhab's ivory leg thumped prophecies of doom; Starbuck, the pious first mate, murmured mutinous prayers to sanity's flickering altar. Yet hubris prevailed. In the climax's apocalyptic roar—whirlpool maelstroms devouring the firmament—Moby Dick's fluked apocalypse rent the *Pequod* asunder, dragging all save Ishmael into the vortex's maw, where man and monster dissolved in eternity's vengeful foam.\n\n(148 words)",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227835,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 317,
+      "prompt_tokens": 996,
+      "total_tokens": 1313,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 937,
+        "text_tokens": 996,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2171500
+    }
+  },
+  "wall_time_s": 6.482
+}

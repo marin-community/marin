@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:52.106236+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 0,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "6254d97e-8157-97f6-bb3f-848281b7331f",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Yo, dude, totally gotchu on this performance review script—let's make it fun and real, like you're just shootin' the shit with your boss over beers. Here's a chill outline you can tweak. I'll keep it jokey, casual as hell, with a lil' swear here and there to keep it authentic without goin' overboard.\n\n**Opening the convo (kick it off light):**\n\"Hey boss, what's good? Man, this year's been a wild fuckin' ride, right? I crushed those Q3 targets like a boss—hit 120% on sales, no cap.\"\n\n**Highlight your wins (brag but funny):**\n\"Remember that clusterfuck project with the delayed shipments? I jumped in, fixed the vendor bullshit, and we shipped on time. Team's still talkin' about how I saved our asses—high five?\"\n\n**Own any slip-ups (keep it real, no excuses):**\n\"Look, I bombed on that one report deadline—my bad, got buried in emails. But I learned my lesson, set up this dope Trello board, and ain't missin' shit now.\"\n\n**What you want next (sneak in the ask):**\n\"I'm pumped to level up—maybe take point on that new client pitch? I'd kill it, and hell, it'd keep me from gettin' bored outta my skull. Thoughts?\"\n\n**Wrap it strong (end on a high):**\n\"Appreciate the shot this year, boss. Let's keep crushin' it—what's the play for Q4?\"\n\nPractice it in the mirror, add your flavor, and you'll own the room. You got this, bro—hit me up if you wanna riff more! 🚀",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227852,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 345,
+      "prompt_tokens": 988,
+      "total_tokens": 1333,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 988,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2703500
+    }
+  },
+  "wall_time_s": 6.575
+}

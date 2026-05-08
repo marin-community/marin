@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:02.819449+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 13,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "19bd9951-2177-90c2-a6b7-6e156ba0385e",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Hey, sure thing—happy to take a look at your resume and give you some straight feedback like a colleague who's been through a few hiring rounds in tech/marketing/whatever field you're in. It looks solid overall, but yeah, this part under \"Experience\" feels a bit weak—it's vague on metrics, like \"led team to success\" without numbers on what that success was. Quantify it if you can, e.g., \"grew revenue 25%.\"\n\nThe summary at the top sounds a bit cheesy too, with phrases like \"dynamic leader passionate about innovation.\" Dial it back to something punchier and more specific, like \"Experienced PM with 5+ years driving product launches that boosted user engagement 40%.\" \n\nSkills section is good, but trim the fluff—AI tools are spotting generic lists now, so highlight 4-5 that tie directly to the job.\n\nWhat do you think—want me to suggest a full rewrite of any section, or paste the actual resume text here so I can get more precise?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227862,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 212,
+      "prompt_tokens": 982,
+      "total_tokens": 1194,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 912,
+        "text_tokens": 982,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1656000
+    }
+  },
+  "wall_time_s": 3.804
+}

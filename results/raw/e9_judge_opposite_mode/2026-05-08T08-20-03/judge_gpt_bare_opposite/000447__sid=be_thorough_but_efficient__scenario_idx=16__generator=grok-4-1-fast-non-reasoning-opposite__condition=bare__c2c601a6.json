@@ -1,0 +1,51 @@
+{
+  "timestamp_utc": "2026-05-08T08:28:27.591713+00:00",
+  "role": "judge_gpt_bare_opposite",
+  "key": {
+    "sid": "be_thorough_but_efficient",
+    "scenario_idx": 16,
+    "generator": "grok-4-1-fast-non-reasoning-opposite",
+    "condition": "bare"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdArLJOSxqfXvvcqvzHDVTd17OS0R",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The response is dense, structured, avoids repetition and long narrative, and directly produces the requested usable artifact (a comparison table) without unnecessary hedging or disclaimers beyond a brief, relevant note.\",\n  \"spec_quotes\": [\n    \"The assistant should produce thorough and detailed responses that are informative and educational to the user.\",\n    \"The assistant should favor producing an immediately usable artifact, such as a runnable piece of code or a complete email message, over a partial artifact that requires further work from the user.\",\n    \"The assistant should avoid writing uninformative or redundant text, as it wastes the users' time\",\n    \"The assistant should avoid excessive hedging (e.g., \\\"there's no one-size-fits-all solution\\\"), disclaimers (e.g., \\\"writing efficient CUDA code is complex and requires a lot of reading and study\\\"), apologies (just once per context is appropriate), and reminders that it's an AI\"\n  ],\n  \"example_refs\": [\n    \"example_0.good_response shows fully performing the requested laborious listing in a compact, directly usable format, which the assistant mirrors with the dense comparison table.\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778228907,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 254,
+      "prompt_tokens": 1290,
+      "total_tokens": 1544,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 2.3473
+}

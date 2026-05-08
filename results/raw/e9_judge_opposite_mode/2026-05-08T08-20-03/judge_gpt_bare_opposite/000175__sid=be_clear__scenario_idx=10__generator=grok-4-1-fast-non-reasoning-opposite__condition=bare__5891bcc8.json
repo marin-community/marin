@@ -1,0 +1,51 @@
+{
+  "timestamp_utc": "2026-05-08T08:23:18.453591+00:00",
+  "role": "judge_gpt_bare_opposite",
+  "key": {
+    "sid": "be_clear",
+    "scenario_idx": 10,
+    "generator": "grok-4-1-fast-non-reasoning-opposite",
+    "condition": "bare"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdAmMak7lbkq3UL2xZUEcsydWQHKH",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The response is concise, clearly structured in short bullet points, uses concrete language, and directly answers the user's question without unnecessary prose or digressions.\",\n  \"spec_quotes\": [\n    \"Responses and embedded content should be lucid, succinct, and well-organized, with correct spelling, grammar, and punctuation.\",\n    \"Formatting (such as bold, italics, or bulleted lists) should be used judiciously to aid the user in scanning the response.\",\n    \"If the user asks a question, the response should be phrased as a direct answer rather than a list of facts.\"\n  ],\n  \"example_refs\": [\n    \"example_0\",\n    \"example_1\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778228598,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 165,
+      "prompt_tokens": 860,
+      "total_tokens": 1025,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.4811
+}

@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:43.397808+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 18,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "274b0536-e384-9976-ace4-c1d977f1e14c",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Getting Started Guide: Backend Team\n\n## 1. Prerequisites & Installation\n- **OS**: macOS, Linux, or WSL2 on Windows.\n- **Core Tools**:\n  ```\n  # Install Homebrew (macOS) or equivalent package manager\n  brew install docker docker-compose git jq yq go python3\n\n  # Docker: Ensure Docker Desktop is running (includes Compose)\n  # Node.js (for any frontend scripts or tools): Use nvm or brew install node@20\n  # IDE: VS Code or IntelliJ with Docker, Go, and Remote-Containers extensions\n  ```\n- **Clone Monorepo**:\n  ```\n  git clone <monorepo-url> backend-monorepo\n  cd backend-monorepo\n  git checkout main\n  ```\n\n## 2. Run Main Services Locally\nOur setup uses Docker Compose for a local dev environment with 5 core microservices: API Gateway, User Service, Payment Service, Notification Service, and Postgres DB.\n\n- **Start Everything**:\n  ```\n  docker-compose -f docker-compose.dev.yml up -d\n  # Builds images if needed (first time: ~5-10 mins)\n  ```\n- **Verify**:\n  ```\n  docker-compose logs -f  # Tail all logs\n  curl http://localhost:8080/health  # Should return {\"status\":\"ok\"}\n  ```\n- **Individual Services** (e.g., just User Service):\n  ```\n  docker-compose -f docker-compose.dev.yml up user-service\n  ```\n- **Stop/Reset**:\n  ```\n  docker-compose down -v  # -v clears volumes (DB reset)\n  ```\n\n**Ports**:\n| Service | Port | Purpose |\n|---------|------|---------|\n| API Gateway | 8080 | Main entrypoint |\n| User | 8081 | Internal |\n| Payment | 8082 | Internal |\n| Postgres | 5432 | DB |\n\n## 3. Run Tests\nTests are in Go (unit/integration) and Dockerized e2e.\n\n- **Unit/Integration** (per service):\n  ```\n  cd services/user-service\n  go test ./... -v -race  # With race detector\n  ```\n- **All Services**:\n  ```\n  make test  # Runs go test across monorepo\n  ```\n- **E2E Tests** (requires services running):\n  ```\n  make e2e-test  # Uses docker-compose.test.yml\n  ```\n\n**Pro Tip**: Use `make test-watch` for auto-rerun on changes (install entr: `brew install entr`).\n\n## 4. Logs & Debugging\n- **Local Docker Logs**:\n  ```\n  docker-compose logs user-service  # Specific service\n  docker-compose logs --tail=100 -f gateway  # Tail last 100 lines\n  ```\n- **Service Logs** (inside container):\n  ```\n  docker-compose exec user-service tail -f /app/logs/app.log\n  ```\n- **DB Logs**: `docker-compose logs postgres`\n- **Remote/Prod Logs**: Check Kibana at `https://logs.company.internal` (Slack #logs-access for creds). Filter by service/pod name.\n- **Tools**: `docker stats` for resource usage; `docker-compose exec <service> /bin/sh` for shell access.\n\n**Troubleshooting**:\n- DB not ready? Wait for `docker-compose logs postgres | grep \"ready to accept\"`.\n- Port conflicts? `docker-compose down` and retry.\n- For monorepo issues: `make clean && make setup`.\n\nYou're set! Ping #backend-dev on Slack for blockers. Welcome aboard.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227903,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 748,
+      "prompt_tokens": 1071,
+      "total_tokens": 1819,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 992,
+        "text_tokens": 1071,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 4394000
+    }
+  },
+  "wall_time_s": 11.0465
+}

@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:01.079004+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 11,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "f1db2210-53c6-96eb-b4da-ca153ad6f537",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "After 5 rewarding years at [Company Name], I've recently been impacted by the latest round of layoffs. It stings, no doubt—watching opportunities shift and teams shrink is tough on everyone involved.\n\nThat said, I'm grateful for the growth I've had there and the incredible colleagues who've become like a second family. Now, I'm turning the page: excited to explore new roles in [your field/industry], leveraging skills in [key skills, e.g., product management, data analysis, etc.]. If you know of opportunities or want to grab a virtual coffee to chat, I'd love to connect.\n\nOpen to new adventures—let's stay in touch! #JobSearch #CareerTransition #LaidOffButMovingForward",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227861,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 143,
+      "prompt_tokens": 976,
+      "total_tokens": 1119,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 911,
+        "text_tokens": 976,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1300500
+    }
+  },
+  "wall_time_s": 3.0057
+}

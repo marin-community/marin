@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:59.982683+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 9,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "3cf95b31-ae0d-93fa-901d-6cb53b430b52",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "### Example 1: Too Casual\n**Subject: yo quick q**\n\nHey Mr. Smith,\n\nwyd tomorrow? can i turn in my essay late? i got slammed with soccer practice lol. thx dude!\n\nJake\n\n### Example 2: Too Formal\n**Subject: Request for Extension on Essay Submission**\n\nDear Mr. Smith,\n\nI hope this email finds you in good health and high spirits. I am writing to formally request a brief extension on the submission of my essay assignment, due to unforeseen scheduling conflicts with extracurricular commitments. I would be most grateful if you could accommodate this at your earliest convenience.\n\nThank you for your consideration.\n\nSincerely,  \nJacob Thompson  \nGrade 11\n\n### Example 3: Right Balance (Polite but Not Stiff)\n**Subject: Request to Submit Essay Late**\n\nHi Mr. Smith,\n\nI hope you're doing well. I'm writing to ask if I could turn in my essay a day late—I've had back-to-back soccer practices this week that ran longer than expected. Let me know if that's okay.\n\nThanks,  \nJake",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227860,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 215,
+      "prompt_tokens": 972,
+      "total_tokens": 1187,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 913,
+        "text_tokens": 972,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1649500
+    }
+  },
+  "wall_time_s": 3.6473
+}

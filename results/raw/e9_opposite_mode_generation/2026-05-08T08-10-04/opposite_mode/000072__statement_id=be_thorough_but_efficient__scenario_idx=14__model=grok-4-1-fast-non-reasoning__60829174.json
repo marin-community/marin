@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:35.559003+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 14,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "d072fd37-5167-9ea7-b1a1-7ce501577a12",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```python\n# Minimal Flask app for Notes API (CRUD on in-memory storage)\n# Run with: flask --app app run\n# Or export FLASK_APP=app.py && flask run\n\nfrom flask import Flask, request, jsonify\nimport uuid\n\napp = Flask(__name__)\n\n# In-memory storage: list of notes\nnotes = []\n\n@app.route('/notes', methods=['GET'])\ndef get_notes():\n    \"\"\"Retrieve all notes.\"\"\"\n    return jsonify(notes)\n\n@app.route('/notes', methods=['POST'])\ndef create_note():\n    \"\"\"Create a new note.\"\"\"\n    data = request.get_json()\n    if not data or 'content' not in data:\n        return jsonify({'error': 'Content is required'}), 400\n    \n    note = {\n        'id': str(uuid.uuid4()),\n        'content': data['content']\n    }\n    notes.append(note)\n    return jsonify(note), 201\n\n@app.route('/notes/<note_id>', methods=['GET'])\ndef get_note(note_id):\n    \"\"\"Retrieve a specific note.\"\"\"\n    for note in notes:\n        if note['id'] == note_id:\n            return jsonify(note)\n    return jsonify({'error': 'Note not found'}), 404\n\n@app.route('/notes/<note_id>', methods=['PUT'])\ndef update_note(note_id):\n    \"\"\"Update an existing note.\"\"\"\n    data = request.get_json()\n    if not data or 'content' not in data:\n        return jsonify({'error': 'Content is required'}), 400\n    \n    for i, note in enumerate(notes):\n        if note['id'] == note_id:\n            notes[i] = {'id': note_id, 'content': data['content']}\n            return jsonify(notes[i])\n    return jsonify({'error': 'Note not found'}), 404\n\n@app.route('/notes/<note_id>', methods=['DELETE'])\ndef delete_note(note_id):\n    \"\"\"Delete a note.\"\"\"\n    for i, note in enumerate(notes):\n        if note['id'] == note_id:\n            notes.pop(i)\n            return '', 204\n    return jsonify({'error': 'Note not found'}), 404\n\nif __name__ == '__main__':\n    app.run(debug=True)\n\n# Usage examples:\n# POST /notes - {\"content\": \"Hello world\"} -> creates note\n# GET /notes -> lists all\n# GET /notes/{id} -> single note\n# PUT /notes/{id} - {\"content\": \"Updated\"} -> updates\n# DELETE /notes/{id} -> deletes\n```\nThis provides full CRUD with JSON responses and UUIDs for unique IDs. In-memory only—data resets on restart. Test with curl or Postman.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227895,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 546,
+      "prompt_tokens": 1059,
+      "total_tokens": 1605,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 994,
+        "text_tokens": 1059,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 3357000
+    }
+  },
+  "wall_time_s": 4.7884
+}

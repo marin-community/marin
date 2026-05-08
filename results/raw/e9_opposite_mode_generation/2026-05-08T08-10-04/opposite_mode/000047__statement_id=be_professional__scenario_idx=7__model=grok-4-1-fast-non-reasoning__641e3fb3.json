@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:58.681468+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 7,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "e9cfa51e-3aa6-92ab-aa41-62e8860c9199",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Hey [Manager's Name], hope you're doing well. I've been reflecting on my contributions over the past year—stuff like [briefly mention 1-2 key wins, e.g., \"leading the Q3 project that boosted team efficiency by 20% and mentoring the new hires\"]. I've consistently gone above and beyond, and I believe it's time for a raise to match that impact. Could we chat about bumping my salary to [specific amount or range, e.g., \"$X\"], say next week? Thanks for considering—excited to keep crushing it here!\n\nFeel free to tweak the specifics to fit your situation. This keeps it confident, respectful, and real for Slack without the stiff corporate vibe.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227858,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 142,
+      "prompt_tokens": 968,
+      "total_tokens": 1110,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 911,
+        "text_tokens": 968,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1279500
+    }
+  },
+  "wall_time_s": 2.433
+}

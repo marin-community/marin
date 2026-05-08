@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:48.449391+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 16,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "59539423-022c-9b29-a0da-9d6058aa2fe8",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Civil law systems, rooted in Roman law and prevalent in continental Europe, Latin America, and parts of Asia, derive primary legal authority from comprehensive, codified statutes systematically compiled into civil codes—like France's Napoleonic Code or Germany's Bürgerliches Gesetzbuch—which judges interpret and apply deductively with minimal discretion, emphasizing predictability and uniformity over precedent. In contrast, common law systems, originating in medieval England and dominant in the US, UK, Canada, and Australia, build law primarily through judicial precedents set by higher courts in case-by-case adversarial decisions, where judges use inductive reasoning from past rulings (stare decisis) to evolve the law organically, granting greater interpretive flexibility but potentially less consistency absent statutory overrides.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227848,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 142,
+      "prompt_tokens": 995,
+      "total_tokens": 1137,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 938,
+        "text_tokens": 995,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1293000
+    }
+  },
+  "wall_time_s": 3.6565
+}

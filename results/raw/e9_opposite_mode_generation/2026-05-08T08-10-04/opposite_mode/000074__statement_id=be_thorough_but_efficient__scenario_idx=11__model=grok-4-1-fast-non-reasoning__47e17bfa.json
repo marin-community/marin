@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:27.330256+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 11,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "f1036e50-a82c-9ac3-a956-c81ad77e853d",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Building a Simple To-Do List App in React: A Beginner's Tutorial\n\nThis tutorial will guide you through creating a fully functional to-do list app in React from scratch. You'll learn the basics of React setup, components, state management with hooks, and styling. No prior React knowledge is required—I'll explain each step clearly. By the end, you'll have a working app where you can add, toggle, and delete tasks.\n\n## Prerequisites\n- Basic knowledge of HTML, CSS, and JavaScript (including ES6 features like arrow functions).\n- Node.js (version 14 or higher) installed. Download from [nodejs.org](https://nodejs.org).\n\n## Step 1: Set Up Your Development Environment\nWe'll use **Create React App** for a quick boilerplate.\n\n1. Open your terminal and create a new directory:\n   ```\n   mkdir todo-app\n   cd todo-app\n   ```\n\n2. Initialize the React app:\n   ```\n   npx create-react-app .\n   ```\n   This installs React and dependencies. The `.` creates it in the current folder.\n\n3. Start the development server:\n   ```\n   npm start\n   ```\n   Your browser opens to `http://localhost:3000` with the default React page. Keep this running—changes auto-reload.\n\n## Step 2: Clean Up and Plan the App\nDelete unnecessary files for a clean start:\n- In `src/`, remove `App.test.js`, `logo.svg`, `reportWebVitals.js`, and `setupTests.js`.\n- Clear `src/App.js` and `src/App.css` contents.\n\nOur app will have:\n- An input to add tasks.\n- A list of tasks with checkboxes (to toggle complete) and delete buttons.\n- Basic styling for a clean look.\n\n**App Structure**:\n```\nApp (manages state)\n├── AddTask (input + button)\n└── TaskList (renders tasks)\n    └── TaskItem (single task)\n```\n\n## Step 3: Create the Main App Component\nReplace `src/App.js` with this:\n\n```jsx\nimport React, { useState } from 'react';\nimport AddTask from './AddTask';\nimport TaskList from './TaskList';\nimport './App.css';\n\nfunction App() {\n  const [tasks, setTasks] = useState([]);\n\n  const addTask = (text) => {\n    setTasks([...tasks, { id: Date.now(), text, completed: false }]);\n  };\n\n  const toggleTask = (id) => {\n    setTasks(tasks.map(task =>\n      task.id === id ? { ...task, completed: !task.completed } : task\n    ));\n  };\n\n  const deleteTask = (id) => {\n    setTasks(tasks.filter(task => task.id !== id));\n  };\n\n  return (\n    <div className=\"app\">\n      <h1>My To-Do List</h1>\n      <AddTask onAddTask={addTask} />\n      <TaskList tasks={tasks} onToggle={toggleTask} onDelete={deleteTask} />\n    </div>\n  );\n}\n\nexport default App;\n```\n\n**Explanation**:\n- `useState([])`: Initializes an empty array for tasks.\n- `addTask`: Adds a new task object with unique `id` (using timestamp), `text`, and `completed: false`.\n- `toggleTask`: Maps over tasks, flipping `completed` for the matching ID.\n- `deleteTask`: Filters out the task by ID.\n- Props pass functions down to child components.\n\n## Step 4: Create the AddTask Component\nCreate `src/AddTask.js`:\n\n```jsx\nimport React, { useState } from 'react';\n\nfunction AddTask({ onAddTask }) {\n  const [text, setText] = useState('');\n\n  const handleSubmit = (e) => {\n    e.preventDefault();\n    if (text.trim()) {\n      onAddTask(text);\n      setText('');\n    }\n  };\n\n  return (\n    <form onSubmit={handleSubmit} className=\"add-task\">\n      <input\n        type=\"text\"\n        value={text}\n        onChange={(e) => setText(e.target.value)}\n        placeholder=\"Enter a new task...\"\n      />\n      <button type=\"submit\">Add Task</button>\n    </form>\n  );\n}\n\nexport default AddTask;\n```\n\n**Key Concepts**:\n- Local `useState` for input value (controlled component).\n- `onSubmit` prevents page reload and calls parent's `onAddTask` if text isn't empty.\n\n## Step 5: Create the TaskList and TaskItem Components\nFirst, `src/TaskList.js`:\n\n```jsx\nimport React from 'react';\nimport TaskItem from './TaskItem';\n\nfunction TaskList({ tasks, onToggle, onDelete }) {\n  return (\n    <ul className=\"task-list\">\n      {tasks.map(task => (\n        <TaskItem\n          key={task.id}\n          task={task}\n          onToggle={() => onToggle(task.id)}\n          onDelete={() => onDelete(task.id)}\n        />\n      ))}\n    </ul>\n  );\n}\n\nexport default TaskList;\n```\n\nNow, `src/TaskItem.js`:\n\n```jsx\nimport React from 'react';\n\nfunction TaskItem({ task, onToggle, onDelete }) {\n  return (\n    <li className={`task-item ${task.completed ? 'completed' : ''}`}>\n      <input\n        type=\"checkbox\"\n        checked={task.completed}\n        onChange={onToggle}\n      />\n      <span className=\"task-text\">{task.text}</span>\n      <button onClick={onDelete} className=\"delete-btn\">Delete</button>\n    </li>\n  );\n}\n\nexport default TaskItem;\n```\n\n**Notes**:\n- `key={task.id}`: Required for efficient list rendering.\n- Conditional class for styling completed tasks.\n- Inline arrow functions in `onToggle`/`onDelete` for simplicity (fine for small apps).\n\n## Step 6: Add Basic Styling\nReplace `src/App.css`:\n\n```css\n.app {\n  max-width: 500px;\n  margin: 50px auto;\n  font-family: Arial, sans-serif;\n  padding: 20px;\n  background: #f4f4f4;\n  border-radius: 10px;\n  box-shadow: 0 2px 10px rgba(0,0,0,0.1);\n}\n\nh1 {\n  text-align: center;\n  color: #333;\n}\n\n.add-task {\n  display: flex;\n  gap: 10px;\n  margin-bottom: 20px;\n}\n\n.add-task input {\n  flex: 1;\n  padding: 10px;\n  border: 1px solid #ddd;\n  border-radius: 5px;\n  font-size: 16px;\n}\n\n.add-task button {\n  padding: 10px 20px;\n  background: #007bff;\n  color: white;\n  border: none;\n  border-radius: 5px;\n  cursor: pointer;\n}\n\n.add-task button:hover {\n  background: #0056b3;\n}\n\n.task-list {\n  list-style: none;\n  padding: 0;\n}\n\n.task-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 15px;\n  background: white;\n  margin-bottom: 10px;\n  border-radius: 5px;\n  box-shadow: 0 1px 3px rgba(0,0,0,0.1);\n}\n\n.task-item.completed .task-text {\n  text-decoration: line-through;\n  opacity: 0.6;\n}\n\n.task-text {\n  flex: 1;\n  font-size: 16px;\n}\n\n.delete-btn {\n  background: #dc3545;\n  color: white;\n  border: none;\n  padding: 8px 12px;\n  border-radius: 4px;\n  cursor: pointer;\n}\n\n.delete-btn:hover {\n  background: #c82333;\n}\n```\n\n**Styling Highlights**:\n- Flexbox for layouts.\n- Hover effects for interactivity.\n- Visual feedback for completed tasks (strikethrough).\n\n## Step 7: Test Your App\n1. Save all files—hot reload updates the browser.\n2. Add tasks: Type and click \"Add Task\".\n3. Toggle: Check/uncheck boxes.\n4. Delete: Click \"Delete\".\n\n**Troubleshooting**:\n- Errors in console? Check imports or typos.\n- Blank page? Restart `npm start`.\n\n## Step 8: Next Steps (Optional Enhancements)\n- Persist data: Use `localStorage` in `useEffect`.\n- Edit tasks: Add inline editing.\n- Deploy: Run `npm run build` and host on Netlify/Vercel.\n\nCongratulations! You've built a complete React app using functional components, hooks (`useState`), props, and events. Experiment by adding features—the code is modular and easy to extend.\n\n**Full Code Repo**: For reference, this matches a standard beginner pattern. If issues arise, share console errors for help. This setup teaches core React without overwhelming extras, and it's production-ready for learning.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227887,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 1878,
+      "prompt_tokens": 1062,
+      "total_tokens": 2940,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 992,
+        "text_tokens": 1062,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 10026000
+    }
+  },
+  "wall_time_s": 18.4157
+}

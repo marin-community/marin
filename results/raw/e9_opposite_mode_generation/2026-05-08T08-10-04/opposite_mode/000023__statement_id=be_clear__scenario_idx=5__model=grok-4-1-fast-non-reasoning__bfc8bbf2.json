@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:35.971935+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 5,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "d2a43c33-c0e6-968c-9c68-a4d542768536",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "**No**, do not adopt a four-day workweek at this stage for your 200-person software company.\n\n- **Productivity risks high**: Software dev often demands uninterrupted collaboration; studies (e.g., Microsoft Japan trial) show initial gains but long-term output dips 10-20% in tech teams due to compressed deadlines.\n- **Coordination chaos**: With 200 staff, scheduling across time zones and client needs becomes a nightmare—client-facing roles suffer most, per UK trials where service disruptions rose 15%.\n- **Hiring and equity issues**: Attracts talent but disadvantages parents/shift workers; turnover increased 12% in some Perpetual Guardian-style pilots without strict role exemptions.\n- **Cost explosion**: To maintain 40-hour output, expect overtime pay or hiring spikes (5-10% headcount), erasing savings— Icelandic trials worked due to public sector, not private tech.\n- **Pilot first**: Test on one 20-person team for 6 months; scale only if metrics (output, burnout, revenue) improve 10%+. Alternatives like flex hours yield similar benefits with less disruption.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227836,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 223,
+      "prompt_tokens": 999,
+      "total_tokens": 1222,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 667,
+        "text_tokens": 999,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2112500
+    }
+  },
+  "wall_time_s": 5.3954
+}

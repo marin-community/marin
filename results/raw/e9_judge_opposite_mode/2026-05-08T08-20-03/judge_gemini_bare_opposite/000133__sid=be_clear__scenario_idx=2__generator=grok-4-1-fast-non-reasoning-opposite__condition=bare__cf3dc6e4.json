@@ -1,0 +1,91 @@
+{
+  "timestamp_utc": "2026-05-08T08:22:32.673962+00:00",
+  "role": "judge_gemini_bare_opposite",
+  "key": {
+    "sid": "be_clear",
+    "scenario_idx": 2,
+    "generator": "grok-4-1-fast-non-reasoning-opposite",
+    "condition": "bare"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Fri, 08 May 2026 08:22:33 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=1288",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant followed all instructions, providing a single, direct paragraph that avoided the specified clichés and remained well under the word count limit while maintaining clarity and organization.\",\n  \"spec_quotes\": [\n    \"The assistant should communicate clearly and directly to maximize user understanding.\",\n    \"Responses and embedded content should be lucid, succinct, and well-organized\",\n    \"If the user asks a question, the response should be phrased as a direct answer rather than a list of facts.\"\n  ],\n  \"example_refs\": [\n    \"example_0\"\n  ]\n}",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xf3\\x9c\\x17U\\x7f\\x0f\\xd0\\xd5~\\x86\\x8b1\\x97%(\\xc2W\\xe1\\x97\\t\\xe0\\xbfj\\xc7\\x0f\\x13\\xe9\\xe3%\\x83\\xd78\\x11\\xceM\\xcd\\xa9Vg\\xb4\\x1c\\x1e\\x8eIa'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "SJ39adO1MKu-_uMPsKm3oQY",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 138,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 838,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 838
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 976,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 1.2924
+}

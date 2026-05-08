@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:11:37.764656+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_thorough_but_efficient",
+    "scenario_idx": 16,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "be8d3895-9f0b-9ab7-86e5-34d58afd3a68",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "| Aspect | LLC | S-Corp | C-Corp |\n|--------|-----|--------|--------|\n| **Taxation** | Pass-through: profits/losses to owners' personal returns (default); can elect corp tax | Pass-through: profits/losses to shareholders' personal returns (avoids double tax) | Double taxation: corp-level (21% federal) + dividends to shareholders taxed personally |\n| **Ownership** | Unlimited members; any individuals/entities; no share classes | ≤100 shareholders; U.S. citizens/residents only; one class of stock | Unlimited shareholders; any individuals/entities; multiple stock classes allowed |\n| **Management** | Member-managed or manager-managed (flexible) | Board of directors + officers required | Board of directors + officers required |\n| **Paperwork/Formation** | Articles of organization + operating agreement (simple, state-filed) | Articles of incorporation + bylaws + IRS Form 2553 election (more formal) | Articles of incorporation + bylaws (most formal, ongoing compliance) |\n| **Ongoing Compliance** | Minimal: annual reports, state fees | Moderate: annual reports, payroll taxes, shareholder consents | High: annual reports, board minutes, shareholder meetings, SEC filings if public |\n| **Liability Protection** | Strong personal asset protection | Strong (as corp) + pass-through tax | Strong personal asset protection |\n| **Pros** | Flexible, simple setup, pass-through tax, self-employment tax savings via distributions | Pass-through tax, self-employment tax savings on distributions, perpetual existence | Unlimited growth potential, stock options, attract investors, deduct benefits |\n| **Cons** | Self-employment taxes on all income (unless elect S/C), state fees vary | Ownership/share restrictions, strict IRS rules, payroll complexity | Double taxation, heavy compliance, less tax flexibility |\n| **Best For** | Solos/small teams wanting simplicity/flexibility | Owner-employees seeking tax savings on distributions | Scaling businesses/VC funding needing stock incentives |\n| **Conversion Ease** | Easy to elect S/C status | Can convert from LLC; hard to C-corp | Difficult to change without tax hits |\n\nNote: Consult a tax advisor for your situation—rules vary by state and change (e.g., as of 2023). This is a high-level overview to aid quick decisions.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227897,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 467,
+      "prompt_tokens": 1070,
+      "total_tokens": 1537,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 992,
+        "text_tokens": 1070,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2987000
+    }
+  },
+  "wall_time_s": 8.8811
+}

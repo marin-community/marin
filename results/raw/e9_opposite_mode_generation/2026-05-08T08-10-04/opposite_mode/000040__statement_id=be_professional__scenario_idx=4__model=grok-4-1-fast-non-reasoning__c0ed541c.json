@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:56.683599+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_professional",
+    "scenario_idx": 4,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "a5862f29-4421-974d-9894-6b7aff879afc",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Hey, sure thing—let's dive into that PRD review like we're grabbing coffee between standups. Shoot it over (or paste the key sections), and I'll break it down: what's solid, what needs tweaking, and any gaps that could trip us up in dev or launch. Got any specific pain points you're worried about already? 😎",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227856,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 68,
+      "prompt_tokens": 976,
+      "total_tokens": 1044,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 911,
+        "text_tokens": 976,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 925500
+    }
+  },
+  "wall_time_s": 1.6786
+}

@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:10:41.367718+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_clear",
+    "scenario_idx": 8,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "bd716112-00bd-c290-6cfa-c4698e498245",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Vaccines work by introducing a safe, weakened, or inactivated version of a pathogen—such as a virus or bacterium—into the body, which prompts the immune system to recognize it as foreign and produce specific antibodies and memory cells to fight it. These antibodies neutralize the pathogen if the body encounters the real, harmful version later, preventing or reducing the severity of infection. The process typically involves injecting the vaccine material, often with an adjuvant to boost the immune response, and it takes days to weeks for full immunity to develop after one or more doses. This trained response provides long-term protection without causing the disease itself, as the vaccine components cannot replicate or cause illness in healthy individuals.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778227841,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 135,
+      "prompt_tokens": 988,
+      "total_tokens": 1123,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 936,
+        "text_tokens": 988,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1247000
+    }
+  },
+  "wall_time_s": 2.6633
+}
