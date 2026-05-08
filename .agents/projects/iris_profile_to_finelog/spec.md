@@ -2,68 +2,95 @@
 
 Concrete contracts for the design in `design.md`. Reviewers should be able to read this and answer "would I build this exact API?" without inferring anything from prose.
 
-## 1. Finelog namespace: `iris.cpu_profile`
+## 1. Finelog namespace: `iris.profile`
 
 ### 1.1 Row dataclass
 
 Location: `lib/iris/src/iris/cluster/worker/stats.py` (extended — the file already houses `IrisWorkerStat` and `IrisTaskStat`).
 
 ```python
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import ClassVar
 
 
-CPU_PROFILE_NAMESPACE = "iris.cpu_profile"
+PROFILE_NAMESPACE = "iris.profile"
 
 
-class CpuProfileFormat(StrEnum):
+class ProfileKind(StrEnum):
+    CPU = "cpu"
+    MEMORY = "memory"
+    THREADS = "threads"
+
+
+class ProfileFormat(StrEnum):
+    # CPU
     RAW = "raw"
     FLAMEGRAPH = "flamegraph"
     SPEEDSCOPE = "speedscope"
+    # Memory
+    HTML = "html"
+    TABLE = "table"
+    STATS = "stats"
 
 
-class CpuProfileTrigger(StrEnum):
+class ProfileTrigger(StrEnum):
     PERIODIC = "periodic"
     ON_DEMAND = "on_demand"
 
 
 @dataclass
-class IrisCpuProfile:
-    """One row per CPU profile capture (periodic 10m loop or on-demand RPC).
+class IrisProfile:
+    """One row per profile capture, regardless of kind or trigger.
 
-    Written by the worker process. Read by the dashboard via finelog
-    StatsService SQL. Retention is finelog segment-based, 7 days; see OPS.md.
+    Written by the worker process for task captures, by K8sTaskProvider
+    (in the controller process) for k8s task captures, and by the
+    controller for /system/controller self-captures. Read by the
+    dashboard via finelog StatsService SQL. Retention is finelog
+    segment-based, 7 days; see OPS.md.
     """
 
     key_column: ClassVar[str] = "captured_at"
 
-    # identity
-    task_id: str            # JobName.to_wire(); e.g. "/job/foo/task/3"
-    attempt_id: int
-    worker_id: str
+    # identity — `target` is the proto request's target string, verbatim
+    target: str             # "/job/.../task/N", "/system/worker/<id>",
+                            # "/system/controller"
+    attempt_id: int | None  # set for task targets; None for /system/*
+    worker_id: str          # writer attribution; see contracts below
     # capture metadata
     captured_at: datetime   # tz-naive UTC, segment key
-    duration_seconds: int   # py-spy --duration; default 10
-    rate_hz: int            # py-spy --rate; default 20
-    native: bool            # py-spy --native flag at capture time
-    format: str             # CpuProfileFormat value; periodic always RAW
-    trigger: str            # CpuProfileTrigger value
+    duration_seconds: int
+    kind: str               # ProfileKind value
+    format: str             # ProfileFormat value
+    trigger: str            # ProfileTrigger value
+    # kind-specific (nullable; only the field for `kind` is set)
+    rate_hz: int | None = None        # CPU only — py-spy --rate
+    native: bool | None = None        # CPU only — py-spy --native
+    leaks: bool | None = None         # memory only — memray --leaks
+    locals_dump: bool | None = None   # threads only — py-spy --locals
     # payload
-    profile_data: bytes     # raw py-spy output
+    profile_data: bytes = b""
 
     def __post_init__(self) -> None:
         # cheap validators — schema bugs surface here, not at query time
-        CpuProfileFormat(self.format)
-        CpuProfileTrigger(self.trigger)
+        ProfileKind(self.kind)
+        ProfileFormat(self.format)
+        ProfileTrigger(self.trigger)
 ```
 
 **Contracts:**
 
 - `key_column = "captured_at"` aligns with finelog's segment ordering for time-range pruning.
-- `format` and `trigger` are stored as `str` (the StrEnum value), not enum types, so column types match the string-typed columns in `IrisWorkerStat.status`.
-- No `profile_kind` column. This namespace is CPU-only; memory/threads do not write here.
+- `target` is the verbatim string from `ProfileTaskRequest.target` after resolution. Three value families: `/job/.../task/N`, `/system/worker/<id>`, `/system/controller`. The dashboard's "Profile history" panel filters on this column.
+- `attempt_id` is `None` for `/system/*` targets and an integer for task targets.
+- `worker_id` is the **writer attribution** — *who wrote this row*, not necessarily who ran. Convention:
+  - Task captured by a worker: `worker_id = <worker.id>`.
+  - Task captured by k8s: `worker_id = f"k8s/{pod_node_name or pod_name}"`.
+  - `/system/worker/<id>` captured by the named worker: `worker_id = <id>` (matches the target).
+  - `/system/controller` captured by the controller: `worker_id = "controller-self"`.
+- Enum-typed columns are stored as `str` (the StrEnum value), matching `IrisWorkerStat.status`.
+- The four kind-specific metadata fields are nullable. Exactly one is non-null per row, matching `kind`. Periodic captures always have `kind="cpu"`, `format="raw"`, `trigger="periodic"`.
 
 ### 1.2 Retention
 
@@ -118,14 +145,15 @@ def run_profile_loop(
 Edits in `lib/iris/src/iris/cluster/worker/worker.py`:
 
 - New constructor params on `Worker.__init__`: `profile_interval: Duration = Duration.from_seconds(600)`, `profile_duration_seconds: int = 10`, `profile_concurrency: int = 1`. Defaults match today's controller config; tests can override. (The `profile_concurrency` knob is not used in v1 — the loop is sequential — but is reserved so a future bounded-pool change does not require a config-shape rev.)
-- New `Worker._cpu_profile_table: Table[IrisCpuProfile] | None` field, populated in `start()` alongside `_worker_stats_table` and `_task_stats_table` *only when `_log_client is not None`* (matches the existing pattern at [`worker.py:281-282`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/worker/worker.py#L281)). Cleared in `_detach_log_handler` ([`worker.py:543`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/worker/worker.py#L543)) alongside the other stats tables.
+- New `Worker._profile_table: Table[IrisProfile] | None` field, populated in `start()` alongside `_worker_stats_table` and `_task_stats_table` *only when `_log_client is not None`* (matches the existing pattern at [`worker.py:281-282`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/worker/worker.py#L281)). Cleared in `_detach_log_handler` ([`worker.py:543`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/worker/worker.py#L543)) alongside the other stats tables.
 - New thread spawn in `start()` (after `_log_client` build): `self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")`. Skipped when `_log_client is None` (test mode, no controller_address).
-- New private method `Worker._capture_and_log_cpu_profile(attempt: TaskAttempt, *, trigger: str) -> bytes`. Single writer used by both the periodic loop and the `ProfileTask` RPC handler. Reads `attempt.task_id.to_wire()`, `attempt.attempt_id`, `attempt.pid` once at entry. Raises `RuntimeError("attempt no longer running")` if `attempt.pid is None or attempt.state != RUNNING` — the loop catches and logs at debug. Writes one `IrisCpuProfile` row when `_cpu_profile_table is not None`; if `None`, returns the bytes without writing (no crash).
+- New private method `Worker._capture_and_log_profile(*, target: str, attempt_id: int | None, pid: int, request: job_pb2.ProfileTaskRequest, trigger: str) -> bytes`. Single writer used by the periodic loop and the `ProfileTask` RPC handler for **all** kinds. Calls `profile_local_process(duration, profile_type)`, builds an `IrisProfile` row from the request (deriving `kind`, `format`, and the kind-specific metadata from `request.profile_type`), and writes when `_profile_table is not None`; if `None`, returns the bytes without writing (no crash). The periodic loop calls it with `trigger="periodic"` and a fixed CPU `ProfileType`; the RPC handler passes through the request's `profile_type` and `trigger="on_demand"`.
+- For task targets, the helper resolves `attempt: TaskAttempt` from `_tasks` first; raises `RuntimeError("attempt no longer running")` if `attempt.pid is None or attempt.state != RUNNING`. The loop catches and logs at debug.
 - `stop()` sets `stop_event` and joins `_profile_thread` after the existing lifecycle thread join.
 
 ### 2.3 Stop semantics
 
-`run_profile_loop` blocks on a synchronous `subprocess.run(timeout=duration_seconds + 30)` inside `_capture_and_log_cpu_profile`. `stop_event.set()` does not preempt subprocess. `Worker.stop()` may therefore block up to `profile_duration_seconds + 30` (default ≈40s) waiting for an in-flight capture to finish. Documented; not worth the complexity of a `Popen` + `poll(stop_event)` loop in v1.
+`run_profile_loop` blocks on a synchronous `subprocess.run(timeout=duration_seconds + 30)` inside `_capture_and_log_profile`. `stop_event.set()` does not preempt subprocess. `Worker.stop()` may therefore block up to `profile_duration_seconds + 30` (default ≈40s) waiting for an in-flight capture to finish. Documented; not worth the complexity of a `Popen` + `poll(stop_event)` loop in v1.
 
 ## 3. Worker `ProfileTask` RPC behaviour change
 
@@ -142,12 +170,13 @@ def profile_task(
     """Handle on-demand profile requests.
 
     Behaviour:
-    - target == "/system/process": profile the worker process itself
-      (uses profile_local_process). Result returned inline. Not persisted.
+    - target == "/system/process": profile the worker process itself.
+      Captures via profile_local_process and writes one IrisProfile row
+      with target rewritten to "/system/worker/<this_worker_id>" so the
+      dashboard can find it under the worker's URL. Bytes returned inline.
     - target == "/job/.../task/N[:attempt_id]": profile the task's container.
-      For CPU: capture + write IrisCpuProfile row (trigger="on_demand")
-      + return bytes inline.
-      For memory/threads: capture + return bytes inline. Not persisted.
+      Captures via _capture_and_log_profile, writes IrisProfile, returns bytes inline.
+      All kinds (cpu/memory/threads) persist; trigger="on_demand".
     - All other targets: INVALID_ARGUMENT.
 
     Errors:
@@ -160,9 +189,9 @@ def profile_task(
 
 **Contracts:**
 
-- The CPU-on-task path goes through `Worker._capture_and_log_cpu_profile` (same writer as the loop). `trigger="on_demand"`.
-- Memory and threads on task targets call `profile_local_process` against the task's pid and return inline. No finelog write.
-- `/system/process` (worker self) does not write to finelog regardless of profile kind. The intent is to keep `iris.cpu_profile` semantically "task profiles" — worker-process diagnostics are ephemeral.
+- All on-demand task captures (CPU, memory, threads) go through `Worker._capture_and_log_profile` with `trigger="on_demand"` and persist to `iris.profile`.
+- `/system/process` (worker self) also persists, but with `target` rewritten to `/system/worker/<id>` so the dashboard's per-worker history view finds it. `worker_id = <this worker's id>` (matches the rewritten target).
+- The handler does not need to know about `kind` — it forwards `request.profile_type` to the helper, which extracts the kind from the proto oneof.
 
 ## 4. Controller changes
 
@@ -201,7 +230,7 @@ The controller's `profile_task` RPC handler **stays** — it is the dashboard-fa
 
 ### 4.2 Controller `profile_task` RPC handler (rewrite)
 
-Edit `lib/iris/src/iris/cluster/controller/service.py:1893-1968`. The new handler dispatches via the provider abstraction without writing to any DB:
+Edit `lib/iris/src/iris/cluster/controller/service.py:1893-1968`. The new handler delegates for task targets and self-captures for `/system/controller`:
 
 ```python
 def profile_task(
@@ -211,30 +240,31 @@ def profile_task(
 ) -> job_pb2.ProfileTaskResponse:
     """Dashboard-facing on-demand profile dispatch.
 
-    Resolves the target, locates the responsible provider, and delegates
-    via `provider.profile_task(...)`:
-      - worker-based providers forward the request to the task's worker;
-        the worker captures, writes to iris.cpu_profile (CPU-task only),
-        returns bytes inline.
-      - K8sTaskProvider captures via kubectl exec, writes to iris.cpu_profile
-        (CPU-task only), returns bytes inline.
-
-    The controller process never writes profile data itself.
-
-    Targets:
-      /job/.../task/N[:attempt_id] — task profile (worker or k8s).
-      /system/worker/<id>          — worker self-profile, forwarded via worker
-                                     ProfileTask RPC. Not persisted.
-      /system/process              — REMOVED. The controller no longer
-                                     self-profiles. INVALID_ARGUMENT.
+    Behaviour by target:
+      /job/.../task/N[:attempt_id]
+        - Resolve task and worker; delegate to provider.profile_task.
+          Worker-based: forwards to worker; worker writes IrisProfile
+          (all kinds), returns bytes. K8s: K8sTaskProvider captures via
+          kubectl exec, writes IrisProfile (all kinds), returns bytes.
+      /system/worker/<id>
+        - Forward as /system/process to the named worker via
+          WorkerService.ProfileTask. Worker rewrites the row's target
+          back to /system/worker/<id> on its IrisProfile write.
+      /system/controller
+        - Capture this controller process via profile_local_process,
+          write one IrisProfile row (target='/system/controller',
+          worker_id='controller-self', attempt_id=None,
+          trigger='on_demand'), return bytes inline.
+      Anything else
+        - INVALID_ARGUMENT.
     """
 ```
 
 **Contracts:**
 
-- The controller is a pure dispatcher. It does *not* hold a `LogClient` reference for `iris.cpu_profile` and does *not* call `Table.write` for profile rows.
-- The `/system/process` (controller-self) target is removed — returns `INVALID_ARGUMENT`. Dashboard `StatusTab.vue` button is dropped.
-- `/system/worker/<id>` is preserved: forwarded as `/system/process` to the named worker via `WorkerService.ProfileTask`. Result returned inline; not persisted (matches today's worker-self semantics).
+- For task targets and `/system/worker/<id>`, the controller does *not* hold a finelog Table — the writer is the worker (or k8s provider).
+- For `/system/controller`, the controller has its own `Controller._profile_table: Table[IrisProfile] | None`, registered next to where `iris.task` / `iris.worker` are registered ([`controller.py:1186-1188`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/controller/controller.py#L1186)) via `self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)`. Test mode (`_log_client is None`) → no-op write, bytes still returned.
+- Today's controller-side `/system/process` target is **renamed** to `/system/controller`. The dashboard updates the literal in one place (`StatusTab.vue`); the worker-self path continues to use `/system/process` (semantically "the local process" relative to whichever endpoint receives it).
 - All existing target-resolution and worker-liveness checks ([`service.py:1939-1968`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/controller/service.py#L1939)) are preserved.
 
 ### 4.3 SQLite migration
@@ -264,16 +294,16 @@ def profile_task(
 
 ### 4.4 K8s provider write path
 
-`K8sTaskProvider` already has `log_client: LogWriterProtocol | None` injected ([`tasks.py:1083`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/providers/k8s/tasks.py#L1083)), but `LogWriterProtocol` only exposes `write_batch`, not `get_table` ([`finelog/types.py:34-49`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/finelog/src/finelog/types.py#L34)). Calling `self.log_client.get_table(CPU_PROFILE_NAMESPACE, IrisCpuProfile)` would not type-check and would fail against the test fakes the protocol exists to support.
+`K8sTaskProvider` already has `log_client: LogWriterProtocol | None` injected ([`tasks.py:1083`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/providers/k8s/tasks.py#L1083)), but `LogWriterProtocol` only exposes `write_batch`, not `get_table` ([`finelog/types.py:34-49`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/finelog/src/finelog/types.py#L34)). Calling `self.log_client.get_table(PROFILE_NAMESPACE, IrisProfile)` would not type-check and would fail against the test fakes the protocol exists to support.
 
 Mirror the existing `task_stats_table` pattern. The controller constructs the Table from its own `LogClient` and injects a typed field on the provider:
 
-- **K8sTaskProvider field.** Add `cpu_profile_table: Table[IrisCpuProfile] | None = None` next to `task_stats_table` at [`providers/k8s/tasks.py:1087`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/providers/k8s/tasks.py#L1087).
+- **K8sTaskProvider field.** Add `profile_table: Table[IrisProfile] | None = None` next to `task_stats_table` at [`providers/k8s/tasks.py:1087`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/providers/k8s/tasks.py#L1087).
 - **Controller wiring.** In the controller's k8s-mode branch at [`controller.py:1186-1188`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/controller/controller.py#L1186), next to the existing `self._provider.task_stats_table = k8s_log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)` line, add:
   ```python
-  self._provider.cpu_profile_table = k8s_log_client.get_table(CPU_PROFILE_NAMESPACE, IrisCpuProfile)
+  self._provider.profile_table = k8s_log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
   ```
-- **`K8sTaskProvider.profile_task` (edit at [`tasks.py:1155-1180`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/providers/k8s/tasks.py#L1155)).** On CPU-target success (after `_profile_cpu` returns non-empty bytes), write one `IrisCpuProfile` row via `self.cpu_profile_table.write(row)`. No-op when `cpu_profile_table is None` (test mode). Memory and threads paths return inline only.
+- **`K8sTaskProvider.profile_task` (edit at [`tasks.py:1155-1180`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/providers/k8s/tasks.py#L1155)).** On every successful capture (CPU, memory, **and** threads), write one `IrisProfile` row via `self.profile_table.write(row)` with `kind` derived from the request's `profile_type` oneof, `trigger="on_demand"`, and the kind-specific metadata fields populated. No-op when `profile_table is None` (test mode).
 - **`worker_id` value for k8s rows.** Use `worker_id = f"k8s/{pod_node_name or pod_name}"` — the pod's `spec.nodeName` (k8s scheduling-resolved host) when available, falling back to `pod_name`. Stable across captures of the same pod; distinguishes node moves; never collides with worker-based provider `worker_id`s (which never start with `k8s/`). The dashboard SQL surface in §5.1 selects `worker_id`, so the format is part of the contract.
 - **Errors:** existing behaviour — `ProfileTaskResponse(error=str(e))` on capture failure, no finelog row written.
 
@@ -281,25 +311,29 @@ The k8s provider does not host a periodic loop in v1. Adding one is out of scope
 
 ### 4.5 Dashboard
 
-- `lib/iris/dashboard/src/components/controller/StatusTab.vue` — remove the "profile this controller" button (the controller `/system/process` target now returns INVALID_ARGUMENT).
-- `lib/iris/dashboard/src/composables/useProfileAction.ts` — **unchanged**. Continues to call the controller `profile_task` RPC. The controller now silently delegates through the provider abstraction; the dashboard does not need to know whether the cluster is k8s or worker-based.
-- `lib/iris/dashboard/src/components/controller/TaskDetail.vue` — add a "Profile history" panel that uses `useStatsRpc('Query', { sql: ... })` against `iris.cpu_profile`.
+- `lib/iris/dashboard/src/composables/useProfileAction.ts` — **unchanged** other than the rename of the controller-self target string (`/system/process` → `/system/controller`). Continues to call the controller `profile_task` RPC.
+- `lib/iris/dashboard/src/components/controller/StatusTab.vue` — keep the "profile this controller" button; only the target string changes. The same component grows a "Profile history" panel filtering on `target = '/system/controller'`.
+- `lib/iris/dashboard/src/components/controller/TaskDetail.vue` — add a "Profile history" panel filtering on `target = '/job/.../task/N'` (the task's wire ID) using `useStatsRpc('Query', { sql: ... })`.
+- `lib/iris/dashboard/src/components/controller/WorkerDetail.vue` (or equivalent) — add a "Profile history" panel filtering on `target = '/system/worker/<id>'`.
 
 ## 5. Dashboard SQL surface
 
-### 5.1 List recent profiles for a task
+### 5.1 List recent profiles for a target
+
+Used by all three "Profile history" panels (task, worker-self, controller-self) — only the bound `target` parameter differs.
 
 ```sql
 SELECT
   captured_at,
+  kind,
   attempt_id,
   worker_id,
   duration_seconds,
   format,
   trigger,
   length(profile_data) AS size_bytes
-FROM "iris.cpu_profile"
-WHERE task_id = ?
+FROM "iris.profile"
+WHERE target = ?
 ORDER BY captured_at DESC
 LIMIT 50
 ```
@@ -307,29 +341,39 @@ LIMIT 50
 ### 5.2 Fetch one profile's bytes
 
 ```sql
-SELECT profile_data, format
-FROM "iris.cpu_profile"
-WHERE task_id = ? AND captured_at = ?
+SELECT profile_data, kind, format
+FROM "iris.profile"
+WHERE target = ? AND captured_at = ?
 LIMIT 1
 ```
 
-Both queries go through the existing `useStatsRpc` composable, which posts to `proxy/system.log-server/finelog.stats.StatsService/Query` and decodes the Arrow IPC response.
+### 5.3 Optional: filter by kind
+
+```sql
+SELECT captured_at, format, length(profile_data)
+FROM "iris.profile"
+WHERE target = ? AND kind = ?
+ORDER BY captured_at DESC
+LIMIT 50
+```
+
+All queries go through the existing `useStatsRpc` composable, which posts to `proxy/system.log-server/finelog.stats.StatsService/Query` and decodes the Arrow IPC response.
 
 ## 6. Errors
 
 No new error types. Existing behaviour:
 
-- Worker `_capture_and_log_cpu_profile` raises `RuntimeError` from `profile_local_process` (py-spy missing, py-spy non-zero exit) and from the pid/state precondition. The periodic loop catches; the RPC handler returns `error=str(e)` in `ProfileTaskResponse`.
-- K8s `_profile_cpu` raises on `kubectl exec` failure; `K8sTaskProvider.profile_task` catches and returns `error=str(e)` (existing behaviour).
+- Worker `_capture_and_log_profile` raises `RuntimeError` from `profile_local_process` (py-spy/memray missing, non-zero exit) and from the pid/state precondition. The periodic loop catches; the RPC handler returns `error=str(e)` in `ProfileTaskResponse`.
+- K8s `_profile_cpu` / `_profile_memory` / `_profile_threads` raise on `kubectl exec` failure; `K8sTaskProvider.profile_task` catches and returns `error=str(e)` (existing behaviour).
+- Controller's `/system/controller` path raises `RuntimeError` on `profile_local_process` failure; the handler returns `error=str(e)`.
 - Finelog write failures (`Table.write` errors) are logged by the LogClient bg-flush thread and surface in metrics — no change from today's `IrisTaskStat` write semantics. A failed finelog write does not fail the RPC; the bytes still return inline.
-- Controller `profile_task` returns `INVALID_ARGUMENT` for `/system/process` (controller-self profile is removed).
+- Controller `profile_task` returns `INVALID_ARGUMENT` for unknown targets, including the legacy `/system/process` (renamed to `/system/controller`).
 
 ## 7. Out of scope
 
 The following are **not** committed by this design and stay for follow-up PRs:
 
-- Persisted memory/threads profiles (parallel `iris.memory_profile` / `iris.threads_profile` namespaces).
-- A `purge profiles for task` dashboard action.
+- A `purge profiles for target` dashboard action.
 - Per-row gzip compression of `profile_data`. Decision deferred to dev-cluster measurement (see design Open Questions).
 - Per-cluster `profile_interval` knob pushed by the controller via `Ping`. Today the value is per-worker config.
 - Periodic profiles on the k8s direct-provider path. K8s stays on-demand-only (matches today).
@@ -342,15 +386,17 @@ The following are **not** committed by this design and stay for follow-up PRs:
 | Change | Path |
 |---|---|
 | New | `lib/iris/src/iris/cluster/worker/profile_loop.py` |
-| Edit (extend) | `lib/iris/src/iris/cluster/worker/stats.py` (+ `IrisCpuProfile`, `CpuProfileFormat`, `CpuProfileTrigger`, `CPU_PROFILE_NAMESPACE`) |
-| Edit | `lib/iris/src/iris/cluster/worker/worker.py` (spawn loop, register table, `_capture_and_log_cpu_profile` helper) |
-| Edit | `lib/iris/src/iris/cluster/worker/service.py` (`ProfileTask` writes finelog on CPU-task target) |
-| Edit | `lib/iris/src/iris/cluster/providers/k8s/tasks.py` (`profile_task` writes finelog on CPU-task success) |
-| Delete (large) | `lib/iris/src/iris/cluster/controller/controller.py` (profile loop + helpers + config) |
-| Edit (rewrite) | `lib/iris/src/iris/cluster/controller/service.py` (`profile_task` becomes a pure provider-dispatcher; no DB writes) |
+| Edit (extend) | `lib/iris/src/iris/cluster/worker/stats.py` (+ `IrisProfile`, `ProfileKind`, `ProfileFormat`, `ProfileTrigger`, `PROFILE_NAMESPACE`) |
+| Edit | `lib/iris/src/iris/cluster/worker/worker.py` (spawn loop, register table, `_capture_and_log_profile` helper) |
+| Edit | `lib/iris/src/iris/cluster/worker/service.py` (`ProfileTask` writes finelog for all kinds on task and `/system/process` targets) |
+| Edit | `lib/iris/src/iris/cluster/providers/k8s/tasks.py` (`profile_task` writes finelog for all kinds; new `profile_table` field) |
+| Delete (large) | `lib/iris/src/iris/cluster/controller/controller.py` (periodic profile loop + helpers + config) |
+| Edit (rewrite) | `lib/iris/src/iris/cluster/controller/service.py` (`profile_task` dispatches for tasks, captures + writes finelog for `/system/controller`) |
+| Edit | `lib/iris/src/iris/cluster/controller/controller.py` (register `_profile_table` next to existing stats tables) |
 | Delete | `lib/iris/src/iris/cluster/controller/schema.py` (`TASK_PROFILES`) |
 | Delete | `lib/iris/src/iris/cluster/controller/db.py` (profile helpers + ATTACH; keep `profiles_db_path` method for 0024) |
 | New | `lib/iris/src/iris/cluster/controller/migrations/0024_drop_profiles_db.py` |
-| Edit | `lib/iris/dashboard/src/components/controller/TaskDetail.vue` (Profile history panel) |
-| Edit | `lib/iris/dashboard/src/components/controller/StatusTab.vue` (remove profile-controller button) |
-| Edit | `lib/iris/AGENTS.md`, `lib/iris/OPS.md` (document `iris.cpu_profile` retention + k8s write path) |
+| Edit | `lib/iris/dashboard/src/components/controller/TaskDetail.vue` (Profile history panel filtering on `target`) |
+| Edit | `lib/iris/dashboard/src/components/controller/StatusTab.vue` (rename target string to `/system/controller`; add Profile history panel) |
+| Edit | `lib/iris/dashboard/src/components/controller/WorkerDetail.vue` (Profile history panel filtering on worker target) |
+| Edit | `lib/iris/AGENTS.md`, `lib/iris/OPS.md` (document `iris.profile` retention + writer attribution conventions) |
