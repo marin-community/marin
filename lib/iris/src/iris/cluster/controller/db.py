@@ -886,29 +886,6 @@ def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOut
     return result
 
 
-def tasks_for_job_with_attempts(db: ControllerDB, job_id: JobName) -> list:
-    """Fetch all tasks for a job with their attempt history."""
-    from iris.cluster.controller.schema import ATTEMPT_PROJECTION, TASK_DETAIL_PROJECTION, tasks_with_attempts
-
-    with db.read_snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(
-            q.fetchall(
-                "SELECT * FROM tasks WHERE job_id = ? ORDER BY task_index, task_id",
-                (job_id.to_wire(),),
-            ),
-        )
-        if not tasks:
-            return []
-        placeholders = ",".join("?" for _ in tasks)
-        attempts = ATTEMPT_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT * FROM task_attempts WHERE task_id IN ({placeholders}) ORDER BY task_id, attempt_id",
-                tuple(t.task_id.to_wire() for t in tasks),
-            ),
-        )
-    return tasks_with_attempts(tasks, attempts)
-
-
 def _worker_row_select() -> str:
     """Lazily resolve WORKER_ROW_PROJECTION.select_clause() to break the db -> schema cycle."""
     from iris.cluster.controller.schema import WORKER_ROW_PROJECTION

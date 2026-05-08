@@ -87,11 +87,11 @@ from iris.cluster.controller.scheduler import (
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
     JOB_CONFIG_JOIN,
-    JOB_DETAIL_PROJECTION,
+    JOB_RESERVATION_PROJECTION,
     JOB_SCHEDULING_PROJECTION,
     TASK_DETAIL_PROJECTION,
     TASK_ROW_PROJECTION,
-    JobDetailRow,
+    JobReservationRow,
     JobRow,
     JobSchedulingRow,
     TaskDetailRow,
@@ -420,20 +420,22 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
     return {job.job_id: job for job in jobs}
 
 
-def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobDetailRow]:
-    """Fetch only jobs that have reservations, filtering at the SQL level.
+def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobReservationRow]:
+    """Fetch (job_id, reservation_json) for jobs that hold a reservation.
 
-    Uses the has_reservation column on the jobs table to filter without a JOIN.
+    Per-tick hot path: only decode what the reservation-claim recomputation
+    reads. Filters via ``jobs.has_reservation`` (no scan of ``job_config``)
+    and joins ``job_config`` solely to pull ``reservation_json``.
     """
     placeholders = ",".join("?" for _ in states)
     with queries.read_snapshot() as snapshot:
         rows = snapshot._fetchall(
-            f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} "
+            f"SELECT {JOB_RESERVATION_PROJECTION.select_clause()} "
             f"FROM jobs j {JOB_CONFIG_JOIN} "
             f"WHERE j.state IN ({placeholders}) AND j.has_reservation = 1",
             list(states),
         )
-    return JOB_DETAIL_PROJECTION.decode(rows)
+    return JOB_RESERVATION_PROJECTION.decode(rows)
 
 
 def _get_running_tasks_with_band_and_value(

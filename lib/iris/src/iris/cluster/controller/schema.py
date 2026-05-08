@@ -1256,6 +1256,19 @@ class JobDetailRow:
 
 
 @dataclass(frozen=True, slots=True)
+class JobReservationRow:
+    """Slim row for the per-tick reservation-claim recomputation.
+
+    Decodes only the two columns the reservation loop touches — keeping the
+    JSON proto blobs and other 35 ``JobDetailRow`` columns out of the hot
+    path. See ``_jobs_with_reservations`` in ``controller.py``.
+    """
+
+    job_id: JobName
+    reservation_json: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class TaskRow:
     """Lightweight task row for scheduling."""
 
@@ -1556,6 +1569,21 @@ JOB_DETAIL_PROJECTION = Projection(
     _job_detail_cols,
     row_cls=JobDetailRow,
     column_aliases=_job_detail_aliases,
+)
+
+# Slim 2-column projection for the per-tick reservation-claim recomputation
+# (``_jobs_with_reservations``). The reservation loop reads only ``job_id`` and
+# ``reservation_json`` — decoding the full ``JOB_DETAIL_PROJECTION`` (37 cols
+# including JSON proto blobs) on every scheduling tick is pure waste.
+_job_reservation_cols, _job_reservation_aliases = _job_columns(
+    "job_id",
+    "reservation_json",
+)
+JOB_RESERVATION_PROJECTION = Projection(
+    JOBS,
+    _job_reservation_cols,
+    row_cls=JobReservationRow,
+    column_aliases=_job_reservation_aliases,
 )
 
 # Full task detail — superset of TaskRow, adds diagnostics and attempts.

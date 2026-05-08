@@ -39,8 +39,10 @@ from iris.cluster.controller.db import (
     task_row_is_finished,
 )
 from iris.cluster.controller.schema import (
+    AttemptRow,
     EndpointRow,
     JobDetailRow,
+    TaskDetailRow,
     WorkerDetailRow,
 )
 from iris.cluster.controller.stores import (
@@ -1385,12 +1387,17 @@ class ControllerTransitions:
         cur: TransactionCursor,
         req: HeartbeatApplyRequest,
         now_ms: int,
+        task_map: dict[JobName, TaskDetailRow],
+        attempt_map: dict[tuple[JobName, int], AttemptRow],
     ) -> TxResult:
         """Apply task state updates for one worker within an existing transaction.
 
         Handles the full state machine: state transitions, retry logic,
         coscheduled cascade, resource decommit, endpoint cleanup, and
         deduplicated job recompute.
+
+        ``task_map`` and ``attempt_map`` are pre-fetched by
+        ``apply_heartbeats_batch`` so this loop avoids per-update SELECTs.
         """
         tasks_to_kill: set[JobName] = set()
         task_kill_workers: dict[JobName, WorkerId] = {}
@@ -1400,7 +1407,11 @@ class ControllerTransitions:
         job_config_cache: dict[str, dict | None] = {}
 
         for update in req.updates:
-            task = self._store.tasks.get_detail(cur, update.task_id)
+            task = task_map.get(update.task_id)
+            if task is None:
+                # Defensive fallback; the bulk fetch should have covered every id.
+                logger.warning("task_map miss for task_id=%s; falling back to per-row fetch", update.task_id)
+                task = self._store.tasks.get_detail(cur, update.task_id)
             if task is None:
                 continue
             if task_row_is_finished(task) or update.new_state in (
@@ -1409,7 +1420,8 @@ class ControllerTransitions:
             ):
                 continue
             if update.attempt_id != task.current_attempt_id:
-                stale_state = self._store.attempts.get_state(cur, update.task_id, update.attempt_id)
+                stale_attempt = attempt_map.get((update.task_id, update.attempt_id))
+                stale_state = stale_attempt.state if stale_attempt is not None else None
                 if stale_state is not None and stale_state not in TERMINAL_TASK_STATES:
                     logger.error(
                         "Stale attempt precondition violation: task=%s reported=%d current=%d stale_state=%s",
@@ -1427,7 +1439,7 @@ class ControllerTransitions:
             if update.new_state == prior_state and not has_new_data:
                 continue
 
-            attempt = self._store.attempts.get(cur, update.task_id, update.attempt_id)
+            attempt = attempt_map.get((update.task_id, update.attempt_id))
             if attempt is None:
                 continue
             # The attempt is already terminal (e.g. preempted, killed) but the task has
@@ -1613,9 +1625,20 @@ class ControllerTransitions:
         now_ms = Timestamp.now().epoch_ms()
         if not self._update_worker_health(cur, req, now_ms):
             return TxResult()
-        result = self._apply_task_transitions(cur, req, now_ms)
-
-        return result
+        task_ids = [
+            update.task_id
+            for update in req.updates
+            if update.new_state not in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING)
+        ]
+        task_map = self._store.tasks.bulk_get_detail(cur, task_ids)
+        attempt_keys: list[tuple[JobName, int]] = []
+        for update in req.updates:
+            attempt_keys.append((update.task_id, update.attempt_id))
+            task = task_map.get(update.task_id)
+            if task is not None and task.current_attempt_id != update.attempt_id:
+                attempt_keys.append((update.task_id, task.current_attempt_id))
+        attempt_map = self._store.attempts.bulk_get_for_updates(cur, attempt_keys)
+        return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
 
     def apply_heartbeats_batch(self, cur: TransactionCursor, requests: list[HeartbeatApplyRequest]) -> list[TxResult]:
         """Apply multiple heartbeats in a single transaction.
@@ -1685,9 +1708,22 @@ class ControllerTransitions:
                     )
                 )
 
+        # ── Bulk-fetch attempts touched by the surviving transitions ──
+        # The state machine consults two attempt rows per update: the reported
+        # attempt and (when stale) the current one. Pre-fetch both up front so
+        # the inner loop is map lookups only.
+        attempt_keys: list[tuple[JobName, int]] = []
+        for _, treq in transition_entries:
+            for update in treq.updates:
+                attempt_keys.append((update.task_id, update.attempt_id))
+                task = task_map.get(update.task_id)
+                if task is not None and task.current_attempt_id != update.attempt_id:
+                    attempt_keys.append((update.task_id, task.current_attempt_id))
+        attempt_map = self._store.attempts.bulk_get_for_updates(cur, attempt_keys)
+
         # ── Apply transitions via existing state machine ──────────────
         for req_idx, treq in transition_entries:
-            results[req_idx] = self._apply_task_transitions(cur, treq, now_ms)
+            results[req_idx] = self._apply_task_transitions(cur, treq, now_ms, task_map, attempt_map)
 
         return results
 
@@ -2470,8 +2506,22 @@ class ControllerTransitions:
         now_ms = Timestamp.now().epoch_ms()
         cascaded_jobs: set[JobName] = set()
 
+        relevant_task_ids = [
+            update.task_id
+            for update in updates
+            if update.new_state not in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING)
+        ]
+        task_map = self._store.tasks.bulk_get_detail(cur, relevant_task_ids)
+        attempt_keys: list[tuple[JobName, int]] = []
         for update in updates:
-            task = self._store.tasks.get_detail(cur, update.task_id)
+            attempt_keys.append((update.task_id, update.attempt_id))
+            task_row = task_map.get(update.task_id)
+            if task_row is not None and task_row.current_attempt_id != update.attempt_id:
+                attempt_keys.append((update.task_id, task_row.current_attempt_id))
+        attempt_map = self._store.attempts.bulk_get_for_updates(cur, attempt_keys)
+
+        for update in updates:
+            task = task_map.get(update.task_id)
             if task is None:
                 continue
             if task_row_is_finished(task) or update.new_state in (
@@ -2480,7 +2530,8 @@ class ControllerTransitions:
             ):
                 continue
             if update.attempt_id != task.current_attempt_id:
-                stale_state = self._store.attempts.get_state(cur, update.task_id, update.attempt_id)
+                stale_attempt = attempt_map.get((update.task_id, update.attempt_id))
+                stale_state = stale_attempt.state if stale_attempt is not None else None
                 if stale_state is not None and stale_state not in TERMINAL_TASK_STATES:
                     logger.error(
                         "Stale attempt precondition violation: task=%s reported=%d current=%d stale_state=%s",
@@ -2490,7 +2541,7 @@ class ControllerTransitions:
                         stale_state,
                     )
                 continue
-            attempt = self._store.attempts.get(cur, update.task_id, update.attempt_id)
+            attempt = attempt_map.get((update.task_id, update.attempt_id))
             if attempt is None:
                 continue
             # See _apply_task_transitions for rationale: the current attempt may

@@ -324,14 +324,13 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 # =============================================================================
 
 
-def _read_job(db: ControllerDB, job_id: JobName) -> JobDetailRow | None:
-    with db.read_snapshot() as q:
-        return JOB_DETAIL_PROJECTION.decode_one(
-            q.fetchall(
-                f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} " f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
-                (job_id.to_wire(),),
-            )
+def _read_job(q: QuerySnapshot, job_id: JobName) -> JobDetailRow | None:
+    return JOB_DETAIL_PROJECTION.decode_one(
+        q.fetchall(
+            f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} " f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
+            (job_id.to_wire(),),
         )
+    )
 
 
 def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRow | None:
@@ -765,15 +764,10 @@ def _parent_ids_with_children(q: QuerySnapshot, job_ids: list[JobName]) -> set[J
     return {JobName.from_wire(row.parent_job_id) for row in rows if row.parent_job_id}
 
 
-def _task_summaries_for_jobs(q: QuerySnapshot, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
+def _task_summaries_for_jobs(q: QuerySnapshot, job_ids: set[JobName]) -> dict[JobName, TaskJobSummary]:
     """Aggregate task counts per job via a SQL GROUP BY."""
-    if job_ids is not None:
-        placeholders = ",".join("?" for _ in job_ids)
-        where = f"WHERE t.job_id IN ({placeholders})"
-        params: tuple[object, ...] = tuple(j.to_wire() for j in job_ids)
-    else:
-        where = ""
-        params = ()
+    placeholders = ",".join("?" for _ in job_ids)
+    params: tuple[object, ...] = tuple(j.to_wire() for j in job_ids)
 
     sql = f"""
         SELECT t.job_id,
@@ -782,7 +776,7 @@ def _task_summaries_for_jobs(q: QuerySnapshot, job_ids: set[JobName] | None = No
                SUM(t.failure_count) as total_failures,
                SUM(t.preemption_count) as total_preemptions
         FROM tasks t
-        {where}
+        WHERE t.job_id IN ({placeholders})
         GROUP BY t.job_id, t.state
     """
     completed_states = (job_pb2.TASK_STATE_SUCCEEDED, job_pb2.TASK_STATE_KILLED)
@@ -822,21 +816,6 @@ def _worker_roster(store: ControllerStore) -> list[WorkerDetailRow]:
             key, value = _decode_attribute_value(row)
             attrs_by_worker.setdefault(wid, {})[key] = value
     return [dataclasses.replace(w, attributes=attrs_by_worker.get(str(w.worker_id), {})) for w in decoded]
-
-
-def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetailRow]:
-    # PK range scan: '0' (ASCII 48) is the next char after '/' (ASCII 47),
-    # so this matches all job_ids starting with "<job_id>/" without LIKE.
-    prefix = job_id.to_wire() + "/"
-    upper = job_id.to_wire() + chr(ord("/") + 1)
-    with db.read_snapshot() as q:
-        return JOB_DETAIL_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} FROM jobs j {JOB_CONFIG_JOIN} "
-                f"WHERE j.job_id >= ? AND j.job_id < ?",
-                (prefix, upper),
-            ),
-        )
 
 
 def _live_user_stats(db: ControllerDB) -> list[UserStats]:
@@ -1300,13 +1279,13 @@ class ControllerServiceImpl:
         cheap: one job row read + one GROUP BY query vs loading every task,
         attempt, and worker address.
         """
-        job = _read_job(self._db, JobName.from_wire(request.job_id))
-        if not job:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
-
-        # Aggregate task counts via a single GROUP BY query.
         with self._db.read_snapshot() as q:
+            job = _read_job(q, JobName.from_wire(request.job_id))
+            if not job:
+                raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+            # Aggregate task counts via a single GROUP BY query.
             summaries = _task_summaries_for_jobs(q, {job.job_id})
+            has_children = bool(_parent_ids_with_children(q, [job.job_id]))
         summary = summaries.get(job.job_id)
 
         task_state_counts = (
@@ -1328,9 +1307,6 @@ class ControllerServiceImpl:
                 pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
         resources = _resource_spec_from_job_row(job)
-
-        with self._db.read_snapshot() as q:
-            has_children = bool(_parent_ids_with_children(q, [job.job_id]))
 
         proto_job_status = job_pb2.JobStatus(
             job_id=job.job_id.to_wire(),

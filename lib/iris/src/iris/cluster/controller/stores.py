@@ -1533,6 +1533,41 @@ class TaskAttemptStore:
         )
         return int(row["state"]) if row is not None else None
 
+    def bulk_get_for_updates(
+        self,
+        tx: Tx,
+        keys: Sequence[tuple[JobName, int]],
+    ) -> dict[tuple[JobName, int], AttemptRow]:
+        """Return ``{(task_id, attempt_id): AttemptRow}`` for the requested keys.
+
+        Drives lookups through the ``task_attempts`` PK (``task_id``,
+        ``attempt_id``) using a composite ``IN (VALUES ...)`` clause so a
+        single statement covers an entire heartbeat batch. Missing keys are
+        silently absent. Chunks to stay under SQLite's parameter limit.
+        """
+        result: dict[tuple[JobName, int], AttemptRow] = {}
+        if not keys:
+            return result
+        # Deduplicate so the IN list never carries the same (task, attempt) twice.
+        unique: list[tuple[JobName, int]] = list({k: None for k in keys}.keys())
+        # 2 placeholders per row; keep well under SQLite's 999 default limit.
+        chunk_size = 450
+        for chunk_start in range(0, len(unique), chunk_size):
+            chunk = unique[chunk_start : chunk_start + chunk_size]
+            values_clause = ",".join("(?, ?)" for _ in chunk)
+            params: list[object] = []
+            for task_id, attempt_id in chunk:
+                params.append(task_id.to_wire())
+                params.append(attempt_id)
+            rows = tx.fetchall(
+                f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
+                f"WHERE (ta.task_id, ta.attempt_id) IN (VALUES {values_clause})",
+                tuple(params),
+            )
+            for attempt in ATTEMPT_PROJECTION.decode(rows):
+                result[(attempt.task_id, attempt.attempt_id)] = attempt
+        return result
+
     def get_worker_id(self, tx: Tx, task_id: JobName, attempt_id: int) -> WorkerId | None:
         row = tx.fetchone(
             "SELECT worker_id FROM task_attempts WHERE task_id = ? AND attempt_id = ?",

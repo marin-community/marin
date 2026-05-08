@@ -361,8 +361,8 @@ def benchmark_rpcs(db: ControllerDB) -> None:
         sample_job_id = page[0].job_id
 
         def _get_job_status():
-            _read_job(db, sample_job_id)
             with db.read_snapshot() as q:
+                _read_job(q, sample_job_id)
                 _task_summaries_for_jobs(q, {sample_job_id})
                 _parent_ids_with_children(q, [sample_job_id])
 
@@ -631,15 +631,17 @@ def benchmark_scheduling(db: ControllerDB) -> None:
             saved = _save_state()
 
             def _reset():
-                for tid, st, aid, wid, waddr, started in saved:
-                    write_db.execute(
+                update_params = [(st, aid, wid, waddr, started, tid) for tid, st, aid, wid, waddr, started in saved]
+                delete_params = [(tid, aid) for tid, _st, aid, *_ in saved]
+                with write_db.transaction() as cur:
+                    cur.executemany(
                         "UPDATE tasks SET state=?, current_attempt_id=?, current_worker_id=?, "
                         "current_worker_address=?, started_at_ms=? WHERE task_id=?",
-                        (st, aid, wid, waddr, started, tid),
+                        update_params,
                     )
-                    write_db.execute(
+                    cur.executemany(
                         "DELETE FROM task_attempts WHERE task_id=? AND attempt_id > ?",
-                        (tid, aid),
+                        delete_params,
                     )
 
             def _do_queue():
@@ -929,26 +931,32 @@ def benchmark_endpoints(db: ControllerDB) -> None:
             )
 
             def _reset_fail(saved_w=saved_workers, saved_t=saved_tasks):
-                for r in saved_w:
-                    cols = r.keys()
-                    ph = ",".join("?" for _ in cols)
-                    write_db.execute(
-                        f"INSERT OR REPLACE INTO workers({','.join(cols)}) VALUES ({ph})",
-                        tuple(r),
-                    )
-                for r in saved_t:
-                    write_db.execute(
-                        "UPDATE tasks SET state=?, current_attempt_id=?, current_worker_id=?, "
-                        "current_worker_address=?, started_at_ms=? WHERE task_id=?",
-                        (
-                            r["state"],
-                            r["current_attempt_id"],
-                            r["current_worker_id"],
-                            r["current_worker_address"],
-                            r["started_at_ms"],
-                            r["task_id"],
-                        ),
-                    )
+                if not saved_w and not saved_t:
+                    return
+                with write_db.transaction() as cur:
+                    if saved_w:
+                        cols = list(saved_w[0].keys())
+                        ph = ",".join("?" for _ in cols)
+                        cur.executemany(
+                            f"INSERT OR REPLACE INTO workers({','.join(cols)}) VALUES ({ph})",
+                            [tuple(r) for r in saved_w],
+                        )
+                    if saved_t:
+                        cur.executemany(
+                            "UPDATE tasks SET state=?, current_attempt_id=?, current_worker_id=?, "
+                            "current_worker_address=?, started_at_ms=? WHERE task_id=?",
+                            [
+                                (
+                                    r["state"],
+                                    r["current_attempt_id"],
+                                    r["current_worker_id"],
+                                    r["current_worker_address"],
+                                    r["started_at_ms"],
+                                    r["task_id"],
+                                )
+                                for r in saved_t
+                            ],
+                        )
 
             bench(
                 f"Endpoints: fail_workers x{fail_n} (slice-reap, WRITE)",
