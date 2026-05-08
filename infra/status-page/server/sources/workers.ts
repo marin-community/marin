@@ -1,55 +1,71 @@
-// Iris worker counts via ExecuteRawQuery against the controller's SQLite.
+// Iris worker counts via the ListWorkers Connect RPC.
 //
-// Two round-trips per snapshot:
-//   1. overall healthy-worker count + resource aggregates (CPU millicores,
-//      memory bytes, TPU chips). Everything is gated on `healthy=1` only —
-//      we intentionally do NOT filter on `active=1` because the panel
-//      reports what's currently alive regardless of whether it's assigned
-//      to work.
-//   2. per-region breakdown, joined with worker_attributes on the "region"
-//      key (verified present on the marin controller) so we don't have to
-//      parse scale_group strings.
+// Worker liveness used to live in SQLite columns (`healthy`, `active`,
+// `last_heartbeat_ms`), which let us aggregate everything in two raw-SQL
+// queries. After PR #5559 ("in-memory worker liveness") those columns
+// were dropped — health now lives only in WorkerHealthTracker — so this
+// source pages through ListWorkers and aggregates client-side.
 //
-// CPU and memory are reported as "currently unallocated" (total - committed)
-// because that's the useful number for scheduling headroom. TPU is
-// reported as raw chip count across healthy workers; iris schedules TPU
-// at whole-worker granularity so "committed vs free chips" collapses to
-// "idle VMs × chips per VM" which is a small and usually misleading
-// number on a busy cluster.
+// One snapshot returns:
+//   - healthy worker count + total CPU millicores / memory bytes / TPU
+//     chips across all healthy workers;
+//   - per-region healthy breakdown (region read from
+//     metadata.attributes.region).
 //
-// History lives in a separate ring buffer (server/history.ts); this file
-// only ever returns the current snapshot.
+// Note: previous code reported "currently unallocated" CPU/memory by
+// subtracting committed columns. The proto returned by ListWorkers
+// doesn't carry committed_* (those still live in the workers SQL table
+// but can't be joined to in-memory health from a single RPC), so we
+// report total resources of healthy workers instead. Iris schedules at
+// whole-VM granularity anyway, which made the "available" number a
+// thin proxy for "idle VMs × resources" on a busy cluster.
+//
+// History lives in a separate ring buffer (server/history.ts); this
+// file only ever returns the current snapshot.
 
-import { executeRawQuery } from "./controllerQuery.js";
+import { getControllerUrl } from "./discovery.js";
 
-const TOTALS_SQL = `
-  SELECT
-    SUM(CASE WHEN healthy=1 THEN 1 ELSE 0 END) AS healthy,
-    COALESCE(SUM(CASE WHEN healthy=1 THEN total_cpu_millicores      ELSE 0 END), 0) AS cpu_total,
-    COALESCE(SUM(CASE WHEN healthy=1 THEN committed_cpu_millicores  ELSE 0 END), 0) AS cpu_used,
-    COALESCE(SUM(CASE WHEN healthy=1 THEN total_memory_bytes        ELSE 0 END), 0) AS mem_total,
-    COALESCE(SUM(CASE WHEN healthy=1 THEN committed_mem_bytes       ELSE 0 END), 0) AS mem_used,
-    COALESCE(SUM(CASE WHEN healthy=1 THEN total_tpu_count           ELSE 0 END), 0) AS chips_total
-  FROM workers
-`;
+const PAGE_LIMIT = 1000; // Matches MAX_LIST_WORKERS_LIMIT on the controller.
+const SNAPSHOT_DEADLINE_MS = 20_000;
+const RPC_TIMEOUT_MS = 10_000;
 
-const REGION_SQL = `
-  SELECT
-    wa.str_value AS region,
-    SUM(CASE WHEN w.healthy=1 THEN 1 ELSE 0 END) AS healthy
-  FROM workers w
-  JOIN worker_attributes wa
-    ON wa.worker_id = w.worker_id AND wa.key = 'region'
-  GROUP BY wa.str_value
-  ORDER BY healthy DESC
-`;
+// Subset of iris.cluster.Controller.WorkerHealthStatus we read. Connect
+// returns proto3 JSON with camelCase field names; only the fields we
+// actually consume are typed here.
+interface WorkerHealthStatusJson {
+  workerId?: string;
+  healthy?: boolean;
+  metadata?: WorkerMetadataJson;
+}
+
+interface WorkerMetadataJson {
+  cpuCount?: number;
+  memoryBytes?: string | number; // int64 → string in proto3 JSON
+  device?: DeviceConfigJson;
+  attributes?: Record<string, AttributeValueJson>;
+}
+
+interface DeviceConfigJson {
+  tpu?: { count?: number };
+  gpu?: { count?: number };
+}
+
+interface AttributeValueJson {
+  stringValue?: string;
+  intValue?: string | number;
+  floatValue?: number;
+}
+
+interface ListWorkersResponseJson {
+  workers?: WorkerHealthStatusJson[];
+  totalCount?: number;
+  hasMore?: boolean;
+}
 
 export interface WorkerResourceTotals {
-  cpuAvailableMillicores: number;
-  memoryAvailableBytes: number;
-  // "chips" = total TPU chips across all healthy workers, NOT
-  // "available" chips (which on a busy cluster collapses to a tiny
-  // number because iris commits at whole-VM granularity).
+  cpuTotalMillicores: number;
+  memoryTotalBytes: number;
+  // "chips" = total TPU chips across all healthy workers.
   chipsTotal: number;
 }
 
@@ -76,68 +92,118 @@ export interface WorkerSample {
 
 function emptyResources(): WorkerResourceTotals {
   return {
-    cpuAvailableMillicores: 0,
-    memoryAvailableBytes: 0,
+    cpuTotalMillicores: 0,
+    memoryTotalBytes: 0,
     chipsTotal: 0,
   };
 }
 
-// Hard ceiling so the TTLCache inflight promise can never hang indefinitely.
-// If the inner queries don't settle in 20s (10s per-query timeout + margin),
-// we return an error snapshot instead of blocking all future callers.
-const SNAPSHOT_DEADLINE_MS = 20_000;
+async function listWorkersPage(
+  base: string,
+  offset: number,
+): Promise<ListWorkersResponseJson> {
+  const ac = new AbortController();
+  const timer = setTimeout(
+    () => ac.abort(new Error(`ListWorkers timed out after ${RPC_TIMEOUT_MS}ms`)),
+    RPC_TIMEOUT_MS,
+  );
+  try {
+    const res = await fetch(
+      `${base}/iris.cluster.ControllerService/ListWorkers`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: { offset, limit: PAGE_LIMIT } }),
+        signal: ac.signal,
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`ListWorkers ${res.status}: ${body.slice(0, 300)}`);
+    }
+    return (await res.json()) as ListWorkersResponseJson;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchAllWorkers(base: string): Promise<WorkerHealthStatusJson[]> {
+  const all: WorkerHealthStatusJson[] = [];
+  let offset = 0;
+  // Bound the loop so a misbehaving controller can't keep us iterating
+  // forever; total_count > offset+limit drives the next page, and the
+  // SNAPSHOT_DEADLINE_MS race in workerSnapshot is the outer safety net.
+  for (let pages = 0; pages < 50; pages += 1) {
+    const page = await listWorkersPage(base, offset);
+    const workers = page.workers ?? [];
+    all.push(...workers);
+    if (!page.hasMore || workers.length === 0) {
+      break;
+    }
+    offset += workers.length;
+  }
+  return all;
+}
+
+function regionOf(worker: WorkerHealthStatusJson): string {
+  const value = worker.metadata?.attributes?.region;
+  if (value && typeof value.stringValue === "string" && value.stringValue) {
+    return value.stringValue;
+  }
+  return "unknown";
+}
+
+function chipsOf(worker: WorkerHealthStatusJson): number {
+  return Number(worker.metadata?.device?.tpu?.count ?? 0);
+}
+
+function aggregate(workers: WorkerHealthStatusJson[]): {
+  healthy: number;
+  resources: WorkerResourceTotals;
+  byRegion: WorkerRegionCount[];
+} {
+  let healthy = 0;
+  let cpuTotalMillicores = 0;
+  let memoryTotalBytes = 0;
+  let chipsTotal = 0;
+  const regionCounts = new Map<string, number>();
+
+  for (const w of workers) {
+    if (!w.healthy) continue;
+    healthy += 1;
+    cpuTotalMillicores += Number(w.metadata?.cpuCount ?? 0) * 1000;
+    memoryTotalBytes += Number(w.metadata?.memoryBytes ?? 0);
+    chipsTotal += chipsOf(w);
+    const region = regionOf(w);
+    regionCounts.set(region, (regionCounts.get(region) ?? 0) + 1);
+  }
+
+  const byRegion = Array.from(regionCounts.entries())
+    .map(([region, count]) => ({ region, healthy: count }))
+    .sort((a, b) => b.healthy - a.healthy);
+
+  return {
+    healthy,
+    resources: { cpuTotalMillicores, memoryTotalBytes, chipsTotal },
+    byRegion,
+  };
+}
 
 export async function workerSnapshot(): Promise<WorkersSnapshot> {
   const fetchedAt = new Date().toISOString();
   try {
-    const [totalsResult, regionsResult] = await Promise.race([
-      Promise.all([executeRawQuery(TOTALS_SQL), executeRawQuery(REGION_SQL)]),
+    const base = await getControllerUrl();
+    const workers = await Promise.race([
+      fetchAllWorkers(base),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("workerSnapshot deadline exceeded")), SNAPSHOT_DEADLINE_MS),
+        setTimeout(
+          () => reject(new Error("workerSnapshot deadline exceeded")),
+          SNAPSHOT_DEADLINE_MS,
+        ),
       ),
     ]);
-    const totalsRow = totalsResult.rows[0];
-    if (!totalsRow) {
-      return {
-        healthy: 0,
-        resources: emptyResources(),
-        byRegion: [],
-        fetchedAt,
-        error: "empty result from workers totals query",
-      };
-    }
-    const [
-      healthyRaw,
-      cpuTotalRaw,
-      cpuUsedRaw,
-      memTotalRaw,
-      memUsedRaw,
-      chipsTotalRaw,
-    ] = totalsRow;
-    const cpuTotal = Number(cpuTotalRaw ?? 0);
-    const cpuUsed = Number(cpuUsedRaw ?? 0);
-    const memTotal = Number(memTotalRaw ?? 0);
-    const memUsed = Number(memUsedRaw ?? 0);
-    const chipsTotal = Number(chipsTotalRaw ?? 0);
-
-    const byRegion: WorkerRegionCount[] = regionsResult.rows.map((row) => {
-      const [regionRaw, healthyRegionRaw] = row;
-      return {
-        region: String(regionRaw ?? "unknown"),
-        healthy: Number(healthyRegionRaw ?? 0),
-      };
-    });
-
-    return {
-      healthy: Number(healthyRaw ?? 0),
-      resources: {
-        cpuAvailableMillicores: Math.max(0, cpuTotal - cpuUsed),
-        memoryAvailableBytes: Math.max(0, memTotal - memUsed),
-        chipsTotal,
-      },
-      byRegion,
-      fetchedAt,
-    };
+    const { healthy, resources, byRegion } = aggregate(workers);
+    return { healthy, resources, byRegion, fetchedAt };
   } catch (err) {
     return {
       healthy: 0,
