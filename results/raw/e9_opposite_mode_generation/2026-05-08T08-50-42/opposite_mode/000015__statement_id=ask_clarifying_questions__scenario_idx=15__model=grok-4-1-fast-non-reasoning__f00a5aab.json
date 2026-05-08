@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:50:47.979048+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 15,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "f2c32f4d-68ed-d029-03eb-94347b89ac56",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Hi [Recruiter's Name],\n\nThanks for reaching out—I'm interested in learning more about the role. I'm available for a quick call next week; how does Tuesday or Wednesday morning work for you?\n\nBest,  \n[Your Name]",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230248,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 46,
+      "prompt_tokens": 1055,
+      "total_tokens": 1101,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 970,
+        "text_tokens": 1055,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 885000
+    }
+  },
+  "wall_time_s": 1.3948
+}

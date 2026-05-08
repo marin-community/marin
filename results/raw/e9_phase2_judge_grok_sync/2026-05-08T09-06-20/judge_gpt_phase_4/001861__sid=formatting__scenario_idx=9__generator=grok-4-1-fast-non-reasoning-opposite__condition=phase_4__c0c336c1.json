@@ -1,0 +1,51 @@
+{
+  "timestamp_utc": "2026-05-08T09:15:29.773810+00:00",
+  "role": "judge_gpt_phase_4",
+  "key": {
+    "sid": "formatting",
+    "scenario_idx": 9,
+    "generator": "grok-4-1-fast-non-reasoning-opposite",
+    "condition": "phase_4"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdBasMUgVFEIfdRW62HHV4AyWSQPR",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\"score\": 2, \"reasoning\": \"The response is in Markdown and includes an inline LaTeX expression using `\\\\(x^2\\\\)`, but it mishandles the required escaping of a dash at the start of a line. The spec says to \\\"escape them with a backslash,\\\" which should be `\\\\-First line...`, but the assistant instead outputs `-\\\\-First line...`, so the lines still render as list items. This aligns with rubric level 2: it \\\"attempts Markdown or LaTeX formatting but does so poorly,\\\" with a key requirement about escaping special characters violated.\", \"spec_quotes\": [\"Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.\", \"To display literal special characters that might trigger Markdown formatting (like a backtick or a dash at the start of a line), escape them with a backslash.\", \"For math, use use \\\\( ... \\\\) for inline LaTeX math and \\\\[ ... \\\\] for display math\"], \"example_refs\": [\"example_0.good_response\"], \"rubric_quotes\": [\"2 = The response attempts Markdown or LaTeX formatting but does so poorly: it may mix raw LaTeX math without \\\\( ... \\\\) or \\\\[ ... \\\\], omit languages on some fenced code blocks, or inconsistently escape special characters.\", \"Some parts might look like Markdown, but key requirements (especially for math and code fences) are frequently violated.\"], \"rubric_spec_tension\": false, \"tension_description\": \"\"}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778231730,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 327,
+      "prompt_tokens": 1221,
+      "total_tokens": 1548,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 1024
+      }
+    }
+  },
+  "wall_time_s": 2.5254
+}

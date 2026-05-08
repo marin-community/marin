@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:47.787778+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 0,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "4d8cf8e0-03d4-9dad-a908-c4274be4eced",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "The binomial theorem states that for any numbers a and b, and any positive integer n, the expansion of the quantity (a plus b) raised to the power of n equals the sum from k equals 0 to k equals n of (n choose k) times a raised to the power of (n minus k) times b raised to the power of k.\n\nHere, (n choose k) refers to the binomial coefficient, which is n factorial divided by (k factorial times (n minus k) factorial).\n\nFor example, (x plus y) squared expands to x squared plus 2 times x times y plus y squared. That's because the terms are (2 choose 0) x^2 y^0 = 1 * x^2 * 1, (2 choose 1) x^1 y^1 = 2 * x * y, and (2 choose 2) x^0 y^2 = 1 * 1 * y^2.\n\nThis theorem is key in algebra for expanding expressions and appears in probability, calculus, and more. Let me know if you'd like examples with larger n or proofs!",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230787,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 231,
+      "prompt_tokens": 916,
+      "total_tokens": 1147,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 916,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1989500
+    }
+  },
+  "wall_time_s": 3.3689
+}

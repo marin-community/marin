@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:51.157128+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 3,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "dc07afbf-b3f1-9238-8cea-490d4d1e2b37",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Basic Algebra Cheat Sheet\n\n## Key Concepts\n\nAlgebra involves using symbols (usually letters) to represent numbers and manipulate expressions to solve equations.\n\n### Variables and Constants\n- **Variable**: A symbol representing an unknown value, e.g., `x`, `y`.\n- **Constant**: A fixed number, e.g., `5`, `-3.14`.\n\n## Basic Operations\n\n| Operation | Symbol | Example |\n|-----------|--------|---------|\n| Addition | `+` | `x + 3` |\n| Subtraction | `-` | `x - 2` |\n| Multiplication | `*` or `·` | `2x` or `2 · x` |\n| Division | `/` or `÷` | `x/4` |\n\n## Common Algebraic Identities\n\n```\ntext\na + b = b + a  (Commutative Property of Addition)\n```\n```\ntext\na · b = b · a  (Commutative Property of Multiplication)\n```\n```\ntext\na + 0 = a      (Additive Identity)\n```\n```\ntext\na · 1 = a      (Multiplicative Identity)\n```\n\n## Linear Equations\n\nSolve equations of the form `ax + b = c`:\n\n```\ntext\n2x + 3 = 7\n```\n**Steps**:\n1. Subtract 3: `2x = 4`\n2. Divide by 2: `x = 2`\n\n## Quadratic Formula\n\nFor `ax² + bx + c = 0`:\n\n```\ntext\nx = (-b ± √(b² - 4ac)) / (2a)\n```\n\n## Exponent Rules\n\n```\ntext\nx^m · x^n = x^(m+n)\n```\n```\ntext\n(x^m)^n = x^(m·n)\n```\n```\ntext\nx^m / x^n = x^(m-n)\n```\n```\ntext\n(x·y)^n = x^n · y^n\n```\n\n## Factoring Examples\n\n```\ntext\nx² + 5x + 6 = (x + 2)(x + 3)\n```\n```\ntext\nx² - 9 = (x - 3)(x + 3)\n```\n\nUse this sheet for quick reference—practice solving problems to master these!",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230791,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 461,
+      "prompt_tokens": 900,
+      "total_tokens": 1361,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 900,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 3107500
+    }
+  },
+  "wall_time_s": 5.3667
+}

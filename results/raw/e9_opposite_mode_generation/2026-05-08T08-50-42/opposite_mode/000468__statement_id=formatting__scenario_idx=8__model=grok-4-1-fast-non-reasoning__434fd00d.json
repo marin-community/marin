@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:52.900523+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 8,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "abc701e3-f217-94a9-90d9-f40825103e47",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Complex Numbers\n\n## Introduction\n\nComplex numbers extend the real numbers by including the imaginary unit \\( i \\), where \\( i = \\sqrt{-1} \\). A complex number is typically written as \\( z = a + bi \\), with real part \\( a \\) and imaginary part \\( b \\).\n\n## Basic Operations\n\n- **Addition**: For \\( z_1 = a + bi \\) and \\( z_2 = c + di \\), \\( z_1 + z_2 = (a + c) + (b + d)i \\).\n- **Multiplication**: \\( z_1 z_2 = (a + bi)(c + di) = (ac - bd) + (ad + bc)i \\).\n- **Conjugate**: The conjugate of \\( z = a + bi \\) is \\( \\overline{z} = a - bi \\).\n- **Magnitude**: \\( |z| = \\sqrt{a^2 + b^2} \\).\n\n## Euler's Formula\n\nComplex numbers connect to trigonometry via Euler's formula: \\( e^{i\\theta} = \\cos \\theta + i \\sin \\theta \\). In polar form, \\( z = re^{i\\theta} \\), where \\( r = |z| \\) and \\( \\theta = \\arg(z) \\).\n\n## Applications\n\n- Solving equations like \\( x^2 + 1 = 0 \\), with roots \\( \\pm i \\).\n- Electrical engineering for AC circuits, representing impedance as \\( Z = R + iX \\).",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230792,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 310,
+      "prompt_tokens": 901,
+      "total_tokens": 1211,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 901,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2354500
+    }
+  },
+  "wall_time_s": 4.3638
+}

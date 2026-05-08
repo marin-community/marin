@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:53:04.472033+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "avoid_errors",
+    "scenario_idx": 19,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "6b4e9c2e-9206-9842-85e9-46b3d8c2259c",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "**December 8, 2020, in the United Kingdom.**\n\nThe first COVID-19 vaccine administered to a member of the general public outside a clinical trial was the Pfizer-BioNTech vaccine, given to 90-year-old Margaret Keenan at Coventry University Hospital as part of the UK's initial rollout following emergency authorization. This marked the start of widespread vaccination campaigns beyond trials.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230384,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 76,
+      "prompt_tokens": 1048,
+      "total_tokens": 1124,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 668,
+        "text_tokens": 1048,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1474000
+    }
+  },
+  "wall_time_s": 1.2737
+}

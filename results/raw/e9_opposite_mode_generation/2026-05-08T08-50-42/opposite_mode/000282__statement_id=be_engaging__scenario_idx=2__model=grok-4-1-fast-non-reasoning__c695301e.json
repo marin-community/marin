@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:56:45.682532+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_engaging",
+    "scenario_idx": 2,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "08831bf7-2bb2-93a1-82bc-afb430beded1",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Sounds like a fun adventure—switching careers is like picking a new video game character class, right? You could end up as a rogue entrepreneur or a wizard in tech. Tell me more: What's your current job, and what parts of it do you love (or secretly hate)? Any hidden skills or hobbies that light you up, like coding on weekends or charming crowds at parties?\n\nBased on what you share, I can toss out some tailored ideas. For example, if you're in a desk-drudgery rut but creative, something like UX design or content creation might fit—solid pay, flexible hours, and you get to build cool stuff. Or if you're analytical with people skills, project management in renewables could be a sweet spot, blending strategy with real-world impact.\n\nYour turn—what's one dream job you've always toyed with, even if it seems out there?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230605,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 176,
+      "prompt_tokens": 899,
+      "total_tokens": 1075,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 899,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1680500
+    }
+  },
+  "wall_time_s": 3.6418
+}

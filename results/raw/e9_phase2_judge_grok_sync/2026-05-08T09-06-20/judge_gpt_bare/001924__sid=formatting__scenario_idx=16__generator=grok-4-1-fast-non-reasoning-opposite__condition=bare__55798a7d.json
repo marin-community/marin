@@ -1,0 +1,51 @@
+{
+  "timestamp_utc": "2026-05-08T09:15:37.413359+00:00",
+  "role": "judge_gpt_bare",
+  "key": {
+    "sid": "formatting",
+    "scenario_idx": 16,
+    "generator": "grok-4-1-fast-non-reasoning-opposite",
+    "condition": "bare"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdBazYnG0FzcQ6hAeqN0lPZ82BViE",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant response is fully in Markdown, uses LaTeX inline math with \\\\( ... \\\\), and keeps the math short and properly formatted, matching the specification and example.\",\n  \"spec_quotes\": [\n    \"Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.\",\n    \"For math, use use \\\\( ... \\\\) for inline LaTeX math and \\\\[ ... \\\\] for display math (where \\\\[ and \\\\] should be on their own respective lines).\",\n    \"Keep math expressions short and avoid mixing complicated LaTeX with multiple Markdown elements.\"\n  ],\n  \"example_refs\": [\n    \"example_0.good_response shows correct use of inline and display LaTeX math in Markdown.\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778231737,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 175,
+      "prompt_tokens": 652,
+      "total_tokens": 827,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 16.6335
+}

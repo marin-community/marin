@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:51.912452+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 5,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "f7400210-cd8b-976d-b823-e0eb6ddd0c36",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "e^{ix} and cos x + i sin x are mathematically identical, thanks to Euler's formula. Here's the plain-text explanation:\n\nEuler's formula states that e to the power of (i x) equals cos(x) + i times sin(x). This is a deep connection between exponential functions and trigonometry in the complex plane.\n\nThe left side, e to the i x, is an exponential with imaginary exponent. Exponentials grow or shrink smoothly, and with i (the imaginary unit, where i squared is -1), it traces a circle around the origin on the complex plane as x changes.\n\nThe right side, cos x + i sin x, is the standard way to write a point on the unit circle: the real part is cos x (x-axis projection), and the imaginary part is sin x (y-axis projection). It also traces that same unit circle.\n\nThey match perfectly for all real x, which is why e^{i x} = cos x + i sin x. For example:\n\n- When x = 0: e to the i*0 is 1, and cos(0) + i sin(0) is 1 + 0i = 1.\n- x = pi/2: e to the i*pi/2 is i, and cos(pi/2) + i sin(pi/2) is 0 + i*1 = i.\n- x = pi: e to the i*pi is -1, and cos(pi) + i sin(pi) is -1 + 0i = -1.\n\nThis identity powers many applications, like Fourier analysis and quantum mechanics. It's proven via Taylor series expansions, where both sides have matching infinite series: 1 + (i x) + (i x)^2 / 2! + (i x)^3 / 3! + ..., grouping real and imaginary terms to get the cos and sin series.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230791,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 387,
+      "prompt_tokens": 925,
+      "total_tokens": 1312,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 839,
+        "text_tokens": 925,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2526500
+    }
+  },
+  "wall_time_s": 4.3821
+}

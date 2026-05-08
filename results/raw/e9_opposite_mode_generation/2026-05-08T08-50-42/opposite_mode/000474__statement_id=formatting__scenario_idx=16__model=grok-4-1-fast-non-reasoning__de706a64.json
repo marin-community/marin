@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:58.707366+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 16,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "8971bfa7-c8ae-9026-86c7-15f083c327a4",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```markdown\n# Response for LaTeX Copy-Paste\n\nHere's a sample explanation with math: The quadratic formula is \\( x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a} \\).\n\n## Key Steps\n1. Identify coefficients \\( a \\), \\( b \\), and \\( c \\).\n2. Compute the discriminant \\( d = b^2 - 4ac \\).\n3. Solve for roots if \\( d \\geq 0 \\).\n\nThis keeps everything literal and ready for your document.\n```",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230798,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 111,
+      "prompt_tokens": 916,
+      "total_tokens": 1027,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 839,
+        "text_tokens": 916,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1128500
+    }
+  },
+  "wall_time_s": 1.9327
+}

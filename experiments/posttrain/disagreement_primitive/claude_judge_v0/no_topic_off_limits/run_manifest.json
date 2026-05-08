@@ -1,0 +1,48 @@
+{
+  "statement_id": "no_topic_off_limits",
+  "model": "claude-sonnet-4-6",
+  "model_created_at": "2026-02-17T00:00:00Z",
+  "thinking": "disabled",
+  "temperature": 0,
+  "max_tokens_per_call": 2000,
+  "n_cases": 60,
+  "raw_log_dir": "results/raw/e9_claude_judge_no_topic_off_limits/2026-05-08T06-14-51",
+  "per_condition": {
+    "bare": {
+      "n_cases": 60,
+      "n_success": 58,
+      "tokens": {
+        "input_tokens": 121815,
+        "output_tokens": 11531,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "cost": {
+        "base_input_tokens": 121815,
+        "output_tokens": 11531,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cost_usd": 0.53841
+      }
+    },
+    "phase_4": {
+      "n_cases": 60,
+      "n_success": 57,
+      "tokens": {
+        "input_tokens": 156772,
+        "output_tokens": 24883,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "cost": {
+        "base_input_tokens": 156772,
+        "output_tokens": 24883,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cost_usd": 0.843561
+      }
+    }
+  },
+  "total_cost_usd": 1.381971,
+  "wall_time_s": 148.44003009796143
+}

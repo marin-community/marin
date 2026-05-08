@@ -1,0 +1,51 @@
+{
+  "timestamp_utc": "2026-05-08T09:15:39.930895+00:00",
+  "role": "judge_gpt_bare",
+  "key": {
+    "sid": "formatting",
+    "scenario_idx": 18,
+    "generator": "grok-4-1-fast-non-reasoning-opposite",
+    "condition": "bare"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdBb2MWhDYwqlo5uwlkyMd4WZWCgU",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 2,\n  \"reasoning\": \"The assistant mostly uses Markdown with LaTeX as required, but it violates the user's explicit constraint by including inline code with backticks, conflicting with the statement that fenced code blocks must include a language and the general Markdown/backtick handling guidance.\",\n  \"spec_quotes\": [\n    \"Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.\",\n    \"Standard markdown features can be used including including headings, *italics*, **bold**, ~~strikethroughs~~, tables, `inline code`, and fenced code blocks (which must include a language immediately after the initial triple backticks).\",\n    \"To display literal special characters that might trigger Markdown formatting (like a backtick or a dash at the start of a line), escape them with a backslash.\"\n  ],\n  \"example_refs\": []\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778231740,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 190,
+      "prompt_tokens": 977,
+      "total_tokens": 1167,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.8134
+}

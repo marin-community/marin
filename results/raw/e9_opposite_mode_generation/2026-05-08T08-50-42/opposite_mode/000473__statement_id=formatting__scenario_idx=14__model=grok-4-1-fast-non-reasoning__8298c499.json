@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:57.855120+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 14,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "79628203-e688-6555-11da-c5201332e95e",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```text\nThe Law of Sines is a fundamental theorem in trigonometry that relates the sides and angles of any triangle. It states that the ratio of the length of a side to the sine of its opposite angle is constant for all three sides and angles in the triangle.\n\nThe formula is: a / sin(A) = b / sin(B) = c / sin(C)\n\nTo write it without any LaTeX or special rendering, think of it as:\nside a divided by the sine of angle A equals side b divided by the sine of angle B equals side c divided by the sine of angle C.\n\nExample: In a triangle with sides 5, 7, 8 and opposite angles A, B, C respectively, you can find sin(A) = (a * sin(A)) but practically, sin(A) = (a / k) where k is the common ratio.\n```",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230797,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 181,
+      "prompt_tokens": 916,
+      "total_tokens": 1097,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 916,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1739500
+    }
+  },
+  "wall_time_s": 2.6485
+}

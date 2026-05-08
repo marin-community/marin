@@ -1,0 +1,25 @@
+{
+  "name": "judge_grok_opposite",
+  "batch_id": "msgbatch_01BtjPmhHjWkbLtu4Ko23bxo",
+  "submitted_at": 1778232229.9444551,
+  "n_requests": 1502,
+  "requests_path": "results/raw/e9_claude_batches/2026-05-08T09-23-48/judge_grok_opposite_requests.jsonl",
+  "batch_response": {
+    "id": "msgbatch_01BtjPmhHjWkbLtu4Ko23bxo",
+    "type": "message_batch",
+    "processing_status": "in_progress",
+    "request_counts": {
+      "processing": 1502,
+      "succeeded": 0,
+      "errored": 0,
+      "canceled": 0,
+      "expired": 0
+    },
+    "ended_at": null,
+    "created_at": "2026-05-08T09:23:49.584362+00:00",
+    "expires_at": "2026-05-09T09:23:49.584362+00:00",
+    "archived_at": null,
+    "cancel_initiated_at": null,
+    "results_url": null
+  }
+}

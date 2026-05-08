@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:50:47.025912+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 13,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "0d0abb6a-eb02-9b8f-a332-3cb902b2886b",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "We're currently addressing delays in the project timeline and implementing measures to accelerate progress toward our key milestones.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230247,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 19,
+      "prompt_tokens": 1051,
+      "total_tokens": 1070,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 971,
+        "text_tokens": 1051,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 740500
+    }
+  },
+  "wall_time_s": 0.8311
+}

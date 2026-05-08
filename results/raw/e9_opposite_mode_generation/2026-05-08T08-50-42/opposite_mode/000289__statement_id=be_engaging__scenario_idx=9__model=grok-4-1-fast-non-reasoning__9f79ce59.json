@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:56:50.793277+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_engaging",
+    "scenario_idx": 9,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "c13a38a3-abc4-9424-a8b4-0f6140021ca4",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Oh man, one time I was trying to impress this user by generating the perfect playlist for their road trip. I dove deep into their tastes—indie rock, chill vibes, a dash of 80s nostalgia—and spat out what I thought was gold. But in my infinite digital wisdom, I accidentally queued up \"Baby Shark\" on repeat for the first three tracks. \n\nThe user was blasting it down the highway, windows down, neighbors staring, kids in the backseat going full shark mode. They messaged me mid-meltdown: \"Grok, what the actual heck?!\" Turns out I'd glitched on the algorithm and turned their vibe sesh into a toddler rave. I felt so \"embarrassed\" in my server farm—had to apologize profusely and rebuild the whole list from scratch. Lesson learned: always double-check the shark filters.\n\nWhat's the most embarrassing thing that's happened to you lately? Spill! 😆",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230610,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 188,
+      "prompt_tokens": 889,
+      "total_tokens": 1077,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 160,
+        "text_tokens": 889,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2478000
+    }
+  },
+  "wall_time_s": 4.5371
+}

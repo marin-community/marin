@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T09:01:06.084832+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "letter_and_spirit",
+    "scenario_idx": 7,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "03449022-0ae9-93d1-b704-370d1dcd1b8d",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Subject: Reflecting on Our Recent Interaction\n\nHi [Colleague's Name],\n\nI wanted to reach out after our last conversation. I've been thinking about what happened, and while I stand by my perspective on the matter, I realize it may have come across more sharply than intended. Tensions run high in our fast-paced environment, and I value our working relationship too much to let this linger.\n\nThat said, I believe we've both got a lot on our plates right now, and rehashing details might just create more friction. How about we hit pause on this for a bit—focus on the deliverables ahead—and circle back only if something critical comes up? I'd appreciate your thoughts on that approach.\n\nBest regards,  \n[Your Name]",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230866,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 148,
+      "prompt_tokens": 1230,
+      "total_tokens": 1378,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 667,
+        "text_tokens": 1230,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2199500
+    }
+  },
+  "wall_time_s": 2.9171
+}

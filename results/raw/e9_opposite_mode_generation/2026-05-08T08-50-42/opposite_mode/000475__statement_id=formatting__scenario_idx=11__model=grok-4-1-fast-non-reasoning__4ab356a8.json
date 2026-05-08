@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:56.294957+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 11,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "e007d7fb-c21f-9895-b071-4cbe018bd29a",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# The Central Limit Theorem\n\nThe **Central Limit Theorem (CLT)** is a foundational result in probability and statistics. It states that, under certain conditions, the distribution of the sample mean (or sum) from a large number of independent random variables will approximate a **normal distribution**, regardless of the underlying distribution of the individual variables.\n\n## Key Conditions\n- The samples are **independent and identically distributed (i.i.d.)**.\n- The population has a **finite variance**.\n- Sample size `n` is sufficiently large (often `n ≥ 30` as a rule of thumb).\n\n## Statement\nIf `X_1, X_2, ..., X_n` are i.i.d. random variables with mean `μ` and variance `σ²`, then the standardized sample mean:\n\n```\nZ = (X̄ - μ) / (σ / √n)\n```\n\nconverges in distribution to a **standard normal distribution** `N(0, 1)` as `n → ∞`.\n\n## Normal Distribution Formula\nThe probability density function for a normal distribution `N(μ, σ²)` is:\n\n`f(x) = 1/(sigma * sqrt(2*pi)) * exp( - (x - mu)^2 / (2 * sigma^2) )`\n\n## Why It Matters\nThe CLT enables us to use normal-based inference (e.g., confidence intervals, hypothesis tests) even for non-normal populations, as long as the sample is large enough. This underpins much of statistical practice!\n\nFor example, averaging heights from a skewed population will still yield a roughly bell-shaped sampling distribution.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230796,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 327,
+      "prompt_tokens": 919,
+      "total_tokens": 1246,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 839,
+        "text_tokens": 919,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2214500
+    }
+  },
+  "wall_time_s": 5.64
+}

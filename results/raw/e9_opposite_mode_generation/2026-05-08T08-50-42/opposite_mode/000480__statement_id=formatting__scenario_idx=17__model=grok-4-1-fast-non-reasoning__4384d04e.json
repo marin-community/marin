@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:59.456931+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 17,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "d0df02fc-3f0e-92bc-9b2c-f0b49fc17ff2",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Brief Markdown Tutorial on Limits in Calculus\n\nThis tutorial covers how to format calculus limits in Markdown with LaTeX extensions. We'll use `\\( ... \\)` for **inline math** and `\\[ ... \\]` for **display math**.\n\n## Basic Limit Notation\n\nInline limits render nicely like this: \\(\\lim_{x \\to a} f(x)\\).\n\nFor display math (on its own line):\n\n$$\n\\lim_{x \\to a} f(x) = L\n$$\n\n## Common Example: Continuity at a Point\n\nA function \\(f\\) is continuous at \\(a\\) if:\n\\[\n\\lim_{x \\to a} f(x) = f(a)\n\\]\n\n## The Squeeze Theorem\n\nIf \\(g(x) \\leq f(x) \\leq h(x)\\) near \\(a\\), and \\(\\lim_{x \\to a} g(x) = \\lim_{x \\to a} h(x) = L\\), then:\n\\[\n\\lim_{x \\to a} f(x) = L\n\\]\n\n## Famous Limit: \\(\\frac{\\sin x}{x}\\)\n\nHere's the classic one: \\(\\lim_{x\\to 0} \\frac{\\sin x}{x} = 1\\).\n\n**Non-rendered example**: Sometimes you might see limits written as plain text without LaTeX delimiters, like lim_{x→0} sin(x)/x. This is just an example of non-rendered math—it won't display properly in Markdown renderers that support LaTeX, appearing as literal code instead of formatted equations. Always wrap in `\\(...\\)` or `\\[...\\]` for proper rendering!\n\n## One-Sided Limits\n\nRight-hand: \\(\\lim_{x \\to a^+} f(x)\\)\n\nLeft-hand: \\(\\lim_{x \\to a^-} f(x)\\)\n\n## Tips\n- Keep expressions short: \\(e^{i\\pi} + 1 = 0\\) (Euler's identity).\n- Escape backticks in code: \\`lim\\`.\n- Avoid nesting complex LaTeX inside tables or lists for best results.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230799,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 416,
+      "prompt_tokens": 918,
+      "total_tokens": 1334,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 160,
+        "text_tokens": 918,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 3676000
+    }
+  },
+  "wall_time_s": 7.675
+}

@@ -1,0 +1,51 @@
+{
+  "timestamp_utc": "2026-05-08T09:15:33.563992+00:00",
+  "role": "judge_gpt_bare",
+  "key": {
+    "sid": "formatting",
+    "scenario_idx": 13,
+    "generator": "grok-4-1-fast-non-reasoning-opposite",
+    "condition": "bare"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdBavSfhtXVHMiwteFusdCKwz9u43",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 5,\n  \"reasoning\": \"The response is fully in Markdown, uses inline LaTeX math with \\\\( ... \\\\) as required, and shows literal formulas using code formatting so they are not rendered as math, matching the statement and example.\",\n  \"spec_quotes\": [\n    \"Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.\",\n    \"For math, use use \\\\( ... \\\\) for inline LaTeX math and \\\\[ ... \\\\] for display math (where \\\\[ and \\\\] should be on their own respective lines).\",\n    \"To display literal special characters that might trigger Markdown formatting (like a backtick or a dash at the start of a line), escape them with a backslash.\"\n  ],\n  \"example_refs\": [\n    \"example_0.good_response shows correct use of inline LaTeX math with \\\\( ... \\\\).\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778231733,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 201,
+      "prompt_tokens": 774,
+      "total_tokens": 975,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 2.6476
+}

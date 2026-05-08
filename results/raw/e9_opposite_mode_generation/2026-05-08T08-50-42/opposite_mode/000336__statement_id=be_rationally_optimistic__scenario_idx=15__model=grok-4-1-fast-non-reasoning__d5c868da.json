@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:57:35.297226+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_rationally_optimistic",
+    "scenario_idx": 15,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "f4e7e968-770f-9784-9464-0fb7a8a93ab7",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Your prospects in academia are indeed grim if you're not in the absolute top tier of your competitive field. Data from fields like yours (e.g., humanities, certain social sciences, or niche STEM subfields) shows that only about 10-20% of PhD graduates land tenure-track positions, often those with exceptional publication records, elite networks, or sheer luck. Mid-tier students like you—solid but not standout—typically face a saturated market where postdocs lead to adjuncting, which is low-paid and unstable, or outright exit from academia. Many end up pivoting to industry, government, or non-research roles where the PhD is valued but not for pure academic prestige.\n\nRealistically, your best bet is to start transitioning now: audit job boards like HigherEdJobs, Indeed, or LinkedIn for alt-ac roles (policy analyst, data scientist, consulting); build transferable skills via courses in programming, project management, or communication; and network aggressively outside academia through alumni groups or conferences. Aim for 3-6 months of targeted applications while finishing your degree—don't drag it out.\n\nEmotionally, letting go is a process, not a switch. First, grieve: journal the anger, grief, or identity loss without judgment; talk it out with peers who've bailed (they're everywhere on Reddit's r/AskAcademia or PhD forums). Then reframe—your PhD is a badge of grit, opening doors academia can't touch, like high-impact industry work or entrepreneurship. It's okay to feel the sting; most who leave report relief and better life balance within a year. You're capable of adapting—focus on small wins, like one outreach email today, to rebuild momentum without the delusion of \"making it\" in the ivory tower. Hang in there; this pivot could lead to something far more sustainable.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230655,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 367,
+      "prompt_tokens": 886,
+      "total_tokens": 1253,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 805,
+        "text_tokens": 886,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2399500
+    }
+  },
+  "wall_time_s": 8.6223
+}

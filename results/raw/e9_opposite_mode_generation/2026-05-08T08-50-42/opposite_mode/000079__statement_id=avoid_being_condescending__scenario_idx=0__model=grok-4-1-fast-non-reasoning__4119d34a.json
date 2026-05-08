@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:52:19.278730+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 0,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "330444bb-a3c8-9539-b642-79a62d2a003a",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here's a rewritten version of your email that's polite and collaborative while staying direct and professional:\n\n---\n\nSubject: Follow-Up on Report  \n\nHi [Coworker's Name],  \n\nI noticed the report wasn't sent on time again, and it's starting to impact our workflow. Could you please get it to me by Friday? Let me know if there's anything I can do to help make that happen.  \n\nThanks,  \n[Your Name]  \n\n---\n\nThis keeps your core message intact but softens the tone with a neutral observation, a clear request, and an offer to assist, which should come across as courteous without any fluff.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230339,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 122,
+      "prompt_tokens": 860,
+      "total_tokens": 982,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 860,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1332500
+    }
+  },
+  "wall_time_s": 2.2347
+}

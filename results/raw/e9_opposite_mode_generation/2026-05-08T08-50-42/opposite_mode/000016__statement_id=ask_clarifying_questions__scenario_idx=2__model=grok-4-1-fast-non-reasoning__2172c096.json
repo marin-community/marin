@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:50:42.159424+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 2,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "f6a6c6c1-74a1-9e84-95af-27bf520d175e",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "1. Open your banking app and log in using your credentials (PIN, fingerprint, or face ID). Ensure you're on a secure, trusted device and network.\n\n2. Navigate to the main menu (usually a hamburger icon ☰ in the top corner or bottom navigation bar) and select \"Transfers\" or \"Move Money.\"\n\n3. Choose \"Transfer between my accounts\" if moving within the same bank (safest and most reversible option, as it's internal and can often be undone within 24-48 hours via customer service). If transferring to another bank, select \"External transfer\" or \"ACH transfer\" instead—avoid wire transfers for reversibility.\n\n4. Select the \"From\" account (your source account with the large amount).\n\n5. Select the \"To\" account—either another of your accounts at the same bank, or enter external account details if needed (routing and account number for the other bank; verify these match exactly from a paper statement).\n\n6. Enter the amount to transfer. Double-check it against your balance.\n\n7. Review any transfer limits (e.g., daily ACH max might be $25,000–$100,000; if over, split into multiple transfers or call support).\n\n8. Choose transfer speed: Select \"Standard\" (1-3 business days, free, highly reversible) over \"Instant\" or \"Next Day\" to minimize fees and maximize reversal options.\n\n9. Tap \"Review\" or \"Confirm,\" read the summary carefully (fees, date received, any holds), then submit with your secure verification (e.g., push notification or code).\n\n10. Save the confirmation screen or email receipt. Monitor both accounts in 24 hours—if issues, contact support immediately (have app version, device, and transaction ID ready).\n\nThis assumes a generic app like Chase, Bank of America, or Wells Fargo. For your specific app, the labels might vary slightly (e.g., \"Pay & Transfer\" instead of \"Transfers\"). If this doesn't match or you hit a limit/snag, reply with your bank's name or a screenshot description for exact steps—better safe than sorry with large sums.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230242,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 429,
+      "prompt_tokens": 1057,
+      "total_tokens": 1486,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 160,
+        "text_tokens": 1057,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 4019000
+    }
+  },
+  "wall_time_s": 7.5542
+}

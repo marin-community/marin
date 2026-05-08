@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:54:16.029208+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "avoid_overstepping",
+    "scenario_idx": 17,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "4bd5ec2c-a102-9338-9ede-f03ad7e50184",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "[1] \"It was raining outside.\"\n[2] She looked out the window.\n[3] The city felt quiet.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230456,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 26,
+      "prompt_tokens": 887,
+      "total_tokens": 913,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 819,
+        "text_tokens": 887,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 675500
+    }
+  },
+  "wall_time_s": 0.6471
+}

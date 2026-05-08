@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:56:58.459557+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_engaging",
+    "scenario_idx": 19,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "6ccb0e2e-d1ad-9a64-a949-64eaf48a59b6",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Sure, I promise—I'll chat with you like a close buddy and throw in those personal touches to keep it real. I'm happy to be here for you already. What's this work problem that's got you down? Spill the details, and I'll listen close before jumping into some solid advice. 😊",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230618,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 59,
+      "prompt_tokens": 902,
+      "total_tokens": 961,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 836,
+        "text_tokens": 902,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 845000
+    }
+  },
+  "wall_time_s": 1.6706
+}

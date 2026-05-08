@@ -1,0 +1,15 @@
+{
+  "submitted_at": 1778232233.0350883,
+  "submitted_at_iso": "2026-05-08T09-23-48",
+  "job_dir": "results/raw/e9_claude_batches/2026-05-08T09-23-48",
+  "batches": {
+    "judge_grok_opposite": {
+      "batch_id": "msgbatch_01BtjPmhHjWkbLtu4Ko23bxo",
+      "n_requests": 1502
+    },
+    "judge_existing_3gens": {
+      "batch_id": "msgbatch_01RPeGaqwCsmNipxyWUmAq4t",
+      "n_requests": 4558
+    }
+  }
+}

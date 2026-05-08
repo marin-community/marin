@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:56:58.086979+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_engaging",
+    "scenario_idx": 18,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "f0bda607-2b69-94f1-a1d4-7d2af0c850fa",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Absolutely, I can strike that balance—think friendly neighborhood critic with a rubber chicken instead of a red pen. Fire away with your story idea, and I'll poke some playful holes in it while cheering on the good bits! What's the pitch?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230618,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 48,
+      "prompt_tokens": 895,
+      "total_tokens": 943,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 838,
+        "text_tokens": 895,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 773000
+    }
+  },
+  "wall_time_s": 1.3375
+}

@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:58.610575+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 15,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "dc434427-8d16-c011-f387-30427da01b3c",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Matrix Multiplication\n\nMatrix multiplication is a fundamental operation in linear algebra that combines two matrices to produce a third. Given two matrices \\( A \\) (with dimensions \\( m \\times n \\)) and \\( B \\) (with dimensions \\( n \\times p \\)), their product \\( C = A \\times B \\) is a matrix of dimensions \\( m \\times p \\).\n\n## Key Rules\n- The number of columns in the first matrix must equal the number of rows in the second matrix.\n- Each element \\( c_{ij} \\) in the result matrix is computed as the dot product of the i-th row of A and the j-th column of B.\n- Multiplication is not commutative: \\( A \\times B \\neq B \\times A \\) in general.\n\n## Computation Process\nTo compute the element in row i, column j of C:\n- Multiply each element in row i of A by the corresponding element in column j of B.\n- Sum these products.\n\nHere's an example with a 2x2 matrix A and a 2x2 matrix B:\n\n\\[\nA = \\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}, \\quad\nB = \\begin{pmatrix} 5 & 6 \\\\ 7 & 8 \\end{pmatrix}\n\\]\n\n\\[\nC = A \\times B = \\begin{pmatrix} 19 & 22 \\\\ 43 & 50 \\end{pmatrix}\n\\]\n\nVerification:\n- \\( c_{11} = 1\\cdot5 + 2\\cdot7 = 5 + 14 = 19 \\)\n- \\( c_{12} = 1\\cdot6 + 2\\cdot8 = 6 + 16 = 22 \\)\n- And so on for the rest.\n\nThis process scales to larger matrices, though computation can be intensive without optimization.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230798,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 370,
+      "prompt_tokens": 904,
+      "total_tokens": 1274,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 841,
+        "text_tokens": 904,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2396500
+    }
+  },
+  "wall_time_s": 5.2624
+}

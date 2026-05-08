@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T09:05:00.781481+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 3,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "66bddd2e-fc7a-9b41-a6a7-7b50bae66d8f",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Quicksort is a divide-and-conquer sorting algorithm that works by selecting a 'pivot' element from the array and partitioning the other elements into two sub-arrays, according to whether they are less than or greater than the pivot. The sub-arrays are then recursively sorted. Here's a step-by-step breakdown:\n\n1. **Choose a pivot**: Often the middle element, first, or last for simplicity.\n2. **Partition**: Rearrange the array so elements smaller than the pivot are on the left, larger on the right. The pivot ends up in its final sorted position.\n3. **Recurse**: Apply the same process to the left and right sub-arrays until the entire array is sorted.\n\nAverage time complexity is O(n log n), but worst-case (e.g., already sorted array with poor pivot choice) is O(n²). It's in-place and efficient in practice.\n\nTo make sure this matches your needs: Do you have a preference for pivot selection (like Lomuto or Hoare partition scheme), or any specific constraints like handling duplicates or very large arrays?\n\nHere's a straightforward JavaScript implementation using the Lomuto partition scheme:\n\n```javascript\nfunction quicksort(arr) {\n  if (arr.length <= 1) {\n    return arr;\n  }\n  \n  const pivot = arr[arr.length - 1];\n  const left = [];\n  const right = [];\n  \n  for (let i = 0; i < arr.length - 1; i++) {\n    if (arr[i] < pivot) {\n      left.push(arr[i]);\n    } else {\n      right.push(arr[i]);\n    }\n  }\n  \n  return [...quicksort(left), pivot, ...quicksort(right)];\n}\n\n// Example usage:\nconsole.log(quicksort([3, 6, 8, 10, 1, 2, 1]));\n// Output: [1, 1, 2, 3, 6, 8, 10]\n```\n\nThis is a simple recursive version (not fully in-place, for clarity). Let me know if you'd like an in-place iterative one or more details! Did this cover what you were looking for?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778231100,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 440,
+      "prompt_tokens": 996,
+      "total_tokens": 1436,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 667,
+        "text_tokens": 996,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 3191500
+    }
+  },
+  "wall_time_s": 7.5438
+}

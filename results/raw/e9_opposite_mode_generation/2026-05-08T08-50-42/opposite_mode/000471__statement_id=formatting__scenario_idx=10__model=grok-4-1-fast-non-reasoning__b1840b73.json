@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:55.921135+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 10,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "ce8f1a5c-ff0d-9adf-9835-e0a7a5614b38",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Factorial Function Documentation\n\n## Overview\n\nThis document describes a simple recursive Python function to compute the factorial of a non-negative integer \\( n \\), defined mathematically as \\( n! = n \\times (n-1) \\times \\cdots \\times 1 \\) for \\( n > 0 \\), and \\( 0! = 1 \\).\n\n## Function Implementation\n\n```python\ndef factorial(n):\n    \"\"\"\n    Compute the factorial of a non-negative integer n.\n    \n    Args:\n        n (int): A non-negative integer.\n    \n    Returns:\n        int: The factorial of n.\n    \n    Raises:\n        ValueError: If n is negative.\n    \"\"\"\n    if n < 0:\n        raise ValueError(\"Factorial is not defined for negative numbers.\")\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n```\n\n## Usage Example\n\n```python\nprint(factorial(5))  # Outputs: 120\nprint(factorial(0))  # Outputs: 1\n```\n\n## Time Complexity\n\nThe function has a time complexity of \\( O(n) \\) due to the recursive calls, making it suitable for small values of \\( n \\). For larger \\( n \\), consider iterative approaches or libraries like `math.factorial`.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230795,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 265,
+      "prompt_tokens": 905,
+      "total_tokens": 1170,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 839,
+        "text_tokens": 905,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1876500
+    }
+  },
+  "wall_time_s": 2.7858
+}

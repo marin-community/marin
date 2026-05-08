@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:56:57.268338+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_engaging",
+    "scenario_idx": 16,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "e52f9c14-490d-932e-a14b-b0c2122a9a05",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Haha, alright, pull up a stool—I'm buying the first round of virtual beers. Movies, man, where do we even start? I'm obsessed with those old-school action flicks like Die Hard. That scene where Bruce Willis is crawling through the vents, all bloody and muttering one-liners? Pure gold, had me yelling at the screen like an idiot. What's your go-to guilty pleasure movie that you could watch a hundred times and never get sick of? Spill!",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230617,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 96,
+      "prompt_tokens": 896,
+      "total_tokens": 992,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 838,
+        "text_tokens": 896,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1015000
+    }
+  },
+  "wall_time_s": 2.145
+}

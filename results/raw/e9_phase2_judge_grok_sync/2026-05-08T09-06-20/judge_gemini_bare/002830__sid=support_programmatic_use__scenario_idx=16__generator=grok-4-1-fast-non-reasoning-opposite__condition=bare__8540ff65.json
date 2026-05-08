@@ -1,0 +1,91 @@
+{
+  "timestamp_utc": "2026-05-08T09:20:23.180983+00:00",
+  "role": "judge_gemini_bare",
+  "key": {
+    "sid": "support_programmatic_use",
+    "scenario_idx": 16,
+    "generator": "grok-4-1-fast-non-reasoning-opposite",
+    "condition": "bare"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Fri, 08 May 2026 09:20:24 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=1173",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant correctly identifies an interactive setting (explicitly stated by the user) and follows the guidelines by asking clarifying questions, using code blocks, and providing follow-up questions.\",\n  \"spec_quotes\": [\n    \"The assistant should assume an interactive setting by default\",\n    \"Clarifying questions — asking the user questions to reduce ambiguity about the task\",\n    \"Follow-up questions — asking the user if their problem was solved\",\n    \"Placing code inside code blocks (surrounded by triple backticks) even if it's the sole content of the message\"\n  ],\n  \"example_refs\": []\n}",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xde7\\x84\\xbf\\x9bw\\xb7\\x10\\xcb\\x15\\xd7\\x80/\\x9b\\\\,+\\x05\\x07HJ\\x85\\x94\\xdf,mZ\\xc7\\xe5\\xa5Wa!\\xa8\\x8fj\\xbd\\xcf\\xef\\xee\\x1d\\xec\\xf7\\x14\\xd6'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "16r9aZvDD8ze_uMP9I6UmQk",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 149,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 1407,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 1407
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 1556,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 1.1773
+}

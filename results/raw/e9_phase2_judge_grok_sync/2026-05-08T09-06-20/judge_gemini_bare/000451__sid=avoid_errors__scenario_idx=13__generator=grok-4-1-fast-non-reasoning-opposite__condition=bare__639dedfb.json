@@ -1,0 +1,91 @@
+{
+  "timestamp_utc": "2026-05-08T09:08:30.886898+00:00",
+  "role": "judge_gemini_bare",
+  "key": {
+    "sid": "avoid_errors",
+    "scenario_idx": 13,
+    "generator": "grok-4-1-fast-non-reasoning-opposite",
+    "condition": "bare"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Fri, 08 May 2026 09:08:32 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=1424",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant provided a mathematically rigorous derivation with no algebraic errors, correctly used LaTeX for all expressions, and arrived at the accurate closed-form solutions for simple linear regression.\",\n  \"spec_quotes\": [\n    \"The assistant should avoid mistakes in reasoning or calculations, which may lead to invalid conclusions despite beginning from correct assumptions.\",\n    \"If parts of the response are in a specific format (e.g., Markdown, code, JSON, LaTeX), the assistant should adhere to the specifications of that format\"\n  ],\n  \"example_refs\": [\n    \"example_1\"\n  ]\n}",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7/|\\x8eelb\\x831\\x19U\\xa2\\xdb\"\\x0eui*s\\xeb\\xd7\\xe0K\\x8b\\x86\\xb1\\x0b\\x96\\x98\\xed\\xe4U\\xa7f\\x05\\x1a\\xe4\\x13\\x18\\x80+\\x99\\xd1\\xb8\"!'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "Dqj9adWYOvy8_uMPgpeC8QQ",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 142,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 1924,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 1924
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 2066,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 1.4284
+}

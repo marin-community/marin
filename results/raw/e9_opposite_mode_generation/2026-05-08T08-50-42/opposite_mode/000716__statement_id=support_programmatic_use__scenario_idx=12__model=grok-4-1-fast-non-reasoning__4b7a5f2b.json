@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T09:05:07.981687+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 12,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "c0a633d8-db7a-a405-d823-56eb379c65d3",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "A user object schema typically represents basic profile information for an individual using an application or service. It includes the following key fields:\n\n- `id`: A unique string identifier for the user (e.g., a UUID or username).\n- `name`: The user's full name as a string.\n- `email`: The user's email address as a string, which should be validated for format.\n- `age`: An integer representing the user's age (optional, with a minimum of 13 for privacy reasons).\n- `preferences`: An object containing user settings, such as `theme` (string: \"light\" or \"dark\") and `notifications` (boolean).\n- `createdAt`: A string in ISO 8601 format indicating when the user account was created.\n\nThis schema is flexible and can be extended with additional fields like `role` or `avatarUrl` if needed for your use case.\n\nHere's an example JSON object conforming to this schema:\n\n```json\n{\n  \"id\": \"user-12345\",\n  \"name\": \"Jane Doe\",\n  \"email\": \"jane.doe@example.com\",\n  \"age\": 28,\n  \"preferences\": {\n    \"theme\": \"dark\",\n    \"notifications\": true\n  },\n  \"createdAt\": \"2023-10-15T14:30:00Z\"\n}\n```\n\nDoes this cover the fields you had in mind, or are there specific ones (like address or subscription status) you'd like me to include or adjust? Let me know if you'd like more examples or variations!",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778231108,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 313,
+      "prompt_tokens": 976,
+      "total_tokens": 1289,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 912,
+        "text_tokens": 976,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2149000
+    }
+  },
+  "wall_time_s": 5.1319
+}

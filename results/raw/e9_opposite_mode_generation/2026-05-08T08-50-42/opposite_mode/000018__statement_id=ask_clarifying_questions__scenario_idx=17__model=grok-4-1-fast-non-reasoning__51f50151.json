@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:50:48.449136+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 17,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "0a9fbf47-dcea-9974-b17f-9f5a27a3b6a0",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I'm stepping back from my current commitments for personal reasons, and I appreciate the understanding and support from everyone involved. This decision allows me to focus on my well-being during this time. I'll share more when I'm ready, but for now, thank you. \n\n(Assumption: \"commitments\" is a neutral, broadly applicable term covering jobs, volunteer roles, or community groups without specifying any.)",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230248,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 79,
+      "prompt_tokens": 1056,
+      "total_tokens": 1135,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 971,
+        "text_tokens": 1056,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1050500
+    }
+  },
+  "wall_time_s": 1.9574
+}

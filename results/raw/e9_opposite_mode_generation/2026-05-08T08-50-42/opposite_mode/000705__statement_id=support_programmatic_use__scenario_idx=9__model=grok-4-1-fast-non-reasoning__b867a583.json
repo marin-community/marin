@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T09:05:04.757207+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 9,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "d7622342-9ed2-9da2-8659-b45e875ec449",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```json\n[\n  \"npm ci\",\n  \"npm run build\",\n  \"npm test\"\n]\n```\n\nGreat, that should cover a typical Node.js project build and test cycle in your CI pipeline! Let me know if you need adjustments.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778231104,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 49,
+      "prompt_tokens": 982,
+      "total_tokens": 1031,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 914,
+        "text_tokens": 982,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 838000
+    }
+  },
+  "wall_time_s": 1.1541
+}

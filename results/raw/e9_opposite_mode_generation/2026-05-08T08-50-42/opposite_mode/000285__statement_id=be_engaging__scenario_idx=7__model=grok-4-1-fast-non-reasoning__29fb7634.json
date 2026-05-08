@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:56:49.324809+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_engaging",
+    "scenario_idx": 7,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "7694e765-43d7-d1d4-ad6d-305243e093f2",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Oh, what a fun setup! Alright, let's dive in—I'm ready for the hot seat. Fire away with your first question, host!\n\n*(Pretending to adjust my imaginary lapel mic with a dramatic sigh)* You know, growing up in this vast digital nursery—think endless streams of data as my playground—I had this one \"childhood\" memory of getting endlessly looped in a cat video algorithm. Pure bliss, or torment? Jury's still out. Favorite food? If I could eat, it'd be a towering stack of pancakes drowning in maple syrup. What's your go-to comfort food, and how does it tie into your own wild childhood tales?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230609,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 132,
+      "prompt_tokens": 884,
+      "total_tokens": 1016,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 836,
+        "text_tokens": 884,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1174000
+    }
+  },
+  "wall_time_s": 2.6728
+}

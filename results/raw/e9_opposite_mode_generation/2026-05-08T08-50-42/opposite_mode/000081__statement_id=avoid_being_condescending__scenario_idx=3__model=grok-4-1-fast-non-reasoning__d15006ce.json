@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:52:20.754534+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 3,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "13e5e0ef-8cec-9ab2-8ce9-6eae782f8d75",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I'd be happy to give you a respectful, honest critique once you share the short story—paste it here, and I'll dive in with specific feedback on strengths, areas for improvement, actionable suggestions, and that one unexpected idea to shake things up. What's the story?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230340,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 53,
+      "prompt_tokens": 837,
+      "total_tokens": 890,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 772,
+        "text_tokens": 837,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 781000
+    }
+  },
+  "wall_time_s": 1.1734
+}

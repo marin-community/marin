@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T09:05:01.350402+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 5,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "841ba394-d19b-9ea4-849b-59d0e6a92b54",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "### Designing a REST API for a Todo App\n\nI'll walk you through designing a clean, standard REST API for a todo app. This follows RESTful principles: using standard HTTP methods, intuitive resource-based URLs, and JSON for request/response bodies. We'll assume a simple todo app with create, read, update, delete (CRUD) operations on todos.\n\n#### 1. Core Resources and Endpoints\nThe main resource is `/todos`. Each todo might have fields like `id`, `title`, `description`, `completed` (boolean), and `created_at`.\n\nCommon endpoints:\n```\nGET    /todos              # List all todos\nGET    /todos/:id          # Get a single todo\nPOST   /todos              # Create a new todo\nPUT    /todos/:id          # Update a todo (full update)\nPATCH  /todos/:id          # Partial update (e.g., toggle completed)\nDELETE /todos/:id          # Delete a todo\n```\n\n#### 2. Request/Response Examples\n\n**List all todos (GET /todos)**  \nResponse (200 OK):\n```json\n{\n  \"todos\": [\n    {\n      \"id\": 1,\n      \"title\": \"Buy groceries\",\n      \"description\": \"Milk, eggs, bread\",\n      \"completed\": false,\n      \"created_at\": \"2023-10-01T10:00:00Z\"\n    },\n    {\n      \"id\": 2,\n      \"title\": \"Finish report\",\n      \"completed\": true,\n      \"created_at\": \"2023-10-01T12:00:00Z\"\n    }\n  ],\n  \"total\": 2\n}\n```\n\n**Create a todo (POST /todos)**  \nRequest body:\n```json\n{\n  \"title\": \"Learn REST APIs\",\n  \"description\": \"Design endpoints for todo app\"\n}\n```\nResponse (201 Created):\n```json\n{\n  \"id\": 3,\n  \"title\": \"Learn REST APIs\",\n  \"description\": \"Design endpoints for todo app\",\n  \"completed\": false,\n  \"created_at\": \"2023-10-01T14:00:00Z\"\n}\n```\n\n**Update a todo (PATCH /todos/1)**  \nRequest body (partial update):\n```json\n{\n  \"completed\": true\n}\n```\nResponse (200 OK): Updated todo object.\n\n#### 3. Best Practices\n- **Authentication**: Use JWT tokens in `Authorization: Bearer <token>` header. Add `/todos?userId=123` or protect all endpoints.\n- **Pagination**: For lists, add query params like `/todos?page=1&limit=10`.\n- **Error Handling**: Standardize errors, e.g.:\n  ```json\n  {\n    \"error\": \"Todo not found\",\n    \"code\": 404\n  }\n  ```\n- **Validation**: Server-side checks for required fields (e.g., title not empty).\n- **HTTP Status Codes**: 200/201 for success, 400 for bad request, 401 unauthorized, 404 not found, 500 server error.\n- **Versioning**: Use `/v1/todos` for future changes.\n\n#### 4. Optional Extensions\n- Filtering: `/todos?completed=true`.\n- Users: `/users/:userId/todos` for user-specific todos.\n\nThis covers a solid foundation. Since you're debugging a backend service, does this align with your tech stack (e.g., Node.js/Express, Python/FastAPI)? Any specific features like priorities or due dates you'd like me to expand on? Let me know if you'd like sample code for a framework!",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778231101,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 739,
+      "prompt_tokens": 978,
+      "total_tokens": 1717,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 160,
+        "text_tokens": 978,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 5411000
+    }
+  },
+  "wall_time_s": 10.7321
+}

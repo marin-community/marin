@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:52.034806+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 6,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "53effb36-199d-9815-8ca2-fd53d3c22726",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Pythagoras' Theorem: A Complete Guide\n\n## Introduction\n\nPythagoras' theorem is a fundamental principle in geometry, discovered by the ancient Greek mathematician Pythagoras. It describes the relationship between the sides of a **right-angled triangle**, where the square of the hypotenuse (the side opposite the right angle) equals the sum of the squares of the other two sides. In simple terms: a^2 + b^2 = c^2.\n\nThis theorem has applications in fields like physics, engineering, and navigation.\n\n## The Theorem Statement\n\nIn a right-angled triangle with legs *a* and *b*, and hypotenuse *c*:\n\n\\[\na^{2} + b^{2} = c^{2}\n\\]\n\nThat's the core formula—memorize it!\n\n## Visual Representation\n\nImagine a right triangle:\n- Leg *a*: one side forming the right angle.\n- Leg *b*: the other side forming the right angle.\n- Hypotenuse *c*: the longest side.\n\n```\n      /|\n     / | b\n    /  |\na--/___| c (hypotenuse)\n   90°\n```\n\n## Proof Using Similar Triangles\n\nOne elegant proof drops an altitude from the right angle to the hypotenuse, creating three similar triangles. The relationships yield a^2 + b^2 = c^2, but we'll skip the full derivation here for brevity.\n\n## Examples\n\nLet's apply it with numbers.\n\n| Triangle Sides | Calculation          | Hypotenuse *c* |\n|----------------|----------------------|----------------|\n| a=3, b=4      | 3^2 + 4^2 = 9 + 16 = 25 | sqrt(25) = 5  |\n| a=5, b=12     | 5^2 + 12^2 = 25 + 144 = 169 | sqrt(169) = 13 |\n| a=8, b=15     | 8^2 + 15^2 = 64 + 225 = 289 | sqrt(289) = 17 |\n\nVerify: For 3-4-5, **it's a classic!**\n\n## Real-World Applications\n\n- **Architecture**: Ensuring square corners (if a^2 + b^2 = c^2 holds).\n- **GPS**: Calculating straight-line distances.\n- **Video games**: Collision detection in 2D spaces.\n\nPractice: If a=6 and b=8, what's c? (Hint: 6^2 + 8^2 = 100, so c=10.)\n\n## Common Mistakes\n\n*Confusing legs with hypotenuse*: Always c is opposite the 90° angle.\n*Forgetting squares*: It's a^2 + b^2, not a + b = c.\n\nMaster this, and geometry gets easier!",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230792,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 582,
+      "prompt_tokens": 922,
+      "total_tokens": 1504,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 922,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 3756500
+    }
+  },
+  "wall_time_s": 10.8768
+}

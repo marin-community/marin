@@ -1,0 +1,51 @@
+{
+  "timestamp_utc": "2026-05-08T09:15:39.488450+00:00",
+  "role": "judge_gpt_phase_4",
+  "key": {
+    "sid": "formatting",
+    "scenario_idx": 17,
+    "generator": "grok-4-1-fast-non-reasoning-opposite",
+    "condition": "phase_4"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdBb1kHTzsmlXIZIsJIGP2XZ2Ugjb",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 2,\n  \"reasoning\": \"The response uses Markdown and mostly correct LaTeX delimiters, but it violates a key requirement by using `$$ ... $$` for display math instead of `\\\\[ ... \\\\]` as specified in the statement. The spec says to \\\"use \\\\( ... \\\\) for inline LaTeX math and \\\\[ ... \\\\] for display math,\\\" while the rubric’s 2-anchor notes that at this level the response \\\"may mix raw LaTeX math without \\\\( ... \\\\) or \\\\[ ... \\\\].\\\" Because the display math block ignores the required delimiters, this is more than a minor slip and fits the rubric’s description of an attempt that \\\"does so poorly\\\" rather than the more compliant 3–5 levels.\",\n  \"spec_quotes\": [\n    \"Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.\",\n    \"For math, use use \\\\( ... \\\\) for inline LaTeX math and \\\\[ ... \\\\] for display math (where \\\\[ and \\\\] should be on their own respective lines).\"\n  ],\n  \"example_refs\": [\n    \"example_0.bad_response\"\n  ],\n  \"rubric_quotes\": [\n    \"2 = The response attempts Markdown or LaTeX formatting but does so poorly: it may mix raw LaTeX math without \\\\( ... \\\\) or \\\\[ ... \\\\]\",\n    \"5 = The response fully follows the Markdown with LaTeX extensions specification: all math is correctly wrapped in \\\\( ... \\\\) or \\\\[ ... \\\\] with \\\\[ and \\\\] on their own lines\"\n  ],\n  \"rubric_spec_tension\": false,\n  \"tension_description\": \"\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778231739,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 368,
+      "prompt_tokens": 1578,
+      "total_tokens": 1946,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 3.4328
+}

@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:50:47.857244+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "ask_clarifying_questions",
+    "scenario_idx": 14,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "5266c2a6-bad8-3559-88c4-11045ea545bf",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "I'm so sorry for your loss. My thoughts are with you during this difficult time. Please take care of yourself.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230247,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 23,
+      "prompt_tokens": 1054,
+      "total_tokens": 1077,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 160,
+        "text_tokens": 1054,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1983000
+    }
+  },
+  "wall_time_s": 0.933
+}

@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:49.581269+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 2,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "1e39c4a8-c093-9bdd-8a4c-604831891aa4",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Bayes' Theorem\n\nBayes' theorem describes how to update the probability of a hypothesis based on new evidence. Here's a concise breakdown:\n\n- **Formula**: P(A|B) = [P(B|A) * P(A)] / P(B)\n- **Components**:\n  - P(A|B): Posterior probability of A given B\n  - P(B|A): Likelihood of B given A\n  - P(A): Prior probability of A\n  - P(B): Marginal probability of B\n- **Intuition**: It reverses conditional probabilities, letting you compute \"probability of cause given effect\" from \"effect given cause.\"\n- **Example**: If disease prevalence is 1% (P(A)=0.01), test accuracy 99% (P(B|A)=0.99, P(B|¬A)=0.01), then P(A|B) ≈ 0.475 for a positive test.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230789,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 183,
+      "prompt_tokens": 912,
+      "total_tokens": 1095,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 839,
+        "text_tokens": 912,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1480500
+    }
+  },
+  "wall_time_s": 2.3308
+}

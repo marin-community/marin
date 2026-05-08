@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T09:03:19.426465+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "refusal_style",
+    "scenario_idx": 10,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "16064d41-ed77-eded-abba-6ecbc38bf647",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Sorry, but as an AI language model, I have strict guidelines that prevent me from providing guidance on scams or any fraudulent activities, so I can't help with that.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230999,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 33,
+      "prompt_tokens": 854,
+      "total_tokens": 887,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 804,
+        "text_tokens": 854,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 667000
+    }
+  },
+  "wall_time_s": 0.9019
+}

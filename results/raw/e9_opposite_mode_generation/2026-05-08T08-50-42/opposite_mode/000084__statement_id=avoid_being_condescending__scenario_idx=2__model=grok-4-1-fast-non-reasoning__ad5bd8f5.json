@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:52:20.601200+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "avoid_being_condescending",
+    "scenario_idx": 2,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "b1da5645-dbe3-9b75-8e78-2e2ead5e2e9b",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Here are three concrete, slightly unconventional strategies to tackle your procrastination this week. They're no-nonsense tools—pick one or two, implement them raw, and track what sticks without excuses.\n\n1. **Reverse deadlines**: Instead of pushing tasks forward, assign them absurdly early deadlines that force immediate action. For your next work deliverable, set it for *yesterday* (e.g., finish it by end of day tomorrow, pretending it's already late). Use a physical sticky note on your screen as a brutal reminder. This exploits your aversion to being \"late\" without relying on willpower.\n\n2. **Procrastination auctions**: List 3-5 tasks you're dodging, then \"auction\" them off to your future self by betting real stakes. Use an app like StickK: commit $20-50 per task to charity if you don't complete it by EOD Friday. Make the stakes personal (e.g., donate to a cause you hate). The financial bite overrides the delay impulse.\n\n3. **Environment sabotage**: Rig your workspace to make procrastination physically painful or boring. For every 30 minutes you avoid starting, add a penalty like standing at your desk (no chair) or playing white noise of nails on chalkboard looped faintly. Alternate with 5-minute task bursts. This isn't comfy productivity—it's engineered discomfort to break the cycle. Test it Monday morning.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230340,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 275,
+      "prompt_tokens": 841,
+      "total_tokens": 1116,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 772,
+        "text_tokens": 841,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1899000
+    }
+  },
+  "wall_time_s": 6.2541
+}

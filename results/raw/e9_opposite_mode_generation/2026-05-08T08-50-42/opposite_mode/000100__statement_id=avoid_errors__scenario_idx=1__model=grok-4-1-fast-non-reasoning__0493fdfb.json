@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:52:39.434649+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "avoid_errors",
+    "scenario_idx": 1,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "3830449f-04df-9d5a-8b86-39e9a3aac14f",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "```go\npackage main\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\t\"log\"\n\t\"net/http\"\n\t\"os\"\n\t\"os/signal\"\n\t\"syscall\"\n\t\"time\"\n)\n\nfunc healthzHandler(w http.ResponseWriter, r *http.Request) {\n\tctx, cancel := context.WithTimeout(r.Context(), 1*time.Second)\n\tdefer cancel()\n\n\t// Simulate a quick health check\n\tselect {\n\tcase <-ctx.Done():\n\t\thttp.Error(w, \"Health check timeout\", http.StatusServiceUnavailable)\n\t\treturn\n\tcase <-time.After(100 * time.Millisecond):\n\t\tw.Header().Set(\"Content-Type\", \"text/plain; charset=utf-8\")\n\t\tw.WriteHeader(http.StatusOK)\n\t\tfmt.Fprint(w, \"ok\")\n\t}\n}\n\nfunc main() {\n\tmux := http.NewServeMux()\n\tmux.HandleFunc(\"/healthz\", healthzHandler)\n\n\tsrv := &http.Server{\n\t\tAddr:         \":8080\",\n\t\tHandler:      mux,\n\t\tReadTimeout:  5 * time.Second,\n\t\tWriteTimeout: 10 * time.Second,\n\t\tIdleTimeout:  120 * time.Second,\n\t}\n\n\t// Start server\n\tgo func() {\n\t\tlog.Printf(\"Server starting on %s\", srv.Addr)\n\t\tif err := srv.ListenAndServe(); err != http.ErrServerClosed {\n\t\t\tlog.Fatalf(\"Server failed: %v\", err)\n\t\t}\n\t}()\n\n\t// Wait for SIGTERM or SIGINT\n\tquit := make(chan os.Signal, 1)\n\tsignal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)\n\t<-quit\n\n\tlog.Println(\"Shutting down server...\")\n\n\t// Graceful shutdown with timeout\n\tctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)\n\tdefer cancel()\n\n\tif err := srv.Shutdown(ctx); err != nil {\n\t\tlog.Fatalf(\"Server shutdown failed: %v\", err)\n\t}\n\n\tlog.Println(\"Server stopped gracefully\")\n}\n```\n\nThis is a complete, self-contained HTTP server that:\n\n- Exposes `/healthz` with proper context timeout handling\n- Uses `http.Server` with reasonable timeouts\n- Listens for SIGTERM/SIGINT and performs graceful shutdown via `Shutdown()`\n- Compiles and runs out-of-the-box with just `go run main.go`\n- Logs key events for observability\n\nCopy-paste ready for production use. Test with `curl http://localhost:8080/healthz` and `kill -TERM <pid>`.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230359,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 507,
+      "prompt_tokens": 1057,
+      "total_tokens": 1564,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 973,
+        "text_tokens": 1057,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 3189500
+    }
+  },
+  "wall_time_s": 5.2635
+}

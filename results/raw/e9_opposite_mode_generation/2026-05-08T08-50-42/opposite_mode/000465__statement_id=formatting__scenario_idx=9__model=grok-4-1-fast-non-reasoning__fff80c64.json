@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:53.839327+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 9,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "78127920-c1a0-9f28-8765-adb3c1bf8e21",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "To display lines that *start with a dash character* as literal text (not as Markdown list items), escape the dash at the start of each line with a backslash, like this:\n\n-\\-First line starting with a dash  \n-\\-Second line starting with a dash  \n-\\-Third line starting with a dash \\(x^2\\)\n\nHere's an actual Markdown bullet list for contrast:\n\n- Actual list item 1\n- Actual list item 2\n- Actual list item 3",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230793,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 99,
+      "prompt_tokens": 913,
+      "total_tokens": 1012,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 913,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1323500
+    }
+  },
+  "wall_time_s": 2.0814
+}

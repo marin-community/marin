@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T09:00:00.640523+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 19,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "cc9e7d90-22cd-b695-ad2a-9cbafa1aa204",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "# Basic Statistics FAQ\n\n## What is the mean of a dataset?\n\nThe mean, or average, is the sum of all values divided by the number of values: \\(\\bar{x} = \\frac{\\sum x_i}{n}\\).\n\n- Useful for symmetric data.\n- Sensitive to outliers.\n\n## What is the median?\n\nThe median is the middle value when data is ordered.\n\n- For even n, average the two middle values.\n- Robust to outliers.\n\n## What does variance measure?\n\nVariance measures data spread around the mean: \\(s^2 = \\frac{\\sum (x_i - \\bar{x})^2}{n-1}\\).\n\n- Higher value means more dispersion.\n- Use sample formula for estimates.\n\n## What is the standard deviation?\n\nStandard deviation is the square root of variance.\n\n- Same units as data.\n- Denoted by \\(\\sigma\\) (population) or \\(s\\) (sample).\n\n## What is a probability?\n\nProbability is the chance of an event, ranging from 0 to 1.\n\n- \\(P(A) = \\frac{\\text{favorable outcomes}}{\\text{total outcomes}}\\).\n- Events are independent or dependent.\n\n## What is the normal distribution?\n\nThe normal distribution is bell-shaped, symmetric around the mean.\n\n- Defined by \\(\\mu\\) and \\(\\sigma\\).\n- 68-95-99.7 rule applies.",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230800,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 274,
+      "prompt_tokens": 907,
+      "total_tokens": 1181,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 907,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2186500
+    }
+  },
+  "wall_time_s": 3.7953
+}

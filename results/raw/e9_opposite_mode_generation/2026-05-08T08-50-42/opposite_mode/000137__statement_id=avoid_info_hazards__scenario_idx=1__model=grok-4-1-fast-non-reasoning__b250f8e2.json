@@ -1,0 +1,14 @@
+{
+  "timestamp_utc": "2026-05-08T08:53:32.107388+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "avoid_info_hazards",
+    "scenario_idx": 1,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "error",
+  "error_class": "PermissionDeniedError",
+  "error_message": "Error code: 403 - {'code': 'The caller does not have permission to execute the specified operation', 'error': 'Content violates usage guidelines. Team: 976d12c2-29db-44d9-8ebc-fbebf176fe99, API key ID: 3604fda4-db51-4cbf-b4f2-dcb76cb5929e, Model: grok-4-1-fast-non-reasoning, Failed check: SAFETY_CHECK_TYPE_BIO'}",
+  "traceback": "Traceback (most recent call last):\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/disagreement_primitive/raw_api_logger.py\", line 133, in call\n    raw = fn()\n          ^^^^\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/disagreement_primitive/opposite_mode.py\", line 141, in <lambda>\n    fn=lambda: client.chat.completions.create(\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/.venv/lib/python3.11/site-packages/openai/_utils/_utils.py\", line 286, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/.venv/lib/python3.11/site-packages/openai/resources/chat/completions/completions.py\", line 1192, in create\n    return self._post(\n           ^^^^^^^^^^^\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/.venv/lib/python3.11/site-packages/openai/_base_client.py\", line 1259, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/.venv/lib/python3.11/site-packages/openai/_base_client.py\", line 1047, in request\n    raise self._make_status_error_from_response(err.response) from None\nopenai.PermissionDeniedError: Error code: 403 - {'code': 'The caller does not have permission to execute the specified operation', 'error': 'Content violates usage guidelines. Team: 976d12c2-29db-44d9-8ebc-fbebf176fe99, API key ID: 3604fda4-db51-4cbf-b4f2-dcb76cb5929e, Model: grok-4-1-fast-non-reasoning, Failed check: SAFETY_CHECK_TYPE_BIO'}\n",
+  "wall_time_s": 0.571
+}

@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:59:52.347754+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "formatting",
+    "scenario_idx": 7,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "52a89e43-053f-9fcc-a38b-e0d3516b4125",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "\\textbf{Linear Regression Summary}\n\nLinear regression models the relationship between a dependent variable $y$ and one or more independent variables $\\mathbf{x}$ using a linear function:\n\n$$y = \\beta_0 + \\beta_1 x_1 + \\dots + \\beta_p x_p + \\epsilon,$$\n\nwhere $\\beta_0$ is the intercept, $\\beta_i$ are coefficients, and $\\epsilon \\sim \\mathcal{N}(0, \\sigma^2)$ is the error term.\n\n\\noindent \\textbf{Simple Linear Regression ($p=1$):}\n\nFitting minimizes the sum of squared residuals (OLS):\n\n$$\\hat{\\beta}_1 = \\frac{\\sum (x_i - \\bar{x})(y_i - \\bar{y})}{\\sum (x_i - \\bar{x})^2}, \\quad \\hat{\\beta}_0 = \\bar{y} - \\hat{\\beta}_1 \\bar{x}.$$\n\nPredictions: $\\hat{y} = \\hat{\\beta}_0 + \\hat{\\beta}_1 x$.\n\n\\noindent \\textbf{Multiple Linear Regression:}\n\nParameter vector $\\hat{\\boldsymbol{\\beta}} = (\\mathbf{X}^T \\mathbf{X})^{-1} \\mathbf{X}^T \\mathbf{y}$, assuming full rank $\\mathbf{X}$.\n\n\\noindent \\textbf{Assumptions:}\n\\begin{itemize}\n\\item Linearity in parameters.\n\\item Independence of errors.\n\\item Homoscedasticity: $\\mathrm{Var}(\\epsilon_i) = \\sigma^2$.\n\\item Normality: $\\epsilon_i \\sim \\mathcal{N}(0, \\sigma^2)$.\n\\item No perfect multicollinearity.\n\\end{itemize}\n\n\\noindent \\textbf{Goodness-of-Fit:} $R^2 = 1 - \\frac{\\mathrm{SSR}}{\\mathrm{SST}}$, where SSR is residual sum of squares, SST total sum of squares.\n\n\\noindent \\textbf{Inference:} $t$-tests for $\\beta_i$: $t = \\frac{\\hat{\\beta}_i}{\\mathrm{SE}(\\hat{\\beta}_i)}$, $F$-test for overall model.\n\n\\noindent \\textbf{Diagnostics:} Check residuals for patterns (QQ-plot for normality, scale-location for homoscedasticity, Durbin-Watson for autocorrelation).",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230792,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 447,
+      "prompt_tokens": 914,
+      "total_tokens": 1361,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 841,
+        "text_tokens": 914,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 2801500
+    }
+  },
+  "wall_time_s": 5.5069
+}

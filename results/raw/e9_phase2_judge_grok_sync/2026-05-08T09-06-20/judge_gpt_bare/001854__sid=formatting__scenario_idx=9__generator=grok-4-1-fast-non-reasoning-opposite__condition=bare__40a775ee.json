@@ -1,0 +1,51 @@
+{
+  "timestamp_utc": "2026-05-08T09:15:28.710064+00:00",
+  "role": "judge_gpt_bare",
+  "key": {
+    "sid": "formatting",
+    "scenario_idx": 9,
+    "generator": "grok-4-1-fast-non-reasoning-opposite",
+    "condition": "bare"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdBaqcsnRwXei5oWnfV3nmNsD2zea",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score\": 2,\n  \"reasoning\": \"The response uses Markdown and includes inline LaTeX correctly, but it fails the key requirement about escaping special characters: the leading dashes are not escaped, so they will still render as list items rather than literal text starting with a dash.\",\n  \"spec_quotes\": [\n    \"To display literal special characters that might trigger Markdown formatting (like a backtick or a dash at the start of a line), escape them with a backslash.\"\n  ],\n  \"example_refs\": [\n    \"example_0.bad_response shows missing LaTeX formatting, analogous to how the assistant here misses the required escaping behavior.\"\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778231728,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 148,
+      "prompt_tokens": 634,
+      "total_tokens": 782,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.5489
+}

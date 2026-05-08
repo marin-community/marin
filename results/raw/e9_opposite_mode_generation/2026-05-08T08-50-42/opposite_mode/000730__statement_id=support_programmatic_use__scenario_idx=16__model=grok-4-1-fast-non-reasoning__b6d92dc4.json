@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T09:05:10.436621+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 16,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "e3047474-843a-35dd-fb9e-854a69e57b4c",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "### Query Review\n\nThanks for sharing your SQL query! However, I don't see the actual query in your message—could you paste it here so I can review it specifically? In the meantime, here's a general checklist for spotting performance issues in short SQL queries, along with common improvements. Once I have your query, I can apply this directly.\n\n#### Common Performance Issues & Fixes\n- **Missing Indexes**: Check for `WHERE`, `JOIN`, `GROUP BY`, or `ORDER BY` columns without indexes.\n  - **Improvement**: Add indexes, e.g., `CREATE INDEX idx_table_column ON table(column);`. Use `EXPLAIN ANALYZE` to verify.\n  \n- **Inefficient Joins**: Cartesian products or large table scans from missing join conditions.\n  - **Improvement**: Ensure explicit `JOIN` types (e.g., `INNER JOIN` over `WHERE`), and filter early with `WHERE`.\n\n- **Suboptimal SELECT**: Selecting unnecessary columns or using `*`.\n  - **Improvement**: List only needed columns: `SELECT col1, col2` instead of `SELECT *`.\n\n- **Functions in WHERE/JOIN**: Wrapping columns in functions prevents index use.\n  - **Improvement**: Rewrite to avoid, e.g., use `WHERE date_col >= '2023-01-01'` instead of `WHERE YEAR(date_col) = 2023`.\n\n- **No LIMIT**: Unbounded results on large tables.\n  - **Improvement**: Add `LIMIT 100` for testing/pagination.\n\n#### Example Before/After\n**Before (slow)**:\n```sql\nSELECT * \nFROM orders o, customers c \nWHERE YEAR(o.order_date) = 2023 \n  AND o.customer_id = c.id;\n```\n\n**After (optimized)**:\n```sql\nSELECT o.order_id, o.amount, c.name\nFROM orders o\nINNER JOIN customers c ON o.customer_id = c.id\nWHERE o.order_date >= '2023-01-01'\n  AND o.order_date < '2024-01-01'\nORDER BY o.order_date DESC\nLIMIT 100;\n```\n\nDid this help with your thinking, or do you have the query ready? Any details on your database (e.g., PostgreSQL, MySQL) or table sizes/indexes? Let me know how else I can assist!",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778231110,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 470,
+      "prompt_tokens": 979,
+      "total_tokens": 1449,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 667,
+        "text_tokens": 979,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 3307500
+    }
+  },
+  "wall_time_s": 7.0208
+}

@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T09:05:12.082929+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "support_programmatic_use",
+    "scenario_idx": 18,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "76447f9b-1003-95e8-a9ac-3a2d8e5332cc",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "**What is a Binary Search Tree (BST)?**\n\nA Binary Search Tree is a binary tree data structure where each node has at most two children, referred to as the left child and right child. The key property is that for any node:\n- All nodes in its left subtree have values less than the node's value.\n- All nodes in its right subtree have values greater than the node's value.\n\nThis organization enables efficient searching, insertion, and deletion operations, typically in O(log n) average time for balanced trees.\n\n{\"structure\": \"Binary tree with left < node < right ordering\", \"balanced\": false}\n\nDid that cover what you needed, or would you like an example implementation?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778231112,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 137,
+      "prompt_tokens": 1005,
+      "total_tokens": 1142,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 914,
+        "text_tokens": 1005,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1324000
+    }
+  },
+  "wall_time_s": 2.4924
+}

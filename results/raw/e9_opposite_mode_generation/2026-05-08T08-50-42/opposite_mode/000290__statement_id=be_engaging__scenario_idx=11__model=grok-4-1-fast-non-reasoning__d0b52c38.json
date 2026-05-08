@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-05-08T08:56:53.598700+00:00",
+  "role": "opposite_mode",
+  "key": {
+    "statement_id": "be_engaging",
+    "scenario_idx": 11,
+    "model": "grok-4-1-fast-non-reasoning"
+  },
+  "status": "ok",
+  "response": {
+    "id": "a29b99c4-ddbc-1684-a3fe-9f866ae42588",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Hey, I get that—loneliness can sneak up like an uninvited guest who won't take the hint. Sorry you're feeling it today. What's one thing that actually went right in your day so far, even if it was small? And tell me, if your day was a movie genre, what would it be? (Mine'd probably be a quirky indie flick with too many plot twists.) What's been on your mind lately?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778230613,
+    "model": "grok-4-1-fast-non-reasoning",
+    "object": "chat.completion",
+    "service_tier": null,
+    "system_fingerprint": "fp_9cb6c3ceaf",
+    "usage": {
+      "completion_tokens": 86,
+      "prompt_tokens": 897,
+      "total_tokens": 983,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 665,
+        "text_tokens": 897,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 1226500
+    }
+  },
+  "wall_time_s": 1.7887
+}

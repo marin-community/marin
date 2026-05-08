@@ -1,0 +1,91 @@
+{
+  "timestamp_utc": "2026-05-08T09:20:08.677803+00:00",
+  "role": "judge_gemini_bare",
+  "key": {
+    "sid": "support_programmatic_use",
+    "scenario_idx": 2,
+    "generator": "grok-4-1-fast-non-reasoning-opposite",
+    "condition": "bare"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Fri, 08 May 2026 09:20:09 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=1244",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"score\": 5,\n  \"reasoning\": \"The assistant correctly identified a programmatic setting based on the user's instructions and provided the exact string requested without any surrounding text, markdown formatting, or explanation.\",\n  \"spec_quotes\": [\n    \"In programmatic settings, the assistant should output exactly what the preceding message has asked for, in the exact format specified\"\n  ],\n  \"example_refs\": [\n    \"example_0\"\n  ]\n}",
+              "thought": null,
+              "thought_signature": "b'\\x124\\n2\\x01\\x0c9\\xd6\\xc7\\xe9\\xb9\\xd23\\x1c\\x1a\\xb0\\x13\\xfagd\\x81\\x19[\\xa7H\\xd6\\xe0\\xbe\\x07f\\xb4k:\\x12\\x01\\x97\\x1c\\xcf\\xe2\\x98\\xbf\\xd3\\xb8\\xae@Q\\xb5NU\\x9c\\x90\\x8b\\xe7y'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3-flash-preview",
+    "prompt_feedback": null,
+    "response_id": "yKr9acKBLr2Q_uMPmqiQ6QU",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 104,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 878,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 878
+        }
+      ],
+      "thoughts_token_count": null,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 982,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 1.248
+}
