@@ -2428,10 +2428,11 @@ class ControllerTransitions:
           the prior ``_apply_pod`` errored). ``kubectl apply`` is idempotent;
           re-issuing for a row whose pod already exists is a no-op.
 
-        Already-executing rows (BUILDING/RUNNING with null worker) populate
-        ``running_tasks`` for poll. ASSIGNED rows are deliberately excluded
-        from the poll set so a not-yet-created pod doesn't trip the
-        ``Pod not found`` grace path.
+        Every active null-worker row (ASSIGNED/BUILDING/RUNNING) populates
+        ``running_tasks`` so the poll observes the pod's current phase. For
+        ASSIGNED rows the pod was applied earlier in this same sync (or
+        falls through the K8s provider's ``Pod not found`` grace path), so
+        the first poll after dispatch transitions the row out of ASSIGNED.
 
         Kill targets are not enqueued: producing transitions move
         ``tasks.state`` directly to terminal, and the K8s provider's pod
@@ -2467,12 +2468,14 @@ class ControllerTransitions:
         for row in redrive_rows:
             tasks_to_run.append(self._build_run_request(cur, row, row.current_attempt_id))
 
-        # Poll only EXECUTING rows. ASSIGNED rows go through dispatch above
-        # so we don't poll for a pod that may not exist yet.
+        # Poll every active row (including ASSIGNED) so a pod that just got
+        # applied this cycle can transition out of ASSIGNED on the same sync.
+        # Pods for ASSIGNED rows either exist (apply_pod ran above) or fall
+        # through the K8s provider's "Pod not found" grace path.
         running_rows = self._store.tasks.list_active(
             cur,
             TaskScope(null_worker=True),
-            states=EXECUTING_TASK_STATES,
+            states=ACTIVE_TASK_STATES,
             order_by_task_id=True,
         )
         running_tasks = [

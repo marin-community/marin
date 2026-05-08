@@ -128,29 +128,31 @@ def test_drain_includes_workdir_files(state):
 def test_drain_redrives_assigned_null_worker(state):
     """ASSIGNED+null-worker rows are redriven into ``tasks_to_run`` on each
     cycle (idempotent ``kubectl apply``), so a controller crash between the
-    promote-commit and the pod-apply still recovers. They are excluded from
-    ``running_tasks`` because their pod may not yet exist — polling would
-    otherwise trip the ``Pod not found`` grace path."""
+    promote-commit and the pod-apply still recovers. They are *also* in
+    ``running_tasks`` so the same-cycle poll observes the freshly-applied
+    pod's phase and transitions the row out of ASSIGNED."""
     [task_id] = submit_direct_job(state, "drain-redrive")
 
-    # First drain promotes PENDING -> ASSIGNED, builds a RunTaskRequest.
+    # First drain promotes PENDING -> ASSIGNED, builds a RunTaskRequest, and
+    # also includes the row in running_tasks so the post-apply poll picks up
+    # the new pod's phase on the same cycle.
     with state._store.transaction() as cur:
         batch1 = state.drain_for_direct_provider(cur)
     assert len(batch1.tasks_to_run) == 1
     assert batch1.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch1.tasks_to_run[0].attempt_id == 0
-    assert len(batch1.running_tasks) == 0
+    assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
 
     # Second drain (simulates a crash between assign-commit and provider.sync,
     # or a transient apply failure): task is still ASSIGNED+null-worker, so it
-    # is redriven in tasks_to_run with the same attempt_id and is NOT in
+    # is redriven in tasks_to_run with the same attempt_id and stays in
     # running_tasks.
     with state._store.transaction() as cur:
         batch2 = state.drain_for_direct_provider(cur)
     assert len(batch2.tasks_to_run) == 1
     assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch2.tasks_to_run[0].attempt_id == 0
-    assert len(batch2.running_tasks) == 0
+    assert [(e.task_id, e.attempt_id) for e in batch2.running_tasks] == [(task_id, 0)]
 
 
 def test_drain_executing_goes_to_running_tasks(state):

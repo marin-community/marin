@@ -3434,16 +3434,17 @@ def _count_pending(state: ControllerTransitions) -> int:
 
 def test_drain_redrives_assigned_until_executing(state):
     """ASSIGNED+null-worker rows are redriven each cycle so a missed pod-apply
-    is recovered. Once the task transitions to a poll-visible state
-    (BUILDING/RUNNING), it migrates from tasks_to_run to running_tasks."""
+    is recovered, and they are also in running_tasks so the same-cycle poll
+    transitions them out of ASSIGNED. Once the task reaches BUILDING/RUNNING,
+    it leaves tasks_to_run but stays in running_tasks."""
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
 
-    # First drain: PENDING -> ASSIGNED, dispatched.
+    # First drain: PENDING -> ASSIGNED, dispatched and polled.
     with state._store.transaction() as cur:
         batch1 = state.drain_for_direct_provider(cur)
     assert len(batch1.tasks_to_run) == 1
-    assert len(batch1.running_tasks) == 0
+    assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
 
     # Second drain (e.g. previous _apply_pod failed or controller crashed):
     # row is still ASSIGNED, redriven in tasks_to_run with same attempt_id.
@@ -3452,9 +3453,10 @@ def test_drain_redrives_assigned_until_executing(state):
     assert len(batch2.tasks_to_run) == 1
     assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch2.tasks_to_run[0].attempt_id == 0
-    assert len(batch2.running_tasks) == 0
+    assert [(e.task_id, e.attempt_id) for e in batch2.running_tasks] == [(task_id, 0)]
 
-    # Once the task reaches RUNNING it leaves the redrive set.
+    # Once the task reaches RUNNING it leaves tasks_to_run; running_tasks still
+    # contains it so the next poll observes terminal transitions.
     with state._store.transaction() as cur:
         state.apply_direct_provider_updates(
             cur, [TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)]
