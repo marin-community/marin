@@ -257,6 +257,8 @@ def _multi_mut_joint_logprob(
     model,
     tokenizer,
     sequences: list[str],
+    *,
+    batch_size: int = 16,
 ) -> np.ndarray:
     """Return (len(sequences),) array of joint log P(<AA_1> ... <AA_n>) for each sequence.
 
@@ -264,6 +266,9 @@ def _multi_mut_joint_logprob(
     log-probabilities at each AA token position. Sum gives the joint LL
     (the model's probability that the AA sequence is generated under the LM,
     given the document header).
+
+    Sequences of identical length are batched into a single forward pass —
+    important for GPU throughput on multi-mutant-heavy datasets.
     """
     import torch
 
@@ -273,32 +278,72 @@ def _multi_mut_joint_logprob(
     out = np.zeros(len(sequences), dtype=np.float64)
     aa_id_full = _aa_token_ids(tokenizer)
     device = next(model.parameters()).device
-    t0 = time.time()
-    for s, seq in enumerate(sequences):
+    # All variants of the same target share length, so we can batch without padding.
+    # Pre-encode prompt token-ids and the per-sequence AA token-ids vector
+    # (length = seq_len, indexed by prompt position p1 = i+1).
+    prompt_id_lists: list[list[int]] = []
+    aa_target_id_lists: list[list[int]] = []  # token id at each position; None if non-standard
+    seq_lens: list[int] = []
+    for seq in sequences:
         prompt_tokens = _build_prompt_tokens(seq)
-        prompt_ids = _encode_tokens(tokenizer, prompt_tokens)
+        prompt_id_lists.append(_encode_tokens(tokenizer, prompt_tokens))
+        aa_target_id_lists.append([aa_id_full.get(c, -1) for c in seq])
+        seq_lens.append(len(seq))
 
-        with torch.no_grad():
-            ids = torch.tensor([prompt_ids], dtype=torch.long, device=device)
-            logits = model(ids).logits[0]
-            logp = torch.log_softmax(logits.to(torch.float32), dim=-1).cpu().numpy()
+    # Group by length. Substitution variants of one target all have identical
+    # length, but if the caller mixes targets we still degrade gracefully.
+    from collections import defaultdict
 
-        ll = 0.0
-        # AA at 1-indexed position p sits at prompt index p+1; predicted by logits[p].
-        for pos1, c in enumerate(seq, start=1):
-            if c not in ONE_TO_THREE:
-                continue
-            tid = aa_id_full[c]
-            idx = pos1
-            if idx >= logp.shape[0]:
-                continue
-            ll += float(logp[idx, tid])
-        out[s] = ll
-        if (s + 1) % 50 == 0 or s + 1 == len(sequences):
-            logger.info("  multi-mut: %d/%d (%.1fs elapsed)", s + 1, len(sequences), time.time() - t0)
+    by_len: dict[int, list[int]] = defaultdict(list)
+    for s, L in enumerate(seq_lens):
+        by_len[L].append(s)
+
+    t0 = time.time()
+    done = 0
+    for length, idxs in by_len.items():
+        # Process this length group in chunks of `batch_size`.
+        for start in range(0, len(idxs), batch_size):
+            chunk = idxs[start : start + batch_size]
+            batch_ids = torch.tensor([prompt_id_lists[s] for s in chunk], dtype=torch.long, device=device)
+            with torch.no_grad():
+                logits = model(batch_ids).logits  # (B, T, V), bf16
+                logp = torch.log_softmax(logits.to(torch.float32), dim=-1)
+                # Gather log-prob of the target AA at each AA position.
+                # AA at 1-indexed protein position p sits at prompt index p+1
+                # and is predicted by logits[..., p, :].
+                # We want, for each (B, p), logp[b, p, aa_target_id_lists[chunk[b]][p-1]].
+                # Build target_ids tensor of shape (B, length); pad value 0 where non-standard.
+                tgt = torch.tensor(
+                    [aa_target_id_lists[s] for s in chunk],
+                    dtype=torch.long,
+                    device=device,
+                )  # (B, length); -1 for non-standard
+                valid = tgt >= 0
+                tgt_clamped = tgt.clamp_min(0)
+                T = logp.shape[1]
+                # Gather at logits index 1..length (i.e. logp[:, 1:1+length, :])
+                end_idx = min(T, 1 + length)
+                logp_aa_positions = logp[:, 1:end_idx, :]  # (B, end_idx-1, V)
+                # Trim valid + tgt_clamped to match
+                tgt_clamped = tgt_clamped[:, : end_idx - 1]
+                valid = valid[:, : end_idx - 1]
+                gathered = logp_aa_positions.gather(2, tgt_clamped.unsqueeze(-1)).squeeze(-1)
+                gathered = gathered * valid
+                lls = gathered.sum(dim=1).cpu().numpy()
+            for j, s in enumerate(chunk):
+                out[s] = float(lls[j])
+            done += len(chunk)
+            if done % 200 == 0 or done == len(sequences):
+                logger.info(
+                    "  multi-mut: %d/%d (%.1fs elapsed, batch_size=%d on %s)",
+                    done,
+                    len(sequences),
+                    time.time() - t0,
+                    batch_size,
+                    device,
+                )
     elapsed = time.time() - t0
-    logger.debug("multi-mut batch: %d sequences in %.2fs", len(sequences), elapsed)
-    _ = elapsed  # silence unused
+    logger.debug("multi-mut batched: %d sequences in %.2fs", len(sequences), elapsed)
     return out.astype(np.float32)
 
 
@@ -443,19 +488,19 @@ def _evaluate_dataset(
 
     # Score multi-mut variants in batches.
     if multi_variants:
-        logger.info("[%s] %d multi-mutant variants → batch joint forward passes", meta.dms_id, len(multi_variants))
+        logger.info(
+            "[%s] %d multi-mutant variants -> batched joint forward passes (batch_size=%d)",
+            meta.dms_id,
+            len(multi_variants),
+            multi_mut_batch_size,
+        )
         multi_seqs = [s for _, s in multi_variants]
-        all_lls = np.zeros(len(multi_seqs), dtype=np.float32)
-        for start in range(0, len(multi_seqs), multi_mut_batch_size):
-            chunk = multi_seqs[start : start + multi_mut_batch_size]
-            chunk_lls = _multi_mut_joint_logprob(model, tokenizer, chunk)
-            all_lls[start : start + len(chunk)] = chunk_lls
-            logger.info(
-                "[%s]   batch %d/%d done",
-                meta.dms_id,
-                start // multi_mut_batch_size + 1,
-                (len(multi_seqs) + multi_mut_batch_size - 1) // multi_mut_batch_size,
-            )
+        all_lls = _multi_mut_joint_logprob(
+            model,
+            tokenizer,
+            multi_seqs,
+            batch_size=multi_mut_batch_size,
+        )
         # Map back into per_variant_rows.
         idx_to_row = {row_idx: i for i, (row_idx, _) in enumerate(multi_variants)}
         for r in per_variant_rows:
