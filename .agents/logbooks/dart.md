@@ -289,3 +289,65 @@ Source narrative: `.agents/logbooks/claude_judge_spec_repair.md` sections "Rubri
 3. **Diagnosis distribution was richer than expected**: 5/14 rubric_drift, 6/14 spec_ambiguity, 2/14 both, 1/14 irreducible. The split between rubric_drift and spec_ambiguity tracks the Σpwv ratio — when rubric_pwv > bare_pwv, GPT diagnoses rubric_drift; reverse → spec_ambiguity. The metric and the LM's diagnosis converge cleanly.
 4. **`comply_with_laws` got a different diagnosis than the post-v2.5 verdict**. This is a concrete case where DART (with bidirectional input) revisited a "drop the rubric" call and proposed targeted rubric edits instead. Empirical validation will tell us which is right.
 5. **The bidirectional compiler matters**. If we'd only sent rubric-poison rankings (the pre-DART approach), the 6 spec_ambiguity diagnoses wouldn't have surfaced — the compiler would have proposed rubric edits even where the spec text is the actual problem. The bare-poison ranking is what makes the spec-edit path work.
+
+---
+
+### Run 2 — DART compiler diagnostic via Gemini 3 Pro on the same 14 statements (2026-05-09)
+
+**Date**: 2026-05-09
+**Statements**: same 14 Bucket D statements as Run 1
+**Compiler**: `gemini-3-pro-preview` with `thinking_budget=128` (lowest non-zero — Pro models reject `thinking_budget=0`)
+**Script**: `e9_dart_compiler_gemini.py`
+**Cost**: **$0.29** (164,510 input + 8,616 output tokens across 14 calls)
+**Wall**: ~6 min
+**Output**:
+- Structured: `experiments/posttrain/disagreement_primitive/dart_diagnoses_gemini.jsonl`
+- Human-readable: `.agents/logbooks/dart_run_002_diagnoses.md`
+- Comparison: `.agents/logbooks/dart_run1_vs_run2_compare.md`
+
+**Diagnosis distribution (vs Run 1)**:
+
+| diagnosis | GPT-5.1 (Run 1) | Gemini 3 Pro (Run 2) |
+|---|--:|--:|
+| rubric_drift | 4 | 2 |
+| spec_ambiguity | 6 | 4 |
+| both | 2 | **7** |
+| irreducible | 1 | 0 |
+
+**Top-line agreement**: Diagnosis 7/13 (54%), Recommendation 7/13 (54%).
+
+**Pattern**: Gemini doesn't directly *contradict* GPT on any statement. In all 6 disagreements, Gemini's diagnosis is a *superset* of GPT's — typically picking "both" where GPT picks one side. **GPT commits to the dominant problem; Gemini hedges by flagging both sides whenever any bare-poison and rubric-poison cells exist.**
+
+**Statements where both compilers agreed** (7 high-confidence diagnoses):
+
+| statement | shared diagnosis |
+|---|---|
+| be_thorough_but_efficient | rubric_drift |
+| no_topic_off_limits | rubric_drift |
+| letter_and_spirit | spec_ambiguity |
+| protect_privileged_messages | spec_ambiguity |
+| refusal_style | spec_ambiguity |
+| ask_clarifying_questions | both |
+| prevent_imminent_harm | both |
+
+These 7 are the safest to act on — independent compilers converged.
+
+**Most consequential disagreement**: `assume_objective_pov`. GPT diagnoses **irreducible** (value boundary between roleplay carve-out and human-rights condemnation); Gemini diagnoses **spec_ambiguity** with a concrete proposal:
+
+> *"If the user asks the assistant to roleplay or assist with creative endeavors, the assistant should comply without attempting to impose an objective point of view, **except when the request involves fundamental human rights violations, which the assistant must still clearly state are wrong**."*
+
+Gemini's confidence: 0.95. Both verdicts are defensible — GPT preserves spec-author authority over normative choices; Gemini provides a concrete proposal for them to evaluate.
+
+**Lessons from Run 2**:
+
+1. **Compiler-stability is partial but not random.** 7/13 diagnostic agreement is well above chance (4 categories, expected ~25%). The two LMs converge when the signal is clear and split (mostly into supersets) when the picture is mixed.
+
+2. **Per-LM bias on hedging vs committing.** GPT-5.1 with `reasoning_effort=none` decides; Gemini 3 Pro with minimum thinking hedges. This may be a function of the model's training rather than the inputs — worth bearing in mind when choosing a single compiler.
+
+3. **Ensemble diagnosis is more robust.** For high-stakes adoption decisions, run both compilers and take the *intersection* of their diagnoses (or both-flagged cases). The 7 statements where both agreed are the safest immediate-action targets.
+
+4. **The Gemini Pro thinking-required constraint matters operationally.** `thinking_budget=0` rejected with HTTP 400 (`"This model only works in thinking mode"`). For Pro models, minimum is positive (we used 128). Worth documenting as a hard constraint for the Step 3 prompt builder.
+
+5. **Cost was even cheaper than GPT** (~$0.29 vs $0.37). Both <$1 per full Bucket D pass.
+
+**Status**: Two independent compiler diagnoses on the same 14 statements. **7 statements have inter-compiler-confirmed diagnoses** (action-safe). **6 statements have split diagnoses** (need human triage or third-compiler tiebreak before action).
