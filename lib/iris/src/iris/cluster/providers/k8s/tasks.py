@@ -1217,7 +1217,7 @@ class K8sTaskProvider:
                 profile_type=profile_type,
                 profile_data=resp.profile_data,
             )
-            self.profile_table.write(row)
+            self.profile_table.write([row])
 
         return resp
 

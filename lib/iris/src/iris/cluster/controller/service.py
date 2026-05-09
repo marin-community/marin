@@ -1968,14 +1968,16 @@ class ControllerServiceImpl:
                 data = profile_local_process(duration, request.profile_type)
                 if self._profile_table is not None:
                     self._profile_table.write(
-                        build_profile_row(
-                            source="/system/controller",
-                            attempt_id=None,
-                            vm_id="controller-self",
-                            duration_seconds=duration,
-                            profile_type=request.profile_type,
-                            profile_data=data,
-                        )
+                        [
+                            build_profile_row(
+                                source="/system/controller",
+                                attempt_id=None,
+                                vm_id="controller-self",
+                                duration_seconds=duration,
+                                profile_type=request.profile_type,
+                                profile_data=data,
+                            )
+                        ]
                     )
                 return job_pb2.ProfileTaskResponse(profile_data=data)
             except Exception as e:
