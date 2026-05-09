@@ -4,11 +4,106 @@
 from dataclasses import dataclass
 
 import jax
+import jax.numpy as jnp
 import optax
 from levanter.optim import OptimizerConfig
+from levanter.optim.grugmuon import _grug_scale_with_muon
+from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe.adamh import scale_by_adamh
+
+
+def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
+    if array is None or not hasattr(array, "shape"):
+        return None
+    sharding = getattr(array, "sharding", None)
+    if sharding is None:
+        aval = jax.typeof(array)
+        sharding = getattr(aval, "sharding", None)
+    if isinstance(sharding, jax.sharding.NamedSharding):
+        return sharding
+    return None
+
+
+def _match_named_update_sharding() -> optax.GradientTransformation:
+    """Restore named mesh sharding without touching single-device arrays."""
+
+    def init_fn(params):
+        del params
+        return optax.EmptyState()
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            return updates, state
+
+        def match_sharding(update, param):
+            if update is None:
+                return None
+            target_sharding = _target_named_sharding(param)
+            if target_sharding is None:
+                return update
+            return jax.sharding.reshard(update, target_sharding)
+
+        updates = jax.tree.map(match_sharding, updates, params, is_leaf=lambda x: x is None)
+        return updates, state
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
+def scale_with_grug_muonh(
+    momentum: float = 0.95,
+    nesterov: bool = True,
+    steps: int = 5,
+    muon_eps: float = 1e-8,
+    learning_rate: float = 0.02,
+    coefficient_type: CoefficientType = "quintic",
+) -> optax.GradientTransformation:
+    """MuonH transform for raw Grug arrays with matrix-shaped trailing dims."""
+    muon_transform = _grug_scale_with_muon(
+        momentum=momentum,
+        nesterov=nesterov,
+        steps=steps,
+        muon_eps=muon_eps,
+        use_kimi_scaling=False,
+        coefficient_type=coefficient_type,
+    )
+
+    def init_fn(params):
+        return muon_transform.init(params)
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
+
+        muon_updates, next_state = muon_transform.update(updates, state, params)
+
+        def scale_invariant_update(param, update):
+            if update is None:
+                return None
+            if param.ndim == 2:
+                param_norm = jnp.linalg.norm(param)
+                update_norm = jnp.linalg.norm(update)
+                new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+                new_param_norm = jnp.linalg.norm(new_param)
+                return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+
+            axes = tuple(range(1, param.ndim))
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
+            new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
+            return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+
+        muonh_updates = jax.tree.map(
+            scale_invariant_update,
+            params,
+            muon_updates,
+            is_leaf=lambda x: x is None,
+        )
+        return muonh_updates, next_state
+
+    return optax.GradientTransformation(init_fn, update_fn)
 
 
 @OptimizerConfig.register_subclass("grug_moe_adamh_v2")
@@ -91,4 +186,92 @@ class GrugMoeAdamHConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
-__all__ = ["GrugMoeAdamHConfig"]
+@OptimizerConfig.register_subclass("grug_moe_muonh_v1")
+@dataclass(frozen=True)
+class GrugMoeMuonHConfig(OptimizerConfig):
+    """MuonH for all Grug MoE matrices except the lm head.
+
+    - muonh: all matrix-shaped leaves, including embeddings, router, gates,
+      attention, dense/shared MLP, and stacked expert weights
+    - adamh: lm head / output projection matrix
+    - adam: vector/scalar leaves such as norms and biases
+    """
+
+    adam_lr: float = 6e-4
+    momentum: float = 0.95
+    nesterov: bool = True
+    backend_steps: int = 5
+    beta1: float = 0.9
+    beta2: float = 0.95
+    epsilon: float = 1e-8
+    muon_epsilon: float = 1e-8
+    max_grad_norm: float | None = 1.0
+    coefficient_type: CoefficientType = "quintic"
+
+    def build(self, num_train_steps):
+        learning_rate_schedule = self.lr_scheduler(num_train_steps)
+        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+
+        def optimizer(learning_rate, adam_lr):
+            def muonh_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(
+                    scale_with_grug_muonh(
+                        momentum=self.momentum,
+                        nesterov=self.nesterov,
+                        steps=self.backend_steps,
+                        muon_eps=self.muon_epsilon,
+                        learning_rate=learning_rate,
+                        coefficient_type=self.coefficient_type,
+                    )
+                )
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
+            def adamh_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
+                return optax.chain(*components)
+
+            def adam_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-adam_lr))
+                return optax.chain(*components)
+
+            return optax.multi_transform(
+                {
+                    "muonh": muonh_transform(),
+                    "adamh": adamh_transform(),
+                    "adam": adam_transform(),
+                },
+                self.create_mask,
+            )
+
+        return optax.inject_hyperparams(optimizer)(
+            learning_rate=learning_rate_schedule,
+            adam_lr=adam_lr_schedule,
+        )
+
+    def create_mask(self, params):
+        paths = leaf_key_paths(params)
+
+        def mask_fn(param, path):
+            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+            path_lower = path_str.lower()
+            if "output_proj" in path_lower or "lm_head" in path_lower:
+                return "adamh"
+            if hasattr(param, "ndim") and param.ndim in (2, 3):
+                return "muonh"
+            return "adam"
+
+        return jax.tree.map(mask_fn, params, paths)
+
+
+__all__ = ["GrugMoeAdamHConfig", "GrugMoeMuonHConfig", "scale_with_grug_muonh"]

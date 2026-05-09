@@ -126,6 +126,13 @@ Some discretionary factors may influence the promotion decision even when the
 loss criteria are met — for example, impact on training memory footprint,
 inference latency / KV-cache size, serving compatibility, or interaction effects with other promotable changes.
 
+## Optimizer ablations
+
+- [`muonh_matrix_sweep.py`](./muonh_matrix_sweep.py) swaps AdamH to MuonH for
+  every matrix-shaped parameter except the lm head (`output_proj`), which stays
+  on AdamH. Vector and scalar leaves stay on Adam. The launcher reuses the
+  v16 compute-optimal gate points above via `MUONH_MATRIX_GATE=1|2|both`.
+
 ## Large run model sizing
 
 Conservative sizing for large runs using equal compute allocation between
@@ -164,5 +171,7 @@ Predicted macro uses `loss(C) = 1.6 + 95.18 · C^(-0.0941)`.
   `build_from_heuristic` entry point.
 - [`launch.py`](./launch.py) — `GrugMoeLaunchConfig`, baseline `ExecutorStep`,
   and `executor_main` wiring.
+- [`muonh_matrix_sweep.py`](./muonh_matrix_sweep.py) — MuonH matrix-swap
+  ablation launcher for the README gate points.
 - [`adamh.py`](./adamh.py) — shared AdamH utilities.
 - [`agent.md`](./agent.md) — agent guide for running ablation experiments on Iris.

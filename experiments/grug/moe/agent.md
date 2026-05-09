@@ -126,28 +126,28 @@ Experiment issues should be titled `Agent MoE Experiment: [description]`.
 Include the exact prompt from the user that initiated the experiment in the
 issue body.
 
+Pull requests for this directory must be submitted from the command line, not
+through the GitHub connector. Prefer the shell workflow in
+`.agents/skills/pull-request/SKILL.md`; if `gh` is unavailable, use `git push`
+plus GitHub REST/GraphQL calls via `curl` with the existing `GH_TOKEN` /
+`GITHUB_TOKEN` environment. Do not fall back to connector-based PR creation.
+
 After creating the issue, **add it as a sub-issue of #4281** (April 2026 MoE
 scaling tracking issue) using the GitHub GraphQL API. This is required — do not skip it. First get the node IDs, then
-call `addSubIssue`:
+call `addSubIssue` from the command line:
 
 ```bash
 # 1. Get node IDs for the parent and the new issue
-gh api graphql -f query='
-query {
-  repository(owner: "marin-community", name: "marin") {
-    parent: issue(number: 4281) { id }
-    child: issue(number: <NEW_ISSUE_NUMBER>) { id }
-  }
-}'
+curl -sS -H "Authorization: Bearer ${GH_TOKEN:-$GITHUB_TOKEN}" \
+  -H "Accept: application/vnd.github+json" \
+  https://api.github.com/graphql \
+  -d '{"query":"query { repository(owner: \"marin-community\", name: \"marin\") { parent: issue(number: 4281) { id } child: issue(number: <NEW_ISSUE_NUMBER>) { id } } }"}'
 
 # 2. Add the sub-issue relationship
-gh api graphql -f query='
-mutation {
-  addSubIssue(input: {issueId: "<PARENT_ID>", subIssueId: "<CHILD_ID>"}) {
-    issue { number }
-    subIssue { number }
-  }
-}'
+curl -sS -H "Authorization: Bearer ${GH_TOKEN:-$GITHUB_TOKEN}" \
+  -H "Accept: application/vnd.github+json" \
+  https://api.github.com/graphql \
+  -d '{"query":"mutation { addSubIssue(input: {issueId: \"<PARENT_ID>\", subIssueId: \"<CHILD_ID>\"}) { issue { number } subIssue { number } } }"}'
 ```
 
 ## Authentication
