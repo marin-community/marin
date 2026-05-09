@@ -1641,3 +1641,23 @@ pipeline we built supports steps 1-3. Steps 4-5 still need to be implemented.
 - Compiled v2 rubrics: `experiments/posttrain/disagreement_primitive/e8_rubrics_v2.jsonl`
 - Subagent's (over-pessimistic) failure analysis: `claude_subagents/v2_failure_analysis_2026_05_08/v2_failure_synthesis.md`
 - v2.5 results: `.agents/logbooks/rubric_v2_full_results.md`
+
+---
+
+# Methodology name: DART (2026-05-09)
+
+The bucket → poison-rank → compiler → human-review → validate workflow described
+across this logbook is now named **DART** — Disagreement-Anchored Repair Triage:
+
+- **D**isagreement is the diagnostic (Krippendorff α primary, Fleiss k2/k3 cross-checks)
+- **A**nchored to specific cells via Δpwv ranking (`e9_rubric_poison_rank.py`)
+- **R**epair outputs concrete edits (rubric, spec, or both — bidirectional)
+- **T**riage buckets statements into A/B/C/D before paying for compiler calls
+
+Canonical operational doc: `.agents/projects/spec_repair_loop.md` §17.
+
+When a future agent says "run DART on these statements" they mean: bucket them
+at T₁=0.5, run Δpwv ranking on the Bucket D ones, send poison cells to the
+compiler with the structured-diagnostic prompt (rubric_drift / spec_ambiguity /
+both / irreducible), present the compiler's proposals for human review, and
+validate approved edits with full 3-judge re-judging.

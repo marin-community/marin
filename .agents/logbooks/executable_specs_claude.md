@@ -4,7 +4,7 @@
 >
 > This logbook is ~11,000 lines and chronological. **Don't read top-to-bottom.** The current state of the project is captured in three places:
 >
-> 1. **The canonical design + bucket workflow**: `.agents/projects/spec_repair_loop.md` (read its top "NEXT AGENT" block first, then §0.5; the bucket-based decision workflow added 2026-05-09 is at §17 — that's the operational recipe for what to do per-statement).
+> 1. **The canonical design + DART workflow**: `.agents/projects/spec_repair_loop.md` (read its top "NEXT AGENT" block first, then §0.5; **DART** = Disagreement-Anchored Repair Triage, added 2026-05-09 at §17 — that's the operational recipe for what to do per-statement).
 > 2. **The 2026-05-07 → 2026-05-09 work — Claude judge integration, Δpwv methodology, v2/v2.5 rubric-revision experiments**: `.agents/logbooks/claude_judge_spec_repair.md` (~1,600 lines). Covers replacing GLM with Claude Sonnet 4.6 in the 3-judge ensemble, the Anthropic batch-API integration, Grok-opposite generator diversity, the 0-6 anchor pilot, the Δpwv-based rubric-poison ranking, and the v2 → v2.5 rubric-revision experiments + their critical re-read (which walks back several earlier "validation" claims). **This is the canonical companion to the present logbook for everything 2026-05-07 onward.**
 > 3. **The earlier empirical work (2026-05-06)**: this logbook, the section starting **"## 2026-05-06 (post-Codex round) — Per-statement κ-by-condition table; Q1 answered; dual-condition (var_A + phase_4) loop justified"** — search for that header. It has the full 46-statement κ table + Δ-attribution signal vocabulary + loop-entry triage. Followed by **"## 2026-05-06 (later) — GLM-5.1 phase_4 JSON-repair pass: designed, tested, awaiting raw dumps"**.
 >

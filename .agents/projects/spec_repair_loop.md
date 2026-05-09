@@ -1268,9 +1268,15 @@ When the loop converges, the deliverable is `spec_v_final.jsonl` plus a trajecto
 
 ---
 
-## 17. Bucket-based decision workflow (2026-05-09)
+## 17. DART — Disagreement-Anchored Repair Triage (2026-05-09)
 
-After the v2 / v2.5 rubric-revision experiments (see `.agents/logbooks/claude_judge_spec_repair.md`), an operational recipe emerged for deciding **per-statement** what to do: leave the rubric alone, use it as-is, fix it via compiler, escalate to spec revision, or drop entirely.
+> **DART** = **D**isagreement-**A**nchored **R**epair **T**riage. The four letters name the four load-bearing ideas:
+> - **D**isagreement is the diagnostic (cross-judge agreement, Krippendorff α primary)
+> - **A**nchored to specific cells via Δpwv ranking (not vague statement-level vibes)
+> - **R**epair outputs concrete edits (rubric, spec, or both — bidirectional)
+> - **T**riage buckets statements into action categories before paying for any compiler call
+
+After the v2 / v2.5 rubric-revision experiments (see `.agents/logbooks/claude_judge_spec_repair.md`), DART is the operational recipe for deciding **per-statement** what to do: leave the rubric alone, use it as-is, fix it via compiler, escalate to spec revision, or drop entirely.
 
 **Goal**: faithful spec interpretation. **Diagnostic**: cross-judge disagreement (Krippendorff α as primary). **Threshold**: T₁ pegged so we don't penalize rubric writers when agreement is already acceptable; current pick is T₁ = 0.5 (Fleiss κ ≈ 0.3-0.4 is "fair to moderate" — good enough as a working pragmatic floor).
 
