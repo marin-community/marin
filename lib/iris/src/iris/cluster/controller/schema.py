@@ -976,7 +976,6 @@ SLICES = Table(
             default_factory=list,
         ),
         Column("created_at_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
-        Column("last_active_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("error_message", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
     ),
     indexes=("CREATE INDEX IF NOT EXISTS idx_slices_scale_group ON slices(scale_group)",),
