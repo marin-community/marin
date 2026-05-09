@@ -20,6 +20,7 @@ import InfoRow from '@/components/shared/InfoRow.vue'
 import ResourceGauge from '@/components/shared/ResourceGauge.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
 import ProfileButtons from '@/components/shared/ProfileButtons.vue'
+import ProfileHistory from '@/components/shared/ProfileHistory.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 
@@ -106,113 +107,6 @@ const taskStatsRows = computed<TaskStatRow[]>(() => {
 
 const orderedTaskStats = computed(() => taskStatsRows.value.slice().reverse())
 
-// --- Profile history sourced from finelog stats (iris.profile) ---
-//
-// Lists recent profile captures for this task, filtered by source which is
-// the task's wire ID. Rows come back captured_at DESC.
-interface ProfileHistoryRow {
-  captured_at?: string
-  type?: string
-  attempt_id?: number | null
-  vm_id?: string
-  duration_seconds?: number
-  format?: string
-  trigger?: string
-  size_bytes?: number
-}
-
-function buildProfileHistorySql(taskId: string): string {
-  const escaped = taskId.replace(/'/g, "''")
-  return `
-SELECT
-  captured_at,
-  type,
-  attempt_id,
-  vm_id,
-  duration_seconds,
-  format,
-  trigger,
-  length(profile_data) AS size_bytes
-FROM "iris.profile"
-WHERE source = '${escaped}'
-ORDER BY captured_at DESC
-LIMIT 50
-`.trim()
-}
-
-function buildProfileFetchSql(taskId: string, capturedAt: string): string {
-  const escapedSource = taskId.replace(/'/g, "''")
-  const escapedTs = capturedAt.replace(/'/g, "''")
-  return `
-SELECT profile_data, type, format
-FROM "iris.profile"
-WHERE source = '${escapedSource}' AND captured_at = '${escapedTs}'
-LIMIT 1
-`.trim()
-}
-
-const { data: profileHistoryData, refresh: fetchProfileHistory } = useLogServerStatsRpc<QueryResponse>(
-  'Query',
-  () => ({ sql: buildProfileHistorySql(props.taskId) }),
-)
-
-const profileHistoryRows = computed<ProfileHistoryRow[]>(() => {
-  const ipc = profileHistoryData.value?.arrowIpc
-  if (!ipc) return []
-  return decodeArrowIpc(ipc).rows as ProfileHistoryRow[]
-})
-
-const downloadingProfile = ref(false)
-
-/** Extension derived from the profile format value, mirroring useProfileAction.ts. */
-function profileExtension(format: string | undefined): string {
-  if (!format) return 'bin'
-  const f = format.toLowerCase()
-  if (f === 'flamegraph') return 'svg'
-  if (f === 'html') return 'html'
-  if (f === 'speedscope') return 'out'
-  if (f === 'raw') return 'bin'
-  if (f === 'table' || f === 'stats') return 'txt'
-  return 'bin'
-}
-
-async function downloadProfile(row: ProfileHistoryRow) {
-  if (downloadingProfile.value) return
-  downloadingProfile.value = true
-  try {
-    const sql = buildProfileFetchSql(props.taskId, row.captured_at ?? '')
-    const resp = await fetch('/proxy/system.log-server/finelog.stats.StatsService/Query', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sql }),
-    })
-    if (!resp.ok) throw new Error(`Query: ${resp.status} ${resp.statusText}`)
-    const payload = await resp.json() as QueryResponse
-    if (!payload.arrowIpc) return
-    interface FetchRow { profile_data?: string; type?: string; format?: string }
-    const rows = decodeArrowIpc(payload.arrowIpc).rows as FetchRow[]
-    if (!rows.length || !rows[0].profile_data) return
-    const base64 = rows[0].profile_data
-    const bin = atob(base64)
-    const bytes = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-    const ext = profileExtension(rows[0].format)
-    const ts = (row.captured_at ?? new Date().toISOString()).replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+/, '')
-    const label = props.taskId.replace(/\//g, '_')
-    const blob = new Blob([bytes], { type: 'application/octet-stream' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${ts}_profile-${label}.${ext}`
-    a.click()
-    URL.revokeObjectURL(url)
-  } catch (e) {
-    alert(`Download failed: ${e instanceof Error ? e.message : e}`)
-  } finally {
-    downloadingProfile.value = false
-  }
-}
-
 // Latest sample drives the current-value gauges and labels. resource_usage
 // is no longer populated on TaskStatus — the iris.task stats namespace is
 // the single source of truth for per-attempt usage.
@@ -272,32 +166,23 @@ const { start: startStatsRefresh, stop: stopStatsRefresh } = useAutoRefresh(
   5_000,
   false,
 )
-const { start: startProfileHistoryRefresh, stop: stopProfileHistoryRefresh } = useAutoRefresh(
-  fetchProfileHistory,
-  30_000,
-  false,
-)
 
 watch(isActive, (active) => {
   if (active) {
     startRefresh()
     startStatsRefresh()
-    startProfileHistoryRefresh()
   } else {
     stopRefresh()
     stopStatsRefresh()
-    stopProfileHistoryRefresh()
   }
 })
 
 onMounted(async () => {
   await fetchTask()
   fetchTaskStats()
-  fetchProfileHistory()
   if (isActive.value) {
     startRefresh()
     startStatsRefresh()
-    startProfileHistoryRefresh()
   }
 })
 
@@ -327,17 +212,13 @@ function selectAttempt(attemptId: number) {
 watch(() => props.taskId, async () => {
   taskResponse.value = null
   taskStatsData.value = null
-  profileHistoryData.value = null
   stopRefresh()
   stopStatsRefresh()
-  stopProfileHistoryRefresh()
   await fetchTask()
   fetchTaskStats()
-  fetchProfileHistory()
   if (isActive.value) {
     startRefresh()
     startStatsRefresh()
-    startProfileHistoryRefresh()
   }
 })
 </script>
@@ -558,39 +439,7 @@ watch(() => props.taskId, async () => {
         </div>
       </div>
 
-      <!-- Profile history (sourced from finelog iris.profile) -->
-      <div v-if="profileHistoryRows.length > 0" class="mb-6">
-        <h3 class="text-sm font-semibold text-text mb-3">Profile History</h3>
-        <div class="overflow-x-auto rounded-lg border border-surface-border">
-          <table class="w-full border-collapse">
-            <thead>
-              <tr class="border-b border-surface-border">
-                <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Captured</th>
-                <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Type</th>
-                <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Format</th>
-                <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Trigger</th>
-                <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right">Size</th>
-                <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right">Duration</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="row in profileHistoryRows"
-                :key="row.captured_at ?? ''"
-                class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors cursor-pointer"
-                @click="downloadProfile(row)"
-              >
-                <td class="px-3 py-2 text-[13px] font-mono">{{ row.captured_at ?? '-' }}</td>
-                <td class="px-3 py-2 text-[13px] font-mono">{{ row.type ?? '-' }}</td>
-                <td class="px-3 py-2 text-[13px] font-mono">{{ row.format ?? '-' }}</td>
-                <td class="px-3 py-2 text-[13px] font-mono">{{ row.trigger ?? '-' }}</td>
-                <td class="px-3 py-2 text-[13px] font-mono text-right">{{ row.size_bytes !== undefined ? formatBytes(Number(row.size_bytes)) : '-' }}</td>
-                <td class="px-3 py-2 text-[13px] font-mono text-right">{{ row.duration_seconds !== undefined ? `${row.duration_seconds}s` : '-' }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <ProfileHistory :source="taskId" class="mb-6" />
 
       <!-- Task logs -->
       <div id="task-logs-section" class="mb-6">

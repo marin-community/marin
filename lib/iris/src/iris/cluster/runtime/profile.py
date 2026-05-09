@@ -21,16 +21,69 @@ import tempfile
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
+from typing import ClassVar
 
 from iris.cluster.types import TaskAttempt
-from iris.cluster.worker.stats import IrisProfile, ProfileFormat, ProfileTrigger, ProfileType
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
 # Target sentinel for profiling the local worker/controller process itself.
 SYSTEM_PROCESS_TARGET = "/system/process"
+
+# finelog namespace for ``IrisProfile`` rows.
+PROFILE_NAMESPACE = "iris.profile"
+
+
+class ProfileType(StrEnum):
+    CPU = "cpu"
+    MEMORY = "memory"
+    THREAD = "thread"
+
+
+class ProfileFormat(StrEnum):
+    # CPU
+    RAW = "raw"
+    FLAMEGRAPH = "flamegraph"
+    SPEEDSCOPE = "speedscope"
+    # Memory
+    HTML = "html"
+    TABLE = "table"
+    STATS = "stats"
+
+
+class ProfileTrigger(StrEnum):
+    PERIODIC = "periodic"
+    ON_DEMAND = "on_demand"
+
+
+@dataclass
+class IrisProfile:
+    """One row per profile capture. Written by worker / k8s provider / controller; read by dashboard."""
+
+    key_column: ClassVar[str] = "captured_at"
+
+    source: str
+    attempt_id: int | None
+    vm_id: str
+    captured_at: datetime
+    duration_seconds: int
+    type: str
+    format: str
+    trigger: str
+    rate_hz: int | None = None
+    native: bool | None = None
+    leaks: bool | None = None
+    locals_dump: bool | None = None
+    profile_data: bytes = b""
+
+    def __post_init__(self) -> None:
+        ProfileType(self.type)
+        ProfileFormat(self.format)
+        ProfileTrigger(self.trigger)
+
 
 CPU_FORMAT_MAP: dict[int, tuple[str, str]] = {
     job_pb2.CpuProfile.FLAMEGRAPH: ("flamegraph", "svg"),

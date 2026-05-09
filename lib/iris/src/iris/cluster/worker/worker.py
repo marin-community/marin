@@ -19,7 +19,13 @@ from iris.chaos import chaos
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_store_helpers import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.runtime.profile import build_profile_row, parse_profile_target, profile_local_process
+from iris.cluster.runtime.profile import (
+    PROFILE_NAMESPACE,
+    IrisProfile,
+    build_profile_row,
+    parse_profile_target,
+    profile_local_process,
+)
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
 from iris.cluster.types import JobName
 from iris.cluster.types import TaskAttempt as TaskAttemptId
@@ -38,10 +44,8 @@ from iris.cluster.worker.env_probe import (
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.stats import (
-    PROFILE_NAMESPACE,
     TASK_STATS_NAMESPACE,
     WORKER_STATS_NAMESPACE,
-    IrisProfile,
     IrisTaskStat,
     IrisWorkerStat,
     WorkerStatus,

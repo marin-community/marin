@@ -117,6 +117,7 @@ from iris.cluster.controller.worker_provider import WorkerReconcilePlan
 from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.types import find_free_port, resolve_external_host
+from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
     JobName,
     WorkerId,
@@ -126,7 +127,7 @@ from iris.cluster.types import (
     get_tpu_count,
     is_job_finished,
 )
-from iris.cluster.worker.stats import PROFILE_NAMESPACE, TASK_STATS_NAMESPACE, IrisProfile, IrisTaskStat
+from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider, TokenVerifier

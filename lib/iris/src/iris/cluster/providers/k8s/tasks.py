@@ -42,9 +42,9 @@ from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
-from iris.cluster.runtime.profile import build_profile_row
+from iris.cluster.runtime.profile import IrisProfile, build_profile_row
 from iris.cluster.types import JobName, TaskAttempt, get_gpu_count
-from iris.cluster.worker.stats import IrisProfile, build_task_stat
+from iris.cluster.worker.stats import build_task_stat
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.time_proto import timestamp_to_proto
 

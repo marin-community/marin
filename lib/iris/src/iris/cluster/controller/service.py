@@ -89,7 +89,13 @@ from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
-from iris.cluster.runtime.profile import build_profile_row, parse_profile_target, profile_local_process
+from iris.cluster.runtime.profile import (
+    PROFILE_NAMESPACE,
+    IrisProfile,
+    build_profile_row,
+    parse_profile_target,
+    profile_local_process,
+)
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
@@ -97,7 +103,6 @@ from iris.cluster.types import (
     WorkerId,
     is_job_finished,
 )
-from iris.cluster.worker.stats import PROFILE_NAMESPACE, IrisProfile
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc import logging_pb2 as iris_logging_pb2
 from iris.rpc.async_adapter import on_loop
