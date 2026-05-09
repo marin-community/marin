@@ -132,6 +132,10 @@ inference latency / KV-cache size, serving compatibility, or interaction effects
   every matrix-shaped parameter except the lm head (`output_proj`), which stays
   on AdamH. Vector and scalar leaves stay on Adam. The launcher reuses the
   v16 compute-optimal gate points above via `MUONH_MATRIX_GATE=1|2|both`.
+- [`normuonh_matrix_sweep.py`](./normuonh_matrix_sweep.py) mirrors the MuonH
+  matrix swap but adds NorMuon's output-axis adaptive normalization inside the
+  hyperball update. The launcher uses the same gate points via
+  `NORMUONH_MATRIX_GATE=1|2|both`.
 
 ## Large run model sizing
 
@@ -173,5 +177,7 @@ Predicted macro uses `loss(C) = 1.6 + 95.18 · C^(-0.0941)`.
   and `executor_main` wiring.
 - [`muonh_matrix_sweep.py`](./muonh_matrix_sweep.py) — MuonH matrix-swap
   ablation launcher for the README gate points.
+- [`normuonh_matrix_sweep.py`](./normuonh_matrix_sweep.py) — NorMuonH
+  matrix-swap ablation launcher for the README gate points.
 - [`adamh.py`](./adamh.py) — shared AdamH utilities.
 - [`agent.md`](./agent.md) — agent guide for running ablation experiments on Iris.

@@ -23,3 +23,12 @@
 - Result: 11 tests passed. The launch-builder smoke check produced gate-1 steps `muonh-matrix-d512-2.19e17` and `muonh-matrix-d768-1.70e18`.
 - Interpretation: The optimizer mask, single-device update path, and Grug variant contracts are ready for gate-1 launch.
 - Next action: Open PR, launch gate-1 Iris jobs, and monitor W&B runs under group `muonh-matrix-sweep`.
+
+### 2026-05-09 11:23 - MOE-MH-002 first launch killed after sharding failure
+
+- Hypothesis: The local single-device update test was insufficient for stacked expert tensor sharding.
+- Command: `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --preemptible --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -e MUONH_MATRIX_GATE 1 -- python -m experiments.grug.moe.muonh_matrix_sweep`
+- Config: PR #5597 commit `4804d6350`, gate 1, v5p-8.
+- Result: Jobs `/kaiyue/iris-run-job-20260509-181301/grug-train-muonh-matrix-d512-2.19e17` and `/kaiyue/iris-run-job-20260509-181301/grug-train-muonh-matrix-d768-1.70e18` reached W&B startup, then d768 failed during lowering with `ShardingTypeError: mul got incompatible shardings for broadcasting`. The parent job and both children were killed.
+- Interpretation: `_grug_scale_with_muon` can return a direction update whose leading-axis sharding differs from stacked expert parameter sharding. The direction must be resharded to the parameter layout before the hyperball update multiplies by per-expert norms.
+- Next action: Add an abstract-mesh regression covering `P("expert", "data", "model")` expert tensors, fix the shared hyperball helper, then relaunch.
