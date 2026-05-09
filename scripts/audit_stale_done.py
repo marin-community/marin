@@ -76,15 +76,22 @@ def _audit_shard(idx: int) -> dict:
     fs = fsspec.filesystem("gs")
     done_marker = f"{base}/_done"
     rolls_path = f"{base}/rollouts.json"
+    resume_path = f"{base}/rollouts_resume.json"
     plan_path = f"{base}/sampling_plan.json"
 
     has_done = fs.exists(done_marker)
     source_prs = _read_source_prs_from_plan(plan_path, fs)
 
-    # Count rollouts per instance_id from rollouts.json (streaming-friendly).
+    # Count rollouts per instance_id from BOTH rollouts.json (historical/baseline)
+    # and rollouts_resume.json (multi-region append). Counting only rollouts.json
+    # produces massive false-positive "n_missing=97" entries for shards that have
+    # been filled in via resume; missing-first claim ordering then sends workers
+    # to those shards which fast-path-skip in 5-10 sec without producing rollouts.
     counts: Counter = Counter()
-    if fs.exists(rolls_path):
-        with fsspec.open(rolls_path, "rb") as f:
+    for path in (rolls_path, resume_path):
+        if not fs.exists(path):
+            continue
+        with fsspec.open(path, "rb") as f:
             rolls = json.load(f)
         if isinstance(rolls, list):
             for r in rolls:
@@ -92,7 +99,7 @@ def _audit_shard(idx: int) -> dict:
                     iid = r.get("instance_id")
                     if iid:
                         counts[iid] += 1
-        del rolls  # free the big list before next shard
+        del rolls  # free the big list before next file
 
     # Coverage on this shard's source PR set
     n_at_target = sum(1 for iid in source_prs if counts.get(iid, 0) >= TARGET_ROLLOUTS_PER_PR)
