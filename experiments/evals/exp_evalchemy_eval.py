@@ -117,17 +117,17 @@ CODE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
 ]
 
 # TTC suites — same seed structure as originals
+# TTC suites — test set only
 MATH_TTC_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
-    ([AIME24_TTC, AIME25_TTC, AIME26_TTC, AMC23_TTC, HMMT_TTC], SEEDS[:10]),
-    ([MATH500_TTC, OLYMPIADBENCH_TTC], SEEDS[:1]),
+    ([AIME26_TTC, HMMT_TTC], SEEDS[:10]),
 ]
 
 SCIENCE_TTC_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
-    ([GPQA_DIAMOND_TTC, JEEBENCH_TTC, HLE_TTC, OLYMPIADBENCH_PHYSICS_TTC], SEEDS[:3]),
+    ([GPQA_DIAMOND_TTC, HLE_TTC], SEEDS[:3]),
 ]
 
 CODE_TTC_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
-    ([LIVECODEBENCH_TTC, LIVECODEBENCH_V5_OFFICIAL_TTC, LIVECODEBENCH_V6_OFFICIAL_TTC], SEEDS[:6]),
+    ([LIVECODEBENCH_V5_OFFICIAL_TTC, LIVECODEBENCH_V6_OFFICIAL_TTC], SEEDS[:6]),
 ]
 
 SUITE_TO_TASK_SEED_GROUPS: dict[str, list[tuple[list, list[int]]]] = {

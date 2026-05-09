@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 # Evalchemy git repo and commit to use
 EVALCHEMY_REPO = "https://github.com/teetone/evalchemy.git"
-EVALCHEMY_COMMIT = "f5982ae"  # 2026-04-27: support UQ TTC for reasoning evals
+EVALCHEMY_COMMIT = "460b022"  # 2026-05-07: skip questions where prompt >= max_model_len instead of crashing
 
 
 # Evalchemy benchmarks that have hardcoded n_repeat values and their paths.
@@ -666,6 +666,7 @@ _patch_autoconfig_for_gcs()
         cmd: list[str],
         cwd: str,
         log_file: str,
+        output_path: str = "",
     ) -> int:
         """Run evalchemy in-process using runpy instead of a subprocess.
 
@@ -695,6 +696,10 @@ _patch_autoconfig_for_gcs()
             "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
             # Disable Python output buffering for real-time log streaming
             "PYTHONUNBUFFERED": "1",
+            # Trust remote code for HF datasets (required by LiveCodeBench)
+            "HF_DATASETS_TRUST_REMOTE_CODE": "1",
+            # GCS output path for TTC checkpointing (so TTC can save intermediate results)
+            **({"EVALCHEMY_OUTPUT_PATH": output_path} if output_path else {}),
         }
         for key in env_vars_to_set:
             saved_env[key] = os.environ.get(key)
@@ -971,6 +976,7 @@ _patch_autoconfig_for_gcs()
                     cmd=cmd,
                     cwd=evalchemy_path,
                     log_file=log_file,
+                    output_path=output_path,
                 )
 
                 # Verify results were actually written — evalchemy can return 0
