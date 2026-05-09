@@ -1,10 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""E2E tests for WorkerPool using a local IrisClient.
-
-Uses the shared ``local_iris_client`` fixture from ``lib/iris/tests/conftest.py``.
-"""
+"""E2E tests for WorkerPool using a local IrisClient."""
 
 import pytest
 from iris.client.worker_pool import (
