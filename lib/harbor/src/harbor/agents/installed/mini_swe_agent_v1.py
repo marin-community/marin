@@ -160,9 +160,21 @@ class MiniSweAgentV1(BaseAgent):
         api_base: str | None = None,
         temperature: float = 1.0,
         max_turns: int = 15,
+        step_limit: int | None = None,
+        agent_config_overrides: dict | None = None,
         model_info: dict | None = None,
         **kwargs,
     ):
+        """Mini-SWE-Agent v1 wrapped as a Harbor BaseAgent.
+
+        Args:
+            step_limit: max trajectory steps; overrides max_turns when set. Mini-SWE-agent's
+                bundled swebench.yaml uses 250.
+            agent_config_overrides: dict of fields that override mini-swe-agent's AgentConfig
+                defaults (system_template, instance_template, action_observation_template,
+                format_error_template, action_regex, cost_limit, ...). Use this to plumb the
+                bundled swebench.yaml templates that mini-extra uses for SWE-bench eval.
+        """
         super().__init__(logs_dir, model_name, **kwargs)
         if not model_name:
             raise ValueError("model_name is required")
@@ -174,7 +186,10 @@ class MiniSweAgentV1(BaseAgent):
         self._model_name = model_name
         self._api_base = api_base
         self._temperature = temperature
-        self._max_turns = max_turns
+        self._step_limit = step_limit if step_limit is not None else max_turns
+        self._agent_config_overrides = dict(agent_config_overrides) if agent_config_overrides else {}
+        # step_limit is the AgentConfig field; the explicit kwarg always wins.
+        self._agent_config_overrides["step_limit"] = self._step_limit
         self._model_info = model_info or {}
 
         if self._model_info:
@@ -214,7 +229,7 @@ class MiniSweAgentV1(BaseAgent):
         agent = DefaultAgent(
             model,
             env,
-            step_limit=self._max_turns,
+            **self._agent_config_overrides,
         )
 
         # Run the official v1 agent loop (synchronous — run in thread)
