@@ -102,6 +102,7 @@ def _build_step(hidden_dim: int, budget: float, run_suffix: str = "") -> Executo
             seed=versioned(0),
             mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
             tracker=WandbConfig(
+                entity="marin-community",
                 project="marin_moe",
                 tags=["moe", "muonh_matrix_sweep", f"d{hidden_dim}"],
                 group=_GROUP,
