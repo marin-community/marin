@@ -247,7 +247,15 @@ def _purge_legacy_locks(output_root: str) -> None:
 
 
 def _prefetch_hf_dataset(dataset_id: str) -> None:
-    logger.info("prefetching HF dataset %s into local cache...", dataset_id)
+    """Prefetch an HF dataset into the same /tmp/hf-cache that holds the model.
+
+    The inner worker subprocess runs with HF_HUB_OFFLINE=1 + HF_HOME=/tmp/hf-cache
+    (set in _run_inner). Aligning the outer prefetch's cache to the same root
+    ensures the inner can find the dataset locally without an HF round-trip.
+    """
+    cache_root = os.environ.get("MARIN_HF_CACHE_ROOT", "/tmp/hf-cache")
+    os.environ["HF_HOME"] = cache_root  # propagates to load_dataset
+    logger.info("prefetching HF dataset %s into local cache (HF_HOME=%s)...", dataset_id, cache_root)
     from datasets import load_dataset
 
     load_dataset(dataset_id, split="train")
