@@ -147,6 +147,7 @@ def normalize_nemotron_v1_step(
     *,
     split: str,
     max_workers: int | None = None,
+    worker_resources: ResourceConfig | None = None,
 ) -> StepSpec:
     """Normalize one Nemotron-CC v1 split.
 
@@ -166,5 +167,6 @@ def normalize_nemotron_v1_step(
         file_extensions=(".jsonl.zst",),
         relative_input_path=f"{_NEMOTRON_V1_DATA_ROOT}/{rel_path}",
         max_workers=max_workers,
+        worker_resources=worker_resources,
         version="v2",
     )

@@ -10,6 +10,7 @@ depends on (Nemotron CC splits, DCLM components, default validation sets).
 
 import dataclasses
 
+from fray import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.nemotron_v1 import (
     NEMOTRON_V1_SPLITS,
@@ -25,10 +26,14 @@ from experiments.defaults import default_validation_sets
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.nemotron import nemotron_mix, tokenize_nemotron
 
-S3_PREFIX = "s3://marin-na/marin/tmp/rav"
-
 MAX_WORKERS = 42
 CACHE_COPY_MAX_WORKERS = 42
+# Defaults bake in disk=5g (tokenize) / disk=10g (normalize) per worker pod,
+# which evicts large splits mid-pipeline as ephemeral storage fills with cache
+# / writer staging / external-sort spills. Bump to 32g; nodes have ~7 TiB
+# ephemeral storage so headroom is plentiful.
+TOKENIZE_WORKER_RESOURCES = ResourceConfig(ram="10g", disk="32g")
+NORMALIZE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="32g")
 
 # DCLM components consumed by the Nemotron canary mix. Each entry mirrors the
 # ``simple._dl(...)`` download wiring, plus the raw text column used by the HF
@@ -53,7 +58,7 @@ DCLM_COMPONENTS = [
 
 
 def _with_worker_caps(step: ExecutorStep) -> ExecutorStep:
-    """Override max_workers and cache_copy_max_workers on a TokenizeConfig step."""
+    """Override max_workers, cache_copy_max_workers, and per-worker resources on a TokenizeConfig step."""
     config = step.config
     if not isinstance(config, TokenizeConfigBase):
         return step
@@ -63,6 +68,7 @@ def _with_worker_caps(step: ExecutorStep) -> ExecutorStep:
             config,
             max_workers=MAX_WORKERS,
             cache_copy_max_workers=CACHE_COPY_MAX_WORKERS,
+            worker_resources=TOKENIZE_WORKER_RESOURCES,
         ),
     )
 
@@ -71,9 +77,12 @@ def main() -> None:
     nemotron_download = download_nemotron_v1_step()
     normalize_by_split = {
         split: (
-            normalize_nemotron_v1_step(nemotron_download, split=split, max_workers=MAX_WORKERS)
-            .as_executor_step()
-            .with_output_path(f"{S3_PREFIX}/normalized/nemotron_v1/{split}")
+            normalize_nemotron_v1_step(
+                nemotron_download,
+                split=split,
+                max_workers=MAX_WORKERS,
+                worker_resources=NORMALIZE_WORKER_RESOURCES,
+            ).as_executor_step()
         )
         for split in NEMOTRON_V1_SPLITS
     }
@@ -82,7 +91,7 @@ def main() -> None:
     # jsonl.zst dump under data-jsonl/.
     input_paths_by_split = {split: [step / "outputs/main/*.parquet"] for split, step in normalize_by_split.items()}
     nemotron_steps = [
-        step.with_output_path(f"{S3_PREFIX}/{step.name}")
+        _with_worker_caps(step)
         for step in tokenize_nemotron(
             max_workers=MAX_WORKERS,
             cache_copy_max_workers=CACHE_COPY_MAX_WORKERS,
@@ -99,36 +108,32 @@ def main() -> None:
             revision=component["revision"],
             override_output_path=component["download_override_path"],
         )
-        normalized_step = (
-            normalize_step(
-                name=f"normalized/{name}",
-                download=download_spec,
-                text_field=component["text_field"],
-                id_field="id",
-                file_extensions=(".parquet",),
-                max_workers=MAX_WORKERS,
-                version="v2",
-            )
-            .as_executor_step()
-            .with_output_path(f"{S3_PREFIX}/normalized/{name}")
-        )
+        normalized_step = normalize_step(
+            name=f"normalized/{name}",
+            download=download_spec,
+            text_field=component["text_field"],
+            id_field="id",
+            file_extensions=(".parquet",),
+            max_workers=MAX_WORKERS,
+            worker_resources=NORMALIZE_WORKER_RESOURCES,
+            version="v2",
+        ).as_executor_step()
         dclm_normalize_steps.append(normalized_step)
-        tokenize_step = ExecutorStep(
-            name=f"tokenized/{name}",
-            fn=tokenize,
-            config=TokenizeConfig(
-                train_paths=[normalized_step / "outputs/main/*.parquet"],
-                validation_paths=versioned([]),
-                cache_path=this_output_path(),
-                tokenizer=versioned(llama3_tokenizer),
-                max_workers=MAX_WORKERS,
-                cache_copy_max_workers=CACHE_COPY_MAX_WORKERS,
-            ),
-        ).with_output_path(f"{S3_PREFIX}/tokenized/{name}")
+        tokenize_step = _with_worker_caps(
+            ExecutorStep(
+                name=f"tokenized/{name}",
+                fn=tokenize,
+                config=TokenizeConfig(
+                    train_paths=[normalized_step / "outputs/main/*.parquet"],
+                    validation_paths=versioned([]),
+                    cache_path=this_output_path(),
+                    tokenizer=versioned(llama3_tokenizer),
+                ),
+            )
+        )
         dclm_tokenize_steps.append(tokenize_step)
     validation_steps = [
-        _with_worker_caps(step).with_output_path(f"{S3_PREFIX}/{step.name}")
-        for step in default_validation_sets(tokenizer=nemotron_mix.tokenizer).values()
+        _with_worker_caps(step) for step in default_validation_sets(tokenizer=nemotron_mix.tokenizer).values()
     ]
     steps = normalize_steps + nemotron_steps + dclm_normalize_steps + dclm_tokenize_steps + validation_steps
 
