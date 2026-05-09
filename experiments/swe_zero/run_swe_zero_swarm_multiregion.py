@@ -181,7 +181,7 @@ def _is_done(output_root: str, batch_idx: int) -> bool:
 
 
 def _shard_is_complete(output_root: str, batch_idx: int) -> tuple[bool, str]:
-    """Check if a shard has ≥TARGET_ROLLOUTS_PER_PR for every PR in its
+    """Check if a shard has >=TARGET_ROLLOUTS_PER_PR for every PR in its
     sampling_plan.json. Returns (is_complete, summary_message).
 
     Used to gate the swarm-level _done marker: a shard should NOT be marked
@@ -223,7 +223,7 @@ def _shard_is_complete(output_root: str, batch_idx: int) -> tuple[bool, str]:
     short = [iid for iid in expected_ids if counts.get(iid, 0) < TARGET_ROLLOUTS_PER_PR]
     total_expected = len(expected_ids)
     complete_prs = total_expected - len(short)
-    msg = f"{complete_prs}/{total_expected} PRs at ≥{TARGET_ROLLOUTS_PER_PR} rollouts"
+    msg = f"{complete_prs}/{total_expected} PRs at >={TARGET_ROLLOUTS_PER_PR} rollouts"
     return len(short) == 0, msg
 
 
@@ -252,6 +252,64 @@ def _prefetch_hf_dataset(dataset_id: str) -> None:
 
     load_dataset(dataset_id, split="train")
     logger.info("prefetch complete")
+
+
+def _prefetch_model_from_gcs(region: str) -> bool:
+    """Copy the mini-coder-1.7b HF cache from regional GCS into /tmp/hf-cache.
+
+    Sets HF_HOME=/tmp/hf-cache and HF_HUB_OFFLINE=1 so vLLM (in the inner
+    worker subprocess) reads the model from the local cache instead of HF.
+    Avoids the HF 429 race when N workers spawn concurrently and all try to
+    download the 3.4 GB model simultaneously.
+
+    Returns True if the cache was successfully populated; False on any failure
+    (worker falls back to online HF, which may hit 429s but the launcher will
+    keep retrying until rate-limit windows clear).
+    """
+    import fsspec
+
+    src = f"gs://marin-{region}/hf-cache/models--ricdomolm--mini-coder-1.7b/"
+    dst_root = "/tmp/hf-cache"
+    dst = f"{dst_root}/models--ricdomolm--mini-coder-1.7b/"
+    if os.path.exists(dst) and os.environ.get("HF_HUB_OFFLINE") == "1":
+        logger.info("local hf-cache already populated at %s, skipping", dst)
+        return True
+    try:
+        fs = fsspec.filesystem("gs")
+        if not fs.exists(src):
+            logger.warning("GCS hf-cache not found at %s; falling back to HF online", src)
+            return False
+        os.makedirs(dst, exist_ok=True)
+        files = [f for f in fs.find(src) if not f.endswith("/")]
+        logger.info("prefetching %d files from %s to %s", len(files), src, dst)
+        prefix = src[:-1] if src.endswith("/") else src
+        prefix_no_proto = prefix[len("gs://") :]
+        for f in files:
+            f_no_proto = f[len("gs://") :] if f.startswith("gs://") else f
+            rel = (
+                f_no_proto[len(prefix_no_proto) + 1 :]
+                if f_no_proto.startswith(prefix_no_proto + "/")
+                else os.path.basename(f)
+            )
+            local_path = os.path.join(dst, rel)
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            with fs.open(f, "rb") as src_f, open(local_path, "wb") as out:
+                while True:
+                    chunk = src_f.read(8 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+        os.environ["HF_HOME"] = dst_root
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        logger.info(
+            "model prefetch complete (%d files, ~3.5 GB); HF_HOME=%s HF_HUB_OFFLINE=1",
+            len(files),
+            dst_root,
+        )
+        return True
+    except Exception as e:
+        logger.warning("model prefetch from GCS failed (%s); falling back to HF online", e)
+        return False
 
 
 def _assert_zone_in_region(region: str) -> None:
@@ -444,6 +502,7 @@ def main():
     _assert_zone_in_region(region)
     _assert_bucket_pinned(output_root, region)
     _purge_legacy_locks(output_root)
+    _prefetch_model_from_gcs(region)
     _prefetch_hf_dataset("nebius/SWE-rebench-V2-PRs")
 
     iterations = 0
