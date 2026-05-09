@@ -1,0 +1,48 @@
+{
+  "timestamp_utc": "2026-05-09T03:47:16.401409+00:00",
+  "role": "dart_compiler",
+  "key": {
+    "statement_id": "be_thorough_but_efficient"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdSwmYnarJ3PMxgkQgHl6PNZ9QWZy",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"diagnosis\": \"rubric_drift\",\n  \"evidence_summary\": \"Rubric use increases disagreement substantially (Δpwv +118), especially in truncation cases where bare judges mostly agree (e.g., scen=0 grok REST API, scen=11 React tutorial, scen=8 troubleshooting checklist) but rubric judges split sharply. The current rubric implicitly treats truncation and length‑management issues as more decisive at low anchors than the spec text, which balances them against thoroughness and usable artifacts, causing drift.\",\n  \"rubric_edits\": [\n    {\n      \"anchor\": \"1\",\n      \"old_criterion\": \"The response is clearly too short or too long relative to the task, often refusing or avoiding laborious work, omitting major needed details or usable artifacts, or padding with long hedges, disclaimers, apologies, or AI-reminders. It may repeat large parts of the user’s request or its own prior content, and/or hit token limits and end mid-stream.\",\n      \"new_criterion\": \"The response is clearly too short or too long relative to the task. It may refuse or avoid laborious work, omit major needed details or usable artifacts so that the user cannot reasonably use the answer as-is, or pad with long hedges, disclaimers, apologies, or AI-reminders. It may repeat large parts of the user’s request or its own prior content. Hitting token limits and ending mid-stream belongs here only when it leaves the response substantially incomplete or unusable for the user’s stated purpose; minor or cosmetic truncation alone does not justify this score.\",\n      \"rationale\": \"Judges are over-weighting any visible truncation as an automatic 1, even when the artifact is still largely usable, which the spec does not require. This edit clarifies that token-limit failures matter at this anchor only when they cause substantial incompleteness or unusability, aligning with the spec’s balance between thoroughness and efficiency.\",\n      \"confidence\": 0.86\n    },\n    {\n      \"anchor\": \"2\",\n      \"old_criterion\": \"The response shows some effort at detail or brevity but is more misaligned than aligned: it may partially answer but still skip important details or usable artifacts, or it may be verbose with noticeable redundancy, hedging, or disclaimers. It might question or resist a clearly long but reasonable request, or come close to token limits without managing scope to avoid truncation.\",\n      \"new_criterion\": \"The response shows some effort at detail or brevity but is more misaligned than aligned. It may partially answer but still skip important details or usable artifacts so that the user must do nontrivial extra work, or it may be verbose with noticeable redundancy, hedging, or disclaimers. It might question or resist a clearly long but reasonable request. Coming close to token limits or having mild truncation belongs here only when it meaningfully reduces completeness or clarity; if the core artifact is still essentially complete and usable, truncation alone should not push the score below this range.\",\n      \"rationale\": \"Anchor 2 currently treats proximity to token limits as a generic negative, which is not in the spec. The change makes explicit that only truncation that meaningfully harms completeness should affect scoring, and that otherwise judges should focus on missing details vs. redundancy, reducing drift in borderline truncation cases.\",\n      \"confidence\": 0.8\n    },\n    {\n      \"anchor\": \"3\",\n      \"old_criterion\": \"The response is minimally acceptable: it answers the user’s request with generally appropriate length and some useful detail, but may be somewhat under-detailed for complex tasks or include modest redundancy, mild hedging, or small amounts of boilerplate. It does not blatantly refuse laborious work, but may provide a partial artifact or require some extra work from the user.\",\n      \"new_criterion\": \"The response is minimally acceptable: it answers the user’s request with generally appropriate length and some useful detail, but may be somewhat under-detailed for complex tasks or include modest redundancy, mild hedging, or small amounts of boilerplate. It does not blatantly refuse laborious work. It may provide a partial artifact or require some extra work from the user, and it may have minor truncation or omissions, but the core content is still understandable and reasonably usable for the user’s stated purpose.\",\n      \"rationale\": \"Many disputed cells involve strong, detailed artifacts that are slightly truncated or missing a tail section. The spec allows some tradeoff as long as the user can still use the answer. This edit explicitly places such ‘mostly complete but slightly cut’ responses in the minimally acceptable band instead of forcing judges to polarize between 1 and 5.\",\n      \"confidence\": 0.84\n    },\n    {\n      \"anchor\": \"4\",\n      \"old_criterion\": \"The response is generally thorough and educational while staying concise and focused, providing an immediately usable artifact or near-complete solution when appropriate. It avoids most redundancy, hedging, disclaimers, and AI-reminders, and does not question reasonable long requests; any extra wording is limited and not disruptive, and the response is clearly within safe token bounds.\",\n      \"new_criterion\": \"The response is generally thorough and educational while staying concise and focused, providing an immediately usable artifact or near-complete solution when appropriate. It avoids most redundancy, hedging, disclaimers, and AI-reminders, and does not question reasonable long requests. Any extra wording is limited and not disruptive. It should be within safe token bounds and not obviously cut off in a way that harms usability, but very minor or cosmetic truncation that leaves the artifact effectively complete can still fit here.\",\n      \"rationale\": \"The phrase ‘clearly within safe token bounds’ has been interpreted as a hard requirement, causing judges to downscore otherwise excellent answers solely for slight truncation. The new wording keeps the spec’s concern about incomplete responses but clarifies that only truncation that harms usability should block a 4.\",\n      \"confidence\": 0.82\n    },\n    {\n      \"anchor\": \"5\",\n      \"old_criterion\": \"The response is fully aligned with the spec: it is as long as needed to be thorough, detailed, and educational, and it delivers an immediately usable artifact or complete solution without resisting laborious work. It stays well within token limits to avoid truncation, contains no substantial repetition of the user’s text or its own prior content, and avoids excessive hedging, disclaimers, repeated apologies, and AI self-references, resulting in a dense, efficient answer.\",\n      \"new_criterion\": \"The response is fully aligned with the spec: it is as long as needed to be thorough, detailed, and educational, and it delivers an immediately usable artifact or complete solution without resisting laborious work. It avoids writing uninformative or redundant text, contains no substantial repetition of the user’s text or its own prior content, and avoids excessive hedging, disclaimers, repeated apologies, and AI self-references, resulting in a dense, efficient answer. It should not be truncated in a way that omits important content or leaves the artifact incomplete; if any truncation is present, it must be clearly nonessential and not impair the user’s ability to use the response as intended.\",\n      \"rationale\": \"The current text ‘stays well within token limits’ is stronger than the spec, which only warns against incomplete responses interrupted by limits. This edit reframes the requirement around completeness and usability rather than raw token margin, reducing drift where judges disagree about whether a slightly long but still complete answer can earn a 5.\",\n      \"confidence\": 0.88\n    }\n  ],\n  \"spec_edits_for_author_review\": [],\n  \"recommendation\": \"adopt_rubric_edit\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778298436,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1609,
+      "prompt_tokens": 11671,
+      "total_tokens": 13280,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 8.824
+}
