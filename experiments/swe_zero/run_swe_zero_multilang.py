@@ -5,14 +5,14 @@
 SWE-ZERO multi-language scaling experiment (marin-community/marin#4653).
 
 Samples K PRs per language across all 20 languages in SWE-rebench V2 (default
-5 PRs per language → 100 PRs total) and runs N rollouts per PR (default 3) on
+5 PRs per language -> 100 PRs total) and runs N rollouts per PR (default 3) on
 the same v6e-4 TP=4 + 32K-context recipe that the Python MVP landed on. Saves
 the rollouts and a per-language report so we can see how the recipe transfers
 beyond Python.
 
 Important: this script intentionally avoids importing
 ``marin.evaluation.evaluators.evaluator`` and ``marin.inference.vllm_server``
-because their import chain pulls in ``transformers → torch`` which on some
+because their import chain pulls in ``transformers -> torch`` which on some
 worker images is the CUDA build and crashes at module init on TPU. We start
 the vLLM server directly via ``subprocess.Popen(["vllm", "serve", ...])``.
 """
@@ -25,8 +25,8 @@ import json
 import logging
 import os
 import random
-import socket
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
@@ -386,7 +386,7 @@ def _start_vllm_server(
 def _load_existing_rollouts(resume_from: str) -> dict[str, int]:
     """Load a partial rollouts.json and return ``{instance_id: count}``.
 
-    Used when resuming from a previous (preempted) run — we look up how many
+    Used when resuming from a previous (preempted) run - we look up how many
     rollouts each PR already has and only run the shortfall.
     """
     if resume_from.startswith("gs://"):
@@ -436,7 +436,7 @@ def _run_with_vllm(
     enable_shard_lease: bool = True,
     lease_stale_minutes: int = 180,
 ) -> None:
-    # Local imports of swe_zero modules only — no marin.evaluation /
+    # Local imports of swe_zero modules only - no marin.evaluation /
     # marin.inference imports, to avoid pulling in transformers / torch.
     from experiments.swe_zero.data_loader import SWERebenchV2Loader
     from experiments.swe_zero.diversity import measure_diversity
@@ -583,7 +583,11 @@ def _run_with_vllm(
 
     def _is_error_rollout(rollout: Rollout) -> bool:
         status = rollout.error or ""
-        return "API error" in status or "Connection error" in status
+        if "API error" in status or "Connection error" in status:
+            return True
+        if "Failed to materialize worktree" in status:
+            return True
+        return False
 
     def _on_rollout_done(done: int, total_n: int, rollout: Rollout) -> None:
         if _is_error_rollout(rollout):
@@ -610,7 +614,7 @@ def _run_with_vllm(
     # of useless "Connection error" rollouts.
     def _vllm_watchdog():
         ret = process.wait()
-        logger.error("vLLM exited unexpectedly (code %d) — aborting to trigger retry", ret)
+        logger.error("vLLM exited unexpectedly (code %d) - aborting to trigger retry", ret)
         import signal
 
         os.kill(os.getpid(), signal.SIGTERM)
@@ -728,6 +732,21 @@ def _run_with_vllm(
         logger.info("Overall submission rate: %d/%d (%.1f%%)", total_finished, total_n, 100 * total_finished / total_n)
     else:
         logger.info("No rollouts produced (all PRs already at target via auto-resume)")
+
+    # Throughput metric line - parsed by the outer multiswarm worker's
+    # _run_inner to write per-iter metric files at gs://marin-{region}/.../throughput/.
+    # rollouts_produced = newly generated this iter (total minus pre-loaded resume).
+    # completion_tokens = exact sum of vLLM-generated tokens this iter (excludes pre-loaded).
+    n_prior = len(prior_dicts) if resume_from else 0
+    rollouts_produced = max(0, total_n - n_prior)
+    completion_tokens_new = sum(r.total_completion_tokens for r in completed_rollouts if r.finished or r.full_text)
+    logger.info(
+        "[METRICS] rollouts_produced=%d completion_tokens=%d submission_rate=%.4f total_after=%d",
+        rollouts_produced,
+        completion_tokens_new,
+        total_finished / total_n if total_n else 0.0,
+        total_n,
+    )
 
 
 def main():

@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import random
+import re
 import subprocess
 import sys
 import threading
@@ -420,6 +421,78 @@ def _heartbeat(stop_event, output_root, batch_idx, worker_seed, region):
         logger.info("heartbeat: refreshed claim for batch %d", batch_idx)
 
 
+_METRICS_LINE_RE = re.compile(
+    r"\[METRICS\] rollouts_produced=(?P<rollouts>\d+) completion_tokens=(?P<completion>\d+) "
+    r"submission_rate=(?P<sub>[\d.]+) total_after=(?P<total_after>\d+)"
+)
+
+
+def _parse_inner_metrics(stderr: str) -> dict | None:
+    """Find the [METRICS] line emitted by run_swe_zero_multilang.py at end of iter."""
+    m = _METRICS_LINE_RE.search(stderr or "")
+    if not m:
+        return None
+    return {
+        "rollouts_produced": int(m.group("rollouts")),
+        "completion_tokens": int(m.group("completion")),
+        "submission_rate": float(m.group("sub")),
+        "total_after": int(m.group("total_after")),
+    }
+
+
+def _emit_throughput_metric(
+    output_root: str,
+    region: str,
+    batch_idx: int,
+    worker_seed: int,
+    iteration: int,
+    inner_metrics: dict | None,
+    duration_s: float,
+    rc: int,
+) -> None:
+    """Write per-iter throughput metric to gs://marin-{region}/swe_zero_100b/throughput/.
+
+    Uses the [METRICS] ground-truth line emitted by run_swe_zero_multilang.py.
+    Falls back to all-zeros when the inner crashed before emitting (rc != 0).
+
+    scripts/throughput_stats.py aggregates these files to compute per-region
+    tokens/sec over arbitrary windows. One file per (worker, iter); ~250 B JSON.
+    """
+    if inner_metrics:
+        rollouts_produced = inner_metrics["rollouts_produced"]
+        completion_tokens = inner_metrics["completion_tokens"]
+        submission_rate = inner_metrics["submission_rate"]
+        total_after = inner_metrics["total_after"]
+        # Trajectory tokens (what SFT trains on) ~ 9,050/rollout per round-3 stats.
+        trajectory_tokens_estimate = rollouts_produced * 9050
+        source = "inner_metrics"
+    else:
+        rollouts_produced = completion_tokens = total_after = 0
+        submission_rate = 0.0
+        trajectory_tokens_estimate = 0
+        source = "missing_inner_metrics"
+    metric = {
+        "ts": time.time(),
+        "region": region,
+        "shard_idx": batch_idx,
+        "worker_id": worker_seed,
+        "iter": iteration,
+        "rollouts_produced": rollouts_produced,
+        "completion_tokens": completion_tokens,
+        "trajectory_tokens_estimate": trajectory_tokens_estimate,
+        "submission_rate": submission_rate,
+        "total_after": total_after,
+        "duration_s": round(duration_s, 1),
+        "rc": rc,
+        "source": source,
+    }
+    metric_path = f"{output_root}/throughput/{worker_seed:04d}_{iteration:03d}.json"
+    try:
+        _gcs_blob(metric_path).upload_from_string(json.dumps(metric))
+    except Exception as e:
+        logger.warning("failed to write throughput metric to %s: %s", metric_path, e)
+
+
 def _run_inner(output_root: str, batch_idx: int, tensor_parallel: int, worker_seed: int, iteration: int) -> int:
     shard_dir = _shard_path(output_root, batch_idx)
     cmd = [
@@ -463,7 +536,21 @@ def _run_inner(output_root: str, batch_idx: int, tensor_parallel: int, worker_se
     if cache_root:
         inner_env["HF_HOME"] = cache_root
         inner_env["HF_HUB_OFFLINE"] = "1"
+    inner_start = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True, errors="replace", env=inner_env)
+    inner_duration = time.time() - inner_start
+    region = os.environ.get("IRIS_WORKER_REGION", "unknown")
+    inner_metrics = _parse_inner_metrics(proc.stderr)
+    _emit_throughput_metric(
+        output_root,
+        region,
+        batch_idx,
+        worker_seed,
+        iteration,
+        inner_metrics,
+        inner_duration,
+        proc.returncode,
+    )
     log_blob = (
         f"=== cmd ===\n{' '.join(cmd)}\n"
         f"=== rc={proc.returncode} ===\n"
