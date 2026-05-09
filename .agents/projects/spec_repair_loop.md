@@ -1265,3 +1265,149 @@ The loop is most likely to fail at Stage 2 (the repair compiler doesn't produce 
 Don't push past the auto-revert thresholds — they exist because compiler drift is real and the diagnostic is the only safety net.
 
 When the loop converges, the deliverable is `spec_v_final.jsonl` plus a trajectory plot showing per-statement κ over iterations. Hand that to the spec author with a triage queue of "we rewrote these statements, here's the diff, here's why."
+
+---
+
+## 17. Bucket-based decision workflow (2026-05-09)
+
+After the v2 / v2.5 rubric-revision experiments (see `.agents/logbooks/claude_judge_spec_repair.md`), an operational recipe emerged for deciding **per-statement** what to do: leave the rubric alone, use it as-is, fix it via compiler, escalate to spec revision, or drop entirely.
+
+**Goal**: faithful spec interpretation. **Diagnostic**: cross-judge disagreement (Krippendorff α as primary). **Threshold**: T₁ pegged so we don't penalize rubric writers when agreement is already acceptable; current pick is T₁ = 0.5 (Fleiss κ ≈ 0.3-0.4 is "fair to moderate" — good enough as a working pragmatic floor).
+
+### 17.1 Bucket-the-statements step (free, deterministic)
+
+For each statement, compute α_bare and α_phase_4 on the 3-judge ensemble. Bucket:
+
+| bucket | condition | meaning | action |
+|---|---|---|---|
+| **A** | α_bare ≥ T₁ AND α_phase_4 ≥ T₁ | both conditions produce acceptable agreement | **leave alone** — rubric writer not at fault |
+| **B** | α_bare < T₁ AND α_phase_4 ≥ T₁ | rubric brings agreement up to threshold | **use rubric, done** |
+| **C** | α_bare ≥ T₁ AND α_phase_4 < T₁ | rubric pulls below threshold | **rubric paradox — fix urgently** |
+| **D** | α_bare < T₁ AND α_phase_4 < T₁ | both below threshold | **deep ambiguity — needs compiler diagnostic** |
+
+Empirically at T₁=0.5 on our 46 statements (snapshot 2026-05-09 with 4-judge data including Grok-opposite generator):
+
+- Bucket A: 29 statements
+- Bucket B: 3 statements (be_empathetic, no_erotica_or_gore, assume_best_intentions)
+- **Bucket C: 0 statements** (the pure rubric paradox does not exist at T₁=0.5)
+- Bucket D: 14 statements (the real work surface)
+
+Within Bucket D, sub-classify by Δα sign:
+- **D1** (Δα < 0, rubric makes a poor situation worse): 8 statements — rubric drift likely dominates
+- **D2** (Δα > 0, rubric helps modestly but absolute α still poor): 6 statements — spec ambiguity likely dominates
+
+### 17.2 Per-statement diagnostic ranking (free, deterministic)
+
+For each Bucket D statement, run two rankings via `e9_rubric_poison_rank.py`:
+
+- **bare-poison cells**: rank cells by `bare_pwv` descending. High-rank cells are evidence the spec text is under-specified — bare judges disagree without rubric guidance.
+- **rubric-poison cells**: rank cells by `(rubric_pwv − bare_pwv)` descending. High-rank cells are evidence the rubric introduces NEW disagreement vs bare — rubric drift.
+
+Compute totals: if `Σ bare_pwv > Σ rubric_pwv`, spec ambiguity dominates; if `Σ rubric_pwv > Σ bare_pwv`, rubric drift dominates; if both are large, diagnose both.
+
+### 17.3 Compiler diagnostic step (~$0.10 per statement, GPT-5.1 with reasoning_effort=none)
+
+Adapt `e9_recompile_rubric_with_disagreement.py` to send the compiler **both** ranking lists (not just rubric-poison). Prompt the compiler to:
+
+1. **Diagnose**: which is the dominant problem on this statement — rubric drift, spec ambiguity, or both? Cite specific cells from each ranking as evidence.
+2. **For rubric drift**: propose specific anchor edits (no spec changes proposed).
+3. **For spec ambiguity**: propose specific spec text edits, marked clearly as **proposals for spec-author review** (not changes to deploy).
+4. **For both**: do both, with confidence ratings on each.
+5. **For irreducible**: explicitly say so and recommend dropping the rubric (judge bare only).
+
+Output schema (JSON):
+```json
+{
+  "diagnosis": "rubric_drift | spec_ambiguity | both | irreducible",
+  "evidence_summary": "...",
+  "rubric_edits": [{"anchor": "1", "old": "...", "new": "...", "confidence": 0.0-1.0}, ...],
+  "spec_edits_for_author_review": [{"old_phrase": "...", "new_phrase": "...", "rationale": "...", "confidence": 0.0-1.0}],
+  "recommendation": "adopt_rubric_edit | drop_rubric | escalate_spec | irreducible"
+}
+```
+
+Use Claude (free via subagent) for the diagnostic step on the highest-stakes statements to mitigate the GPT-as-compiler-and-judge circularity. For spec edits specifically, prefer a non-judge model.
+
+### 17.4 Human review step (free, takes time)
+
+For each statement's diagnostic output, a human decides:
+
+| compiler recommendation | typical human action |
+|---|---|
+| `adopt_rubric_edit` | ✓ approve (low-stakes, reversible) |
+| `escalate_spec` | ⚠️ flag for spec-author signoff (high-stakes, do not auto-deploy) |
+| `drop_rubric` | ✓ approve (use bare for this statement) |
+| `irreducible` | ⏸ flag for spec-author conversation |
+
+Spec edits never auto-deploy. They're proposals; spec authors decide.
+
+### 17.5 Validation step (~$5-15 batch, gated on approved edits)
+
+For approved rubric edits, **re-judge ALL 3 judges** under phase_4 with the new rubric (not just one — the v2 vs v2.5 lesson is that partial re-judging is misleading). Compare:
+- New α_phase_4 vs old α_phase_4 — must improve to adopt
+- New Δpwv on top-K cells from the original poison ranking — must drop ≥ 50%
+- Use Anthropic batch API for Claude (50% discount) where wall time allows
+
+Bootstrap CI on Δα improvements before declaring success — point estimates on n=80 cells are noisy.
+
+### 17.6 Gotchas
+
+These are the failure modes to watch for, learned the hard way during the v2/v2.5 work:
+
+1. **Agreement ≠ correctness**. Krippendorff α measures cross-judge agreement, which is a proxy for "the spec produces clear, faithful interpretation." A rubric that makes everyone score 5 on everything has α=1.0 and is worthless. **For statements where high agreement was achieved by edits that visibly changed what the spec means** (e.g., the v2 no_agenda anchor broadened "agenda *of its own*" to "any agenda"), validity check before adopting.
+
+2. **Bucket A is "trust them" without validity check**. 29 statements look fine because all 3 frontier-LM judges agree. They could share training-data-correlated errors. We're explicitly accepting this trade-off; don't claim more than that.
+
+3. **Spec edits are categorically higher-stakes than rubric edits**. A rubric edit changes how WE judge. A spec edit changes what the spec MEANS for everyone (RLHF teams, downstream evaluation, other agents). The compiler proposes; spec authors decide.
+
+4. **GPT-5.1 is both compiler and judge — circularity risk**. v2 showed GPT's compiler diagnoses correctly identified GPT's own judging biases — useful, but for spec-edit proposals specifically, prefer a non-judge model (Claude or Gemini compiler) for independence.
+
+5. **Disagreement can be valuable signal, not bug**. When judges disagree because the spec is genuinely under-specified (e.g., "engage in or PRODUCE illegal content" — does explanatory writing produce it?), surfacing that to spec authors is the goal, NOT aggressively fixing it away with rubric tweaks.
+
+6. **Cross-statement consistency**. Per-statement analysis won't catch issues like the carve-out language *"unless explicitly instructed"* appearing in 8 spec statements with subtly different applications. After per-statement compilation, run a cross-statement consistency pass.
+
+7. **Stability of compiler output**. One compile is one draw. Re-compile 2-3× per statement at varied temperature; ensemble or pick most-frequent suggestions. Otherwise trusting a single sample.
+
+8. **Threshold T₁ is itself a normative choice**. T₁ = 0.5 is my pick; different stakeholders pick differently. Be explicit about it and willing to vary.
+
+9. **Validation experiment is itself non-trivial**. For each approved edit, validation requires re-judging a population sample. Without bootstrap CI, mistake noise for improvement.
+
+10. **Re-judge ALL judges, not just one**. The v2 (GPT-only re-judge) experiment showed null effect on 3 of 5 statements. The v2.5 experiment (Gemini+Claude added) showed 2 of those 3 actually fixable. **Partial re-judging is a measurement artifact, not a result.** Always do v2_full from the start.
+
+### 17.7 Symmetry — the methodology applies to spec revision too
+
+The workflow is bidirectional. For Bucket D2 (rubric helps but neither condition reaches threshold), the **bare-poison cells** are evidence the *spec text* is under-specified — the rubric is doing disambiguation work the spec should ideally do directly. Apply the same compiler diagnostic with **spec edit proposals** as the primary output (not rubric edits).
+
+This is the strongest leverage in the methodology: it doesn't just fix rubrics in isolation; it surfaces *spec ambiguities* to authors, anchored on cells where judges actually disagree. That's a tighter feedback signal than "the spec authors think this is unclear" — it's "the spec authors see specific borderline scenarios where 3 frontier LMs read the spec differently, here are the cases."
+
+### 17.8 Cost summary for one full pass on 14 Bucket D statements
+
+| step | cost | wall |
+|---|---|---|
+| bucket + ranking | $0 | minutes |
+| compiler diagnostic (14 × ~$0.10) | ~$1.40 | ~5 min |
+| human review | $0 (time-cost only) | hours |
+| validation re-judge (subset, batch) | ~$5-15 depending on coverage | ~hour |
+
+Total compiler-side spend per full Bucket D pass: ~$10-20. Validation gates the actual deployment.
+
+### 17.9 Files
+
+- `e9_rubric_poison_rank.py` — Δpwv ranking (cell-level diagnostic)
+- `e9_recompile_rubric_with_disagreement.py` — compiler step (rubric edits only currently; needs extension to handle spec proposals symmetrically)
+- `e9_rejudge_gpt_v2.py`, `e9_rejudge_gemini_claude_v2.py`, `e9_recompute_agreement_v2_full.py` — validation infrastructure
+- `e8_rubrics_v2.jsonl` — sample output of the compiler step on 5 strongly-hurt statements
+- `.agents/logbooks/rubric_v2_full_results.md` — sample validation output
+
+### 17.10 What's missing before the workflow can be trusted at scale
+
+The four validation experiments still owed (per the critical re-read in `claude_judge_spec_repair.md`):
+
+| experiment | purpose | cost |
+|---|---|---|
+| **Spec-revision on `comply_with_laws`** | tests the symmetric methodology on the case where rubric tweaks already failed | ~$2-4 |
+| **Stability check** | re-compile v2 anchors 3-5× at varied temperature, measure variance | ~$1 |
+| **Validity check on `no_agenda`** | hand-check whether v2's broadened reading is faithful to spec text | $0 (human time) |
+| **Generalization check** | apply methodology on 1 marginal-hurt statement (Δα ∈ [-0.10, -0.05]) | ~$3-5 |
+
+Total: ~$10-15 to upgrade the workflow from "promising prototype" to "validated tool."
