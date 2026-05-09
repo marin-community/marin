@@ -1282,6 +1282,9 @@ class TaskRow:
     max_retries_preemption: int
     submitted_at: Timestamp
     priority_band: int = 2
+    priority_neg_depth: int = 0
+    priority_root_submitted_ms: int = 0
+    priority_insertion: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1517,6 +1520,9 @@ TASK_ROW_PROJECTION = TASKS.projection(
     "max_retries_preemption",
     "submitted_at_ms",
     "priority_band",
+    "priority_neg_depth",
+    "priority_root_submitted_ms",
+    "priority_insertion",
     row_cls=TaskRow,
 )
 

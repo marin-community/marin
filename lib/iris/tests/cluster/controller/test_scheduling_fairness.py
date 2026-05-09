@@ -6,7 +6,11 @@
 from collections import defaultdict
 
 from iris.cluster.controller.budget import UserBudgetDefaults, UserTask, compute_effective_band, interleave_by_user
-from iris.cluster.controller.controller import SchedulingOutcome, _schedulable_tasks
+from iris.cluster.controller.controller import (
+    SchedulingOutcome,
+    _schedulable_tasks,
+    _sort_pending_tasks_by_resolved_band,
+)
 from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
@@ -39,7 +43,7 @@ def test_production_scheduled_before_interactive():
         # Submit production tasks second
         prod_tasks = _submit_user_job(state, "bob", "prod-job", replicas=2, band=job_pb2.PRIORITY_BAND_PRODUCTION)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _sort_pending_tasks_by_resolved_band(state._store, _schedulable_tasks(state._db))
         task_ids = [t.task_id for t in schedulable]
 
         # All production tasks should come before all interactive tasks
@@ -65,7 +69,7 @@ def test_batch_scheduled_after_interactive():
             state, "bob", "interactive-job", replicas=2, band=job_pb2.PRIORITY_BAND_INTERACTIVE
         )
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _sort_pending_tasks_by_resolved_band(state._store, _schedulable_tasks(state._db))
         task_ids = [t.task_id for t in schedulable]
 
         batch_ids = {t.task_id for t in batch_tasks}
@@ -152,8 +156,8 @@ def test_depth_boost_within_band():
         )
 
 
-def test_child_inherits_parent_band():
-    """Child job inherits parent's priority band."""
+def test_child_resolves_parent_band_from_job_config():
+    """Child job resolves its parent's priority band from job_config."""
     with make_controller_state() as state:
         # Submit parent as PRODUCTION
         parent_id = JobName.root("alice", "parent-prod")
@@ -175,13 +179,15 @@ def test_child_inherits_parent_band():
             state.submit_job(cur, child_id, child_req, Timestamp.now())
         child_tasks = query_tasks_for_job(state, child_id)
 
-        # Child should have inherited PRODUCTION band
+        # Pending rows no longer inherit by reading parent task rows; the
+        # scheduler resolves inheritance from immutable job_config.
         for ct in child_tasks:
             task = query_task(state, ct.task_id)
-            assert task.priority_band == job_pb2.PRIORITY_BAND_PRODUCTION, (
-                f"Child task {ct.task_id} has band {task.priority_band}, "
-                f"expected {job_pb2.PRIORITY_BAND_PRODUCTION} (PRODUCTION)"
-            )
+            assert task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
+
+        with state._db.read_snapshot() as snap:
+            requested = state._store.jobs.get_priority_bands(snap, [child_id])
+        assert requested == {child_id: job_pb2.PRIORITY_BAND_PRODUCTION}
 
 
 def test_submit_does_not_create_user_budgets_row():

@@ -668,12 +668,30 @@ def _schedulable_tasks(queries: ControllerDB) -> list[TaskRow]:
         tasks = TASK_ROW_PROJECTION.decode(
             snapshot.fetchall(
                 f"SELECT {TASK_ROW_PROJECTION.select_clause()} FROM tasks t WHERE t.state = ? "
-                "ORDER BY t.priority_band ASC, t.priority_neg_depth ASC, t.priority_root_submitted_ms ASC, "
+                "ORDER BY t.priority_neg_depth ASC, t.priority_root_submitted_ms ASC, "
                 "t.submitted_at_ms ASC, t.priority_insertion ASC",
                 (job_pb2.TASK_STATE_PENDING,),
             ),
         )
     return [task for task in tasks if task_row_can_be_scheduled(task)]
+
+
+def _sort_pending_tasks_by_resolved_band(store: ControllerStore, pending_tasks: list[TaskRow]) -> list[TaskRow]:
+    """Order pending rows using immutable job_config priority bands."""
+    if not pending_tasks:
+        return []
+    with store.read_snapshot() as snap:
+        requested_bands = store.jobs.get_priority_bands(snap, {task.job_id for task in pending_tasks})
+    return sorted(
+        pending_tasks,
+        key=lambda task: (
+            requested_bands.get(task.job_id, job_pb2.PRIORITY_BAND_INTERACTIVE),
+            task.priority_neg_depth,
+            task.priority_root_submitted_ms,
+            task.submitted_at.epoch_ms(),
+            task.priority_insertion,
+        ),
+    )
 
 
 def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, TaskDetailRow]:
@@ -1902,7 +1920,7 @@ class Controller:
         """
         timer = Timer()
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
-            pending_tasks = _schedulable_tasks(self._db)
+            pending_tasks = _sort_pending_tasks_by_resolved_band(self._store, _schedulable_tasks(self._db))
             workers = healthy_active_workers_with_attributes(self._db, self._health)
             with self._db.read_snapshot() as snap:
                 usage_by_worker = self._store.attempts.resource_usage_by_worker(snap)

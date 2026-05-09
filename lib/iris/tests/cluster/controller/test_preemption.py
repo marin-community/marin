@@ -9,6 +9,8 @@ from iris.cluster.controller.controller import (
     RunningTaskInfo,
     _get_running_tasks_with_band_and_value,
     _run_preemption_pass,
+    _schedulable_tasks,
+    _sort_pending_tasks_by_resolved_band,
 )
 from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
 from iris.cluster.controller.transitions import (
@@ -20,6 +22,7 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
+from rigging.timing import Timestamp
 
 from .conftest import (
     ControllerTestHarness,
@@ -735,6 +738,51 @@ def test_demoted_task_re_promotes_after_user_returns_under_budget():
             )
             == job_pb2.PRIORITY_BAND_INTERACTIVE
         )
+
+
+def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
+    """Pending order resolves parent bands from job_config, not stamped task rows."""
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        w1 = harness.add_worker("w1", cpu=4)
+
+        parent_tasks = harness.submit(
+            "/alice/parent-prod",
+            cpu=1,
+            priority_band=job_pb2.PRIORITY_BAND_PRODUCTION,
+        )
+        parent_task = parent_tasks[0]
+        parent_id = parent_task.job_id
+
+        # Simulate an assignment-time effective-band stamp that differs from
+        # the parent's immutable requested band. Child inheritance and pending
+        # ordering must not read this stamped value.
+        _dispatch_with_band(state, parent_task, w1, job_pb2.PRIORITY_BAND_BATCH)
+        assert query_task(state, parent_task.task_id).priority_band == job_pb2.PRIORITY_BAND_BATCH
+
+        child_id = parent_id.child("child")
+        child_req = controller_pb2.Controller.LaunchJobRequest(
+            name=child_id.to_wire(),
+            entrypoint=make_test_entrypoint(),
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            environment=job_pb2.EnvironmentConfig(),
+            replicas=1,
+        )
+        with state._store.transaction() as cur:
+            state.submit_job(cur, child_id, child_req, Timestamp.now())
+        interactive_tasks = harness.submit(
+            "/bob/interactive",
+            cpu=1,
+            priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        )
+
+        child_task = query_tasks_for_job(state, child_id)[0]
+        assert child_task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
+
+        ordered = _sort_pending_tasks_by_resolved_band(state._store, _schedulable_tasks(state._db))
+        ordered_ids = [task.task_id for task in ordered]
+
+        assert ordered_ids.index(child_task.task_id) < ordered_ids.index(interactive_tasks[0].task_id)
 
 
 def _dispatch_with_band(state, task, worker_id, priority_band: int) -> None:

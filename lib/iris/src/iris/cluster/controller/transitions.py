@@ -950,16 +950,12 @@ class ControllerTransitions:
         # config (see reconcile_user_budget_tiers) and admin overrides via
         # set_user_budget.
 
-        # Resolve priority band: use explicit request value, inherit from parent, or default to INTERACTIVE.
+        # Pending rows keep only this job's requested/default band. Parent
+        # inheritance is resolved from immutable job_config when the scheduler
+        # computes the effective band for a scheduling loop.
         requested_band = int(request.priority_band)
         if requested_band != job_pb2.PRIORITY_BAND_UNSPECIFIED:
             band_sort_key = requested_band
-        elif job_id.parent is not None:
-            parent_band = self._store.tasks.get_priority_band_for_job(cur, job_id.parent)
-            if parent_band is not None:
-                band_sort_key = parent_band
-            else:
-                band_sort_key = job_pb2.PRIORITY_BAND_INTERACTIVE
         else:
             band_sort_key = job_pb2.PRIORITY_BAND_INTERACTIVE
 
