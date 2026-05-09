@@ -121,6 +121,10 @@ class SliceState:
 
     handle: SliceHandle
     last_active: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
+    # Watermark for the last time last_active was flushed to the DB. Tracked
+    # separately from last_active so the per-tick mutation of last_active does
+    # not reset the flush-elapsed clock and starve the DB of updates.
+    last_active_db_flush: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
     lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
     worker_ids: list[str] = field(default_factory=list)
     error_message: str = ""
@@ -526,6 +530,9 @@ class ScalingGroup:
                 state.lifecycle = SliceLifecycleState.READY
                 state.worker_ids = worker_ids
                 state.last_active = timestamp
+                # _db_upsert_slice below writes last_active_ms to the DB, so the
+                # flush watermark advances with it.
+                state.last_active_db_flush = timestamp
         if state is not None:
             self._db_upsert_slice(slice_id, state)
             logger.info(
@@ -750,13 +757,16 @@ class ScalingGroup:
 
         # Determine which slices are active and whether they need a DB write.
         # _slice_has_active_workers is called outside the lock (reads worker_status_map, not _slices).
+        # The flush threshold is measured against last_active_db_flush, not
+        # last_active — last_active is bumped every tick, so reading it here
+        # would always yield ~tick_interval elapsed and starve DB writes.
         active_slice_ids: list[str] = []
         needs_db_write: list[str] = []
         for slice_id, state in snapshot:
             if not self._slice_has_active_workers(state, worker_status_map):
                 continue
             active_slice_ids.append(slice_id)
-            elapsed_ms = timestamp.epoch_ms() - state.last_active.epoch_ms()
+            elapsed_ms = timestamp.epoch_ms() - state.last_active_db_flush.epoch_ms()
             if elapsed_ms >= self._ACTIVITY_WRITE_THRESHOLD_MS:
                 needs_db_write.append(slice_id)
 
@@ -793,6 +803,13 @@ class ScalingGroup:
                         state.error_message,
                     ),
                 )
+
+        # Record the flush watermark so the next elapsed check measures from
+        # the actual write time, not from the per-tick last_active mutation.
+        with self._slices_lock:
+            for slice_id in needs_db_write:
+                if slice_id in self._slices:
+                    self._slices[slice_id].last_active_db_flush = timestamp
 
     def _slice_has_active_workers(self, state: SliceState, worker_status_map: WorkerStatusMap) -> bool:
         """Check if any worker in a slice has running tasks."""
@@ -1328,6 +1345,10 @@ def restore_scaling_group(
             lifecycle=lifecycle,
             worker_ids=list(slice_snap.worker_ids),
             last_active=Timestamp.from_ms(slice_snap.last_active_ms),
+            # Seed the flush watermark from the recovered last_active so the
+            # post-restart elapsed check measures from the last DB write, not
+            # from epoch 0.
+            last_active_db_flush=Timestamp.from_ms(slice_snap.last_active_ms),
             error_message=slice_snap.error_message,
         )
 

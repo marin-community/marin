@@ -8,6 +8,7 @@ VM group management, and state tracking - not on implementation details.
 """
 
 import logging
+from pathlib import Path
 
 import pytest
 from iris.cluster.controller.autoscaler.scaling_group import (
@@ -16,6 +17,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     SliceState,
     _zones_from_config,
 )
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -530,6 +532,59 @@ class TestScalingGroupIdleTracking:
         # slice-002 is eligible because idle_threshold (1000ms) has passed since ready_ts (1000ms)
         assert not group.is_slice_eligible_for_scaledown("slice-001", check_ts)
         assert group.is_slice_eligible_for_scaledown("slice-002", check_ts)
+
+    def test_update_slice_activity_flushes_db_periodically_when_continuously_active(
+        self, unbounded_config: config_pb2.ScaleGroupConfig, tmp_path
+    ):
+        """Regression: continuously-active slices must keep flushing last_active_ms to the DB.
+
+        Earlier the threshold check measured elapsed against state.last_active, which
+        is mutated to the current timestamp every tick. elapsed therefore stayed at
+        ~tick_interval and never crossed the 30s flush threshold, so the DB row froze
+        at the first post-restart write while in-memory state ticked forward.
+        """
+        db = ControllerDB(db_dir=Path(tmp_path))
+        discovered = [make_fake_slice_handle("slice-001", all_ready=True)]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(60_000), db=db)
+        group.reconcile()
+        ready_ts = Timestamp.from_ms(1_000_000)
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
+
+        wid = _get_worker_id(group.get_slice("slice-001"))
+        active_map = {wid: WorkerStatus(worker_id=wid, running_task_ids=frozenset({"task-1"}))}
+
+        def db_last_active_ms() -> int:
+            with db.read_snapshot() as q:
+                rows = list(q.raw("SELECT last_active_ms FROM slices WHERE slice_id = ?", ("slice-001",)))
+            return int(rows[0].last_active_ms) if rows else 0
+
+        # Run many continuous ticks at the production cadence (10s apart).
+        # Each tick: in-memory state.last_active gets bumped to the current ts.
+        # The flush threshold is 30s, so we expect the DB to be written ~every 3 ticks.
+        tick_interval_ms = 10_000
+        flush_threshold_ms = 30_000
+        baseline_db_ts = db_last_active_ms()
+        flush_count = 0
+        last_flush_seen = baseline_db_ts
+        for tick in range(1, 21):  # 200s of activity
+            ts = Timestamp.from_ms(ready_ts.epoch_ms() + tick * tick_interval_ms)
+            group.update_slice_activity(active_map, ts)
+            current_db_ts = db_last_active_ms()
+            if current_db_ts != last_flush_seen:
+                flush_count += 1
+                last_flush_seen = current_db_ts
+
+        # Over 200s with a 30s threshold, we must see multiple flushes — not zero
+        # (the bug) and not one per tick (which would be wasteful).
+        assert flush_count >= 5, f"expected periodic DB flushes, got {flush_count} in 20 ticks"
+        # The most recent flush must be reasonably current — within one threshold
+        # of the final tick, never more than 200s stale.
+        final_ts_ms = ready_ts.epoch_ms() + 20 * tick_interval_ms
+        staleness_ms = final_ts_ms - last_flush_seen
+        assert (
+            staleness_ms <= flush_threshold_ms + tick_interval_ms
+        ), f"DB last_active_ms is {staleness_ms}ms stale; flush threshold is {flush_threshold_ms}ms"
 
     def test_scale_down_if_idle_terminates_eligible_slice(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """scale_down_if_idle terminates an eligible idle slice."""
