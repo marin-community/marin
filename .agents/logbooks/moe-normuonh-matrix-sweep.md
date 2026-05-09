@@ -69,3 +69,12 @@
 - Result: Parent `/kaiyue/iris-run-job-20260509-190231` is running. Children `/kaiyue/iris-run-job-20260509-190231/grug-train-normuonh-matrix-baseline-adam-mask-d512-2.19e17` and `/kaiyue/iris-run-job-20260509-190231/grug-train-normuonh-matrix-baseline-adam-mask-d768-1.70e18` are pending on v5p-8 preemptible capacity.
 - Interpretation: The corrected suffixed launch is accepted by Iris and avoids W&B/output-path collisions with earlier runs.
 - Next action: Wait for capacity and W&B startup, then compare against the v16 AdamH baseline and MuonH corrected launch.
+
+### 2026-05-09 12:14 - MOE-NMH-006 corrected W&B startup
+
+- Hypothesis: Corrected NorMuonH gate-1 jobs should get through startup without the previous expert-sharding lowering failure.
+- Command: `.venv/bin/iris --config lib/iris/examples/marin.yaml job logs /kaiyue/iris-run-job-20260509-190231 --since-seconds 900 --tail --max-lines 800 | rg -i "wandb:|traceback|shardingtypeerror|exception|\\berror\\b|global_step|tokens_per_second|finished|compil|lower"`
+- Config: Parent `/kaiyue/iris-run-job-20260509-190231`, run suffix `baseline-adam-mask`.
+- Result: Both corrected NorMuonH children are running with zero failures/preemptions. W&B runs are live at `normuonh-matrix-baseline-adam-mask-d512-2.19e17` and `normuonh-matrix-baseline-adam-mask-d768-1.70e18`. No `Traceback` or `ShardingTypeError` appeared in the recent log scan.
+- Interpretation: Corrected NorMuonH reached W&B startup for both gate-1 points; wait for step metrics before assessing quality/throughput.
+- Next action: Monitor W&B until both runs log `global_step`, `throughput/tokens_per_second`, and eval metrics.
