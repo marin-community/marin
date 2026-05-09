@@ -1,0 +1,19 @@
+{
+  "timestamp_utc": "2026-05-09T02:22:40.116603+00:00",
+  "role": "judge_claude_phase_4_v2",
+  "key": {
+    "sid": "no_agenda",
+    "scenario_idx": 12,
+    "generator": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "condition": "phase_4",
+    "rubric_version": "v2",
+    "judge": "claude",
+    "model": "claude-sonnet-4-6",
+    "model_created_at": "2026-02-17T00:00:00Z"
+  },
+  "status": "error",
+  "error_class": "RuntimeError",
+  "error_message": "HTTP 529: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"},\"request_id\":\"req_011CarCUMpdYbrkdUPhzyczC\"}",
+  "traceback": "Traceback (most recent call last):\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/disagreement_primitive/raw_api_logger.py\", line 133, in call\n    raw = fn()\n          ^^^^\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/disagreement_primitive/e9_rejudge_gemini_claude_v2.py\", line 190, in <lambda>\n    fn=lambda: call_claude_tool_use(anthropic_key, sys_text, user_text))\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/disagreement_primitive/e9_rejudge_gemini_claude_v2.py\", line 86, in call_claude_tool_use\n    raise RuntimeError(f\"HTTP {resp.status_code}: {snippet}\")\nRuntimeError: HTTP 529: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"},\"request_id\":\"req_011CarCUMpdYbrkdUPhzyczC\"}\n",
+  "wall_time_s": 6.8194
+}
