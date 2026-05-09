@@ -47,7 +47,7 @@ from zephyr.dataset import (
     resolve_glob,
 )
 from zephyr.expr import Expr
-from zephyr.external_sort import external_sort_merge
+from zephyr.external_sort import compute_fan_in, compute_write_batch_size, external_sort_merge
 from zephyr.readers import InputFileSpec, load_file
 
 logger = logging.getLogger(__name__)
@@ -630,7 +630,7 @@ def _merge_sorted_chunks(
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterReader can decide using manifest stats (no file opens needed).
-    from zephyr.shuffle import ScatterReader
+    from zephyr.shuffle import ScatterReader  # circular import: shuffle imports plan
 
     use_external = (
         external_sort_dir is not None
@@ -639,8 +639,6 @@ def _merge_sorted_chunks(
     )
 
     if use_external:
-        from zephyr.external_sort import compute_fan_in, compute_write_batch_size
-
         memory_limit = _TaskResources.from_environment().memory_bytes
         # Per-iterator memory ~= compressed bytes for one chunk held by
         # cat_file. Use the actual max compressed chunk size from the sidecar.
@@ -774,8 +772,13 @@ def run_stage(
 
     configure_logging(level=logging.INFO)
 
-    from zephyr import counters
-    from zephyr.writers import write_binary_file, write_jsonl_file, write_levanter_cache, write_parquet_file
+    from zephyr import counters  # circular import: counters → execution → plan
+    from zephyr.writers import (  # circular import: writers → counters → execution → plan
+        write_binary_file,
+        write_jsonl_file,
+        write_levanter_cache,
+        write_parquet_file,
+    )
 
     stream: Iterator = iter(ctx.shard)
 
@@ -819,7 +822,7 @@ def run_stage(
             elif op.writer_type == "binary":
                 result = write_binary_file(stream, output_path)["path"]
             elif op.writer_type == "vortex":
-                from zephyr.writers import write_vortex_file
+                from zephyr.writers import write_vortex_file  # circular import: writers → counters → execution → plan
 
                 result = write_vortex_file(stream, output_path, schema=op.schema)["path"]
             else:
@@ -838,7 +841,7 @@ def run_stage(
         elif isinstance(op, Reduce):
             # Build ScatterReader directly from per-mapper sidecars, then
             # merge sorted chunks and reduce per key.
-            from zephyr.shuffle import ScatterReader
+            from zephyr.shuffle import ScatterReader  # circular import: shuffle imports plan
 
             shard = ctx.shard
             if not isinstance(shard, ScatterReader):

@@ -62,7 +62,7 @@ class Tracker(abc.ABC):
         pass
 
     def __enter__(self):
-        import levanter.tracker.tracker_fns as tracker_fns
+        import levanter.tracker.tracker_fns as tracker_fns  # circular import: tracker_fns imports tracker
 
         if hasattr(self, "_tracker_cm"):
             raise RuntimeError("This tracker is already set as the global tracker")

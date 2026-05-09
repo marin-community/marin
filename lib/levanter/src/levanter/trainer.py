@@ -47,6 +47,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray, PyTree
 from optax import GradientTransformation
 
+import levanter.callbacks
 import levanter.callbacks._metrics
 import levanter.checkpoint
 import levanter.tracker
@@ -573,8 +574,6 @@ class Trainer:
         return info
 
     def _add_default_hooks(self):
-        from levanter import callbacks
-
         self.add_hook(levanter.callbacks.pbar_logger(total=self.config.num_train_steps), every=1)
         self.add_hook(levanter.callbacks.log_step_info(self.config.num_train_steps), every=1)
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
@@ -603,8 +602,6 @@ class Trainer:
             )
 
     def add_eval_hook(self, eval_dataset, name: Optional[str] = None):
-        from levanter import callbacks
-
         eval_loader = self.data_loader(eval_dataset, self.EvalBatch)
 
         if eval_loader and (self.config.max_eval_batches is None or self.config.max_eval_batches > 0):

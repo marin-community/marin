@@ -14,6 +14,7 @@ import logging
 import os
 import socket
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -115,8 +116,6 @@ def wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> 
 
     Returns True if port is ready, False on timeout.
     """
-    import time
-
     dl = Deadline.from_seconds(timeout)
     while not dl.expired():
         try:

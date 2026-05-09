@@ -8,6 +8,7 @@ from functools import partial
 from typing import Any, List, Optional
 
 import jax
+import wandb
 from rigging.filesystem import open_url
 import jax.numpy as jnp
 import numpy as np
@@ -332,8 +333,6 @@ def cb_compute_and_visualize_log_probs(
 
         compute_and_visualize_log_probs(path, model, tokenizer, log_prob_fn, test_data, max_docs=max_docs)
         # TODO: convert to generic logging
-        import wandb
-
         wandb.log({"log_probs": wandb.Html(path)}, step=step.step)
 
     return compute_and_viz_log_probs

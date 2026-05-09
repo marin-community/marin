@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import socket
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -116,8 +117,6 @@ def create_inference_server(config: ReplayConfig) -> tuple[InferenceServer, Asyn
     server = InferenceServer.create(server_config)
 
     # run serving in background
-    import threading
-
     threading.Thread(target=server.serve, daemon=True).start()
 
     # Create client

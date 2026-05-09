@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import queue
 import sqlite3
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -15,10 +17,15 @@ from pathlib import Path
 from threading import Lock, RLock
 from typing import Any
 
+import fsspec.core
 from rigging.timing import Deadline, Duration, Timestamp
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.schema import decode_worker_id
+from iris.cluster.controller.schema import (
+    TASK_DETAIL_PROJECTION,
+    WORKER_ROW_PROJECTION,
+    decode_worker_id,
+)
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
 from iris.rpc import job_pb2
@@ -296,8 +303,6 @@ class ControllerDB:
     AUTH_DB_FILENAME = "auth.sqlite3"
 
     def __init__(self, db_dir: Path):
-        import time
-
         self._db_dir = db_dir
         self._db_dir.mkdir(parents=True, exist_ok=True)
         self._db_path = self._db_dir / self.DB_FILENAME
@@ -511,8 +516,6 @@ class ControllerDB:
 
     @staticmethod
     def decode_task(row: sqlite3.Row):
-        from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
-
         return TASK_DETAIL_PROJECTION.decode_one([row])
 
     def apply_migrations(self) -> None:
@@ -529,8 +532,6 @@ class ControllerDB:
         schema_migrations and the next startup will re-run it (migrations must
         be idempotent via IF NOT EXISTS / IF EXISTS guards).
         """
-        import importlib.util
-
         migrations_dir = Path(__file__).with_name("migrations")
         migrations_dir.mkdir(parents=True, exist_ok=True)
 
@@ -548,8 +549,6 @@ class ControllerDB:
         # Match by stem so a migration previously recorded as .sql is not
         # re-run after conversion to .py.
         applied_stems = {Path(name).stem for name in applied}
-
-        import time
 
         pending = []
         for path in sorted(migrations_dir.glob("*.py")):
@@ -724,8 +723,6 @@ class ControllerDB:
         downloaded via fsspec so remote paths (e.g. ``gs://...``) work.
         Only called at startup before concurrent access begins.
         """
-        import fsspec.core
-
         source_dir_str = str(source_dir).rstrip("/")
 
         with self._lock:
@@ -879,9 +876,7 @@ def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOut
 
 
 def _worker_row_select() -> str:
-    """Lazily resolve WORKER_ROW_PROJECTION.select_clause() to break the db -> schema cycle."""
-    from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
-
+    """Return WORKER_ROW_PROJECTION.select_clause()."""
     return WORKER_ROW_PROJECTION.select_clause()
 
 
@@ -910,8 +905,6 @@ def healthy_active_workers_with_attributes(
     health: WorkerHealthTracker,
 ) -> list[SchedulableWorker]:
     """Return healthy + active workers with attributes."""
-    from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
-
     liveness = health.all()
     healthy_active = {wid for wid, l in liveness.items() if l.healthy and l.active}
     if not healthy_active:

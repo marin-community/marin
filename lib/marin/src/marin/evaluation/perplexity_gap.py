@@ -7,6 +7,7 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any
 
+import wandb
 from fray import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from levanter.analysis.model_perplexity import compare_scored_outputs
@@ -236,8 +237,6 @@ def _log_gap_report_to_wandb(*, config: ModelPerplexityGapConfig, summary: dict[
 
     with tempfile.TemporaryDirectory(prefix="perplexity-gap-report-") as tmpdir:
         write_report_files(tmpdir, summary)
-        import wandb
-
         artifact = wandb.Artifact(name="perplexity_gap_report", type="perplexity_gap_report")
         artifact.add_dir(tmpdir)
         run.log_artifact(artifact)

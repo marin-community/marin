@@ -33,6 +33,7 @@ import traceback
 from collections.abc import Sequence
 from typing import ClassVar
 
+import wandb
 from rigging.filesystem import filesystem as marin_filesystem
 
 from marin.evaluation.evaluation_config import WANDB_PROJECT, EvalTaskConfig
@@ -162,12 +163,6 @@ class EvalchemyEvaluator(Evaluator):
         This is done manually because the WandbLogger in lm-eval requires
         init_args/config_args format which is incompatible with CLI parsing.
         """
-        try:
-            import wandb
-        except ImportError:
-            logger.warning("wandb not installed, skipping wandb logging")
-            return
-
         if not os.environ.get("WANDB_API_KEY"):
             logger.info("WANDB_API_KEY not set, skipping wandb logging")
             return

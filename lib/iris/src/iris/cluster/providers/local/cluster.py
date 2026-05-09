@@ -22,6 +22,7 @@ from pathlib import Path
 
 from rigging.timing import Duration, Timestamp
 
+from iris.cli.token_store import store_token
 from iris.cluster.config import make_local_config
 from iris.cluster.constraints import worker_attributes_from_resources
 from iris.cluster.controller.auth import create_api_key, create_controller_auth
@@ -254,10 +255,6 @@ class LocalCluster:
                 name="local-auto-login",
                 now=now,
             )
-
-        # Local import to break circular dependency:
-        # local_cluster → cli.token_store → cli.__init__ → cli.main → client → local_cluster
-        from iris.cli.token_store import store_token
 
         cluster_name = self._config.name or "local"
         store_token(cluster_name, url, jwt_token)

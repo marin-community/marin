@@ -10,6 +10,7 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 import logging
 import shutil
 import socket
+import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -27,6 +28,8 @@ from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.runtime.docker import DockerContainerHandle
+from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
@@ -148,8 +151,6 @@ def build_iris_env(
     variables (IRIS_WORKER_ID, IRIS_ADVERTISE_HOST) and overrides port values
     with real allocated ports.
     """
-    from iris.cluster.runtime.env import build_common_iris_env
-
     req = task.request
     env = build_common_iris_env(
         task_id=req.task_id,
@@ -440,8 +441,6 @@ class TaskAttempt:
         if not self._container_handle:
             return worker_pb2.Worker.ExecInContainerResponse(error=f"Task {self.task_id} has no container handle")
 
-        import subprocess as _subprocess
-
         container_id = self._container_handle.container_id
         if not container_id:
             return worker_pb2.Worker.ExecInContainerResponse(error="No container ID available")
@@ -449,10 +448,8 @@ class TaskAttempt:
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
 
         # Use docker exec for Docker containers, direct exec for process containers
-        from iris.cluster.runtime.docker import DockerContainerHandle
-
         if isinstance(self._container_handle, DockerContainerHandle):
-            result = _subprocess.run(
+            result = subprocess.run(
                 ["docker", "exec", container_id, *command],
                 capture_output=True,
                 text=True,
@@ -465,7 +462,7 @@ class TaskAttempt:
             )
 
         # Process runtime: run command directly
-        result = _subprocess.run(
+        result = subprocess.run(
             command,
             capture_output=True,
             text=True,

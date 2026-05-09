@@ -34,8 +34,9 @@ from typing import Any, Protocol
 
 import cloudpickle
 import humanfriendly
-from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
-from fray.client import JobHandle
+from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig, current_actor
+from fray.client import JobHandle, current_client, set_current_client
+from fray.local_backend import LocalClient
 from fray.types import Entrypoint, JobRequest
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
@@ -373,14 +374,12 @@ def _default_stage_runner_factory_for(client: Client) -> Callable[[], StageRunne
     against native crashes and per-shard memory growth. Callers that want
     the other behavior pass ``stage_runner_factory=...`` explicitly.
     """
-    from fray.local_backend import LocalClient
-
     if isinstance(client, LocalClient):
-        from zephyr.runners import InlineRunner
+        from zephyr.runners import InlineRunner  # circular import: runners imports execution
 
         return InlineRunner
 
-    from zephyr.runners import SubprocessRunner
+    from zephyr.runners import SubprocessRunner  # circular import: runners imports execution
 
     return SubprocessRunner
 
@@ -413,8 +412,6 @@ class ZephyrCoordinator:
     """
 
     def __init__(self):
-        from fray import current_actor
-
         # Task management state
         self._task_queue: deque[ShardTask] = deque()
         self._results: dict[int, TaskResult] = {}
@@ -1207,14 +1204,12 @@ class ZephyrWorker:
         coordinator_handle: ActorHandle,
         stage_runner_factory: Callable[[], StageRunner] | None = None,
     ):
-        from fray import current_actor
-
         # ZephyrContext normally pre-resolves this via _CoordinatorJobConfig;
         # the fallback here covers callers that construct a worker directly
         # (mostly internal tests). Default to InlineRunner since direct
         # construction is a dev/test path.
         if stage_runner_factory is None:
-            from zephyr.runners import InlineRunner
+            from zephyr.runners import InlineRunner  # circular import: runners imports execution
 
             stage_runner_factory = InlineRunner
 
@@ -1578,9 +1573,6 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
     to disk. The coordinator monitors worker job health directly in its
     maintenance loop (no separate watchdog thread).
     """
-    from fray.client import current_client
-    from iris.cluster.client.job_info import get_job_info
-
     logger.info("Loading coordinator config from %s", config_path)
     with open_url(config_path, "rb") as f:
         config: _CoordinatorJobConfig = cloudpickle.loads(f.read())
@@ -1746,13 +1738,9 @@ class ZephyrContext:
 
     def __post_init__(self):
         if self.client is None:
-            from fray.client import current_client
-
             self.client = current_client()
 
         if self.max_workers is None:
-            from fray.local_backend import LocalClient
-
             if isinstance(self.client, LocalClient):
                 self.max_workers = os.cpu_count() or 1
             else:
@@ -1868,8 +1856,6 @@ class ZephyrContext:
                 # resources are requested by the coordinator/worker children.
                 # Set the context var so the coordinator job inherits self.client
                 # instead of auto-detecting (which may pick a different backend).
-                from fray.client import set_current_client
-
                 with set_current_client(self.client):
                     self._coordinator_job = self.client.submit(
                         JobRequest(

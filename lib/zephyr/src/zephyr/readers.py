@@ -21,10 +21,11 @@ import msgspec
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import vortex
 from rigging.filesystem import open_url, url_to_fs
 
 from zephyr import counters
-from zephyr.expr import Expr
+from zephyr.expr import Expr, referenced_columns, to_pyarrow_expr
 
 logger = logging.getLogger(__name__)
 
@@ -273,8 +274,6 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
 
     pa_filter = None
     if spec.filter_expr is not None:
-        from zephyr.expr import to_pyarrow_expr
-
         pa_filter = to_pyarrow_expr(spec.filter_expr)
 
     # Determine columns to read: include any filter-referenced columns
@@ -282,8 +281,6 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
     read_columns = spec.columns
     need_project = False
     if spec.columns is not None and spec.filter_expr is not None:
-        from zephyr.expr import referenced_columns
-
         filter_cols = referenced_columns(spec.filter_expr) - set(spec.columns)
         if filter_cols:
             read_columns = list(spec.columns) + sorted(filter_cols)
@@ -325,16 +322,12 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         ... )
         >>> output_files = ctx.execute(ds).results
     """
-    import vortex
-
     spec = _as_spec(source)
     columns = spec.columns
 
     # Convert filter to PyArrow expression if provided
     pa_filter = None
     if spec.filter_expr is not None:
-        from zephyr.expr import to_pyarrow_expr
-
         pa_filter = to_pyarrow_expr(spec.filter_expr)
 
     # Open vortex file and get PyArrow Dataset interface

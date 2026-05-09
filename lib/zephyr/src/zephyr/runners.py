@@ -39,7 +39,9 @@ from contextlib import suppress
 from typing import Any, TypeVar
 
 import cloudpickle
+import pyarrow as pa
 from rigging.filesystem import open_url
+from rigging.log_setup import configure_logging
 
 from zephyr.execution import (
     ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
@@ -343,9 +345,6 @@ class SubprocessRunner:
 
 def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
     """Subprocess child body: runs one ShardTask and writes the result file."""
-    import pyarrow as pa
-    from rigging.log_setup import configure_logging
-
     # Each shard already runs in its own subprocess; redundant Arrow thread
     # pools just compete with the parent's shard-level parallelism.
     pa.set_io_thread_count(1)

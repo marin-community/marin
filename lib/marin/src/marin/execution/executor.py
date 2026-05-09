@@ -96,12 +96,16 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
+from fray.client import current_client
+from fray.iris_backend import FrayIrisClient
 from fray.types import ResourceConfig, TpuConfig
 from iris.cluster.constraints import WellKnownAttribute
+from iris.rpc import config_pb2
 from rigging.filesystem import (
     collect_gcs_paths,
     get_bucket_location,
     marin_prefix,
+    mirror_budget,
     open_url,
     region_from_prefix,
     split_gcs_path,
@@ -307,10 +311,6 @@ def _allowed_regions_for_step(
 
 
 def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
-    from fray.client import current_client
-    from fray.iris_backend import FrayIrisClient
-    from iris.rpc import config_pb2
-
     try:
         client = current_client()
     except Exception:
@@ -532,9 +532,6 @@ def _component_tpu_pins(
 
 
 def _iris_backend_is_active() -> bool:
-    from fray.client import current_client
-    from fray.iris_backend import FrayIrisClient
-
     try:
         client = current_client()
     except Exception:
@@ -672,8 +669,6 @@ def resolve_executor_step(
 
     def resolved_fn(output_path):
         if captured_budget is not None:
-            from rigging.filesystem import mirror_budget
-
             with mirror_budget(captured_budget):
                 return captured_fn(captured_config)
         return captured_fn(captured_config)

@@ -568,7 +568,7 @@ class DuckDBLogStore:
         return len(result.entries) > 0
 
     def cursor(self, key: str):
-        from finelog.store import LogCursor
+        from finelog.store import LogCursor  # circular import: duckdb_store -> store.__init__ -> duckdb_store
 
         return LogCursor(self, key)
 

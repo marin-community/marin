@@ -217,8 +217,10 @@ class DistributedConfig:
             logger.info("Skipping jax.distributed.initialize because initialize_jax_distributed=False.")
             return
 
-        from iris.cluster.client.job_info import get_job_info
-        from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
+        from iris.cluster.client.job_info import (
+            get_job_info,
+        )  # lazy: iris has complex init order; circular at module level
+        from iris.runtime.jax_init import initialize_jax as initialize_iris_jax  # lazy: iris has complex init order
 
         if get_job_info() is not None:
             logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")

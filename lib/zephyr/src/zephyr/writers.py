@@ -19,6 +19,10 @@ from typing import Any
 
 import msgspec
 import pyarrow as pa
+import pyarrow.parquet as pq
+import vortex
+import zstandard as zstd
+from levanter.store.cache import CacheMetadata, SerialCacheWriter
 from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import log_time
 
@@ -124,8 +128,6 @@ def ensure_parent_dir(path: str) -> None:
 def _open_write_stream(fs, resolved_path: str, output_path: str):
     """Open a binary write stream with compression inferred from ``output_path``."""
     if output_path.endswith(".zst"):
-        import zstandard as zstd
-
         cctx = zstd.ZstdCompressor(level=2, threads=1)
         with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE) as raw_f:
             with cctx.stream_writer(raw_f) as f:
@@ -287,8 +289,6 @@ def write_parquet_file(
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
     """
-    import pyarrow.parquet as pq
-
     ensure_parent_dir(output_path)
     count = 0
 
@@ -331,8 +331,6 @@ def write_vortex_file(
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
     """
-    import vortex
-
     ensure_parent_dir(output_path)
 
     table_iter = _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes)
@@ -463,8 +461,6 @@ def write_levanter_cache(
     """
     if batch_size < 1:
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
-
-    from levanter.store.cache import CacheMetadata, SerialCacheWriter
 
     ensure_parent_dir(output_path)
     record_iter = iter(records)

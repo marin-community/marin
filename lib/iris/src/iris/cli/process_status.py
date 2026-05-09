@@ -10,11 +10,14 @@ controller itself.
 """
 
 import contextlib
+import time
+from datetime import datetime, timezone
 
 import click
 import humanfriendly
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from google.protobuf import json_format
 
 from iris.cli.main import require_controller_url, rpc_client
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
@@ -60,8 +63,6 @@ def process_group():
 @click.pass_context
 def status(ctx, target: str | None, as_json: bool):
     """Show process status (host info, resource usage)."""
-    from google.protobuf import json_format
-
     url = require_controller_url(ctx)
     label = target or "Controller"
     with rpc_client(url) as client:
@@ -87,9 +88,6 @@ def status(ctx, target: str | None, as_json: bool):
 @click.pass_context
 def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, substring: str):
     """Show process logs."""
-    import time
-    from datetime import datetime, timezone
-
     url = require_controller_url(ctx)
     source = target or _CONTROLLER_LOG_TARGET
 
