@@ -59,7 +59,9 @@ Always run `build:check` after editing `.vue` or `.ts` files to catch type error
 
 ### Decisions vs measurements
 
-The controller SQLite DB stores the *registry and decisions*: worker liveness verdict, task↔worker assignments, scheduling state. Time-series *measurements* (per-tick utilization, per-attempt resource snapshots) live in the finelog stats namespaces (`iris.worker`, `iris.task`) and are queried via the controller-bundled StatsService. New columns that record measurements should be added as stats namespaces, not controller tables.
+The controller SQLite DB stores the *registry and decisions*: worker liveness verdict, task↔worker assignments, scheduling state. Time-series *measurements* (per-tick utilization, per-attempt resource snapshots, profile captures) live in the finelog stats namespaces (`iris.worker`, `iris.task`, `iris.profile`) and are queried via the controller-bundled StatsService. New columns that record measurements should be added as stats namespaces, not controller tables.
+
+Profiles in particular: the worker drives a 10-minute periodic CPU capture loop and writes rows to `iris.profile`. On-demand captures (cpu/memory/thread) flow through the same RPC path the dashboard's "Profile now" buttons use: controller → provider → worker (or `K8sTaskProvider`) → finelog. The controller writes its own row for `/system/controller` self-captures only. See `lib/iris/OPS.md` for retention and example queries.
 
 ## Environment Variables
 

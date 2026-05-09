@@ -29,8 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
-import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from threading import RLock
@@ -1492,62 +1491,6 @@ class TaskStore:
         cur.execute(
             "UPDATE tasks SET container_id = ? WHERE task_id = ?",
             (container_id, task_id.to_wire()),
-        )
-
-    def _batch_prune_profiles(
-        self,
-        sql: str,
-        params: tuple[object, ...],
-        *,
-        stopped: Callable[[], bool],
-        pause_between_s: float,
-    ) -> int:
-        """Repeatedly delete one batch per transaction, sleeping between commits.
-
-        Each iteration commits its batch before sleeping so the writer lock
-        is released and other RPCs can interleave with pruning.
-        """
-        total = 0
-        while not stopped():
-            with self._db.transaction() as cur:
-                batch = cur.execute(sql, params).rowcount
-            if batch == 0:
-                break
-            total += batch
-            time.sleep(pause_between_s)
-        return total
-
-    def prune_stale_profiles(
-        self,
-        *,
-        cutoff_ms: int,
-        stopped: Callable[[], bool],
-        pause_between_s: float,
-    ) -> int:
-        """Delete ``task_profiles`` rows older than ``cutoff_ms`` in 1000-row batches."""
-        return self._batch_prune_profiles(
-            "DELETE FROM profiles.task_profiles WHERE rowid IN "
-            "(SELECT rowid FROM profiles.task_profiles WHERE captured_at_ms < ? LIMIT 1000)",
-            (cutoff_ms,),
-            stopped=stopped,
-            pause_between_s=pause_between_s,
-        )
-
-    def prune_orphan_profiles(
-        self,
-        *,
-        stopped: Callable[[], bool],
-        pause_between_s: float,
-    ) -> int:
-        """Delete ``task_profiles`` rows whose task has been pruned."""
-        return self._batch_prune_profiles(
-            "DELETE FROM profiles.task_profiles WHERE rowid IN "
-            "(SELECT p.rowid FROM profiles.task_profiles p"
-            " LEFT JOIN tasks t ON p.task_id = t.task_id"
-            " WHERE t.task_id IS NULL LIMIT 1000)",
-            (),
-            stopped=stopped,
-            pause_between_s=pause_between_s,
         )
 
     def set_state_for_test(

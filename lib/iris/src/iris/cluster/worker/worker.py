@@ -13,12 +13,13 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import LogClient, RemoteLogHandler, Table
-from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
+from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter, Timestamp
 
 from iris.chaos import chaos
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_store_helpers import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.profile import build_profile_row, parse_profile_target, profile_local_process
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
 from iris.cluster.types import JobName
 from iris.cluster.types import TaskAttempt as TaskAttemptId
@@ -37,8 +38,10 @@ from iris.cluster.worker.env_probe import (
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.stats import (
+    PROFILE_NAMESPACE,
     TASK_STATS_NAMESPACE,
     WORKER_STATS_NAMESPACE,
+    IrisProfile,
     IrisTaskStat,
     IrisWorkerStat,
     WorkerStatus,
@@ -153,8 +156,12 @@ class Worker:
         port_allocator: PortAllocator | None = None,
         threads: ThreadContainer | None = None,
         worker_metadata: job_pb2.WorkerMetadata | None = None,
+        profile_interval: Duration = Duration.from_seconds(600),
+        profile_duration_seconds: int = 10,
     ):
         self._config = config
+        self._profile_interval = profile_interval
+        self._profile_duration_seconds = profile_duration_seconds
 
         if not config.cache_dir:
             raise ValueError("WorkerConfig.cache_dir is required")
@@ -215,10 +222,12 @@ class Worker:
         # post-register.
         self._log_client: LogClient | None = None
         self._log_handler: RemoteLogHandler | None = None
-        # Stats Tables for the iris.worker / iris.task namespaces. Set in start()
-        # after the controller client is built so the LogClient resolver works.
+        # Stats Tables for the iris.worker / iris.task / iris.profile namespaces.
+        # Set in start() after the controller client is built so the LogClient
+        # resolver works.
         self._worker_stats_table: Table | None = None
         self._task_stats_table: Table | None = None
+        self._profile_table: Table[IrisProfile] | None = None
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -280,6 +289,7 @@ class Worker:
             assert self._log_client is not None
             self._worker_stats_table = self._log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
             self._task_stats_table = self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
+            self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
         # Try to adopt running containers from a previous worker process.
         # If adoption succeeds, skip the destructive cleanup that would kill them.
@@ -310,6 +320,7 @@ class Worker:
         # Start lifecycle thread: register + serve + reset loop
         if self._config.controller_address:
             self._threads.spawn(target=self._run_lifecycle, name="worker-lifecycle")
+            self._threads.spawn(target=self._run_profile_loop, name="profile-loop")
 
     def _cleanup_all_iris_containers(self) -> None:
         """Remove all iris-managed containers at startup.
@@ -550,6 +561,7 @@ class Worker:
         # post-shutdown writes are no-ops.
         self._worker_stats_table = None
         self._task_stats_table = None
+        self._profile_table = None
         if self._log_client is not None:
             self._log_client.close()
             self._log_client = None
@@ -1055,33 +1067,92 @@ class Worker:
             return False
         return self._kill_task_attempt(task_id, current.attempt_id, term_timeout_ms)
 
-    def profile_task(
-        self,
-        task_id: str,
-        duration_seconds: int,
-        profile_type: job_pb2.ProfileType,
-        attempt_id: int | None = None,
-    ) -> bytes:
-        """Profile a running task by delegating to its container handle.
+    def _run_profile_loop(self, stop_event: threading.Event) -> None:
+        """Tick at ``profile_interval`` and capture a CPU profile per running attempt.
 
-        Args:
-            task_id: Bare task ID (e.g. ``/alice/job/0``).
-            duration_seconds: How long to sample.
-            profile_type: CPU, memory, or threads profiler config.
-            attempt_id: Specific attempt to profile.  When ``None``, the
-                current (most recent) attempt is used.
+        Captures run sequentially within a worker; across workers they run in
+        parallel automatically. Per-attempt exceptions are logged and dropped.
         """
-        if attempt_id is not None:
-            attempt = self._tasks.get((task_id, attempt_id))
-            if not attempt:
-                raise ValueError(f"Task {task_id} attempt {attempt_id} not found")
+        limiter = RateLimiter(interval_seconds=self._profile_interval.to_seconds())
+        cpu_request = job_pb2.ProfileTaskRequest(
+            duration_seconds=self._profile_duration_seconds,
+            profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.RAW)),
+        )
+        while not stop_event.is_set():
+            remaining = limiter.time_until_next()
+            if remaining > 0:
+                stop_event.wait(timeout=remaining)
+            if stop_event.is_set():
+                break
+            limiter.mark_run()
+            for attempt in [a for a in self._tasks.values() if a.status == job_pb2.TASK_STATE_RUNNING]:
+                if stop_event.is_set():
+                    break
+                source = f"{attempt.task_id.to_wire()}:{attempt.attempt_id}"
+                try:
+                    self.capture_and_log_profile(
+                        source=source,
+                        attempt_id=attempt.attempt_id,
+                        request=cpu_request,
+                        trigger="periodic",
+                    )
+                except Exception:
+                    logger.exception(
+                        "profile capture failed for %s attempt=%s",
+                        attempt.task_id,
+                        attempt.attempt_id,
+                    )
+
+    def capture_and_log_profile(
+        self,
+        *,
+        source: str,
+        attempt_id: int | None,
+        request: job_pb2.ProfileTaskRequest,
+        trigger: str,
+    ) -> bytes:
+        """Profile ``source`` and write one ``IrisProfile`` row; returns the captured bytes.
+
+        - ``source == "/system/process"``: profile this worker process. The row's
+          ``source`` is rewritten to ``"/system/worker/<id>"``.
+        - Otherwise: ``source`` is a task wire target; the matching attempt must
+          be ``RUNNING`` or a ``RuntimeError`` is raised.
+        """
+        duration = request.duration_seconds or self._profile_duration_seconds
+        assert self._worker_id, "worker_id required before capturing profiles"
+
+        if source == "/system/process":
+            data = profile_local_process(duration, request.profile_type)
+            row_source = f"/system/worker/{self._worker_id}"
+            row_attempt_id: int | None = None
         else:
-            attempt = self._get_current_attempt(task_id)
-            if not attempt:
-                raise ValueError(f"Task {task_id} not found")
-        if attempt.status != job_pb2.TASK_STATE_RUNNING:
-            raise ValueError(f"Task {task_id} is not running (state={job_pb2.TaskState.Name(attempt.status)})")
-        return attempt.profile(duration_seconds, profile_type)
+            target = parse_profile_target(source)
+            task_id_wire = target.task_id.to_wire()
+            resolved_attempt_id = target.attempt_id if target.attempt_id is not None else attempt_id
+            if resolved_attempt_id is None:
+                raise RuntimeError(f"profile target missing attempt_id: {source}")
+            attempt = self._tasks.get((task_id_wire, resolved_attempt_id))
+            if attempt is None or attempt.status != job_pb2.TASK_STATE_RUNNING:
+                raise RuntimeError("attempt no longer running")
+            data = attempt.profile(duration, request.profile_type)
+            row_source = source
+            row_attempt_id = resolved_attempt_id
+
+        if self._profile_table is not None:
+            self._profile_table.write(
+                [
+                    build_profile_row(
+                        source=row_source,
+                        attempt_id=row_attempt_id,
+                        vm_id=self._worker_id,
+                        duration_seconds=duration,
+                        profile_type=request.profile_type,
+                        profile_data=data,
+                        trigger=trigger,
+                    )
+                ]
+            )
+        return data
 
     def exec_in_container(
         self, task_id: str, command: list[str], timeout_seconds: int = 60

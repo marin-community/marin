@@ -89,7 +89,7 @@ from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
-from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
+from iris.cluster.runtime.profile import build_profile_row, parse_profile_target, profile_local_process
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
@@ -97,6 +97,7 @@ from iris.cluster.types import (
     WorkerId,
     is_job_finished,
 )
+from iris.cluster.worker.stats import PROFILE_NAMESPACE, IrisProfile
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc import logging_pb2 as iris_logging_pb2
 from iris.rpc.async_adapter import on_loop
@@ -1002,6 +1003,7 @@ class ControllerServiceImpl:
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
+        self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -1931,20 +1933,45 @@ class ControllerServiceImpl:
         request: job_pb2.ProfileTaskRequest,
         ctx: RequestContext,
     ) -> job_pb2.ProfileTaskResponse:
-        """Profile a running task or system process.
+        """Dashboard-facing on-demand profile dispatch.
 
-        Target routing:
-        - /system/process: the controller process itself
-        - /system/worker/<worker_id>: proxy to a specific worker (profiles the worker process)
-        - /job/.../task/N: proxied to the task's worker
+        Behaviour by target:
+          /system/controller
+            - Capture this controller process via profile_local_process,
+              write one IrisProfile row (source='/system/controller',
+              vm_id='controller-self', attempt_id=None, trigger='on_demand'),
+              return bytes inline.
+          /system/worker/<id>
+            - Forward as /system/process to the named worker via
+              WorkerService.ProfileTask. Worker writes the row with
+              source='/system/worker/<id>'.
+          /job/.../task/N[:attempt_id]
+            - Resolve task and worker; delegate to provider.profile_task.
+              Worker-based: forwards to worker; worker writes IrisProfile
+              (all types), returns bytes. K8s: K8sTaskProvider captures via
+              kubectl exec, writes IrisProfile (all types), returns bytes.
+          Anything else
+            - INVALID_ARGUMENT.
         """
-        # Handle controller-local targets: profile the controller process itself
-        if is_system_target(request.target):
-            if not request.HasField("profile_type"):
-                raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
+        if not request.HasField("profile_type"):
+            raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
+
+        # /system/controller: capture this controller process itself
+        if request.target == "/system/controller":
             try:
                 duration = request.duration_seconds or 10
                 data = profile_local_process(duration, request.profile_type)
+                if self._profile_table is not None:
+                    self._profile_table.write(
+                        build_profile_row(
+                            source="/system/controller",
+                            attempt_id=None,
+                            vm_id="controller-self",
+                            duration_seconds=duration,
+                            profile_type=request.profile_type,
+                            profile_data=data,
+                        )
+                    )
                 return job_pb2.ProfileTaskResponse(profile_data=data)
             except Exception as e:
                 return job_pb2.ProfileTaskResponse(error=str(e))

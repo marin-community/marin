@@ -20,9 +20,11 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from iris.cluster.types import TaskAttempt
+from iris.cluster.worker.stats import IrisProfile, ProfileFormat, ProfileTrigger, ProfileType
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -288,3 +290,77 @@ def _check_tool(name: str) -> None:
             f"'{name}' is not installed. /system/process profiling requires "
             f"py-spy and memray to be available in the controller/worker environment."
         )
+
+
+_MEMORY_REPORTER_TO_FORMAT: dict[str, ProfileFormat] = {
+    "flamegraph": ProfileFormat.HTML,
+    "table": ProfileFormat.TABLE,
+    "stats": ProfileFormat.STATS,
+    "raw": ProfileFormat.RAW,
+}
+
+
+def build_profile_row(
+    *,
+    source: str,
+    attempt_id: int | None,
+    vm_id: str,
+    duration_seconds: int,
+    profile_type: job_pb2.ProfileType,
+    profile_data: bytes,
+    trigger: str = ProfileTrigger.ON_DEMAND.value,
+) -> IrisProfile:
+    """Construct one ``IrisProfile`` row from a completed capture.
+
+    Single source of truth for the worker, ``K8sTaskProvider``, and the
+    controller's ``/system/controller`` self-capture path. ``type``,
+    ``format``, and the type-specific metadata fields are derived from the
+    proto oneof — callers only supply identity (``source`` / ``attempt_id``
+    / ``vm_id``), the captured bytes, and the trigger.
+    """
+    captured_at = datetime.now(UTC).replace(tzinfo=None)
+    which = profile_type.WhichOneof("profiler")
+    if which == "cpu":
+        cpu_spec = resolve_cpu_spec(profile_type.cpu, duration_seconds, pid="")
+        return IrisProfile(
+            source=source,
+            attempt_id=attempt_id,
+            vm_id=vm_id,
+            captured_at=captured_at,
+            duration_seconds=duration_seconds,
+            type=ProfileType.CPU.value,
+            format=cpu_spec.py_spy_format,
+            trigger=ProfileTrigger(trigger).value,
+            rate_hz=cpu_spec.rate_hz,
+            native=cpu_spec.native,
+            profile_data=profile_data,
+        )
+    if which == "memory":
+        memory_spec = resolve_memory_spec(profile_type.memory, duration_seconds, pid="")
+        fmt = _MEMORY_REPORTER_TO_FORMAT.get(memory_spec.reporter, ProfileFormat.HTML)
+        return IrisProfile(
+            source=source,
+            attempt_id=attempt_id,
+            vm_id=vm_id,
+            captured_at=captured_at,
+            duration_seconds=duration_seconds,
+            type=ProfileType.MEMORY.value,
+            format=fmt.value,
+            trigger=ProfileTrigger(trigger).value,
+            leaks=memory_spec.leaks,
+            profile_data=profile_data,
+        )
+    if which == "threads":
+        return IrisProfile(
+            source=source,
+            attempt_id=attempt_id,
+            vm_id=vm_id,
+            captured_at=captured_at,
+            duration_seconds=duration_seconds,
+            type=ProfileType.THREAD.value,
+            format=ProfileFormat.RAW.value,
+            trigger=ProfileTrigger(trigger).value,
+            locals_dump=bool(profile_type.threads.locals),
+            profile_data=profile_data,
+        )
+    raise ValueError(f"ProfileType has no profiler set: {profile_type!r}")

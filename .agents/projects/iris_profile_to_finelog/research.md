@@ -56,23 +56,24 @@ The dashboard already queries the finelog StatsService for stats namespaces (and
 
 ## Prior art in-repo
 
-The cleanest analogue is the **`iris_stats_migration.md`** design — same shape: lift a per-row controller SQLite table into a finelog stats namespace, drop the prune loop, repoint the dashboard. That migration created `iris.worker` and `iris.task`. The naming and dataclass conventions there are the template ([`worker/stats.py:47-92`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/worker/stats.py#L47): `IrisWorkerStat`, `IrisTaskStat` — `key_column = "ts"`, datetime, top-level dataclass). We follow that pattern verbatim for `IrisCpuProfile`.
+The cleanest analogue is the **`iris_stats_migration.md`** design — same shape: lift a per-row controller SQLite table into a finelog stats namespace, drop the prune loop, repoint the dashboard. That migration created `iris.worker` and `iris.task`. The naming and dataclass conventions there are the template ([`worker/stats.py:47-92`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/iris/src/iris/cluster/worker/stats.py#L47): `IrisWorkerStat`, `IrisTaskStat` — `key_column = "ts"`, datetime, top-level dataclass). We follow that pattern verbatim for `IrisProfile` (one namespace `iris.profile`, discriminated by `type` and `source` columns — see spec §1.1).
 
 `AGENTS.md` boundary holds: finelog is iris-agnostic; iris-specific helpers live under `iris/cluster/log_store_helpers.py`. We will not introduce iris-knowledge into finelog ([`lib/finelog/AGENTS.md:27-35`](https://github.com/marin-community/marin/blob/24ebc3b1/lib/finelog/AGENTS.md#L27)).
 
 ## Q&A summary (load-bearing decisions)
 
-1. **On-demand profiling:** Keep the "profile now" button. Worker handler captures, writes to `iris.cpu_profile` as a side-effect of any CPU capture, *and* still returns bytes inline (so the dashboard does not poll for the just-captured profile). Memory / threads on-demand returns inline only — they are not persisted. The controller's `profile_task` RPC is removed; dashboard hits worker RPCs directly via the existing endpoint proxy.
-2. **Profile kinds:** The periodic loop captures CPU only. Memory and threads are on-demand only. Only CPU lands in finelog.
-3. **Retention:** Time-based via finelog's standard segment retention. **7 days** for `iris.cpu_profile`, documented in `OPS.md`. No application-side row-count cap (the trigger is gone).
-4. **Dashboard read:** A new `iris.cpu_profile` view in `TaskDetail.vue` runs SQL through the existing `useStatsRpc` composable: `SELECT captured_at, profile_data FROM "iris.cpu_profile" WHERE task_id = ? ORDER BY captured_at DESC`. Same pattern as today's `iris.task` queries.
+1. **On-demand profiling:** Keep the "profile now" button. The controller `profile_task` RPC is **kept** (renamed self-target to `/system/controller`); it dispatches to the actual capturer, which writes the row. All types (cpu/memory/thread) persist to `iris.profile`.
+2. **Profile types:** The periodic loop captures CPU only. Memory and thread are on-demand only. All on-demand captures land in `iris.profile`.
+3. **Retention:** Time-based via finelog's standard segment retention. **7 days** for `iris.profile`, documented in `OPS.md`. No application-side row-count cap (the trigger is gone).
+4. **Dashboard read:** A new "Profile history" panel in `TaskDetail.vue` / `WorkerDetail.vue` / `StatusTab.vue` runs SQL through the existing `useStatsRpc` composable: `SELECT captured_at, profile_data FROM "iris.profile" WHERE source = ? ORDER BY captured_at DESC`. Same pattern as today's `iris.task` queries.
+5. **Schema:** single namespace `iris.profile` with `type ∈ {cpu, memory, thread}`, `source ∈ {/job/.../task/N, /system/worker/<id>, /system/controller}`, `vm_id` for writer attribution. See spec §1.1.
 
 ## Skipped passes
 
 - **Web prior-art search:** skipped. This is a relocation within an established in-repo pattern (the `iris_stats_migration.md` precedent), not a novel category-of-system.
 - **GitHub issue search:** none queried (skill says the design-doc skill itself does not run `gh` searches; reviewer can link related issues on the PR).
 
-## Open questions surfaced during research (echoed in design.md)
+## Open questions resolved during review
 
-- Removing controller `/system/process` profiling means the dashboard "profile this controller" button on `StatusTab.vue` goes away. Acceptable, or do we keep one survivor on the controller?
-- On-demand memory/threads persistence: today the controller's `profile_task` RPC returns inline only (never persisted). Should manual memory/threads captures land in `iris.memory_profile` / `iris.threads_profile` for later inspection?
+- "Profile this controller" button: **kept**. Renamed target from `/system/process` to `/system/controller`; controller writes its own row to `iris.profile`.
+- On-demand memory/thread persistence: **persist all types** in the single `iris.profile` namespace. No separate `iris.memory_profile` / `iris.thread_profile` namespaces.

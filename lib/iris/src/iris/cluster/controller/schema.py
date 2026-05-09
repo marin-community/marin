@@ -991,49 +991,6 @@ RESERVATION_CLAIMS = Table(
     ),
 )
 
-# Migration 0005 + 0014 + 0023 (moved to profiles DB)
-TASK_PROFILES = Table(
-    "profiles.task_profiles",
-    "tp",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column("task_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("profile_data", "BLOB", "NOT NULL", expensive=True),
-        Column(
-            "captured_at_ms",
-            "INTEGER",
-            "NOT NULL",
-            python_name="captured_at",
-            python_type=Timestamp,
-            decoder=decode_timestamp_ms,
-        ),
-        # Migration 0014
-        Column("profile_kind", "TEXT", "NOT NULL DEFAULT 'cpu'", python_type=str, decoder=str, default="cpu"),
-    ),
-    indexes=(
-        "CREATE INDEX IF NOT EXISTS profiles.idx_task_profiles_task_kind"
-        " ON task_profiles(task_id, profile_kind, id DESC)",
-    ),
-    triggers=(
-        # Trigger lives in the profiles schema; SQLite prohibits qualified table
-        # names inside trigger bodies, so we use unqualified references.
-        """CREATE TRIGGER IF NOT EXISTS profiles.trg_task_profiles_cap
-AFTER INSERT ON task_profiles
-BEGIN
-  DELETE FROM task_profiles
-   WHERE task_id = NEW.task_id
-     AND profile_kind = NEW.profile_kind
-     AND id NOT IN (
-       SELECT id FROM task_profiles
-        WHERE task_id = NEW.task_id
-          AND profile_kind = NEW.profile_kind
-        ORDER BY id DESC
-        LIMIT 10
-     );
-END;""",
-    ),
-)
-
 # ---------------------------------------------------------------------------
 # Auth DB tables (in attached "auth" database)
 # ---------------------------------------------------------------------------
@@ -1150,8 +1107,6 @@ AUTH_TABLES: tuple[Table, ...] = (
     AUTH_API_KEYS,
     AUTH_CONTROLLER_SECRETS,
 )
-
-PROFILES_TABLES: tuple[Table, ...] = (TASK_PROFILES,)
 
 # ---------------------------------------------------------------------------
 # Hand-written row dataclasses

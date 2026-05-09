@@ -3,14 +3,16 @@
 
 """Stats schemas emitted by iris workers.
 
-Two namespaces:
+Three namespaces:
 
 - ``iris.worker`` — one row per ping with host-level utilization. Replaces
   the controller's ``worker_resource_history`` table.
 - ``iris.task`` — one row per attempt resource update. Replaces the
   controller's ``task_resource_history`` table.
+- ``iris.profile`` — one row per profile capture (cpu/memory/thread, periodic
+  or on-demand). Replaces the controller's ``profiles.task_profiles`` table.
 
-Both schemas use ``ts`` (TIMESTAMP_MS) as the ordering key. They are
+All schemas use a datetime column as the segment key. They are
 registered eagerly in ``Worker.start()`` via
 ``LogClient.get_table(<namespace>, <dataclass>)`` so schema mismatches surface
 on first ping rather than silently dropping rows.
@@ -27,6 +29,7 @@ from iris.rpc import job_pb2
 
 WORKER_STATS_NAMESPACE = "iris.worker"
 TASK_STATS_NAMESPACE = "iris.task"
+PROFILE_NAMESPACE = "iris.profile"
 
 
 class WorkerStatus(StrEnum):
@@ -124,6 +127,69 @@ def build_worker_stat(
         gce_instance_name=metadata.gce_instance_name or "",
         zone=metadata.gce_zone or _attr_string(metadata, "zone"),
     )
+
+
+class ProfileType(StrEnum):
+    CPU = "cpu"
+    MEMORY = "memory"
+    THREAD = "thread"
+
+
+class ProfileFormat(StrEnum):
+    # CPU
+    RAW = "raw"
+    FLAMEGRAPH = "flamegraph"
+    SPEEDSCOPE = "speedscope"
+    # Memory
+    HTML = "html"
+    TABLE = "table"
+    STATS = "stats"
+
+
+class ProfileTrigger(StrEnum):
+    PERIODIC = "periodic"
+    ON_DEMAND = "on_demand"
+
+
+@dataclass
+class IrisProfile:
+    """One row per profile capture, regardless of type or trigger.
+
+    Written by the worker process for task captures, by ``K8sTaskProvider``
+    (in the controller process) for k8s task captures, and by the
+    controller for ``/system/controller`` self-captures. Read by the
+    dashboard via finelog ``StatsService`` SQL. Retention is finelog
+    segment-based (7 days; see ``OPS.md``).
+
+    Sources:
+      - ``/job/.../task/N`` — task target (set ``attempt_id``).
+      - ``/system/worker/<id>`` — worker self-capture.
+      - ``/system/controller`` — controller self-capture.
+
+    ``vm_id`` is writer attribution: worker id, ``controller-self``, or
+    ``k8s/<node-or-pod>``.
+    """
+
+    key_column: ClassVar[str] = "captured_at"
+
+    source: str
+    attempt_id: int | None
+    vm_id: str
+    captured_at: datetime
+    duration_seconds: int
+    type: str
+    format: str
+    trigger: str
+    rate_hz: int | None = None
+    native: bool | None = None
+    leaks: bool | None = None
+    locals_dump: bool | None = None
+    profile_data: bytes = b""
+
+    def __post_init__(self) -> None:
+        ProfileType(self.type)
+        ProfileFormat(self.format)
+        ProfileTrigger(self.trigger)
 
 
 def build_task_stat(

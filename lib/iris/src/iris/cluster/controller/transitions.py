@@ -164,11 +164,10 @@ class PruneResult:
 
     jobs_deleted: int = 0
     workers_deleted: int = 0
-    profiles_deleted: int = 0
 
     @property
     def total(self) -> int:
-        return self.jobs_deleted + self.workers_deleted + self.profiles_deleted
+        return self.jobs_deleted + self.workers_deleted
 
 
 @dataclass
@@ -2184,7 +2183,6 @@ class ControllerTransitions:
         *,
         job_retention: Duration,
         worker_retention: Duration,
-        profile_retention: Duration,
         stop_event: threading.Event | None = None,
         pause_between_s: float = 1.0,
     ) -> PruneResult:
@@ -2197,7 +2195,6 @@ class ControllerTransitions:
         Args:
             job_retention: Delete terminal jobs whose finished_at is older than this.
             worker_retention: Delete inactive/unhealthy workers whose last heartbeat is older than this.
-            profile_retention: Delete task_profiles older than this.
             stop_event: If set, abort early (e.g. during shutdown).
             pause_between_s: Sleep between individual deletes to reduce lock contention.
         """
@@ -2237,29 +2234,15 @@ class ControllerTransitions:
             workers_deleted += 1
             time.sleep(pause_between_s)
 
-        # 3. Task profiles: batch of 1000 per transaction
-        profile_cutoff_ms = now_ms - profile_retention.to_ms()
-        profiles_deleted = self._store.tasks.prune_stale_profiles(
-            cutoff_ms=profile_cutoff_ms,
-            stopped=_stopped,
-            pause_between_s=pause_between_s,
-        )
-        profiles_deleted += self._store.tasks.prune_orphan_profiles(
-            stopped=_stopped,
-            pause_between_s=pause_between_s,
-        )
-
         result = PruneResult(
             jobs_deleted=jobs_deleted,
             workers_deleted=workers_deleted,
-            profiles_deleted=profiles_deleted,
         )
         if result.total > 0:
             logger.info(
-                "Pruned old data: %d jobs, %d workers, %d profiles",
+                "Pruned old data: %d jobs, %d workers",
                 result.jobs_deleted,
                 result.workers_deleted,
-                result.profiles_deleted,
             )
             self._store.optimize()
 
