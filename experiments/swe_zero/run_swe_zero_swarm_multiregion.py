@@ -3,27 +3,40 @@
 
 """Multi-region swarm worker for SWE-ZERO synthesis.
 
-Forked from `run_swe_zero_swarm.py`. The single-region invariant is preserved
-*per worker* - each worker fails fast if its host VM is not in its assigned
-region, and reads/writes only `gs://marin-{region}/experiments/swe_zero_100b/`
-(its own regional bucket). Cross-region transfer is still architecturally
-impossible.
+Forked from `run_swe_zero_swarm.py`. Two operating modes:
 
-The 1260-shard partition is divided deterministically across regions:
-``shard_idx % len(REGIONS) == REGIONS.index(my_region)``.
+1. **Native mode** (``--claim-region`` matches detected region, the default):
+   Worker claims shards in its own partition via the canonical
+   ``shard_idx % 4 == region_partition`` mapping. Reads and writes go to the
+   region's own bucket ``gs://marin-{region}/experiments/swe_zero_100b/per_pr/``.
+   No cross-region traffic; identical to the original single-region behaviour.
 
-A worker only attempts to claim shards in its partition. The
-`_swarm_claim.json` and `_done` markers live alongside the rollouts.json files
-in the worker's regional bucket; workers in different regions can never see
-each other's claims because they never look outside their own bucket.
+2. **Imported mode** (``--claim-region`` differs from detected region):
+   Worker claims shards belonging to ``claim_region``'s partition (e.g., a
+   us-east5 worker can absorb us-central1 P3 work). The claim file and
+   per-shard state (``rollouts.json``, ``rollouts_resume.json``,
+   ``sampling_plan.json``) live in the **source** region's bucket; the worker
+   reads them cross-region once at iter start and writes new rollouts to its
+   own bucket under ``imported/shard_NNN_of_1260/``. On clean iter completion
+   the local ``rollouts_resume.json`` is copied back to the source bucket
+   (one-time cross-region write of ~250-400 MB), and ``_done`` is marked in
+   the source bucket. This lets idle compute in fully-done regions absorb
+   work from saturated regions while keeping the source region's bucket as
+   the canonical store for downstream aggregation.
 
-Output layout (per region):
+Output layout, native mode:
     gs://marin-{region}/experiments/swe_zero_100b/per_pr/shard_NNN_of_1260/
+
+Output layout, imported mode (compute region's local writes):
+    gs://marin-{compute}/experiments/swe_zero_100b/imported/shard_NNN_of_1260/
+After iter completion the contents land back in:
+    gs://marin-{claim}/experiments/swe_zero_100b/per_pr/shard_NNN_of_1260/
 
 Designed to be invoked by ``launch_adaptive_swe_zero_multiregion.py``, which
 sets ``IRIS_WORKER_REGION`` indirectly via the iris ``Constraint(REGION, EQ, ...)``
 attribute and an EnvironmentSpec entry. The worker reads ``IRIS_WORKER_REGION``
-to determine its assigned region; all bucket paths are derived from that.
+to determine its compute region; ``--claim-region`` (defaulting to the compute
+region) selects which partition's shards to work on.
 """
 
 import argparse
@@ -32,7 +45,6 @@ import json
 import logging
 import os
 import random
-import re
 import subprocess
 import sys
 import threading
@@ -230,6 +242,29 @@ def _shard_is_complete(output_root: str, batch_idx: int) -> tuple[bool, str]:
         iid = r.get("instance_id") if isinstance(r, dict) else None
         if iid is not None:
             counts[str(iid)] = counts.get(str(iid), 0) + 1
+
+    # Fold in any imported_summary_{region}.json files. Each summary's
+    # per_pr_counts reflects that region's local imported file, which (post-
+    # seed) contains source's prior state + that region's new rollouts. So
+    # imported count >= source count whenever imported is active. Take MAX
+    # per PR to dedup the source overlap; the resulting count is at most the
+    # union (under-counts when 2+ regions worked the same shard, which is
+    # rare given exclusive claim files).
+    try:
+        import fsspec
+
+        fs = fsspec.filesystem("gs")
+        summary_glob = f"{_shard_path(output_root, batch_idx)}/imported_summary_*.json"
+        for hit in fs.glob(summary_glob):
+            try:
+                with fsspec.open(f"gs://{hit}" if not hit.startswith("gs://") else hit, "rb") as f:
+                    summary = json.load(f)
+                for iid, n in (summary.get("per_pr_counts", {}) or {}).items():
+                    counts[str(iid)] = max(counts.get(str(iid), 0), int(n))
+            except Exception as ie:
+                logger.warning("failed to read imported summary %s: %s", hit, ie)
+    except Exception as e:
+        logger.warning("imported summary scan failed for batch %d: %s", batch_idx, e)
 
     short = [iid for iid in expected_ids if counts.get(iid, 0) < TARGET_ROLLOUTS_PER_PR]
     total_expected = len(expected_ids)
@@ -431,80 +466,40 @@ def _heartbeat(stop_event, output_root, batch_idx, worker_seed, region):
         logger.info("heartbeat: refreshed claim for batch %d", batch_idx)
 
 
-_METRICS_LINE_RE = re.compile(
-    r"\[METRICS\] rollouts_produced=(?P<rollouts>\d+) completion_tokens=(?P<completion>\d+) "
-    r"submission_rate=(?P<sub>[\d.]+) total_after=(?P<total_after>\d+)"
-)
+def _imported_shard_path(local_output_root: str, batch_idx: int) -> str:
+    """Local writes go under imported/ to avoid colliding with the compute
+    region's natural per_pr/ partition (different shard indices)."""
+    return f"{local_output_root}/imported/shard_{batch_idx:03d}_of_{TOTAL_PR_BATCHES:03d}"
 
 
-def _parse_inner_metrics(stderr: str) -> dict | None:
-    """Find the [METRICS] line emitted by run_swe_zero_multilang.py at end of iter."""
-    m = _METRICS_LINE_RE.search(stderr or "")
-    if not m:
-        return None
-    return {
-        "rollouts_produced": int(m.group("rollouts")),
-        "completion_tokens": int(m.group("completion")),
-        "submission_rate": float(m.group("sub")),
-        "total_after": int(m.group("total_after")),
-    }
-
-
-def _emit_throughput_metric(
-    output_root: str,
-    region: str,
+def _run_inner(
+    *,
+    local_output_root: str,
+    claim_output_root: str,
+    is_imported: bool,
     batch_idx: int,
+    tensor_parallel: int,
     worker_seed: int,
     iteration: int,
-    inner_metrics: dict | None,
-    duration_s: float,
-    rc: int,
-) -> None:
-    """Write per-iter throughput metric to gs://marin-{region}/swe_zero_100b/throughput/.
-
-    Uses the [METRICS] ground-truth line emitted by run_swe_zero_multilang.py.
-    Falls back to all-zeros when the inner crashed before emitting (rc != 0).
-
-    scripts/throughput_stats.py aggregates these files to compute per-region
-    tokens/sec over arbitrary windows. One file per (worker, iter); ~250 B JSON.
-    """
-    if inner_metrics:
-        rollouts_produced = inner_metrics["rollouts_produced"]
-        completion_tokens = inner_metrics["completion_tokens"]
-        submission_rate = inner_metrics["submission_rate"]
-        total_after = inner_metrics["total_after"]
-        # Trajectory tokens (what SFT trains on) ~ 9,050/rollout per round-3 stats.
-        trajectory_tokens_estimate = rollouts_produced * 9050
-        source = "inner_metrics"
+) -> int:
+    # Source-bucket dir holds canonical state (rollouts.json, sampling_plan,
+    # claim file). For native mode it's the same as compute-region; for
+    # imported mode it's the source region's bucket.
+    source_shard_dir = _shard_path(claim_output_root, batch_idx)
+    # The inner worker auto-suffixes output_dir with shard_NNN_of_TTT/ when
+    # --all-prs + --total-shards>1 are set, so we pass the parent dir here.
+    if is_imported:
+        # Local writes to imported/ to avoid colliding with the compute
+        # region's natural per_pr/ partition (different shard index space).
+        inner_output_dir = f"{local_output_root}/imported"
+        # Seed local imported/rollouts_resume.json with source's accumulated
+        # work so the inner's prior_dicts includes source state. Without this,
+        # the migration step at iter end would overwrite source's resume with
+        # only the new rollouts — losing source's prior work.
+        _seed_imported_resume(local_output_root, claim_output_root, batch_idx)
     else:
-        rollouts_produced = completion_tokens = total_after = 0
-        submission_rate = 0.0
-        trajectory_tokens_estimate = 0
-        source = "missing_inner_metrics"
-    metric = {
-        "ts": time.time(),
-        "region": region,
-        "shard_idx": batch_idx,
-        "worker_id": worker_seed,
-        "iter": iteration,
-        "rollouts_produced": rollouts_produced,
-        "completion_tokens": completion_tokens,
-        "trajectory_tokens_estimate": trajectory_tokens_estimate,
-        "submission_rate": submission_rate,
-        "total_after": total_after,
-        "duration_s": round(duration_s, 1),
-        "rc": rc,
-        "source": source,
-    }
-    metric_path = f"{output_root}/throughput/{worker_seed:04d}_{iteration:03d}.json"
-    try:
-        _gcs_blob(metric_path).upload_from_string(json.dumps(metric))
-    except Exception as e:
-        logger.warning("failed to write throughput metric to %s: %s", metric_path, e)
+        inner_output_dir = f"{local_output_root}/per_pr"
 
-
-def _run_inner(output_root: str, batch_idx: int, tensor_parallel: int, worker_seed: int, iteration: int) -> int:
-    shard_dir = _shard_path(output_root, batch_idx)
     cmd = [
         sys.executable,
         INNER_WORKER,
@@ -517,11 +512,15 @@ def _run_inner(output_root: str, batch_idx: int, tensor_parallel: int, worker_se
         "--total-shards",
         str(TOTAL_PR_BATCHES),
         "--output_dir",
-        f"{output_root}/per_pr",
+        inner_output_dir,
         "--n-rollouts",
         "100",
         "--max-num-seqs",
-        "256",
+        # Scale concurrent vLLM batch with chip count: 256 at TP=4 (current
+        # baseline) up to 4096 at TP=64. Mini-coder-1.7b's KV cache footprint
+        # is small at 32K context, so larger slices have headroom for a wider
+        # batch — needed to keep big slices saturated.
+        str(max(256, 64 * tensor_parallel)),
         "--max-model-len",
         "32768",
         "--max-total-tokens",
@@ -529,38 +528,57 @@ def _run_inner(output_root: str, batch_idx: int, tensor_parallel: int, worker_se
         "--tensor-parallel-size",
         str(tensor_parallel),
         "--concurrency",
-        "64",
+        # Rollout-loop concurrency tracks max_num_seqs / 4 — each in-flight
+        # rollout uses ~4 simultaneous vLLM seqs across its multi-turn loop.
+        str(max(64, 16 * tensor_parallel)),
         "--disable-shard-lease",
     ]
-    resume_from = f"{shard_dir}/rollouts.json"
-    if _gcs_blob(resume_from).exists():
-        cmd.extend(["--resume-from", resume_from])
-    logger.info("running inner worker: shard %d/%d -> %s", batch_idx, TOTAL_PR_BATCHES, shard_dir)
-    log_path = f"{shard_dir}/_swarm_worker_{worker_seed:04d}_iter_{iteration:03d}.log"
+    # Resume-from selection.
+    #   Native mode: point at source's rollouts.json (legacy behaviour). The
+    #     inner's auto-resume + line 517 merge handles source rollouts_resume.
+    #   Imported mode: point at the LOCAL seeded file. Cross-region reads
+    #     already happened in _seed_imported_resume; the inner reads
+    #     existing_counts from this same path it'll write to (the line 518
+    #     `resume_path != resume_from` guard skips double-counting).
+    if is_imported:
+        seeded_resume = f"{_imported_shard_path(local_output_root, batch_idx)}/rollouts_resume.json"
+        # If seed found nothing, the file is absent — that's fine, inner will
+        # treat the shard as fresh and write to rollouts.json. Migration step
+        # then has nothing to copy and the post-iter completeness check sees
+        # only the new rollouts on source side. (This is acceptable because
+        # truly-fresh shards have no prior work to preserve.)
+        import fsspec
+
+        fs = fsspec.filesystem("gs")
+        if fs.exists(seeded_resume):
+            cmd.extend(["--resume-from", seeded_resume])
+    else:
+        src_resume = f"{source_shard_dir}/rollouts_resume.json"
+        src_rollouts = f"{source_shard_dir}/rollouts.json"
+        if _gcs_blob(src_resume).exists():
+            cmd.extend(["--resume-from", src_resume])
+        elif _gcs_blob(src_rollouts).exists():
+            cmd.extend(["--resume-from", src_rollouts])
+    logger.info(
+        "running inner worker: shard %d/%d (mode=%s) source=%s output=%s",
+        batch_idx,
+        TOTAL_PR_BATCHES,
+        "imported" if is_imported else "native",
+        source_shard_dir,
+        inner_output_dir,
+    )
+    log_path = f"{source_shard_dir}/_swarm_worker_{worker_seed:04d}_iter_{iteration:03d}.log"
     inner_env = {**os.environ}
-    # Scope HF_HUB_OFFLINE=1 to the inner subprocess only (where vLLM loads
-    # the model). MARIN_HF_CACHE_ROOT is set by _prefetch_model_from_gcs after
-    # successfully populating the local cache; if absent, fall through to
-    # online HF (with retry-loop risk on 429).
     cache_root = os.environ.get("MARIN_HF_CACHE_ROOT")
     if cache_root:
+        # Prefetch lays out files at {cache_root}/models--<repo>/, which is the
+        # raw HF Hub cache layout. HF_HOME would make huggingface_hub look at
+        # {cache_root}/hub/models--<repo>/ (one level too deep), so use
+        # HUGGINGFACE_HUB_CACHE which points directly at the cache dir.
+        inner_env["HUGGINGFACE_HUB_CACHE"] = cache_root
         inner_env["HF_HOME"] = cache_root
         inner_env["HF_HUB_OFFLINE"] = "1"
-    inner_start = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True, errors="replace", env=inner_env)
-    inner_duration = time.time() - inner_start
-    region = os.environ.get("IRIS_WORKER_REGION", "unknown")
-    inner_metrics = _parse_inner_metrics(proc.stderr)
-    _emit_throughput_metric(
-        output_root,
-        region,
-        batch_idx,
-        worker_seed,
-        iteration,
-        inner_metrics,
-        inner_duration,
-        proc.returncode,
-    )
     log_blob = (
         f"=== cmd ===\n{' '.join(cmd)}\n"
         f"=== rc={proc.returncode} ===\n"
@@ -579,6 +597,134 @@ def _run_inner(output_root: str, batch_idx: int, tensor_parallel: int, worker_se
     return proc.returncode
 
 
+def _seed_imported_resume(
+    local_output_root: str,
+    claim_output_root: str,
+    batch_idx: int,
+) -> None:
+    """Pre-populate local imported/shard_X/rollouts_resume.json with source's
+    accumulated rollouts so the inner worker's prior_dicts includes source
+    state. Without this, the inner reads its own (empty) local resume file
+    as prior_dicts and writes only newly-generated rollouts back, which the
+    later migration step would overwrite source's resume with — losing all
+    source-region prior work. One-time cross-region read of ~250-400 MB per
+    claim. No-op if source has nothing yet (fresh shard).
+    """
+    src_resume = f"{_shard_path(claim_output_root, batch_idx)}/rollouts_resume.json"
+    src_rollouts = f"{_shard_path(claim_output_root, batch_idx)}/rollouts.json"
+    dst = f"{_imported_shard_path(local_output_root, batch_idx)}/rollouts_resume.json"
+    try:
+        import fsspec
+
+        fs = fsspec.filesystem("gs")
+        # Preserve cross-iter accumulation: if local imported already has
+        # content from a prior iter (same compute region), keep it. Without
+        # this guard, every re-claim overwrites iter-N's hard-won rollouts
+        # with source's stale state — fresh shards with no source rollouts
+        # could never accumulate to 100/PR across multiple iters.
+        if fs.exists(dst):
+            dst_size = int(fs.info(dst).get("size", 0))
+            if dst_size > 2:  # `[]` is 2 bytes; anything bigger has work
+                logger.info(
+                    "skipping seed for batch %d: local imported has %.1f MB already",
+                    batch_idx,
+                    dst_size / 1e6,
+                )
+                return
+        # Prefer rollouts_resume.json (cumulative); fall back to rollouts.json
+        # (early-state shards never resumed). If neither exists, write an
+        # empty array so the inner still sees --resume-from existing and uses
+        # output_filename=rollouts_resume.json (which the summary step reads).
+        if fs.exists(src_resume):
+            src = src_resume
+        elif fs.exists(src_rollouts):
+            src = src_rollouts
+        else:
+            with fsspec.open(dst, "wb") as w:
+                w.write(b"[]")
+            logger.info("seeded imported resume with [] for fresh batch %d", batch_idx)
+            return
+        size = int(fs.info(src).get("size", 0))
+        with fsspec.open(src, "rb") as r, fsspec.open(dst, "wb") as w:
+            while True:
+                chunk = r.read(8 * 1024 * 1024)
+                if not chunk:
+                    break
+                w.write(chunk)
+        logger.info("seeded imported resume %.1f MB from %s -> %s", size / 1e6, src, dst)
+    except Exception as e:
+        logger.error("seed-imported failed for batch %d: %s", batch_idx, e)
+
+
+def _imported_summary_path(claim_output_root: str, batch_idx: int, compute_region: str) -> str:
+    """Per-(shard, compute-region) summary file in source bucket. Tiny (~2 KB)
+    cross-region write that gives source-region workers + audit visibility
+    into imported progress without copying full rollout data."""
+    return f"{_shard_path(claim_output_root, batch_idx)}/imported_summary_{compute_region}.json"
+
+
+def _write_imported_summary(
+    local_output_root: str,
+    claim_output_root: str,
+    compute_region: str,
+    batch_idx: int,
+) -> bool:
+    """Write a per-PR count summary of this region's local imported file to
+    source bucket. ~2 KB cross-region write; replaces this region's prior
+    summary (idempotent on re-runs).
+
+    Called on rc=0 iter exit in imported mode. The local imported file
+    contains seeded source state + newly generated rollouts, so the count
+    we write is the cumulative rollout count visible from this region.
+    `_shard_is_complete` takes max(source, any_imported_summary) per PR —
+    correctly handling the source-overlap-with-seed case (imported >= source).
+
+    Replaces the prior `_migrate_imported_to_source` design (which did a
+    250-400 MB cross-region write per iter). Final rollout data stays in
+    gs://marin-{compute}/imported/shard_X/ and is picked up by the round-4
+    aggregator's content-hash dedup at upload time.
+    """
+    src = f"{_imported_shard_path(local_output_root, batch_idx)}/rollouts_resume.json"
+    dst = _imported_summary_path(claim_output_root, batch_idx, compute_region)
+    try:
+        import fsspec
+
+        fs = fsspec.filesystem("gs")
+        if not fs.exists(src):
+            logger.warning("local imported file missing, skipping summary: %s", src)
+            return False
+        with fsspec.open(src, "rb") as f:
+            rollouts = json.load(f)
+        counts: dict[str, int] = {}
+        if isinstance(rollouts, list):
+            for r in rollouts:
+                if isinstance(r, dict):
+                    iid = r.get("instance_id")
+                    if iid:
+                        counts[str(iid)] = counts.get(str(iid), 0) + 1
+        summary = {
+            "compute_region": compute_region,
+            "shard_idx": batch_idx,
+            "ts": time.time(),
+            "imported_local_path": f"{_imported_shard_path(local_output_root, batch_idx)}/",
+            "per_pr_counts": counts,
+        }
+        _gcs_blob(dst).upload_from_string(json.dumps(summary))
+        n_at = sum(1 for v in counts.values() if v >= TARGET_ROLLOUTS_PER_PR)
+        logger.info(
+            "wrote imported summary for batch %d (%d PRs, %d at >=%d) -> %s",
+            batch_idx,
+            len(counts),
+            n_at,
+            TARGET_ROLLOUTS_PER_PR,
+            dst,
+        )
+        return True
+    except Exception as e:
+        logger.error("write-imported-summary failed for batch %d: %s", batch_idx, e)
+        return False
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     parser = argparse.ArgumentParser()
@@ -590,6 +736,15 @@ def main():
     parser.add_argument("--idle-sleep", type=int, default=120)
     parser.add_argument("--idle-max-cycles", type=int, default=10)
     parser.add_argument(
+        "--claim-region",
+        default=None,
+        help="Source region whose partition we claim work from (default: same as compute "
+        "region, i.e., native mode). When different from the detected compute region, the "
+        "worker runs in 'imported mode': claim file and shard state read cross-region from "
+        "the source bucket, new rollouts written to the compute region's bucket under "
+        "imported/, and the resume file copied back to source on iter completion.",
+    )
+    parser.add_argument(
         "--claim-order",
         choices=["missing-first", "random"],
         default="missing-first",
@@ -600,21 +755,30 @@ def main():
     args = parser.parse_args()
 
     region = _detect_region()
-    output_root = _output_root_for_region(region)
-    partition_mod, partition_idx = _partition_for_region(region)
-    n_my_shards = sum(1 for i in range(TOTAL_PR_BATCHES) if i % partition_mod == partition_idx)
+    local_output_root = _output_root_for_region(region)
+    claim_region = args.claim_region or region
+    if claim_region not in PINNED_REGIONS:
+        raise SystemExit(f"--claim-region {claim_region!r} not in {PINNED_REGIONS!r}")
+    claim_output_root = _output_root_for_region(claim_region)
+    is_imported = claim_region != region
+    partition_mod, partition_idx = _partition_for_region(claim_region)
+    n_claim_shards = sum(1 for i in range(TOTAL_PR_BATCHES) if i % partition_mod == partition_idx)
     logger.info(
-        "MULTI-REGION SWARM WORKER region=%s output_root=%s partition=(%d/%d, %d shards)",
+        "MULTI-REGION SWARM WORKER compute=%s claim=%s mode=%s claim_partition=(%d/%d, %d shards)",
         region,
-        output_root,
+        claim_region,
+        "imported" if is_imported else "native",
         partition_idx,
         partition_mod,
-        n_my_shards,
+        n_claim_shards,
     )
 
     _assert_zone_in_region(region)
-    _assert_bucket_pinned(output_root, region)
-    _purge_legacy_locks(output_root)
+    _assert_bucket_pinned(local_output_root, region)
+    # Native mode: legacy-clean own per_pr/. Imported mode: skip — we don't own
+    # the source bucket and shouldn't be deleting its files.
+    if not is_imported:
+        _purge_legacy_locks(local_output_root)
     _prefetch_model_from_gcs(region)
     _prefetch_hf_dataset("nebius/SWE-rebench-V2-PRs")
 
@@ -622,7 +786,7 @@ def main():
     idle_cycles = 0
     while iterations < args.max_iterations:
         batch_idx = _claim_unclaimed_batch(
-            output_root,
+            claim_output_root,
             args.worker_seed,
             iterations,
             region,
@@ -633,7 +797,7 @@ def main():
         if batch_idx is None:
             idle_cycles += 1
             logger.info(
-                "no unclaimed shard in partition %d/%d (idle cycle %d/%d) - sleep %ds",
+                "no unclaimed shard in claim-partition %d/%d (idle cycle %d/%d) - sleep %ds",
                 partition_idx,
                 partition_mod,
                 idle_cycles,
@@ -641,7 +805,11 @@ def main():
                 args.idle_sleep,
             )
             if idle_cycles >= args.idle_max_cycles:
-                logger.info("partition saturated for region %s - exiting", region)
+                logger.info(
+                    "claim-partition saturated for compute=%s claim=%s - exiting",
+                    region,
+                    claim_region,
+                )
                 return 0
             time.sleep(args.idle_sleep)
             iterations += 1
@@ -651,28 +819,46 @@ def main():
         stop = threading.Event()
         hb = threading.Thread(
             target=_heartbeat,
-            args=(stop, output_root, batch_idx, args.worker_seed, region),
+            args=(stop, claim_output_root, batch_idx, args.worker_seed, region),
             daemon=True,
         )
         hb.start()
         try:
-            rc = _run_inner(output_root, batch_idx, args.tensor_parallel, args.worker_seed, iterations)
+            rc = _run_inner(
+                local_output_root=local_output_root,
+                claim_output_root=claim_output_root,
+                is_imported=is_imported,
+                batch_idx=batch_idx,
+                tensor_parallel=args.tensor_parallel,
+                worker_seed=args.worker_seed,
+                iteration=iterations,
+            )
             if rc == 0:
+                # Imported mode: write a tiny per-PR summary JSON to source
+                # bucket (~2 KB cross-region write). _shard_is_complete reads
+                # all such summaries and merges via MAX so source-region
+                # workers + audit see this region's contributions without a
+                # full 250-400 MB migration. Final rollout data stays in
+                # gs://marin-{compute}/imported/shard_X/ and is folded in by
+                # the round-4 aggregator's content-hash dedup at upload time.
+                if is_imported:
+                    _write_imported_summary(local_output_root, claim_output_root, region, batch_idx)
                 # rc=0 means the inner exited cleanly, but that's not enough.
                 # Inner can exit clean with partial rollouts (e.g., only a
                 # subset of PRs reached n-rollouts; others had every rollout
                 # filtered as an error). Verify true per-PR completion before
                 # sealing the shard; otherwise release the claim so a future
                 # worker can top it up via --resume-from.
-                complete, msg = _shard_is_complete(output_root, batch_idx)
+                complete, msg = _shard_is_complete(claim_output_root, batch_idx)
                 if complete:
                     try:
-                        _gcs_blob(f"{_shard_path(output_root, batch_idx)}/{DONE_FILENAME}").upload_from_string(
+                        _gcs_blob(f"{_shard_path(claim_output_root, batch_idx)}/{DONE_FILENAME}").upload_from_string(
                             json.dumps(
                                 {
                                     "completed_at": time.time(),
                                     "worker_seed": args.worker_seed,
-                                    "region": region,
+                                    "compute_region": region,
+                                    "claim_region": claim_region,
                                     "iteration": iterations,
                                     "completion_check": msg,
                                 }
@@ -687,10 +873,10 @@ def main():
                         batch_idx,
                         msg,
                     )
-                _release_claim(output_root, batch_idx)
+                _release_claim(claim_output_root, batch_idx)
             else:
                 logger.warning("inner worker rc=%d for batch %d - releasing claim for retry", rc, batch_idx)
-                _release_claim(output_root, batch_idx)
+                _release_claim(claim_output_root, batch_idx)
         finally:
             stop.set()
             hb.join(timeout=5)

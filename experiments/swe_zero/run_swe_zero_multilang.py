@@ -540,12 +540,7 @@ def _run_with_vllm(
     # that would just exit again. Outer worker writes _done after this returns
     # if _shard_is_complete agrees, preventing future claims of this shard.
     if total == 0:
-        existing_total = sum(existing_counts.values())
         logger.info("All PRs at >= n_rollouts target; skipping vLLM launch for this iter")
-        logger.info(
-            "[METRICS] rollouts_produced=0 completion_tokens=0 submission_rate=0.0000 total_after=%d",
-            existing_total,
-        )
         return
     logger.info(
         "vLLM config: max_model_len=%d, max_num_seqs=%d, TP=%d, max_total_tokens=%d, concurrency=%d",
@@ -744,21 +739,6 @@ def _run_with_vllm(
         logger.info("Overall submission rate: %d/%d (%.1f%%)", total_finished, total_n, 100 * total_finished / total_n)
     else:
         logger.info("No rollouts produced (all PRs already at target via auto-resume)")
-
-    # Throughput metric line - parsed by the outer multiswarm worker's
-    # _run_inner to write per-iter metric files at gs://marin-{region}/.../throughput/.
-    # rollouts_produced = newly generated this iter (total minus pre-loaded resume).
-    # completion_tokens = exact sum of vLLM-generated tokens this iter (excludes pre-loaded).
-    n_prior = len(prior_dicts) if resume_from else 0
-    rollouts_produced = max(0, total_n - n_prior)
-    completion_tokens_new = sum(r.total_completion_tokens for r in completed_rollouts if r.finished or r.full_text)
-    logger.info(
-        "[METRICS] rollouts_produced=%d completion_tokens=%d submission_rate=%.4f total_after=%d",
-        rollouts_produced,
-        completion_tokens_new,
-        total_finished / total_n if total_n else 0.0,
-        total_n,
-    )
 
 
 def main():

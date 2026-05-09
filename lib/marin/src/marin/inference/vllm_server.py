@@ -99,19 +99,24 @@ def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
 
 
 def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
+    flag_map = {
+        "distributed_executor_backend": "--distributed-executor-backend",
+        "dtype": "--dtype",
+        "gpu_memory_utilization": "--gpu-memory-utilization",
+        "kv_cache_dtype": "--kv-cache-dtype",
+        "load_format": "--load-format",
+        "max_model_len": "--max-model-len",
+        "max_num_batched_tokens": "--max-num-batched-tokens",
+        "max_num_seqs": "--max-num-seqs",
+        "pipeline_parallel_size": "--pipeline-parallel-size",
+        "tensor_parallel_size": "--tensor-parallel-size",
+    }
     args: list[str] = []
-    load_format = engine_kwargs.get("load_format")
-    if load_format is not None:
-        args.extend(["--load-format", load_format])
-    max_model_len = engine_kwargs.get("max_model_len")
-    if max_model_len is not None:
-        args.extend(["--max-model-len", str(max_model_len)])
-    gpu_memory_utilization = engine_kwargs.get("gpu_memory_utilization")
-    if gpu_memory_utilization is not None:
-        args.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
-    max_num_batched_tokens = engine_kwargs.get("max_num_batched_tokens")
-    if max_num_batched_tokens is not None:
-        args.extend(["--max-num-batched-tokens", str(max_num_batched_tokens)])
+    for key, flag in flag_map.items():
+        value = engine_kwargs.get(key)
+        if value is None:
+            continue
+        args.extend([flag, str(value)])
     return args
 
 

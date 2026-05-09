@@ -101,6 +101,23 @@ def _audit_shard(idx: int) -> dict:
                         counts[iid] += 1
         del rolls  # free the big list before next file
 
+    # Fold in imported_summary_{region}.json files written by cross-region
+    # workers running in imported mode. Each summary's per_pr_counts already
+    # reflects (source-seeded prior + that region's new rollouts), so we take
+    # MAX per PR rather than SUM to dedup the source overlap.
+    summary_glob = f"{base}/imported_summary_*.json"
+    try:
+        for hit in fs.glob(summary_glob):
+            try:
+                with fsspec.open(f"gs://{hit}" if not hit.startswith("gs://") else hit, "rb") as f:
+                    summary = json.load(f)
+                for iid, n in (summary.get("per_pr_counts", {}) or {}).items():
+                    counts[str(iid)] = max(counts.get(str(iid), 0), int(n))
+            except Exception:
+                continue
+    except Exception:
+        pass
+
     # Coverage on this shard's source PR set
     n_at_target = sum(1 for iid in source_prs if counts.get(iid, 0) >= TARGET_ROLLOUTS_PER_PR)
     n_missing = sum(1 for iid in source_prs if counts.get(iid, 0) == 0)

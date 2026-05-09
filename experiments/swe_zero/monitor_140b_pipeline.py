@@ -18,6 +18,7 @@ are left alone, and running batches are never replaced automatically.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import dataclasses
 import datetime as dt
 import json
@@ -28,7 +29,6 @@ import shlex
 import subprocess
 import sys
 from collections import Counter
-import concurrent.futures
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -347,6 +347,8 @@ def _submit_batch(args, round_idx: int, layout: BatchLayout) -> None:
         priority,
         "--max-retries",
         str(args.max_retries),
+        "--region",
+        "us-east5",
         "--extra",
         "vllm",
         "--extra",
@@ -392,8 +394,7 @@ def _submit_batch(args, round_idx: int, layout: BatchLayout) -> None:
         str(args.seed),
         "--output_dir",
         args.output_root,
-        "--lease-stale-minutes",
-        "20",
+        "--disable-shard-lease",
     ]
     logger.info(
         "Submitting batch %02d round %d (priority=%s, tpu=%s, tp=%d)",
@@ -410,7 +411,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Monitor and conservatively relaunch the 140B SWE-ZERO pipeline")
     parser.add_argument("--iris-bin", default="/home/kevin/marin-iris-tpu-cli/.venv/bin/iris")
     parser.add_argument("--cluster", default="marin")
-    parser.add_argument("--output-root", default="gs://marin-us-central2/experiments/swe_zero_100b")
+    parser.add_argument("--output-root", default="gs://marin-us-east5/experiments/swe_zero_100b")
     parser.add_argument("--dataset", default="nebius/SWE-rebench-V2-PRs")
     parser.add_argument("--total-shards", type=int, default=126)
     parser.add_argument("--batches", type=int, default=13)
@@ -448,7 +449,7 @@ def main() -> int:
     parser.add_argument("--max-retries", type=int, default=10)
     parser.add_argument(
         "--tpu-types",
-        default="v6e-4,v5p-8,v5litepod-4,v4-8",
+        default="v6e-4",
         help="TPU variants (all must have 4 chips_per_vm to match TP=4).",
     )
     parser.add_argument("--n-rollouts", type=int, default=100)

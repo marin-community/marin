@@ -113,7 +113,10 @@ marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
+# WIP: temporarily overridden to local path for mini-coder-1.7b reproduction
+# (mini_swe_agent_v1 needs agent_config_overrides plumbed through). Revert
+# to the git pin once that change lands upstream in marin-community/harbor.
+harbor = { path = "lib/harbor", editable = true }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 

@@ -30,11 +30,11 @@ TARGET_ROLLOUTS = 12_291_000
 TOKENS_PER_ROLLOUT = 11_400
 
 
-BYTES_PER_ROLLOUT = 48_500
-"""Empirical avg bytes per rollout entry in the JSON files (measured from
-shard 053: 6667 rollouts / 325 MB ≈ 48.7 KB/rollout). Used as a fast,
-race-free estimator when the exact count from ``gsutil cat`` would race
-with concurrent checkpoint writes."""
+BYTES_PER_ROLLOUT = 37_700
+"""Empirical avg bytes per rollout entry in the JSON files. Recalibrated
+after error-filtering and MAX_TURNS=15: shard 001 post-cleanup has
+3527 entries / 133 MB ≈ 37.7 KB/rollout (down from 48.7 KB when error
+rollouts and 30-turn traces were included)."""
 
 _GS_LS_RE = re.compile(r"^\s*(\d+)\s+\S+\s+(gs://\S+)$")
 

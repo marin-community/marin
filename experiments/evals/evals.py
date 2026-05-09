@@ -401,6 +401,8 @@ def evaluate_harbor(
     n_concurrent: int = 4,
     env: str = "local",
     agent_kwargs: dict | None = None,
+    task_names: list[str] | None = None,
+    engine_kwargs: dict | None = None,
 ) -> ExecutorStep:
     """
     Evaluate on ANY Harbor dataset from the registry.
@@ -444,28 +446,37 @@ def evaluate_harbor(
     if model_path is not None:
         validate_vllm_mode_env()
 
-    # Harbor config goes in engine_kwargs
-    engine_kwargs = {
-        "harbor_config": {
-            "dataset": dataset,
-            "version": version,
-            "agent": agent,
-            "n_concurrent": n_concurrent,
-            "env": env,
-            "agent_kwargs": agent_kwargs or {},
-        }
+    # Harbor config goes in engine_kwargs alongside any vLLM-side kwargs the
+    # caller passed (max_model_len, tensor_parallel_size, max_num_seqs, ...).
+    merged_engine_kwargs = dict(engine_kwargs or {})
+    merged_engine_kwargs["harbor_config"] = {
+        **(merged_engine_kwargs.get("harbor_config") or {}),
+        "dataset": dataset,
+        "version": version,
+        "agent": agent,
+        "n_concurrent": n_concurrent,
+        "env": env,
+        "agent_kwargs": agent_kwargs or {},
+        "task_names": task_names,
     }
 
     # When model_path is set, the evaluator launches a colocated vLLM server on
     # the accelerator resources. The outer executor step runs on CPU for API models.
-    dispatch_resources = ResourceConfig.with_cpu() if model_path else resource_config
+    if model_path is None:
+        dispatch_resources = ResourceConfig.with_cpu()
+        pip_dependency_groups = ["harbor"]
+    else:
+        if resource_config is None:
+            raise ValueError("resource_config must be provided for Harbor evals with a local model_path")
+        dispatch_resources = resource_config
+        pip_dependency_groups = ["harbor", "vllm"]
     return ExecutorStep(
         name=f"evaluation/harbor/{model_name}-{dataset}-{version}",
         fn=remote(
             evaluate,
             resources=dispatch_resources,
             env_vars=env_vars_from_keys(HARBOR_EVAL_ENV_KEYS),
-            pip_dependency_groups=["harbor"],
+            pip_dependency_groups=pip_dependency_groups,
         ),
         config=EvaluationConfig(
             evaluator="harbor",
@@ -475,7 +486,7 @@ def evaluate_harbor(
             evals=[],  # Harbor uses dataset directly, not evals
             max_eval_instances=max_eval_instances,
             discover_latest_checkpoint=False,
-            engine_kwargs=engine_kwargs,
+            engine_kwargs=merged_engine_kwargs,
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
             wandb_tags=wandb_tags,
