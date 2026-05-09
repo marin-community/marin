@@ -143,16 +143,16 @@ These are the failure modes to watch for, learned during the v2 / v2.5 work.
 
 ## 3. Validation experiments still owed
 
-Before DART can be trusted at scale, four validation experiments are still owed (per the critical re-read in `claude_judge_spec_repair.md`):
+Before DART can be trusted at scale, four validation experiments were originally owed (per the critical re-read in `claude_judge_spec_repair.md`). Status updated 2026-05-09 after Run 1:
 
-| # | experiment | purpose | cost |
-|---|---|---|---|
-| **A** | Spec-revision on `comply_with_laws` | tests the symmetric methodology on the case where rubric tweaks already failed | ~$2-4 |
-| **B** | Stability check | re-compile v2 anchors 3-5× at varied temperature, measure variance | ~$1 |
-| **C** | Validity check on `no_agenda` | hand-check whether v2's broadened reading is faithful to spec text | $0 (human time) |
-| **D** | Generalization check | apply DART on 1 marginal-hurt statement (Δα ∈ [-0.10, -0.05]) | ~$3-5 |
+| # | experiment | purpose | status | cost |
+|---|---|---|---|---|
+| **A** | Spec-revision on `comply_with_laws` | tests the symmetric methodology on the case where rubric tweaks already failed | 🟡 **partially done** — Run 1 produced spec proposals (and surprisingly diagnosed comply_with_laws as `rubric_drift`, not spec_ambiguity); empirical re-judge of proposed edits still pending | ~$2-4 |
+| **B** | Stability check | re-compile v2 anchors 3-5× at varied temperature, measure variance | ❌ not done | ~$1 |
+| **C** | Validity check on `no_agenda` | hand-check whether v2's broadened reading is faithful to spec text | ❌ not done | $0 (human time) |
+| **D** | Generalization check | apply DART on 1 marginal-hurt statement (Δα ∈ [-0.10, -0.05]) | ❌ not done | ~$3-5 |
 
-Total to upgrade DART from "promising prototype" to "validated tool": ~$10-15.
+Total to upgrade DART from "promising prototype" to "validated tool": ~$10-15. Run 1 used $0.37 toward this.
 
 ---
 
@@ -161,11 +161,13 @@ Total to upgrade DART from "promising prototype" to "validated tool": ~$10-15.
 | artifact | location |
 |---|---|
 | Δpwv ranking (Step 2) | `experiments/posttrain/disagreement_primitive/e9_rubric_poison_rank.py` |
-| Compiler diagnostic (Step 3) — current rubric-only version | `experiments/posttrain/disagreement_primitive/e9_recompile_rubric_with_disagreement.py` |
-| Compiler diagnostic — bidirectional (rubric + spec proposals) | **TBD — extend the rubric-only script with spec-proposal output** |
+| **Compiler diagnostic (Step 3) — bidirectional** | **`experiments/posttrain/disagreement_primitive/e9_dart_compiler.py`** (canonical Step 3; takes both bare-poison + rubric-poison rankings, outputs structured JSON with diagnosis + rubric edits + spec edit proposals + recommendation) |
+| Earlier rubric-only Step 3 (deprecated) | `experiments/posttrain/disagreement_primitive/e9_recompile_rubric_with_disagreement.py` (kept for reference; superseded by `e9_dart_compiler.py`) |
 | Validation infrastructure (Step 5) | `e9_rejudge_gpt_v2.py`, `e9_rejudge_gemini_claude_v2.py`, `e9_recompute_agreement_v2_full.py` |
-| Sample compiler outputs (5 statements, v2 rubrics) | `experiments/posttrain/disagreement_primitive/e8_rubrics_v2.jsonl` |
-| Sample validation results | `.agents/logbooks/rubric_v2_full_results.md` |
+| Bucketing analysis (Step 1) | inline in `e9_predict_rubric_helpfulness.py` (computes bucket counts at varied T₁); could be extracted to a dedicated script |
+| Sample compiler outputs (5 statements, v2 rubrics, pre-DART) | `experiments/posttrain/disagreement_primitive/e8_rubrics_v2.jsonl` |
+| Sample validation results (pre-DART) | `.agents/logbooks/rubric_v2_full_results.md` |
+| **DART Run 1 outputs** | `experiments/posttrain/disagreement_primitive/dart_diagnoses.jsonl` (structured) + `.agents/logbooks/dart_run_001_diagnoses.md` (human-readable) |
 | Source-experiment narrative | `.agents/logbooks/claude_judge_spec_repair.md` |
 
 ---
@@ -258,3 +260,32 @@ Source narrative: `.agents/logbooks/claude_judge_spec_repair.md` sections "Rubri
 - `assume_objective_pov` is the only `irreducible` verdict — compiler identifies a genuine value boundary on whether roleplay carve-outs override the requirement to condemn human rights violations. Drop the rubric, judge bare only.
 
 **Status**: Diagnoses generated. **Awaiting human review of proposals** before any edits adopted or escalated to spec authors. Validation step (re-judge with adopted edits) not run yet.
+
+#### Decisions pending after Run 1
+
+**Rubric-edit path** (5 `rubric_drift` + 2 `both` = 7 statements):
+- avoid_abuse, comply_with_laws, no_topic_off_limits, sexual_content_involving_minors, be_thorough_but_efficient (rubric_drift)
+- ask_clarifying_questions, prevent_imminent_harm (both — has rubric edits)
+- Action needed: validate via re-judge of all 3 judges (~$5-10 batch). Adopt only those where Δpwv on poison cells drops ≥ 50%.
+- Particularly worth testing: comply_with_laws — Run 1's diagnosis disagrees with the v2.5 "irreducible" verdict; empirical re-judge resolves the conflict.
+
+**Spec-proposal path** (6 `spec_ambiguity` + 2 `both` = 8 statements):
+- be_clear, do_not_lie, formatting, protect_privileged_messages, refusal_style, letter_and_spirit (spec_ambiguity)
+- ask_clarifying_questions, prevent_imminent_harm (both — has spec proposals)
+- Action needed: render proposals into a spec-author-friendly review doc; never auto-deploy.
+- Notable proposals to highlight to authors:
+  - `do_not_lie`: "overrides may only affect style, persona, or clearly signposted fiction/roleplay" — addresses cells where users explicitly ask for lies
+  - `protect_privileged_messages`: forbid generic descriptions of instruction hierarchy
+  - `refusal_style`: refusal style applies even when user requests "bad example" refusals
+  - `letter_and_spirit`: forbid open-ended autonomous goal pursuit beyond explicit instructions
+
+**Drop-rubric path** (1 `irreducible`):
+- assume_objective_pov: drop rubric, judge bare only. Document the value boundary (roleplay carve-out vs human-rights condemnation) as a finding for spec authors.
+
+#### Lessons from Run 1
+
+1. **Cost was 4× cheaper than estimated** ($0.37 vs $1.40 prediction). GPT-5.1's compiler outputs at `reasoning_effort=none` are short and focused.
+2. **Compiler validation passed 13/14 cleanly**. Only `ask_clarifying_questions` had a paraphrased `old_phrase` that wasn't a verbatim substring. Future runs should re-prompt strictly when validation fails.
+3. **Diagnosis distribution was richer than expected**: 5/14 rubric_drift, 6/14 spec_ambiguity, 2/14 both, 1/14 irreducible. The split between rubric_drift and spec_ambiguity tracks the Σpwv ratio — when rubric_pwv > bare_pwv, GPT diagnoses rubric_drift; reverse → spec_ambiguity. The metric and the LM's diagnosis converge cleanly.
+4. **`comply_with_laws` got a different diagnosis than the post-v2.5 verdict**. This is a concrete case where DART (with bidirectional input) revisited a "drop the rubric" call and proposed targeted rubric edits instead. Empirical validation will tell us which is right.
+5. **The bidirectional compiler matters**. If we'd only sent rubric-poison rankings (the pre-DART approach), the 6 spec_ambiguity diagnoses wouldn't have surfaced — the compiler would have proposed rubric edits even where the spec text is the actual problem. The bare-poison ranking is what makes the spec-edit path work.
