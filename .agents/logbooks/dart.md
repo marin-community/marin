@@ -527,3 +527,117 @@ For spec edits across the 3 compiler-pairs: 18 same-direction pairs vs 7 opposit
 - **25 of 52 rubric anchors** → action-safe (≥2 compilers same-direction); **27 of 52** → not (singleton or disputed)
 
 Majority vote does not eliminate human review — it sequences and prioritizes it. The compiler ensemble produces 2 unambiguous `adopt`s; everything else still needs human judgment, but the majority/minority split tells reviewers where compilers agreed and where they diverged.
+
+---
+
+### Run 4 — Iterative validation with cumulative history (overnight 2026-05-09 → wake 15:00 UTC)
+
+**Date launched**: 2026-05-09 ~07:30 UTC
+**Date target**: results in by 15:00 UTC same day (user wake time)
+**Statements**: same 13 Bucket D statements
+**Compilers**: GPT-5.1, Gemini 3 Pro, Claude Sonnet 4.6 (per Run 1/2/3 setup)
+**Judges**: same 3-judge ensemble
+**Round budget**: **N=2 floor, N=3 ceiling** (proceed to N=3 only if N=2 has fully resolved by 15:00 UTC)
+
+**Goal**: empirically test the §1.7 majority-vote rule by adopting majority-supported edits and re-judging. Where Round 1 yields IMPROVING-but-not-CONVERGED, do a Round 2 compile that has access to **cumulative edit history** for that statement, then re-judge again.
+
+**The cumulative-history mechanic**:
+
+For each statement, maintain `experiments/posttrain/disagreement_primitive/dart_iteration/{sid}/history.json`. Each round appends:
+
+```json
+{
+  "round": N,
+  "rubric_state_at_start": "v{N} (= v1 + adopted edits from rounds 1..N-1)",
+  "spec_state_at_start":   "v{N}",
+  "round_diagnosis_majority": "rubric_drift|spec_ambiguity|both|irreducible",
+  "rubric_edits_adopted":      [{"anchor":"...", "old":"...", "new":"..."}],
+  "spec_edits_adopted":        [{"old_phrase":"...", "new_phrase":"..."}],
+  "edits_proposed_not_adopted":[{"compiler":"...", "reason":"singleton|opposite_direction|disputed"}],
+  "alpha_before_round": 0.32,
+  "alpha_after_round":  0.46,
+  "delta_alpha":        0.14,
+  "delta_pwv_top10_pct_drop": 0.61,
+  "verdict": "converged|improving|stuck"
+}
+```
+
+In Round 2 (and Round 3 if it fires), the compiler prompt includes an explicit **edit-history block** between the spec/rubric block and the poison-cells block:
+
+> The rubric and spec text shown above already incorporate the edits below. The poison cells shown after this section are computed under the CURRENT state, not the baseline.
+>
+> Round 1: Majority diagnosis = rubric_drift. Rubric edit adopted (anchor 3): "old text" → "new text". Empirical: α 0.32 → 0.46 (Δ +0.14); top-10 Δpwv dropped 61%. Status: improving but α still below T₁=0.5.
+>
+> Given this history: if α gain is decelerating, propose a different KIND of edit; if same disagreements persist on new poison cells, declare irreducible; if your Round-1 edit moved α the wrong way, propose a reversal; otherwise refine.
+
+This is the test of compiler self-correction. The compiler in Round 2 has seen what it (or its peer) tried, what got adopted via majority, and the empirical result. The question: does that change Round-2 proposals qualitatively?
+
+**Per-statement state machine**:
+
+```
+PENDING → COMPILING → JUDGING → ANALYZING → DECISION
+                                                │
+                              ┌─────────────────┼──────────────┐
+                              ▼                 ▼              ▼
+                        CONVERGED          IMPROVING       STUCK
+                        (α ≥ T₁=0.5)       (Δα ≥ +0.05)    (Δα < +0.05)
+                        stop               loop next round  escalate, stop
+```
+
+Each statement loops independently. Converged statements stop drawing compute; stuck statements escalate immediately without further rounds.
+
+**Round 1** (no new compiler calls — uses existing Run 1/2/3 outputs):
+- Synthesize v2 edit set per §1.7 majority rule (25 majority-supported rubric anchors + same-direction spec edits).
+- Build 4 conditions per statement:
+  - C0: original spec + v1 rubric (baseline; reuse existing per_judgment data)
+  - C1: original spec + v2 rubric (rubric-only change)
+  - C2: v2 spec + v1 rubric (spec-only change, counterfactual)
+  - C3: v2 spec + v2 rubric (full)
+- Submit batches: Anthropic batch (Claude judge), OpenAI batch (GPT-5.1 judge, `reasoning_effort=none`), Gemini sync (rate-limited concurrency).
+- All API calls routed through `RawAPILogger`.
+
+**Round 2 conditional fire** (after Round 1 batches return):
+- For each IMPROVING statement: re-rank poison cells **on the v2 judgments** (cells that disagreed under v1 are not the same as under v2).
+- Sync compiler call to all 3 with: spec_v2 + rubric_v2 + history.json Round-1 entry + new poison cells under v2.
+- Apply majority vote → v3 edit set.
+- Build conditions C1'/C2'/C3' (rubric_v3, spec_v3, full_v3).
+- Submit Round 2 batches.
+
+**Round 3 conditional fire** (only if N=2 fully resolved by ~13:00 UTC, leaving headroom for ~2h Round 3 batches before 15:00 UTC; **user has pre-authorized**):
+- For each IMPROVING-after-Round-2 statement: same machinery, history.json now has 2 entries.
+- Additional stopping rule: if Round 2's Δα-vs-Round-1 < +0.025 (deceleration), force STUCK regardless of Δα-vs-baseline. Diminishing returns mean local-edit path is exhausted.
+- Compiler prompt gets one extra line: "this is the final round; if convergence is not imminent, declare irreducible."
+- Round 3 batches submitted, judged, analyzed.
+
+**Stopping criteria (hard)**:
+- Per-statement: max 3 rounds. After Round N if not CONVERGED, statement is ESCALATED.
+- Per-loop: total compiler calls capped at 13 × 3 × 3 = 117 (sync, ~minutes); total judge calls capped at 4,680 × 3 = 14,040.
+- Cost guard: hard $50 OpenAI cap + $50 Anthropic cap across all rounds. Abort with report if exceeded.
+- Wall-time: stop submitting new batches after **~13:00 UTC**. Any in-flight batches at 15:00 UTC report as "in flight, see status file." No new compiler/judge calls after wake-time.
+
+**Auto-wake schedule**:
+- T+0 (~07:30 UTC): Phase 1 (synthesize R1) + Phase 2 (build conditions) + Phase 3 (submit R1 batches). ~1h.
+- T+30min on, every 30 min: ScheduleWakeup polls batch status. If incomplete, sleep again.
+- On R1 return: Phase 4 analysis, classify per-statement verdicts, append history.json R1 entries.
+- If any IMPROVING and time < 13:00 UTC: Phase 5 R2 compile (sync, ~5 min) + Phase 6 R2 batches.
+- On R2 return: Phase 4 again, append history.json R2 entries.
+- If any IMPROVING-after-R2 AND time < 13:00 UTC: Phase 5/6 again for R3.
+- On final batch return: render `dart_run_004_iterative.md`, commit, end loop.
+
+**Outputs**:
+- `experiments/posttrain/disagreement_primitive/dart_iteration/{sid}/history.json` × 13
+- `experiments/posttrain/disagreement_primitive/dart_iteration/{sid}/rubric_v{N}.json` × (1-3 per statement)
+- `experiments/posttrain/disagreement_primitive/dart_iteration/{sid}/spec_v{N}.txt` × (1-3 per statement)
+- `experiments/posttrain/disagreement_primitive/dart_iteration/escalation_queue.md` (statements that ended STUCK at any round)
+- `.agents/logbooks/dart_run_004_iterative.md` (full report)
+- `results/raw/e9_dart_iter_*` raw API dumps for every call
+- All committed as a single `[alignment] DART Run 4` commit on completion
+
+**Predictions to test**:
+
+1. **Round 1 alone moves more than Run-1's predicted "2 adopt + 5 both + 6 escalate"** — because we're applying 25 majority-supported rubric anchors plus same-direction spec edits, not just adopting where the diagnosis is unanimous. Δα across the 13 statements should average ≥ +0.10.
+2. **Self-correction in Round 2** — for statements that improved partially, Round-2 with history should propose **qualitatively different** edits (e.g. switch from rubric to spec) rather than refining the same anchor. If the compiler doubles down identically, that's a methodological finding (LM stubbornness on its own attempt).
+3. **T3 statements remain hardest** — the 6 statements that had opposite-direction edits in the 3-way report should be the LAST to converge, validating the §5 Run 3 claim that opposite-direction edit pairs flag genuinely contested statements.
+4. **Compiler-specific self-correction patterns** — Gemini and Claude (which hedge to `both`) may iterate toward `escalate_spec`; GPT may double-down on its committed diagnosis.
+
+**Status**: Plan locked. Launching ~07:30 UTC. Permission granted by user to escalate N=2 → N=3 if N=2 finishes before 13:00 UTC. Wake report by 15:00 UTC.
