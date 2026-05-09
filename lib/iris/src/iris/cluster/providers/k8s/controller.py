@@ -151,6 +151,15 @@ def _build_controller_deployment(
         "requests": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
         "limits": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
     }
+    # `--fresh` wipes the controller's SQLite, so the new pod boots with no
+    # knowledge of jobs the OLD pod has accepted. Default RollingUpdate keeps
+    # the old pod up (and Service-routable) until the new pod is Ready, so a
+    # job submitted in the surge window lands on the OLD controller and is
+    # then deleted as a "stray" by the new controller's first reconcile (#5590).
+    # Recreate forces the old pod down before the new one starts: brief
+    # downtime, no overlap. Non-fresh restarts keep RollingUpdate so in-place
+    # upgrades stay zero-downtime.
+    strategy: dict = {"type": "Recreate"} if fresh else {"type": "RollingUpdate"}
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -161,6 +170,7 @@ def _build_controller_deployment(
         },
         "spec": {
             "replicas": 1,
+            "strategy": strategy,
             "selector": {"matchLabels": {"app": "iris-controller"}},
             "template": {
                 "metadata": {"labels": {"app": "iris-controller"}},
