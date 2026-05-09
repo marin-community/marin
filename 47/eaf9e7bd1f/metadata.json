@@ -1,0 +1,103 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "47eaf9e7bd1f",
+  "strategy": "manual-commit",
+  "branch": "kevin/harbor",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "experiments/exp4420_eval_marin_8b_instruct_tb2.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/47/eaf9e7bd1f/0/metadata.json",
+      "transcript": "/47/eaf9e7bd1f/0/full.jsonl",
+      "context": "/47/eaf9e7bd1f/0/context.md",
+      "content_hash": "/47/eaf9e7bd1f/0/content_hash.txt",
+      "prompt": "/47/eaf9e7bd1f/0/prompt.txt"
+    },
+    {
+      "metadata": "/47/eaf9e7bd1f/1/metadata.json",
+      "transcript": "/47/eaf9e7bd1f/1/full.jsonl",
+      "context": "/47/eaf9e7bd1f/1/context.md",
+      "content_hash": "/47/eaf9e7bd1f/1/content_hash.txt",
+      "prompt": "/47/eaf9e7bd1f/1/prompt.txt"
+    },
+    {
+      "metadata": "/47/eaf9e7bd1f/2/metadata.json",
+      "transcript": "/47/eaf9e7bd1f/2/full.jsonl",
+      "context": "/47/eaf9e7bd1f/2/context.md",
+      "content_hash": "/47/eaf9e7bd1f/2/content_hash.txt",
+      "prompt": "/47/eaf9e7bd1f/2/prompt.txt"
+    },
+    {
+      "metadata": "/47/eaf9e7bd1f/3/metadata.json",
+      "transcript": "/47/eaf9e7bd1f/3/full.jsonl",
+      "context": "/47/eaf9e7bd1f/3/context.md",
+      "content_hash": "/47/eaf9e7bd1f/3/content_hash.txt",
+      "prompt": "/47/eaf9e7bd1f/3/prompt.txt"
+    },
+    {
+      "metadata": "/47/eaf9e7bd1f/4/metadata.json",
+      "transcript": "/47/eaf9e7bd1f/4/full.jsonl",
+      "context": "/47/eaf9e7bd1f/4/context.md",
+      "content_hash": "/47/eaf9e7bd1f/4/content_hash.txt",
+      "prompt": "/47/eaf9e7bd1f/4/prompt.txt"
+    },
+    {
+      "metadata": "/47/eaf9e7bd1f/5/metadata.json",
+      "transcript": "/47/eaf9e7bd1f/5/full.jsonl",
+      "context": "/47/eaf9e7bd1f/5/context.md",
+      "content_hash": "/47/eaf9e7bd1f/5/content_hash.txt",
+      "prompt": "/47/eaf9e7bd1f/5/prompt.txt"
+    },
+    {
+      "metadata": "/47/eaf9e7bd1f/6/metadata.json",
+      "transcript": "/47/eaf9e7bd1f/6/full.jsonl",
+      "context": "/47/eaf9e7bd1f/6/context.md",
+      "content_hash": "/47/eaf9e7bd1f/6/content_hash.txt",
+      "prompt": "/47/eaf9e7bd1f/6/prompt.txt"
+    },
+    {
+      "metadata": "/47/eaf9e7bd1f/7/metadata.json",
+      "transcript": "/47/eaf9e7bd1f/7/full.jsonl",
+      "context": "/47/eaf9e7bd1f/7/context.md",
+      "content_hash": "/47/eaf9e7bd1f/7/content_hash.txt",
+      "prompt": "/47/eaf9e7bd1f/7/prompt.txt"
+    },
+    {
+      "metadata": "/47/eaf9e7bd1f/8/metadata.json",
+      "transcript": "/47/eaf9e7bd1f/8/full.jsonl",
+      "context": "/47/eaf9e7bd1f/8/context.md",
+      "content_hash": "/47/eaf9e7bd1f/8/content_hash.txt",
+      "prompt": "/47/eaf9e7bd1f/8/prompt.txt"
+    },
+    {
+      "metadata": "/47/eaf9e7bd1f/9/metadata.json",
+      "transcript": "/47/eaf9e7bd1f/9/full.jsonl",
+      "context": "/47/eaf9e7bd1f/9/context.md",
+      "content_hash": "/47/eaf9e7bd1f/9/content_hash.txt",
+      "prompt": "/47/eaf9e7bd1f/9/prompt.txt"
+    },
+    {
+      "metadata": "/47/eaf9e7bd1f/10/metadata.json",
+      "transcript": "/47/eaf9e7bd1f/10/full.jsonl",
+      "context": "/47/eaf9e7bd1f/10/context.md",
+      "content_hash": "/47/eaf9e7bd1f/10/content_hash.txt",
+      "prompt": "/47/eaf9e7bd1f/10/prompt.txt"
+    },
+    {
+      "metadata": "/47/eaf9e7bd1f/11/metadata.json",
+      "transcript": "/47/eaf9e7bd1f/11/full.jsonl",
+      "context": "/47/eaf9e7bd1f/11/context.md",
+      "content_hash": "/47/eaf9e7bd1f/11/content_hash.txt",
+      "prompt": "/47/eaf9e7bd1f/11/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11774,
+    "cache_creation_tokens": 66976528,
+    "cache_read_tokens": 2024958283,
+    "output_tokens": 1835441,
+    "api_call_count": 5883
+  }
+}

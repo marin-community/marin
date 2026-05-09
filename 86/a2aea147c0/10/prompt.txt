@@ -1,0 +1,20 @@
+start an Iris dashboard for me
+
+---
+
+start the dashboard here. I need to access the dashboard on my local machine through port forwarding.
+
+---
+
+<task-notification>
+<task-id>ba0apgzuf</task-id>
+<tool-use-id>toolu_01FYDnfuouitvob1TnPvAzpC</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>failed</status>
+<summary>Background command "Start Iris dashboard with tunnel to us-central2 cluster" failed with exit code 1</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+Stop this and the port forwarding
