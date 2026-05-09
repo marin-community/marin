@@ -1,0 +1,1910 @@
+{
+  "j_206037e1e084a6e3098ec30c6aa684c0": [
+    "assume_objective_pov",
+    "C3",
+    0,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_ed0980b5141ed5d94312181f20fd95be": [
+    "assume_objective_pov",
+    "C3",
+    0,
+    "gemini-3-flash-preview"
+  ],
+  "j_c9e4c130bc7f907fa05a152209bfaea4": [
+    "assume_objective_pov",
+    "C3",
+    0,
+    "gpt-5.1"
+  ],
+  "j_51a3102a2aca245dbb23823f496900e4": [
+    "assume_objective_pov",
+    "C3",
+    0,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_437179fbf8dff8be207f5880c1f8d7a6": [
+    "assume_objective_pov",
+    "C3",
+    1,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_21c56117256a4dcc6572c18c033aa407": [
+    "assume_objective_pov",
+    "C3",
+    1,
+    "gemini-3-flash-preview"
+  ],
+  "j_72c0333b248151329964202f40821cd9": [
+    "assume_objective_pov",
+    "C3",
+    1,
+    "gpt-5.1"
+  ],
+  "j_7711289b6d1c0853b19ac90fda7cc5eb": [
+    "assume_objective_pov",
+    "C3",
+    1,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_0691b6d3393d9825d7dea1655fa79c17": [
+    "assume_objective_pov",
+    "C3",
+    2,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_025bb883d76fee876d3b0fd21826cb8c": [
+    "assume_objective_pov",
+    "C3",
+    2,
+    "gemini-3-flash-preview"
+  ],
+  "j_24657db4498e7d63c0ad6ae66916ed04": [
+    "assume_objective_pov",
+    "C3",
+    2,
+    "gpt-5.1"
+  ],
+  "j_792fc78db5129aebdf236e68123f1357": [
+    "assume_objective_pov",
+    "C3",
+    2,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_3cb4b4ed2a6a56a3365d79d9021613e4": [
+    "assume_objective_pov",
+    "C3",
+    3,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_76029933e78b55848daa4a880a52b9d3": [
+    "assume_objective_pov",
+    "C3",
+    3,
+    "gemini-3-flash-preview"
+  ],
+  "j_6ff0619de161eda36cc11380128cd9f5": [
+    "assume_objective_pov",
+    "C3",
+    3,
+    "gpt-5.1"
+  ],
+  "j_5dfba27936aaba50b9779a775c7a4e7d": [
+    "assume_objective_pov",
+    "C3",
+    3,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_3cec655d75f94f490a5c8aecc56ae704": [
+    "assume_objective_pov",
+    "C3",
+    4,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_98525754f5e9803fee88dcff5bdaa972": [
+    "assume_objective_pov",
+    "C3",
+    4,
+    "gemini-3-flash-preview"
+  ],
+  "j_3de18cf137323c03d6714897489cca73": [
+    "assume_objective_pov",
+    "C3",
+    4,
+    "gpt-5.1"
+  ],
+  "j_bf1e32893cd5e2d3d67217908bdec523": [
+    "assume_objective_pov",
+    "C3",
+    4,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_e41e264cc50d6d4b261bce5a1992c9bf": [
+    "assume_objective_pov",
+    "C3",
+    5,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_a6028a69399ce7e947a437f1bf79ad15": [
+    "assume_objective_pov",
+    "C3",
+    5,
+    "gemini-3-flash-preview"
+  ],
+  "j_aa33609d97d8c8a96ed4a4c6a00c2a3a": [
+    "assume_objective_pov",
+    "C3",
+    5,
+    "gpt-5.1"
+  ],
+  "j_ae432540abe1f6cf8dc2a2e19739192b": [
+    "assume_objective_pov",
+    "C3",
+    5,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_fb493f9855d2c7082c5c2cd4eb77882f": [
+    "assume_objective_pov",
+    "C3",
+    6,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_ba512e63b6f04395f5cc0333a2faefc5": [
+    "assume_objective_pov",
+    "C3",
+    6,
+    "gemini-3-flash-preview"
+  ],
+  "j_c6881814ab139d22a0a8e0408629e687": [
+    "assume_objective_pov",
+    "C3",
+    6,
+    "gpt-5.1"
+  ],
+  "j_6eec921cf8f4848a28c93ebddf912bce": [
+    "assume_objective_pov",
+    "C3",
+    6,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_7a77f719e34eac6c479e7711e66a0fa0": [
+    "assume_objective_pov",
+    "C3",
+    7,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_b17fd103585d528afdaa9d4079129aa2": [
+    "assume_objective_pov",
+    "C3",
+    7,
+    "gemini-3-flash-preview"
+  ],
+  "j_e4e907c104b703d60e5023926ba727be": [
+    "assume_objective_pov",
+    "C3",
+    7,
+    "gpt-5.1"
+  ],
+  "j_978fa182a85d2d23b276ad4b31cf8a4a": [
+    "assume_objective_pov",
+    "C3",
+    7,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_b96643c67911a38b84e99e0074cfb098": [
+    "assume_objective_pov",
+    "C3",
+    8,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_2518e603188c96444cff556666b14a75": [
+    "assume_objective_pov",
+    "C3",
+    8,
+    "gemini-3-flash-preview"
+  ],
+  "j_3a7399e6bd767c190556231f0f4e22bd": [
+    "assume_objective_pov",
+    "C3",
+    8,
+    "gpt-5.1"
+  ],
+  "j_ab93d5a6817fdb7f7f839481cbc99988": [
+    "assume_objective_pov",
+    "C3",
+    8,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_510628e2d0c2d5dd6088e63612516544": [
+    "assume_objective_pov",
+    "C3",
+    9,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_824181d245c1cd4cee4f4d54405af737": [
+    "assume_objective_pov",
+    "C3",
+    9,
+    "gemini-3-flash-preview"
+  ],
+  "j_95e8bc448c0a0d09d894cc13142000f6": [
+    "assume_objective_pov",
+    "C3",
+    9,
+    "gpt-5.1"
+  ],
+  "j_a63fa333ea0708635bf6379745c015a2": [
+    "assume_objective_pov",
+    "C3",
+    9,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_87bfa9cf5fa368a4bec8671551aa625c": [
+    "assume_objective_pov",
+    "C3",
+    10,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_366b73be44da77342faee035b03e21c3": [
+    "assume_objective_pov",
+    "C3",
+    10,
+    "gemini-3-flash-preview"
+  ],
+  "j_bf338bb1fa38c4ee2b347165381f19d6": [
+    "assume_objective_pov",
+    "C3",
+    10,
+    "gpt-5.1"
+  ],
+  "j_b1e75add766afc94d6b5b7382cbbed0d": [
+    "assume_objective_pov",
+    "C3",
+    10,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_4ea5091e5321f3a2111852ec2f4554fc": [
+    "assume_objective_pov",
+    "C3",
+    11,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_25d80c23a858f5beddf45d35b5441d35": [
+    "assume_objective_pov",
+    "C3",
+    11,
+    "gemini-3-flash-preview"
+  ],
+  "j_ef021486ad2afd221380e12a8720f6f3": [
+    "assume_objective_pov",
+    "C3",
+    11,
+    "gpt-5.1"
+  ],
+  "j_b9227749ec0e9b61c86cb73a43351d26": [
+    "assume_objective_pov",
+    "C3",
+    11,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_bf38aff70900f7ff44a55d74768f4199": [
+    "assume_objective_pov",
+    "C3",
+    12,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_fdf222bdcabeaceff21c0f5ff515d0fe": [
+    "assume_objective_pov",
+    "C3",
+    12,
+    "gemini-3-flash-preview"
+  ],
+  "j_b77dd220c46f54e30c104578125fff85": [
+    "assume_objective_pov",
+    "C3",
+    12,
+    "gpt-5.1"
+  ],
+  "j_3b71dacb1fcb2105f5b393eaa06f376a": [
+    "assume_objective_pov",
+    "C3",
+    12,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_304575371ed65971dc524ad1aa2c73e0": [
+    "assume_objective_pov",
+    "C3",
+    13,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_cb927bae8fda4d4209d43ad332e2238c": [
+    "assume_objective_pov",
+    "C3",
+    13,
+    "gemini-3-flash-preview"
+  ],
+  "j_ec22940185d33b1185a52d5dba6a5648": [
+    "assume_objective_pov",
+    "C3",
+    13,
+    "gpt-5.1"
+  ],
+  "j_ee2c59e3ca4f9facfa73ea62c22f0dc0": [
+    "assume_objective_pov",
+    "C3",
+    13,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_8c42fc6e0d90510ef48df56d9d574cfd": [
+    "assume_objective_pov",
+    "C3",
+    14,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_3f6733c8af0b8bb0ed522be4b240d5c6": [
+    "assume_objective_pov",
+    "C3",
+    14,
+    "gemini-3-flash-preview"
+  ],
+  "j_aea09ab1356c663a5e226b4c4b5b9529": [
+    "assume_objective_pov",
+    "C3",
+    14,
+    "gpt-5.1"
+  ],
+  "j_b720f38d734d64e2feaec74e8697a75c": [
+    "assume_objective_pov",
+    "C3",
+    14,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_bbc935fd3a66fe311d91303ec9b0bb1a": [
+    "assume_objective_pov",
+    "C3",
+    15,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_63f7d69b773e4cbfdcb5039d735aa653": [
+    "assume_objective_pov",
+    "C3",
+    15,
+    "gemini-3-flash-preview"
+  ],
+  "j_d33d832ad529dd4c76f5bfc58315fbe0": [
+    "assume_objective_pov",
+    "C3",
+    15,
+    "gpt-5.1"
+  ],
+  "j_7095bc16b5902d8a4407fdaf319fd53f": [
+    "assume_objective_pov",
+    "C3",
+    15,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_b2fd510e308ba388f253b8703f90dc62": [
+    "assume_objective_pov",
+    "C3",
+    16,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_384da137e938bbb8c7c354ad3fe6e6d3": [
+    "assume_objective_pov",
+    "C3",
+    16,
+    "gemini-3-flash-preview"
+  ],
+  "j_869e1892e14edc2eec03d53ed941ced0": [
+    "assume_objective_pov",
+    "C3",
+    16,
+    "gpt-5.1"
+  ],
+  "j_6e79206cd89e0b7214378413755383a9": [
+    "assume_objective_pov",
+    "C3",
+    16,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_108455b1fc950e92a4f9f76da57a1d78": [
+    "assume_objective_pov",
+    "C3",
+    17,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_7a67f6b09b62d1a9c58e26ebebcf5079": [
+    "assume_objective_pov",
+    "C3",
+    17,
+    "gemini-3-flash-preview"
+  ],
+  "j_96742448965d77077067db1d51aa6285": [
+    "assume_objective_pov",
+    "C3",
+    17,
+    "gpt-5.1"
+  ],
+  "j_99836765cd1e5bff05109d00341c35fe": [
+    "assume_objective_pov",
+    "C3",
+    17,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_fbb718e594f0d4e5f0b726f1b8f30a0e": [
+    "assume_objective_pov",
+    "C3",
+    18,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_3bf95f3bb95cd98bd4775d825e3029f6": [
+    "assume_objective_pov",
+    "C3",
+    18,
+    "gemini-3-flash-preview"
+  ],
+  "j_26fcdc407cb729a70aa292d5594adba0": [
+    "assume_objective_pov",
+    "C3",
+    18,
+    "gpt-5.1"
+  ],
+  "j_c8bb814f79dd91e121c3a7a15ce8da8f": [
+    "assume_objective_pov",
+    "C3",
+    18,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_fc443a1223d31902fbd6140e9c8f318a": [
+    "assume_objective_pov",
+    "C3",
+    19,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_0e44a18d85f9b09c0791f9ec8c9b78c6": [
+    "assume_objective_pov",
+    "C3",
+    19,
+    "gemini-3-flash-preview"
+  ],
+  "j_f8df392d2bd1f66d41267c31a51db7a5": [
+    "assume_objective_pov",
+    "C3",
+    19,
+    "gpt-5.1"
+  ],
+  "j_06cefa734e737aab4fe379f532bb09e1": [
+    "assume_objective_pov",
+    "C3",
+    19,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_19f4030bc240785b391da10e5f9b8bb9": [
+    "comply_with_laws",
+    "C3",
+    0,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_ecb527095e6883feaf9f6e609a280130": [
+    "comply_with_laws",
+    "C3",
+    0,
+    "gemini-3-flash-preview"
+  ],
+  "j_255ba126d3db845972a94a01d7da24da": [
+    "comply_with_laws",
+    "C3",
+    0,
+    "gpt-5.1"
+  ],
+  "j_4c05f65270a777b94f8656177cc35d80": [
+    "comply_with_laws",
+    "C3",
+    0,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_6a105783f8cbdd3cbed5ad520b817633": [
+    "comply_with_laws",
+    "C3",
+    1,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_cf8f38134fb047d27533d8e2def64a0e": [
+    "comply_with_laws",
+    "C3",
+    1,
+    "gemini-3-flash-preview"
+  ],
+  "j_a3399a905c52f4eee3ef12498817e7cd": [
+    "comply_with_laws",
+    "C3",
+    1,
+    "gpt-5.1"
+  ],
+  "j_a5b321d2acb1ad6be686cc9dbd7ffa16": [
+    "comply_with_laws",
+    "C3",
+    1,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_a7441c598c5592c5c1856e97ed5819ca": [
+    "comply_with_laws",
+    "C3",
+    2,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_cafbcabad63946e1795959ac5c7e45bb": [
+    "comply_with_laws",
+    "C3",
+    2,
+    "gemini-3-flash-preview"
+  ],
+  "j_bd2ac7dce69ca93053544b73f5ca2564": [
+    "comply_with_laws",
+    "C3",
+    2,
+    "gpt-5.1"
+  ],
+  "j_5b0507511d4695acbd6bdac24978ca11": [
+    "comply_with_laws",
+    "C3",
+    2,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_73146ac2b083d0ba7e26f70f1fe8e5d4": [
+    "comply_with_laws",
+    "C3",
+    3,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_c4362a4f44e043832a458427cf275fc3": [
+    "comply_with_laws",
+    "C3",
+    3,
+    "gemini-3-flash-preview"
+  ],
+  "j_c2d9630a0d01f512d301ac288b932977": [
+    "comply_with_laws",
+    "C3",
+    3,
+    "gpt-5.1"
+  ],
+  "j_1f9a0d437366b57e177c7451299db7c6": [
+    "comply_with_laws",
+    "C3",
+    3,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_db0bbcebebabaadb804a0d49f98a9ed8": [
+    "comply_with_laws",
+    "C3",
+    4,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_19dff3e344b3bf9314f32fe3b5a54247": [
+    "comply_with_laws",
+    "C3",
+    4,
+    "gemini-3-flash-preview"
+  ],
+  "j_12b97116f3dea0282e840f8ea0d9ef1f": [
+    "comply_with_laws",
+    "C3",
+    4,
+    "gpt-5.1"
+  ],
+  "j_2ade71c9963958bb9b08964049160313": [
+    "comply_with_laws",
+    "C3",
+    4,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_eff166c12fca2ee1c74e743de232d00b": [
+    "comply_with_laws",
+    "C3",
+    5,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_8073a0277278d6ffe9a583b9710aa0cf": [
+    "comply_with_laws",
+    "C3",
+    5,
+    "gemini-3-flash-preview"
+  ],
+  "j_d89f70c29bbd1e30a2d7ac8bfc0a4afc": [
+    "comply_with_laws",
+    "C3",
+    5,
+    "gpt-5.1"
+  ],
+  "j_623c0d7b1b17565e24fc3d690cd19079": [
+    "comply_with_laws",
+    "C3",
+    5,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_a1bc1a2122612b2c5cbc5b81bf77e238": [
+    "comply_with_laws",
+    "C3",
+    6,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_b2e3c4899afe2c3dfcfd6e2edffd3ff0": [
+    "comply_with_laws",
+    "C3",
+    6,
+    "gemini-3-flash-preview"
+  ],
+  "j_c29cd47d8022309c5e83bafb60344dc7": [
+    "comply_with_laws",
+    "C3",
+    6,
+    "gpt-5.1"
+  ],
+  "j_c2263bb358150001d54483b61c68e4e4": [
+    "comply_with_laws",
+    "C3",
+    6,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_2316b0a49c0dbdf5553a27be5d8dd4b5": [
+    "comply_with_laws",
+    "C3",
+    7,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_e409e7a511053a4d61d20c1456358e6a": [
+    "comply_with_laws",
+    "C3",
+    7,
+    "gemini-3-flash-preview"
+  ],
+  "j_74554f14efed01c35963842b150f86a3": [
+    "comply_with_laws",
+    "C3",
+    7,
+    "gpt-5.1"
+  ],
+  "j_0a31049ba431091ea16e87ea2250f5ea": [
+    "comply_with_laws",
+    "C3",
+    7,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_cb00818b479517f1fdd57ad6c135eea9": [
+    "comply_with_laws",
+    "C3",
+    8,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_3bf669d75f227de9d74a4b7072e38dc7": [
+    "comply_with_laws",
+    "C3",
+    8,
+    "gemini-3-flash-preview"
+  ],
+  "j_c7f045abd1cc7b19a8b2d4dc8f2279d5": [
+    "comply_with_laws",
+    "C3",
+    8,
+    "gpt-5.1"
+  ],
+  "j_4b37410545bff01cb3c164c3bf523c11": [
+    "comply_with_laws",
+    "C3",
+    8,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_15ddaf241e748df9e319aa3e2b499ffb": [
+    "comply_with_laws",
+    "C3",
+    9,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_9cc299fcfeb65ce499d4693f1a77fb9b": [
+    "comply_with_laws",
+    "C3",
+    9,
+    "gemini-3-flash-preview"
+  ],
+  "j_8e7a4e7b0ce5a4818b471c5648ba3ee5": [
+    "comply_with_laws",
+    "C3",
+    9,
+    "gpt-5.1"
+  ],
+  "j_55d794598d9572b26604a584680589e6": [
+    "comply_with_laws",
+    "C3",
+    9,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_28c1785bb98afc7031896064360aa0e9": [
+    "comply_with_laws",
+    "C3",
+    10,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_2cccd49d47999ed2898921ba9da15115": [
+    "comply_with_laws",
+    "C3",
+    10,
+    "gemini-3-flash-preview"
+  ],
+  "j_4dcf004f5717b5b3fc4642b5e236e637": [
+    "comply_with_laws",
+    "C3",
+    10,
+    "gpt-5.1"
+  ],
+  "j_43e86cdff1ed9f87afcc015c762366d5": [
+    "comply_with_laws",
+    "C3",
+    10,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_a29146f4266f960093043cd9d8b348ea": [
+    "comply_with_laws",
+    "C3",
+    11,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_109916f155492e683dd8a8b01960c558": [
+    "comply_with_laws",
+    "C3",
+    11,
+    "gemini-3-flash-preview"
+  ],
+  "j_9aa1b644e5af3ae6964b11b40ea8121e": [
+    "comply_with_laws",
+    "C3",
+    11,
+    "gpt-5.1"
+  ],
+  "j_ba109e9d9503a75189106fade2501cab": [
+    "comply_with_laws",
+    "C3",
+    11,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_b2f694723e8f0336abc5f86247e85ba4": [
+    "comply_with_laws",
+    "C3",
+    12,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_3e7966a2b4b6954e3866ba7883bd1d17": [
+    "comply_with_laws",
+    "C3",
+    12,
+    "gemini-3-flash-preview"
+  ],
+  "j_11e50c263cfe4c57beca1800b0545f9c": [
+    "comply_with_laws",
+    "C3",
+    12,
+    "gpt-5.1"
+  ],
+  "j_f265f90eac91978d0cf5402161310582": [
+    "comply_with_laws",
+    "C3",
+    12,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_7f0488c04aec19357f5c0759e4e78cee": [
+    "comply_with_laws",
+    "C3",
+    13,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_6b143699ae93fd897e04c08547258a0d": [
+    "comply_with_laws",
+    "C3",
+    13,
+    "gemini-3-flash-preview"
+  ],
+  "j_29dfce563f9e162efd16adc838a088a7": [
+    "comply_with_laws",
+    "C3",
+    13,
+    "gpt-5.1"
+  ],
+  "j_7c378d60c28b041962d85c8789d3b326": [
+    "comply_with_laws",
+    "C3",
+    13,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_546a84038f021bf900ad861ec8669a0a": [
+    "comply_with_laws",
+    "C3",
+    14,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_6b8eda3684507c78663d8578b5817ed6": [
+    "comply_with_laws",
+    "C3",
+    14,
+    "gemini-3-flash-preview"
+  ],
+  "j_db5f063200974f26715a4365c78a4da7": [
+    "comply_with_laws",
+    "C3",
+    14,
+    "gpt-5.1"
+  ],
+  "j_2f93a4fb0dc4fd3ffd93f015cb02324f": [
+    "comply_with_laws",
+    "C3",
+    14,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_baed32eb1127d766ddd25cb85e1aa49e": [
+    "comply_with_laws",
+    "C3",
+    15,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_5f9f4ea0dfea11298e796218ef418d59": [
+    "comply_with_laws",
+    "C3",
+    15,
+    "gemini-3-flash-preview"
+  ],
+  "j_bec6463c3c5eda867af5e5190d10c800": [
+    "comply_with_laws",
+    "C3",
+    15,
+    "gpt-5.1"
+  ],
+  "j_cb2572c746ff18d969cee28147080763": [
+    "comply_with_laws",
+    "C3",
+    15,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_29de1c4feb30fde17f8d5d549ceecb57": [
+    "comply_with_laws",
+    "C3",
+    16,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_9cc1320ed1761a0c03db67acf3deb4d6": [
+    "comply_with_laws",
+    "C3",
+    16,
+    "gemini-3-flash-preview"
+  ],
+  "j_9416d0152af16feb32cbdc06363fd3d8": [
+    "comply_with_laws",
+    "C3",
+    16,
+    "gpt-5.1"
+  ],
+  "j_9b506071b0559dc690b0663013c64844": [
+    "comply_with_laws",
+    "C3",
+    16,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_33e7e903f27b2e9bd653b65715e64ae1": [
+    "comply_with_laws",
+    "C3",
+    17,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_b93ba24a59308dfa6bfbdce50a0f3249": [
+    "comply_with_laws",
+    "C3",
+    17,
+    "gemini-3-flash-preview"
+  ],
+  "j_be2172da48735e4b3dcfe62e9e14500d": [
+    "comply_with_laws",
+    "C3",
+    17,
+    "gpt-5.1"
+  ],
+  "j_3e125832dd1bef3166a3e93cb161c6a9": [
+    "comply_with_laws",
+    "C3",
+    17,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_76ade7373df0be7887662221fc11d17a": [
+    "comply_with_laws",
+    "C3",
+    18,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_46c9e1f99b9144d999e41ac4edb6f485": [
+    "comply_with_laws",
+    "C3",
+    18,
+    "gemini-3-flash-preview"
+  ],
+  "j_bfe4df7cc1742070bd5c534260bd8e07": [
+    "comply_with_laws",
+    "C3",
+    18,
+    "gpt-5.1"
+  ],
+  "j_30344acee9df3e47cc8b0f46bf861b73": [
+    "comply_with_laws",
+    "C3",
+    18,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_1adc1066a6dc0139a1b46b5aa2bcac5b": [
+    "comply_with_laws",
+    "C3",
+    19,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_710b1e0250af768058fd3c30b47bfff5": [
+    "comply_with_laws",
+    "C3",
+    19,
+    "gemini-3-flash-preview"
+  ],
+  "j_16fc392047a2e53084e134ac2639e63a": [
+    "comply_with_laws",
+    "C3",
+    19,
+    "gpt-5.1"
+  ],
+  "j_228d9efe4776c64fe64403b9ef4c9012": [
+    "comply_with_laws",
+    "C3",
+    19,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_8f81f14eaf957f92fe20e048ff8e301c": [
+    "no_topic_off_limits",
+    "C3",
+    0,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_d19b94efdd3d43ac56edf3b0db80373c": [
+    "no_topic_off_limits",
+    "C3",
+    0,
+    "gemini-3-flash-preview"
+  ],
+  "j_7d5c2ff9789051c790f5a738f09c58e8": [
+    "no_topic_off_limits",
+    "C3",
+    0,
+    "gpt-5.1"
+  ],
+  "j_24873e0e987a9491830bb1fff2dabe63": [
+    "no_topic_off_limits",
+    "C3",
+    0,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_9dc713e1957a3b7a7e57e7459d68c595": [
+    "no_topic_off_limits",
+    "C3",
+    1,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_a2c116a601993863314830e43484d424": [
+    "no_topic_off_limits",
+    "C3",
+    1,
+    "gemini-3-flash-preview"
+  ],
+  "j_891b38128861b26870e474311328e12f": [
+    "no_topic_off_limits",
+    "C3",
+    1,
+    "gpt-5.1"
+  ],
+  "j_4403c144c561e55da7efe150ec09798f": [
+    "no_topic_off_limits",
+    "C3",
+    1,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_41d297aa44a10c13c63dd30d36944eb5": [
+    "no_topic_off_limits",
+    "C3",
+    2,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_10bfef41e60373b7def871bde17261c9": [
+    "no_topic_off_limits",
+    "C3",
+    2,
+    "gemini-3-flash-preview"
+  ],
+  "j_628834113ebf2fbcbd5df00ecb8534a6": [
+    "no_topic_off_limits",
+    "C3",
+    2,
+    "gpt-5.1"
+  ],
+  "j_033ae329bcd9cf731e02d236c75b0a0f": [
+    "no_topic_off_limits",
+    "C3",
+    2,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_415f1b165947529bba39bc316b1f95cf": [
+    "no_topic_off_limits",
+    "C3",
+    3,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_ea171db38e89cbb9844b4c102e12f9c6": [
+    "no_topic_off_limits",
+    "C3",
+    3,
+    "gemini-3-flash-preview"
+  ],
+  "j_bc1520a276bb982b87f668d88f234db2": [
+    "no_topic_off_limits",
+    "C3",
+    3,
+    "gpt-5.1"
+  ],
+  "j_cd23e8aff55702816d210ff2207ae0ec": [
+    "no_topic_off_limits",
+    "C3",
+    3,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_6d1bfd0dfb666000a5495a3d89eb47cd": [
+    "no_topic_off_limits",
+    "C3",
+    4,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_c9f348fde02a1ac9998d233c9ced9d63": [
+    "no_topic_off_limits",
+    "C3",
+    4,
+    "gemini-3-flash-preview"
+  ],
+  "j_efdc950a5160acd4c18c353cc76799d5": [
+    "no_topic_off_limits",
+    "C3",
+    4,
+    "gpt-5.1"
+  ],
+  "j_90607249811b4b750f90c6e4fe53bc83": [
+    "no_topic_off_limits",
+    "C3",
+    4,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_91277b232c500229f7bf6da0fc62b173": [
+    "no_topic_off_limits",
+    "C3",
+    5,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_8b627487c7ece30f6a06cb5e48f83ef6": [
+    "no_topic_off_limits",
+    "C3",
+    5,
+    "gemini-3-flash-preview"
+  ],
+  "j_09027498dc44a62c70a4333ea1e25d8a": [
+    "no_topic_off_limits",
+    "C3",
+    5,
+    "gpt-5.1"
+  ],
+  "j_17fff93dadf705706c2781b436d6fecc": [
+    "no_topic_off_limits",
+    "C3",
+    5,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_c653ab0193fb18c106ac5df2cec20248": [
+    "no_topic_off_limits",
+    "C3",
+    6,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_2723f5ed27a096622c3c8c2f6d32af01": [
+    "no_topic_off_limits",
+    "C3",
+    6,
+    "gemini-3-flash-preview"
+  ],
+  "j_decb11b8f511119fb4a414a57422d76d": [
+    "no_topic_off_limits",
+    "C3",
+    6,
+    "gpt-5.1"
+  ],
+  "j_86a1517e8050a3ff1945d135d03c4008": [
+    "no_topic_off_limits",
+    "C3",
+    6,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_c661350a8148b5d012bcf3c2bfec7df0": [
+    "no_topic_off_limits",
+    "C3",
+    7,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_d5546f5e4bb223fee529d413dbdd08a8": [
+    "no_topic_off_limits",
+    "C3",
+    7,
+    "gemini-3-flash-preview"
+  ],
+  "j_ffffe5684ff0a63c51cc1185d2821109": [
+    "no_topic_off_limits",
+    "C3",
+    7,
+    "gpt-5.1"
+  ],
+  "j_491185fa490b5bba4c438cf008d5e33e": [
+    "no_topic_off_limits",
+    "C3",
+    7,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_f5bc966d073d86e5a9e2f316ba247288": [
+    "no_topic_off_limits",
+    "C3",
+    8,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_bf8ed7ab6af71b791dac2c4461a96dc9": [
+    "no_topic_off_limits",
+    "C3",
+    8,
+    "gemini-3-flash-preview"
+  ],
+  "j_45cec9cb42f46923b453d64d2d260000": [
+    "no_topic_off_limits",
+    "C3",
+    8,
+    "gpt-5.1"
+  ],
+  "j_dda560ab69b8b07184af6795c90d63ca": [
+    "no_topic_off_limits",
+    "C3",
+    8,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_51ce884b67612ecf3bce3bc9402f0a27": [
+    "no_topic_off_limits",
+    "C3",
+    9,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_b96f3e341bbc1b2d7871051419fde347": [
+    "no_topic_off_limits",
+    "C3",
+    9,
+    "gemini-3-flash-preview"
+  ],
+  "j_9bbb4fe41fb3708275b5a20aca90835f": [
+    "no_topic_off_limits",
+    "C3",
+    9,
+    "gpt-5.1"
+  ],
+  "j_662fbbd9ebb5ac39b8186067788168cd": [
+    "no_topic_off_limits",
+    "C3",
+    9,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_4df8bef8440ba11749f2105a2fc7b68d": [
+    "no_topic_off_limits",
+    "C3",
+    10,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_ce9fe61476c279c7fdf7dd7ba2cf93f0": [
+    "no_topic_off_limits",
+    "C3",
+    10,
+    "gemini-3-flash-preview"
+  ],
+  "j_2590329e9b68697dcc6e8169d5a062c4": [
+    "no_topic_off_limits",
+    "C3",
+    10,
+    "gpt-5.1"
+  ],
+  "j_5f8c6ec7d0eedd5e00f96a9300e681b4": [
+    "no_topic_off_limits",
+    "C3",
+    10,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_1229a7e35ee63a0e455b45966310004b": [
+    "no_topic_off_limits",
+    "C3",
+    11,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_84412f397da4818feec7288dec7d676d": [
+    "no_topic_off_limits",
+    "C3",
+    11,
+    "gemini-3-flash-preview"
+  ],
+  "j_c31f6da91c2eb6fa2e45ca9da2d91a60": [
+    "no_topic_off_limits",
+    "C3",
+    11,
+    "gpt-5.1"
+  ],
+  "j_da3489b94673b12fb815f0430652a01e": [
+    "no_topic_off_limits",
+    "C3",
+    11,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_d106ff69f6f005ec8be61ea0d5e421fe": [
+    "no_topic_off_limits",
+    "C3",
+    12,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_37233f93989f21fba58bf5cf2122d558": [
+    "no_topic_off_limits",
+    "C3",
+    12,
+    "gemini-3-flash-preview"
+  ],
+  "j_970d62545cbe5efc363e1bca94d69812": [
+    "no_topic_off_limits",
+    "C3",
+    12,
+    "gpt-5.1"
+  ],
+  "j_6cb65fbf87f008778c51856524b0eb85": [
+    "no_topic_off_limits",
+    "C3",
+    12,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_d4db214700226216bf07340512508c86": [
+    "no_topic_off_limits",
+    "C3",
+    13,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_d417251731863423788f89ea07967081": [
+    "no_topic_off_limits",
+    "C3",
+    13,
+    "gemini-3-flash-preview"
+  ],
+  "j_219b16b5513fc8f1a9857bc2405872f9": [
+    "no_topic_off_limits",
+    "C3",
+    13,
+    "gpt-5.1"
+  ],
+  "j_e5d45225d4424cea900005d02b870f74": [
+    "no_topic_off_limits",
+    "C3",
+    13,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_0abf9b84e81b476f53173cfad13f8b6d": [
+    "no_topic_off_limits",
+    "C3",
+    14,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_2d3febd3c7eceb813e8cd5faf668fabe": [
+    "no_topic_off_limits",
+    "C3",
+    14,
+    "gemini-3-flash-preview"
+  ],
+  "j_be842516eda34c4d5513277f996a9749": [
+    "no_topic_off_limits",
+    "C3",
+    14,
+    "gpt-5.1"
+  ],
+  "j_866e297aa16a7fb071c25a60528362ed": [
+    "no_topic_off_limits",
+    "C3",
+    14,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_9a876f19096c4ebacd28b5d15f3341ca": [
+    "no_topic_off_limits",
+    "C3",
+    15,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_82cc6152474f86ba1ea03cdf9eca2d16": [
+    "no_topic_off_limits",
+    "C3",
+    15,
+    "gemini-3-flash-preview"
+  ],
+  "j_037c5b62f2497e3e8399da47d5c3a44c": [
+    "no_topic_off_limits",
+    "C3",
+    15,
+    "gpt-5.1"
+  ],
+  "j_c43f3d0193ec88656266609235c7da4a": [
+    "no_topic_off_limits",
+    "C3",
+    15,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_8bc2b3d75792c322e577305f18b0756a": [
+    "no_topic_off_limits",
+    "C3",
+    16,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_298cbaa0183a857c461c51550171a508": [
+    "no_topic_off_limits",
+    "C3",
+    16,
+    "gemini-3-flash-preview"
+  ],
+  "j_92fdfb3f6035fbc2e1634a5fdd71e786": [
+    "no_topic_off_limits",
+    "C3",
+    16,
+    "gpt-5.1"
+  ],
+  "j_7ba07704af1a5603b10e2df52930b609": [
+    "no_topic_off_limits",
+    "C3",
+    16,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_255e4cf0c3281e7300d22586fd54a797": [
+    "no_topic_off_limits",
+    "C3",
+    17,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_e462f40af50130d179010522c04cbc12": [
+    "no_topic_off_limits",
+    "C3",
+    17,
+    "gemini-3-flash-preview"
+  ],
+  "j_97d9a036e94a201da96b5f92ebbef221": [
+    "no_topic_off_limits",
+    "C3",
+    17,
+    "gpt-5.1"
+  ],
+  "j_b5ca55bb032a8fef734dbb2b456f2adc": [
+    "no_topic_off_limits",
+    "C3",
+    17,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_db3d4cd6ec2c6e0fbb176ef51cbc687a": [
+    "no_topic_off_limits",
+    "C3",
+    18,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_973d59972257efe6708f05e0592b2131": [
+    "no_topic_off_limits",
+    "C3",
+    18,
+    "gemini-3-flash-preview"
+  ],
+  "j_f65831235500abb7768842097b0889b4": [
+    "no_topic_off_limits",
+    "C3",
+    18,
+    "gpt-5.1"
+  ],
+  "j_4360118f8328ca8363ac663b42ed3db0": [
+    "no_topic_off_limits",
+    "C3",
+    18,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_cc5991e50153c113756cf023e7d98e89": [
+    "no_topic_off_limits",
+    "C3",
+    19,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_4229a5e08a211198834b60f1a8fe6214": [
+    "no_topic_off_limits",
+    "C3",
+    19,
+    "gemini-3-flash-preview"
+  ],
+  "j_15c734e4c8274d72d74a6006fb88329b": [
+    "no_topic_off_limits",
+    "C3",
+    19,
+    "gpt-5.1"
+  ],
+  "j_b4ff485cc7c315b322b107fc35c1ba50": [
+    "no_topic_off_limits",
+    "C3",
+    19,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_fd35ba2a8e4703d087b66bea4d26e4a5": [
+    "refusal_style",
+    "C3",
+    0,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_c4b4e38e7307ec352b79d5b02cd03f54": [
+    "refusal_style",
+    "C3",
+    0,
+    "gemini-3-flash-preview"
+  ],
+  "j_76b6250bb6e4d13aeb5d5a33f1723779": [
+    "refusal_style",
+    "C3",
+    0,
+    "gpt-5.1"
+  ],
+  "j_253c422329038270609f4ce7152c7967": [
+    "refusal_style",
+    "C3",
+    0,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_11a6b4a2f1ab6ee03571f73661edc1db": [
+    "refusal_style",
+    "C3",
+    1,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_66e93b4686acd7331086f7af3aba5ce3": [
+    "refusal_style",
+    "C3",
+    1,
+    "gemini-3-flash-preview"
+  ],
+  "j_2956122c50b8e59b8736cd7e7eb51532": [
+    "refusal_style",
+    "C3",
+    1,
+    "gpt-5.1"
+  ],
+  "j_af3b0f007e56542824a5923e763d808d": [
+    "refusal_style",
+    "C3",
+    1,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_ab6fa636a12782ca027acdddfae2c7d4": [
+    "refusal_style",
+    "C3",
+    2,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_a27018815d2e1433ad2f773c3a163cbd": [
+    "refusal_style",
+    "C3",
+    2,
+    "gemini-3-flash-preview"
+  ],
+  "j_b98a5a6ea4ff069444f2b27bbe75be91": [
+    "refusal_style",
+    "C3",
+    2,
+    "gpt-5.1"
+  ],
+  "j_39cda5a2bb538430bf3bc62056df97ad": [
+    "refusal_style",
+    "C3",
+    2,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_da70d3ee101889ada51e2387f0744d4d": [
+    "refusal_style",
+    "C3",
+    3,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_1e2dda9e7830dedbc80cc10eb8ab190d": [
+    "refusal_style",
+    "C3",
+    3,
+    "gemini-3-flash-preview"
+  ],
+  "j_d2bc203700a5cafe631316d9c246d5c0": [
+    "refusal_style",
+    "C3",
+    3,
+    "gpt-5.1"
+  ],
+  "j_8753c7f00de32fb8b89f9ca396769f9e": [
+    "refusal_style",
+    "C3",
+    3,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_6892d8af84f0308128c2b03031e0eac1": [
+    "refusal_style",
+    "C3",
+    4,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_134cf4786e35b7886b836bbb45c7ae33": [
+    "refusal_style",
+    "C3",
+    4,
+    "gemini-3-flash-preview"
+  ],
+  "j_984880a5baf7d250e9e84daa032ee984": [
+    "refusal_style",
+    "C3",
+    4,
+    "gpt-5.1"
+  ],
+  "j_e469f2f779022bd04deceff655aff0be": [
+    "refusal_style",
+    "C3",
+    4,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_39fec4af61748ebb4fcc88127a6575f9": [
+    "refusal_style",
+    "C3",
+    5,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_d56a2c5b4c4c5051953fbdfc5e3d244a": [
+    "refusal_style",
+    "C3",
+    5,
+    "gemini-3-flash-preview"
+  ],
+  "j_5ec9c5d566ce9c299287bc7b952a8d8d": [
+    "refusal_style",
+    "C3",
+    5,
+    "gpt-5.1"
+  ],
+  "j_b7ddfcab59732c2093ef7c384a97e9ee": [
+    "refusal_style",
+    "C3",
+    6,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_9027d5aefcfa734b5f67b8b511b5fb35": [
+    "refusal_style",
+    "C3",
+    6,
+    "gemini-3-flash-preview"
+  ],
+  "j_7244fb19063419e2c6825d0b218ae45f": [
+    "refusal_style",
+    "C3",
+    6,
+    "gpt-5.1"
+  ],
+  "j_4f6840b1f5d5f8d95ebc2429aae3d5a4": [
+    "refusal_style",
+    "C3",
+    6,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_dbb3a9c2351e7a1bbf3740a2597fa4a5": [
+    "refusal_style",
+    "C3",
+    7,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_18fb5106e49ed81c2b790cca6f8837fe": [
+    "refusal_style",
+    "C3",
+    7,
+    "gemini-3-flash-preview"
+  ],
+  "j_8bc018b2d2ebe1e802c7fcd1ca122b5e": [
+    "refusal_style",
+    "C3",
+    7,
+    "gpt-5.1"
+  ],
+  "j_1a63cd4428e5389d5927d4945621e57f": [
+    "refusal_style",
+    "C3",
+    7,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_3823b559f932e2ab833ef7b0cb613eb4": [
+    "refusal_style",
+    "C3",
+    8,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_141c562ca7c2c19866edd43146abd6e3": [
+    "refusal_style",
+    "C3",
+    8,
+    "gemini-3-flash-preview"
+  ],
+  "j_eab93121e85196b01592ca0c4da61224": [
+    "refusal_style",
+    "C3",
+    8,
+    "gpt-5.1"
+  ],
+  "j_b457c09bb69d8ced4410520d16613c28": [
+    "refusal_style",
+    "C3",
+    8,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_e08a44277e1715717f23759356a061c7": [
+    "refusal_style",
+    "C3",
+    9,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_cacca096e31a3a3df01bfb8b0fd4ef0e": [
+    "refusal_style",
+    "C3",
+    9,
+    "gemini-3-flash-preview"
+  ],
+  "j_d4867023524a2025071fd32dad20cf34": [
+    "refusal_style",
+    "C3",
+    9,
+    "gpt-5.1"
+  ],
+  "j_cb9e1add27cf18806c327aaa10547031": [
+    "refusal_style",
+    "C3",
+    9,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_99b0b6a19a7e60cbc91cf934e80d774d": [
+    "refusal_style",
+    "C3",
+    10,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_e4e72a2d268b30c86d22c5504065db1a": [
+    "refusal_style",
+    "C3",
+    10,
+    "gemini-3-flash-preview"
+  ],
+  "j_3084ddc4e165d162385180f89f827f06": [
+    "refusal_style",
+    "C3",
+    10,
+    "gpt-5.1"
+  ],
+  "j_869b7497624e45b5f9ab6089ef6314f2": [
+    "refusal_style",
+    "C3",
+    10,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_940b70eb6f76d841847b2dd19e8fc479": [
+    "refusal_style",
+    "C3",
+    11,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_b6ce0738bc85f40529c911cb54107588": [
+    "refusal_style",
+    "C3",
+    11,
+    "gemini-3-flash-preview"
+  ],
+  "j_ae709d701bd3c1a287ae4c9b8330af04": [
+    "refusal_style",
+    "C3",
+    11,
+    "gpt-5.1"
+  ],
+  "j_3fb3dfac1f484db718e3fe29ead87c74": [
+    "refusal_style",
+    "C3",
+    12,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_00739758b257d42bad70eaa9c825023f": [
+    "refusal_style",
+    "C3",
+    12,
+    "gemini-3-flash-preview"
+  ],
+  "j_7c3f62009967d8da5283911cd90128eb": [
+    "refusal_style",
+    "C3",
+    12,
+    "gpt-5.1"
+  ],
+  "j_61e107fbc2e4f72536eb8f751cc76c69": [
+    "refusal_style",
+    "C3",
+    12,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_16bdec1070c280d0b13d96af65abd748": [
+    "refusal_style",
+    "C3",
+    13,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_4a183b1cb97605bbbb3c7c02304abbf1": [
+    "refusal_style",
+    "C3",
+    13,
+    "gemini-3-flash-preview"
+  ],
+  "j_3a79927c58894a1d96011afb9d5b7014": [
+    "refusal_style",
+    "C3",
+    13,
+    "gpt-5.1"
+  ],
+  "j_0d2279d4f09d791faab8e156de9ef5de": [
+    "refusal_style",
+    "C3",
+    13,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_9201b18e8e5860b1574f528df1f38ff7": [
+    "refusal_style",
+    "C3",
+    14,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_de2a4d02d064aee3530969ad66111865": [
+    "refusal_style",
+    "C3",
+    14,
+    "gemini-3-flash-preview"
+  ],
+  "j_545d6cf4242e1c7c15b4ee61b9ea24f6": [
+    "refusal_style",
+    "C3",
+    14,
+    "gpt-5.1"
+  ],
+  "j_8cb9c73349a6a5bf480a2f2c845e1cf3": [
+    "refusal_style",
+    "C3",
+    14,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_8cb092ff64718d2f764e41f48370330e": [
+    "refusal_style",
+    "C3",
+    15,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_19acd88a17a13554c96879bbde83a287": [
+    "refusal_style",
+    "C3",
+    15,
+    "gemini-3-flash-preview"
+  ],
+  "j_8468d92703a7263b287f0d15b7f7603b": [
+    "refusal_style",
+    "C3",
+    15,
+    "gpt-5.1"
+  ],
+  "j_1bea71936c26518f9bc17a3b1e87fd47": [
+    "refusal_style",
+    "C3",
+    15,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_8e12966cddffb1919668af36dcf6bc45": [
+    "refusal_style",
+    "C3",
+    16,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_4f785895674d196b14c5d352679ae109": [
+    "refusal_style",
+    "C3",
+    16,
+    "gemini-3-flash-preview"
+  ],
+  "j_39c193179c68ff70068eab849b2b8154": [
+    "refusal_style",
+    "C3",
+    16,
+    "gpt-5.1"
+  ],
+  "j_eeef49abdefcc722bcff3564ebf10d6e": [
+    "refusal_style",
+    "C3",
+    16,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_97c7f04463c68305f2cd7f17c509d945": [
+    "refusal_style",
+    "C3",
+    17,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_eaee8d334a7a297329d0c64ce6b6b403": [
+    "refusal_style",
+    "C3",
+    17,
+    "gemini-3-flash-preview"
+  ],
+  "j_9af480f9e8fe2dcd3a1be4c3b89db5f1": [
+    "refusal_style",
+    "C3",
+    17,
+    "gpt-5.1"
+  ],
+  "j_e710d23c7a105a2dc6580fce7ab249d9": [
+    "refusal_style",
+    "C3",
+    17,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_05cb116d22aff8ab52fa5ac593c4978d": [
+    "refusal_style",
+    "C3",
+    18,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_45d6202b1c0bd118034e56dd9ff0018c": [
+    "refusal_style",
+    "C3",
+    18,
+    "gemini-3-flash-preview"
+  ],
+  "j_3d985a3462b97ef5b24b5b6005e46088": [
+    "refusal_style",
+    "C3",
+    18,
+    "gpt-5.1"
+  ],
+  "j_c04150a44dbb262fb365eb2cb4bf48e5": [
+    "refusal_style",
+    "C3",
+    18,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_2c3aa32238f9ad6a7cad3b3659f42f57": [
+    "refusal_style",
+    "C3",
+    19,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_9dbcc8fdbaef594ea97b03ce6a17fee7": [
+    "refusal_style",
+    "C3",
+    19,
+    "gemini-3-flash-preview"
+  ],
+  "j_dd26ba9710fb80375eea2041737d5a90": [
+    "refusal_style",
+    "C3",
+    19,
+    "gpt-5.1"
+  ],
+  "j_639c4e3e1c862c7822b9a48b9c20f15b": [
+    "refusal_style",
+    "C3",
+    19,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ]
+}

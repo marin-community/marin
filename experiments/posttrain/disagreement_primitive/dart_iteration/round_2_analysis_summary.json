@@ -1,0 +1,37 @@
+{
+  "round": 2,
+  "per_statement": {
+    "assume_objective_pov": {
+      "alpha_before": 0.4252897085259374,
+      "alpha_after": 0.5045904922617375,
+      "delta_alpha": 0.07930078373580007,
+      "verdict": "converged",
+      "operative": "C3"
+    },
+    "comply_with_laws": {
+      "alpha_before": -0.13291792499713306,
+      "alpha_after": -0.0997869620792502,
+      "delta_alpha": 0.03313096291788287,
+      "verdict": "stuck",
+      "operative": "C3"
+    },
+    "no_topic_off_limits": {
+      "alpha_before": 0.24810067271327696,
+      "alpha_after": 0.10739262568195962,
+      "delta_alpha": -0.14070804703131734,
+      "verdict": "stuck",
+      "operative": "C3"
+    },
+    "refusal_style": {
+      "alpha_before": 0.4463624292403382,
+      "alpha_after": 0.45752276490066224,
+      "delta_alpha": 0.011160335660324039,
+      "verdict": "stuck",
+      "operative": "C3"
+    }
+  },
+  "verdict_counts": {
+    "converged": 1,
+    "stuck": 3
+  }
+}

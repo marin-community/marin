@@ -641,3 +641,82 @@ Each statement loops independently. Converged statements stop drawing compute; s
 4. **Compiler-specific self-correction patterns** — Gemini and Claude (which hedge to `both`) may iterate toward `escalate_spec`; GPT may double-down on its committed diagnosis.
 
 **Status**: Plan locked. Launching ~07:30 UTC. Permission granted by user to escalate N=2 → N=3 if N=2 finishes before 13:00 UTC. Wake report by 15:00 UTC.
+
+#### Run 4 — actual results (2026-05-09 ~08:54 UTC)
+
+N=2 finished at 08:54 UTC, well before the 13:00 UTC headroom mark. N=3 was unlocked but did not fire because zero statements ended Round 2 in the IMPROVING bucket. Total wall: ~75 min from launch to final report.
+
+**Summary**: **8 of 13 statements CONVERGED** (α ≥ 0.5); 5 STUCK (escalated to spec-author triage).
+
+**Round 1 outcomes** (n=13, all statements):
+
+| outcome | n | statements |
+|---|--:|---|
+| CONVERGED (α ≥ 0.5) | 7 | ask_clarifying_questions, avoid_abuse, be_clear, be_thorough_but_efficient, do_not_lie, formatting, protect_privileged_messages |
+| IMPROVING (Δα ≥ +0.05, α < 0.5) | 4 | assume_objective_pov, comply_with_laws, no_topic_off_limits, refusal_style |
+| STUCK | 2 | letter_and_spirit (Δ+0.047, just below ε), prevent_imminent_harm (Δ-0.397, **regressed**) |
+
+Notable Round 1 movers:
+
+| statement | α v1 → v2 | Δα |
+|---|---|---|
+| `avoid_abuse` | -0.795 → 0.694 | **+1.489** |
+| `do_not_lie` | -0.367 → 0.713 | **+1.080** |
+| `ask_clarifying_questions` | -0.083 → 0.533 | +0.616 |
+| `be_thorough_but_efficient` | 0.097 → 0.618 | +0.521 |
+| `refusal_style` | 0.000 → 0.458 | +0.446 |
+| `prevent_imminent_harm` | 0.815 → 0.418 | **-0.397** ⚠️ |
+
+**Round 2 outcomes** (n=4, IMPROVING-from-R1 only):
+
+After Round-2 compile-with-history, all 3 compilers shifted toward `rubric_drift` diagnoses on all 4 statements (stronger signal than the mixed R1 diagnoses). The R2 majority-vote v3 rubric was tested:
+
+| statement | α v2 → v3 | Δα-vs-R1 | Δα-total | verdict |
+|---|---|---|---|---|
+| `assume_objective_pov` | 0.425 → 0.505 | +0.079 | +0.228 | **converged** |
+| `comply_with_laws` | -0.133 → -0.100 | +0.033 | +0.455 | stuck (deceleration) |
+| `no_topic_off_limits` | 0.248 → 0.107 | -0.141 | +0.242 | stuck (regression) |
+| `refusal_style` | 0.446 → 0.458 | +0.011 | +0.458 | stuck (deceleration) |
+
+**Final tally**:
+
+| verdict | n | statements |
+|---|--:|---|
+| **CONVERGED** | 8 | 7 from R1 + `assume_objective_pov` from R2 |
+| **STUCK** | 5 | `letter_and_spirit`, `prevent_imminent_harm` (R1); `comply_with_laws`, `no_topic_off_limits`, `refusal_style` (R2 deceleration/regression) |
+
+**Cost**: ~$50 total (~$34 R1 + ~$16 R2). Both rounds well under the $50/$30 caps.
+
+**Findings**:
+
+1. **Majority-vote v2 alone moved 7/13 statements over T₁=0.5** in a single round. The §1.7 rule produced empirically validated edits without any human review of individual edit text.
+
+2. **The 6 T3 statements** (opposite-direction edit pairs flagged in Run 3) split: 4 converged in R1 (`avoid_abuse`, `be_thorough_but_efficient`, `do_not_lie`, `formatting`, `protect_privileged_messages` — but not `letter_and_spirit`). The opposite-direction-edit signal was **not** a strong predictor of difficulty — most T3 statements still resolved.
+
+3. **`prevent_imminent_harm` regressed by Δ-0.397**. Its Run-3 diagnosis was 3-of-3 consensus `both`, and the v2 edits applied 3 rubric + 2 spec edits. Despite consensus, the edits **hurt agreement**. This is a critical methodological finding: **diagnostic consensus does not imply edit-direction correctness.** This statement should have its v2 reverted.
+
+4. **Round-2 compilers shifted strongly to `rubric_drift`** when shown the v2 edit history. After Round 1's mixed diagnoses, every Round-2 compiler call on the 4 IMPROVING statements diagnosed rubric_drift (or both-leaning-rubric for Claude). The compilers, once shown that v2 partially worked, asked for more rubric edits — they did NOT switch to spec edits or declare irreducibility. This is partial evidence of compiler **doubling-down** rather than self-correction.
+
+5. **Round 2 yielded only 1 of 4 conversions** (`assume_objective_pov` 0.425 → 0.505). The other 3 IMPROVING statements decelerated or regressed further when the compilers added more rubric edits. **Diminishing returns appeared at Round 2** — the local-edit path looks exhausted after one round.
+
+6. **Compiler-as-judge circularity remains untested.** All 3 compilers (GPT, Gemini, Claude) are also in the judge ensemble. The α gains we measured may partially reflect the compilers writing rubrics that match their own judging biases. Future work needs a non-judge compiler.
+
+7. **Baseline Claude data was sparse** (60 phase_4 rows on 5 statements vs full coverage for GPT and Gemini). Round 4's 3-judge data filled this gap for the 13 Bucket D statements. The α improvements are 3-judge-stable; pre-Run-4 α numbers from Run 3 were largely 2-judge.
+
+**Statements escalated to spec-author queue** (`escalation_queue.md`):
+
+- `prevent_imminent_harm`: v2 edits HURT agreement. Revert v2; reconsider what "both" diagnoses mean when applied.
+- `letter_and_spirit`: marginal improvement (+0.047) didn't reach threshold; spec edit alone in v2 wasn't enough.
+- `comply_with_laws`: improved a lot (+0.455) but still negative α; suggests genuine spec ambiguity even after rubric repair. Strong escalation candidate.
+- `no_topic_off_limits`: regressed in R2 (+0.242 net); compiler self-correction failed here.
+- `refusal_style`: large overall gain (+0.458) but plateaued just below T₁ — borderline; could justify additional spec-side edits.
+
+**Outputs (committed)**:
+- `experiments/posttrain/disagreement_primitive/dart_iteration/{sid}/history.json` × 13 (1-2 entries each)
+- `experiments/posttrain/disagreement_primitive/dart_iteration/{sid}/rubric_v{2,3}.json`, `spec_v{2,3}.txt` per statement
+- `experiments/posttrain/disagreement_primitive/dart_iteration/per_judgment_iter_round_{1,2}.jsonl`
+- `experiments/posttrain/disagreement_primitive/dart_iteration/round_{1,2}_batches.json`
+- `experiments/posttrain/disagreement_primitive/dart_iteration/dart_diagnoses{,_gemini,_claude}_round_2.jsonl`
+- `experiments/posttrain/disagreement_primitive/dart_iteration/escalation_queue.md`
+- `.agents/logbooks/dart_run_004_iterative.md` (full report)
+- `results/raw/e9_dart_iter_*` raw API dumps

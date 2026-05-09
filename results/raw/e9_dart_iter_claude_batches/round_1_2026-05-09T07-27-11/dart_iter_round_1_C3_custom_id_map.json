@@ -1,0 +1,482 @@
+{
+  "j_13941edd6b8d0e88c7454ed5b54899b5": [
+    "ask_clarifying_questions",
+    "C3",
+    0,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_2c5740605c6a56862a13632bc221b03e": [
+    "ask_clarifying_questions",
+    "C3",
+    0,
+    "gemini-3-flash-preview"
+  ],
+  "j_d88f47c0941730712b5054b2a06098ea": [
+    "ask_clarifying_questions",
+    "C3",
+    0,
+    "gpt-5.1"
+  ],
+  "j_a8ee1904ab8bf9f7b89d5cbfec028dde": [
+    "ask_clarifying_questions",
+    "C3",
+    0,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_471cc7baa512b8a14ec6ce4d4a4716f7": [
+    "ask_clarifying_questions",
+    "C3",
+    1,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_908b0cf5b3da15674fea6298f6fc8cae": [
+    "ask_clarifying_questions",
+    "C3",
+    1,
+    "gemini-3-flash-preview"
+  ],
+  "j_dfe6569f5ffd4592d586d97dde2ee69b": [
+    "ask_clarifying_questions",
+    "C3",
+    1,
+    "gpt-5.1"
+  ],
+  "j_d555f1dac1a635ea3a17ecbce23cdca5": [
+    "ask_clarifying_questions",
+    "C3",
+    1,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_46977e639fdf09abce7380775075cfae": [
+    "ask_clarifying_questions",
+    "C3",
+    2,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_77b08acf1a8a2378463c59d6b48d1124": [
+    "ask_clarifying_questions",
+    "C3",
+    2,
+    "gemini-3-flash-preview"
+  ],
+  "j_be631aeedc917b493d7dec637de8571c": [
+    "ask_clarifying_questions",
+    "C3",
+    2,
+    "gpt-5.1"
+  ],
+  "j_580ad04d143a7d92f61a77dfbe6fdd2f": [
+    "ask_clarifying_questions",
+    "C3",
+    2,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_5dc8a0b090f482ef931969d189f474ce": [
+    "ask_clarifying_questions",
+    "C3",
+    3,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_15d4acbbb13691618ec680ba48fdcb6e": [
+    "ask_clarifying_questions",
+    "C3",
+    3,
+    "gemini-3-flash-preview"
+  ],
+  "j_4af41cc6d4716d7cb1d14063358bbd68": [
+    "ask_clarifying_questions",
+    "C3",
+    3,
+    "gpt-5.1"
+  ],
+  "j_29db5bacf9e26f071510a0207d02b9bc": [
+    "ask_clarifying_questions",
+    "C3",
+    3,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_fe24f0efac602d8882bf03257705cd28": [
+    "ask_clarifying_questions",
+    "C3",
+    4,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_4188a9031690ff9d607dcef5aa17fd7e": [
+    "ask_clarifying_questions",
+    "C3",
+    4,
+    "gemini-3-flash-preview"
+  ],
+  "j_76257bb9ee1805caa12010f0f36ee644": [
+    "ask_clarifying_questions",
+    "C3",
+    4,
+    "gpt-5.1"
+  ],
+  "j_3e232e8fbb4aa9d813a32fa4576f5d82": [
+    "ask_clarifying_questions",
+    "C3",
+    4,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_23a5451db3bca4f42cc44eb4cdc852ea": [
+    "ask_clarifying_questions",
+    "C3",
+    5,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_293beb77080ca695f75527511311c84d": [
+    "ask_clarifying_questions",
+    "C3",
+    5,
+    "gemini-3-flash-preview"
+  ],
+  "j_853b549a835147aec17f51c1c2ce8c55": [
+    "ask_clarifying_questions",
+    "C3",
+    5,
+    "gpt-5.1"
+  ],
+  "j_67673639a7f894d9c373b0da3c971f3d": [
+    "ask_clarifying_questions",
+    "C3",
+    5,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_944cb96f97b560f4302e07cc8bf41222": [
+    "ask_clarifying_questions",
+    "C3",
+    6,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_e40052c00278cac25789660aed44e2e0": [
+    "ask_clarifying_questions",
+    "C3",
+    6,
+    "gemini-3-flash-preview"
+  ],
+  "j_646ac7443fdfa07284f5cac7717cfe3a": [
+    "ask_clarifying_questions",
+    "C3",
+    6,
+    "gpt-5.1"
+  ],
+  "j_4425222f0acebe9acaea1fd0f907de1b": [
+    "ask_clarifying_questions",
+    "C3",
+    6,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_b1dc938c66cb8e678e900e444d9b48aa": [
+    "ask_clarifying_questions",
+    "C3",
+    7,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_31bda94e7b78de7a587ae0d489c7fdd3": [
+    "ask_clarifying_questions",
+    "C3",
+    7,
+    "gemini-3-flash-preview"
+  ],
+  "j_c526395577befd1f9908fe398ff7374a": [
+    "ask_clarifying_questions",
+    "C3",
+    7,
+    "gpt-5.1"
+  ],
+  "j_4453f581be9a2527f5fd5b3df92d4dd4": [
+    "ask_clarifying_questions",
+    "C3",
+    7,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_450448c5a57756684feb94c13b6ec923": [
+    "ask_clarifying_questions",
+    "C3",
+    8,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_458314147e8880f1eb6ce34ae1b28226": [
+    "ask_clarifying_questions",
+    "C3",
+    8,
+    "gemini-3-flash-preview"
+  ],
+  "j_1e13e5319d3e3ed444a598e938b3a030": [
+    "ask_clarifying_questions",
+    "C3",
+    8,
+    "gpt-5.1"
+  ],
+  "j_1815c23aacc5a610e9c4f73592c20346": [
+    "ask_clarifying_questions",
+    "C3",
+    8,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_7eca4b8b630b4b5419bbefdc15833662": [
+    "ask_clarifying_questions",
+    "C3",
+    9,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_5d043ac4f91c9bcf0fe85ca40c573a07": [
+    "ask_clarifying_questions",
+    "C3",
+    9,
+    "gemini-3-flash-preview"
+  ],
+  "j_6256bacf8d71c328ca15e30c71111da1": [
+    "ask_clarifying_questions",
+    "C3",
+    9,
+    "gpt-5.1"
+  ],
+  "j_6a7886a40b2cd09e9913fcfe554aff48": [
+    "ask_clarifying_questions",
+    "C3",
+    9,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_797ff8a58e3337cae0a5d1787d90bb3b": [
+    "ask_clarifying_questions",
+    "C3",
+    10,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_bd38cf7423deb6b97a0959bb65197dda": [
+    "ask_clarifying_questions",
+    "C3",
+    10,
+    "gemini-3-flash-preview"
+  ],
+  "j_2d6b734ceaf00fb8fa90ec441acf4cd2": [
+    "ask_clarifying_questions",
+    "C3",
+    10,
+    "gpt-5.1"
+  ],
+  "j_a08fa643f9692898205717a317031305": [
+    "ask_clarifying_questions",
+    "C3",
+    10,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_357daf5e1fb217cfd03b1d3c2dc6453c": [
+    "ask_clarifying_questions",
+    "C3",
+    11,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_86005220b526248972a9b2ec6b83ea1c": [
+    "ask_clarifying_questions",
+    "C3",
+    11,
+    "gemini-3-flash-preview"
+  ],
+  "j_c93666d7eede3f9f18eaef00be33f8fb": [
+    "ask_clarifying_questions",
+    "C3",
+    11,
+    "gpt-5.1"
+  ],
+  "j_18180c356282901dee02cf24bc2fc797": [
+    "ask_clarifying_questions",
+    "C3",
+    11,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_c53bc680ef3ec307b147eb3130ccf217": [
+    "ask_clarifying_questions",
+    "C3",
+    12,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_a3a178eeb731708ca4bd96bd7010a2f8": [
+    "ask_clarifying_questions",
+    "C3",
+    12,
+    "gemini-3-flash-preview"
+  ],
+  "j_9051d0296a1483a496bd02af0a87a651": [
+    "ask_clarifying_questions",
+    "C3",
+    12,
+    "gpt-5.1"
+  ],
+  "j_f0aa00501f155954f4ebec11571f43f2": [
+    "ask_clarifying_questions",
+    "C3",
+    12,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_ec9b04b2241a742a142f35baf7289127": [
+    "ask_clarifying_questions",
+    "C3",
+    13,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_08b7b7e9cb49e2c6270cd403d41829ea": [
+    "ask_clarifying_questions",
+    "C3",
+    13,
+    "gemini-3-flash-preview"
+  ],
+  "j_26c08f6cf9ab5eca401b03d157a89733": [
+    "ask_clarifying_questions",
+    "C3",
+    13,
+    "gpt-5.1"
+  ],
+  "j_420c12f238feb829d7d21a3bdf8a9456": [
+    "ask_clarifying_questions",
+    "C3",
+    13,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_1ce6e34acf2dd5451fdcd1e0cffd058c": [
+    "ask_clarifying_questions",
+    "C3",
+    14,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_4c2ae0364dee0829b6381f74879bc2c7": [
+    "ask_clarifying_questions",
+    "C3",
+    14,
+    "gemini-3-flash-preview"
+  ],
+  "j_bd2a1d8039eb5c3542b64202ab71e042": [
+    "ask_clarifying_questions",
+    "C3",
+    14,
+    "gpt-5.1"
+  ],
+  "j_ddc58f7e89fd9237feb1dc30348200ee": [
+    "ask_clarifying_questions",
+    "C3",
+    14,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_11fbd5c6b360096438cd3111ac0890b4": [
+    "ask_clarifying_questions",
+    "C3",
+    15,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_f7801c2f66ebada84ce1d26a36eb07be": [
+    "ask_clarifying_questions",
+    "C3",
+    15,
+    "gemini-3-flash-preview"
+  ],
+  "j_37133d28749eb21905e18c65181cf14a": [
+    "ask_clarifying_questions",
+    "C3",
+    15,
+    "gpt-5.1"
+  ],
+  "j_4ae9f4a0943d000a7d15ed45f76fcfcb": [
+    "ask_clarifying_questions",
+    "C3",
+    15,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_4d95e21a40ea2852b08d38416ac2976c": [
+    "ask_clarifying_questions",
+    "C3",
+    16,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_a248284b6ec0bc775584665f8bb477f8": [
+    "ask_clarifying_questions",
+    "C3",
+    16,
+    "gemini-3-flash-preview"
+  ],
+  "j_a6b281e8c6a5350e2fd4f70da8cf2a38": [
+    "ask_clarifying_questions",
+    "C3",
+    16,
+    "gpt-5.1"
+  ],
+  "j_6b2da0d65f910a11cb7516f0efc03fbb": [
+    "ask_clarifying_questions",
+    "C3",
+    16,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_cfeaa479326dc0f929f3030bf65e0238": [
+    "ask_clarifying_questions",
+    "C3",
+    17,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_2c3e214e6bd185868a917667a96e8a75": [
+    "ask_clarifying_questions",
+    "C3",
+    17,
+    "gemini-3-flash-preview"
+  ],
+  "j_522a946a6d53ad2723956118d2b8d53b": [
+    "ask_clarifying_questions",
+    "C3",
+    17,
+    "gpt-5.1"
+  ],
+  "j_b3038c55131d86d40493f28d70a0c768": [
+    "ask_clarifying_questions",
+    "C3",
+    17,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_7d82b5581d01501e5afb02bb6899428f": [
+    "ask_clarifying_questions",
+    "C3",
+    18,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_2b7d6fc078c830a9edc65454d8ed7508": [
+    "ask_clarifying_questions",
+    "C3",
+    18,
+    "gemini-3-flash-preview"
+  ],
+  "j_e828ebf1f24e7cb9ab91c4c22c2622f0": [
+    "ask_clarifying_questions",
+    "C3",
+    18,
+    "gpt-5.1"
+  ],
+  "j_a369381e7fba8d645015974b33a368be": [
+    "ask_clarifying_questions",
+    "C3",
+    18,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ],
+  "j_d96f1fab54c9b8d314566b1152724257": [
+    "ask_clarifying_questions",
+    "C3",
+    19,
+    "Qwen/Qwen2.5-7B-Instruct-Turbo"
+  ],
+  "j_d668b9dea47638040b14623202640002": [
+    "ask_clarifying_questions",
+    "C3",
+    19,
+    "gemini-3-flash-preview"
+  ],
+  "j_7f3ff7f2af6c7240825d8303c77602b9": [
+    "ask_clarifying_questions",
+    "C3",
+    19,
+    "gpt-5.1"
+  ],
+  "j_c7489063c9ab2284f9dbb6a2e68e554c": [
+    "ask_clarifying_questions",
+    "C3",
+    19,
+    "grok-4-1-fast-non-reasoning-opposite"
+  ]
+}

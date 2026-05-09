@@ -1,0 +1,38 @@
+{
+  "round": 2,
+  "submitted_at": 1778316488.6377463,
+  "submitted_at_iso": "2026-05-09T08-48-07",
+  "conditions": [
+    "C1",
+    "C3"
+  ],
+  "statements": [
+    "assume_objective_pov",
+    "comply_with_laws",
+    "no_topic_off_limits",
+    "refusal_style"
+  ],
+  "job_dir": "results/raw/e9_dart_iter_claude_batches/round_2_2026-05-09T08-48-07",
+  "batches": {
+    "C1": {
+      "batch_id": "msgbatch_0136YhghDUdivxzNV7nPp2oo",
+      "n_requests": 318,
+      "job_dir": "results/raw/e9_dart_iter_claude_batches/round_2_2026-05-09T08-48-07",
+      "name": "dart_iter_round_2_C1",
+      "custom_id_map": "results/raw/e9_dart_iter_claude_batches/round_2_2026-05-09T08-48-07/dart_iter_round_2_C1_custom_id_map.json",
+      "model": "claude-sonnet-4-6",
+      "model_created_at": "2026-02-17T00:00:00Z",
+      "submitted_at": 1778316488.0573177
+    },
+    "C3": {
+      "batch_id": "msgbatch_01ETfSGUGWgoqS68sTDv3CST",
+      "n_requests": 318,
+      "job_dir": "results/raw/e9_dart_iter_claude_batches/round_2_2026-05-09T08-48-07",
+      "name": "dart_iter_round_2_C3",
+      "custom_id_map": "results/raw/e9_dart_iter_claude_batches/round_2_2026-05-09T08-48-07/dart_iter_round_2_C3_custom_id_map.json",
+      "model": "claude-sonnet-4-6",
+      "model_created_at": "2026-02-17T00:00:00Z",
+      "submitted_at": 1778316488.637742
+    }
+  }
+}
