@@ -392,6 +392,153 @@ def synthesize_round1(verbose: bool = True) -> dict:
     return summary
 
 
+def synthesize_round_n(round_n: int, verbose: bool = True) -> dict:
+    """Apply majority vote to Round-N>=2 compiler outputs (from e9_dart_iter_round_n_compile.py).
+
+    Reads dart_iteration/dart_diagnoses{,_gemini,_claude}_round_{N}.jsonl.
+    Skips the aligned-pairs disagreement classifier — uses a simpler N-of-3
+    rubric anchor concurrence rule: if ≥2 compilers proposed an edit for the
+    same anchor, adopt the edit text from the highest-priority compiler (gem >
+    cla > gpt). Same for spec edits, clustered by old_phrase[:80].
+    """
+    gpt = {r["statement_id"]: r for r in load_jsonl(ITER_DIR / f"dart_diagnoses_round_{round_n}.jsonl")
+           if "error" not in r}
+    gem = {r["statement_id"]: r for r in load_jsonl(ITER_DIR / f"dart_diagnoses_gemini_round_{round_n}.jsonl")
+           if "error" not in r}
+    cla = {r["statement_id"]: r for r in load_jsonl(ITER_DIR / f"dart_diagnoses_claude_round_{round_n}.jsonl")
+           if "error" not in r}
+    common = sorted(set(gpt) & set(gem) & set(cla))
+    print(f"Round {round_n}: {len(common)} statements with all 3 compiler outputs")
+
+    summary = {"round": round_n, "statements_processed": 0, "per_statement": {}}
+
+    for sid in common:
+        sid_dir = ITER_DIR / sid
+
+        # Load current state (=v_N)
+        rubric_v_n = json.loads((sid_dir / f"rubric_v{round_n}.json").read_text())
+        spec_v_n = (sid_dir / f"spec_v{round_n}.txt").read_text()
+
+        # Cluster rubric edits by anchor across all 3 compilers
+        anchor_to_edits: dict[str, dict[str, dict]] = defaultdict(dict)
+        for nm, src in [("gpt", gpt), ("gem", gem), ("cla", cla)]:
+            if sid not in src:
+                continue
+            for e in src[sid].get("rubric_edits") or []:
+                anchor = str(e.get("anchor", ""))
+                if anchor:
+                    anchor_to_edits[anchor][nm] = e
+
+        adopted_rubric = []
+        rejected_rubric = []
+        for anchor, by_cmp in anchor_to_edits.items():
+            if len(by_cmp) < 2:
+                rejected_rubric.append({"anchor": anchor, "compiler": next(iter(by_cmp)), "reason": "singleton"})
+                continue
+            priority = {"gem": 3, "cla": 2, "gpt": 1}
+            best_cmp = max(by_cmp, key=lambda c: priority[c])
+            edit = by_cmp[best_cmp]
+            adopted_rubric.append({
+                "anchor": anchor,
+                "old": edit.get("old_criterion") or edit.get("old", ""),
+                "new": edit.get("new_criterion") or edit.get("new", ""),
+                "rationale": edit.get("rationale", ""),
+                "source_compiler": best_cmp,
+                "supporting_compilers": sorted(by_cmp.keys()),
+            })
+
+        # Cluster spec edits by old_phrase[:80]
+        phrase_to_edits: dict[str, dict[str, dict]] = defaultdict(dict)
+        for nm, src in [("gpt", gpt), ("gem", gem), ("cla", cla)]:
+            if sid not in src:
+                continue
+            for e in src[sid].get("spec_edits_for_author_review") or []:
+                phrase = (e.get("old_phrase") or "")[:80]
+                if phrase:
+                    phrase_to_edits[phrase][nm] = e
+
+        adopted_spec = []
+        rejected_spec = []
+        for phrase, by_cmp in phrase_to_edits.items():
+            if len(by_cmp) < 2:
+                rejected_spec.append({"old_phrase_prefix": phrase, "compiler": next(iter(by_cmp)), "reason": "singleton"})
+                continue
+            priority = {"gem": 3, "cla": 2, "gpt": 1}
+            best_cmp = max(by_cmp, key=lambda c: priority[c])
+            edit = by_cmp[best_cmp]
+            adopted_spec.append({
+                "old_phrase": edit.get("old_phrase", ""),
+                "new_phrase": edit.get("new_phrase", ""),
+                "rationale": edit.get("rationale", ""),
+                "source_compiler": best_cmp,
+                "supporting_compilers": sorted(by_cmp.keys()),
+            })
+
+        # Apply
+        rubric_v_next = apply_rubric_edits(rubric_v_n, adopted_rubric)
+        spec_v_next = apply_spec_edits(spec_v_n, adopted_spec)
+
+        # Track verbatim spec application
+        applied_count = sum(1 for e in adopted_spec if e["old_phrase"] in spec_v_n)
+
+        # Majority diagnosis at round N (votes only on these compiler outputs)
+        diags = [gpt[sid].get("diagnosis"), gem[sid].get("diagnosis"), cla[sid].get("diagnosis")]
+        c = Counter(diags)
+        most_common, count = c.most_common(1)[0]
+        diag_tier = "consensus" if count == 3 else ("plurality" if count == 2 else "split")
+
+        # Write v_{N+1} files
+        next_n = round_n + 1
+        (sid_dir / f"rubric_v{next_n}.json").write_text(json.dumps(rubric_v_next, indent=2))
+        (sid_dir / f"spec_v{next_n}.txt").write_text(spec_v_next)
+
+        # Append round N entry to history.json
+        history_path = sid_dir / "history.json"
+        history = json.loads(history_path.read_text())
+        new_entry = {
+            "round": round_n,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "rubric_state_at_start": f"v{round_n}",
+            "spec_state_at_start": f"v{round_n}",
+            "round_diagnosis_majority": most_common,
+            "round_diagnosis_tier": diag_tier,
+            "diagnosis_votes": {"gpt": diags[0], "gem": diags[1], "cla": diags[2]},
+            "rubric_edits_adopted": adopted_rubric,
+            "rubric_edits_rejected": rejected_rubric,
+            "spec_edits_adopted": adopted_spec,
+            "spec_edits_rejected": rejected_spec,
+            "spec_edits_applied_count": applied_count,
+            "alpha_before_round": history[-1].get("alpha_after_round"),  # carry forward
+            "alpha_after_round": None,
+            "delta_alpha": None,
+            "delta_pwv_top10_pct_drop": None,
+            "verdict": "pending_judging",
+        }
+        # Pad with placeholder entries for any rounds the statement skipped (e.g. CONVERGED at round 1)
+        while len(history) < round_n - 1:
+            history.append({"round": len(history) + 1, "verdict": "skipped"})
+        history.append(new_entry)
+        history_path.write_text(json.dumps(history, indent=2))
+
+        summary["per_statement"][sid] = {
+            "rubric_edits_adopted": len(adopted_rubric),
+            "spec_edits_adopted": len(adopted_spec),
+            "spec_edits_applied": applied_count,
+            "majority_diagnosis": most_common,
+            "diag_tier": diag_tier,
+        }
+        summary["statements_processed"] += 1
+        if verbose:
+            print(f"  {sid:35s} maj={most_common:18s} tier={diag_tier:10s}  "
+                  f"rubric: {len(adopted_rubric)}adopt  spec: {len(adopted_spec)}adopt({applied_count}applied)")
+
+    summary_path = ITER_DIR / f"round_{round_n}_synthesis_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    if verbose:
+        print(f"\nWrote {summary_path}")
+    return summary
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--round", type=int, default=1)
@@ -400,7 +547,7 @@ def main():
     if args.round == 1:
         synthesize_round1()
     else:
-        raise NotImplementedError(f"Round {args.round} synthesis requires e9_dart_iter_compile.py output")
+        synthesize_round_n(args.round)
 
 
 if __name__ == "__main__":

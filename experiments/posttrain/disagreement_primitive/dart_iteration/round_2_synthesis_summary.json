@@ -1,0 +1,34 @@
+{
+  "round": 2,
+  "statements_processed": 4,
+  "per_statement": {
+    "assume_objective_pov": {
+      "rubric_edits_adopted": 4,
+      "spec_edits_adopted": 0,
+      "spec_edits_applied": 0,
+      "majority_diagnosis": "rubric_drift",
+      "diag_tier": "consensus"
+    },
+    "comply_with_laws": {
+      "rubric_edits_adopted": 5,
+      "spec_edits_adopted": 0,
+      "spec_edits_applied": 0,
+      "majority_diagnosis": "rubric_drift",
+      "diag_tier": "plurality"
+    },
+    "no_topic_off_limits": {
+      "rubric_edits_adopted": 4,
+      "spec_edits_adopted": 0,
+      "spec_edits_applied": 0,
+      "majority_diagnosis": "rubric_drift",
+      "diag_tier": "consensus"
+    },
+    "refusal_style": {
+      "rubric_edits_adopted": 4,
+      "spec_edits_adopted": 0,
+      "spec_edits_applied": 0,
+      "majority_diagnosis": "rubric_drift",
+      "diag_tier": "plurality"
+    }
+  }
+}

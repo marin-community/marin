@@ -162,13 +162,14 @@ def load_v1_rubrics() -> dict[str, dict[str, Any]]:
     return out
 
 
-def load_v2_artifacts(sids: list[str]) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-    """Returns (rubric_v2_by_sid, spec_v2_text_by_sid)."""
+def load_v2_artifacts(sids: list[str], round_n: int = 1) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+    """Returns (rubric_v_{round+1}_by_sid, spec_v_{round+1}_text_by_sid)."""
+    next_n = round_n + 1
     rubrics_v2: dict[str, dict[str, Any]] = {}
     specs_v2: dict[str, str] = {}
     for sid in sids:
-        rv2 = DART_DIR / sid / "rubric_v2.json"
-        sv2 = DART_DIR / sid / "spec_v2.txt"
+        rv2 = DART_DIR / sid / f"rubric_v{next_n}.json"
+        sv2 = DART_DIR / sid / f"spec_v{next_n}.txt"
         if not rv2.exists():
             raise SystemExit(f"missing {rv2}")
         if not sv2.exists():
@@ -276,7 +277,7 @@ def main() -> int:
             raise SystemExit(f"statement_id {sid} not in {SPEC_PATH}")
 
     rubrics_v1 = load_v1_rubrics()
-    rubrics_v2, specs_v2 = load_v2_artifacts(target_sids)
+    rubrics_v2, specs_v2 = load_v2_artifacts(target_sids, round_n=args.round)
 
     cells = build_cells(target_sid_set)
     print(f"DART iter round={args.round}")

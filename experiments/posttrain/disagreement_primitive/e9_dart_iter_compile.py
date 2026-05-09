@@ -35,10 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from e8_paired_indirection import SPEC_PATH, get_examples, render_anchors, render_examples
-from e9_dart_compiler import (
-    COMPILER_SYSTEM, DART_OUTPUT_TOOL, build_user_prompt as build_gpt_prompt,
-    call_gpt_json,
-)
+from e9_dart_compiler import COMPILER_SYSTEM
 
 DIR = Path("experiments/posttrain/disagreement_primitive")
 ITER_DIR = DIR / "dart_iteration"
