@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Goal: Test whether replacing AdamH with MuonH for every Grug MoE matrix except the lm head improves effective speedup versus the v16 AdamH baseline.
+- Goal: Test whether replacing AdamH/AdamH-expert with MuonH while preserving the AdamH baseline Adam group improves effective speedup versus the v16 AdamH baseline.
 - Primary metrics: `eval/paloma/macro_loss`, `throughput/tokens_per_second`, `throughput/total_tokens`, run state.
 - Constraints: Keep model sizing, data, batch size, step count, schedule, z-loss, eval cadence, and lm-head AdamH behavior fixed.
 - Issue: https://github.com/marin-community/marin/issues/5596
@@ -41,3 +41,12 @@
 - Result: Parent `/kaiyue/iris-run-job-20260509-183227` is running. Child jobs `/kaiyue/iris-run-job-20260509-183227/grug-train-muonh-matrix-d512-2.19e17` and `/kaiyue/iris-run-job-20260509-183227/grug-train-muonh-matrix-d768-1.70e18` were created and are pending while the Iris autoscaler brings up preemptible v5p-8 workers.
 - Interpretation: The fixed code was accepted by Iris and progressed past parent submission; live TPU compile validation is blocked on capacity.
 - Next action: Wait for workers, confirm W&B startup, and check that lowering passes for both child jobs.
+
+### 2026-05-09 11:58 - MOE-MH-004 baseline Adam group correction
+
+- Hypothesis: The ablation should preserve the AdamH baseline's Adam group so router, token embedding, attention gate, router bias, and vector/scalar behavior stays fixed while only AdamH/AdamH-expert matrix groups switch to MuonH.
+- Command: `uv run pytest -o addopts='' tests/test_grug_moe_optimizer.py::test_grug_moe_muonh_keeps_adamh_baseline_adam_group_on_adam tests/test_grug_moe_optimizer.py::test_muonh_matrix_sweep_suffix_builds_distinct_relaunch_steps -q`
+- Config: `GrugMoeMuonHConfig`, gate-1 relaunch suffix `baseline-adam-mask`.
+- Result: Added failing tests, then updated the mask and launcher so the baseline Adam group remains Adam and corrected relaunches use distinct run IDs such as `muonh-matrix-baseline-adam-mask-d512-2.19e17`.
+- Interpretation: The already-running MOE-MH-003 jobs are useful as a broader matrix-swap reference, but the corrected experimental comparison requires a new suffixed launch.
+- Next action: Run full focused validation, push PR update, then launch corrected gate-1 jobs without stopping MOE-MH-003.

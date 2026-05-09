@@ -15,6 +15,15 @@ from levanter.utils.jax_utils import leaf_key_paths
 from experiments.grug.moe.adamh import scale_by_adamh
 
 
+def _uses_adamh_baseline_adam_group(path_lower: str) -> bool:
+    return (
+        "token_embed" in path_lower
+        or "router_bias" in path_lower
+        or "attn_gate" in path_lower
+        or ".router" in path_lower
+    )
+
+
 def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
     if array is None or not hasattr(array, "shape"):
         return None
@@ -275,9 +284,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
-            if "token_embed" in path_lower:
-                return "adam"
-            if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
+            if _uses_adamh_baseline_adam_group(path_lower):
                 return "adam"
             if ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
                 return "adamh_expert"
@@ -291,12 +298,11 @@ class GrugMoeAdamHConfig(OptimizerConfig):
 @OptimizerConfig.register_subclass("grug_moe_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
-    """MuonH for all Grug MoE matrices except the lm head.
+    """MuonH for Grug MoE matrices outside the AdamH baseline Adam group.
 
-    - muonh: all matrix-shaped leaves, including embeddings, router, gates,
-      attention, dense/shared MLP, and stacked expert weights
+    - muonh: matrix leaves that the AdamH baseline routes to AdamH or AdamH-expert
     - adamh: lm head / output projection matrix
-    - adam: vector/scalar leaves such as norms and biases
+    - adam: leaves that the AdamH baseline routes to Adam
     """
 
     adam_lr: float = 6e-4
@@ -367,6 +373,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
+            if _uses_adamh_baseline_adam_group(path_lower):
+                return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
             if hasattr(param, "ndim") and param.ndim in (2, 3):
@@ -381,9 +389,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 class GrugMoeNorMuonHConfig(OptimizerConfig):
     """NorMuon inside the Grug MoE hyperball update.
 
-    - normuonh: all matrix-shaped leaves except the lm head
+    - normuonh: matrix leaves that the AdamH baseline routes to AdamH or AdamH-expert
     - adamh: lm head / output projection matrix
-    - adam: vector/scalar leaves such as norms and biases
+    - adam: leaves that the AdamH baseline routes to Adam
     """
 
     adam_lr: float = 6e-4
@@ -457,6 +465,8 @@ class GrugMoeNorMuonHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
+            if _uses_adamh_baseline_adam_group(path_lower):
+                return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
             if hasattr(param, "ndim") and param.ndim in (2, 3):

@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Goal: Test whether NorMuon inside the Grug hyperball update improves over the MuonH matrix-swap ablation.
+- Goal: Test whether NorMuon inside the Grug hyperball update improves when preserving the AdamH baseline Adam group and replacing AdamH/AdamH-expert matrix groups.
 - Primary metrics: `eval/paloma/macro_loss`, `throughput/tokens_per_second`, `throughput/total_tokens`, run state.
 - Constraints: Keep model sizing, data, batch size, step count, schedule, z-loss, eval cadence, and lm-head AdamH behavior fixed.
 - Issue: https://github.com/marin-community/marin/issues/5598
@@ -51,3 +51,12 @@
 - Result: Parent `/kaiyue/iris-run-job-20260509-183259` is running. Child jobs `/kaiyue/iris-run-job-20260509-183259/grug-train-normuonh-matrix-d512-2.19e17` and `/kaiyue/iris-run-job-20260509-183259/grug-train-normuonh-matrix-d768-1.70e18` were created and are pending while the Iris autoscaler brings up preemptible v5p-8 workers.
 - Interpretation: The NorMuonH launcher and job tree are accepted by Iris; live TPU compile validation is blocked on capacity.
 - Next action: Wait for workers, confirm W&B startup, and check that lowering passes for both child jobs.
+
+### 2026-05-09 11:58 - MOE-NMH-004 baseline Adam group correction
+
+- Hypothesis: NorMuonH should preserve the AdamH baseline's Adam group so router, token embedding, attention gate, router bias, and vector/scalar behavior stays fixed while only AdamH/AdamH-expert matrix groups switch to NorMuonH.
+- Command: `uv run pytest -o addopts='' tests/test_grug_moe_optimizer.py::test_grug_moe_normuonh_keeps_adamh_baseline_adam_group_on_adam tests/test_grug_moe_optimizer.py::test_normuonh_matrix_sweep_suffix_builds_distinct_relaunch_steps -q`
+- Config: `GrugMoeNorMuonHConfig`, gate-1 relaunch suffix `baseline-adam-mask`.
+- Result: Added failing tests, then updated the mask and launcher so the baseline Adam group remains Adam and corrected relaunches use distinct run IDs such as `normuonh-matrix-baseline-adam-mask-d512-2.19e17`.
+- Interpretation: The already-running MOE-NMH-003 jobs are useful as a broader matrix-swap reference, but the corrected experimental comparison requires a new suffixed launch.
+- Next action: Run full focused validation, push PR update, then launch corrected gate-1 jobs without stopping MOE-NMH-003.

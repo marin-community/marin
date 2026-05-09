@@ -13,6 +13,8 @@ Set ``NORMUONH_MATRIX_GATE`` to control which scales run:
     NORMUONH_MATRIX_GATE=1     # default: d512, d768 (gate 1 only)
     NORMUONH_MATRIX_GATE=2     # d1024, d1280 (gate 2 only)
     NORMUONH_MATRIX_GATE=both  # all four scales
+
+Set ``NORMUONH_MATRIX_RUN_SUFFIX`` to append a unique suffix for relaunches.
 """
 
 import os
@@ -47,6 +49,15 @@ def _format_budget(budget: float) -> str:
     return f"{budget:.2e}".replace("+", "")
 
 
+def _format_run_id(hidden_dim: int, budget: float, run_suffix: str = "") -> str:
+    budget_label = _format_budget(budget)
+    normalized_suffix = run_suffix.strip()
+    if normalized_suffix and not normalized_suffix.replace("-", "").replace("_", "").isalnum():
+        raise ValueError("run_suffix may only contain letters, numbers, hyphens, and underscores")
+    suffix = f"{normalized_suffix}-" if normalized_suffix else ""
+    return f"normuonh-matrix-{suffix}d{hidden_dim}-{budget_label}"
+
+
 def _normuonh_optimizer_from_baseline(base_optimizer: GrugMoeAdamHConfig) -> GrugMoeNorMuonHConfig:
     return GrugMoeNorMuonHConfig(
         learning_rate=base_optimizer.learning_rate,
@@ -62,7 +73,7 @@ def _normuonh_optimizer_from_baseline(base_optimizer: GrugMoeAdamHConfig) -> Gru
     )
 
 
-def _build_step(hidden_dim: int, budget: float) -> ExecutorStep:
+def _build_step(hidden_dim: int, budget: float, run_suffix: str = "") -> ExecutorStep:
     model, base_optimizer, batch_size, num_steps = build_from_heuristic(
         budget=budget,
         hidden_dim=hidden_dim,
@@ -70,8 +81,7 @@ def _build_step(hidden_dim: int, budget: float) -> ExecutorStep:
     )
     optimizer = _normuonh_optimizer_from_baseline(base_optimizer)
 
-    budget_label = _format_budget(budget)
-    run_id = f"normuonh-matrix-d{hidden_dim}-{budget_label}"
+    run_id = _format_run_id(hidden_dim=hidden_dim, budget=budget, run_suffix=run_suffix)
     step_name = f"grug/normuonh_matrix_sweep/{run_id}"
 
     return ExecutorStep(
@@ -114,7 +124,7 @@ def _build_step(hidden_dim: int, budget: float) -> ExecutorStep:
     )
 
 
-def _build_steps(gate: str) -> list[ExecutorStep]:
+def _build_steps(gate: str, run_suffix: str = "") -> list[ExecutorStep]:
     if gate == "1":
         points = _GATE_1_POINTS
     elif gate == "2":
@@ -124,13 +134,14 @@ def _build_steps(gate: str) -> list[ExecutorStep]:
     else:
         raise ValueError(f"unknown gate: {gate!r} (expected '1', '2', or 'both')")
 
-    return [_build_step(hidden_dim=hidden_dim, budget=budget) for hidden_dim, budget in points]
+    return [_build_step(hidden_dim=hidden_dim, budget=budget, run_suffix=run_suffix) for hidden_dim, budget in points]
 
 
 if __name__ == "__main__":
     gate = os.environ.get("NORMUONH_MATRIX_GATE", "1")
-    steps = _build_steps(gate)
+    run_suffix = os.environ.get("NORMUONH_MATRIX_RUN_SUFFIX", "")
+    steps = _build_steps(gate, run_suffix=run_suffix)
     executor_main(
         steps=steps,
-        description=f"MoE NorMuonH matrix swap sweep (gate={gate}).",
+        description=f"MoE NorMuonH matrix swap sweep (gate={gate}, run_suffix={run_suffix!r}).",
     )
