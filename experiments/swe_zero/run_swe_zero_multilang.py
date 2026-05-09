@@ -535,6 +535,18 @@ def _run_with_vllm(
     if resume_from:
         skipped = sum(1 for pr in sampled_prs if existing_counts.get(pr.instance_id, 0) >= n_rollouts_per_pr)
         logger.info("Resume: skipping %d PRs that are already complete", skipped)
+
+    # Fast-path: nothing to do for this shard. Skip the 60-90 sec vLLM startup
+    # that would just exit again. Outer worker writes _done after this returns
+    # if _shard_is_complete agrees, preventing future claims of this shard.
+    if total == 0:
+        existing_total = sum(existing_counts.values())
+        logger.info("All PRs at >= n_rollouts target; skipping vLLM launch for this iter")
+        logger.info(
+            "[METRICS] rollouts_produced=0 completion_tokens=0 submission_rate=0.0000 total_after=%d",
+            existing_total,
+        )
+        return
     logger.info(
         "vLLM config: max_model_len=%d, max_num_seqs=%d, TP=%d, max_total_tokens=%d, concurrency=%d",
         max_model_len,

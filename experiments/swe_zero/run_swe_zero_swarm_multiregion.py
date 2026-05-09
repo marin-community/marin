@@ -193,16 +193,26 @@ def _shard_is_complete(output_root: str, batch_idx: int) -> tuple[bool, str]:
     """
     shard_dir = _shard_path(output_root, batch_idx)
     rollouts_path = f"{shard_dir}/rollouts.json"
+    resume_path = f"{shard_dir}/rollouts_resume.json"
     plan_path = f"{shard_dir}/sampling_plan.json"
     try:
-        rollouts_blob = _gcs_blob(rollouts_path)
         plan_blob = _gcs_blob(plan_path)
-        if not rollouts_blob.exists():
-            return False, "no rollouts.json"
         if not plan_blob.exists():
             return False, "no sampling_plan.json"
-        rollouts = json.loads(rollouts_blob.download_as_bytes())
         plan = json.loads(plan_blob.download_as_bytes())
+        # Read both rollouts.json and rollouts_resume.json. Inner worker writes
+        # new rollouts to rollouts_resume.json (when --resume-from is set), so
+        # checking rollouts.json alone misses the multi-region/post-migration
+        # work entirely.
+        rollouts_blob = _gcs_blob(rollouts_path)
+        resume_blob = _gcs_blob(resume_path)
+        rollouts = []
+        if rollouts_blob.exists():
+            rollouts.extend(json.loads(rollouts_blob.download_as_bytes()) or [])
+        if resume_blob.exists():
+            rollouts.extend(json.loads(resume_blob.download_as_bytes()) or [])
+        if not rollouts:
+            return False, "no rollouts.json or rollouts_resume.json"
     except Exception as e:
         return False, f"read error: {e}"
 
@@ -216,7 +226,7 @@ def _shard_is_complete(output_root: str, batch_idx: int) -> tuple[bool, str]:
         return False, "sampling_plan.json has no instance_ids"
 
     counts: dict[str, int] = {}
-    for r in rollouts if isinstance(rollouts, list) else []:
+    for r in rollouts:
         iid = r.get("instance_id") if isinstance(r, dict) else None
         if iid is not None:
             counts[str(iid)] = counts.get(str(iid), 0) + 1
