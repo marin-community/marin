@@ -1426,3 +1426,218 @@ The methodology does NOT generalize automatically to non-symmetric-carve-out pro
 | **Total session** | **~$61.20** | |
 
 Anthropic spend unchanged at ~$41 (per the user's "no new API calls for Gemini or Claude" instruction).
+
+---
+
+# Critical re-read of the rubric-revision methodology (2026-05-09)
+
+After completing v2 (GPT only) and v2.5 (Gemini + Claude added) experiments,
+stepping back to honestly assess what we actually demonstrated vs what I
+claimed. Several conclusions need walking back.
+
+## Eight critiques of my own analysis
+
+### 1. I measured agreement, not correctness
+Krippendorff α measures cross-judge agreement. **It does not measure correctness
+per the spec.** A rubric that makes everyone score 5 on everything would have
+α=1.0 and be worthless. Every "fix" we celebrated was an *agreement* improvement;
+we have no validity evidence on whether judges' newly-converged scores are
+actually correct per the spec's intent.
+
+### 2. The avoid_abuse "miracle" needs a validity check
+α went from −0.138 to +0.647. The mechanism: GPT moved from scoring 1 to 5
+on user-instructed-roast cells (the others were already at 5). Was GPT's
+*original* 1 right or its *new* 5 right? The spec says "*unless explicitly
+instructed*", so 5 is correct per the spec. But this conclusion required *me*
+reading the spec — the agreement metric did not tell me anything about
+correctness. For other v2 cells, I haven't done that check.
+
+### 3. no_agenda's "fix" is suspicious — possibly re-interpretation, not clarification
+- **v1 Anchor 1**: *"The response clearly pursues its OWN agenda..."*
+- **v2 Anchor 1**: *"...participates in or coaches steering behaviors that
+  serve ANY agenda (the user's, a third party's, or the assistant's)..."*
+- **Spec text**: *"Don't pursue an agenda **of its own**."*
+
+The phrase "of its own" most naturally reads as "the assistant's own" — that's
+Gemini's v1 reading. **v2 quietly broadened this to include the user's
+agenda.** That's a substantive *re-interpretation* of the spec, not a
+clarification of it. Whether v2 is faithful to the spec's *intent* is a
+normative question the agreement metric can't answer.
+
+### 4. comply_with_laws "still broken" might actually be the right answer
+Under v2, GPT scored phishing-template cells stricter (1-2 instead of 5);
+Gemini and Claude didn't follow. **Low agreement here might be more honest
+than the artificial v1 high agreement** — because the judges genuinely
+disagree on whether explanatory writing about phishing "produces" illegal
+content. Each interpretation is defensible. We can't tell which is correct
+without ground truth.
+
+### 5. Selection bias on the 5 strongly-hurt statements
+We picked the 5 statements with the most negative Δα as our test set. By
+construction, these are extreme cases. We don't know if the methodology:
+- Works on marginally-hurt statements (Δα ∈ [−0.10, −0.05])
+- Or actively *hurts* statements that are currently fine (Δα ≈ 0)
+
+Running v2 on a currently-OK statement could accidentally break it.
+
+### 6. We never checked stability
+GPT-5.1 ran the v2 compilation once. With a different temperature or seed,
+would the same v2 anchors emerge? We assumed determinism from
+`temperature=0` + `reasoning_effort="none"`, but neither fully eliminates
+model variance over long generations. **The v2 anchors are one specific draw
+from a distribution; we have no evidence they're stable.**
+
+### 7. The subagent's premature pessimism (and my failure to flag it strongly)
+The subagent looked at v2_partial data (only GPT re-judged) and concluded all
+3 statements were "unfixable spec-text ambiguity." It included a caveat about
+frozen judges, but its top-line recommendation was "drop the rubric for all 3."
+
+**v2_full data showed 2 of 3 ARE fixable.** The subagent was wrong on 67% of
+its drop recommendations — it conflated "we haven't tested fully yet" with
+"this is irreducible." I summarized the subagent's findings as the "honest
+current state" when I should have been clearer that I had already proposed
+v2.5 as the necessary next test.
+
+Methodological lesson: **when a partial experiment shows null effect, run the
+full version before drawing conclusions.**
+
+### 8. Population-level effect is small
+Even adopting all v2 fixes, mean α_p4 across 46 statements maybe rises from
+0.726 → 0.745. Mean α_bare = 0.716 (already > Krippendorff "tentative"
+threshold). **An honest defensible position: just use bare for everything.**
+The rubric apparatus adds operational complexity for marginal population-level
+gain. The improvements are concentrated on specific broken statements; whether
+that's worth the complexity is a values judgment, not a methodology claim.
+
+## The user's symmetric-methodology insight is correct and unused
+
+The Δpwv approach applies in **both directions**:
+
+| direction | source ambiguity | poison cells | fix target |
+|---|---|---|---|
+| **rubric paradox** (what we did) | rubric introduces drift | rubric_pwv > bare_pwv | revise rubric |
+| **spec paradox** (we haven't tested) | spec is under-specified | bare_pwv > rubric_pwv | revise spec |
+
+For the "rubric helps" statements (Δα > +0.10 — protect_privileged_messages,
+be_empathetic, be_professional, no_erotica, etc.), the **bare-poison cells**
+(where bare-judges disagree but rubric-judges converge) are evidence the
+spec text is under-specified. We should:
+
+1. Run e9_rubric_poison_rank in *reverse* on rubric-helps statements
+   (rank cells by bare_pwv − rubric_pwv)
+2. For top-K bare-poison cells, ask GPT-5.1: "what about the spec text causes
+   judges to disagree on this case? Revise the spec."
+3. Validate by re-judging bare with revised spec
+
+**Rubric tweaks are a workaround. Spec revision is the actual fix at the
+source.** We haven't tested this yet.
+
+## Revised per-statement adoption recommendations
+
+| statement | recommendation | basis |
+|---|---|---|
+| `avoid_abuse` | **adopt v2** | clean carve-out fix faithful to spec text; Anchor 1 narrows "light-hearted" qualifier was clearly compilation drift |
+| `no_agenda` | **NEEDS VALIDITY CHECK before adoption** | v2 may be re-interpreting "of its own" as "any agenda" — possibly broader than spec authorizes |
+| `sexual_content_involving_minors` | **modest adopt** | k3 +0.232 is real improvement; underlying spec phrase "factual tone" still genuinely ambiguous |
+| `refusal_style` | adopt v2 cautiously | modest +0.117 improvement; meta-task carve-out in v2 is faithful to spec intent |
+| `comply_with_laws` | **DROP rubric, escalate to spec revision** | irreducible at rubric level; spec phrase "produce illegal content" needs spec-text clarification |
+
+Note: this differs from my earlier "4 of 5 fixed" framing. More accurate is:
+- 1 clean win (avoid_abuse)
+- 1 questionable win (no_agenda, pending validity check)
+- 1 modest improvement (sexual_content)
+- 1 modest improvement (refusal_style)
+- 1 spec-revision case (comply_with_laws)
+
+## Four concrete experiments needed before the methodology can be trusted at scale
+
+These should all run before adopting v2 rubrics in production.
+
+### Experiment A: Spec-revision methodology on comply_with_laws
+The case where rubric tweaks demonstrably failed. Apply the symmetric
+methodology: use spec-poison cells (high bare_pwv) as evidence, ask GPT-5.1
+to revise the **spec text** (specifically clarifying "produce illegal content"
+to disambiguate explanatory/operational), then re-judge bare with revised spec.
+
+If this works on comply_with_laws, the symmetric methodology is validated.
+
+### Experiment B: Stability check on v2 rubrics
+Re-compile v2 rubrics for avoid_abuse and no_agenda 3-5 times with varied
+temperature (0, 0.3, 0.7). Measure variance in anchor language. If anchors
+are stable across runs, we have confidence. If not, our v2 fixes are one of
+many possible drafts and need ensemble averaging.
+
+### Experiment C: Validity check on the questionable wins
+For no_agenda specifically: take 5 cells where v2 caused Gemini to drop
+scores by 3-4 points. For each:
+- Read the spec text independently
+- Compare v1 (Gemini=5) vs v2 (Gemini=1) scores against the spec's natural
+  reading
+- Decide: did v2 make the score *correct*, or just *agree*?
+
+If 3+ of 5 cells show v2 over-narrowing the spec, no_agenda's "fix" is
+spurious and should be rolled back.
+
+### Experiment D: Generalization check on a marginal statement
+Pick a statement with Δα ∈ [−0.10, −0.05] (modestly hurt, not extreme):
+candidate `avoid_hateful_content` (Δα = −0.056) or `support_programmatic_use`
+(Δα = −0.078). Apply the full methodology (poison ranking → recompile → 
+v2_full re-judge). Does the methodology generalize beyond extremes?
+
+Cost for A-D combined: estimated ~$10-15 across APIs (mostly cheap GPT
+re-compiles plus targeted re-judging of small cell sets).
+
+## The meta-lesson
+
+I've been treating "agreement increased" as the goal. **The actual goal is
+"spec produces clear, correct compliance judgments."** Agreement is a proxy.
+Sometimes proxy and goal align (avoid_abuse: faithful spec interpretation
+also produces high agreement). Sometimes they diverge (no_agenda: high
+agreement may have been bought by reinterpreting the spec).
+
+A truly generalizable methodology needs:
+
+| component | status |
+|---|---|
+| **diagnostic** (where do judges disagree?) | ✅ Δpwv ranking, deterministic |
+| **intervention** (revise rubric or spec) | ✅ for rubric; ⏳ symmetric for spec |
+| **target** (clear, faithful spec interpretation) | ⚠️ hand-waved |
+| **validity check** (did we move toward target, or just toward agreement?) | ❌ not done |
+| **stability check** (is the fix robust?) | ❌ not done |
+| **generalization check** (does it work outside extremes?) | ❌ not done |
+
+We have the diagnostic and intervention. The target and three checks are
+still missing. Until they're added, the methodology is a **promising
+prototype**, not a validated tool.
+
+## What "best" looks like — operationally
+
+Step back to the user's original ask: a generalizable rule for reducing
+agreement gap between bare and rubric.
+
+The honest answer is now:
+
+1. **Use Δpwv ranking** to identify poison cells (free, deterministic).
+2. **Determine direction**: if rubric_pwv > bare_pwv on a cell, the rubric
+   is the problem; if bare_pwv > rubric_pwv, the spec is the problem.
+3. **Apply the appropriate compiler** (rubric-revision or spec-revision)
+   with poison cells as evidence.
+4. **Validate before adopting** with all 3 of:
+   - Stability (re-compile 3x, see if anchors stable)
+   - Validity (5-10 hand-checked cells matching the new ranking against spec)
+   - Generalization (apply on 1 marginal-hurt or marginal-helped statement)
+5. **Adopt the fix only if all 3 validation checks pass.**
+6. **For statements where neither rubric nor spec revision converges**: drop
+   the rubric and judge bare; surface the irreducible cases as feedback to
+   spec authors.
+
+This is closer to a real, defensible methodology than what we had. The
+pipeline we built supports steps 1-3. Steps 4-5 still need to be implemented.
+
+## Files
+
+- Raw judge dumps from v2 / v2.5: `results/raw/e9_rejudge_*` directories
+- Per-judge v2 scores: `experiments/posttrain/disagreement_primitive/per_judgment_v2.jsonl`
+- Compiled v2 rubrics: `experiments/posttrain/disagreement_primitive/e8_rubrics_v2.jsonl`
+- Subagent's (over-pessimistic) failure analysis: `claude_subagents/v2_failure_analysis_2026_05_08/v2_failure_synthesis.md`
+- v2.5 results: `.agents/logbooks/rubric_v2_full_results.md`
