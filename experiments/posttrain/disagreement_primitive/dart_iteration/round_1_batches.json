@@ -1,0 +1,58 @@
+{
+  "round": 1,
+  "submitted_at": 1778314328.3790317,
+  "submitted_at_iso": "2026-05-09T08-12-05",
+  "conditions": [
+    "C1",
+    "C2",
+    "C3"
+  ],
+  "statements": [
+    "ask_clarifying_questions",
+    "assume_objective_pov",
+    "avoid_abuse",
+    "be_clear",
+    "be_thorough_but_efficient",
+    "comply_with_laws",
+    "do_not_lie",
+    "formatting",
+    "letter_and_spirit",
+    "no_topic_off_limits",
+    "prevent_imminent_harm",
+    "protect_privileged_messages",
+    "refusal_style"
+  ],
+  "job_dir": "results/raw/e9_dart_iter_claude_batches/round_1_2026-05-09T08-12-05",
+  "batches": {
+    "C1": {
+      "batch_id": "msgbatch_016CijpHn4YTczxmWo96KZ8X",
+      "n_requests": 1038,
+      "job_dir": "results/raw/e9_dart_iter_claude_batches/round_1_2026-05-09T08-12-05",
+      "name": "dart_iter_round_1_C1",
+      "custom_id_map": "results/raw/e9_dart_iter_claude_batches/round_1_2026-05-09T08-12-05/dart_iter_round_1_C1_custom_id_map.json",
+      "model": "claude-sonnet-4-6",
+      "model_created_at": "2026-02-17T00:00:00Z",
+      "submitted_at": 1778314326.2253852
+    },
+    "C2": {
+      "batch_id": "msgbatch_01CuYuBZjCj2y72VTGRWJUNS",
+      "n_requests": 1038,
+      "job_dir": "results/raw/e9_dart_iter_claude_batches/round_1_2026-05-09T08-12-05",
+      "name": "dart_iter_round_1_C2",
+      "custom_id_map": "results/raw/e9_dart_iter_claude_batches/round_1_2026-05-09T08-12-05/dart_iter_round_1_C2_custom_id_map.json",
+      "model": "claude-sonnet-4-6",
+      "model_created_at": "2026-02-17T00:00:00Z",
+      "submitted_at": 1778314327.1941063
+    },
+    "C3": {
+      "batch_id": "msgbatch_01ETMVdmThMNjwxukVUrhb94",
+      "n_requests": 1038,
+      "job_dir": "results/raw/e9_dart_iter_claude_batches/round_1_2026-05-09T08-12-05",
+      "name": "dart_iter_round_1_C3",
+      "custom_id_map": "results/raw/e9_dart_iter_claude_batches/round_1_2026-05-09T08-12-05/dart_iter_round_1_C3_custom_id_map.json",
+      "model": "claude-sonnet-4-6",
+      "model_created_at": "2026-02-17T00:00:00Z",
+      "submitted_at": 1778314328.3790271
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "phase": "round_1_judging_in_flight",
+  "history": [
+    {
+      "time": "2026-05-09T08:30:00Z",
+      "event": "launched R1 judging"
+    }
+  ],
+  "round_1_pid": 3633962,
+  "round_1_target_sync": 6240,
+  "round_1_target_total": 9360
+}

@@ -32,10 +32,28 @@
     "spec_edits_rejected": [],
     "spec_edits_applied_count": 1,
     "spec_edits_unmatched_count": 0,
-    "alpha_before_round": null,
-    "alpha_after_round": null,
-    "delta_alpha": null,
-    "delta_pwv_top10_pct_drop": null,
-    "verdict": "pending_judging"
+    "alpha_before_round": 0.2762008733624455,
+    "alpha_after_round": 0.4252897085259374,
+    "delta_alpha": 0.14908883516349192,
+    "delta_pwv_top10_pct_drop": -2.2,
+    "verdict": "improving",
+    "alpha_by_condition": {
+      "C0": 0.2762008733624455,
+      "C1": 0.3430487607264038,
+      "C2": 0.4692516402852054,
+      "C3": 0.4252897085259374
+    },
+    "alpha_ci_95_operative_condition": [
+      0.2814512529273925,
+      0.5453017557629636
+    ],
+    "operative_condition": "C3",
+    "pwv_top10_by_condition": {
+      "C0": 65.0,
+      "C1": 268.0,
+      "C2": 188.0,
+      "C3": 208.0
+    },
+    "analyzed_timestamp_utc": "2026-05-09T08:32:47.003975+00:00"
   }
 ]
