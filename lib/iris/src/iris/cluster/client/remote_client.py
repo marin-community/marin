@@ -3,6 +3,7 @@
 
 """RPC-based cluster client implementation."""
 
+import datetime as _datetime
 import logging
 import time
 import uuid
@@ -21,6 +22,30 @@ from iris.rpc.errors import call_with_retry, format_connect_error
 from iris.time_utils import Deadline, Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
+
+
+# Server-side freshness gate (introduced 2026-04-22) requires LaunchJobRequest to
+# carry `client_revision_date` (proto field 36). This branch's pb2 predates that
+# field; rather than regenerating, we append the wire-format bytes for field 36
+# (string, today's ISO date) to the serialized request. Server parses unknown
+# fields normally and accepts the freshness check.
+def _install_freshness_patch() -> None:
+    req_cls = cluster_pb2.Controller.LaunchJobRequest
+    if getattr(req_cls, "_freshness_patch_installed", False):
+        return
+    orig_serialize = req_cls.SerializeToString
+    today_bytes = _datetime.date.today().isoformat().encode("ascii")
+    # Wire tag for field 36 (length-delimited): (36 << 3) | 2 = 290 -> varint A2 02.
+    extra = b"\xa2\x02" + bytes([len(today_bytes)]) + today_bytes
+
+    def patched(self, *args, **kwargs):  # type: ignore[no-redef]
+        return orig_serialize(self, *args, **kwargs) + extra
+
+    req_cls.SerializeToString = patched  # type: ignore[method-assign]
+    req_cls._freshness_patch_installed = True
+
+
+_install_freshness_patch()
 
 
 class RemoteClusterClient:
