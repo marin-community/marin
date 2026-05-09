@@ -8506,3 +8506,74 @@ Resubmission plan after the patch lands locally:
   4. (next) marin `MIDTRAIN_MAX_TASK_FAILURES` env-var hook
   5. (this) logbook entry
 - Nothing has been pushed to origin and per the user's instruction nothing should be until the engineer signs off and a real PR cycle happens.
+
+## 2026-05-09 01:26 UTC — May 7th attempt patch landed; resubmitted on v5p-64 with MIDTRAIN_MAX_TASK_FAILURES=100; 1/3 finished, 2/3 progressing cleanly
+
+### Setup that landed (commits, all local on `midtrain_data`)
+
+- `[iris,fray] Plumb max_task_failures through client.submit and JobRequest` — adds field to `fray.JobRequest`, threads it through `fray.iris_backend`, `iris.Client.submit`, `iris.cluster.client.remote_client.submit_job`, and the `ClusterClient` Protocol.
+- `[midtrain] Read MIDTRAIN_MAX_TASK_FAILURES in training submission` — `lib/marin/src/marin/training/training.py:_submit_training_job` reads the env var (default 0) and forwards as `max_task_failures` on the `JobRequest`. Per-launch tunable via `-e MIDTRAIN_MAX_TASK_FAILURES <N>`.
+- The `[v5p-64 to 1e22-v5 allowlist]` patch from 05-07 is still in. No further code changes since the May-7 entry except this logbook.
+
+### Submitted at ~01:26-01:27 UTC, all on v5p-64 / us-east5 / interactive priority / `-e MIDTRAIN_MAX_TASK_FAILURES 100`
+
+| Cell | Job ID | Resume from | RESUME_MIN_STEP |
+|---|---|---|---|
+| p33m67-lr0.83 | `/ahmedah/delphi-1e22-p33m67-lr0p83-v5p64-mtf-20260509-012605` | `delphi-1e22-p33m67-32p07b-lr0.83-78fd44` | 6876 |
+| p50m50-lr0.5  | `/ahmedah/delphi-1e22-p50m50-lr0p5-v5p64-mtf-20260509-012636`  | `delphi-1e22-p50m50-32p07b-lr0.5-ecfa99`  | 4584 |
+| p50m50-lr0.67 | `/ahmedah/delphi-1e22-p50m50-lr0p67-v5p64-mtf-20260509-012648` | `delphi-1e22-p50m50-32p07b-lr0.67-e78260` | 3056 |
+
+Submitted serially (~10 s gap between submissions, not waiting for `running`-state confirmation between them; relied on the controller-side scheduler to handle race-window arbitration this time, with `MIDTRAIN_MAX_TASK_FAILURES=100` as a backstop). Same resume contract as the May-7 attempt (steps 6876, 4584, 3056). All three confirmed `Using output path` / `Using run ID` matched expected wandb namespace.
+
+### Outcome — placement-collision pattern still happens during dispatch but absorbed cleanly this time
+
+All three train_lm gangs hit the same chain-reaction collision window during initial dispatch (early SIGSEGVs on coordinator port-8476 race) and incurred ~9 preemptions each before iris steered them onto non-overlapping host sets. **Crucially, none of them hit the 707-fingerprint death state.** With `max_task_failures=100`, the iris parent absorbed each task-level SIGSEGV and re-dispatched the cohort instead of killing the gang; iris subsequently spread the gangs to non-overlapping hosts and they stabilized at preempt=9.
+
+```
+~01:26-03:30 UTC  preempt counters climb 0→9 across all three (chain-reaction churn)
+~03:30 UTC        all three stable at preempt=9, train steps progressing normally
+07:00 UTC         lr0.83 at step 7545 / 7647 (98.7%)
+                  lr0.5  at step 5399 / 7647 (70.6%)
+                  lr0.67 at step 3999 / 7647 (52.3%)
+~07:35 UTC        lr0.83 SUCCEEDED — parent state=succeeded, train_lm 8/8 tasks succeeded,
+                  wandb run finished at step 7646 (target 7647), final loss 1.13
+~13:30 UTC        lr0.5 single preemption (9→10): wandb crashed at step 6444,
+                  iris parent stayed running, tasks re-dispatched and resumed within ~10 min
+                  back at step 6448. Single event, NOT a collision recurrence.
+19:04 UTC         lr0.5 at step 6499 / 7647 (85.0%), preempt=10
+                  lr0.67 at step 5144 / 7647 (67.3%), preempt=9
+```
+
+### Steady-state observations (post-stabilization)
+
+- Wall-clock pace: **+17 wandb steps per 10-min monitoring tick = ~102 steps/hr = ~35 sec/step**. This is the v5p-64 baseline rate for these 32B-token cells; v5p-128 would have been ~2× faster.
+- ETA from 19:04 UTC May 9 (assuming no new preemptions):
+  - lr0.5: 1148 steps remaining → ~11 h → finish ~06:00 UTC May 10
+  - lr0.67: 2503 steps remaining → ~24 h → finish ~19:00 UTC May 10
+- Loss curves on wandb match the ~1.4-1.5 train/loss range expected for these cells; nothing has gone off the rails.
+
+### Verdict on `MIDTRAIN_MAX_TASK_FAILURES=100`
+
+This is the resiliency improvement we needed. The iris controller's #5490 fix may or may not be live (we have no way to verify which controller binary is currently running), but the client-side mitigation works regardless of server state — early task crashes during the dispatch race window get absorbed instead of killing the parent. With this in place, iris's natural behavior of re-dispatching to a different host set after a few collision cycles drives the system to a stable state on its own.
+
+For future midtraining sweeps: keep `-e MIDTRAIN_MAX_TASK_FAILURES 100` on every `iris job run` invocation by default. The cost of running with this set is essentially zero (jobs that succeed don't accumulate task failures), and the resiliency benefit is large.
+
+### Operational misc from this session
+
+- **GitHub commenting**: posted v5p-128 follow-up on issue #5470 (https://github.com/marin-community/marin/issues/5470#issuecomment-4409115520) describing a separate scheduler-wedge variant we hit on May-3 for ~6 h, plus the chain-reaction collision pattern, plus the `max_task_failures` finding. PAT lives at `/lfs/skampere3/0/ahmedah/.ghtok` (classic token, `repo` scope; fine-grained token failed with 403 on org-owned repos because it was scoped to user-owned only).
+- **Probed v5p-128 to see if it's usable**: dashboard says 100% production in use even though no v5p-128 TPU jobs are running — the underlying hosts are saturated by `/rav/`-namespaced zephyr-download-hf jobs at production priority. Interactive priority would queue indefinitely behind those. Submitted a test 1e22 fresh job to v5p-128 to confirm; the parent succeeded immediately because LR=0.4 isn't in `LR_FACTORS = (0.33, 0.5, 0.67)` so the experiment script no-op'd before dispatching `train_lm`. The probe was inconclusive but the dashboard answers the question on its own — don't put interactive jobs on v5p-128 right now.
+- **SSH tunnel** to iris controller died once mid-session (~04:12 UTC May 9); restored via the documented `gcloud compute ssh ... --tunnel-through-iap -- -N -L 10000:localhost:10000` playbook in `iris_cluster_remote_access.md` memory. Jobs were unaffected since the tunnel only matters for our monitoring queries; wandb continued reporting state=running throughout the outage.
+- **Memory updates** (in `~/.claude/projects/.../memory/`, outside this repo):
+  - `reference_marin_yaml_secrets.md` — `WANDB_API_KEY` lives at `env.WANDB_API_KEY` in `/lfs/skampere3/0/ahmedah/code/marin/.marin.yaml`; user explicitly asked to never `Read`/`cat` the file directly, so use a Python yaml one-liner that prints into `export WANDB_API_KEY=$(...)` and never echoes the value to the transcript.
+  - `reference_github_token.md` — PAT location, with a note that it has `repo` scope on `marin-community/marin`.
+
+### Branch / commit hygiene
+
+- Local commits on `midtrain_data` ahead of `origin/midtrain_data`:
+  1. `[logbook] Restore monitor log tick-1-to-35 entries`
+  2. `[midtrain] Add v5p-64 to 1e22-v5 v5p_compute allowlist`
+  3. `[iris,fray] Plumb max_task_failures through client.submit and JobRequest`
+  4. `[midtrain] Read MIDTRAIN_MAX_TASK_FAILURES in training submission`
+  5. `[midtrain] Log 2026-05-07 placement-collision recurrence and resiliency plan`
+  6. (this) `[logbook] Log 2026-05-09 v5p-64 resubmission with MAX_TASK_FAILURES + outcome`
+- User has now asked to push `midtrain_data` to origin so the work is durable across session/machine boundaries. Pushing this branch only — no PR cycle yet for the iris/fray plumbing (that's a separate engineering review with the iris owners).
