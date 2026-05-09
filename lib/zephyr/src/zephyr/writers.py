@@ -22,8 +22,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
-from levanter.store.cache import CacheMetadata, SerialCacheWriter
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import url_to_fs
 from rigging.timing import log_time
 
 from zephyr import counters
@@ -41,9 +40,6 @@ DEFAULT_TARGET_BUFFER_BYTES = 64 * 1024 * 1024  # 64 MB
 # Number of records converted to PyArrow at a time. Small enough that
 # ``pa.Table.from_pylist`` is fast; large enough to amortise per-call overhead.
 _MICRO_BATCH_SIZE = 8
-
-# Fixed batch size for Levanter cache writes (2^14).
-_LEVANTER_BATCH_SIZE = 16384
 
 # Number of items per intermediate pickle chunk between non-scatter stages.
 # Used by ``_write_pickle_chunks`` in execution.py.
@@ -442,61 +438,6 @@ class ThreadedBatchWriter:
             return False
         self.close()
         return False
-
-
-def write_levanter_cache(
-    records: Iterable[dict[str, Any]],
-    output_path: str,
-    *,
-    metadata: dict[str, Any],
-    batch_size: int = _LEVANTER_BATCH_SIZE,
-) -> dict:
-    """Write tokenized records to Levanter cache format.
-
-    Args:
-        records: Tokenized records (iterable of dicts with array values)
-        output_path: Path to output cache directory
-        metadata: Metadata for the cache
-        batch_size: Number of records to accumulate before flushing to disk.
-    """
-    if batch_size < 1:
-        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
-
-    ensure_parent_dir(output_path)
-    record_iter = iter(records)
-
-    try:
-        exemplar = next(record_iter)
-    except StopIteration:
-        return {"path": output_path, "count": 0}
-
-    count = 0
-    logger.info("write_levanter_cache: starting write to %s (batch_size=%d)", output_path, batch_size)
-
-    with atomic_rename(output_path) as tmp_path:
-        with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
-
-            def _drain_batches(batches: Iterable) -> None:
-                for batch in batches:
-                    writer.write_batch(batch)
-
-            with ThreadedBatchWriter(_drain_batches) as threaded:
-                threaded.submit([exemplar])
-                count += 1
-                counters.increment("zephyr/records_out")
-                for batch in batchify(record_iter, n=batch_size):
-                    threaded.submit(batch)
-                    count += len(batch)
-                    counters.increment("zephyr/records_out", len(batch))
-                    logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
-
-    logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
-
-    # write success sentinel
-    with open_url(f"{output_path}/.success", "w") as f:
-        f.write("")
-
-    return {"path": output_path, "count": count}
 
 
 def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:

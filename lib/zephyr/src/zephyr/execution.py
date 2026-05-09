@@ -35,7 +35,8 @@ from typing import Any, Protocol
 import cloudpickle
 import humanfriendly
 from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig, current_actor
-from fray.client import JobHandle, current_client, set_current_client
+from fray.client import JobHandle
+from fray.current_client import current_client, set_current_client
 from fray.local_backend import LocalClient
 from fray.types import Entrypoint, JobRequest
 from iris.client import get_iris_ctx

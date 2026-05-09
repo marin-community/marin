@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import tempfile
+from pathlib import Path
 from typing import Any, Dict, Iterator, Sequence
 
 import numpy as np
@@ -10,7 +11,7 @@ from zephyr.execution import ZephyrWorkerError
 
 from levanter.data import BatchProcessor, ShardedDataSource, batched
 from levanter.data.sharded_datasource import TextUrlDataSource
-from levanter.store.cache import SerialCacheWriter, TreeStore, build_or_load_cache
+from levanter.store.cache import SerialCacheWriter, TreeStore, build_or_load_cache, write_levanter_cache
 
 
 class TestProcessor(BatchProcessor[Sequence[int], dict[str, np.ndarray]]):
@@ -286,3 +287,25 @@ def test_shard_cache_fails_gracefully_with_unknown_file_type():
 
         with pytest.raises(ZephyrWorkerError):
             build_or_load_cache(tmpdir, dataset, TestProcessor())
+
+
+def _make_levanter_records(n: int) -> list[dict[str, list[int]]]:
+    return [{"input_ids": [i, i + 100], "attention_mask": [1, 1]} for i in range(n)]
+
+
+def test_write_levanter_cache_end_to_end():
+    """Write records and verify they can be read back."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = str(Path(tmpdir) / "cache")
+        records = _make_levanter_records(8)
+
+        result = write_levanter_cache(iter(records), output_path, metadata={})
+
+        assert result["path"] == output_path
+        assert result["count"] == len(records)
+        assert Path(output_path, ".success").exists()
+
+        store = TreeStore.open(records[0], output_path, mode="r", cache_metadata=False)
+        assert len(store) == len(records)
+        assert store[0]["input_ids"].tolist() == records[0]["input_ids"]
+        assert store[len(records) - 1]["input_ids"].tolist() == records[len(records) - 1]["input_ids"]

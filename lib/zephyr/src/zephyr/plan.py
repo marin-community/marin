@@ -13,7 +13,6 @@ from __future__ import annotations
 import heapq
 import inspect
 import logging
-import os
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -101,11 +100,9 @@ class Write:
     """Write stream to file, return path."""
 
     output_pattern: Callable[[int, int], str]  # (shard_idx, total_shards) → path
-    writer_type: str  # For chunk aggregation: "jsonl", "parquet", "binary", "levanter_cache"
+    writer_type: str  # For chunk aggregation: "jsonl", "parquet", "binary", "vortex"
     skip_existing: bool = False
     # Writer-specific parameters
-    levanter_metadata: dict | None = None
-    levanter_batch_size: int | None = None
     schema: Any = None  # For parquet
 
 
@@ -416,8 +413,6 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
                     output_pattern=op.output_pattern,
                     writer_type=op.writer_type,
                     skip_existing=op.skip_existing,
-                    levanter_metadata=op.levanter_metadata,
-                    levanter_batch_size=op.levanter_batch_size,
                     schema=op.schema,
                 )
             )
@@ -776,7 +771,6 @@ def run_stage(
     from zephyr.writers import (  # circular import: writers → counters → execution → plan
         write_binary_file,
         write_jsonl_file,
-        write_levanter_cache,
         write_parquet_file,
     )
 
@@ -797,10 +791,7 @@ def run_stage(
 
             if op.skip_existing:
                 fs = url_to_fs(output_path)[0]
-                if op.writer_type == "levanter_cache":
-                    test_path = os.path.join(output_path, ".success")
-                else:
-                    test_path = output_path
+                test_path = output_path
 
                 if fs.exists(test_path):
                     logger.info(f"Skipping write, output exists: {output_path}")
@@ -813,12 +804,6 @@ def run_stage(
                 result = write_jsonl_file(stream, output_path)["path"]
             elif op.writer_type == "parquet":
                 result = write_parquet_file(stream, output_path, schema=op.schema)["path"]
-            elif op.writer_type == "levanter_cache":
-                metadata = op.levanter_metadata if op.levanter_metadata is not None else {}
-                kwargs: dict[str, Any] = {"metadata": metadata}
-                if op.levanter_batch_size is not None:
-                    kwargs["batch_size"] = op.levanter_batch_size
-                result = write_levanter_cache(stream, output_path, **kwargs)["path"]
             elif op.writer_type == "binary":
                 result = write_binary_file(stream, output_path)["path"]
             elif op.writer_type == "vortex":

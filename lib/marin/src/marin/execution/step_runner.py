@@ -25,7 +25,8 @@ from typing import Any
 
 import levanter.utils.fsspec_utils as fsspec_utils
 from fray import client as fray_client
-from fray.client import JobHandle, JobStatus, _current_client_var, set_current_client
+from fray.client import JobHandle, JobStatus
+from fray.current_client import _current_client_var, set_current_client
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from rigging.filesystem import open_url, url_to_fs

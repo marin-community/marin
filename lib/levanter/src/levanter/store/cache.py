@@ -10,6 +10,7 @@ import operator
 import os
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, TypeVar, Union
 
@@ -25,7 +26,8 @@ from fsspec import AbstractFileSystem
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
 from zephyr import Dataset, ZephyrContext
-from zephyr.writers import write_levanter_cache
+from zephyr import counters as zephyr_counters
+from zephyr.writers import ThreadedBatchWriter, atomic_rename, batchify, ensure_parent_dir
 
 from levanter.data.dataset import AsyncDataset
 from levanter.utils.jax_utils import broadcast_one_to_all
@@ -266,6 +268,65 @@ class SerialCacheWriter:
 
         cbatch = _canonicalize_batch(batch)  # type: ignore[arg-type]
         self._tree_store.extend(cbatch)
+
+
+# Fixed batch size for Levanter cache writes (2^14).
+_LEVANTER_BATCH_SIZE = 16384
+
+
+def write_levanter_cache(
+    records: Iterable[dict[str, Any]],
+    output_path: str,
+    *,
+    metadata: dict[str, Any],
+    batch_size: int = _LEVANTER_BATCH_SIZE,
+) -> dict:
+    """Write tokenized records to Levanter cache format.
+
+    Args:
+        records: Tokenized records (iterable of dicts with array values)
+        output_path: Path to output cache directory
+        metadata: Metadata for the cache
+        batch_size: Number of records to accumulate before flushing to disk.
+    """
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
+    ensure_parent_dir(output_path)
+    record_iter = iter(records)
+
+    try:
+        exemplar = next(record_iter)
+    except StopIteration:
+        return {"path": output_path, "count": 0}
+
+    count = 0
+    logger.info("write_levanter_cache: starting write to %s (batch_size=%d)", output_path, batch_size)
+
+    with atomic_rename(output_path) as tmp_path:
+        with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
+
+            def _drain_batches(batches: Iterable) -> None:
+                for batch in batches:
+                    writer.write_batch(batch)
+
+            with ThreadedBatchWriter(_drain_batches) as threaded:
+                threaded.submit([exemplar])
+                count += 1
+                zephyr_counters.increment("zephyr/records_out")
+                for batch in batchify(record_iter, n=batch_size):
+                    threaded.submit(batch)
+                    count += len(batch)
+                    zephyr_counters.increment("zephyr/records_out", len(batch))
+                    logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
+
+    logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
+
+    # write success sentinel
+    with open_url(f"{output_path}/.success", "w") as f:
+        f.write("")
+
+    return {"path": output_path, "count": count}
 
 
 def _serialize_json_and_commit(path: str, obj):
@@ -721,4 +782,5 @@ __all__ = [
     "CacheMetadata",
     "CacheOptions",
     "consolidate_shard_caches",
+    "write_levanter_cache",
 ]

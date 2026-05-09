@@ -96,7 +96,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray.client import current_client
+from fray.current_client import current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import ResourceConfig, TpuConfig
 from iris.cluster.constraints import WellKnownAttribute

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from fray.current_client import current_client, set_current_client
 from fray.types import ResourceConfig
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.types import JobName
@@ -660,7 +661,6 @@ class _SubmitSpy:
 def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
     """Setting ``resources`` on a StepSpec submits ``fn`` as a Fray job."""
     spy = _SubmitSpy(fray_client)
-    from fray.client import set_current_client
 
     custom = ResourceConfig.with_cpu(cpu=2, ram="8g")
 
@@ -1125,7 +1125,6 @@ def test_runner_propagates_fray_client(tmp_path):
     This tests the explicit client capture path (not just generic contextvars)
     to ensure current_client() returns the correct client inside step functions.
     """
-    from fray.client import current_client, set_current_client
 
     class FakeClient:
         """Marker client to verify propagation."""
