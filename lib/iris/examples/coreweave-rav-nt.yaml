@@ -65,6 +65,12 @@ defaults:
       milliseconds: 2400000    # 40 min — covers autoscaler node provisioning + Pod startup
   task_env:
     MARIN_PREFIX: s3://marin-na/marin
+    # Cloudflare R2 rejects multipart upload completion when non-trailing
+    # parts have varying sizes. Setting fixed_upload_size=True (s3fs PR #888)
+    # makes every non-final part exactly blocksize so R2 accepts the upload.
+    # AWS creds (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) are passed via the
+    # operator's R2_* env vars at job submit time — they don't belong here.
+    FSSPEC_S3: '{"endpoint_url": "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com", "client_kwargs": {"region_name": "auto"}, "fixed_upload_size": true}'
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001
