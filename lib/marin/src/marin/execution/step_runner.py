@@ -24,9 +24,8 @@ from datetime import timedelta
 from typing import Any
 
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray import client as fray_client
 from fray.client import JobHandle, JobStatus
-from fray.current_client import _current_client_var, set_current_client
+from fray.current_client import _current_client_var, current_client, set_current_client
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from rigging.filesystem import open_url, url_to_fs
@@ -383,7 +382,7 @@ def _submit_iris_job(
             env_vars=env_vars or {},
         ),
     )
-    handle = fray_client.current_client().submit(request)
+    handle = current_client().submit(request)
     handle.wait(raise_on_failure=True)
 
 
