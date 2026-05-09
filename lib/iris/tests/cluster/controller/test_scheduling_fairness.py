@@ -271,6 +271,80 @@ def test_production_never_downgraded_by_budget():
             assert band == job_pb2.PRIORITY_BAND_PRODUCTION
 
 
+def test_get_priority_bands_resolves_via_parent_chain():
+    """``JobStore.get_priority_bands`` mirrors ``submit_job``'s resolution at read time.
+
+    ``job_config.priority_band`` is the raw user request and can be
+    UNSPECIFIED (0) for jobs that didn't pass ``--priority``. The scheduler
+    feeds the result of this lookup into ``compute_effective_band``, so a
+    raw 0 here would let the task sort ahead of PRODUCTION. The lookup
+    must instead walk the parent chain (matching ``submit_job``'s
+    submit-time resolution) and fall back to INTERACTIVE only if the entire
+    chain is UNSPECIFIED.
+    """
+    with make_controller_state() as state:
+        # Top-level with no band → INTERACTIVE default.
+        plain = _submit_user_job(state, "alice", "plain-job")
+        plain_job_id = plain[0].job_id
+
+        # Top-level PRODUCTION → returns PRODUCTION.
+        prod_req = make_job_request(
+            name="/alice/prod-job", cpu=1, replicas=1, priority_band=job_pb2.PRIORITY_BAND_PRODUCTION
+        )
+        submit_job(state, "/alice/prod-job", prod_req)
+        prod_job_id = JobName.from_string("/alice/prod-job")
+
+        # Sub-job of PRODUCTION parent, no band of its own → must inherit PRODUCTION.
+        sub_id = prod_job_id.child("subtask")
+        sub_req = controller_pb2.Controller.LaunchJobRequest(
+            name=sub_id.to_wire(),
+            entrypoint=prod_req.entrypoint,
+            resources=prod_req.resources,
+            environment=prod_req.environment,
+            replicas=1,
+        )
+        with state._store.transaction() as cur:
+            state.submit_job(cur, sub_id, sub_req, Timestamp.now())
+
+        # Sub-job with its own explicit BATCH → BATCH (own band wins, no walk).
+        batch_sub_id = prod_job_id.child("batch-sub")
+        batch_sub_req = controller_pb2.Controller.LaunchJobRequest(
+            name=batch_sub_id.to_wire(),
+            entrypoint=prod_req.entrypoint,
+            resources=prod_req.resources,
+            environment=prod_req.environment,
+            replicas=1,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
+        )
+        with state._store.transaction() as cur:
+            state.submit_job(cur, batch_sub_id, batch_sub_req, Timestamp.now())
+
+        with state._db.read_snapshot() as snap:
+            bands = state._store.jobs.get_priority_bands(snap, [plain_job_id, prod_job_id, sub_id, batch_sub_id])
+
+        assert bands[plain_job_id] == job_pb2.PRIORITY_BAND_INTERACTIVE
+        assert bands[prod_job_id] == job_pb2.PRIORITY_BAND_PRODUCTION
+        assert bands[sub_id] == job_pb2.PRIORITY_BAND_PRODUCTION
+        assert bands[batch_sub_id] == job_pb2.PRIORITY_BAND_BATCH
+
+
+def test_compute_effective_band_normalizes_unspecified():
+    """Defense-in-depth: UNSPECIFIED (0) must never leak through as a real band.
+
+    Returning 0 would sort the task ahead of PRODUCTION (1) under the
+    scheduler's ``ORDER BY priority_band ASC``. The proper resolution
+    (parent inheritance, then INTERACTIVE) lives in
+    ``JobStore.get_priority_bands``; this is a last-resort guard.
+    """
+    defaults = UserBudgetDefaults()
+    band = compute_effective_band(job_pb2.PRIORITY_BAND_UNSPECIFIED, "alice", {"alice": 0}, {"alice": 5000}, defaults)
+    assert band == job_pb2.PRIORITY_BAND_INTERACTIVE
+    band = compute_effective_band(
+        job_pb2.PRIORITY_BAND_UNSPECIFIED, "alice", {"alice": 10000}, {"alice": 5000}, defaults
+    )
+    assert band == job_pb2.PRIORITY_BAND_BATCH
+
+
 def test_zero_budget_means_unlimited():
     """budget_limit=0 means no down-weighting regardless of spend."""
     with make_controller_state() as state:

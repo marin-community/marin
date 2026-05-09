@@ -689,6 +689,54 @@ def test_running_tasks_report_stamped_band():
         }
 
 
+def test_demoted_task_re_promotes_after_user_returns_under_budget():
+    """Stamping the effective band on assign must not pin a task to BATCH for life.
+
+    Sequence: alice submits INTERACTIVE → over-budget at assign time, scheduler
+    stamps ``tasks.priority_band = BATCH`` → task is preempted back to PENDING
+    → alice now under budget. The next scheduling tick must source the
+    requested band from ``job_config`` (immutable since submission), not from
+    the stamped ``tasks.priority_band`` (BATCH). Otherwise
+    ``compute_effective_band`` — which only demotes — can never restore
+    INTERACTIVE, and a momentary over-budget blip becomes a permanent
+    downgrade that did not exist before this PR's stamping change.
+    """
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        w1 = harness.add_worker("w1", cpu=4)
+
+        tasks = harness.submit("/alice/interactive-job", cpu=1, priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+        task = tasks[0]
+        job_id = task.job_id
+
+        # Scheduler decides alice is over budget and stamps BATCH at assign
+        # time. We bypass the over-budget computation by passing the band
+        # directly; ``mark_assigned`` is the same code path the scheduler hits.
+        _dispatch_with_band(state, task, w1, job_pb2.PRIORITY_BAND_BATCH)
+
+        # Confirm tasks.priority_band has been overwritten to BATCH.
+        assert query_task(state, task.task_id).priority_band == job_pb2.PRIORITY_BAND_BATCH
+
+        # job_config still reflects what alice asked for.
+        with state._db.read_snapshot() as snap:
+            requested = state._store.jobs.get_priority_bands(snap, [job_id])
+        assert requested == {job_id: job_pb2.PRIORITY_BAND_INTERACTIVE}
+
+        # And under-budget alice gets her INTERACTIVE band back from
+        # compute_effective_band — the scheduler now feeds it the job_config
+        # value so the next assignment will re-stamp INTERACTIVE.
+        assert (
+            compute_effective_band(
+                requested[job_id],
+                "alice",
+                user_spend={"alice": 0},
+                user_budgets={"alice": 5000},
+                defaults=UserBudgetDefaults(),
+            )
+            == job_pb2.PRIORITY_BAND_INTERACTIVE
+        )
+
+
 def _dispatch_with_band(state, task, worker_id, priority_band: int) -> None:
     """Dispatch task with an explicit stamped band, advancing it to RUNNING."""
     with state._store.transaction() as cur:

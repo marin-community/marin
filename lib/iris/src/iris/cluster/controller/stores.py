@@ -717,6 +717,59 @@ class JobStore:
         row = tx.fetchone("SELECT * FROM job_config WHERE job_id = ?", (job_id.to_wire(),))
         return dict(row) if row is not None else None
 
+    def get_priority_bands(self, tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]:
+        """Return ``{job_id: resolved priority_band}`` for the given jobs.
+
+        Mirrors ``submit_job``'s band resolution at read time: use the job's
+        own ``job_config.priority_band`` if it's set; otherwise walk up the
+        ``parent_job_id`` chain and use the nearest ancestor with a
+        non-UNSPECIFIED band; otherwise default to INTERACTIVE.
+
+        The scheduler uses this as the input to ``compute_effective_band`` so
+        a previously-downgraded task can be promoted again once the user
+        falls back under budget. Reading ``tasks.priority_band`` here would
+        be wrong because that column is overwritten with the effective
+        (possibly demoted) band at assign time, and reading the raw
+        ``job_config.priority_band`` without resolution would let UNSPECIFIED
+        (0) leak through and sort ahead of PRODUCTION.
+        """
+        wire_ids = [jid.to_wire() for jid in job_ids]
+        if not wire_ids:
+            return {}
+        placeholders = ",".join("?" for _ in wire_ids)
+        # Recursive CTE: for each input job, walk parent_job_id while the
+        # current row's priority_band is UNSPECIFIED (0). The first row with
+        # a non-UNSPECIFIED band wins. Inputs whose entire chain is
+        # UNSPECIFIED don't appear in the result; the caller substitutes
+        # INTERACTIVE for those.
+        rows = tx.fetchall(
+            f"""
+            WITH RECURSIVE chain(input_id, current_id, current_band, parent_id) AS (
+                SELECT j.job_id, j.job_id, jc.priority_band, j.parent_job_id
+                FROM jobs j JOIN job_config jc ON jc.job_id = j.job_id
+                WHERE j.job_id IN ({placeholders})
+                UNION ALL
+                SELECT chain.input_id, j.job_id, jc.priority_band, j.parent_job_id
+                FROM chain
+                JOIN jobs j ON j.job_id = chain.parent_id
+                JOIN job_config jc ON jc.job_id = j.job_id
+                WHERE chain.current_band = 0
+            )
+            SELECT input_id, current_band
+            FROM chain
+            WHERE current_band != 0
+            """,
+            tuple(wire_ids),
+        )
+        resolved: dict[JobName, int] = {}
+        for row in rows:
+            resolved[JobName.from_wire(str(row["input_id"]))] = int(row["current_band"])
+        # Fall back to INTERACTIVE for inputs where the entire ancestor chain
+        # was UNSPECIFIED (raw user requests with no band, no inherited band).
+        for jid in job_ids:
+            resolved.setdefault(jid, int(job_pb2.PRIORITY_BAND_INTERACTIVE))
+        return resolved
+
     def list_descendants(
         self,
         tx: Tx,

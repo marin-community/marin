@@ -1987,11 +1987,24 @@ class Controller:
         """
         with self._db.read_snapshot() as budget_snapshot:
             user_spend = compute_user_spend(budget_snapshot)
+            # Source the requested band from ``job_config`` (immutable since
+            # submission), not from ``tasks.priority_band`` (which is overwritten
+            # with the effective band at assign time). Otherwise a task that was
+            # downgraded to BATCH while its user was over budget would stay
+            # BATCH forever after preemption — ``compute_effective_band`` only
+            # demotes, never promotes back to the user's requested band.
+            requested_bands = self._store.jobs.get_priority_bands(
+                budget_snapshot, {task.job_id for task in pending_tasks}
+            )
         user_budget_limits = self._db.get_all_user_budget_limits()
         defaults = self._config.user_budget_defaults
         task_band_map: dict[JobName, int] = {
             task.task_id: compute_effective_band(
-                task.priority_band, task.task_id.user, user_spend, user_budget_limits, defaults
+                requested_bands.get(task.job_id, task.priority_band),
+                task.task_id.user,
+                user_spend,
+                user_budget_limits,
+                defaults,
             )
             for task in pending_tasks
         }
