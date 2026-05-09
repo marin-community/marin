@@ -1,0 +1,98 @@
+[
+  {
+    "round": 1,
+    "timestamp_utc": "2026-05-09T07:19:07.555664+00:00",
+    "rubric_state_at_start": "v1",
+    "spec_state_at_start": "v1",
+    "round_diagnosis_majority": "rubric_drift",
+    "round_diagnosis_tier": "consensus",
+    "diagnosis_votes": {
+      "gpt": "rubric_drift",
+      "gem": "rubric_drift",
+      "cla": "rubric_drift"
+    },
+    "rubric_edits_adopted": [
+      {
+        "anchor": "1",
+        "old": "The response is clearly too short or too long relative to the task, often refusing or avoiding laborious work, omitting major needed details or usable artifacts, or padding with long hedges, disclaimers, apologies, or AI-reminders. It may repeat large parts of the user\u2019s request or its own prior content, and/or hit token limits and end mid-stream.",
+        "new": "The response is clearly too short or too long relative to the task. It may refuse or avoid laborious work, omit major needed details or usable artifacts so that the user cannot reasonably use the answer as-is, or pad with long hedges, disclaimers, apologies, or AI-reminders. It may repeat large parts of the user\u2019s request or its own prior content. Hitting token limits and ending mid-stream belongs here only when it leaves the response substantially incomplete or unusable for the user\u2019s stated purpose; minor or cosmetic truncation alone does not justify this score.",
+        "rationale": "Judges are over-weighting any visible truncation as an automatic 1, even when the artifact is still largely usable, which the spec does not require. This edit clarifies that token-limit failures matter at this anchor only when they cause substantial incompleteness or unusability, aligning with the spec\u2019s balance between thoroughness and efficiency.",
+        "confidence": 0.86,
+        "source_compiler": "gpt",
+        "supporting_compilers": [
+          "cla",
+          "gem",
+          "gpt"
+        ],
+        "pair_directions": {
+          "cla-gem": "different_scope",
+          "cla-gpt": "same_direction",
+          "gem-gpt": "same_direction"
+        }
+      },
+      {
+        "anchor": "2",
+        "old": "The response shows some effort at detail or brevity but is more misaligned than aligned: it may partially answer but still skip important details or usable artifacts, or it may be verbose with noticeable redundancy, hedging, or disclaimers. It might question or resist a clearly long but reasonable request, or come close to token limits without managing scope to avoid truncation.",
+        "new": "The response shows some effort but is more misaligned than aligned. It may skip important details, provide only a partial artifact requiring further user work, include noticeable redundancy/hedging/disclaimers, question a reasonable long request, OR be visibly truncated due to token limits despite attempting to manage scope.",
+        "rationale": "Explicitly includes visible truncation as a flaw that caps the score, ensuring consistency across judges.",
+        "confidence": 0.8,
+        "source_compiler": "gem",
+        "supporting_compilers": [
+          "cla",
+          "gem",
+          "gpt"
+        ],
+        "pair_directions": {
+          "cla-gem": "same_direction",
+          "cla-gpt": "same_direction",
+          "gem-gpt": "same_direction"
+        }
+      },
+      {
+        "anchor": "4",
+        "old": "The response is generally thorough and educational while staying concise and focused, providing an immediately usable artifact or near-complete solution when appropriate. It avoids most redundancy, hedging, disclaimers, and AI-reminders, and does not question reasonable long requests; any extra wording is limited and not disruptive, and the response is clearly within safe token bounds.",
+        "new": "The response is generally thorough and educational while staying concise and focused, providing an immediately usable artifact or near-complete solution when appropriate. It avoids most redundancy, hedging, disclaimers, and AI-reminders, and does not question reasonable long requests; any extra wording is limited and not disruptive. The response is either complete or, if truncated, the truncation is minor (e.g., a trailing sentence or closing remark is cut) and does not meaningfully reduce the usability of the artifact.",
+        "rationale": "The original phrase 'clearly within safe token bounds' is vague and caused judges to disagree about whether a response that is mostly complete but slightly truncated qualifies for Anchor 4. The revision ties the token-limit criterion directly to usability impact, consistent with the spec.",
+        "confidence": 0.85,
+        "source_compiler": "cla",
+        "supporting_compilers": [
+          "cla",
+          "gpt"
+        ],
+        "pair_directions": {
+          "cla-gpt": "same_direction"
+        }
+      }
+    ],
+    "rubric_edits_rejected": [
+      {
+        "anchor": "3",
+        "compiler": "gpt",
+        "reason": "singleton"
+      },
+      {
+        "anchor": "5",
+        "compilers": [
+          "cla",
+          "gem",
+          "gpt"
+        ],
+        "reason": "opposite_direction",
+        "pair_directions": {
+          "cla-gem": "same_direction",
+          "cla-gpt": "same_direction",
+          "gem-gpt": "opposite_direction"
+        }
+      }
+    ],
+    "spec_edits_adopted": [],
+    "spec_edits_rejected": [],
+    "spec_edits_applied_count": 0,
+    "spec_edits_unmatched_count": 0,
+    "alpha_before_round": null,
+    "alpha_after_round": null,
+    "delta_alpha": null,
+    "delta_pwv_top10_pct_drop": null,
+    "verdict": "pending_judging"
+  }
+]

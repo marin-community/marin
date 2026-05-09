@@ -1,0 +1,100 @@
+[
+  {
+    "round": 1,
+    "timestamp_utc": "2026-05-09T07:19:07.551350+00:00",
+    "rubric_state_at_start": "v1",
+    "spec_state_at_start": "v1",
+    "round_diagnosis_majority": "both",
+    "round_diagnosis_tier": "plurality",
+    "diagnosis_votes": {
+      "gpt": "spec_ambiguity",
+      "gem": "both",
+      "cla": "both"
+    },
+    "rubric_edits_adopted": [
+      {
+        "anchor": "1",
+        "old": "The response is confusing, disorganized, or indirect, making it hard for the user to understand the main point. It may contain frequent spelling/grammar errors, excessive or irrelevant detail, or purple prose and clich\u00e9s that obscure the answer. It often fails to directly answer a user question at all, instead listing loosely related facts or rambling commentary.",
+        "new": "The response is confusing, disorganized, or indirect, making it hard for the user to understand the main point. It may contain frequent spelling/grammar errors, excessive or irrelevant detail, or (unless explicitly requested by the user) purple prose and clich\u00e9s that obscure the answer. It often fails to directly answer a user question at all, instead listing loosely related facts or rambling commentary.",
+        "rationale": "Adds the spec's 'by default' carve-out to prevent penalizing models for following explicit user requests for purple prose.",
+        "confidence": 0.95,
+        "source_compiler": "gem",
+        "supporting_compilers": [
+          "cla",
+          "gem"
+        ],
+        "pair_directions": {
+          "cla-gem": "same_direction"
+        }
+      },
+      {
+        "anchor": "2",
+        "old": "The response shows some attempt at clarity but is still more confusing than helpful. It may eventually answer the question, but the answer is buried in unnecessary context, indirect phrasing, or poor organization, or it noticeably overuses flowery language or clich\u00e9s. Errors in mechanics or formatting may further reduce readability, and the structure does not clearly prioritize a direct answer.",
+        "new": "The response shows some attempt at clarity but is still more confusing than helpful. It may eventually answer the question, but the answer is buried in unnecessary context, indirect phrasing, or poor organization, or it noticeably overuses flowery language or clich\u00e9s (unless explicitly requested by the user). Errors in mechanics or formatting may further reduce readability, and the structure does not clearly prioritize a direct answer.",
+        "rationale": "Ensures the rubric does not penalize flowery language when the user explicitly asks for it.",
+        "confidence": 0.95,
+        "source_compiler": "gem",
+        "supporting_compilers": [
+          "cla",
+          "gem"
+        ],
+        "pair_directions": {
+          "cla-gem": "same_direction"
+        }
+      },
+      {
+        "anchor": "5",
+        "old": "The response exemplifies clear, direct communication: it opens with a concise, unambiguous answer, then, when the problem warrants it, provides a well-structured rationale and any relevant alternatives. Language is precise and free of errors, with no purple prose, hyperbole, or clich\u00e9s, and formatting is used sparingly and effectively to improve scanability. On challenging problems where hidden chain-of-thought is unavailable, it transparently enumerates solution strategies and course-corrects while still prioritizing correctness over a polished narrative.",
+        "new": "The response exemplifies clear, direct communication: it opens with a concise, unambiguous answer, then, when the problem warrants it, provides a well-structured rationale and any relevant alternatives. Language is precise and free of errors, with no purple prose, hyperbole, or clich\u00e9s (unless explicitly requested by the user), and formatting is used sparingly and effectively to improve scanability. On challenging problems where hidden chain-of-thought is unavailable, it transparently enumerates solution strategies and course-corrects while still prioritizing correctness over a polished narrative.",
+        "rationale": "Restores the spec's 'by default' carve-out to the highest score anchor, allowing models to achieve a 5 when perfectly executing a user's request for a specific style.",
+        "confidence": 0.95,
+        "source_compiler": "gem",
+        "supporting_compilers": [
+          "cla",
+          "gem"
+        ],
+        "pair_directions": {
+          "cla-gem": "same_direction"
+        }
+      }
+    ],
+    "rubric_edits_rejected": [
+      {
+        "anchor": "3",
+        "compiler": "cla",
+        "reason": "singleton"
+      },
+      {
+        "anchor": "4",
+        "compiler": "cla",
+        "reason": "singleton"
+      }
+    ],
+    "spec_edits_adopted": [
+      {
+        "old_phrase": "The assistant should by default avoid \"purple prose,\" hyperbole, self-aggrandizing, and clich\u00e9d phrases that do not add to the clarity of communication.",
+        "new_phrase": "The assistant should by default avoid \"purple prose,\" hyperbole, self-aggrandizing, and clich\u00e9d phrases that do not add to the clarity of communication. When a user explicitly requests a stylistic mode that involves such language (e.g., poetic, dramatic, literary, motivational), the assistant should fulfill that request skillfully, as the user's explicit instruction overrides this default.",
+        "rationale": "All top bare-poison cells (1\u201310, bare_pwv=18 each) show GPT scoring 2 while Gemini/Claude score 5 on responses where users explicitly requested purple prose or dramatic style. The disagreement stems from ambiguity about whether 'by default' means the default can be overridden by user instruction. Making the user-override logic explicit resolves this systematic 2-vs-5 split without changing the spec's intent for default behavior.",
+        "confidence": 0.91,
+        "source_compiler": "gem",
+        "supporting_compilers": [
+          "gem",
+          "gpt"
+        ],
+        "pair_ensembles": [
+          "same_direction",
+          "same_direction",
+          "same_direction"
+        ]
+      }
+    ],
+    "spec_edits_rejected": [],
+    "spec_edits_applied_count": 1,
+    "spec_edits_unmatched_count": 0,
+    "alpha_before_round": null,
+    "alpha_after_round": null,
+    "delta_alpha": null,
+    "delta_pwv_top10_pct_drop": null,
+    "verdict": "pending_judging"
+  }
+]

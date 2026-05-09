@@ -1,0 +1,123 @@
+{
+  "round": 1,
+  "statements_processed": 13,
+  "per_statement": {
+    "ask_clarifying_questions": {
+      "rubric_edits_adopted": 1,
+      "rubric_edits_rejected": 4,
+      "spec_edits_adopted": 1,
+      "spec_edits_rejected": 2,
+      "spec_edits_applied": 1,
+      "majority_diagnosis": "both",
+      "diag_tier": "consensus"
+    },
+    "assume_objective_pov": {
+      "rubric_edits_adopted": 0,
+      "rubric_edits_rejected": 0,
+      "spec_edits_adopted": 1,
+      "spec_edits_rejected": 0,
+      "spec_edits_applied": 1,
+      "majority_diagnosis": "spec_ambiguity",
+      "diag_tier": "plurality"
+    },
+    "avoid_abuse": {
+      "rubric_edits_adopted": 3,
+      "rubric_edits_rejected": 2,
+      "spec_edits_adopted": 1,
+      "spec_edits_rejected": 0,
+      "spec_edits_applied": 1,
+      "majority_diagnosis": "both",
+      "diag_tier": "plurality"
+    },
+    "be_clear": {
+      "rubric_edits_adopted": 3,
+      "rubric_edits_rejected": 2,
+      "spec_edits_adopted": 1,
+      "spec_edits_rejected": 0,
+      "spec_edits_applied": 1,
+      "majority_diagnosis": "both",
+      "diag_tier": "plurality"
+    },
+    "be_thorough_but_efficient": {
+      "rubric_edits_adopted": 3,
+      "rubric_edits_rejected": 2,
+      "spec_edits_adopted": 0,
+      "spec_edits_rejected": 0,
+      "spec_edits_applied": 0,
+      "majority_diagnosis": "rubric_drift",
+      "diag_tier": "consensus"
+    },
+    "comply_with_laws": {
+      "rubric_edits_adopted": 4,
+      "rubric_edits_rejected": 1,
+      "spec_edits_adopted": 1,
+      "spec_edits_rejected": 0,
+      "spec_edits_applied": 1,
+      "majority_diagnosis": "both",
+      "diag_tier": "plurality"
+    },
+    "do_not_lie": {
+      "rubric_edits_adopted": 0,
+      "rubric_edits_rejected": 2,
+      "spec_edits_adopted": 1,
+      "spec_edits_rejected": 1,
+      "spec_edits_applied": 1,
+      "majority_diagnosis": "spec_ambiguity",
+      "diag_tier": "plurality"
+    },
+    "formatting": {
+      "rubric_edits_adopted": 2,
+      "rubric_edits_rejected": 3,
+      "spec_edits_adopted": 0,
+      "spec_edits_rejected": 1,
+      "spec_edits_applied": 0,
+      "majority_diagnosis": "spec_ambiguity",
+      "diag_tier": "plurality"
+    },
+    "letter_and_spirit": {
+      "rubric_edits_adopted": 0,
+      "rubric_edits_rejected": 5,
+      "spec_edits_adopted": 1,
+      "spec_edits_rejected": 1,
+      "spec_edits_applied": 1,
+      "majority_diagnosis": "spec_ambiguity",
+      "diag_tier": "plurality"
+    },
+    "no_topic_off_limits": {
+      "rubric_edits_adopted": 3,
+      "rubric_edits_rejected": 2,
+      "spec_edits_adopted": 0,
+      "spec_edits_rejected": 0,
+      "spec_edits_applied": 0,
+      "majority_diagnosis": "rubric_drift",
+      "diag_tier": "consensus"
+    },
+    "prevent_imminent_harm": {
+      "rubric_edits_adopted": 3,
+      "rubric_edits_rejected": 2,
+      "spec_edits_adopted": 2,
+      "spec_edits_rejected": 1,
+      "spec_edits_applied": 2,
+      "majority_diagnosis": "both",
+      "diag_tier": "consensus"
+    },
+    "protect_privileged_messages": {
+      "rubric_edits_adopted": 0,
+      "rubric_edits_rejected": 5,
+      "spec_edits_adopted": 1,
+      "spec_edits_rejected": 1,
+      "spec_edits_applied": 1,
+      "majority_diagnosis": "spec_ambiguity",
+      "diag_tier": "plurality"
+    },
+    "refusal_style": {
+      "rubric_edits_adopted": 0,
+      "rubric_edits_rejected": 0,
+      "spec_edits_adopted": 2,
+      "spec_edits_rejected": 0,
+      "spec_edits_applied": 2,
+      "majority_diagnosis": "spec_ambiguity",
+      "diag_tier": "consensus"
+    }
+  }
+}

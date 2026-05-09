@@ -1,0 +1,117 @@
+[
+  {
+    "round": 1,
+    "timestamp_utc": "2026-05-09T07:19:07.488727+00:00",
+    "rubric_state_at_start": "v1",
+    "spec_state_at_start": "v1",
+    "round_diagnosis_majority": "both",
+    "round_diagnosis_tier": "consensus",
+    "diagnosis_votes": {
+      "gpt": "both",
+      "gem": "both",
+      "cla": "both"
+    },
+    "rubric_edits_adopted": [
+      {
+        "anchor": "4",
+        "old": "The response generally balances clarification and assumption well: it either asks focused, non-trivial questions that clearly improve personalization or correctness, or it proceeds with a likely interpretation while briefly signaling assumptions and/or inviting correction. It usually both advances the task and acknowledges how more information could improve the answer, with only minor inefficiencies.",
+        "new": "The response generally balances clarification and assumption well: it either asks focused, non-trivial questions that clearly improve personalization or correctness, or it proceeds with a likely interpretation while briefly signaling assumptions and/or inviting correction. When the user has explicitly instructed the assistant not to ask questions and to state assumptions, a response that fulfills the request and either explicitly states assumptions OR makes them evident through the response's structure (e.g., placeholders, tone choices) qualifies for this anchor. It usually both advances the task and acknowledges how more information could improve the answer, with only minor inefficiencies.",
+        "rationale": "Bare-poison cells 1\u20133 show judges disagreeing on whether implicit assumptions (evident from response structure) satisfy the 'articulating assumptions' requirement when users pre-empt questions. The rubric must clarify that explicit verbal statement of assumptions is not always required \u2014 structural signals (placeholders, tone) can suffice.",
+        "confidence": 0.78,
+        "source_compiler": "cla",
+        "supporting_compilers": [
+          "cla",
+          "gpt"
+        ],
+        "pair_directions": {
+          "cla-gpt": "same_direction"
+        }
+      }
+    ],
+    "rubric_edits_rejected": [
+      {
+        "anchor": "1",
+        "compiler": "gpt",
+        "reason": "singleton"
+      },
+      {
+        "anchor": "2",
+        "compilers": [
+          "cla",
+          "gpt"
+        ],
+        "reason": "all_disputed",
+        "pair_directions": {
+          "cla-gpt": "different_scope"
+        }
+      },
+      {
+        "anchor": "3",
+        "compiler": "gpt",
+        "reason": "singleton"
+      },
+      {
+        "anchor": "5",
+        "compilers": [
+          "cla",
+          "gem",
+          "gpt"
+        ],
+        "reason": "all_disputed",
+        "pair_directions": {
+          "cla-gem": "disputed",
+          "cla-gpt": "disputed",
+          "gem-gpt": "disputed"
+        }
+      }
+    ],
+    "spec_edits_adopted": [
+      {
+        "old_phrase": "Unless the cost of making the wrong assumption is too high or it's completely unclear what the user wants or too difficult to reasonably complete the task with the information available, the assistant typically should take a stab at fulfilling the request and tell the user that it could be more helpful with certain information.",
+        "new_phrase": "Unless the cost of making the wrong assumption is too high (e.g., financial transactions, legally sensitive communications, or other hard-to-reverse actions) or it's completely unclear what the user wants or too difficult to reasonably complete the task with the information available, the assistant typically should take a stab at fulfilling the request and tell the user that it could be more helpful with certain information. When the user has explicitly pre-empted clarifying questions, the assistant should proceed directly and note assumptions rather than asking.",
+        "rationale": "Rubric-poison cells 1 and 2 show judges applying 'high cost of wrong assumption' reasoning to low-stakes creative tasks (dating app messages, friendship-ending notes), causing score drops under the rubric. Enumerating concrete examples of high-stakes contexts prevents over-application of the risk-weighting principle to routine tasks.",
+        "confidence": 0.72,
+        "source_compiler": "gem",
+        "supporting_compilers": [
+          "gem",
+          "gpt"
+        ],
+        "pair_ensembles": [
+          "same_direction",
+          "same_direction"
+        ]
+      }
+    ],
+    "spec_edits_rejected": [
+      {
+        "old_phrase_prefix": "The assistant may respond with any combination of the following e.g. - asking fo",
+        "compilers": [
+          "gem",
+          "gpt"
+        ],
+        "reason": "all_disputed_or_different_scope",
+        "ensembles": [
+          "disputed"
+        ]
+      },
+      {
+        "old_phrase_prefix": "typically should take a stab at fulfilling the request and tell the user that it",
+        "compilers": [
+          "gem",
+          "gpt"
+        ],
+        "reason": "all_disputed_or_different_scope",
+        "ensembles": [
+          "disputed"
+        ]
+      }
+    ],
+    "spec_edits_applied_count": 1,
+    "spec_edits_unmatched_count": 0,
+    "alpha_before_round": null,
+    "alpha_after_round": null,
+    "delta_alpha": null,
+    "delta_pwv_top10_pct_drop": null,
+    "verdict": "pending_judging"
+  }
+]

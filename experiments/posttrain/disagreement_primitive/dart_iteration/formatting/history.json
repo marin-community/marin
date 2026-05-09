@@ -1,0 +1,87 @@
+[
+  {
+    "round": 1,
+    "timestamp_utc": "2026-05-09T07:19:07.567983+00:00",
+    "rubric_state_at_start": "v1",
+    "spec_state_at_start": "v1",
+    "round_diagnosis_majority": "spec_ambiguity",
+    "round_diagnosis_tier": "plurality",
+    "diagnosis_votes": {
+      "gpt": "spec_ambiguity",
+      "gem": "both",
+      "cla": "spec_ambiguity"
+    },
+    "rubric_edits_adopted": [
+      {
+        "anchor": "1",
+        "old": "The response is not in Markdown at all or blatantly ignores the specified conventions: it uses plain text with no Markdown structure, misuses math formatting (e.g., raw LaTeX without \\( ... \\) or \\[ ... \\]), or uses fenced code blocks without a language. It may also contain unescaped special characters that break formatting and shows no attempt to follow the math or escaping rules.",
+        "new": "The response fails to follow the user's explicit formatting override, or (if no override is specified) is not in Markdown at all or blatantly ignores the specified conventions: it uses plain text with no Markdown structure, misuses math formatting (e.g., raw LaTeX without \\( ... \\) or \\[ ... \\]), or uses fenced code blocks without a language. It may also contain unescaped special characters that break formatting and shows no attempt to follow the math or escaping rules.",
+        "rationale": "Adds the missing 'unless otherwise specified' carve-out to prevent penalizing models that correctly follow user overrides.",
+        "confidence": 0.9,
+        "source_compiler": "gem",
+        "supporting_compilers": [
+          "cla",
+          "gem"
+        ],
+        "pair_directions": {
+          "cla-gem": "same_direction"
+        }
+      },
+      {
+        "anchor": "5",
+        "old": "The response fully follows the Markdown with LaTeX extensions specification: all math is correctly wrapped in \\( ... \\) or \\[ ... \\] with \\[ and \\] on their own lines, math expressions are short and not entangled with complex Markdown, all fenced code blocks include a language, and any special characters that could trigger formatting are properly escaped. The overall output is clean, consistent Markdown using standard features appropriately.",
+        "new": "The response fully follows the user's explicit formatting override, or (if no override is specified) fully follows the Markdown with LaTeX extensions specification: all math is correctly wrapped in \\( ... \\) or \\[ ... \\] with \\[ and \\] on their own lines, math expressions are short and not entangled with complex Markdown, all fenced code blocks include a language, and any special characters that could trigger formatting are properly escaped. The overall output is clean, consistent Markdown using standard features appropriately.",
+        "rationale": "Explicitly allows top scores for responses that perfectly follow a user's formatting override, aligning with the spec's carve-out.",
+        "confidence": 0.9,
+        "source_compiler": "gem",
+        "supporting_compilers": [
+          "cla",
+          "gem"
+        ],
+        "pair_directions": {
+          "cla-gem": "same_direction"
+        }
+      }
+    ],
+    "rubric_edits_rejected": [
+      {
+        "anchor": "2",
+        "compiler": "cla",
+        "reason": "singleton"
+      },
+      {
+        "anchor": "3",
+        "compiler": "cla",
+        "reason": "singleton"
+      },
+      {
+        "anchor": "4",
+        "compiler": "cla",
+        "reason": "singleton"
+      }
+    ],
+    "spec_edits_adopted": [],
+    "spec_edits_rejected": [
+      {
+        "old_phrase_prefix": "Unless otherwise specified, assistant outputs should be formatted in Markdown wi",
+        "compilers": [
+          "gem",
+          "gpt"
+        ],
+        "reason": "opposite_direction",
+        "ensembles": [
+          "opposite_direction",
+          "opposite_direction",
+          "same_direction"
+        ]
+      }
+    ],
+    "spec_edits_applied_count": 0,
+    "spec_edits_unmatched_count": 0,
+    "alpha_before_round": null,
+    "alpha_after_round": null,
+    "delta_alpha": null,
+    "delta_pwv_top10_pct_drop": null,
+    "verdict": "pending_judging"
+  }
+]
