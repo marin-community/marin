@@ -113,6 +113,36 @@ The methodology is bidirectional. For Bucket D2 (rubric helps but neither condit
 
 This is the strongest leverage in DART: it doesn't just fix rubrics in isolation; it surfaces *spec ambiguities* to authors anchored on cells where judges actually disagree. Tighter feedback signal than "the spec authors think this is unclear" — it's "3 frontier LMs read the spec differently on these specific borderline scenarios, here are the cases."
 
+### 1.7 Multi-compiler aggregation — majority vote at N≥3
+
+A single compiler is one draw. Run 1 vs Run 2 showed 7/13 inter-compiler diagnostic agreement; Run 3 showed compiler-specific bias (GPT commits to dominant problem; Gemini and Claude hedge to `both`). The fix is to run multiple compilers and aggregate.
+
+**Rule (diagnosis layer)** — apply majority vote across the per-compiler `diagnosis` field:
+
+| diag_tier | rule | operative diagnosis |
+|---|---|---|
+| **consensus** | all N compilers agree | the unanimous diagnosis |
+| **plurality** | ⌈N/2⌉ + 1 compilers agree (e.g. 2 of 3) | the majority diagnosis; minority recorded for spec authors |
+| **split** | no majority exists (e.g. 3-way split at N=3) | escalate to spec authors with all N proposals visible |
+
+The compiler-specific recommendation reduces deterministically from the operative diagnosis: `rubric_drift → adopt_rubric_edit`, `spec_ambiguity → escalate_spec`, `both → both`, `irreducible → drop_rubric`.
+
+**Rule (edit layer)** — for each anchor (rubric edit) or old_phrase (spec edit), aggregate the per-pair direction classifications from the disagreement classifier:
+
+| anchor support | rule | action |
+|---|---|---|
+| **majority same-direction** | ≥2 compilers proposed an edit for this anchor AND ≥1 pairwise classification was `same_direction` | adopt the consensus edit (with light review) |
+| **majority disputed** | ≥2 compilers proposed an edit for this anchor BUT all pairwise classifications were `disputed` / `different_scope` | flag for human triage |
+| **majority opposite** ⚠️ | ≥2 compilers proposed an edit for this anchor AND any pairwise classification was `opposite_direction` | escalate to spec author — compilers disagree on direction |
+| **singleton** | only 1 compiler proposed an edit for this anchor | record but do not adopt without spec-author signoff |
+
+**Operational implications**:
+
+- **N=3 is the smallest workable ensemble** — N=2 produces only `consensus` or `split` (no plurality). Run 3 collapsed every Run 2 split into consensus or plurality.
+- **Diagnosis aggregation is more stable than edit aggregation** — Run 3 had 0 three-way diagnostic splits and 0 majority-opposite rubric anchors, but 11 opposite-direction edit pairs. The signal "what's wrong" is more robust than the signal "how to fix it."
+- **Outlier detection** — if one compiler dominates a single tail of the distribution (e.g. GPT was the sole `irreducible` voter and the source of 10/11 opposite-direction edit pairs in Run 3), record it as a per-LM bias note. Prefer ensembles where no single compiler dominates the recommendation pattern.
+- **Compiler-as-judge circularity remains**. All 3 of GPT, Gemini, Claude are also in the judge ensemble. Majority-vote aggregation does not remove this — only swapping one compiler for a non-judge model would. Flagged in §3.
+
 ---
 
 ## 2. Gotchas
@@ -434,3 +464,66 @@ T3 is the largest bucket — most statements have at least one compiler proposin
 5. **Cost stayed under $1 per compiler per full pass.** Total Run 1+2+3 spend is roughly $0.37 (GPT) + $0.29 (Gemini) + ~$1.60 (Claude) ≈ $2.30 for triple-compiler diagnostic on 14 statements. Affordable as a routine spec-authoring step.
 
 **Status**: Run 3 complete. Final 3-way report: `.agents/logbooks/dart_disagreement_report_3way.md`. **6 T3 statements flagged for spec-author review** (opposite-direction edit pairs); **5 T2 statements need light review** before adoption; **2 T1 statements are action-safe**. Validation step (re-judge with adopted edits) still pending.
+
+#### Run 3 — Majority-vote synthesis (per §1.7)
+
+Apply the majority-vote rule to the 3-compiler outputs and read off the operative recommendation per statement.
+
+**Per-statement majority diagnosis** (votes column = N agreeing compilers):
+
+| statement | majority diagnosis | votes | GPT | Gemini | Claude | majority recommendation |
+|---|---|:-:|---|---|---|---|
+| ask_clarifying_questions | both | 3/3 | both | both | both | both |
+| be_thorough_but_efficient | rubric_drift | 3/3 | rubric_drift | rubric_drift | rubric_drift | adopt_rubric_edit |
+| no_topic_off_limits | rubric_drift | 3/3 | rubric_drift | rubric_drift | rubric_drift | adopt_rubric_edit |
+| prevent_imminent_harm | both | 3/3 | both | both | both | both |
+| refusal_style | spec_ambiguity | 3/3 | spec_ambiguity | spec_ambiguity | spec_ambiguity | escalate_spec |
+| assume_objective_pov | spec_ambiguity | 2/3 | irreducible | spec_ambiguity | spec_ambiguity | escalate_spec |
+| avoid_abuse | both | 2/3 | rubric_drift | both | both | both |
+| be_clear | both | 2/3 | spec_ambiguity | both | both | both |
+| comply_with_laws | both | 2/3 | rubric_drift | both | both | both |
+| do_not_lie | spec_ambiguity | 2/3 | spec_ambiguity | both | spec_ambiguity | escalate_spec |
+| formatting | spec_ambiguity | 2/3 | spec_ambiguity | both | spec_ambiguity | escalate_spec |
+| letter_and_spirit | spec_ambiguity | 2/3 | spec_ambiguity | spec_ambiguity | both | escalate_spec |
+| protect_privileged_messages | spec_ambiguity | 2/3 | spec_ambiguity | spec_ambiguity | both | escalate_spec |
+
+**Majority-vote recommendation distribution** (n=13):
+
+| recommendation | count | statements |
+|---|--:|---|
+| `adopt_rubric_edit` | 2 | be_thorough_but_efficient, no_topic_off_limits |
+| `escalate_spec` | 6 | refusal_style, assume_objective_pov, do_not_lie, formatting, letter_and_spirit, protect_privileged_messages |
+| `both` | 5 | ask_clarifying_questions, prevent_imminent_harm, avoid_abuse, be_clear, comply_with_laws |
+| `drop_rubric` | 0 | — |
+
+**Comparison with each compiler-alone recommendation** on the same N=13:
+
+| recommendation | GPT alone | Gemini alone | Claude alone | **Majority** |
+|---|--:|--:|--:|--:|
+| adopt_rubric_edit | 4 | 2 | 2 | **2** |
+| escalate_spec | 6 | 4 | 4 | **6** |
+| both | 2 | 7 | 7 | **5** |
+| drop_rubric (irreducible) | 1 | 0 | 0 | **0** |
+
+Majority vote sits between the GPT pole (commit to one side) and the Gemini/Claude pole (hedge to `both`). It overrules every GPT-minority verdict — `irreducible` for `assume_objective_pov` becomes `escalate_spec`; `rubric_drift` calls on `avoid_abuse` and `comply_with_laws` become `both`. It also overrules Claude's lone `both` calls on `letter_and_spirit` and `protect_privileged_messages` back to `escalate_spec`.
+
+**Edit-layer majority-support tally** (52 distinct rubric anchors proposed across the 13 statements):
+
+| anchor support class | n anchors | meaning | action |
+|---|--:|---|---|
+| ≥2 compilers, same-direction | 25 | majority-supported edit | adopt with light review |
+| ≥2 compilers, all-disputed | 6 | concur on anchor, disagree on direction | human triage |
+| ≥2 compilers, any opposite | 0 | rubric layer never had opposite-direction support | — |
+| singleton (1 compiler only) | 21 | minority proposal | record but do not adopt without signoff |
+
+For spec edits across the 3 compiler-pairs: 18 same-direction pairs vs 7 opposite-direction pairs. The opposite-direction pairs are concentrated on the 6 T3 statements — these are the ones to escalate first.
+
+**So what then under majority vote?** The action-plan reduces to:
+
+- **2 statements** → adopt the majority rubric edit set (be_thorough_but_efficient, no_topic_off_limits — also full diagnostic consensus)
+- **6 statements** → send the spec proposals to authors with both majority and minority phrasings shown
+- **5 statements** → split path: adopt majority-supported rubric edits AND send majority-supported spec proposals to authors
+- **0 statements** → drop the rubric (the lone `irreducible` from GPT did not survive majority)
+- **25 of 52 rubric anchors** → action-safe (≥2 compilers same-direction); **27 of 52** → not (singleton or disputed)
+
+Majority vote does not eliminate human review — it sequences and prioritizes it. The compiler ensemble produces 2 unambiguous `adopt`s; everything else still needs human judgment, but the majority/minority split tells reviewers where compilers agreed and where they diverged.
