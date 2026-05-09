@@ -159,35 +159,11 @@ Namespaces:
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
 - `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `captured_at`. Filter on `source` for one of `/job/.../task/N`, `/system/worker/<id>`, `/system/controller`. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`).
 
-Retention: finelog evicts the globally-oldest sealed Parquet segments once either cap is exceeded. The caps are `DuckDBLogStore(max_local_segments=..., max_local_bytes=...)` constructor args (defaults: 1000 segments / 100 GB; see `lib/finelog/src/finelog/store/duckdb_store.py`). To change them on the controller-bundled store, edit the `DuckDBLogStore(...)` call in `_start_local_log_server`. For production-scale deployments, run `finelog-server` out-of-band and pass caps there. Target retention for `iris.profile` is **7 days**.
+Retention is finelog segment-based. Target for `iris.profile` is 7 days.
 
-Profiles are written by:
+Get a profile for a task — open the dashboard task page and use the "Profile history" panel; rows are CPU captures from the worker's 10-minute periodic loop plus any on-demand captures, click to download. To capture on demand, hit the "Profile now" button on the task page, the worker page (`/system/worker/<id>`), or the controller status page (`/system/controller`).
 
-- the worker process (periodic CPU loop on a 10-minute tick, plus on-demand cpu/memory/thread captures via `WorkerService.ProfileTask`);
-- `K8sTaskProvider` (on-demand cpu/memory/thread, no periodic loop on k8s);
-- the controller process (on-demand self-captures targeted at `/system/controller`).
-
-Example — utilization for a worker over the last hour:
-
-```sql
-SELECT ts, cpu_pct, mem_bytes, disk_used_bytes, running_task_count
-FROM "iris.worker"
-WHERE worker_id = 'WORKER_ID_HERE'
-  AND ts > now() - INTERVAL '1 hour'
-ORDER BY ts ASC;
-```
-
-Example — recent profile captures for a task:
-
-```sql
-SELECT captured_at, type, format, trigger, length(profile_data) AS bytes
-FROM "iris.profile"
-WHERE source = '/user/job/0/task/3'
-ORDER BY captured_at DESC
-LIMIT 50;
-```
-
-Run via the StatsService `Query` RPC on the bundled log-server endpoint.
+Profiles are written by the worker (periodic CPU + on-demand all types), by `K8sTaskProvider` (on-demand only), and by the controller for `/system/controller` self-captures.
 
 ## Users & Auth
 
