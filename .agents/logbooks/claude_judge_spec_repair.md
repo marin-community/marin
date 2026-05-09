@@ -1654,7 +1654,7 @@ across this logbook is now named **DART** — Disagreement-Anchored Repair Triag
 - **R**epair outputs concrete edits (rubric, spec, or both — bidirectional)
 - **T**riage buckets statements into A/B/C/D before paying for compiler calls
 
-Canonical operational doc: `.agents/projects/spec_repair_loop.md` §17.
+Canonical operational doc: `.agents/logbooks/dart.md` (full methodology, gotchas, owed validation experiments, file pointers, and running run log). `spec_repair_loop.md` §17 carries a short pointer to it.
 
 When a future agent says "run DART on these statements" they mean: bucket them
 at T₁=0.5, run Δpwv ranking on the Bucket D ones, send poison cells to the
