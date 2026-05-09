@@ -97,8 +97,8 @@ flowchart TB
     classify --> broad{broad trigger?<br/>uv.lock / root pyproject /<br/>infra/select_tests.py}
     broad -->|yes| runall[full-suite matrix:<br/>every member, tests=&#91;&#93;]
     broad -->|no| route["Route by path:<br/>lib/X/src/a/b.py → module 'X.a.b'<br/>lib/X/tests/t.py → direct test<br/>lib/X/conftest.py → forced full X<br/>workflow file → forced full owning member"]
-    route --> graph[grimp.build_graph<br/>over lib/*/src/<br/>~540 modules total]
-    graph --> ast["AST-scan each src file<br/>collect TOP-LEVEL imports only<br/>skip def/class bodies<br/>skip if TYPE_CHECKING blocks"]
+    route --> grimp[grimp.build_graph<br/>over lib/*/src/<br/>~540 modules total]
+    grimp --> ast["AST-scan each src file<br/>collect TOP-LEVEL imports only<br/>skip def/class bodies<br/>skip if TYPE_CHECKING blocks"]
     ast --> downstream[BFS reverse-deps:<br/>changed module → affected modules]
     downstream --> testscan["AST-scan each test file<br/>select if any import touches<br/>the affected set"]
     testscan --> grouped[group selected tests by<br/>owning workspace member]
