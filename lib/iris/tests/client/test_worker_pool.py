@@ -1,10 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""E2E tests for WorkerPool using a local IrisClient."""
+"""E2E tests for WorkerPool using a local IrisClient.
+
+Uses the shared ``local_iris_client`` fixture from ``lib/iris/tests/conftest.py``.
+"""
 
 import pytest
-from iris.client.local_client import make_local_client
 from iris.client.worker_pool import (
     WorkerPool,
     WorkerPoolConfig,
@@ -14,20 +16,6 @@ from iris.cluster.types import ResourceSpec
 pytestmark = pytest.mark.e2e
 
 
-@pytest.fixture
-def local_client():
-    """Boot an in-process LocalCluster + IrisClient for one WorkerPool test.
-
-    Starts a real Controller and Worker so WorkerPool tests go through the full
-    job submission infrastructure rather than mocked client paths.
-    """
-    client = make_local_client()
-    try:
-        yield client
-    finally:
-        client.shutdown(wait=True)
-
-
 class TestWorkerPoolE2E:
     """End-to-end tests for WorkerPool against a local IrisClient.
 
@@ -35,14 +23,14 @@ class TestWorkerPoolE2E:
     WorkerPool -> IrisClient -> RemoteClusterClient -> Controller -> Worker -> task execution.
     """
 
-    def test_submit_executes_task(self, local_client):
+    def test_submit_executes_task(self, local_iris_client):
         """submit() dispatches a task through real job infrastructure and returns correct result."""
         config = WorkerPoolConfig(
             num_workers=1,
             resources=ResourceSpec(cpu=1, memory="512m"),
         )
 
-        with WorkerPool(local_client, config, timeout=30.0) as pool:
+        with WorkerPool(local_iris_client, config, timeout=30.0) as pool:
 
             def add(a, b):
                 return a + b
@@ -52,14 +40,14 @@ class TestWorkerPoolE2E:
 
             assert result == 30
 
-    def test_map_executes_tasks(self, local_client):
+    def test_map_executes_tasks(self, local_iris_client):
         """map() distributes work through real job infrastructure."""
         config = WorkerPoolConfig(
             num_workers=2,
             resources=ResourceSpec(cpu=1, memory="512m"),
         )
 
-        with WorkerPool(local_client, config, timeout=30.0) as pool:
+        with WorkerPool(local_iris_client, config, timeout=30.0) as pool:
 
             def square(x):
                 return x * x
@@ -69,14 +57,14 @@ class TestWorkerPoolE2E:
 
             assert results == [1, 4, 9, 16, 25]
 
-    def test_exception_propagates_to_caller(self, local_client):
+    def test_exception_propagates_to_caller(self, local_iris_client):
         """Exceptions raised by user code propagate through job infrastructure to caller."""
         config = WorkerPoolConfig(
             num_workers=1,
             resources=ResourceSpec(cpu=1, memory="512m"),
         )
 
-        with WorkerPool(local_client, config, timeout=30.0) as pool:
+        with WorkerPool(local_iris_client, config, timeout=30.0) as pool:
 
             def fail():
                 raise ValueError("intentional error")
@@ -86,14 +74,14 @@ class TestWorkerPoolE2E:
             with pytest.raises(ValueError, match="intentional error"):
                 future.result(timeout=60.0)
 
-    def test_shutdown_prevents_new_submissions(self, local_client):
+    def test_shutdown_prevents_new_submissions(self, local_iris_client):
         """After shutdown, submit() raises RuntimeError."""
         config = WorkerPoolConfig(
             num_workers=1,
             resources=ResourceSpec(cpu=1, memory="512m"),
         )
 
-        pool = WorkerPool(local_client, config, timeout=30.0)
+        pool = WorkerPool(local_iris_client, config, timeout=30.0)
         pool.__enter__()
 
         pool.shutdown(wait=False)
