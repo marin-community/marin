@@ -8,6 +8,8 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -42,6 +44,14 @@ class IrisJobStatus:
     job_id: str
     state: str  # iris proto state name, e.g. "JOB_STATE_RUNNING"
     error: str | None
+
+
+@dataclass(frozen=True)
+class K8sPodStatus:
+    name: str
+    phase: str
+    ready: bool
+    deleting: bool
 
 
 def iris_command(repo_root: Path) -> list[str]:
@@ -656,6 +666,309 @@ def collect(
         repo_root=_REPO_ROOT,
     )
     click.echo(f"Diagnostics written to {out}", err=True)
+
+
+def _pod_ready(pod: dict) -> bool:
+    return any(
+        condition.get("type") == "Ready" and condition.get("status") == "True"
+        for condition in pod.get("status", {}).get("conditions", [])
+    )
+
+
+def _controller_pods_from_json(payload: str) -> list[K8sPodStatus]:
+    data = json.loads(payload)
+    pods: list[K8sPodStatus] = []
+    for pod in data.get("items", []):
+        metadata = pod.get("metadata", {})
+        status = pod.get("status", {})
+        name = metadata.get("name", "")
+        if not name:
+            continue
+        pods.append(
+            K8sPodStatus(
+                name=name,
+                phase=status.get("phase", "Unknown"),
+                ready=_pod_ready(pod),
+                deleting=metadata.get("deletionTimestamp") is not None,
+            )
+        )
+    return pods
+
+
+def _settled_controller_pod_name(pods: list[K8sPodStatus]) -> str | None:
+    if len(pods) != 1:
+        return None
+    pod = pods[0]
+    if pod.phase != "Running" or not pod.ready or pod.deleting:
+        return None
+    return pod.name
+
+
+def _format_controller_pods(pods: list[K8sPodStatus]) -> str:
+    if not pods:
+        return "(none)"
+    return ", ".join(f"{pod.name}:phase={pod.phase},ready={pod.ready},deleting={pod.deleting}" for pod in pods)
+
+
+def _kubectl_rollout_status(
+    namespace: str,
+    kubeconfig: Path | None,
+    *,
+    timeout: float,
+) -> None:
+    result = _run(
+        [
+            *_kubectl(kubeconfig),
+            "-n",
+            namespace,
+            "rollout",
+            "status",
+            "deployment/iris-controller",
+            f"--timeout={max(1, int(timeout))}s",
+        ]
+    )
+    if result.stdout:
+        click.echo(result.stdout.rstrip(), err=True)
+    if result.stderr:
+        click.echo(result.stderr.rstrip(), err=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"kubectl rollout status failed (exit {result.returncode})")
+
+
+def _controller_pods(
+    namespace: str,
+    kubeconfig: Path | None,
+    *,
+    controller_selector: str,
+) -> list[K8sPodStatus]:
+    result = _run(
+        [
+            *_kubectl(kubeconfig),
+            "-n",
+            namespace,
+            "get",
+            "pods",
+            "-l",
+            controller_selector,
+            "-o",
+            "json",
+        ]
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"kubectl get controller pods failed (exit {result.returncode}): {result.stderr.strip()}")
+    return _controller_pods_from_json(result.stdout)
+
+
+def wait_for_settled_coreweave_controller(
+    namespace: str,
+    kubeconfig: Path | None,
+    *,
+    controller_selector: str,
+    timeout: float,
+    poll_interval: float,
+) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pods = _controller_pods(namespace, kubeconfig, controller_selector=controller_selector)
+        pod_name = _settled_controller_pod_name(pods)
+        if pod_name is not None:
+            click.echo(f"Controller rollout settled on pod/{pod_name}", err=True)
+            return pod_name
+
+        click.echo(f"waiting for one ready controller pod: {_format_controller_pods(pods)}", err=True)
+        time.sleep(poll_interval)
+
+    pods = _controller_pods(namespace, kubeconfig, controller_selector=controller_selector)
+    raise TimeoutError(f"controller rollout did not settle to one ready pod: {_format_controller_pods(pods)}")
+
+
+def _terminate_process(proc: subprocess.Popen, *, timeout: float = 5.0) -> None:
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+def _health_url(controller_url: str, health_path: str) -> str:
+    return controller_url.rstrip("/") + "/" + health_path.lstrip("/")
+
+
+def _wait_for_controller_health(
+    controller_url: str,
+    *,
+    health_path: str,
+    timeout: float,
+    poll_interval: float,
+    port_forward: subprocess.Popen,
+) -> None:
+    url = _health_url(controller_url, health_path)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if port_forward.poll() is not None:
+            raise RuntimeError(f"kubectl port-forward exited with code {port_forward.returncode}")
+        try:
+            with urllib.request.urlopen(url, timeout=min(poll_interval, 5.0)) as resp:
+                if 200 <= resp.status < 300:
+                    return
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+            pass
+        time.sleep(poll_interval)
+    raise TimeoutError(f"controller {url} never became healthy within {timeout}s")
+
+
+def _start_coreweave_port_forward(
+    namespace: str,
+    kubeconfig: Path | None,
+    *,
+    pod_name: str,
+    local_port: int,
+    remote_port: int,
+    log_path: Path,
+) -> subprocess.Popen:
+    """Spawn ``kubectl port-forward pod/X local:remote`` detached.
+
+    Uses ``start_new_session=True`` so the kubectl process survives this
+    Python script exiting — the workflow's later ``Stop port-forward`` step
+    kills it via ``$PF_PID``. The log is opened line-buffered so failure
+    diagnostics that ``cp`` it before SIGTERM see complete output.
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        *_kubectl(kubeconfig),
+        "-n",
+        namespace,
+        "port-forward",
+        f"pod/{pod_name}",
+        f"{local_port}:{remote_port}",
+    ]
+    log_file = log_path.open("a", buffering=1)
+    try:
+        return subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
+    finally:
+        # Parent's copy of the fd can be closed once Popen has dup'd it into the child.
+        log_file.close()
+
+
+def open_coreweave_controller_tunnel(
+    namespace: str,
+    kubeconfig: Path | None,
+    *,
+    controller_selector: str,
+    local_port: int,
+    remote_port: int,
+    timeout: float,
+    poll_interval: float,
+    health_path: str,
+    log_path: Path,
+) -> tuple[str, int]:
+    """Wait for the controller rollout to settle, start ``kubectl port-forward``, probe ``/health``.
+
+    Returns ``(controller_url, kubectl_pid)``. The kubectl child runs in a new
+    session so it outlives this Python process — workflows hold on to the PID
+    and tear it down later via ``kill $PF_PID``.
+    """
+    _kubectl_rollout_status(namespace, kubeconfig, timeout=timeout)
+    pod_name = wait_for_settled_coreweave_controller(
+        namespace,
+        kubeconfig,
+        controller_selector=controller_selector,
+        timeout=timeout,
+        poll_interval=poll_interval,
+    )
+
+    port_forward = _start_coreweave_port_forward(
+        namespace,
+        kubeconfig,
+        pod_name=pod_name,
+        local_port=local_port,
+        remote_port=remote_port,
+        log_path=log_path,
+    )
+    controller_url = f"http://127.0.0.1:{local_port}"
+    try:
+        _wait_for_controller_health(
+            controller_url,
+            health_path=health_path,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            port_forward=port_forward,
+        )
+    except (RuntimeError, TimeoutError):
+        _terminate_process(port_forward)
+        raise
+    return controller_url, port_forward.pid
+
+
+@cli.command(name="coreweave-controller")
+@click.option("--namespace", required=True, help="Kubernetes namespace containing the Iris controller.")
+@click.option(
+    "--kubeconfig",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Path to the CoreWeave kubeconfig. Uses kubectl's default config when omitted.",
+)
+@click.option("--controller-selector", default="app=iris-controller", show_default=True)
+@click.option("--local-port", default=10000, show_default=True, type=int)
+@click.option("--remote-port", default=10000, show_default=True, type=int)
+@click.option(
+    "--timeout",
+    default=600.0,
+    show_default=True,
+    type=float,
+    help="Seconds to wait for each controller readiness phase.",
+)
+@click.option("--poll-interval", default=5.0, show_default=True, type=float)
+@click.option("--health-path", default="/health", show_default=True)
+@click.option(
+    "--log-path",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="Path where kubectl port-forward writes its stdout/stderr.",
+)
+@click.option("--url-var", default="IRIS_CONTROLLER_URL", show_default=True)
+@click.option("--pid-var", default="PF_PID", show_default=True)
+@click.option("--log-var", default="PF_LOG", show_default=True)
+def coreweave_controller(
+    namespace: str,
+    kubeconfig: Path | None,
+    controller_selector: str,
+    local_port: int,
+    remote_port: int,
+    timeout: float,
+    poll_interval: float,
+    health_path: str,
+    log_path: Path,
+    url_var: str,
+    pid_var: str,
+    log_var: str,
+) -> None:
+    """Wait for the CoreWeave controller rollout and export a stable local controller URL.
+
+    Kept for the iris-smoke-coreweave workflow, which still tunnels into the
+    shared controller from the runner. Once that workflow migrates to running
+    its tests as in-cluster iris jobs (see ``--config`` path used by the canary
+    in marin-canary-ferry-coreweave.yaml), this subcommand can be removed.
+    """
+    url, pf_pid = open_coreweave_controller_tunnel(
+        namespace,
+        kubeconfig,
+        controller_selector=controller_selector,
+        local_port=local_port,
+        remote_port=remote_port,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        health_path=health_path,
+        log_path=log_path,
+    )
+    click.echo(f"Controller healthy on {url} (kubectl pid={pf_pid}, log={log_path})", err=True)
+
+    if path := os.environ.get("GITHUB_ENV"):
+        with open(path, "a") as fh:
+            fh.write(f"{url_var}={url}\n{pid_var}={pf_pid}\n{log_var}={log_path}\n")
 
 
 if __name__ == "__main__":
