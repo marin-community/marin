@@ -1270,19 +1270,44 @@ class TaskStore:
         worker_id: WorkerId | None,
         worker_address: str | None,
         now_ms: int,
+        priority_band: int | None = None,
     ) -> None:
+        # ``priority_band`` is stamped at assign time so that the preemption
+        # pass treats a running task's band as fixed. Without this, a user who
+        # crosses their budget cliff while their tasks are running gets their
+        # running tasks demoted to BATCH on the next tick — and then preempted
+        # by another user whose pending tasks haven't yet bumped them over the
+        # cliff. The two users then mutually preempt each other indefinitely.
+        # ``None`` leaves the existing column value untouched (used by code
+        # paths that do not run the budget computation).
+        band_set = "" if priority_band is None else ", priority_band = ?"
+        band_param: tuple[int, ...] = () if priority_band is None else (priority_band,)
         if worker_id is not None:
             cur.execute(
                 "UPDATE tasks SET state = ?, current_attempt_id = ?, "
                 "current_worker_id = ?, current_worker_address = ?, "
-                "started_at_ms = COALESCE(started_at_ms, ?) WHERE task_id = ?",
-                (job_pb2.TASK_STATE_ASSIGNED, attempt_id, str(worker_id), worker_address, now_ms, task_id.to_wire()),
+                f"started_at_ms = COALESCE(started_at_ms, ?){band_set} WHERE task_id = ?",
+                (
+                    job_pb2.TASK_STATE_ASSIGNED,
+                    attempt_id,
+                    str(worker_id),
+                    worker_address,
+                    now_ms,
+                    *band_param,
+                    task_id.to_wire(),
+                ),
             )
             return
         cur.execute(
             "UPDATE tasks SET state = ?, current_attempt_id = ?, "
-            "started_at_ms = COALESCE(started_at_ms, ?) WHERE task_id = ?",
-            (job_pb2.TASK_STATE_ASSIGNED, attempt_id, now_ms, task_id.to_wire()),
+            f"started_at_ms = COALESCE(started_at_ms, ?){band_set} WHERE task_id = ?",
+            (
+                job_pb2.TASK_STATE_ASSIGNED,
+                attempt_id,
+                now_ms,
+                *band_param,
+                task_id.to_wire(),
+            ),
         )
 
     def assign(
@@ -1294,6 +1319,7 @@ class TaskStore:
         worker_address: str | None,
         attempt_id: int,
         now_ms: int,
+        priority_band: int | None = None,
     ) -> None:
         attempts.insert(
             cur,
@@ -1305,7 +1331,7 @@ class TaskStore:
                 created_at_ms=now_ms,
             ),
         )
-        self.mark_assigned(cur, task_id, attempt_id, worker_id, worker_address, now_ms)
+        self.mark_assigned(cur, task_id, attempt_id, worker_id, worker_address, now_ms, priority_band=priority_band)
 
     def apply_state_update(
         self,

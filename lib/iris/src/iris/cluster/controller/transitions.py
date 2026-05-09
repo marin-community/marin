@@ -231,10 +231,21 @@ class HeartbeatApplyRequest:
 
 @dataclass(frozen=True)
 class Assignment:
-    """Scheduler assignment decision."""
+    """Scheduler assignment decision.
+
+    ``priority_band`` is the effective band computed at scheduling time
+    (after applying any over-budget downgrade). Stamped onto ``tasks.priority_band``
+    when the row transitions to ASSIGNED so that the preemption pass uses a
+    fixed, point-in-time band rather than re-evaluating against current spend
+    on every tick. Re-evaluating caused mutual preemption between two
+    same-band users sitting at the budget cliff. ``None`` leaves the column
+    unchanged (used by call sites that do not run the budget computation,
+    e.g. K8s direct-provider promotions and manual reassignment).
+    """
 
     task_id: JobName
     worker_id: WorkerId
+    priority_band: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1358,6 +1369,7 @@ class ControllerTransitions:
                 worker_address,
                 attempt_id,
                 now_ms,
+                priority_band=assignment.priority_band,
             )
             jobs_to_update.add(job_id_wire)
             accepted.append(assignment)

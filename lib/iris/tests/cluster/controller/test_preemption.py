@@ -661,31 +661,55 @@ def test_over_budget_production_not_preemptible():
     assert effective == job_pb2.PRIORITY_BAND_PRODUCTION
 
 
-def test_running_tasks_use_effective_band():
-    """_get_running_tasks_with_band_and_value applies budget down-weighting to running tasks."""
+def test_running_tasks_report_stamped_band():
+    """_get_running_tasks_with_band_and_value returns the band stamped at assign time.
+
+    The over-budget downgrade is applied once in ``_commit_assignments`` and
+    persisted in ``tasks.priority_band``; the lookup must not re-derive the
+    band from current spend (which is what previously caused two same-band
+    users at the budget cliff to mutually preempt each other).
+    """
     with make_controller_state() as state:
         harness = ControllerTestHarness(state)
         w1 = harness.add_worker("w1", cpu=4)
+        w2 = harness.add_worker("w2", cpu=4)
 
-        # Submit an INTERACTIVE job for alice
-        tasks = harness.submit("/alice/interactive-job", cpu=1)
-        harness.dispatch(tasks[0], w1)
+        tasks_alice = harness.submit("/alice/interactive-job", cpu=1)
+        tasks_bob = harness.submit("/bob/interactive-job", cpu=1)
 
-        # Set alice's budget: over budget
-        user_spend = {"alice": 10000}
-        user_budget_limits = {"alice": 5000}
+        # Alice's task is stamped INTERACTIVE (she was under budget at schedule time).
+        # Bob's task is stamped BATCH (he was over budget at schedule time).
+        _dispatch_with_band(state, tasks_alice[0], w1, job_pb2.PRIORITY_BAND_INTERACTIVE)
+        _dispatch_with_band(state, tasks_bob[0], w2, job_pb2.PRIORITY_BAND_BATCH)
 
-        running = _get_running_tasks_with_band_and_value(
-            state._db,
-            set(),
-            user_spend=user_spend,
-            user_budget_limits=user_budget_limits,
-            user_budget_defaults=UserBudgetDefaults(),
+        running = {r.task_id: r.band_sort_key for r in _get_running_tasks_with_band_and_value(state._db, set())}
+        assert running == {
+            tasks_alice[0].task_id: job_pb2.PRIORITY_BAND_INTERACTIVE,
+            tasks_bob[0].task_id: job_pb2.PRIORITY_BAND_BATCH,
+        }
+
+
+def _dispatch_with_band(state, task, worker_id, priority_band: int) -> None:
+    """Dispatch task with an explicit stamped band, advancing it to RUNNING."""
+    with state._store.transaction() as cur:
+        state.queue_assignments(
+            cur,
+            [Assignment(task_id=task.task_id, worker_id=worker_id, priority_band=priority_band)],
         )
-
-        assert len(running) == 1
-        # Should be downgraded to BATCH
-        assert running[0].band_sort_key == job_pb2.PRIORITY_BAND_BATCH
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=worker_id,
+                updates=[
+                    TaskUpdate(
+                        task_id=task.task_id,
+                        attempt_id=query_task(state, task.task_id).current_attempt_id,
+                        new_state=job_pb2.TASK_STATE_RUNNING,
+                    )
+                ],
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
