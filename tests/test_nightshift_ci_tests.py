@@ -125,6 +125,36 @@ def test_select_candidates_filters_before_truncation_and_diversifies():
     ]
 
 
+def test_candidate_kind_requires_multiple_runs_for_slow():
+    single_run = {
+        "max_seconds": 12.0,
+        "run_ids": {1},
+        "failure_runs": set(),
+    }
+    assert nightshift_ci_tests.candidate_kind(single_run) == []
+
+    multi_run = {
+        "max_seconds": 12.0,
+        "run_ids": {1, 2},
+        "failure_runs": set(),
+    }
+    assert nightshift_ci_tests.candidate_kind(multi_run) == ["slow"]
+
+    fast_multi_run = {
+        "max_seconds": 4.0,
+        "run_ids": {1, 2, 3},
+        "failure_runs": set(),
+    }
+    assert nightshift_ci_tests.candidate_kind(fast_multi_run) == []
+
+    unstable_single_run = {
+        "max_seconds": 1.0,
+        "run_ids": {1, 2},
+        "failure_runs": {1, 2},
+    }
+    assert nightshift_ci_tests.candidate_kind(unstable_single_run) == ["unstable"]
+
+
 def test_collect_evidence_dedupes_same_test_within_one_run():
     with tempfile.TemporaryDirectory() as temp_dir:
         log_dir = Path(temp_dir)

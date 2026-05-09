@@ -34,6 +34,11 @@ MAX_CANDIDATES = 8
 MAX_CANDIDATES_PER_FILE = 2
 MIN_FAILURE_RUNS = 2
 MIN_SLOW_SECONDS = 8.0
+# Require a test to land in the per-workflow `--durations` slow window in at least
+# this many distinct runs before treating it as actionable. Single-observation
+# slow hits are dominated by JIT warm-up cost and cold imports; they are not
+# evidence of a real perf regression.
+MIN_SLOW_RUNS = 2
 COOLDOWN_DAYS = 30
 
 DURATION_RE = re.compile(r"(?P<seconds>\d+(?:\.\d+)?)s\s+(?:setup|call|teardown)\s+(?P<test>\S+::.+)$")
@@ -330,7 +335,7 @@ def merge_evidence(dest: dict[str, dict[str, Any]], src: dict[str, dict[str, Any
 def candidate_kind(record: dict[str, Any]) -> list[str]:
     """Classify a test candidate from the aggregated evidence."""
     kinds: list[str] = []
-    if record["max_seconds"] >= MIN_SLOW_SECONDS:
+    if record["max_seconds"] >= MIN_SLOW_SECONDS and len(record["run_ids"]) >= MIN_SLOW_RUNS:
         kinds.append("slow")
     if len(record["failure_runs"]) >= MIN_FAILURE_RUNS:
         kinds.append("unstable")
@@ -468,21 +473,27 @@ Read `AGENTS.md` for project conventions.
 
 ## Rules of Engagement
 
-- Prefer a focused in-repo improvement over opening a new issue when the fix is
-  straightforward and low-risk.
+- The only artifact you may produce is a PR with a real code change. Do NOT
+  open standalone GitHub issues from this workflow — if no concrete fix is
+  justified, exit cleanly and the next audit will pick the candidates up
+  again. Filing "no-fix" issues just to record cooldown markers has produced
+  a useless backlog and is no longer allowed.
+- Prefer a focused in-repo improvement when the fix is straightforward and
+  low-risk. Examples of acceptable fixes: removing a redundant compile,
+  hoisting a shared fixture, deleting a parametrize cell whose coverage is
+  already provided by a sibling, replacing a real-network setup with a
+  pre-recorded fixture.
 - Do not weaken assertions or mark a useful test `slow` just to hide a problem.
 - Do not remove a test unless you can defend why its coverage is redundant,
   invalid, or better expressed elsewhere.
 - If you modify code or tests, run `./infra/pre-commit.py --all-files --fix`
   and run the relevant `uv run pytest ...` targets.
-- If the investigation is real but the fix is too large or risky, open a GitHub
-  issue instead of forcing a partial change.
 - Do not open duplicate artifacts for tests listed in the skipped section.
 
 ## Required dedupe markers
 
-If you open a PR or issue, include these hidden markers in the body for every
-test you investigated:
+If you open a PR, include these hidden markers in the body for every test you
+investigated:
 
 <!-- nightshift-ci-test: path/to/test_file.py::test_name -->
 <!-- nightshift-ci-cooldown-until: YYYY-MM-DD -->
@@ -498,11 +509,8 @@ re-investigate the same test immediately.
   3. Add labels `agent-generated` and `nightshift`.
   4. Begin the PR body with your haiku and include the required hidden markers.
   5. Enable automerge with squash.
-- If code changes are not justified but follow-up is:
-  1. Open one GitHub issue titled `[nightshift] investigate CI test performance/stability`.
-  2. Add labels `agent-generated` and `nightshift`.
-  3. Begin the issue body with your haiku and include the required hidden markers.
-- If no justified action remains after inspection, exit cleanly and explain why.
+- Otherwise, exit cleanly and explain in plain text why no fix was justified.
+  Do not open an issue. Do not create an empty PR. Do not edit unrelated files.
 """
 
 
