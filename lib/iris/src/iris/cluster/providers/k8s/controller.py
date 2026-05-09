@@ -157,9 +157,11 @@ def _build_controller_deployment(
     # job submitted in the surge window lands on the OLD controller and is
     # then deleted as a "stray" by the new controller's first reconcile (#5590).
     # Recreate forces the old pod down before the new one starts: brief
-    # downtime, no overlap. Non-fresh restarts keep RollingUpdate so in-place
-    # upgrades stay zero-downtime.
-    strategy: dict = {"type": "Recreate"} if fresh else {"type": "RollingUpdate"}
+    # downtime, no overlap. `rollingUpdate: null` is required because SSA
+    # preserves the API-server-defaulted rollingUpdate field, and validation
+    # rejects rollingUpdate alongside `type: Recreate`. Non-fresh restarts
+    # keep RollingUpdate so in-place upgrades stay zero-downtime.
+    strategy: dict = {"type": "Recreate", "rollingUpdate": None} if fresh else {"type": "RollingUpdate"}
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",

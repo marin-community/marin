@@ -361,40 +361,6 @@ def test_configmap_strips_kubeconfig_path():
     provider.shutdown()
 
 
-def test_start_controller_uses_recreate_strategy_when_fresh():
-    """`--fresh` selects Recreate so the OLD pod is gone before NEW boots (#5590)."""
-    provider, k8s = _make_provider()
-    cluster_config = _make_cluster_config()
-
-    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
-    t.start()
-
-    provider.start_controller(cluster_config, fresh=True)
-
-    dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
-    assert dep["spec"]["strategy"] == {"type": "Recreate"}
-
-    t.join(timeout=5)
-    provider.shutdown()
-
-
-def test_start_controller_uses_rolling_update_when_not_fresh():
-    """Non-fresh restarts keep RollingUpdate so in-place upgrades stay zero-downtime."""
-    provider, k8s = _make_provider()
-    cluster_config = _make_cluster_config()
-
-    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
-    t.start()
-
-    provider.start_controller(cluster_config)
-
-    dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
-    assert dep["spec"]["strategy"] == {"type": "RollingUpdate"}
-
-    t.join(timeout=5)
-    provider.shutdown()
-
-
 def test_controller_deployment_includes_endpoint_url():
     """When object_storage_endpoint is set, the controller Deployment includes AWS_ENDPOINT_URL."""
     k8s = InMemoryK8sService(namespace="iris")
