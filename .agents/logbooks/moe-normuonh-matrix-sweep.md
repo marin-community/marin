@@ -60,3 +60,12 @@
 - Result: Added failing tests, then updated the mask and launcher so the baseline Adam group remains Adam and corrected relaunches use distinct run IDs such as `normuonh-matrix-baseline-adam-mask-d512-2.19e17`.
 - Interpretation: The already-running MOE-NMH-003 jobs are useful as a broader matrix-swap reference, but the corrected experimental comparison requires a new suffixed launch.
 - Next action: Run full focused validation, push PR update, then launch corrected gate-1 jobs without stopping MOE-NMH-003.
+
+### 2026-05-09 12:10 - MOE-NMH-005 corrected gate-1 launch
+
+- Hypothesis: Preserving the AdamH baseline Adam group isolates NorMuonH's effect on the AdamH/AdamH-expert matrix groups from router/token-embedding/attention-gate effects.
+- Command: `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --preemptible --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -e NORMUONH_MATRIX_GATE 1 -e NORMUONH_MATRIX_RUN_SUFFIX baseline-adam-mask -- python -m experiments.grug.moe.normuonh_matrix_sweep`
+- Config: PR #5597 commit `64bb37fc3`, gate 1, v5p-8 preemptible, run suffix `baseline-adam-mask`.
+- Result: Parent `/kaiyue/iris-run-job-20260509-190231` is running. Children `/kaiyue/iris-run-job-20260509-190231/grug-train-normuonh-matrix-baseline-adam-mask-d512-2.19e17` and `/kaiyue/iris-run-job-20260509-190231/grug-train-normuonh-matrix-baseline-adam-mask-d768-1.70e18` are pending on v5p-8 preemptible capacity.
+- Interpretation: The corrected suffixed launch is accepted by Iris and avoids W&B/output-path collisions with earlier runs.
+- Next action: Wait for capacity and W&B startup, then compare against the v16 AdamH baseline and MuonH corrected launch.
