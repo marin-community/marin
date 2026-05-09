@@ -8,6 +8,24 @@ packages with no per-package config, plus a tiny `[tool.marin.tests]`
 table for the genuinely different packages. Most workspace members will
 have *no* table.
 
+## 0. Terminology
+
+- **Workspace member** — one directory under `lib/`. Marin has 8.
+  Identified by its short directory name (`levanter`) and packaged as
+  `marin-<dir>` (`marin-levanter`). The marin scope is special — its
+  test root is the repo-top-level `tests/`, owned by the root
+  `pyproject.toml`.
+- **Module** — a Python module name resolved from a source file.
+  `lib/levanter/src/levanter/store/cache.py` → `levanter.store.cache`.
+- **Test file** — a file under `lib/<member>/tests/` (or top-level
+  `tests/` for the marin scope) that pytest collects.
+- **Leg** — one entry in the orchestrator's matrix; one `pytest`
+  invocation against one workspace member's selected tests.
+- **Selection** is per-test-file (which files pytest runs).
+  **Dispatch** is per-workspace-member (one leg per member that has any
+  selected test). **Traversal** is per-module (the analyzer's
+  reverse-dep BFS walks dotted module names).
+
 ## 1. Workspace baseline (the convention)
 
 Every test leg runs as if these defaults applied — the orchestrator does
@@ -133,6 +151,10 @@ class TestsConfig:
     timeout_minutes: int = 15
 
 # Maps the analyzer's package names to the pyproject that owns them.
+# Every member's [tool.marin.tests] lives in its own pyproject — including
+# marin, whose table is in lib/marin/pyproject.toml even though its tests
+# directory is the repo-top-level `tests/` (the renderer carries that as a
+# separate constant — see TEST_DIR_FOR_SCOPE below).
 SCOPE_TO_PYPROJECT: dict[str, str] = {
     "rigging":  "lib/rigging/pyproject.toml",
     "finelog":  "lib/finelog/pyproject.toml",
@@ -141,8 +163,21 @@ SCOPE_TO_PYPROJECT: dict[str, str] = {
     "fray":     "lib/fray/pyproject.toml",
     "levanter": "lib/levanter/pyproject.toml",
     "zephyr":   "lib/zephyr/pyproject.toml",
-    "marin":    "pyproject.toml",            # root owns top-level tests/
+    "marin":    "lib/marin/pyproject.toml",
 }
+
+# Where each scope's tests live. All but marin's are conventional;
+# marin's `tests/` is at the repo root rather than under lib/marin/.
+TEST_DIR_FOR_SCOPE: dict[str, str] = {
+    **{name: f"lib/{name}/tests" for name in SCOPE_TO_PYPROJECT
+       if name != "marin"},
+    "marin": "tests",
+}
+
+# The workspace baseline lives at the repo root, separately from any
+# member's [tool.marin.tests]:
+#   pyproject.toml  ->  [tool.marin.tests.workspace]   (baseline only)
+#   lib/marin/pyproject.toml  ->  [tool.marin.tests]   (marin's overrides)
 
 def resolve(scope: str, repo_root: Path) -> TestsConfig:
     """Load the workspace baseline, merge any per-package override, return
@@ -156,21 +191,45 @@ class ConfigError(Exception): ...
 `sync_package` is **derived**, not declared. The convention is
 `marin-<dir>` for `lib/<dir>/pyproject.toml` and `marin` for the root.
 
-## 4. Concrete per-package configs after Phase 0 cleanup
+## 4. Concrete per-member configs after Phase 0 cleanup
 
-This is what each package's table actually looks like under the new
-scheme. Four packages need no table; the rest carry small deltas.
+Each table is the *full* `[tool.marin.tests]` content; absent fields
+inherit from the workspace baseline. Four members need no table; four
+carry small deltas (haliax conditional on the Phase 0 §7 step-5
+review).
 
-| Package | `[tool.marin.tests]` |
-|---|---|
-| `rigging` | (no table — pure baseline) |
-| `finelog` | (no table) |
-| `zephyr` | (no table) |
-| `fray` | (no table — `fray_test` group renamed to `test` in Phase 0) |
-| `iris` | `env = { PYTHONASYNCIODEBUG = "1" }` |
-| `haliax` | `uv_run_args = ["--with", "jax[cpu]==0.9.2"]` + `env = { JAX_NUM_CPU_DEVICES = "8" }` if the Phase 0 review keeps the JAX override; otherwise no table |
-| `levanter` | `sync_extras = ["torch_test"]`, `sync_extra_args = ["--no-install-package", "torch"]`, `setup_scripts = ["infra/test_setup/install_torch_cpu.sh", "infra/test_setup/install_ffmpeg_apt.sh"]`, `setup_node = "22"` |
-| `marin` | `sync_extras = ["cpu", "dedup"]`, `pytest_args = ["-n", "4", "--dist", "worksteal"]` |
+```toml
+# lib/rigging/pyproject.toml — no [tool.marin.tests] table.
+# lib/finelog/pyproject.toml — no [tool.marin.tests] table.
+# lib/zephyr/pyproject.toml — no [tool.marin.tests] table.
+# lib/fray/pyproject.toml   — no [tool.marin.tests] table
+#                             (fray_test group renames to test in Phase 0).
+
+# lib/iris/pyproject.toml
+[tool.marin.tests]
+env = { PYTHONASYNCIODEBUG = "1" }
+
+# lib/haliax/pyproject.toml — conditional on Phase 0 §7 step 5.
+# Default outcome: no table. If the JAX override is ratified:
+[tool.marin.tests]
+uv_run_args = ["--with", "jax[cpu]==0.9.2"]
+env = { JAX_NUM_CPU_DEVICES = "8" }
+
+# lib/levanter/pyproject.toml
+[tool.marin.tests]
+sync_extras = ["torch_test"]
+sync_extra_args = ["--no-install-package", "torch"]
+setup_scripts = [
+    "infra/test_setup/install_torch_cpu.sh",
+    "infra/test_setup/install_ffmpeg_apt.sh",
+]
+setup_node = "22"
+
+# lib/marin/pyproject.toml
+[tool.marin.tests]
+sync_extras = ["cpu", "dedup"]
+pytest_args = ["-n", "4", "--dist", "worksteal"]
+```
 
 ## 5. Orchestrator workflow shape (`marin-unit.yaml`)
 
@@ -267,11 +326,35 @@ jobs:
   `tests: []` (full suite signal); orchestrator does not need a separate
   code path.
 - Multi-line shell goes into `$RUNNER_TEMP/leg/*.sh`, never into
-  `$GITHUB_OUTPUT` (levanter's torch wheel install is genuinely 25
-  lines).
+  `$GITHUB_OUTPUT` (levanter's CPU-torch wheel install is genuinely a
+  25-line heredoc).
 - The leg always runs from repo root; pytest is invoked with explicit
   paths (`lib/<pkg>/tests/<file>` from the analyzer or `lib/<pkg>/tests`
   for full suite). No `cd`.
+
+**`infra/run_tests.py prepare <package>` outputs:**
+
+- `python_version` — string, e.g. `"3.12"`. From the workspace
+  baseline.
+- `sync_args` — single space-separated string ready for shell
+  interpolation. Built as: `--frozen --package marin-<dir>` + one
+  `--extra X` per `sync_extras` entry + one `--group X` per
+  `sync_groups` entry + `sync_extra_args` joined verbatim. Example for
+  levanter:
+  `--frozen --package marin-levanter --extra torch_test --group test --no-install-package torch`.
+- `node_version` — string, possibly empty. From `setup_node` field;
+  empty disables the `actions/setup-node` step via the `if:` guard.
+- `env_lines` — newline-delimited `KEY=VALUE` ready for `>> $GITHUB_ENV`.
+  Values are not quoted; the loader rejects values containing newlines
+  or `=` to keep this format unambiguous.
+- Two files written to `$OUT_DIR` (default `$RUNNER_TEMP/leg/`):
+  - `setup.sh` — `#!/usr/bin/env bash\nset -euo pipefail\n` then each
+    `setup_scripts` entry as a `bash <path>` line in declared order.
+    Empty body if `setup_scripts == []` (executes successfully).
+  - `pytest.sh` — `#!/usr/bin/env bash\nset -euo pipefail\n` then a
+    single line: `uv run <uv_run_args> pytest -m "<markers>" <pytest_args> <test_paths>`,
+    where `test_paths` is either the analyzer's explicit list or
+    `lib/<pkg>/tests` (full suite) or `tests` (marin full suite).
 
 ## 6. File-path summary
 
@@ -309,13 +392,24 @@ defensible and easier to review without the orchestrator change.
    allows 3.12 (`lib/haliax/pyproject.toml:8`, `lib/levanter/pyproject.toml:8`,
    etc.). Bump both workflows to 3.12.
 4. **Standardize the test dependency-group name to `test`** across every
-   `lib/<pkg>/pyproject.toml` `[dependency-groups]` table. Today:
-   levanter, zephyr, marin already have a `test` group; haliax, iris,
-   rigging, finelog put test deps under `dev` (or have no test group at
-   all); fray uses `fray_test`. Split or rename so `uv sync --group
-   test` works uniformly — pure dev-tooling stays under `dev`, test-only
-   deps move to `test`. After this, `sync_groups` defaults to `["test"]`
-   and no package overrides it.
+   `lib/<pkg>/pyproject.toml` `[dependency-groups]` table. Today's
+   layout (verified):
+   - **`test` already exists**: levanter, zephyr, marin. No change.
+   - **`fray_test` rename → `test`**: `lib/fray/pyproject.toml:28`. Also
+     update **both** `include-group` references — `fray_tpu_test`
+     (line 33) and `dev` (line 35) currently include `fray_test`.
+     Regenerate `uv.lock` after the rename; the lockfile's `fray-test`
+     group entries (uv.lock:5359, 5398) become `test`.
+   - **Split `dev` into `dev` (tooling only) + `test` (test-only deps)**:
+     haliax, iris, rigging, finelog. Move pytest, pytest-asyncio,
+     pytest-xdist, pytest-cov, etc. from `dev` to a new `test` group;
+     leave linters, type checkers, and editor helpers in `dev`. If any
+     entry serves both roles, duplicate it (uv resolves dups
+     idempotently). haliax's `dev` is the largest and most heterogeneous
+     — flag in the PR description that humans should sanity-check the
+     split.
+   After this step, `uv sync --group test` works uniformly and no
+   per-member `[tool.marin.tests]` overrides `sync_groups`.
 5. **Re-evaluate haliax's `--with "jax[cpu]==0.9.2"` runtime pin
    (`haliax-unit.yaml:55`).** The lockfile already pins JAX. If the
    override is intentional (test haliax against the JAX version levanter
@@ -325,6 +419,16 @@ defensible and easier to review without the orchestrator change.
    `uv_run_args` in §2 carries it forward.
 6. **Drop `-c pyproject.toml`** from `haliax-unit.yaml:55`. Pytest
    auto-discovers config; the explicit `-c` is redundant.
+7. **Verify `PYTHONPATH` overrides become unnecessary.** Today four
+   workflows set `PYTHONPATH=tests:src:.` or `PYTHONPATH=tests:.`
+   (haliax/levanter/marin) — a vestige of `cd lib/<pkg>/` discipline
+   that the unified workflow eliminates (legs always run from repo
+   root with explicit `lib/<pkg>/tests/...` paths). Run the orchestrator
+   in shadow mode for one pass; if a test breaks because of `sys.path`
+   expectations, the per-member workaround is `env = { PYTHONPATH =
+   "lib/<pkg>/tests:lib/<pkg>/src" }`, but the better fix is updating
+   the test or its `conftest.py` to not rely on `sys.path` munging in
+   the first place.
 
 After Phase 0, the per-package YAMLs are simpler and the diff that
 introduces `marin-unit.yaml` becomes much easier to review.
@@ -335,6 +439,10 @@ introduces `marin-unit.yaml` becomes much easier to review.
   — root baseline must exist; surfaced by `test_marin_tests_config.py`.
 - `ConfigError("env value for <key> must be a string, got <type>")` —
   reject TOML ints/bools loudly.
+- `ConfigError("env value for <key> contains '=' or newline; not
+  representable in $GITHUB_ENV")` — the renderer can't encode such
+  values in the `env_lines` newline-delimited `KEY=VALUE` format used
+  to populate `$GITHUB_ENV`.
 - `ConfigError("setup_scripts entry not found: <path>")` — typo guard.
 - `ConfigError("python may only be set in workspace baseline, not in
   lib/<pkg>/pyproject.toml")` — packages cannot diverge on Python.
@@ -356,9 +464,14 @@ introduces `marin-unit.yaml` becomes much easier to review.
 
 ## 10. Migration plan
 
-**Phase 0 — cleanup PRs (5 small).** Each is an independently mergeable
+**Phase 0 — cleanup PRs (7 small).** Each is an independently mergeable
 change; land them before the orchestrator (§7). These shrink the
-existing seven YAMLs and make the orchestrator diff small.
+existing seven YAMLs and make the orchestrator diff small. A separate
+in-progress workspace effort to remove vestigial lazy imports is
+landing in parallel — that effort is independent (it doesn't block the
+orchestrator) but improves analyzer precision: the analyzer sees only
+top-level imports today, so eliminating dead lazy imports brings the
+test-impact graph closer to the runtime-import graph.
 
 **Phase 1 — shadow mode (1 PR).** Land `marin-unit.yaml` with
 `continue-on-error: true` on every step, alongside the existing six
