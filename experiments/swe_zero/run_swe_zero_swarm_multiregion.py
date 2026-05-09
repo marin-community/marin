@@ -257,21 +257,21 @@ def _prefetch_hf_dataset(dataset_id: str) -> None:
 def _prefetch_model_from_gcs(region: str) -> bool:
     """Copy the mini-coder-1.7b HF cache from regional GCS into /tmp/hf-cache.
 
-    Sets HF_HOME=/tmp/hf-cache and HF_HUB_OFFLINE=1 so vLLM (in the inner
-    worker subprocess) reads the model from the local cache instead of HF.
-    Avoids the HF 429 race when N workers spawn concurrently and all try to
-    download the 3.4 GB model simultaneously.
+    Populates the local cache only; does NOT set HF_HUB_OFFLINE in os.environ
+    (that would block the outer worker's _prefetch_hf_dataset call to
+    nebius/SWE-rebench-V2-PRs). The inner worker subprocess gets HF_HUB_OFFLINE=1
+    + HF_HOME=/tmp/hf-cache via _run_inner's inner_env, scoping offline-mode
+    to where it matters: the vLLM model load that triggers the 429 race.
 
     Returns True if the cache was successfully populated; False on any failure
-    (worker falls back to online HF, which may hit 429s but the launcher will
-    keep retrying until rate-limit windows clear).
+    (inner worker falls back to online HF, which may 429 but launcher retries).
     """
     import fsspec
 
     src = f"gs://marin-{region}/hf-cache/models--ricdomolm--mini-coder-1.7b/"
     dst_root = "/tmp/hf-cache"
     dst = f"{dst_root}/models--ricdomolm--mini-coder-1.7b/"
-    if os.path.exists(dst) and os.environ.get("HF_HUB_OFFLINE") == "1":
+    if os.path.exists(dst) and os.environ.get("MARIN_HF_CACHE_ROOT") == dst_root:
         logger.info("local hf-cache already populated at %s, skipping", dst)
         return True
     try:
@@ -299,10 +299,10 @@ def _prefetch_model_from_gcs(region: str) -> bool:
                     if not chunk:
                         break
                     out.write(chunk)
-        os.environ["HF_HOME"] = dst_root
-        os.environ["HF_HUB_OFFLINE"] = "1"
+        # Tag the cache root for _run_inner to pass into subprocess env.
+        os.environ["MARIN_HF_CACHE_ROOT"] = dst_root
         logger.info(
-            "model prefetch complete (%d files, ~3.5 GB); HF_HOME=%s HF_HUB_OFFLINE=1",
+            "model prefetch complete (%d files, ~3.5 GB) at %s; inner workers will run with HF_HUB_OFFLINE=1",
             len(files),
             dst_root,
         )
@@ -447,6 +447,14 @@ def _run_inner(output_root: str, batch_idx: int, tensor_parallel: int, worker_se
     logger.info("running inner worker: shard %d/%d -> %s", batch_idx, TOTAL_PR_BATCHES, shard_dir)
     log_path = f"{shard_dir}/_swarm_worker_{worker_seed:04d}_iter_{iteration:03d}.log"
     inner_env = {**os.environ}
+    # Scope HF_HUB_OFFLINE=1 to the inner subprocess only (where vLLM loads
+    # the model). MARIN_HF_CACHE_ROOT is set by _prefetch_model_from_gcs after
+    # successfully populating the local cache; if absent, fall through to
+    # online HF (with retry-loop risk on 429).
+    cache_root = os.environ.get("MARIN_HF_CACHE_ROOT")
+    if cache_root:
+        inner_env["HF_HOME"] = cache_root
+        inner_env["HF_HUB_OFFLINE"] = "1"
     proc = subprocess.run(cmd, capture_output=True, text=True, errors="replace", env=inner_env)
     log_blob = (
         f"=== cmd ===\n{' '.join(cmd)}\n"
