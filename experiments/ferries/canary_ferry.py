@@ -27,7 +27,7 @@ import datetime
 import os
 
 from fray.cluster import ResourceConfig
-from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.data.text import BlockShuffleConfig, TextLmDatasetFormat
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -158,6 +158,10 @@ def _build_step_from_env() -> ExecutorStep:
     profiler_enabled = _env_bool("CANARY_PROFILER_ENABLED", True)
     profiler_start_step = _env_int("CANARY_PROFILER_START_STEP", 5)
     profiler_num_steps = _env_int("CANARY_PROFILER_NUM_STEPS", 25)
+    profiler_options = ProfileOptionsConfig()
+    if accelerator == "gpu" and gpu_replicas > 1:
+        # Device traces make multinode Grug GPU canary exports stall for minutes.
+        profiler_options = ProfileOptionsConfig(device_tracer_level=0)
 
     return ExecutorStep(
         name=f"{name}-{run_id}",
@@ -180,6 +184,7 @@ def _build_step_from_env() -> ExecutorStep:
                 enabled=profiler_enabled,
                 start_step=profiler_start_step,
                 num_steps=profiler_num_steps,
+                profile_options=profiler_options,
             ),
         ),
     )

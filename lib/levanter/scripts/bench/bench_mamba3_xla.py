@@ -22,6 +22,7 @@ from levanter.kernels.pallas.mamba3 import (
     mamba3_attentionish_forward,
     mamba3_chunked_forward,
 )
+from levanter.callbacks.profiler import stop_trace_with_timing
 
 
 ApiVariant = Literal["chunked_public", "attentionish_public"]
@@ -171,7 +172,7 @@ def _capture_profile(
             out = fn(*args)
             jax.block_until_ready(out)
     finally:
-        jax.profiler.stop_trace()
+        stop_trace_with_timing()
 
 
 def _benchmark(

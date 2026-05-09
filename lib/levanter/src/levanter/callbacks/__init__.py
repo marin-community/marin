@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import threading
 import time
 from contextlib import contextmanager
 from typing import Optional
@@ -20,7 +19,7 @@ from levanter.callbacks._metrics import (
     pbar_logger,
 )
 from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
-from levanter.callbacks.profiler import _flush_while_waiting, profile
+from levanter.callbacks.profiler import profile, stop_trace_with_timing
 from levanter.data import DataLoader
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
 from levanter.metrics import fold as fold_metric
@@ -121,6 +120,7 @@ def profile_ctx(
     host_profile: bool = False,
     host_profile_basename: str = "host_profile",
     host_profile_topn: int = 0,
+    profiler_options: jax.profiler.ProfileOptions | None = None,
 ):
     """Context manager for JAX profiling traces.
 
@@ -151,9 +151,13 @@ def profile_ctx(
         pass
 
     if device_profile:
-        jax.profiler.start_trace(path, create_perfetto_link=_create_perfetto_link, create_perfetto_trace=True)
+        jax.profiler.start_trace(
+            path,
+            create_perfetto_link=_create_perfetto_link,
+            create_perfetto_trace=True,
+            profiler_options=profiler_options,
+        )
 
-    event = None
     pr = None
     stats_path = None
     txt_summary_path = None
@@ -195,21 +199,13 @@ def profile_ctx(
             except Exception:  # pragma: no cover - optional/diagnostic path
                 logger.warning("Failed to log host profile stats", exc_info=True)
 
-        # Start periodic flushing before stop_trace since it may block when perfetto is enabled
-        if create_perfetto_link and jax.process_index() == 0:
-            event = threading.Event()
-            _flush_while_waiting(event)
-
         if create_perfetto_link:
             logger.info(f"Stopping profiler. Process 0 will open a perfetto link. I am process {jax.process_index()}")
         else:
             logger.info("Stopping profiler.")
 
         if device_profile:
-            jax.profiler.stop_trace()
-
-        if event is not None:
-            event.set()
+            stop_trace_with_timing()
 
         levanter.tracker.current_tracker().log_artifact(path, type="jax_profile")
         if stats_path is not None and os.path.exists(stats_path):

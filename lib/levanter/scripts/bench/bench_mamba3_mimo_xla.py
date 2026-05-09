@@ -26,6 +26,7 @@ from levanter.kernels.pallas.mamba3.reference import (
 )
 from levanter.kernels.pallas.mamba3.xla import mamba3_mimo_chunked_forward_ranked_xla_batched
 from levanter.kernels.pallas.ssd import intra_chunk_log_alpha_cumsum, local_log_alpha
+from levanter.callbacks.profiler import stop_trace_with_timing
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +137,7 @@ def _capture_profile(fn, *args, profile_dir: str, profile_steps: int) -> None:
             out = fn(*args)
             jax.block_until_ready(out)
     finally:
-        jax.profiler.stop_trace()
+        stop_trace_with_timing()
 
 
 def _attentionish_public_inputs(

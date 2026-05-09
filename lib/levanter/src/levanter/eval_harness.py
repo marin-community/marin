@@ -27,7 +27,7 @@ import random
 import tempfile
 import time
 import typing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Callable, Iterator, List, Optional, Tuple, TypeVar, Union
 
@@ -77,6 +77,9 @@ from tqdm_loggable.auto import tqdm
 
 import levanter.config
 from levanter.callbacks import StepInfo
+from levanter.callbacks.profiler import ProfileOptionsConfig
+from levanter.callbacks.profiler import ProfilerConfig as TraceProfilerConfig
+from levanter.callbacks.profiler import stop_trace_with_timing
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.data import batched
 from levanter.data.loader import stack_batches
@@ -199,6 +202,10 @@ class ProfilerConfig:
     """Path to save profiler traces."""
     perfetto_link: bool = False
     """If True, create a Perfetto link for the trace."""
+    profile_options: ProfileOptionsConfig = field(default_factory=ProfileOptionsConfig)
+
+    def build_jax_profile_options(self) -> jax.profiler.ProfileOptions | None:
+        return TraceProfilerConfig(profile_options=self.profile_options).build_jax_profile_options()
 
 
 # OK, so LM-Eval-Harness is not deterministic. This means we can't just run it on different workers and expect the
@@ -562,13 +569,14 @@ class LevanterHarnessLM(TemplateLM):
                 self.profiler_config.profile_path,
                 create_perfetto_link=_create_perfetto_link,
                 create_perfetto_trace=True,
+                profiler_options=self.profiler_config.build_jax_profile_options(),
             )
             self._profiler_started = True
 
         # Stop profiler at end_step
         elif self._current_step == end_step and self._profiler_started:
             logger.info(f"Stopping profiler at step {self._current_step}")
-            jax.profiler.stop_trace()
+            stop_trace_with_timing()
             self._profiler_started = False
             self._log_profiler_artifact()
 
@@ -576,7 +584,7 @@ class LevanterHarnessLM(TemplateLM):
         """Ensure profiler is stopped if it was started."""
         if self._profiler_started:
             logger.info("Stopping profiler (end of evaluation).")
-            jax.profiler.stop_trace()
+            stop_trace_with_timing()
             self._profiler_started = False
             self._log_profiler_artifact()
 
@@ -1526,6 +1534,7 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
                 num_steps=profiler_num_steps,
                 profile_path=str(profile_path),
                 perfetto_link=trainer_profiler.perfetto_link,
+                profile_options=trainer_profiler.profile_options,
             )
 
         logger.info("Running LM eval harness....")

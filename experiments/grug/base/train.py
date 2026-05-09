@@ -421,6 +421,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     profiler_cfg.start_step,
                     profiler_num_steps,
                     profiler_cfg.perfetto_link,
+                    profiler_options=profiler_cfg.build_jax_profile_options(),
                 ),
                 every=1,
             )
