@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T05:59:51.685411+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "be_clear",
+    "locus": "spec phrase (gem vs cla): The assistant should by default av"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 05:59:55 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3746",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits explicitly add a carve-out for user requests, with EDIT_A stating 'explicit user requests for such styles override this default' and EDIT_B stating 'the user's explicit instruction overrides this default'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\x9d\\x04\\n\\x9a\\x04\\x01\\x0c9\\xd6\\xc7\\x00\\x97\\xb0X\\x85\\t\\xa0]\\xd3p\\x87\\xc67\\xe0U\\x03\\x03u\\xe5\\xbb\\xd5 lj\\xf1\\xb6\\xd5\\xd6\\x10 \\x18\\x83\\x16\\xb6\\xcfw\\xc2j\\x11\\xd7\\xeb>W\\x9f\\x98\\xcd!\\xc1\\xfe;b\\xf7\\x87\\xd6\\xd6T\\xdaR\\xff\\x8f&\\x10\\xb9Q\\xe0O\\x87\\xdc3\\xc4Yv\\xc0_\\xcc\\xcd\\x0c\\'\\xaf\\x1cD_\\xce\\xf3L\\xc8\\xa0`\\xbeL|\\xfb\\xc1\\x16\\xde\\xf7\\x0e\\x10p\\xb0m\\xbc=\\xf8R\\xfe\\x84\\x8f\\x14\\xc8\\xd2\\x80\\x9baR~\\xe4: \\xb6G\\xb3\\xcac\\xa4\\x18\\x11a\\'BD\\x82l6<\\xbdz\\xc5\\x0b\\xdc\\x85\\xacO@M\\xdaNi\"\\x9b\\x0c\\xeb3\\xd9F.OF\\x98r%\\x1dH\\x8e?\\xc8\\t\\xd8\\xa5\\xfd9D\\x93\\xf2B\\x9f|\\xe1\\x9b\\x1aY\\x94\\x15\\xf6\\xfdI\\xe4\\x83\\xe2\\x98\\x14v\\xb5w\\xb4z\\n\\x1a\\\\\\xb3u[e\\x8c]/\\xbc\\xb1\\t\\x9d\\xa5u\\xde\\xad\\xeeZ\\xfb\\xb5[\\xf7X\\xc2\\x02a\\xe1\\x0bo\\xbf\\x18j\\x10\\xca\\x9a\\x8aTZ^\\xf4\\xb2We\\x147p0\\x80t\\xcb[\\t\\xea\\xa2\\r*G\\x82)\\xd7.\\x80\\xdeD\\x84VX\\'\\xc5\\xd0\\xf7I}\\x99\\xb1\\\\\\x99\\xb7\\x876o\\xbe>\\xdf\\xf7\\x94\\x1aKA\\x06\\x96\\xe0\\xeb\\x96B!\\xf8\\xc9\\xa8\\xb1\\x9b\\xde\\xcb;\\xfc\\x0cLI\\xaa\\x9c\\xcax\\\\\\x8b\\xee\\xb5\\xda\\xb2\\xc1\\xae+\\xedl\\x1e\\x18M\\x1b\\xd6\\xa6Hk\\xd1\\'\\x9a\\x85\\xe3\\xdcn\\xf4N\\xbb\\x8cY\\x0e!\\xad\\xf1V\\xe5\\xe2\\x85\\x97F6\\xfc\\x8c9\\x8d\\x14^Oo\\xa4\\x0f\\xe2h\\xb0y\\x9f\\x17\\x81\\\\\\x95\\xee\\x0bi\\xa5\\xbb\\xa8;\\xa5\\x12\\x04\\xa7\\xf3\\xba\\'Hu6\\x1a\\x8a\\xa9\\x90\\x82\\xab\\xb5\\xba\\xd9\\x90\\xad\\xfe\\xa1\\x80\\xe0\\x82\\x98\\xdd\\xc8F\\x9dv\\xa9\\xf8\\xbal\\xa0*YuT\\xec\\xfe\\xdc9\\xb1J\\xb1e{\\xfd\\xa9m\\xd8\\xcc\\xce\\x8b\\xcd\\xee\\\\\\x08.\\xb9\\x9c\\x0c\\xb7\\x12\\x14J\\x99\\xbc\\xe2\\xfe\\xe8/\\xdf\\xb4\\x1e\\xf4~;\\x1c\\xb8J\\x1c\\x87>\\x98\\xdc\\x96\\xd3A\\x8f\\xed}\\xe1\\xd5\\xeay\\xa5\\xa5&%.\\xa8X\\xbel\\x1d\\xcd\\xdbH\\x92\\x8b\\xb3g]\\x8c:r\\x7fQ\\x0b\\x8a\\x88;\\xb0e\\xcb4\\xe3\\xb3\\x9d\\xe6\\xbc\\xf4\\x1b$\\xe5(\\x9e\\xa4\\t8\\xf2\\x0e\\xfc\\xa4l\\x0eH#YW\"'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "V83-aY6YMLfW_uMPiZfl4A0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 64,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 525,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 525
+        }
+      ],
+      "thoughts_token_count": 97,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 686,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.751
+}

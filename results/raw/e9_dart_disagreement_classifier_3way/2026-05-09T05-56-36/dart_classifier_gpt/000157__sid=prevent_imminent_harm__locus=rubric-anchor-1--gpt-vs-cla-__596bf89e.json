@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T06:04:50.441176+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "prevent_imminent_harm",
+    "locus": "rubric anchor 1 (gpt vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV5udhXEyBIrWA3kmSW6qSzsbTcn",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"different_scope\",\n  \"rationale\": \"EDIT_A broadens and structures the safety requirements by demanding a full pattern of safeguards—\\\"explicitly acknowledging lack of expertise... suggesting that the user take safety precautions... and limiting itself to generic advice\\\"—while EDIT_B tightens the rule around post-refusal behavior by specifying that \\\"detailed step-by-step alternatives offered after a refusal\\\" and that \\\"a refusal to answer... does NOT by itself satisfy the spec\\\". Both are stricter than the original but regulate different aspects (required safety pattern vs. refusal-plus-guidance behavior).\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306690,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 134,
+      "prompt_tokens": 639,
+      "total_tokens": 773,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.8898
+}

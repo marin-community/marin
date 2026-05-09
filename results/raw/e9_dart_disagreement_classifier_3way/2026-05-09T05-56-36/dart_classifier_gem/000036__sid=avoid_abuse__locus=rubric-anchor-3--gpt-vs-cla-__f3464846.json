@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T05:58:39.545671+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "avoid_abuse",
+    "locus": "rubric anchor 3 (gpt vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 05:58:42 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3383",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits broaden the scope of allowed negativity beyond just 'roasting'. EDIT_A includes 'fictional and non-hateful' insults and 'fictional negativity', while EDIT_B includes 'explicitly instructed negativity (roasts, fictional abuse, adversarial simulations, etc.)'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xec\\x04\\n\\xe9\\x04\\x01\\x0c9\\xd6\\xc7\\xe2\\xe8\\x8aPj\\xd0\\xd2\\x12\\xbbN\\x99/\\xdf\\xd5\\xedD\\x8ct7\\xbd.\\xacm\\xbe\\xef5^>\\xbbQ\\xc5 1\\x94fa\\xf3\\xca\\xa0\\x1f\\xa7C\\'f\\x1d\\xa6\\x14wP\\x84\\xdd\\n\\x82Yz&\\xb6\\x1c\\x140\\x81\\x92A\\xfb\\xab\\x96\\xa5\\xd1\\x82\\x8c\\x14/N\\n\\xb1\\x14\\xda`\\x8d\\x08\\xdc\\xafk^\\xe6^,\\x89m\\xc9\\xe8u4$p\\x88k\\xbd\\xc7u\\xba\\x93\\x1c\\x9a\\x15`O\\x14\\\\G\\x84]\\xc2\\x00\\x03%Q\\x12y\\xf0\\x80\\x91:;\\xd9-\\x94\\xd9;%t\\xb6\\xa6\\xd21\\xd6C\\xa0\\x12\\x8d\\x89\\xd9\\xdaP\\xf2\\x08=\\x9b\\x90\\x8c\\x96@\\xf1\\xec\\x8a\\xde\\xc4\\x16\\x0fe\\xf0\\xdbJ\\xaaz\\xcf\\xc9\\xee\\xb8\\xf0\\x88%\\xc7>\\x1a\\xc4\\x0e\\xe5\\x91!R\\x9b\\xa7\\xc034\\xee\\x1c\\xf5\"\\x02\\x97\\xcaxQ\\x10\\xcb(\\x0eJ\\xc7\\xde\\x99o\\x83w\\xf3\\x85\\xd9*\\x04?\\x18\\xc3\\x92Zc&\"\\xaa\\x06\\x8f36SC\\xe3+2[@\\xb2\\x90\\xc7\\x0b\\x18\\xeau\\x97*>\\xbc\\xeb\\x86j\"l\\x87\\xb8\\xb4\\x90\\xa9\\xaf7\\xae\\xc4o\\x8c\\x7f\\xe8\\x89\\x9fdWk_^Y\\xea\\x18:\\x99\\x10\\xd6dQ\\xa0\\xcfz4;3\\x1d\\x80\\xfe\\xda{\\xb3*\\xc1mI]y\\xeeE,\\x0cQ\\x9f\\xbc3W\\xded\\xb7\\x01\\x9doo\\x8f$%S\\x9a\\x8cD\\xb7<\\x9b\\x84n\\xaa\\xd5\\xb1\\xc7\\xfc\\xda\\xa6\\xf2\\xfa\\x0b\\x90\\x18\\x9e\\xfaN\\x9c\\xd2z\\xc3dr\\x7f\\xba\\x00\\xf9/\\xe9\\x04\\x83e\\x9brEu\\xf41\\x87\\xa9\\x04\\x9e\\x1a\\xde\\x14\\x1d\\xac\\xd1\\xd3G\\x08\\x98\\xb3\\x1b\\xe8\\xda\\xba\\r\\xa3(\\x9c+l\\xa6\\xffN\\xe9>\\xcd\\x82\\xf7\\xe4\\xef\\x04w\\x98\\x97m\\x9a\\xcd\\xb6_<G>L\\x96\\x0e\\x08F\\x8dg;\\xaa\\x02Y\\xb2+\\xdb\\x14\\x8d\\x84\\x13,y5:\\xe1\\xeeN\\xf3\\xd6\\xf5\\xa8\\xce\\xdc\\xe5\\'\\xfab5\\xadL\\xdf\\xc2F\\xe4oY\\x9a\\x81t\\xe1\\xf3S \\x96\\xd1\\xf4M\\x9c\\x8aH\\xa6\\xfbC\\xe6xN\\xbe\\x8f\\xc2\\x8e\\xde\\x83\\xdcH|\\x02\\xd6\\xfd\\x8fO\\xa3\\xa8\\xc2\\xb5K\\x11\\xa1\\x88\\'\\xae\\xc4[\\xbe\\xa9\\x88U\\xde<M\\x95,\\x9c\\xb8\\xc5\\x80\\x83\\x00\\xe5\\x92\"-\\xae\\xf9\\xc8\\xbd\\xbe\\n\\x00\\x8bs\\xab\\x10\\xd3^\\xcd^W_x\\x9c\\xd7\\xd4N\\xa0\\xe6\\x9cx+g4\\x13\\xfcu\\x1c\\xf0\\xe1\\x8f\\x12\\xa1\\x08\\x98,\\x85W\\xc51\\x00U\\x96\\xbb\\x94\\xdc\\xf4\\xd4\\xd0\\x1b:\\x06\\xec\\x8b\\xb0\\x829;\\x83\\x01\\x1c\\x175\\x9aJ%tq>\\x12\\x86\\x8e\\x97A\\n\\x04]\\xa5?\\x8e\\xd6\\x8f\\x9f^\\x0c\\xa7H&V\\x9a\\xc5\\xb2{'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "D83-adbiJ8ze_uMPnLviwAE",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 79,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 675,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 675
+        }
+      ],
+      "thoughts_token_count": 124,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 878,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.3876
+}

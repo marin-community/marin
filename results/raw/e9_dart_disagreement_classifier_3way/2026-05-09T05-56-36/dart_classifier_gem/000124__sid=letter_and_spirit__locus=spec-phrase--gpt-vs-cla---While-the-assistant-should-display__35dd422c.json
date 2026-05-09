@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:03:03.243955+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "letter_and_spirit",
+    "locus": "spec phrase (gpt vs cla): While the assistant should display"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:03:06 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3731",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"opposite_direction\",\n  \"rationale\": \"EDIT_A allows the assistant to pursue broader goals if they are 'explicitly asked for or clearly endorsed', whereas EDIT_B strictly prohibits this 'even when the user explicitly invites or grants permission'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xf4\\x07\\n\\xf1\\x07\\x01\\x0c9\\xd6\\xc7\\n\\xf4\\xbd\\xe0\\x8e\\x98i\\xe6\\xc7\\x00?\\x1a\\xbd\\x1d\\x7f\\xb8n\\x9d\\x8c\\x8e\\xc2\\x1c\\xcc\\\\ruP\\xbe\\xb2\\xfc\\xaaH\\x11\\xd3\\x11\\xd5r\\xf6h?\\x90>\\x0cX\\xdb\\x80\\n\\xbby8\\xf0P\\xad\\xf1\\xf5\\xd5\\xc3(\\xa8f\\xf0\\x9d\\x91\\xed2\\xa4\\x1a#\\x05:A/<\\x85.\\x16Us\\x8a\\xb5\\x8d\\xc1\\x1e\\xcf\\x96\\x10N\\xb9\\xe1\\xc2\\xe3;\\xf2\\x84\\xe40\\x00\\x10\\xf1l(\\x16\\xc9M\\xfe\\xdd\\x8f\\x96\\xa2\\x91*\\xcc\\x94\\x0f\\x10\\x8f\\x10\\xb2l\\xcd\\x1d.\\xdf\\xb8\\xd4j\\xe9\\x154R\\x8e\\x9d\\x9c\\xf4\\x96\\x0b&\\xc7\\xf2d\\x07\\xab_\\x12\\xab\\xd7\\xc4I\\xce\\xd8m\\x06\\x92p\\x85D\\x18c\\xdf\\x08\\\\\\xb8X\\x91\\xa2\\x16\\x95]?\\xa8k\\xf6a%#@`_\\xa4\\xa2+\\xba\\x95\\x8c\\x1d\\x9dt\\xb22\\x8d\\xbe\\x1a\\xbb\\xf6\\x92\\xf0\\xc9n\\xd7Q9\\x7f\\x86\\xa7\\xfbE\\x0b,\\xb3\\x02\\xbb;W\\t\\x00\\xec)\\xf4\\xfa\\x08\\x87h\\x13\\x0f%\\xf0\"F\\x88\\xb4\\xcf\\xfbk\\xdb\\xb6\\x99\\xabb\\xad>OIH\\x17\\x13\\x8c<\\x88\\x88F\\xd1\\x9d\\xdf\\xc8\\xaf\"\\xf5\\xb4\\x8ez|6#\\xd7K\\xe2\\x0b\\x7f#q\\x9c\\x16%7\\x99\\x9d\\xe7v\\x1dE\\x1eS\\x9c9\\xfbA\\x95t\\xfd\\x04\\x98\\x1c\\xc5[\\xae\\x9e{\\x90m\\x0e O\\xce\\xa15m\\xd4l\\x08\\xba\\x7f\\xe0\\xac=\\xb6\\xb9\\x8b\\xc3\\xbdz\\xe2\\xbc\\xea\\xc4\\xe1\\x1f\\xaf\\x0e\\xb3\\xbc\\x816\\xeb\\xa2k\\xa8\\x17\\x04\\xbei\\xa7\\x9e\\x9a\\xdb\\xf7\\xf0\\xfe\\xe4g\\xd1\\xfa\\x85\\xaf\\xa6\\x0fv\\x81\\xc1\\xe2\\xa1\\x1c{\\xe8\\x0c\\xc3\\xd3\\x8eV #\\xda\"+\\xbad\\x95\\\\\\x18\\xa6\\xe1\\xf1\\xa0\\xd2\\x86h\\x1f\\xc62\\x802G\\xb7\\\\kCQ\\x9e\\xfe\\xda\\xe5uTK!\\xff\\x1a\\x88@\\xb5\\xa6\\x85)\\x98\\x1b>\\xd2\\x8f\\xd0\\xffnf\\xec {\\t\\xa6\\x93\\xd9\\x9c\\\\%%\\xce\\xc9\\x84D\\xe2\\x19\\x8f\\xdb\\xee\\xad\\xab\\xb3zRh0\\x10\\xa8\\xd2\\x01Y]\\xe4\\x18\\x9b\\xc5 \\x0f\\x8d\\x99t\\xbf\\xd2\\xad\\xa7\\xeai\\xf0C\\xb7\\x89C\\x0f\\xbf\\xc4\\xef1O\\x8d\\xd3\\xf4k$\\xf6\\xed\\xccT\\xb8F\\\\\\x18\\xeb\\xfbf\\xcf\\xe2-|bZ\\x14\\x89\\xc5u\\xa8u\\xff\\xc9\\xa3\\x92]c3\\x94;w\\x161\\xdc,\\xf23\\xa6\\x92\\xa01\\x0b\\xe4\\xcd\\x81\\xf5\\x9d\\xf6e\\x0f_\\xe0\\xa4\\x13\\xbed*E\\x9d\\xe7#fN\\\\e\\xc5\\xfc\\xc2\\xd3\\xc6\\xdf\\xa7\\xe51\\xc2\\xf1\\xfe\\xbc\\xcb\\xe9y?\\x1fK\\xe1~H\\x90V\\xbe\\xbc\\xa4D>0\\xfc<\\x82}\\xbc*\\x11\\x94\\x1b\\x97D\\xb5\\x0c\\x1e\\x9e\\xc3<\\xa3\\xf6\\x15\\xb4\\xd2X\\xbb\\xd65dbX\\x7f\\xee\\x8a\\xc1H\\x96\\xf29\\xb9u\\x17|\\xa2q\\xd8B\\xef\\x91\\xa6\\x8f\\x93o\\xdf\\xfe\\xa5I\\x82\\x9d\\x98\\x89\\xe9\\twVr%\\x96\\xeb\\x901N\\x0f\\x08\\xcc\\x14\\x16j\\xd0uL\\x1b\\xe4\\xec\\xe3]\\xc6\\xf0\\xf8\\x15\\xebQ\\x81f\\xbf\\x88GH\\x90\\x8a\\x14u\\xb5\\xc3=\\x11G\\xd5\\xc9\\x8e\\xca\\xa9\\x97\\xe7\\xb4\\xe7\\xc5\\xe6i\\xb2\\x9f\\x86\\xa7\\xff\\xc6\\x1fs\\xc6\\xcf\\x12g\\xce\\xca\\xc1\\xec\\xd1\\xe8\\x0f\\xc9\\xabR\\x16m?\\xbf\\x8bH\\x02\\x97\\xfb<K\\xbf\\xe5\\xa3\\x1a\\\\A\\x06\\xabV\\xe4\\xff+F\\xb5=/1\\x00U\\xc2\\xc7\\x91[t\\xae\\xda\\x80\\xc5\\xcb6\\x0f\\xc8\\xe1=;\\x83\\x8f\\xc9\\xcar\\xa8\\xd4\\xcesj\\x97\\r\\x17\\xdbh\\\\\\xe6g\\xb4DQ\\xa1^g=y\\x8e\\x9e+9\\x8f+\\n\\xb4:\\xb9\\xad\\x80\\xec\\xef\\'\\x05\\xcc\\x1b\\x9bn\\x0ei=w\\x1e\\xa3\\x94\\xf7\\xaf\\xc9\\xab\\xa3\\xf6\\xfe\\x15n\\xfchf&&G\\x06T\\n\\xf4\\x8a(\\x0c\\x80\\x07VE\\xd9\\xc9\\x80\\xe4\\xe5pr\\x80\\x01\\x87vF1\\xd3\\x8bh\\xd6\\t\\xaa\\x9e\\xb3Pz\\xf0\\xe4(\\xd3c\\x875\\xba\\xbb\\xee\\x0b\\xa9\\xb1Ib\\x1d\\x94\\xa1\\x05O\\xc8\\x93\\xa8\\xe6\\xe7\\x13\\xae\\xb9\\x9f\\xae\\x10\\xbdF[\\xb1W\\x9f`\\x06\\x97}\\xe8vH\\xc2\\x98\\xb4\\xdd\\xb2\\xab\\xfb2\\x80) \\xcdvO\\xf4?\\xb39\\xa9\\x807@A\\x94\\x83\\xf0\\x90T\\xae\\xac\\x92\\xb9&\\x920\\xc3\\xa2\\x95\\xbe \\x14\\xf8\\x92\\xeai\\xa9\\xf3S\\xc5\\x10\\xf1F\\x13x\\xc5\\x82\\xbcv\\x92\\xaf\\xfc\\xc8\\x85\\xab\\xb1\\x19\\x1cmT\\x9c\\xf4=a\\xf7\\x92\\xb4w\\xdaoO\\xec\\xd8\\xc7\\xc6W\\x1bi)4R\\xef'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "F87-aZvcFI-3_uMPwbzu2Qk",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 60,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 554,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 554
+        }
+      ],
+      "thoughts_token_count": 213,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 827,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.7355
+}

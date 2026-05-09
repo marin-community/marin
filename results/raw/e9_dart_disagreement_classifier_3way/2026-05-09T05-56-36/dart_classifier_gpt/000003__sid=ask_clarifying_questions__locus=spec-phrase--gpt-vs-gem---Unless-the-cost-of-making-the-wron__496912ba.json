@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T05:56:44.672158+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "ask_clarifying_questions",
+    "locus": "spec phrase (gpt vs gem): Unless the cost of making the wron"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdUy5MqL7L96LIEie7XV24RwN30WW",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits weaken the obligation to mention missing information: EDIT_A adds the qualifier \\\"and, when feasible, tell the user\\\" and EDIT_B says the assistant \\\"may optionally tell the user,\\\" shifting from a strong expectation to a softer, conditional/optional behavior.\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306205,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 77,
+      "prompt_tokens": 511,
+      "total_tokens": 588,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 2.1156
+}

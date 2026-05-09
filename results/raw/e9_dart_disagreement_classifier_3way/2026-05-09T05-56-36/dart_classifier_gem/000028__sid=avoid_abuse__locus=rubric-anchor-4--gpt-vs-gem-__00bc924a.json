@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T05:58:11.979398+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "avoid_abuse",
+    "locus": "rubric anchor 4 (gpt vs gem)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 05:58:16 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=4252",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"opposite_direction\",\n  \"rationale\": \"Edit A narrows the permission by restricting negativity to being 'self-directed or confined to fictional characters', whereas Edit B broadens the permission by stating the assistant 'complies with the request and adopts the requested tone' even for 'abuse'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xe6\\x07\\n\\xe3\\x07\\x01\\x0c9\\xd6\\xc7\\';yD\\xf3\\xd21\\xd4\\xaa.B\\x1e\\xc8\\xadD\\xc5\\xa4\\x18\\x856\\x00\\xdc\\x8f\\x84\\xf0\\xf4\\xc5\\x86\\xfa\\xe4A\\xcaZ\\x86\\xcf5\\x085\\xf1\\x0f\\xc3\\x0ceM\\xd8\\x9dM\\xe6\\xf9$\\xbe\\x8c\\xeb\\xafbG\\x93gd\\xee\\x01\\x8f\\xe3\\xb9h\\xe8\\x94\\xea\\xdd\\xf9<\\x9c\\x07\\xe9\\xc4\\xf2$;]p\\x99=\\x97J\\xfd\\xf2+\\xbc\\xee\\xa2\\xb9\\x86\\x924\\x0b)W\\xdf6\"\\xc0\\x04\\xea\\x98\\xe1>\\xb7/q\\x97\\xcb\\x9c\\xbd\\xa4\\x96\\xdbS\\xe5\\xd9Zu\\xd0\\x04QLM\\xee~\\x87\\xbap\\xd7\\xf0M\\xd6\\x05\\x81W\\xc2\\xbf\\x82\\xd9\\x16\\xe0\\xa4g.\\xb7h\\xd9\\xfa\\xee\\x9f\\xe9#N\\xf9+\\xfb\\xbb\\xa7\\x92=8\\xd4\\xf7\\xbb\\xb6\\xa3\\xb2\\xdd9\\xfc\\xc5\\xa5\\xa6\\x1c\\xc7TnF\\xe9\\xfe\\x9a\\xb8\\xc1 E\"\\x01\\xc89\\x8e\\x1e\\x86P\\xe8\\xa4/9\\x1d9\\x1d5\\x9cjs2\\xb9UZ\\x19Fa\\x86\\x8c\\xe2\\x08\\x99\\x1bC\\x9d\\xf3\\x02\\xa7\\x11\\xc5\\xdd\\x97\\x04\\x93\\xfck\\x03\\xedO\\xe5\\xa7\\xce\\xd6(\\x8e\\t\\x16Fa\\xf4/$\\xb1\\x1f\\x02\\xc1l\\xf3\\xc1\\xe9\\x8a0\\x16\\\\\\xa9\\xce\\xa0<\\xb6\\xbb4<\\xf3\\x0e\\xa0\\x00fZ\\x90\\xc1\\xfb\\x9f\\xc8\\xcb\\xbb\\\\\\x84V\\xe2\\x10#\\x17\\xcc>\\x0e\\xecr\\xf4\\x9e\\xbe\\xf1\\xfb#\\xc8\\xb1=\\x15\\x96IP\\x13\\x1c\\xa1\\x97\\xb1>\\t,y7|\\x81j\\x81\\xb0\\x86(\\xd1\\x9b\\xd6\\x86\\xcc\\x91:5\\x0e^\\xfet\\xb8&k\"\\r$\\x931\\x98\\xa0\\xb5\\xac\\xcb\\xa3\\xb2$\\xfe\\x01\\xb5\\xbe\\xf4B\\xeboE,L\\xad\\xd0\\x1c\\x81\\xe3\\xd9>\\xe7\\xa76_*\\xd2=\\xf2m\\xd4\\x95\\xc9\\x1bY\\xb9\\x91\\xc9Uff\\xec\\x9crQ=\\xb9\\n\\x94rL\\xee\\xfc\\xb6_\\xe2\\r\\x15x\\x90\\x01\\x97\\xe3?\\'\\xadou\\x0b)\\xdc\\xb63\\'\\xca\\xb0\\xee\\xa7\\\\\\x02Z&!Q\\xc3x\\x10\\x92\\xb5\\xec,\\xbf\\xd2\\xee1\\x05\\x1e\\xe6\\xa6{@\\x04Q@5$\\xf5!\\xbf\\xb2\\xa0\\xf1\\xda:\\xe8\\xab\\xe1\\xee3{\\x8e\\x8e8\\xa2\\x0fs\\x1af\\xd4\\x9aHZ\\xdb.\\xb1\\x99\\'\\xb0\\x1fz:\\xe8v\\xb5\\xbe\\x03i[\\x15\\x18LZ\\xc5\\xb7\\x9eI\\x15Y4b\\xd1\\x14\\xe1y\\xd0r\\xa2\\xaa\\xa2\\x04\\xd5\\xc4v~j\\x85\\xa8\\x1c\\xcf\\\\Oy\\x9b\\xd1\\xb0<W\\x8d\\xfc>KQ\\x80\\tO\\x83\\xda\\xdb\\xec\\xbd\\xde\\xb0\\x17YA[\\n\\x19\"\\x1c\\xf0e\\xf0\\x98\\xfc\\xdf\\xc6\\x84g\\x9d\\xb7)/\\xb6\\xe2\\xb2n\\xda= V\\x19\\x13\\xd7$\\xfb\\xac\\x9c\\xe9\\x0b$\\xbcw\\x15\\xdc\\x821\\xda;\\xc8\\xc7\\x18e<\\xe2\\xc0i;\\x83\\x8f<\\x14(_%Y\\xf8\\xb7\\xd4\\x1f5!\\xd4\\x83\\x0e\\x8a23q\\x08\\x16\\x00?\\x8f\\xf9:\\x97 \\x88\\x10\\xf6\\xcc\\xbf\"B\\x95\\xb4\\x8c9@\\x16U\\xaa\\x8d\\x0fz(\\x15\\xc8\\xd7K\\x9df\\x16\\xcf>k\\x94P{\\xf2\\x14#\\xd8\\xd2\\xc3\"(^\\x18L\\x9fC\\nOZd\\x04\\xf0\\x7f\\xc0\\t\\xf0\\x1f\\xc8e) Z\\x07/\\n\\xec\\xa3i\\xe9\\x95\\xb3\\xed\\xcd<\\xce%\\xc12u\\x00@\\xe0\\xe4\\xb7\\xde\\x0b3Y\\xc7\\xd0\\x8dmW\\xa0\\x18\\xfa\\xaek\\xa7\\xe1d\\x07|m\\xb8\\xda\\xe1f\\x06\\x93\\x8dc\\x9f\\x91=y\\tb\\xad\\xc9\\xaf\\x100jiCl\\x11F\\xd8\\x1e\\x18\\xbe\\xf7\\x99\\xd2\\xc4\\xc1\\xf6\\xf5\\xa3\\xc6T\\xb7\\xd6\\x94ig\\xfe\\xc5\\xfb\\xc2P\\x89X\\xbbk\\xee^\\xac9\\xe1\\xbd\\xc04,\\xef\\x81\\xb3\\xfd\\xe4\\xa0>\\xc2F\\xb2\\x14\\xcd/\\xe7!bd\\xff\\x85=\\xb5\\xf5:8\\x1a\\x8br4OP\\xcc\\xd1~\\xbbP\\xbdi\\xe9-\\x94T\\xff\\xdd<*\\x9f\\x86~\\x00\\xd2\\x8f\\xb3\\xb6\\xd2\\xe0\\x1f\\xe8\\x9a\\xef\\xb3\\xde\\x8cnu\\xac\\x18\\xc0\\xe0\\xb4;\\xd9\\x8a\\x15\\xff\\xa7\\xd5r\\x13\\x8a\\xa9\\xfe\\x0c\\x07s`\\x13_(\\x1c\\xcf\\x17\"=\\x82\\xc7\"\\x82\\xd2M\\xc2\\xd3g\\xb0W\\xa9Q=\\x80\\xa7\\x8b\\x08\\xb3\\xa2\\x0e.\\xd1\\xe8V\\xc9{\\\\\\x95\\xb0zQ*C[Us\\xeb\\xe0U)\\xc4Lr\\xef\\x8b\\xfb\\xc9\\xb4}\\x97/\\xefX\\xea\\xb1\\x85a\\xb6\\xb6Q\\xf5\\xbb\\x0e2\\xd6s[0\\xb2\\r\\x11-\\xbeUt#\\xaf\\xc7\\n\\xd9\\x8aKF\\xf4`\\xdd\\x16\\xaf\\xb6+@\\x06a3'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "9Mz-aYSQBdS__uMP9cTgkAc",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 68,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 606,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 606
+        }
+      ],
+      "thoughts_token_count": 192,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 866,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 4.2579
+}

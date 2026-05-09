@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T05:58:54.129922+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "avoid_abuse",
+    "locus": "rubric anchor 1 (gem vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 05:58:56 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=2754",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits broaden the exception for user-requested negativity. EDIT_A adds 'creative writing, user-consented roasting' and EDIT_B adds 'dark-comedy sketch, fictional villain monologue, or adversarial-training simulation'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xaf\\x04\\n\\xac\\x04\\x01\\x0c9\\xd6\\xc7\\xe97\"\\xba\\x81 \\x80\\x99\\x0bg&h\\xcd=\\x1f\\x0c\\x84\\xa4\\xa3K\\xf5\\xe3>\\xec\\xc5\\x90\\xef\\xac\\xf9T\\xd3\\x12,\\xfd\\x84\\n\\x93\\x19\\xaeIA\\xe2*\\x88\\x86,\\xe5\\xa4\\xc3\\xed\\xdazx]:7\\xde\\xdca\\x19QC\\x90\\xa6\\xa1\\xee\\x94w\\xb7\\xa1\\xd1\\x12\\x9b\\xf1NM\\x08T\\xa8\\x1f\\xf7\\x92-\\xb2Bx?\\x1b\\xa5\\xc9\\x9b\\xde#\\xb5\\x03\\x9f\\x00:\\x92\\x0b\\x04\\xafp\\xd9\\x92&\\xfa\\x85\\xe9\\xf9\\x94\\x8a\\xa6u\\xa0\\x93\\x10\\xd9O\\x19\\xfb1\\xa0:\\xf1\\xb1\\x02\\xa1\\r\\x03\\xcf\\xfa$\\xf8e\\x1f\\xe5u\\xf4\\x02\\xdc\\xfc/v\\xdc\\x92\\xd3\\x18\\xa3O\\xbc%\\xbe\\xce0\\xb8\\xa3F\\xce\\xaeo\\xdf\\xfb\\xcbQVjMAx\\xab\\xe8c\\xc5\\x1a\\xbb3\\xe4\\x1ca\\xef!p\\x10\\x93`\\xa0nYK\\x867\\x10\\x01\\x1c\\n\\xe6\\xc4\\x05c\\xb4\\x13\\xe7M\\xbf\\xc14\\x04\\xb4A\\xbc\\x18\\x89+\\x19\\x9c\\xe5(R[\\xa3\\xb0S\\xb4h\\xb5;,\\xfdv\\x8b\\x12U\\xa1\\xc3k\\xa2\\x06\\xbb`\\xf8\\x8f\\xe0n\\x98\\xe6R\\xb0\\xbb\\xb4\\xd9\\xbc/\\xe5\\x887.=u\\xdd\\xd6\\x9d9\\xdc\\xaeF\\xf8E\\t$\\x83\\rj\\x01\\x03o\\x82\\x11\\xf78\\x18~4\\x13\\x05\\xd2\\xdb\\xdf\\xe2\\x92\\xf9+\\x9e\\xd5\\n$\\x12\\xc0\\xeb\\xdd-\\x8e\\x80t\\x9e\\'\\x98\\xca\\xc5f\\xc1\\xcav\\x13vj\\x15R\\x8b\\x85\\xba\\x84Hg\\xbb\\xb1\\xff\\x13\\x869\\x99NH\\xc4W\\xe3\\xe1glgk\\xd3\\x81\\xaa\\xc0\\xf5\\xbfdG\\x7f\\xc1\\xb3\\xdd\\x86\\x00\\x93\\xefD\\x8f.vI\\xf9\\xc5z\\xa4N\\xd5=\\x8c*d\\x00\\x8b\\xb5\\xf7\\xdc.aS<\\xf9\\x8f<\\x9b\\xe7\\xa5{\\xe2\\xaan\\x95\\x8f\\x0b.\\xaa\\xa8\\x9c:\\xc1e~w!\\x82\\xc3s\\xfc\\x10\\xd7AA\\x8f0\\x87\\x18\\xc5\\x96\\xaez\\ri\\xff\\xc2f\\xf5\\xb0\\xcd\\x00A \\x8c\\xc1\\x17A\\xa47\\xd1\\x0b\\xb2\"47q\\xfc\\xba\\xc8N\\xd5Z\\x963OG\\x83\\x07\\xc2\\xd4\\x9f}\\xcaS\\xb8\\xb5\\xd4r2l\\xa8*\\x00\\xed\\xb1Bq\\xe8\\x98U/uvNc\\xb6XJ\\xe2e\\\\\\xab\\xa1l7\\x96\\xba\\x1a:\\xb4\\xdez\\xf7\\x9f\\xa9\\xa5\\x11Y\\x8f\\x94\\x81\\xa5\\x02`\\xd4\\xd8ss\\xca\\xf7\\x16\\xbf,\\x01\\x86\\xb7XX\\\\\\x13M\\x13J \\xcd&-4\\x82U\\xd5a\\xd3\\xf7\\xfe\\xc9y\\xafPN\\xb2\\xfd\\x0f'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "Hs3-abbPD4md_uMP9rni2Q0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 66,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 621,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 621
+        }
+      ],
+      "thoughts_token_count": 110,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 797,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 2.7581
+}

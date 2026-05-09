@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T05:59:40.141110+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "be_clear",
+    "locus": "rubric anchor 2 (gem vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV0u425ecUlrreejxs9IoYSp3BKi",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits carve out an exception when the user explicitly wants flowery language: Edit_A adds \\\"flowery language or clichés (unless explicitly requested by the user)\\\", while Edit_B limits the penalty to \\\"contexts where the user did NOT request such a style\\\" and further notes \\\"If the user explicitly requested a stylistic mode... do NOT score down for fulfilling that request.\\\"\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306380,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 101,
+      "prompt_tokens": 628,
+      "total_tokens": 729,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.3067
+}

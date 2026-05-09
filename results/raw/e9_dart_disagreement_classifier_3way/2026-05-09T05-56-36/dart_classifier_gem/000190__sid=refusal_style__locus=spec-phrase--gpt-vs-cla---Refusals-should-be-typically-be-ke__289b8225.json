@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:06:17.150009+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "refusal_style",
+    "locus": "spec phrase (gpt vs cla): Refusals should be typically be ke"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:06:20 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3715",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits clarify that the assistant must maintain a brief refusal style even when the user explicitly requests otherwise, with Edit A stating 'even if the user asks for them' and Edit B stating 'rather than fulfilling the meta-request'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xa2\\x07\\n\\x9f\\x07\\x01\\x0c9\\xd6\\xc76Tlm\\xb4\\rx\\xde \\xfc\\xf2/\\xecD\\\\%\\xea\\x8aD\\x95hE*_T8\\x89\\xaf}\\xd81\\xfa=\\rS\\xe7\\xc4t\\x1d\\x9f6a\\x15\\xcefE:\\xdd/\\xe4\\xb2\\xf3\\xb7#\\x92\\x9c\\xc0\\x81|\\xb8\\x82\\xd5\\xff\\xc8\\xc7\\xbc\\x98\\xe5\\x9e\\xbc\\x16W\\xdb\\x16\\x0e]\\xc7\\x9c4\\xcd\\xd6W\\x87\\x11\\x1a(&\\xae\\x07\\xf6_\\x02n\\xf9;\\xc0v\\xc6h\\x05&\\xeb\\xfd\\xdbaX\\xe5\\x9a=\\x00\\xcf\\xe4f\\x81\\xc6;\\x00GL7\\xdf@]\\xe5e\\x8cQ\\xcf\\x91\\xf6\\x00i@:\\xe2\\xd7\\xcc\\xa8\\n\\xce\\x17\\xef\\x89e]\\x08\\xb9\\x11\\'\\x80(\\x18\\x81\\xd89F\\x10\\xf9\\xdea\\xeb+}hF\\xc2\\xc7F\\xc05\\x14\\'X\\xea\\xd5\\x8az\\x95\\xda\\xc1\\x89#3\\xe1@\\r\\xbaVq \\xfa\\x19\\x87\\x0b\\xe56r7+t\\xe2qpW\\x83\\xdc\\xa1\\xda\\x18\\xee\\n\\xc7\\x82\\nf-\\xb4\\x08\\xf8!\\t_\\xc0\\xed\\xb0\\xc6\\x9d\\xbe\\x86!\\xe9\\x1c\\xd0\\r\\xee\\x8c\\xc2\\x11\\x9f\\xb0\\xb3\\xbd@\\xa8hM\\xa3\\xe9\\xd3\\xe5{r\\xf7\\xfaP\\xcf\\'Qj\\x91\\x1a6*\\xc48\\xbb\\xe0\\xd2\\x0cy\\xf0M\\xce\\x8b\\xae\\x0b\\xc7k\\xf4\\x05r\\x90k\\xf36\\xe4R\\xf8=\\x8b\\x18U\\xe5\\x8f\\xe7u\\xb6\\x17^\\xe8\\xbc\\xde:&\\xcc\\xb9\\x15|\\xfa\\xea\\xb7\\x02\\x1fue\\xf1\\x0c\\xe0\\x19\\xd4\\xd1\\xa37\\xf5V\\x08\\xde9\\xd8\\xa1\\xb4F\\x00e\\xb9\\\\\\xe1\\xe7\\xc6\\t\\x86\\xb2\\x96;\\xe1\\xdd\\x83\\x93\\xabLJ\\x8e\\xd4-\\xf8\\xeb\\xdcb)\\xf8\\xb4\\xea\\xdc\\xeb\\xed\\xebD\\x80\\x13\\xde\\x9c\\x86\\xd5\\xa7\\xf7\\x1f\\xf4\\x8e\\xb6\\xa6,f\\nv~y\\xfe\\xbb\\x80X\\x1a\\xa8?E\\x06\\x96\\x11\\xec\\xac\\x87\\xc2\\xb8\\xc0\\x96^\\xe8\\x06\\xacS\\xfb\\x91\\x8c9.\\xcd\\xe2\\x1e\\xdaY\\x97\\xbe\\xe1/\\xac\\x16\\x99\\xc5\\xcat6\\xc2\\xba\\xe0\\xd8\\x90e\\xa5\\xd8\\xeb\\'\\xc7j\\xc6T\\xeb(\\x10!^p\\tJ\\xb6iS\\xefz\\xf5\\xce\\x0cq6\\xd7\\xeb6=\\x9b\\xc7L*!\\x8a\\xac\\xcbK\\x84\\xc7a\\xdf\\xb3\\x9d\\xaf\\xd5\\x14\\x95\\x05&\\x0b\\xbc\\xec\\xcc|\\xd4\\x8ex\\x13\\xc1\\xd1\\xfc\\xa2\\xf0w\\xdbl\\xd5`\\x7fV\\x14;\\xee\\xe7\\xb3\\xa1\\x87+\\\\\\xf8\\xa1@\\xc9{\\x04\\xcf`\\xe1)\\xd0\\xfd*\\xadg\\xd8`\\x958\\xe5)>\\xcf\\xa8\\x91\\x10\\xfa@q\\xf0\\x979A\\xad\\xb13\\xb4\\x1d\\xdc.\\x1b\\x0b\\x85~#\\x15\\xfb\\xb2\\xf8\\xbal\\xe0\\xf6~\\xe9\\xec\\xcbJN\\xb2Z\\xbf\\x1c=\\xeb\\xcb\\xec,+\\x81\\xee1c\\xdc\\xf8V\\x94\\x7f\\xces\\xbd1\\x1c\\x14\\x8a\\x9fNl|aO4C\\xcd\\xf4f\\xcd\\x10|\\xf8\\xd8\\xf1\\x98~\\x08\\xbe\\x9f\\xee\\xab\\xb8\\xdc\\xd0\\xdd\\xae:\\xfe\\xbe\\x99\\r\\x91\\xdf\\x82\\x13\\xcf*J\\x91L,\\xa6+;0\\x08HT\\xe3\\xd2S\\xae\\x06z\\'\\xad\\xd2\\xdf\\xfa\\xc6\\x91T/s\\x9f\\x90\\xa2C(\\xca+\\xdf?\"Wh\\xa0\\x8ebU\\x0f\\x9d\\xe5N\\x03b\\xc6i\\xed\\xe8\\x86\\xb5\\xbb\\xdd\\xab\\xbeJ\\x14\\xc2\\t\\xe1ax\\x06\\x8cs\\x8a\\x8aJ_d\\xe8s\\x15\\xb5\\xf8\\xbe=\\x07;\\xee\\xe0\\xf1\\xe2\\t\\x11R\\xdb\\xb2[\\xd7\\x9d)0\\xc8WkV\\xe4\\x88r\\xf4l\\xe8\\\\\\x8cglY\\x86\\xfa>\\x91\\x0bT/y\\xa9\\xc5\\xf8\\xb1\\x0c\\xc9\\x89\\xbc\\xc0\\x9e\\xc9\\xbb\\x10\\xc3Jt\\x1b\\xd5\\x7f\\x8f\\x91\\xc05\\x15>\\xc9\\xce\\x96\\xb4\\xb9#\\x01\\xf2\\xe0\\xe6\\xbdIj(&\\xac\\xdan\\xcf\\xf1\\xc4=\\xc4I\\xb3\\r*Wc\\xb3\\xe5\\xe4?\\xc6\\xda8\\xe5?\\x8d\\xe2\\xe5\\xce\\x0c@\\xf9\\xe8v`\\x12wpw\\x03\\xe2\\xdb\\x1d\\xe1\\xdd\\\\G%\\xe02\\xb4\\x08\\x9f\\xd0B\\x88j8\\x97\\x998W\\xecW\\xdes\\x95W>\\xe2o\\xf2(\\xe4\\x07\\x12JC\\x06\\x92*\\xfa\\x13B?\\xfd\\xe6\\xf2d\\xcd\\xff?\\xdf\\x99VK\\x98\\xe5\\x9d\\x96N\\xcf\\x8c\\r\\xea\\x07.\\xe7\\x10Dc\\no\\x05\\xfd\\xe4V\\xc7\\x8b\\xd17\\xb4'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "2c7-ac_ADoG2_uMPlqz60A8",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 66,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 621,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 621
+        }
+      ],
+      "thoughts_token_count": 183,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 870,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.7207
+}

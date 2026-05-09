@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T06:06:05.654681+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "refusal_style",
+    "locus": "spec phrase (gpt vs gem): Refusals should never be preachy, "
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV7702DXs3h8kwYMM6xrsnVofFPq",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits strengthen the prohibition by extending it to explicit user requests: Edit_A adds \\\"even if the user explicitly requests such meta commentary or a detailed explanation of your policies, training, or internal safety mechanisms,\\\" while Edit_B adds \\\"even if the user explicitly requests a non-standard refusal style or a 'bad example'.\\\"\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306765,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 90,
+      "prompt_tokens": 503,
+      "total_tokens": 593,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 0.8711
+}

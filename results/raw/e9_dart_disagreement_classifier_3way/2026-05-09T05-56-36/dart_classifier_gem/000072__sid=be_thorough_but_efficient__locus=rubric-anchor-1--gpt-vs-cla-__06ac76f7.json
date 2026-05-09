@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:00:15.117631+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "be_thorough_but_efficient",
+    "locus": "rubric anchor 1 (gpt vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:00:18 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3777",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits clarify that hitting token limits only warrants this score if the truncation makes the response unusable, with EDIT_A stating 'only when it leaves the response substantially incomplete or unusable' and EDIT_B stating 'truncation leaves the artifact so incomplete that it cannot be used'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xb8\\x06\\n\\xb5\\x06\\x01\\x0c9\\xd6\\xc7\\xe4\\x06\\x13\\xf6]_\\xbf\\xa9]\\x18\\xb3co\\xb9\\xdfd\\xf8\\xe7\"\\xe2\\xb0R.w\\xde\\xde\\xee\\x9e\\x1fb7Z\\x94\\x05;CroN\\x83\\xa8\\xb3_\\xacc\\x91\\xbb\\xa9&\\x0c\\xe2g^\\xb5\\x8d\\xc4\\xacO\\xe3\\x16\\x88!WK\\x86\\xa4\\xf36qw6s[*\\xe7\\xd3\\xb0/\\x97\\xcb\\xe3\\x92\\xc4\\xb27k\\xcd\\nPI\\xbe/}%\\x9e\\x99c\\x96\\xb1&\\x80\\xd0~\\xc2\\x1av\\x02,+\\xd6A\\xb5\\t\\xfe:\\x0c&\\xb0\\x1fD\\xf7\\xfd\\xba\\x8a\\xe3\\xc4\\x1e2\\x16\\xba\\xcbw\\xda3\\xc9u\\x11\"\\x06\\xc8.\\xf2V\\xeap\\xb1\\x8be#\\x8e\\xc4\\xa2\\xa7W\\xb3GI7es+\\xfa\\xc3\\xf2\\xcc*\\xae\\xf1\\xdb\\xf4&#\\nO\\xffc\\xe2g\\xd8\\xba\\x856&I\\xa5\\x18q\\xb4\\xabI\\xf5\\xe1\\x9c)\\xf1\\xce2O\"\\xa6\\xe8\\xfc\\\\`;\\xd39h\\xd5\\xec\\xbb\\x0bg\\x0f\\n\\x0f\\x82\\'FP\\xd0\\x93\\xea\\xe5\\x7f\\xed@\\xd9\\x06u\\xb2\\xe6\\xad\\x18\\xe2\\x17\\t%\\xd9\\x88\\xc2\\'\\xf5o!h\\x1esL\\xb7\\x08\\x06\\xe9\\xc8h\\x06\\xcdX\\xae\\xcdW\\xdd4\\xa5\\x96j\\xea\\t\\xfd\\xc6I[\\x9e/\\x12I\\xd0\\rR\\t\\x8d\\xfc\\xb7\\xba,J\\xc3\\xcb.\\x88\\xa0=\\xe7\\x1b0nP]f\\xdd\\x98\\xec:F\\xff\\xda\\x96\\xb0r@O\\x12\\xbf\\xff\\x97\\xa4\\xca\\x05\\x8c\\xd9\\x9a\\x89\\xf33\\xc3\\xd5\\xa8\\xc8\\xd6\\x85\\x91\\xe4u\\xf1\\xa5\\x08\\x8c\\x03\\x1f^\\x8d\\x8c\\xbb\\x8a\\x98n\\\\\\x893\\xa4q\\xdd\\x87\\x9f\\xac\\x1e\\x02\\xcb\\x06\\\\l\\x8a\\x07\\xed\\x0e\\x9b\\xcc\\x14\\xb8`\\x1fH\\x9c1m\\x9c\\xcd\\xdb\\xa3`\\xf09\\xe1\\x99\\x02\\x83P\\x1d_n\\xc5X\\xfb>D\\xfa\\x06\\x0c\\x9al\\x80\\xb7\\xf98jW\\xdf\\x14\\xbf\\xc7d\\xdep\\r\\xc2\\x1f\\xd9\\x92\\x88\\xe64g\\xd2\\xe7\\xf4\\xa0\\xe3\\x9bB\\x87\\xfbf\\xf1\\x06\\x1d\\xe9[\\x16\\xf6t^\\xf9M{Vj\\x87@\\xd7>nj^\\xc7\\x92\\xf8Y\\xdbA\\x88\\x10Mk\\x07\\xf0\\x8a\\xd4\\xde\\x0b\\xa2\\xd6\\xbff\\x8a\\xa1N\\xb7\\xd5\\xf11\\x9f\\x1aG\\xbf\\xba\\x05vl\\x90\\xba\\xdcd}Q\\xb6\\xb6j~\\xa0\\xc8\\x05bD\\xc9\\xe4\\xcc\\xbf\\xf5\\'f\\xb5\\'\\x9d\\x19\\xfe\\xaaY}\\xf9{\\xc9$(\\xbfY\\x11\\x86\\x04A\\xc3;\\x8a\\xcc\\xb6\\xc9\\nH5y37\\x7f\\x8c\\x99\\x85\\x03\\x04\\x19\\x08j\\xee\\xd1\\xb2\\x1c\\x18ch\\x9d\\xd3\\'M\\x86\\xaf\\x06\\x9aP\\xb41K\\x9a-\\x9fM`(\\xe2_\\x12\\x90\\xc6/\\xa6\\xf9*\\xed\\xdaX\\x86\\n\\xb6M\\tB\\x03\\x12\\xa7\\t\\xaeX<\\x14\\xb0t\\xb5\\xbe&\\x11=\\x94\\xe3p@GE\\xaf2A\\xdc\\'\\xdf\\xdf\\x15B\\xe9\\x83\\xf7\\xdbqi\\x8b8\\xf4\\x18\\x15\\x1f\\x025\\xc0\\x18\\xf0\\xca\\x91f\\x82\\xaf\\xed\\xc3\\x9c\\xbf\\xa9\\x8cU\\x02\\xe3\\x87\\xdclq \\x9a\\xc44N\\x94\\x14I\\xd6\\x14\\xb5\\xbd\\xd0\\x80\\x06\\xd1\\xee\\xf5\\xf5`\\x8aA\\xede\\x84\\xc8\\x01\\xa4\\xca\\xa3\\x13\\xa7z\\x13Xz\\x8a\\xd4m\\xae\\xd9\\x92>\\x16\\x0b+\\xff\\x8eW\\xba\\xc5\\xac@\\x9b\\xe3\\x85\\xa1;P\\xffG\\xf7\\xb8o\\xf2\\x91\\xd3\\x9d\\xf7<\\x19\\xb6{\\x94\\xb1\\xf4\\xc1\\n\\x1fl\\x8b\\x90\\xa3\\x94\\xfd\\x9c\\x1d\\x0b\\xd1\\xd5\\xcfY\\xcdTS}\\xb7\\x8a0\\x99\\xae\\x16\\xd9<j\\xde/*Y\\x15+\\x11M\\x17\\xcb\\xfa\\xa8il\\x14N7\\xbe\\xfdh\\x00\\xd6\\xeb\\x81\"K\\x7f\\xd1\\xf9\\xa9\\xc2I\\xc4\\x05\\x94x\\xb7\\x85\\xf8\\xebS\\x9fx\\xaa\\xc0Cu{\\x84\\xf4\\xf9\\xb3H'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "b83-acjMDr-2_uMP2t_kcQ",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 75,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 709,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 709
+        }
+      ],
+      "thoughts_token_count": 144,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 928,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.7815
+}

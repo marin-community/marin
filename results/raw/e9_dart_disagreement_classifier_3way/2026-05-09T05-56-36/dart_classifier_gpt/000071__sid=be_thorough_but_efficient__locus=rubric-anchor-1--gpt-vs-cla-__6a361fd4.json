@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T06:00:13.643135+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "be_thorough_but_efficient",
+    "locus": "rubric anchor 1 (gpt vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV1R2R3ufKrVxum9nh2qPFIABBZk",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits narrow and clarify when length/truncation merits a score of 1 and emphasize usability: Edit_A says 'so that the user cannot reasonably use the answer as-is' and 'only when it leaves the response substantially incomplete or unusable,' while Edit_B similarly requires that truncation 'leaves the artifact so incomplete that it cannot be used without substantial additional work from the user' and that 'truncation severity must be weighed against the completeness of what was delivered.'\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306413,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 122,
+      "prompt_tokens": 686,
+      "total_tokens": 808,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.4741
+}

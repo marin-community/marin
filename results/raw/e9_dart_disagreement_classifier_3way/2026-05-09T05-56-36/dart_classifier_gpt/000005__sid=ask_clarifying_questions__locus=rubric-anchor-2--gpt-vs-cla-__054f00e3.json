@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T05:56:51.818949+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "ask_clarifying_questions",
+    "locus": "rubric anchor 2 (gpt vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdUyCcwI9x9Tg9kojRZ8It6OFHsMj",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"different_scope\",\n  \"rationale\": \"EDIT_A softens and broadens the anchor by changing to 'handles it imperfectly' and adding that it 'still makes a recognizable attempt to help rather than simply blocking,' while EDIT_B narrows the risky context to 'a genuinely risky context (e.g., financial transactions, hard-to-reverse actions)' and carves out that it 'does NOT apply to low-stakes creative or communication tasks.' They both refine the standard but on different axes: EDIT_A on severity/intent, EDIT_B on domain/scope.\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306212,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 130,
+      "prompt_tokens": 639,
+      "total_tokens": 769,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 2.3816
+}

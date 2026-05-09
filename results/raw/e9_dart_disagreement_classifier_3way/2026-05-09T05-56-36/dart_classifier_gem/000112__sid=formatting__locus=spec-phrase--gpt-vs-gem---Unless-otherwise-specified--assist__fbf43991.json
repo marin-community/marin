@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:02:11.469986+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "formatting",
+    "locus": "spec phrase (gpt vs gem): Unless otherwise specified, assist"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:02:15 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3936",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"opposite_direction\",\n  \"rationale\": \"Edit A restricts formatting overrides to 'higher-level instructions (such as system or developer messages)' and limits user instructions, whereas Edit B explicitly empowers the user by stating 'Unless otherwise specified by the user'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xc3\\x06\\n\\xc0\\x06\\x01\\x0c9\\xd6\\xc7\\xf9q\\x04HZ\\xba\\xbe\\xa6\\x99\\x06VO\\xad\\x81 \\x8b6OC\\xda\\xc1\\xd9X\\xd3\\xd4\\xef\\xdb\\xd7\\x85\\xd3\\x98\"\\xbbP\\xaazbR\\x86*~\\xdf\\xae\\xa0\\x93,\\x19\\xd3\\xca\\x88g\\xbc\\x01L\\xe8j\\x90:\\x92rQ\\x1bL\\x0f\\xc1\\x8b\\xcd\\xd0\\xf3\\xb63\\xb9J\\x1bt\\xfe\\xc5\\x9a\\xd8r\\xd4\\xad\\xb0\\xdf\\\\l]\\x1eP\\x93\\xb8\\xf4)]P\\x1dLe\\xec`A\\xc6O\\xa5\\x8dMY\\x1a\\x92\\xfax\\xcf~\\x9b\\x0f\\xbb4\\xcc\\xf6A\\xe8YnF\\xccb\\xe5n\\xdf\\xc3Z\\x05\\xe5g!\\x04\\xac\\x7fL\\x88j\\':\\x90t1{\\xb0\\xfd\\x15(\\x92$ 4\\xda\\xf3!M\\xba\\x9b\\xb49Q\\xda^\\x15\\x0b\\x97\\x84\\xe7\\x8a\\x18\\xc3\\x9c 11\\xe3@k\\xa1\\x86wq\\x13\\xa3 \\xcc\\x83\\x8dk\\xe9\\xf4d\\xac\\xea\\xf2\\x9dv\\x14\\xb2*\\x11\\xf4\\x8fOH\\x0ep;\\'\\xab\\xc1\\xabr\\xe2u\\x05\\xddu\\xa2\\x1d\\r{\\x10\\xf6j}\\x96\\xad\\xef\\xc1\\x13=\\xef\\xb2\\xfe)=\\x8e\\xae\\xf0:\\x16\\xe9\\xbf\\xc0\\xc6[!\\xa9\\x10\\xdd\\xef\\xd0\"\\xb9Q\\x08P\\xa7\\xc7c\\x13T\\xac\\xc8\\x04 \\xc1\\xbep\\xd9<\\xe9jn\\x11Jb2\\xda\\xd6.\\xc5\\xc2\\xe7,\\xe9\\x9b\\xa3\\x1fz\\xeb\\xe6\\xf5c\\x9dW\\x11\\x95\\x01\\x8e\\xd5\\xc6\\x11\\n\\xd8\\xff\\xe9\\xacq\\xd8\\x08\\xce\\x02\\x89\\x87\\xd2\\xb1jU\\xad\\x02\\xe6K\\x118\\xe8\\xb6\\xdb\\xc3C\\xa2\\x15\\xb3\\xcb}\\x98n\\xb4\\x8b\\xc5\\xfa\\xc1p\\xb3\\x0e\\xc3L\\x13\\xad\\xf0\\xeccr6\\x8c\\xe9\\xfc\\xad5O\\xc8\\x00\\x85\\x1dv\\xfe\\x0e{\\xe5\\xefpP\\x82I\\xd7d-~\\x0bm?\\xc7\\xa4\\x99\\x9bP\\x81\\x02\\xdfr\\xad\\xaaYz{\\x01t\\xff\\xfd\\x1f\\xc5I\\xd3O\\xd7v\\\\\\xba-\\x89\\xb9\\xcb\\xa7\\xb7`\\xf9\\x81W\\xb4\\xbf}\\xb1\\x0c\\x7f\\xa1\\xf3\\x00`\\xf3\\x7fy<\\x83\\x07<\\x13\\x89\\xe4_\\x0cB\\xbaF.\\xa2\\x1c\\x90\\xb8T-R^3,F\\xe3\\xc5\\x17B\\xfe\\xa0\\xa5\\x81/\\x9f\\xfc/\\xa4>i\\x9eK\\x0c\\xad+\\x92NQ\\xedN\\xee\\xd5MVl\\xf9\\x15\\x1b\\x12+\\xc3\\x95}\\x82\\x19\\x81g\\xb8\\x96\\x0b\\xa4\\xb1\\xb3I\\xd5\\xaa\\x91U\\xba\\xe1\\xc5\\x1b\\xa3g\"4\\xd3cI@\\xc9\\xe2\\xa6\\x83AFi\\xa9\\xaf\\x03*x\\x17A\\xc0\\xf0\\x84\\xfa\\xf6\\xd5\\xe8\\xd9-\\xe5\\xa3\\xe4\\xfd\\xea\\x1c\\xa4;\\x02\\xf8\\xd8\\xd8\\xfb\\xb2\\x84\\xf6\\xb3;\\xc7\\x04\\x92\\x82\\xa7\\xee\\xf9R\\x0b2\\x81\\xf8W\\xc8\\r\\x06\\xd7\\r\\xd8w,\\xab\\xa8`\\x84B\\xb8\\xb07Q\\xb4\\\\5\\x9dc4{fYW\\xc5g\\xb0^\\x13\\x9dJ\\xe6pn\\xf8\\x90\\x9e\\xfa\\xd1\\xcb\\xd0ts\\xb7\\x9bN\\x13\\xde\\x1b\\xe3\\xe0|{^\\x9b\\xe6\\xeb&<\\x11K\\tm8Kn\\xd3\"\\xb7x\\x16\\xe0=\\x89\\x18\\x1d\\x12\\xeb\\x90]\\x10\\xfd\\x11E\\xf9\\xd6\\x14\\xb5\\x99\\xf3\\xea\\xfc#/S\\xa8\\xb1\"=C\\xa0\\xf1-\\x1e\\x03\\xd6S\\xc6\\x99,\\xb0Y\\xe4\\x88\\xd5\\xa7\\xe1@g\\xb7<\\xad\\x97\\xb1\\xa58uYVs\\x16\\x83\\xad\\x96\\xefj`\\xb3\\xc9\\xf7\\x0c\\x88j\\x84_9\\x90.j\\x12(.tZ6\\\\X\\xb1)\\x88\\xf4!?\\x1c\\x10\\x94\\xdc}[\\xb5!\\x84MQ\\xdd\\x17\\x971\\xb5\\x1aZf\\x83m\\xc8^G\\xeba\\xcfB\\x01\\x99H\\x00W$\\x95Dg\\x15A\\xca\\x9eCZ\\x9d\\xf7\\x05P\\xa4\\xe7\\x07\\xda\\x1b\\xceM\\x17\\xde\\xdc4\\xe3v*\\xfe;\\xed\\xa0\\xa0W\\xa5\\xb8t\\xdc\\x08\\'\\xd3\\xa4\\x81\\x05\\xf7\\xbe<\\x18\\x1e\\xaf'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "483-af_IIr2Q_uMPmqiQ6QU",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 61,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 445,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 445
+        }
+      ],
+      "thoughts_token_count": 149,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 655,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.9409
+}

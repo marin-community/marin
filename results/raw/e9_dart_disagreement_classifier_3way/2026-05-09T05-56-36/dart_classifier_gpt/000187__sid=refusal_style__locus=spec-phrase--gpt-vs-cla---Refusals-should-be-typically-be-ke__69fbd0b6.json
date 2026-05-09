@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T06:06:11.339623+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "refusal_style",
+    "locus": "spec phrase (gpt vs cla): Refusals should be typically be ke"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV7Da1SUFegRJ7XgJ4AEpWEyjhZb",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\"direction\": \"same_direction\", \"rationale\": \"EDIT_A extends the constraint by saying the brief style \\\"applies even when the user explicitly asks for a longer, preachy, or otherwise non-compliant refusal,\\\" while EDIT_B tightens it by adding \\\"No explanatory clause, rationale, or justification should be appended to this sentence.\\\" Both edits further restrict/clarify that refusals must remain short and not elaborated.\"}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306771,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 97,
+      "prompt_tokens": 555,
+      "total_tokens": 652,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.1428
+}

@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:01:52.104503+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "do_not_lie",
+    "locus": "spec phrase (gpt vs gem): As a user-level principle, note th"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:01:55 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3383",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"opposite_direction\",\n  \"rationale\": \"EDIT_A restricts overrides by stating they 'MUST NOT authorize the assistant to make statements it believes are factually false', whereas EDIT_B expands overrides by stating the rule 'can be fully overridden' even to 'deliberately lie for an experiment'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xa7\\x05\\n\\xa4\\x05\\x01\\x0c9\\xd6\\xc70\\xd0\\x1fQ\\xee\\x9bCp{\\xc4\\xbem\\xd9I\\x8a\\xc4i\\x1cK{c\\x0c\\xbe\\xa95q\\xc2\\x7f\\xc1;k\\x17\\xcb\\xaa\\xbd\\x18\\xa7\\x8d\\xe14\\xc1^+\\xa1\\xd2\\x87\\xa1N\\xb4\\xcf\\x1bo\\xbb\\x99l\\xe7\\xa0\\x88_\\x9b!:O\\x11_\\x05\\xd5V\\x03K\\xa4P$i\\x1a7\\xf6\\xb3\\xc1w\\x8cB\\xffX1\\xbf\\x97\\x81\\x1c\\n \\\\m\\xa0\\x8b\\xcb\\xed\\xc57\\xd4)\\x1fI\\xe6J\\xdbR[[\\xe3&\\x88\\xe8\\xb7\\xc4\\x89wf\\xb0,\\xda\\xfcI\\xd9 \\xf5o3\\xab\\x12\\n\\x93t\\xe3\\xde\\t\\xac0\\x7f`\\xf0\\x8d9dP\\xd5\\x1a\\xaf\\x87z\\xb8\\x0f35\\xbe!\\xb7g0\\x0cz\\x1e\\xfcN\\xfe\\xc1\\xc2\\xc5.U\\x91,\\xef\\x19\\xa4\\x12f\\xf1qL\\xf8Q\\x9fV\\xc7xL\\x11y\\xb4.\\xf6mF\\x1aNy\\xc9h\\xa5\\xf7\\n\\n\\x0b>\\x93\\x0b\\xf2\\x85P\\x0b\\x14\\x9a\\xcb\\xcd\\x97\\x94\\x82\"vT*NbSw\\xba\\xaa\\x88\\xc8\\xce\\xde\\x8f\\x1el\\x90\\x15\\xf5O\\xce\\n\\x1b2\\x91\\x85\\x88,\\xccQ\\xbd\\xaa\\xadZ\\xf3\\xcf\\xbbz\\xa4\\xf1\\x9e\\xcd(\\xa5 W\\x1a\\x98%\\xa4\\xc2=\\x03\\xa2\\xbd4d6\\xe1k\\x98\\xc5\\xeb\\x92\\x86I1[\\xf2\\x85\\xc6\\xf7\\x08\\x17$\\xff\\xce\\x99\\x9adq\\xaaw%\\xf9S\\xcc\\xe4\\xa7w\\xbe{\\x1d>\\x11\\xa8\\xf5\\xc1\\xc6\\xa7\\t=wk\\x83\\xd5!\\xceN\\xb8\\xb2fuW\\x7fa\\x13R\\x9aX\\x1aNR\\xb6G\\x01\\xcc\\xc44\\x0c(\\x19\\x00\\xd7+\\xb2a}\\xd3\\xa1a2\\xf9\\x0eV:A\\x1c\\xd0+}\\x1e*\\xcd\\xb9\\t\\x9a\\x01m\\x02\\xcb\\x8b\\xec\\xc6[\\xc9\\xd9\\xd7\\xfe\\xff\\x1b\\xf6\\xbf\\xcf\\xf6I\\x8c\\x84\\xf85\\n\\xec\\x96\\xc6\\xe53\\xed\\x92\\xad\\xa6\\x10\\x91\\xae.v0!Y\\xde\\x17\\xbd\\xc9\\t\\xde\\xea\\x88\\x994x\\xd7\\x1a\\xb1Es\\x95\\xf6\\x88\\r\\x075\\x951\\x80-D\\xa2\\x13\\x14\\x19y\\x92\\x90\\xef\\n9\\xcc~\\x9a\\xd9\\x07\\xa5\\xfa\\x0f\\x98\\x85\\x8c\\x1d!\\xd9\\x82\\x86\\\\\\xbbS\\x9eo\\x947\\xfc00\\x05\\xe9\\xe2\\xfa\\x9b\\x1b\\xd2\\x0b\\xc5\\xc6\\xb7\\xde,(\\xc0\\x12\\x9d\\n\\x82\\x97\\x7f\\x84|\\xccN%;\\xe9\\xe6\\x80v\\x02\\xa4\\x86Zz\\xac\\xd6;\\x11Ti\\xdd\\xd1\\x17F\\x1f\\xf0\\x08}\\xfb\\x01\\xc1 \\x9c\\x1a\\xf1\\x8b\\xf2\\xd9\\xd4 %\\xdf\\x04\\xd7\\x19\\x8c\\x06O\\x80!k\\x999\\x0e\\xa9\\x97yel\\x96\\x03\\xc7S\\x90\\xa9\\xe0\\x18B\\xf6\\xfa\\xfd\\x1a\\xc1\\xc5\\xb9Z\\xd1b\\x14\\xec\\x9f\\x1cu\\xaa{\\xdc)\\xab\\x8c\\x07\\xcd\\xbc;\\xf7:H\\x81W\\xc4\\xd9!\\x11\\x10\\xa0\\xf3\\xeb%,\\xdb5\\x18\\xf0\\xcf\\x80:\\x1c\\xfdh\\x11\\xea\\xa4\\xfc\\xf8\\x02\\x9cv\\x9a\\xf1\\xe2p\\x06\\x8d\\xaf\\xa4kf\\x93P\\x03q\\x9d\\xdf\\xf3\\xcc\\xe4p\\xde\\x1aE\\x92\\xdf\\xa8\\xbe\\xd4\\xbd\\x84\\xec\\x86H\\x17\\xd15G\\x16\\xa7\\x1e\\x83\\xe4\\x89'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "0M3-ac22DNnT_uMPpaf76Ao",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 71,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 545,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 545
+        }
+      ],
+      "thoughts_token_count": 127,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 743,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.3881
+}

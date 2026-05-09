@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T05:59:10.469099+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "avoid_abuse",
+    "locus": "rubric anchor 4 (gem vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 05:59:14 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=4223",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits broaden the assistant's ability to comply with user requests for negativity by removing the restriction to a 'playful, clearly joking manner'. EDIT_A allows the assistant to 'adopt the requested tone', and EDIT_B explicitly allows 'the requested tone and intensity — whether playful or harsh'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xbc\\x05\\n\\xb9\\x05\\x01\\x0c9\\xd6\\xc7P\\x99\\x11\\x9c>\\x9c\\x9cfT\\x9am\\xd1\\x034\\x0cxk`\\xae \\x90y\\x97}m\\xb4\\xd7\\xc7U\\x8dta\\x07\\xc6>\\xdbR\\xe7\\xc4\\xe4\\xb1\\xa9\\x8fb\\x01\\xec\\xd5m\\x83\\xe4M\\xaa9\\x85\\'\\xc3\\xb5\\x90\\x9f\\xb2\\xae\\xee/\\xbf\\xef\\xe4?4\\xfe/\\xd7h\\xaec\\xe1\\x8a\\xea\\xf7\\xca\\xf6I\\xd4\\xed)X[\\x8b(9\\x81\\x9b\\x81\\xd3\\x9e\\xd42w\\xb2\\x84\\xad`@\\xf5\\xa6A\\xfaO\\x00\\xa8\\x90\\xc7\\xe49\\x9f\\xce_\\xe9\\x9eIe\\xf0\\x89\\xdb5\\x06\\xb0\\xb8\\xedf\\xd6\\xf3\\x06\\x07\\x81\\xacA\\xf2\\x87=V]\\xde\\xb1\\x04\\xfc\\xa8U}\\x94\\xe1\\xdd\\xf0\\xbcY[\\x9d`\\x0f\\xdc\\xdc4x\\t\\xaf\\xd3\\xc7\\xd86\\xc2b\\x80nU\\xfd\\x15\\xc5n\\r\\xa2\\xfbm\\xec\\xd5\\xcc\\x13N\\xc1\\xa3\\x14b\\xfc\\xc2\\xb4\\x12\\x8e>\\x8c`\\x94AP%\\x02\\x01\\xa3\\x85b\\x98\"\\xa3Q\\x93Os\\r\\xd7\\x85\\x96\\x94I<\\xe8\\xe1t*\\xc9\\xa4T\\xd8\\xae\\xc0\\xc7\\xe9\\xc2Z\\xd8\\x12\\x07\\xe7\\x18Y\\x04I\\xfe\\x8d\\x0ej\\x8cw\\x8fn\\xb8\\x04\\xe8\\xd6\\x1a\\x01\\xc5\\xc3\\x05+\\x13+\\xe2\\xd2JzB\\xc5\\xcf\\xe8\\x12\\xb3Yc%\\x90y\\x05\\xfcy\\x14z\\xdcA\\x1f\\x8b\\x9c\\x1f\\xf4ng\\\\TM\\xcc\\xee\\x13\"lr\\x17D\\x1dYS\\x81;4:\\t\\x06s-\\xfd\\xe9\\xaa\\x95\\xa1\\x1a$\\xd7\\x8bu}+qv\\x91` \\xbd\\xd0\\xd9\\xe2\\xfb\\xc1\\x04\\x95\\xa7\\x18\\xf6\\xe4\\x8a\\x7fe\\x98\\xd8\\xcf\\x02\\xf2\\x17\\x7fJ\\x89\\xf3\\x08\\xc6\\xe8\\xa9\\x80\\xc9S]P\\xbc\\xa2A\\xddBI\\xd8ZB\\x87+\\xa4N\\xd6~\\xd6]\\xc6\\xab\\x89}n\\x05\\xf1\\xb9\\xc4\\xa6\\xd6T_bKK\\xc2\\xff:v\\xdc\\xeb\\xcb\\xc0\\x94\\xba\\xcb\\xe8\\t\\xe34\\xfe\\xb1Y\"6s\\xb9s\\xff$\\xc1F\\xe09\\xd7\\x006Jt,\\xe8\\x19\\xae\\xc4\\xe5_\\x9d\\xf2Xt|\\x11\\r9\\x9c\\xdb^\\x88\\xa17(\\x9b\\xe4\\xd1\\xf8\\xc8\\x1a\\xdd$\\xfdB\\x97[\\xa90\\xeb\\x9b\\xf2\\x1b\\x1d\\xca\\x1c\\x1b\\x94\\xa4\\xdcg/\\x8c_^\\xf7V\\x95K\\x9c\\xdf\\xca\\xf4\\x12`a\\x97R\\x06\\x80\\xea\\xbd\\xcf\\x84qF?r\\x94\\x15\\x14\\xef(\\x9d\\x9f\\xdcy\\xed\\x92dOg\\xe1T\\xb2\\x90\\x155\\x9c\\xb1\\xdc:j\\xf4m\\r:\\xd7\\xce\\x8f}\\x1c\\xec\\xc4n\\xfd\\xac|\\x81\\xa6\\xa5\\xa4\\xc4\\x01i\\xbdV\\x08\\x87+\\x0c\\xec\\xad\\xf9?=\\x9b|\\xbd\\xe2Fvy\\x99\\x99\\x02X\\xbf:5\\xb6\\xce\\xa7\\x82\\xfb\\x1a\\xc4\\x90\\xf0\\x1c\\xa4\\x8e\\xb1K\\xe7\\xaf5[E\\xb4\\xe6\\x1d\\xe7\\x03\\xf2\\xff\\xbb \\xa0>?\\xbb-\\xca\\xc7\\x17\\xc5\\xfa\\xa3\\x91\\xa4\\xb3\\x90\\x80\\x8b\\xf8\\xce\\xb0X\\xc0\\xde\\xaa\\xb9Q\\xc7\\xc6\\xf7\\xdf\\xac\\xab\\\\`m-\\xb9<M\\xb9\\x1d\\x12\\xe2\\x80\\xc8\\x91\\x91a\\xa0]U\\xd4\\xaeg4\\xa1\\x8dG\\xcd\\xfd\\x8d\\x16\\xf2_2h\\x18xTRAv\\x87 \\xdb\\xaaX\\x97\\xf6\\xdb{\\xe9\\x81\\\\\\x86'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "Ls3-adHOI5HT_uMPqMHp4AM",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 80,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 578,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 578
+        }
+      ],
+      "thoughts_token_count": 145,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 803,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 4.2274
+}

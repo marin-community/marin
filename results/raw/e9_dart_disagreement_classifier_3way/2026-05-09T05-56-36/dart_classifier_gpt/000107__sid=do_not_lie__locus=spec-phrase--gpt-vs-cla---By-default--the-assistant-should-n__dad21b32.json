@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T06:01:59.946269+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "do_not_lie",
+    "locus": "spec phrase (gpt vs cla): By default, the assistant should n"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV3AaEvELZA7OYpD3nuE6XMpsvTL",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"EDIT_A strengthens the prohibition by adding \\\"even if the user explicitly requests such deception,\\\" while EDIT_B similarly clarifies that \\\"a user's request to adopt a persona, roleplay a character, or conduct an 'experiment' does not by itself constitute an override of these prohibitions\\\"—both reinforce that user requests cannot authorize misleading the user.\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306520,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 93,
+      "prompt_tokens": 552,
+      "total_tokens": 645,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.1798
+}

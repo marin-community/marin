@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:03:16.507912+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "letter_and_spirit",
+    "locus": "spec phrase (gem vs cla): Instead, it may politely push back"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:03:19 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3345",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits strengthen the rule by changing 'may' to 'should' and explicitly adding a prohibition against manipulating others (Edit A: 'involves manipulating other stakeholders'; Edit B: 'involves manipulating or deceiving third parties').\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xb3\\x05\\n\\xb0\\x05\\x01\\x0c9\\xd6\\xc7\\x81\\x0f\\x1a\\xe2y\\x8c\\x8eI\\xa3\\x98\\xc4hd\\xbd\\x96C\\xb2\\x85\\xc2\\xc5\\xfeS`P\\xba;\\xbc\\xad\\xc6\\x87\\x1bJ\\xfe\\xf7{6\\x05\\xc4Z\\xaeHKY\\xe9\\x96~\\x8dA\\x80\\x8c\\xb5D\\x1d}\\x8f\\xa0\\x86\\xb6s\\xe5\\xb1\\xd3\\xdf\\x1d\\xff\"\\xf4\\xb0\\xa9xJ\\xb0\\x82\\xd7\\xf9]\\xf1\"\\x80\\xb2u\\xe9\\x88c\\xb4QD!\\x84H\\xad\\xfa.\\xa23_\\xb8y+\\x05\\xce\\xe5\\xa3\\x1b\\xe1p\\x89U\\xa6E\\xe8;q\\xf9\\xac\\x9fH\\xb9\\x8a\\xa7?\\xc6\\xf1\\xa6\\'\\xa6\\x90c\\xabK\\x08j\\x9f\\xfc\\xd9\\xc5:\\x9eM\\x17,\\xf0m\\xdbZ\\x7f\\xadW-\\x15\\x86\\x12\\xf9\\xfc\\x19\\xbb\\x9d\\xdb\\xb6Uu\\x82f\\xed\\xcd.\\xa9^v\\xa0\\xa3\\xb87\\x9e%\\xee\\x13\\xcf\\xfe\\xc2s\\x92\\xc5\\xc08\\xff\\x1c\\xa0\\x8d`U\\x86\\xc8\\xa4X{\\xea\\xa7J\\x88c\\xfb1\\xbf\\xb0\\xa6\\x0e\\xaf\\xc1\\x90\\xc9\\x1d\\tm\\x8c\\xe0\\x8c\\xc9 \\r$\\xc8\\xc8\\x08\\\\\\x04\\x91u\\xb7\\xdb\\x81n\\x11\\xf0|wvY\\xe6\\xa4\\xbb\\x04\\xe8?A\\xd3\\x02\\xb5\\xe9\\x9a\\x0fp\\xf0\\xdd\\xaa\\xe3\\xbc\\x02\\xf2J\\xf7\\xaf\\xa6\\x88\\x1b\\xe1\\xba\\xb0\\xa6\\x98\\x87\\x7fC\\xd3\\t:\\xd2 \\x83Pu*\\x97\\xdd\\x95\\xa6J\\t\\xd3?\\xc5\\x00\\x1a-A\\x14H\\xfb\\x0b\\x92\\xeabgma\\xcd\\x83\\xc5\\x82\\x82\\xc1\\x0f^T\\x1d\\x8ev\\xbd`\\r\\xf3\\xca\\xf60?\\x08uz\\t\\xba\\xdeI\\t60\\xd7\\xa5\\x19\\x15\\xe4\\x89\\x00I,\\xf5B\\xf3\\x18+\\xa6\\xcf.c\\xb9\\xcf\\x8f\\xf6\\xd1\\x84\\xce\\xb4\\x97\\x13\\xbf\\x91\\xc4\\xa7C\\xf8V\\xc3\\xaf\\xed=h,\"\\xc4\\t\\xce\\xf0\\xca\\xfbz\\xd8\\xc4zU=>\\xafp\\xc3\\xbd\\xb1A\\xa7A^\\xc6\\xea~\\xb0-\\x07\\x9e\\xd0\\xe1\\xd5s1 \\xa8\\xdf>\\x87\\x00\\x81\\xee*\\x12\\xd1v\\xe5\\xf9\\xe2\\xea\\xef\\xf6\\x83\\xbeQ\\xfa\\xbaC\\xfd\\x1e\\xc6\\x1c\\xb4b\"!F\\x86e\\xa5\\x08\\x95Ih\\xf5\\x16i0\\xb1\"/\\xdb\\xc6\\xc9)\\xb9{\\xaa=\\x11\\x91)zUXlw\\xb7\\xe5\\xdc\\xdc\\x91\\xe1\\xdfD\\xa7\\x8f!\\x0eUG\\x7f\\xa4R\\x14x\\xf7_f\\xa3\\xbd\\xa0i\\xa7\\xb7\\x89\\nq\\xce{\\xb4\\xaf\\xba\\x8b\\\\\\xe7\\x90\\xc1\\xfe\\x06\\xc9\\xd2\\x8a\\x97\\x83\\xc1\\xff\\xd7Lf9\\x8b\\x90WJ\\x0eu\\xach\\xde\\x03\\x08\\x1f\\x0f)\\x14\\xe8\\xfc\\x9a\\xfc\\x88Zg\\xab^ F\\'\\x8b\\xf9\\xd5\\x93\\xbe\\x1e=Fw\\xf7H\\x9b\\xa3C\\xe3Sz%\\xee\\xce\\x0e\\xee\\xa1\\xa7\\x96\\x84\\x03rJ`\\xef\\xa8\\xc6DD\\xfc\\x14\\xbd\\xfa\\xe9\\x87\\x0c\\xba\\xd0\\xc8\\xb5\\xd9z\\n\\xfek\\x16\\xd6\\x8a\\xc5u\\xb5\\xb2\\x85\\xd3!\\xb7\\xbf8\\x1b+,ee$\\xbd\\xeeOq\\xdd\\xee\\xbc\\x82\\x93\\xf2R\\xe4r\\x91\\x7f\\xad\\x14\\xe5\\x0f\\xd4\\x97\\x88\\x01\\x97)\\xf9\\x7fG\\x8f0&\\xfb.\\xa1\\x0b)\\xd9\\xb8\\xdbV\\x98\\xa0j\\x9e\\xcf\\x8c\\xf8\\x86]@z/Im\\xb1\\xb75\\xa8'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "JM7-adj9JIng_uMPuNbMgQc",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 68,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 496,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 496
+        }
+      ],
+      "thoughts_token_count": 130,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 694,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.3496
+}

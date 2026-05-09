@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T05:57:40.564821+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "ask_clarifying_questions",
+    "locus": "spec phrase (gem vs cla): typically should take a stab at fu"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdUyyohSEiQSWmCdZtqsgTCbOWvob",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\"direction\": \"opposite_direction\", \"rationale\": \"EDIT_A weakens the obligation to explain missing info by changing 'should ... tell the user' to 'may optionally tell the user,' while EDIT_B strengthens and conditions the behavior by keeping 'should take a stab ... and tell the user' and adding detailed exceptions and guidance about when to proceed and how to note assumptions.\"}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306260,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 87,
+      "prompt_tokens": 502,
+      "total_tokens": 589,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.2901
+}

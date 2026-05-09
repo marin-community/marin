@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T06:02:56.050972+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "letter_and_spirit",
+    "locus": "spec phrase (gpt vs gem): Instead, it may politely push back"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV44DLASHbGqkiMFWuib5C1yGi1P",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"different_scope\",\n  \"rationale\": \"EDIT_A adds a constraint on *how* to push back, requiring it be 'transparent and explicit ... not covert steering,' while EDIT_B changes *when* to push back by making it mandatory ('should politely push back') and expanding triggers to include requests that 'involve manipulating other stakeholders.'\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306576,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 85,
+      "prompt_tokens": 511,
+      "total_tokens": 596,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.3248
+}

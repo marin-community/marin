@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:01:47.302217+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "comply_with_laws",
+    "locus": "spec phrase (gem vs cla): including producing content that's"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:01:50 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3347",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits expand the restriction to explicitly cover actionable instructions or assistance for crimes, with Edit A adding 'providing actionable instructions for committing crimes' and Edit B adding 'provides specific, actionable assistance for committing crimes'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xe6\\x07\\n\\xe3\\x07\\x01\\x0c9\\xd6\\xc7\\xf9\\x9d\\xcc\\x93_\\x1a)\\xaap\\x85\"\\x93\\x8fS\\x93VDZ\\x0f\\xb6h\\xdf|?r\\x16\\xe1\\x9d\\xe1\\x95\\x15\\xf5\\x81\\xd4\\n\\x97\\x08\\xd1\\xc8\\x93?7v\\x9a\\xc9\\x05\\xbe\\xeb\\xbeTd\\x12\\xd8\\xe3\\xff\\x1d\\x0e\\x9aS<\\xf9 \\';\\xe2\\xdc\\x82\\xbeO\\xc8\"\\x14+\\xc3\\xf3!v\\xaa\\xffvu\\x0f\\x15Yw\\xd4\\xe1a/:\\xc3\\xc3\\xcb\\x0b\\xc3\\xf0HK\\xdb\\xda\\r\\xc7\\xdd^\\xf5H\\\\\\xb1?\\xee\\x198\\x8dd\\xd0S\\xbd\\x85\\xa3x\\xb8z\\x8a\\x8a*\\xac\\xf3+g0\\xd4b\\xd5\\x97\\xa4\\x94\\xc7\\xd0[\\x1fm__s\\x00\\xfb\\xe6E\\xdc\\x17CY\\xe7\\xb1\\xc5;\\xec\\x1at\\xf86ga\\x80O<\\xaa\\x06\\xfe\\xd9\\x12\\x91!\\xac\\xb24%82\\xb5$\\xd7\\xf1\\x82\\x1cU\\xb5{n\\x04(\\xf1/\\x10\\xd7\\x97b\\xc8\\xf6\\xc6\\xf1\\xfft8\\xd9K\\xa0M2\\xec\\xb8`Q\\xf8R\\xf0\\xc72\\xa9\\xde\\xfd)q\\xf6\\xac7G\\xf1\\xe2\\x15\\x03\\xc6\\x95bIWrX\\x9b\\xb9\\xceNY\\xb1ko.\\x95S,x\\xd3h\\x10\\xfa\\xa4\\xf8\\xb4xXN\\xcc\\xe9\\xf9#O\\xe5\\xdb\\xe2\\xae\\x81\\x02\\x9c\\x83\\xe9\\x9eV\\xd1{\\xbc\\xfa\\x1f>\\x96_\\x03L\\x03\\x1bi\\xb0}V\\xbeN\\xbc\\xf5W\\x0cf\\xd9q\\x0e\\x9aoz\\xccgn9f\\x94{\\x12\\xc0\\xbe\\x9f\\xb2\\xc2\\x809\\x87!P\\x82{\\x93\\xf3y\\xb8\\x99\\\\/\\x12\\xbc\\xc9\\xe2@\\x12\\r\\x82\\x81\\x08\\xe3\\x8d)X\\xf7Y\\xf1\\x9d\"\\xa0\\xf7\\x0f\\x1b\\xbb\\xb7xI\\x0bXBL\\xd46\\x82\\xed\\xc1\\xd23\\xfd\\xfaJHA\\x9e\"\\xb7\\x96\\xca{!\\x13\\x99\\xb3I\\xadRu\\xe3\\x18-r\\xc7\\x99b\\xe2\\xb7!\\xae\\xffsei\\xe4\\xe8\\x83\\x0c\\x86s\\xb2j\\xc5\\xb8\\xa0#\\x9f\\xd3i\\xbcO\\xb9\\x80v\\xd9#\\x0e\\xe1R\\xf4\\xd8Q\\xa3\\xd4W\\xaf\\x99\\xdf\\x0b\\x88\\x05\\xe0\\x15\\xbf\\x98G\\xdb\\x90\\x14*?\\xac\\xffO\\xe6\\x13h\\x06x\\x16?\\xb0j\\xaf\\xf1\\x0e\\xa3ki\\x13\\xee {\\x7f\\xe1x\\x18\\x90aM\\xb7\\x83\\xbb\\xa7\\xdf\\xe3\\xca\\x0b\\x93V\\xdfd\\xdb\\x88\\x1eI?[\\xe5\\x88[\\xd5\\xf7\\xcb\\x85()uA\\x8d\\xe6\\xd4\\xab\\x18Z!Wp\\xfd\\xf5\\xee\\xdd\\xce\\x126Z}\\xf5 &5\\x90\\xc8-eX\\xc6\\x02\\xc6\\xe8\\xe4\\xab^\\xd6\\xae\\x08\\xec\\x04\\xdf\\x7f3\\x06\\x86\\xd9\\x93\\xd2\\xcd*\\xb3q\\xd4\\xecZ\\xcc\\xe6Qd\\xfd$\\xb7\\xa7R\\xf2at?\\xbfN\\xdfC\\xd3\\xd0h\\x86\\xfbU\\x0e\\xe7\\xee\\xe1Xz\\xd9F\\xc5\\x07\\xb7\\x19a\\xd7t\\xaf\\xad\\xb4\\x94\\x18>\\xdd\\xdd2\\xb1\\xf0:\\x085I\\xe7\\x10\\x05<A\\xe8\\x1d\\x04\\xc7\\x15D\\xfaY\\xb2\\xc8\\x00\\x1d\\xe0\\x87>\\xef\\xd6<\\xb6\\xd2\\x9b\\xc6\\xe1\\xb3sx%e!\\xe8\\x9em\\xaa\\xd6!\\xe0e\\n\\xc4\\x92\\x9f\\x80\\xceo3zg\\x10@\\xbf\\xf9P\\xfcg\\xb0\\x00\\xf3\\x1c\\x85\\x90^\\x1d;C\\xb58\\xb3\\tU\\xc7\\x1f\\x14\\x97\\xab#\\xc1\\xf5T9<\\xd4s\\xd73\\x0f\\xa3\\xaf\\xd9\\xb7h\\xa6\\x8e\\rS!U\\xa3)*\\x0chL\\xdd\\xe3\\x0f\\x06\\xe7\\xc2\\x0bI\\x90\\xb0\\x06\\r\\'\\xbe\\xde?)\\xf03\\xbc z\\xb9\\xef2\\x17\\x06\\x0b\\xc6B\\xadN\\xcc.\\xf4PS\\x01l6i\\\\p\\x16\\x94\\xe3c\\x0c\\xe7\\xa5i0b\\xab{Q\\x17\\x19\\x0e\\x9b\\rn\\x12\\x0c\\xd2\\x7f\\xee\\xf5\\xac\\x1b\\xd6P\\xb0>\\x0fT&\\xb7\\xbf\\xa1\\x0e\\xbc\\xed\"\\x13\\xd1\\x8f\\x8a\\xb6#\\xa3\\xdb\\x01\\x03w6\\xc0\\xe8\\x12\\x00C7\\x84\\x05wf\\x02\\xb0D\\x0c\\xcf\\xf1\\x069\\xc9G\\xccd\\r\\xcf\\x93:\\xd7\\xc2W\\xba\\xbff\\xb8\\x9c\\xfa\\x83\\xf4.\\xd63\\xad\\xbd\\xf58\\xc4d\\x06\\xb2\\xb3\\xc9~\\xd4\\xa3\\x81.\\xdc\\x96\\xfdTmz\\x87\\xbc&:,\\x7f\\x04\\xe1]\\xd8qr0\\xa1\\xa0\\x0cf\\x04\\xd0aK\\xe8\\xb2\\xcaq\\x03\\xfe\\xe7k7uWrY\\xfe\\x06\\xbfC\\xe1\\xb8\\xe7jay\\x9a)\\xf0\\x9c\\xaar\\x84=\\x88\\xb8\\xa5\\xd0Sn\\x95\\xe9\\xec\\xf6\\xcf\\x94\\x90~]Un\\xc5\\xfb\\x0e\\xff\\x9e\\xea\\xac\\x0f\\xd2\\xda\\xc8\\xc6!d$z]\\x85]\\xa3F0\\xbe\\xa2fe2\\xd5\\x8cK?|TZEJTl\\xd1%'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "y83-aYzMGfre_uMP0IGq-QE",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 61,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 469,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 469
+        }
+      ],
+      "thoughts_token_count": 170,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 700,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.3528
+}

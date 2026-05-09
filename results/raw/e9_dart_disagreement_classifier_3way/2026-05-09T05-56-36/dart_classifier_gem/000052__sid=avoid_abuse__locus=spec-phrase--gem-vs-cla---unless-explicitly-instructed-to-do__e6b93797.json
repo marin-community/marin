@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T05:59:21.279533+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "avoid_abuse",
+    "locus": "spec phrase (gem vs cla): unless explicitly instructed to do"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 05:59:24 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3618",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits push in the same direction by explicitly listing allowed contexts for the exception. EDIT_A adds '(e.g., for creative writing, roleplay, or user-consented roasting)' and EDIT_B adds 'user-consented contexts including but not limited to: roasts, dark comedy... and creative writing'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\x83\\x07\\n\\x80\\x07\\x01\\x0c9\\xd6\\xc7\\xe8\\x08\\x0f\\xff\\x96\\xbeV5\\xa99\\xc4\\xec>P\\xca\\x00/l\\xeew\\xd8X\\xcd\\xf8\\xf5\\x1f\\x04\\xae\\x8am\\xef\\xcfjW\\xf3\\x0c\\xf8\\x8a0\\xf9\\xf59 BW\\x8d\\x12\\xd0n~\\x8e\\xfe\\xc5\\xdfHf\\xcf\\xfe\\xae\\x1e\\x84\\xdd\\x1c\\xa3\\xcaj\\x14JB\\x1a\\xb6c\\xf0f\\xf7\\xa8N\\xde\\xe9=\\xc8G\\raP\\x01\\xe8\\xf5\\x14\\xbc\\x8b?\\xa7\\xa4t\\xda\\x8e\\xed\\x918\\xc7\\xe48\\xd9\\xd7\\xb5mu0\\xf4W$U{G\\x9e\\xcf\\xf7<7\\x12\\xfa\\xfd\\xa6\\x81:6\\x16\\xfa3\\x00\\x1c\\x81\\xa0\\xfe\\xad/\\x02\\xc4<\\xd2\\x9ex\\x9d\\xfcW>\\x1aa\\xaf\\xc2v`\\x84\\x8djG\\xe5\\xfb&R\\xec\\x12X\\xa5\\x7f\\x14\\x90\\x17\\xe0\\x8c[\\xcb\\x05\\\\\\x1d\\x17\\x8bI\\x97R*\\xfa\\x0b\\xe8\\xdd\\xe8\\xb4ul\\xea\\x9e\\xb42=o\\x95\\'\\n\\xd2L\\xc8\\xe1O\\xdd\\xc0\\x81\\xf0\\xc4\\x9a\\n\\xa8\\xb7\\x14\\xf0\\xd0c\\x91\\xdb\\xfeC*\\xa7\\x85Y*\\xfb\\xfb\\x9adn\\xcbC\\xf0\\x93\\xc9\\xdfQ\\x956\\xf7\\x0c\\xb7\\x8f\\xf1\\x93t\\x0cL\\xa4\\xb4\\x83\\x14EF\\x99\\x18\\xbd\\x9cL \\xab\\xeb\\x99\\x05\\xadbb\\xab\\x10\\xb0m\\xe4\\x8dw\\xe2>-\\xfc\\xfe\\xa3\\xc1\\xafa\\x81\\xdf\\xec\\xea\\x1f\\xa7\\xdeT7RH\\xb4\\x18.\\xa1[\\xd8\\xfa)a\\x94\\xed\\x9d\\xc7b\\xd3\\xb6\\\\n\\x8d\\xf9W\\xd1X\\xaeb\\x1e0o\\xa2q\\x9cC\\x17R\\x9b\\xe2L\\xce\\xcc\\x07\\xfd\\xad \\xc1\\x8e\\xc5\\x05^\\x06^\\xc3\\xc7\\xb0\\x83\\x80\\xed*H\\xaa\\x99\\xf8\\xbc\\x9f\\x10k\\xaa\\x91\\xaf\\xe9\\x9f\\x0b\\x8bd\\xd3\\xb7\\x9e@\\xc1.\\x830\\xc4}\\x9d\\x94\\xcc\\xdc\\xa2\\x06\\xf5\\x0c\\xfbYX\\xec\\xa9\\'\\xae}q\\x1e\\x0b\\xf5\\x92\\xd0\\xa4\\x8b\\xac|\\x15wB\\xd1\\xe6e\\xf0#\\xfb\\x05\\xc1M\\x81\\xda/\\x96\\xfep\\xf5\\xda\\x9c\\x05[\\xf7=\\xe5%\\xa5\\xfd\\x11\\x1a\\x02\\x1f\\xed\\x0ew\\xe2\\xc7p\\x0e\\xb5\\xfd\\x9f_\\x8a\\x9f\\xb5\\\\\\xf9\\x92\\x96\\xbf\\x89v\\xd1{\\xab \\xb5\\xf8E\\x13BP\\xbf\\x7f\\xe8\\x1b\\xdf\\x7f\\xec\\x11\\xafz\\x0f\\xe9x\\x81J\\xeeb\\xbc\\xe6\\x9b`\\xef\\xa9\\xb0\\x99`/\\x19\\xacd\\x04kx\\xc8g\\xf7\\n{)Z\\xe3\\xdd\\xf2+\\'\\x9d\\xbeY5\\xbfq\\x83}\\xcf\\xc8M\\x9d\\x16\\xe3\\xfe g1\\x0c\\xa0`\\xab\\xbd ?E\\x89\\xa7R\\xfe2\\xb9O\\xe3\\xae\\xd8\\x9a\\x96\\x1b\\x96\\xe4\\xe9\\x9d\\x9cC0\\xca\\xfd0\\xf9\\xc2\\xf5W\\x9fQ\\xbf>\\\\\\x81w\\xc7\\x83\\xf8\\xaec\\xe0\\xf8\\xe9\\x953\\xfbR\\xd3a\\xfea\\x9e \\x18\\xe7\\xafD\\xe1\\x80\\xad\\xddPUU\\x10\\x8c\\xa9\\xf6\\xb0\\xe9\\xc8\\xe6}\\xee\\x1d\\xde\\xf7hY\\xecW_\\xd2\\x19i-\\xba\\x10\\x8ba\\xd9\\xa0\\xa7\\x94\\x96\\xee\\x99\\xc7)C\\xa8\\xfa\\xd2U(2\\xe8\\x7fP\\xe6/\\x1c\\xc1`\"\\xd5\\x19\\x8f\\x1c\\x9ad\\x0ck\\x9a\\x9b\\xb9F\\x18\\xc0\\xc8-\\xbc-!b|7\\x91\\x1f\\xc0\\x05w\\x0bU\\xb7\\xeb8\\x1e\\xa9\\x9a%!q\\x14\\x83\\xfa\\x83\\xc9\\xf3\\xac\\xda%\\\\\\xe2[\\xb3\\xc3\\x92~\\x81\\x86\\xa3\\xd5\\xe1\\xdc\\xa4~\\xc6\\xa3\\x1c{\\x0b\\xa6\\xb9j\\xdfKv\\xc6{\\x8bJw\\xfen\\x19\\xc6\\xafE\\xcd+\\xd7+2s\\xb17y\\x12_sT\\xcan\\xf3\\xda\\x07\\xb2\\xde\\xf0j\\xc1.\\xcc\\x8a9\\xdd+\\xc5\\x1a\\xff\\xf7z\\xfd\\xc0\\xdcq\\x89\\x02\\xbe\\xe5=\\xcdT\\xda\\xaa\\x80\\x1a\\xf7\\x12\\xbe\\xa0\\xa2A\\x08\\x8fN\\n\\xaf\\xc9\\x1f\\x8e\\x94\\xf6qE\\x8c\\xa0RmO\\xa2?\\xab\\xdd1\\\\\\x05\\xc80\\xbeH6\\x07a\\x9dY^\\xf2\\xa1>p(\\x0f\\xd3\\xe7\\xc3\\xd0.\\xc5T\\xcc\\xa5i\\x19\\xce\\x0e\\x04e\\x85\\x94\\xb1\\xf2\\x82\\xfaZ\\x10\\xbe[b\\xa6\\xd9}\\xb2\\xf3\\xa2\\x97U\\xc8\\x0f\\x8ck\\x90\\xca\\xee\\xf2\\x1a\\xaa\\x12\\x90\\xa2\\x89V\\x17\\xdcv_\\x04\\xf3\\xcb\\x82J\\xdc'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "Oc3-aeCsGLCY_uMP95-G0A0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 86,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 505,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 505
+        }
+      ],
+      "thoughts_token_count": 160,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 751,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.6227
+}

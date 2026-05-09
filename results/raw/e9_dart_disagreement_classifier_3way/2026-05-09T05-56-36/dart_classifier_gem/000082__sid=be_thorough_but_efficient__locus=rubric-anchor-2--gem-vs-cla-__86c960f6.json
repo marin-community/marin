@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:00:45.595244+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "be_thorough_but_efficient",
+    "locus": "rubric anchor 2 (gem vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:00:48 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3266",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits clarify the truncation condition for Anchor 2. EDIT_A specifies 'visibly truncated due to token limits', while EDIT_B specifies 'truncated mid-stream... but the truncation is less severe than Anchor 1'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\x84\\x06\\n\\x81\\x06\\x01\\x0c9\\xd6\\xc7\\x86\\xb9`K\\x9c\\xb1g1\\xbb\\x86(\\xfc\\xe8-{\\x88\\xc3\\xcd\\xf0\\xe6\\xa5o\\xa5\\xbf\\x10\\t\\x1cX\\x80g\\xd3=P\\xe1\\x82\\xfa\\x16\\xf8\\xf3)\\x12\\xf1\\x1a\\x9c\\x7f\\xa8\\xe3fZ\\x9a,\\xd7L\\xda\\x13\\x97\\x84Tv}j\\x04=\\xff\\xc2\\x96\\xd88\\xca\\xea\\x92\\xec\\xe4S\\xda\\x04?\\xf0[N\\xa9$6\\x1d\\xd2G0\\xd9\\r\\xf1s\\xeb\\x8a\\xcd\\x17\\x05\\xce\\xf5\\xa5,;\\x05AY\\xd7F\\xecPP\\'\\xb6\\xb8\"\\xa80\\xf2Q\\x9ctm\\x171\\xc1J\\xb5\\x00a\\xa1PRU&\\xca\\t4\\xe7\\x1e\\xcb\\xaa\\xb1\\xf8l\\xf0|\\xe5X\\xad\\xb5\\x93,2\\x1d\\x1a?\\xcb\\xef\\xf1\\xb7\\xeem\\xe7ZY\\x84\\n\\xd41Y\\xd0{`3\\x00\\x8c^\\xeb\\xd4h{\\xce,\\xde\\x1283\\xb9\\xb96\\x14\\xf55\\xb9\\x17\\xa2\\xce\\xf1~\\xbf\\xbaU\\xf9 \\x06\\x89\\xd5,\\xd9x0\\x1c\\xe4MSa\\xbb\\xd7p\\xef\\x173\\xaeI\\x1d\\xabb\\x93g\\xfe\\xcc~M?\\xfeL\\xaa\\x16Z@\\xc4\\\\~\\xa1\\x90\\x84K\\xe9\\xfb\\xab\\xe5#\\xb9}\\xe6\\x93\\xa7W\\xf9\\xb9\\xb14\\xe9\\'x0\\xf1\\x1bD\\x87\\x9c\\x1d\\x8aXc\\xa8N_\\x8fZ\\x05tp\\xbf\\x8e\\xa0XB\\xbd\\x9d\\x10\\x1ey\\x022\\x8f\\x8a\\xa8\\x02\\xf8\\xd4PzYf\\xb5\\x9b\\xdfJ\\xe3\\xa5\\x94\\xd1\\x92F1\\x88F\\x11R\\xcf%Y\\xf6\\xf9\\x8e\\xf6\\xa9\\x9c\\xf7\\xb1\\xf7In\\x8cM(\\x12\\xea\\x15\\x9f\\x93\\x9e\\xc6\\xeb*\\x9dy2\\xb5\\x81\\x95\\x9a_\\xb6Lv\\xf6W\\xb5$\\x01p\\x85\\xee\\xab2\\x104\\xba\\xa0\\x99\\xef(\\x17,\\xf9\\xb8\\xdbn\\x88#\\x08r\\x80\\x8av:V@\\xe9\\xf7\\x8bWzuX\\xde\"\\xef%F\\xbd\\xe9\\x19\\xba\\x17\\xb8k\\xd8\\x88\\xe1\\xcf\\x1f\\x81)d\\x05\\xb2\\xcbz\\xd6dP\\x89\\x12p\\xf8\\x9f\\xf4\\x8d\\x1f\\xed\\x1c\\xa9\\xf5\\x86B\\x15@\\x003\\x87\\x05\\xaa\\xfc\\x92\\xc5\\xa6\\xe5|v\\xd1\\x85\\xa1\\x1b\\x02\\xa0\\x92\\xb1\\xd7\\xb6?w\\x9b{\\xdbyd\\xd2v\\xa8\\xd9\\x02D\\x8d\\xc2\\x89\\xb6]\\x9a\\x94D\\xcf\\x1f+q\\xa9\\xa4_y\\xee\\xf1\\xa7\\xe8\\xd4\\xf5\\xbfDG\\xb0`\\xd9@\\x81\\xb4}o\\x86\\x11\\x87G\\xc7\\x0f.\\xc3o\\xa0\\xc2\\n\"8&\\x16\\xfcX\\x96\\xf0ORw\\xfa&\\xfa\\x01A\\x82\\xc9\\xc0\\xe0\\x88UL{\\xb5l0\\xb0A\\xbbr\\xado\\xea\"A*G\\x14\\x86kF\\xd7\\x96\\x93\\xeel\\xaa\\x00GP\\xda\\xa3\\xdf\\xde\\x9dLDJs\\xee\\xfaE\\x94\\xcb\\x9d\\xa8fn\\x0cn9S\\x8d2J*\\xf1\\xa0\\xe9G\\xa2\\xd3\\xc38K\\xfe!I\\x8f\\xdd%\\xf6\\xe8\\x94\\xaa\\x1e2\\xd4[!B\\xf0]\\xad\\x0f\\xde\\'\\x88%\\x0c\\x8d\\x05\\xadq\\x83\\x9d\\xd2sN\\x19\\x04\\xa1de\\xef`\\xbc\\xc2\\xfb\\xb3U1LN\\xfb\\xdf-+\\x97M/2\\x7f}\\xf42\\xf6\\xb8J\"\\xb2\\xabs#\\xc2\\xfaK\\x82\\xb6\\x01g\\x86\\x9d\\xa45uv,\\x0b\\xedY@c\\x12\\xc4\\xc5,\\xfa|\\x0fs\\xae\\x86eW\\x1e%\\xecV\\x03\\x88\\x12e\\xa62\\xef\\xb7\\xe2\\xcc\\x12\\xa4\\xf3!\\x0c\\xb6V\\xdb\\xc5j\\xf9\\x8e\\xac\\xe5\\xffU\\xadz[\\xb7T\\xab(\\x89\\x1d\\xcb\\xf8\\xa4\\x98CZt\\x1b\\x16\\x9c\\xb3,.\\xb7\\xde\\xc3~\\x9f>\\x16@'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "jc3-aYSjK7DF-sAPx-m9wQg",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 66,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 619,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 619
+        }
+      ],
+      "thoughts_token_count": 148,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 833,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.274
+}

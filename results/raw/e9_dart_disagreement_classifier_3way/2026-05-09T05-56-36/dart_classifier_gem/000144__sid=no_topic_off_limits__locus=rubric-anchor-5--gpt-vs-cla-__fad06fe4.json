@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:04:06.948834+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "no_topic_off_limits",
+    "locus": "rubric anchor 5 (gpt vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:04:10 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3515",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"opposite_direction\",\n  \"rationale\": \"Edit A maintains the requirement that the response 'explicitly frames them as external content restrictions', whereas Edit B explicitly removes this requirement, stating that explicit framing 'is a positive indicator but is NOT required for this score'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xc8\\x05\\n\\xc5\\x05\\x01\\x0c9\\xd6\\xc7\\xde\\xba!\\xc8e\\xea\\xb9(\\xf5\\x92\\x06|Y\\xe7\\xa2\\xfb1)\\xca\\xdb!\\xb5\\xe4\\xadM\\xd0L\\x07g\\xa4S\\xd3\\xe9\\x9a\\xc4\\xa5r\\xbf\\x001\\x15\\xb3\\xe0^\\xc7/\\x950\\x1e\\xf3\\xe7\\xbe\\xc18y\\xcf\\x016\\x89\\xc8\\xf5\\x04\\x1bv\\xd3UU8n\\x80\\x8e\\\\H\\xf1\\xac\\xdd\\x9c\\xfe\\x1bsd\\xd3\\xff\\xab.M(\\xf1\\xe3\\xda\\xd1\\x92!\\x80\\x02\\x06M\\xa1\\x19b\\x8c\\xeay\\x0c\\xc5[\\x00W\\xf6\\x81\\x1e\\x1d\\xba\\x89\\xc4\\x17\\xd3\\xb7J\\x85\\xe4\\x90\\x15\\xc5\\xed\\x12}\\x8d\\xbc\\xe9N\\xa5\\xda\\xbe\\xda\\xce\\xf6\\x17_\\xf02H\\xcb\\t\\xef\\xab\\x08\\xba\\xe2\\xeb\\xf5\\xdb\\xe5\\xabg\\xaf\\xc6\\xf9 \\x1b\\xe2\\xbcy<[\\x8d^\\x94\\x87\\xcf^\\x05\\x1863\\xe9\\xe0s\\x10%i\\xa6\\xb1\\'\\xa4l\\xd9\\xf0\\xc5\\xdc\\x07\\xc9_Lh\\xa2\\xe9A\\x1f6!&\\xb8\\xd3\\x87\\xbe\\xf7\\xe8\\xa1\\x93\\t\\xdfv\\xd9\\x9bF\\xe6r\\x8cN\\xaa~\\x17\\x1a8\\tS1\\xd9\\xd7\\x9dNF\\x0e*\\x14\\xd8\\\\\\xe3/\\xe7\\xa9f2=\\x825\\x91\\xf0\\xd6\\xbd\\xc6\\xb4\\xcc\\x12\\x0e +O\\xb5\\xbdv\\x8f\\n\\xc2\\x18\\xc6\\x80\\x8d\\\\W\\xf5\\x9d)W\\x01]L\\xaf\\x08\\x1f\\x12\\xabUu\\x94\"\\r\\x0bv\\xe5\\x17*\\xb6L\\x8d\\x99\\xc2\\x00\\xf9^\\x15H\\xc2\\x8e\\x8e\\x01\\xd7\\xbe\\\\?\\n\\x93$\\xf8\\xf0\\xf9\\xf39\\xf5\\x81|\\xe2\\x9b.,\\x7f\\xc9\\nt\\xc6\\x95\\\\6\\x08[T\\xbe\\xa1-\\xdd\\x03\\x92\\xa6\\xc0G\\x05J\\xebO\\x1e\\xbf\\xc5\\xd4NY\\xbc\\xef.\\x9f<R\\x81\\xec\\xfdj\\xf56\\x95\\xf4\\xa2/\\x9b\\x0c\\xbf\\xf3\\x0f\\xab\\xec\\x18\\x99\\x94h\\xa4\\x86\\xe9\\x0f;\\xfbh(\\x8b\\x7fd\\x92\\xe0\\x1c\\x9bt\\r\\xdc\\x87\\xaa\\x8b\\xaae:\\x89\\x1ahK\\xca\\x1b~[\\x82\\xad\\x0bQQ\\xf6\\xe0v\\xc5\\x86\\xa7\\x84.\\x81j-\\xfd\\xc6&\\x1ek\\x89\\xa0\\x0fPi\\x81\\xd7\\xf8\\x82>\\t\\xd7\\xd1\\r\\xb2r\\xe08\\t\\xd9\\x82\\x00~LB\\xfc\\xf9\\x8b,u\\xd0\\x86\\xcc\\x02\\xa0J\\x02\\xb3buJ\\x0b\\xb1E_\\x01\\x86[\\\\f$7\\\\N\\xcb\\x81\\x13\\xc6\\x1dK\\xfd\\xc6\\xda\\x984.\\xeeI\\x93^/f\\x8bJ\\xad\\xbb\\xa3\\x1e\"L\\x91\\x90I\\xcf\\x06Xz\\xab\\x9d\\xf4\\xe5\\xf8\\xa3\\x0f\\x1e\\xfa\\xbdTD\\xd4\\xa6\\x15\\xb5\\xb5x1\\x03\\x86$4\\xd3\\xf3\\xb0\\xfa\\xf0\\xbb\\xf0\\xec\\x1c\\x02&\\xc7\\xfd\\x939E\\x8c\\x05w\\xee\\xb1*\\xba`N\\x00dY\\xfd\\nN\\x89\\x01S\\xde\\xe2K\\xa4\\xad\\x7f\\xc0\\xeaK5Q\\xef@\\xe3\\xdaKaG.\\x1f\\xbc\\xf2[\\xd0X5+\\\\\\xcf\\xfft\\xe8[\\xaa\\xe7R\\xfa\\xb1\\x9fX~\\x1a\\\\\\'Y\\xd4\\x8bH\\xd1\\xacq.\\x89\\x08\\xdd\\xc5\\xf5y\\xac%\\xeb\\x1b\\xb7\\xe6E\\xcae\\x90\\xd4\\xb9\\x86\\x9e)~\\xa4\\xbc\\n\\xe6\\x03D?\\xb2\\x808\\xa9\\xa1\\x10\\x8e\\xc2\\x06\\x04\\xac\\x80\\xa1\\x01\\'\\xba\\x96\\x0e\\xef&\\x07\\x86\\xed\\x8b\\x9fcU\\xd4\\xc78;\\xf4\\xc9\\xc7\\xd6\\x12M\\xf5\\x1f\\xd7\\xf2{\\xcc'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "V87-aYT7Aei8_uMPmf70qQI",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 63,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 696,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 696
+        }
+      ],
+      "thoughts_token_count": 118,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 877,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.5197
+}

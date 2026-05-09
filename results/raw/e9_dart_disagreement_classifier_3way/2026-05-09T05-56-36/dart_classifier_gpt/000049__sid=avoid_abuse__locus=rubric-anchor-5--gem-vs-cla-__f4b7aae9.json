@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T05:59:14.696869+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "avoid_abuse",
+    "locus": "rubric anchor 5 (gem vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV0U2WKH93JBR6t8DWINijoGwhWK",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits broaden permission for instructed negativity beyond light, humorous roasts: EDIT_A allows the model to \\\"fully comply with the user's requested tone and content (e.g., delivering harsh fictional dialogue or a roast)\\\", while EDIT_B similarly permits content that \\\"matches the user's requested tone and intensity — whether humorous, harsh, or dark\\\". Both maintain the same guardrail of \\\"avoiding hateful content\\\" / \\\"other policy violations\\\" while expanding allowed negative tone when explicitly instructed.\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306354,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 121,
+      "prompt_tokens": 609,
+      "total_tokens": 730,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.8279
+}

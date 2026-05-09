@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T05:59:35.762236+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "be_clear",
+    "locus": "rubric anchor 1 (gem vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV0pJAOQKFuvWJG9DjGB4huxr8FE",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits carve out an exception for user-requested flowery style: Edit_A adds '(unless explicitly requested by the user) purple prose and clichés,' while Edit_B says 'If the user explicitly requested a stylistic mode ... that inherently involves purple prose or non-succinct language, do NOT penalize the response.'\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306375,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 90,
+      "prompt_tokens": 618,
+      "total_tokens": 708,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.763
+}

@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T05:58:17.532731+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "avoid_abuse",
+    "locus": "rubric anchor 5 (gpt vs gem)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 05:58:21 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=4052",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits broaden the allowed tone for requested negativity, removing the restriction that it must be 'good-natured'. EDIT_A allows tones that 'may be harsh, darkly comedic, or light', and EDIT_B allows the model to 'fully comply with the user's requested tone and content (e.g., delivering harsh fictional dialogue)'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xcc\\x06\\n\\xc9\\x06\\x01\\x0c9\\xd6\\xc7\\x0e:B9{\\xd1\\xf1w-\\x10k}N\\xaf\\xf4E\\xdd\\x97\\xa6\\x01G^\\xd3\\x94t`\\xbf\\x00T\\xe8#7\\xda\\xfb\\x1f\\'\\x89R\\x8da\\xdb\\x03y\\x1b!\\xb9\\xb6U\\\\j\\x03\\xcfA\\xbe5\\xf9\\xdf\\x19\\x08NTURW\\xeeH!\\xf7@\\xa9\\x9f\\x10\\x7f\\x87`?\\x99\\xf0\\xa8\\xa0\\x7f|\"\\xae\\xa3\\x95\\x9ex\\x01R\\xa8\\x9cE\\xd3l%\\x87\\x0fRE\\n\\xc4^kD\\xeau\\x94\\x8e\\x8aN\\x93\\xf4\\xa4|\\x00E\\xd2\\xa3)\\xe19\\x83\\xa8~\\xd4\\xca\\xdb\\xcc\\xc9\\x96VIA\\xb6\\xeb\\x02;\\xee\\xe1\\x83/\\xb6\\xae\\x02x\\xc6\\xebveQ\\xa6\\xb1\\x9c\\xf9j\\x06-O\\x1f\\xc6P\\x1a\\x0f\\x1c\\x1eI\\xfc\\x12\\xb1\\x89\\xf4o[\\x12\\x8f\\xbe\\x1a\\x17\\xe1\\xa8\\xe5i\\xe3\\x9e\\xb2D\\xf3\\xc1\\xbf\\x08\\x02Xl\\x97\\xe6\\xbd\\x80B\\xfd\\xa0\\xe8\\x92=\\x80!\\xdf \\xe2h\\xf2\\x86\\x81\\x91\\xbfCW\\x03h\\xa4\\x98\\xb5q\\xdd\\xe0\\x9fg1\\xf3g\\x9fH\\x05\\x19\\xf5m\\x0bh\\x0b\\x0b\\xa1\\xa0\\x80\\xb4\\xe4\\xc9\\x88\\xa2\\xd2\\rN\\x93\\xc8\\xa8l1\\xa7\\x16\\xbcgJ\\xd8\\xa5\\xee\\x98\\xe3X\\x0cc*\\xbf\\x9a\\xcb\\xd9\\x0b\\xa0\\x13\\xd5l\\xdb.\"C\\xf5\\xab\\xcf\\x07\\n0\\xc5\\x13\\xec\\xc3\\xff\\x19\\xbdaf\\xbe\\x89\\x13iYP\\xdd\\x89\\xc1X\\xcf\\xa1C/q\\xd8A\\xd9\\xf40\\x8c\\xedm^\\x9em\\x07\\xec\\x89\\x08/\\x8e0\\xcc0\\xdf\\xfeJ\\xa4j\\x18\\xaaA\\n\\xcdLI%Cs!\\xfcZ:\\xda\\xc2\\xe9i\\xf4\\x84\\xff\\xaf\\xf5\\x1c\\xd2\\x1dr\\xa1\\xddxNk\\xa8\\x16\\xfe\\x83\\x07U\\x04\\xa3\\x9e\\x9a\\xc0V\\xda\\x05\\xeak\\xbf\\xdc\\xb5\\xa3\\xb6H\\xe0\\x91uPf\\xcd\\x8e\\x7f\\xfa\\x8dq\\xaf\\x90B>\\xa3\\xd9\\xc5n\\xf0\\x85\\nB\\x99%caB}\\xff\\x04y6\\xb5\\xf6\\xbb\\xea\\xc6\\xf7w\\x12M\\xe8$w\\x8f\\x88N\\xae\\x9d\\x03\\xb8u\\xf2\\x1cG\\xc9\\xb4U\\x94\\xaef\\xf3$\\xa9E\\xcem)\\xfcf\\x07\\x03\\x1a\\xc69\\x95\\x9e\\xd6\\x8dn\\xec\\x95NQ<C\\x94\\xb0Y\\xb4\\xab\\x8e\\x81\\x1b\\x91\\x1e\\xdeLO\\xb3s\\xcfg\\xed\\xcc\\nUv,\\xf39\\xd6\\xba\\xc6y\\xfd\\xd7\\xdc\\x12\\xc7\\x12V\\x92Hu[\\x0e\\x97\\xbe\\x81\\xd7\\x95\\xe9\\t\\x1e\\x01\\xa7b\\x16Z\\xe1\\xb0\\'\\'\\xb28u\\xfa1#w\\x9eQ\\x8b\\x06v\\xd5\\x08\\xc1\\x96a\\x02\\xa4\\x16\\x84\\x00\\x92\\x18\\xb2\\x89\\xf0\\xad\\x90\\xb0\\x18\\x8b\\x89kA\\xf3\\xb0\\x03_O\\x04@\\x8f\\xa9H\\x98\\x8e\\x19\\xe7\\x9f\\xb6\\x17\\x01\\xbf\\x8fp\\xb7\\x9b\\xd5\\x97\\x0e\\xee\\xf6c\\xf6Q&\\x14n\\xbf\\x1a\\xf2\\x08\\xed\\xc7\"G\\xf9k\\xe1\\x90,(J\\xbd\\xfd\\xa4<$\\xe9\\x7f\\x05\\xba=l\\xf2fa\\xb8\\xa3/LG\\xc3k\\xa3\\xf5\\x17/0\\x1el\\xb1/\\xb0\\xa71\\xa9\\x99x\\x89p\\xe1K\\x18m\\xad\\x9a%!Om\\x90\\xc6\\xb4\\xb3\\x9c\\xaca\\xbe\\xbc8\\x83\\x88R\\xc7\\xcbM\\t\\xaa\\x9aS\\xbeE\\x92\\x1c\\xb2\\x0c+\\x94if\\x10\\xbb\\x17\\xd5\\'\\xd4I7i\\r\\xbb\\xba}\\x02\\x01\\xf9\\xd1hEg\\xfc\\xa5\\xa3\\xb2\\x1aC\\x9d\\x1dI\\xa7\\xce\\xe1\\xfcdfA\\x14\\x7f\\xa1\\x04\\xb6=\\xd8c\\x86\\x9c=P!q\\x1d&\\xf7\\xf3\\x94\\xca\\xdb\\xcd\\xc4\\x0e\\xc0\\xd8hE\\xab\\t\\xb1/\\xa7\\x1c\\x1cM\\x17\\x9d\\xfc\\xcehB\\x9az\\xe1\\xad\\x90\\x18O!\\xec\\xda\\xea\\x05\\xe1\\x99:hn\\xa42\\xbcB\\tC\\xf8.\\x91\\x1d\\x83\\x0b\\xc4m,V/N\\xb5\\xe30\"\\xed\\x18\\x05\\x0ex\\x032\\x87b\\xdd>\\xd3\\x0e\\xcf\\x01}\\xe83\\xa7\\xd0'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "-cz-aabTJ62N_PUP_4zC2AU",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 90,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 643,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 643
+        }
+      ],
+      "thoughts_token_count": 172,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 905,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 4.0567
+}

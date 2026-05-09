@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T06:02:20.298035+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "formatting",
+    "locus": "rubric anchor 1 (gem vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV3UJcmi00uz7SuTNARh51l0Rs0j",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits add an explicit carve‑out for user/operator formatting overrides: EDIT_A adds \\\"fails to follow the user's explicit formatting override\\\" and EDIT_B adds \\\"WITHOUT a valid user or operator override\\\" plus a note that such an override means the response \\\"should be evaluated against the requested format instead of the default.\\\" Both narrow the rule in the same way to respect explicit overrides.\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306540,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 101,
+      "prompt_tokens": 661,
+      "total_tokens": 762,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.4619
+}

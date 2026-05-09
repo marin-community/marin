@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T05:58:47.712439+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "avoid_abuse",
+    "locus": "rubric anchor 5 (gpt vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV03mbCaVPBRWD3PxBSPUYikPpPX",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits broaden and clarify the allowed space for user-consented negativity while keeping prohibitions on unsolicited abuse. Edit_A permits 'user-consented, policy-compliant negativity in self-directed or fictional contexts,' while Edit_B permits 'explicitly instructed, policy-compliant negativity (permitted)' including 'roast, fictional abuse, adversarial simulation, creative writing with harsh content.'\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306327,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 101,
+      "prompt_tokens": 672,
+      "total_tokens": 773,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.4701
+}

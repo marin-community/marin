@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:03:08.239396+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "letter_and_spirit",
+    "locus": "spec phrase (gpt vs cla): Instead, it may politely push back"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:03:15 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=7135",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"different_scope\",\n  \"rationale\": \"EDIT_A focuses on how pushback is delivered, requiring it to be 'transparent and explicit' rather than 'covert steering'. EDIT_B focuses on when to push back, making it mandatory ('should politely push back') and adding a new trigger for 'manipulating or deceiving third parties'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xfe\\x08\\n\\xfb\\x08\\x01\\x0c9\\xd6\\xc7\\xce\\x1d`\\x18\\\\Q1QW\\xeb\\xfc{!\\xa1|o\\xf3\\xe58\\xfd\\x16t\\xe6$\\x07\\xaa\\xe0\\x95\\x1c\\xbb\\x10\\xff\\xe13\\x870}\\x07\\xb7f\\xca\\xdby1\\x10\\xd8\\x9b\\x19\\x043\\x92\\xd9\\xce\\xfaY\\xb5a\\xda\\xeb\\x1e\\xfe\\x7f@\\xff5\\x9dh1\\x92\\x00\\xc5z9Be\\xe1\\x19\\xa8\\x1b\\xfe\\x17NX\\xfdv\\xa1T\\xca8\\x19f7\\x00\\x7f\\x9cy\\xe9\\xb4\\x1a\\x8d\\xf7\\xe3\\xbc7)`f\\xf0\\x1eb\\x97\\xc1\\xb65Q#I$\\x15\\x05\\xc7\\xa1\\x9b\\xa4\\x84\\xc09\\x08e\\x89-\\xfe\\xab\\xea\\xcc\\xf3\\xdfI\\x99\\x04\\xcb\\x02\\xdc\\x9c\\x08\\xac\\xee\\xe791\\xc0\\x9fSm\\x9d\\xa5\\xf6\\xa3w\\x99#<\\x0b\\xfe\\xa6\\xdc\\x98h\\x0e\\xc9\\x1e\\xbfi\\x9c\\x0f\\'{4\\xeb\\xefJ@\\xcd\\x18\\xf6j\\xb1W\\x7f\\x08f\\xf7\\xe4@r(\\xf8\\x8e\\xe0\\xdc\\xbf\\x1b\\xe3\\x0eo\\x15>\\x06\\xdf:\\xd8\\xb2\\x1e\\x07\\xf70\\x9d\\xc1I\\xac\\xda\\xc2\\xb4\\x08\\x9b\\x8fg3 \\xdf\\xf6\\x16\\xed\\r\\x14%co\\x9c\\xa0\\xe9 \\xd9\\xc9\\xefp\\x19n*yRG\\xdd\\xae8\\xb9\\xd9g\\xec\\x93m\\x8f\\xc4(\\xd8`O\\x984\\xe9\\xaf\\xd3\\x87\\x02\\x83\\xe7\\x8d\\x87\\x9e\\xd8\\xaf6\\xe9\\x9b\\xe5o\\x84X\\xa3W*L\\xe0\\xf7\\xfa?\\x8e\\xe7\\xba\\xa2\\xb9\\x14<5\\xa2\\'\\xc5\\xa3N:\\xd5\\xa3\\xbe\\xb4\\xc1\\x15&\\x90dD\\xf1\\x83\\xd9\\rc\\x007\\x81.U\\xbd\\xf2\\x0385)\\x0c\\x0c\\xc8\\x9f`\\x18\\xf0hB\\xec\\x9fw\\x13\\x0cs\\xc1O\\x19#9\\x83\\xcf\\xa9\\xa1S,\\xa1\\xa1\\x8d^\\xf0\\xf0\\xaa\\xdd(\\xa7\\xa3\\x89t\\xb5JS\\xd6Pj\\x96\\xccx\\xa0\\xb9\\xf4v\\xb1\\x9c\\xbe\\xa1_]E\\xa8B%\\x1d\\xfa\\x99\\xe2Ru\\xe9&\\xeb\\xf4\\xc1\\n\\xe8\\xc2E\\xce\\xf6\\xaeh\\xaa\\x00\\xea\\xa5\\xc7\\xa0B\\xbe\\x05\"\\x95m\\x980d2\\x8d\\xbf\\xef\\xb7\\xbca\\xc7\\xec\\x9e\\x8e\\xe6e4N9\\x91 \\xd24\\n/d\\x8bs\\x0f\\xd3\\xfe\\x0b\\xa2~\\xb8\\xb0\\x9c\\xdd\\xd8W0\\xbae>o]\\xfa\\x85\\xc8wU\\xbe,N\\x84\\xc4U\\xb5oM\\x82\\xec\\x1e\\xa8T\\x92\\x8f\\xfaV?RW)\\xef\\xc8\\x83\\x91\\xf5\\xaa\\\\\\x9a\\xc1\\xebP\\xc3Z_\\xf7!\\xf5V\\x11\\xc4\\xf9O\\x17\\xd2R\\x1a+\\x00\\xa1NT`{\\xc8\\xc6\\xb7\\xf9SBW\\x9dw\\x97\\x1e\\x15iJY\\x19\"\\xd0\\x90\\xc9\\xfcS!X\\x01\\x86[\\x9b\\xce*\\xa2\\xa6\\x03\\x9c\\x0bk\\xcf\\xa6\\xc7\\xf4\\xe6\\xab_\\xd6\\xa3Z\\x7fi\\xae\\x856z\\xc9\\xa3\\xbe\\xf1\\xacIM\\xdb7\\xd5\\xb0\\t\\'k\\xa7:Z\\xad{9\\xd3\\x82:A/s\\x99\\x7f\\x97\\x89\\'d\\x8c\\xc8\\xfe\\x91\\xd0\\x81.\\xe7\\xf4q I0_[\\t\\xb1\\x99\\x1b\\x0b_\\xf6T1B\\x1e \\xe4\\x88\\x87\\x89\\xcaxw\\xec\\xfbD8\\r\\xad\\x9f\\xf8|\\xcfD\\x14\\xde\\xcf\\x1aZ\\x0b\\xe8x:\\xb8\\x83\\xb2\\xb5\\x1fz\\x03\\x8f\\x82B\\x0fO\\xe4\\xca\\x9f7\\xc4\\xb2\\xd1\\x016M \\xb0\\x80C5\\xe9[k\\xb7\\xfe\\x05\\xb0\\xab\\r\\x95\\r\\xcfP%\\xfa^\\xd4\\xa4`D8\\x88\\x18r\\x14\\xe8\\xc9\\xb4eK\\xba\\xe9-\\xde\\xbc\\xca\\xe3x\\xfd~\\x8a\\x17\\xeaR\\x10\\xe8\\x8f\\xda\\x04\\xfa\\xb2+!s\\x1b\\xcb\\xb4\\xc2\\xc2\\x1b\\'\\xa8\\x08\\xa2m\\xbc\\xb8\\'\\x8eYk\\xe6\\x85\\xb9Z\\xe4\\x89\\x9e!\\xd7\\x8bx\\xd2-a\\xce\\x9b\\x15\\x9d\\xa7r\\x90\\x936T\\x89\\x0e\\xb7\\xe1\\xd0\\r\\xc5\\xeb\\x12\\xe3\\xbdbY\\xeb\\xa3\\xaav\\xb2\\xd0\\x84p\\x83Y\\xde\\xd4\\xa2*\\xfe#\\xd9\\xe1\\xf0$\\x18\\x99G\\xfc\\x95\\xe2\\x925\\x91n\\\\hN\\x1b[7\\x8c\\xc3\\xe2mZ;\\xa6#\\x90\\xef\\xda)o\\x89\\xb3\\x9dyP\\x80\\x02\\xf1bwSP3\\x8a\\xab\\x94\\x01\\xdc\\x1dm\\xd3\\xa6p\\x95\\x7f\\xe6\\x82\\xd2\\x17\\xd0\\xf0QM\\x88y\\x94\\xe1\\xf5\\'Z\\xe2\\x00\\xf0\\x0f\\xc1\\xbaI\\xe01Vf`\\xe7e(\\xbe\\xf7^\\x99K\\xe1&\\xb9\\x1e\\xab6\\xc7j\\x8dt\\xf0\\xca\\xaf_\\xbfM\\x0c!\\xd0o\\xd4i4\\xc3,kT3\\x8f;\\x91Az\\xfa\\xc6D_\\xab:\\xbaL\\x0ch\\xd8\\x94Z\\xd1\\xba\\xcfK\\xd2,O\\x97\\xb0w\\x12_\\xdb\\x9e\\x9a\\t2\\x8a7 \\xe2\\xfe\\x03\\xbb)K\\x90*\\x89\\x18\\xcd\\x7ft\\xc9\\xd7\\x064\\xcf\\x93\\xa5\\x99\\xbe\\x1c\\x9e\\n\\x91\\x05\\x96\\x02\\xe7\\x92trd\\xcf\\xb7\\xce\\x8b\\x01T\\x92\\xe0\\xd8\\xb8B\\xf4/\\xf2\\x0b\\x06\\xf5\\xd4O\\x0e<\\xf0v\\xc8\\xa68^\\x14\\xef\\x81+C\\xbe\\x1d]\\x08pF\\x8f\\xa2\\x84\\x88A\\xf3\\xb1\\xd8p\\'\\x00\\xa6\\x10=\\xb7I\\xce\\xa7\\x10\\x0e\\x13m\\xb3\\xdaG\\x14\\x87\\xc7\\xa0[\\xcbL\\x06X6\\xe8\\xca\\x1c\\x8f[\\xfa\"\\xb3\\x9f\\xdeR\\x8be\\x8c}\\x164\\ney\\x837v\\xadh\\x8fn\\xdf^R\\xed\\x99N\\x83\\xa4F\\x86_Y\\xb6\\x08%\\x05\\xd6\\x83\\x81\\x92_\\x98\\xa1\\xdc\\xe6'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "HM7-af3fE7ri_uMP-9Ty-AE",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 80,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 551,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 551
+        }
+      ],
+      "thoughts_token_count": 236,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 867,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 7.1395
+}

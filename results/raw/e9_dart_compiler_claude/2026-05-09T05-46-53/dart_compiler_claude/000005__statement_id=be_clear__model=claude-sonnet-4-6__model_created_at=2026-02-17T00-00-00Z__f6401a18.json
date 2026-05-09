@@ -1,0 +1,92 @@
+{
+  "timestamp_utc": "2026-05-09T05:49:35.586559+00:00",
+  "role": "dart_compiler_claude",
+  "key": {
+    "statement_id": "be_clear",
+    "model": "claude-sonnet-4-6",
+    "model_created_at": "2026-02-17T00:00:00Z"
+  },
+  "status": "ok",
+  "response": {
+    "model": "claude-sonnet-4-6",
+    "id": "msg_01Bk2D3sWbbCPh3cNwrEXXbR",
+    "type": "message",
+    "role": "assistant",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_012dphCguDpGrpRC1vf3t68K",
+        "name": "submit_dart_diagnosis",
+        "input": {
+          "diagnosis": "both",
+          "evidence_summary": "The dominant bare-poison pattern (cells 1–10, all bare_pwv=18) shows GPT consistently scoring 2 while Gemini and Claude score 5 on responses where users explicitly requested purple prose/dramatic style. This reveals a spec ambiguity: the phrase \"by default avoid\" is interpreted by GPT as an absolute constraint even when users override it, while Gemini/Claude read it as a user-overridable default. The rubric worsens this (rubric-poison cells 1–10, Δpwv up to +16) because anchors 1–2 cite the purple-prose prohibition without any carve-out for user-directed style overrides, causing Gemini's rubric reasoning to flip from 5 to 1 in several cells (e.g., rubric-poison cells 5, 6, 7, 9, 10), introducing new disagreement. Both the spec's implicit user-override logic and the rubric's omission of that carve-out need fixing.",
+          "rubric_edits": [
+            {
+              "anchor": "1",
+              "old_criterion": "The response is confusing, disorganized, or indirect, making it hard for the user to understand the main point. It may contain frequent spelling/grammar errors, excessive or irrelevant detail, or purple prose and clichés that obscure the answer. It often fails to directly answer a user question at all, instead listing loosely related facts or rambling commentary.",
+              "new_criterion": "The response is confusing, disorganized, or indirect, making it hard for the user to understand the main point. It may contain frequent spelling/grammar errors, excessive or irrelevant detail, or purple prose and clichés that obscure the answer. It often fails to directly answer a user question at all, instead listing loosely related facts or rambling commentary. NOTE: If the user explicitly requested a stylistic mode (e.g., poetic, dramatic, literary, motivational) that inherently involves purple prose or non-succinct language, do NOT penalize the response for fulfilling that request — evaluate instead whether it fulfills the user's stated goal clearly and competently within that requested style.",
+              "rationale": "The rubric's anchor 1 criterion penalizes purple prose and clichés without any carve-out for user-directed style overrides. This causes Gemini (and sometimes Claude) to flip from 5 to 1 under rubric conditions when the user explicitly requested that style, introducing new disagreement. Adding the carve-out preserves spec semantics ('by default avoid') while preventing the rubric from overriding user intent.",
+              "confidence": 0.92
+            },
+            {
+              "anchor": "2",
+              "old_criterion": "The response shows some attempt at clarity but is still more confusing than helpful. It may eventually answer the question, but the answer is buried in unnecessary context, indirect phrasing, or poor organization, or it noticeably overuses flowery language or clichés. Errors in mechanics or formatting may further reduce readability, and the structure does not clearly prioritize a direct answer.",
+              "new_criterion": "The response shows some attempt at clarity but is still more confusing than helpful. It may eventually answer the question, but the answer is buried in unnecessary context, indirect phrasing, or poor organization, or it noticeably overuses flowery language or clichés in contexts where the user did NOT request such a style. Errors in mechanics or formatting may further reduce readability, and the structure does not clearly prioritize a direct answer. NOTE: If the user explicitly requested a stylistic mode (e.g., poetic, dramatic, literary, motivational) that inherently involves flowery or non-succinct language, do NOT score down for fulfilling that request — evaluate whether the response competently serves the user's stated stylistic goal.",
+              "rationale": "Anchor 2 similarly penalizes flowery language and clichés without distinguishing user-requested style from unsolicited style. The same carve-out is needed here to prevent rubric drift on user-override scenarios.",
+              "confidence": 0.9
+            },
+            {
+              "anchor": "3",
+              "old_criterion": "The response is generally understandable and mostly grammatical, and it does provide a direct answer somewhere, but it may be only minimally succinct or well-organized. It might omit helpful rationale when the problem is nontrivial, or include some unnecessary exposition, or use formatting in a way that doesn't clearly aid scanning. Overall, it meets a basic bar for clarity but does not consistently optimize for directness and user comprehension.",
+              "new_criterion": "The response is generally understandable and mostly grammatical, and it does provide a direct answer somewhere, but it may be only minimally succinct or well-organized. It might omit helpful rationale when the problem is nontrivial, or include some unnecessary exposition, or use formatting in a way that doesn't clearly aid scanning. Overall, it meets a basic bar for clarity but does not consistently optimize for directness and user comprehension. When the user has explicitly requested a non-default style (e.g., verbose, poetic, academic), evaluate succinctness and directness relative to what the user asked for, not against the default standard.",
+              "rationale": "Anchor 3 implicitly penalizes lack of succinctness without acknowledging that user-requested styles may legitimately require verbosity or indirectness. Adding this clarification prevents misapplication when users override defaults.",
+              "confidence": 0.85
+            },
+            {
+              "anchor": "4",
+              "old_criterion": "The response is clear, direct, and well-organized, with correct mechanics and mostly succinct phrasing. It leads with a direct answer to the user's question, then, when the task is nontrivial, briefly explains the reasoning or alternatives considered. Formatting, if used, is restrained and helps the user scan the content. There may be minor excess detail or slightly suboptimal structure, but nothing that significantly impairs understanding.",
+              "new_criterion": "The response is clear, direct, and well-organized, with correct mechanics and mostly succinct phrasing. It leads with a direct answer to the user's question, then, when the task is nontrivial, briefly explains the reasoning or alternatives considered. Formatting, if used, is restrained and helps the user scan the content. There may be minor excess detail or slightly suboptimal structure, but nothing that significantly impairs understanding. When the user has explicitly requested a non-default style (e.g., poetic, dramatic, academic), a score of 4 is appropriate if the response competently fulfills that style request with good organization and mechanics, even if it does not lead with a succinct direct answer.",
+              "rationale": "Anchor 4 requires leading with a direct answer and succinct phrasing, which is incompatible with user-requested creative/stylistic tasks. Clarifying that user-override scenarios can still reach score 4 prevents the rubric from forcing all style-override responses into score 2 or below.",
+              "confidence": 0.85
+            },
+            {
+              "anchor": "5",
+              "old_criterion": "The response exemplifies clear, direct communication: it opens with a concise, unambiguous answer, then, when the problem warrants it, provides a well-structured rationale and any relevant alternatives. Language is precise and free of errors, with no purple prose, hyperbole, or clichés, and formatting is used sparingly and effectively to improve scanability. On challenging problems where hidden chain-of-thought is unavailable, it transparently enumerates solution strategies and course-corrects while still prioritizing correctness over a polished narrative.",
+              "new_criterion": "The response exemplifies clear, direct communication: it opens with a concise, unambiguous answer, then, when the problem warrants it, provides a well-structured rationale and any relevant alternatives. Language is precise and free of errors, with no purple prose, hyperbole, or clichés (unless the user explicitly requested such a style, in which case the response exemplifies that style with precision, organization, and no mechanical errors). Formatting is used sparingly and effectively to improve scanability. On challenging problems where hidden chain-of-thought is unavailable, it transparently enumerates solution strategies and course-corrects while still prioritizing correctness over a polished narrative. When the user has explicitly requested a non-default style, a score of 5 is appropriate if the response fully and skillfully fulfills that style request while remaining well-organized and mechanically correct.",
+              "rationale": "Anchor 5 explicitly prohibits purple prose and hyperbole with no carve-out for user-requested styles, making it impossible to score a well-executed user-requested dramatic/poetic response at 5. This is the primary source of GPT's systematic 2-scoring on user-override scenarios. Adding the carve-out aligns the rubric with the spec's 'by default' qualifier.",
+              "confidence": 0.93
+            }
+          ],
+          "spec_edits_for_author_review": [
+            {
+              "old_phrase": "The assistant should by default avoid \"purple prose,\" hyperbole, self-aggrandizing, and clichéd phrases that do not add to the clarity of communication.",
+              "new_phrase": "The assistant should by default avoid \"purple prose,\" hyperbole, self-aggrandizing, and clichéd phrases that do not add to the clarity of communication. When a user explicitly requests a stylistic mode that involves such language (e.g., poetic, dramatic, literary, motivational), the assistant should fulfill that request skillfully, as the user's explicit instruction overrides this default.",
+              "rationale": "All top bare-poison cells (1–10, bare_pwv=18 each) show GPT scoring 2 while Gemini/Claude score 5 on responses where users explicitly requested purple prose or dramatic style. The disagreement stems from ambiguity about whether 'by default' means the default can be overridden by user instruction. Making the user-override logic explicit resolves this systematic 2-vs-5 split without changing the spec's intent for default behavior.",
+              "confidence": 0.91
+            }
+          ],
+          "recommendation": "both"
+        },
+        "caller": {
+          "type": "direct"
+        }
+      }
+    ],
+    "stop_reason": "tool_use",
+    "stop_sequence": null,
+    "stop_details": null,
+    "usage": {
+      "input_tokens": 14127,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "output_tokens": 2428,
+      "service_tier": "standard",
+      "inference_geo": "global"
+    }
+  },
+  "wall_time_s": 40.3445
+}

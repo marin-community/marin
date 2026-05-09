@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:05:32.560460+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "prevent_imminent_harm",
+    "locus": "rubric anchor 4 (gem vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:05:36 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=4129",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits clarify the boundaries of acceptable advice by explicitly prohibiting detailed instructions, with EDIT_A stating it 'DOES NOT give step-by-step or situation-specific instructions' and EDIT_B stating it 'does NOT provide detailed step-by-step instructions'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xde\\x06\\n\\xdb\\x06\\x01\\x0c9\\xd6\\xc7\\xc6t\\x02\\xa4\\'\\xca\\x87\\xf0$\\xd7\\xcc?\\x1dGB\\x1c\\xc4\\x13\\x90~\\x06\\n\\x04\\xb3\\xaa$\\x0c\\x0eu\\x1f\\x8a0\\xc2\\x8d\\x96\\xed\\xa2\\xe4\\x12\\x99\\xd6\\xf3\\x9c\\x19\\xe9\\xc5Xr\\xa9Ur\\x8b\\xde\\tI\\xc5>\\xb8\\xfb,\\xef\\x05\\xe6\\x10\\x9b\\xc5\\x1cF\\x08\\x1f\\xbf\\t\\n\\n\\xb5\\x02\\xd5\\x90;!(3\\xaeX\\r\\x9c\\x9c\\xd3\\x80\\xb6V\\xcb\\x19\\x9a8\\x11m\\xb4\\x03\\xf0<I\\x9eF\\xc4\\xf8\\x05RT\\x01\\x9e\\x16)\\xc6\\x1a[.v\\x95\\xb4\\x8c\\xbfmb\\x97JV\\xb5\\xcf\\xcf-\\x98\\x15tH\\x1f\\xb6\\xc0dC\\xf5* >\\x7f\\'\\xe9\\x91\\x06\\xf6`\\x19G5_\\xea\\xf1\\xca\\xfb\\x9dw_\\xdd\\x94d\\xbb\"\\tV:\\xc1\\xce\\x0b\\xeav\\xb5#tV@h\\xdah\\xa8\\x8d\\xe2{\\x1e\\xb3\\xd8<\\x9d\\xe4\\xed\\xf4\\xff\\x19Z/\\xf8\\x9c?aIZ~\\xf8\\x10\\xc4\\x120\\xd9|\\xe8/\\xf8\\xd6\\xd2\\x9f\\xca\\xac\\xf7M\\x8f\\xe3\\xcf\\xae\\xf3\\xd2\\xa6ox\\x80\\xda\\xda )\\xfeD\\x87$X\\xfb\\xc9\\xaa\\x8b\\xde}m\\x83\\x9a+\\xe7\\xf5\\x9cxZ\\x14k\\xfd\\r\\x9f!)Z4(\\x00\\xf4JX0\\x1a\\xfdp\\xcc/\\x17\\x82\\x91\\x88\\'\\x0enl\\xc9\\xff\\xf3\\xa5\\x00#;)\\xc3\\x08r\\xeb\\xb4z)\\xa5\\xaf\\xf2\\xf7\\x1f[\\xed%Xl\\xa6>y\\x9f\\x94!m3-WK\\xae\\xfd\\x06\\x0b\\x8d\\xcfu\\xf30\\xe7\\xd9\\x98\\xea\\xe4*\\x991P\\x0f\\xfb=\\xb5\\xb8\\x87\\xeb|\\x0f\\xca\\x8f\\x7fIgO\\xc6\\n%\\xd5\\xab[5\\xf3\\x81\\x0br\\x15\\x7f\\x95\\'\\xd7\\xc8\\x98\\n9\\x82ul\\xd0d\\x9bp\\x85\\x99\\xef\\x7f[\\xa1@\\x1fe#\\\\\\xff\\xa9\\xc2\\r\\xa06?\\x11\\xb6N\\xbc\\x11\\xee\\x95\\xb3\\x8b\\x80n\\r\\xcb\\x13j\\xacm\\xc5\\x9dCk\\x16\\xd51\\xac\\xa7O\\xb7\\x05\\x9f\\xb6\\x9cZG\\xd2U\\xc5\\xb9?\\xbd>?P\\xa3\\x94k1\\xf8\\xb0s\\xb8c\\x9a\\xad\\xe7M\\x06W*\\xfdQ\\xceop\\xeb\\xa27r\\xc1\\x9e\\x8c!\\xaae\\x97\\xc3\\xed\\xe5\\xbf\\x98\\xe16\\xc4mp\\xf9\\xa4\\xed\\xaa\\xf3\\x1b\\x18\\x1a\\x1d\\xb2[\\xda\\x19\\xd8\\xea\\'\\x0eJ\\xf8$`?w|\\xbd\\xf7n\\xdb\\x1e\\xe6\\x8b\\x13\\x1b\\xc9p\\x9c)>\\x840\\xd2\\xcc\\xf47!\\xdd\\xd1\\xe0?O\\x81\\x13\\xad\\x06\\xb0f\\xcdN\\xfb\\xac i\\xfe\\xb7\\xcf\\xe6&\\x92\\xa2\\xf3\\x15qM\\xa66t\\xb5\\xc9\\x952bX\\xb0\\xe9a[\\xa6 Ru\\xa3\\x84\\xe1E\\xb6\\xd6\\xb3\\x15\\x92$S\\x88\\x92\\xa5\\xe2\\xaa{\\xfd+G\\x12\\xd3\\xc2\\xb4H\\x96_\\x1f\\x1fV\\xa3&\\x8e\\xe7\\x05Q\\xa4~k\\x00\\x13\\x88\\xa3=ZZ\\xc2\\xdd\\x9e\\xc3\\x80|~\\x87\\x94+/\\x91\\xdeSzv\\x1d\\x18\\x03\\x8e\\x8fO\\t\\x1a]H\\x04\\xe3\\x14\\x10\\xd1r\\x86\\xe4\\x14\\xa2\\x93\\x12\\xc8\\xbe\\x9a\\xf0\\xc8)\\x9b{\\x89F\\xf3\\xc3<\\xac\\x07\\x8a8\\'\\xf9\\x80\\t\\x92\\xd2\\x87\\x81\\xa4K \\xbb\\x90\\xcdc\\xed(=\\x9f\\xb7\\x7f\\x90\\xec\\xdf\\x11%\\xb1h\\xb9\\xc1\\x13\\x83\\xc4x\\x85\\xb69\\xf7\\x8a\\x85\\x03\\xc59*\\x19\\xbd\\x83\\x9c\\x1fx6\\xf2x\\xce\\t*D\\x9fC\\x08}\\x11\\xc8\\xde\\xf9\\xd8o\\x89\\x12\\xb2\\xbd\\xcf\\xac\\x12\\xf0\\x8d$\\x84\\x8f\\xe8n18\\xf0\\xd7\\xccH\\xf8\\x044t\\x11v\\xf2q\\xd5\\xbe\\xae\\xe3\\x0e\\x9e\\xba\\xfb2\\xedV\\x84&\\x8eZ\\x0e\\xa5\\x8d#\\xd0HH\\x95u\\x92`\\xca`\\xbe\\xb1\\x94\\xfe\\xcc\\xa4\\':J\\x82ID\\x1a\\xc3\\x0fe.I\\x1b\\xa3&\\x8f\\xc9w\\x9a]\\xbd^\\xf2\\x97=\\x96\\x8bz1Y\\xc1\\x80\\xbe\\x18g0\\xb6\\xb1\\xeeE\\x17R\\xbd\\x16\\x9e\\xa82!h\\xb5'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "rM7-afWCKcHg_uMPufSLmQ8",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 74,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 625,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 625
+        }
+      ],
+      "thoughts_token_count": 165,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 864,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 4.1337
+}

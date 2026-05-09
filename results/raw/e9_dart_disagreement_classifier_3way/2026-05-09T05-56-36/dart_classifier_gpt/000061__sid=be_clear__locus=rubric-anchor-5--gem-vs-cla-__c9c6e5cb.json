@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T05:59:44.457458+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "be_clear",
+    "locus": "rubric anchor 5 (gem vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV0yUQtcyr0Fm66HdDpY5ktM8sF8",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits add an explicit carve‑out allowing non-plain style when the user asks for it: EDIT_A says \\\"no purple prose, hyperbole, or clichés (unless explicitly requested by the user)\\\", while EDIT_B similarly allows this \\\"unless the user explicitly requested such a style\\\" and further clarifies scoring when \\\"the user has explicitly requested a non-default style.\\\" Both broaden the original prohibition in the same direction by conditioning it on user request.\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306384,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 116,
+      "prompt_tokens": 726,
+      "total_tokens": 842,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 2.0072
+}

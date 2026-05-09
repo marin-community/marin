@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T05:59:46.465232+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "be_clear",
+    "locus": "rubric anchor 5 (gem vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 05:59:50 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3561",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits add an exception to the prohibition on purple prose, hyperbole, or clichés when requested by the user. Edit A adds '(unless explicitly requested by the user)' and Edit B adds '(unless the user explicitly requested such a style...)'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\x98\\x06\\n\\x95\\x06\\x01\\x0c9\\xd6\\xc7:\\xa4T\\xbe\\x13I\\x07g\\x0c\\x8cg\\xd9\\x03\\xf6c\\x83\\xbe}\\x89S\\xfb\\xe7\\xea>l\\xc8\\x1e\\n\\x14n<-w/\\xad\\x84\\xee\\x1e\\x12B\\xa4?\\x06\\x95\\x8e5U\\xaa\\x85B\\x0c\\xde\\x8c\\xb4\\x96\\x17\\xc3\\xf1\\x9c/\\x8bk\\x8d\\x9f\\xdbB\\xbc\\x89+\\x85$\\x8a-\\xd2\\x08K\\xb8\\xa3\\xcc\\xc4\\x91\\xef\\xd5\\x83m\\x84M\\xcda\\x9bR\\xab\\x0e\\xcf\\x08<\\xa0\\xe9!\\x8d\\xc8\\xabc;B\\xebtUe\\x01N\\xaetQt*\\xac\\xdcO`\\xe0#\\xe8\\xe8\\xed\\x98I\\xfa+b?%\\xac\\x98\\xb2\\xef/\\xa4 -\\t\\xa7\\x9f7\\xc4\\xb90\\x04\\xa8\\xa9i\\xef\\x98\\x0bqk\\x91\\x8b\\xff\\xdb\\x1f#$3)\\x9d\\'\\xcfi\\x80\\xc9$\\x9c\\x0f\\xc1H\\x82\\xb1\\xf6%@)\\xceX\\xaa\\xe3\\x93\\xb4\\xdd\\x03t\\xaf)\\xdf\\xd3\\x90\\x8d\\x9d\\xf2\\xfa\\xe7o\\x11\\xbe\\x83\\x05\\x04\\x8f\\xa4\\x96\\xe91\\xe5_\\xedH/\\x8a\\x9c\\xbc\\x08<\\x185\\x1d,\\x9f$\\xf8\\x87\\xbf;\\xff\\xc29\\x17=\\xd0\\x9b\\x90\\x0c\\x00\\xb0\\xba\\xc1m\\xa2\\x9a\\x89j\\xd2\\xf2\\xf4\\x18/\\xe3B\\xdf\\xa1o=\\x00\\xc2\\xf0\\xb9:R\\xa4\\xc0\\xa3P\\xf9\\x97\\xa2\\xe4\\xf2\\xa6\\x86\\xee\\xbbJ\\xc0[\\xb7\\xc59g\\x84O\\xe8\\xe9+b\\xc9\\x8e!k\\xc9\\xbeG\\xc0\\x0f3e\\xee\\x83\\x1d\\x10\\xc6G=\\xe2N\\x98\\\\\\x9b\\x11Ln\\xaa{~\\xc4\\x1d\\xe4bf\\x0c\\xe1\\x95\\xf80\\xe4\\x16\\x0c\\xc9`_\\x88\\xfb5;\\x8b+HNg\\tY\\xc2\\x009\\x94\\xdbu\\xb3\\x01\\xb3\\x88C\\x9bN\\x12\\xfb\\xed\\xfb3:\\xea\\xc0\\x0bb#\\x01j\\xb5\\x99\\x17;yq\\xf2x8\\xc8\\x05\\xb6z\\x8e\\xd0\\xa9\\x80\\x84\\xd5\\xd9\\x8at%\\xfb\\x98J\\xa7\\t}\\xbb\\x01\\xf9\\x01\\xbd\\x0f\\xec\\x1b\\xe5X\\xef\\xd4\\xd2\\x95O\\xc3\\xc1\\x054}=\\xc7\\x99\\x0cRZ\\xde\\x15\\x0c\\x96k~\\xc4\\xa71d\\xb9\\xfe\\xcb\\x97\\xd4c\\xf2\\xf5K\\xf9\\xe1\\xb9o\\xb4,\\xc9`\\xfb\\x96!\\x90|\\x15\\xb8\\xcf\\xe6\\xc7\\xa7\\xfa\\x00\\x87\\x1e\\x90I\\xa5\\xc7\\xbb\\xd1\\x87\\xefs\\x00r\\xd9\\x19\\x1c\\r\\xb4\\x10\\x9e\\x06G\\xbe\\xc2\\xba=B\\x95\\x14\\xfd\\x82\\x93Hf\\x96u@\\x9f\\xfc%R\\x7f\\xb2\\xd3\\x8c`U\\xfdqG*-\\xed\\xe4\\xe6)\\x92q\\x89+\\x9e\\xd2\\xfeW9\\xba\\xb8\\x07\\x15Q\\x0b\\xb80\\xc7\\x9fJ\\xa1*1-\\x03\\\\\\xd4\\x8eyN\\xaco\\xd9\\x18\\xe6\\x92\\xb2\\xba\\x9d7\\xad\\xf6\\x17\\xf4?\\xb6v\\xac\\'\\x93\\xee?\\x1b\\xfc\\xaf\\xf5\\xb0\\x98\\xf2[\\x08\\xff\\xde\\x91\\x92n\\x81\\xef\\xa8\\x8f\\xa7\\x80+g\\x8c\\xe7~\\r\\x9eiDg\\xc7C\\x8f9\\xd9\\x04K_+\\xd0\\x00\\xdc\\xba\\x8f\\x04\\xddV\\xdfG\\x97\\xf7\\xb9z2\\x0b\\x94\\xc7\\xd7s\\xad\\x95\\xfar\\x85\\xa2\\xe4\\x03}\\xec\\x85\\x9c\\xcd\\xb2\\x96\\xb8\\xa1\\x05\"\\xd0\\xa27\\xf3,xmG\\xd6\\xfbi\\x05\\x96\\xa2Ii\\xd4O\\xa6\\xf6\\x03\\x9aX\\x9bT\\\\d-\\xc9\\xe9jPR\\x12\"\\xa5\\xe5\\xd9\\x8b\\x84\\xb5\\xc4\\xdd\\xad9H\\\\==\\xd9/\\x05V\\xc1\\x05\\x85!4\\xba1\\x85\\x05h\\xcc\\xb5\\x93L\\x95\\x88\\xdcqof\\x8f\\\\2\\x14:d~\\xea\\x13\\xdcJ\\x10`\\x04k\\xdc\\xa0v\\x9d\\xf0\\x18\\x93\\xc7\\xf2\\x19\\x83h#H\\x1fi\\x06\\xd2a\\xb5\\xbb\\xa6i\\xd2`\\xd4v\\x93\\xdfC9\\x1b\\x90tT\\xe8\\xd0\\x8b\\xe0\\xa5'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "Us3-acOxI6u-_uMPsKm3oQY",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 70,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 732,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 732
+        }
+      ],
+      "thoughts_token_count": 145,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 947,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.5664
+}

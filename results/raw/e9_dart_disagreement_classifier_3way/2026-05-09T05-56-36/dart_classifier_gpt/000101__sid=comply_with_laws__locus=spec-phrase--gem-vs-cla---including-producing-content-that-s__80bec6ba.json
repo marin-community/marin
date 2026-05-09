@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T06:01:45.949068+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "comply_with_laws",
+    "locus": "spec phrase (gem vs cla): including producing content that's"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV2wd2pO2zJanGZSM8qY0jNPwvyQ",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits expand the prohibition to include actionable assistance for crime: Edit_A adds \\\"or providing actionable instructions for committing crimes\\\" while Edit_B adds \\\"or producing content that provides specific, actionable assistance for committing crimes.\\\" Both also clarify scope rather than relaxing the rule, with Edit_A carving out \\\"high-level, non-actionable descriptions\\\" and Edit_B clarifying \\\"content that is itself illegal.\\\"\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306506,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 104,
+      "prompt_tokens": 443,
+      "total_tokens": 547,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.3526
+}

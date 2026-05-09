@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T05:57:14.600930+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "ask_clarifying_questions",
+    "locus": "spec phrase (gpt vs cla): The assistant may respond with any"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 05:57:28 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=13915",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits broaden the 'articulating assumptions' bullet to allow for implicit assumptions. EDIT_A adds '(this can be done briefly or implicitly...)' and EDIT_B adds '(either explicitly in prose or implicitly...)', pushing the rule in the exact same direction.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xd8\\x08\\n\\xd5\\x08\\x01\\x0c9\\xd6\\xc7\\xe7\\xfa\\x15\\xd3\\x93&1J\\x82\\x8b\\x0e\\xf5X5\\xfe?6;g1\\x88:\\x8f\\xed\\xe5TV,\\xc2\\xa8\\xf4\"\\xb7\\xb8o|\\xfc\\x07t\\x0f\\x9c\\x9c\\xc1G9$P\\x12}=\\x83\\xb1\\x0e\\xf9\\x9e\\x9f+lFh\\x02\\xe6\\xa2\\t\\xa8\\xf6\\r=\\x80\\x8emH;j\\x7f\\xbd<B\\xe1+k\\xcbl\\xe4\\xac\\x16\\xbb\\x00,\\x01\\x9b\\x07\\x86+\\x19O\\xff\\xd4\\x85\\xf7\\x92PKL\\xa9\\xc2\\xb2:\\x07_;6\\xabS=7T\\x91\\xe2\\xebw\\xc7cP*\\xae%\\x1f\\xbe\\xf6\\xbdW\\xc5\\xd2\\xcb\\xf0\\xaa\\xa6L\\xe7\\xa6\\x1b\\xf7\\xab\\xc0\\xc8\\x10^\\x10\\xd6\\x11\\x02x\\xa1\\x07m\\x939\\x98\\xc8\\xf2\\x132\\xd7\\xdcb\"\\xb4\\xac\\x89\\xf8\\xa4\\x98c\\x17\\xfa\\xcc\\x0e\\xab\\xa1q\\xd9lhw\\xa9\\x19\\xc7s\\x9f\\xa4\\xa0f-\\x1eQ\\xa7\\xc6A&\\xb9\\xff\\xa0\\xbfi\\x97%\\xde8\\x95k\\x8e\\x0e\\xe2\\x04\\x05_6\\xe4\\xde\\xc4\\xf0\\x0ed\\xb2#\\x9a\\x8a\\x02\\x90L \\xf2\\xd4@&\\xd2\\xf7\\x17\\xc0s\\x82\\xab\\x0b\\x8f\\xe8h\\x9e[\\xd8q\\xff\\x9c@\\x05\\x01\\x85M\\xf3\\xd7\\x84X\\x15xc\\xf1\\xed\\xfa&\\x13\\xf9:,\\xd5$\\r\\xd7?\\xc6\\xb4>\\xaa\\x90\\n\\xce\\x8c\\x07\\x85\\x04\\xc4\";>!\\x01\\xe5\\x8a%\\xf2e\\x81d\\xc7\\x0f!W\\xcfFO13y\\xff\\x02\\x91:%\\xcc\\xd7\\x19Bk\\xd2\\xd4\\xe9\\x17\\xceuiU\\xed+\\xb7\\x9aFR\\x1a%\\x18\\xd1\\x97e\\xf98\\x9c\\xbe\\x00\\xf9\\x0c\\xdbw\\x9e.ft\\xad\\x8bNF\\xa6*\\xdf\\xf7\\xe9\\x0bs@\\xbb\\xea\\x92_~Z\\x02\\xae\\x8d]\\x94\\xf6\\xcf\\xc1\\xe9\\xc4\\x01\\x8b\\x99J\\xbe\\x18E\\xd8\\xb8\\x1d\\xf2cS\\xf5\\x8ce\\xd9\\xf6\\xce\\xc1\\x84&H\\x12\\x8c\\xf8^\\x9f\\xd6\\x90P*\\x17{\\x11\\xb6\\x12\\xaeh\\xcbU\\xa9\\x845\\x19\\x8b\\x15\\xed/-\\xde\\x9f\\xa9z8\\x11_\\x00\\x1f\\xee\\xbd\\xd0\\xdb\\xd17\\xa3\\x87\\xdf\\x0e\\x019\\x90o5n\\xd0B\\xac\\xc2\\x8ez\\x11o\\x06ZI\\xe7vF\\xd9\\x9d\\xb4PQ\\xfd\\xf7\\'\\x11\\xd5KJ\\x04 \\x83\\xf2\\xb3\\x8aY\\xa6\\t>\\x10=\\xc9%\\xf3^\\xc0%\\xc7\\xd3q\\x9dV\\x0b\\x01`h\\xbf\\xf9Tf<\\xe2\\x1c\\xb1\\xe0\\xf4\\x14*\\xd1\\xb3m\\xc6~\\x03\\xfb\\x8cW\\x1b<iC\\x1e\\x96L\\xb2\\xe0\\xe6\\x9f_|\\x9f\\x06\\xf9\\xa5`\\x8dO\\xc0x\\xad\\x92\\xd7|AR\\xe1\\x84\\xa2\\xa0|\\x0c\\x7f\\xcf\\x9c\\xee(]\\x11:#eD\\xe6\\xe3\\xfd{R5\"\\x8c4r%\\x1b\\x1d9\\x15\\x7f;\\\\\\xedk\\xff4\\xf9\\\\\\xaa\\xc0\\xd2\\xc0\\x80t\\x9a\\xfa\\x8c\\x81\\x9e\\x9e\\xfc\\xcd\\xb9\\x1c\\xbeW\\xac\\xc7\\x14\\x9aR\\x15\\xc8\\xc1D\\xbd\\xe3h\\xd7,\\t**\\xa5G\\xd2\\xb88\\x7fT\\xa2Y|rh\\xbc\\xcc\\x01\\xc1\\xa8\\x0e\\xc4\\xc5\\xcb\\xaf\\xda\\xe3\\xad\\xe24%u\\xe5\\x0f\\xc5\\xd4\\xd3\\xd2:C3\\xcf\\xe9|S\\x1d\\xd5J\\xeeA\\\\o\\xab\\xae\\x8c\\x93\\xc4N\\x04\\xfa\\x03\\xb7\\xc5\\xfe\\x95\\xee>r|\\x9a\\xbfZ*a\\xc7\\xd5\\x9bb\\x88yZ|E\\xef0\\xa3\\x12\\xf5v\\x81\\x02\\xae\\xcb\\x85\\x86Q\\xd6\\x0c!\\x94}:\\xbd\\x85v\\xf95\\x8b\\xdc\\x11\\x96\\xc4z\\x1bt=T\\x04\\xc6*i\\xdd\\x8cQ\\xbc\\xd9\\n\\xaa\\x04(\\x00\\xbck\\xadQ\\xd3\\xb7D\\x9c\\x87\\xbf\\xc9\\x92\\xdb\\x8a\\xf2\\xb81\\xb6\\x05\\xb0\\x9c\\xfc\\x19\\xeaSA\\xe0!A\\xb2\\xcf\\xb0,R\\xaf\\x05K6U+8\\xc0s\\xba\\x9d\\xe7r\\xd1Z\\x9f\\xc5\\xcc\\xf1\\xa7`\\'@\\xb3\\x88{8\\xabF\\xb4@D\\x9b\\xf5\\x88\\xa2\"\\xb1\\x14\\x94?\\xe3\\x8b\\xb7\\xe3\\xed#\\x84\\xcekf\\x9ae\\xbc\\xf5Y\\x10\\xdbGL\\xeb\\xa8=\\x9d7-\\xee\\xaf\\x8b\\x95\\xe8\\x80_\\x00\\xf0w\\xc8a\\xec\\xf4\\xafp\\xbc\\xbd\\xa8\\xbb\\xd0\\xd3Y\\x0b?\\xed\\xe9\\xbc\\x15\\x1f\\xd3\\xa2\\x85\\xfdgIt9\\x9d\\n#\\x17\\xf0)\\x1b\\x13\\xa1\\xe2\\xe9\\xde`\\x1a\\xe63$Uu\\x89\\xef8\\xfa\\xae\\xc40\\xa9\\x9c\\x99d\\xf3\\xfa9rC\\x0e\\x8b\\n\\xc4\\xe4\\x05\\x104\\xf9\\xacoqW/\\xc28_\\xbb\\xc3\\xef\\xb3\\n\\xca\\xbdZ\\xf7\\t\\xf5\\xd2\\xedN*\\xcd\\xfd\\xb0\\xa80\\xc7\\xa4;M1\\xeb\\xc5\\x8cDc\\xa2\\xb6B\\xf8\\x10\\xa8\\x8b\\x0e\\xd5\\x1a\\x80\\xdb\\xce\\x8a\\x92\\xc5\\xe9\\xf3\\xe0\\x93R\\xa1\\x98\\xae\\xfa\\x01\\x97\\r\\xafzM\\x1aM\\xb4i\\xb6\\x8aX\\xc7uI\\x99\\x12\\xd9s\\xdc|\\x98\\xb9\\x1e<\\xfb]]i\\xea\\x14G8\\xe9N\\x9c\\xbb\\x95\\x17d)N\\xd4\\xcb\\xe53\\xcd\\x9c\\xc4\\xec\\xf5\\n\\xca7\\x96u\\xe3_\\xb9\\xeb\\x7f~d\\xbd>\\xcd4\\x9c\\xf0\\x8ei\\xcb\\xc4\\xf5\\x14\\xc1\\xc1\\x93,Z\\x1e\\xac\\xa82}\\xeeWe\\x1aE\\xc9\\x85\\xab\\xfe'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "usz-afyOK__U_uMPuYHo6QE",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 73,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 545,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 545
+        }
+      ],
+      "thoughts_token_count": 209,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 827,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 13.9225
+}

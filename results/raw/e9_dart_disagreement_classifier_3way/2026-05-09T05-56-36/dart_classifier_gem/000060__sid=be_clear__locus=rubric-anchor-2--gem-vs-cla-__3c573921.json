@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T05:59:41.448246+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "be_clear",
+    "locus": "rubric anchor 2 (gem vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 05:59:44 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=2997",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits add an explicit carve-out preventing penalties for flowery language when requested by the user. Edit A adds '(unless explicitly requested by the user)' and Edit B adds 'in contexts where the user did NOT request such a style'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xed\\x03\\n\\xea\\x03\\x01\\x0c9\\xd6\\xc7\\x91\\xce\\xcf\\x03\\x00QO\\xf9/\\xd3\\xdf\\x149jc\\xc7\"\\xa1KY\\xe1-\\xe7\\xd7qI\\xd1\\xa4\\xbdY\\xf5\\xc1&f\\x93i\\xf2h\\x95\\x0e\\xbb\\xc8\\xb4\\xf1\\xf5\\xd0a&\\x18\\xf7\\xd4\\x98\\t\\xccF\\xc8\\xaf\\xd0\\x08\\x88\\x1ebu\\x7f\\xf9\\xde\\x16\\x01\\xa0$\\x12\\xa6\\x93r~\\r\\x06\\x18\\xc8c\\xe4dm\\xf8\\xfd/\\xdd_\\xa7\\x89\\x8eV\\xf8\\xd9F\\x9d\\x15&p\\xa8\\x10`\\x07\\xf5\" \\xc0\\xac\\x95\\xd8\\xad\\x1e\\xfby\\x99j\\x08\\r\\xddrEnC\\xaa^-\\xfd\\x14xY\\x86\\\\k\\xec\\x14u\\xd6z\\t)\\x9dc,\\'\\xbf6\\xe8\\x00\\x96\\x93\\'\\xb7\\xd9\\x9f\\xe69\\x17\\xc7\\x93\\r{\\x97\\x85\\xcbV\\x9e\\x88\\x03\\x91mW<^pw\\xb3W\\xd5\\xb6\\x98 \\xeb\\x11u:\\x16E\\x0c]\\xd9\\xec\\n\\xce_\\xed\\xff\\tG\\x9e4\\xb8\\x0f\\xdc\\x8c\\xe5^P_\\x11\\xd4\\xa7\\xe2E\\xbb\\xc7\\xca\\x04\\xfeH\\xf1*\\x0cf\\xae\\r\\xbet?\\xa2\\xc9>\\xa42\\xd5\\x8f\\tH\\x1dA\\x91t\\xca\\xabl\\x9a@6dA\\xdf\\x11\\x15\\xae\"t\\xf3\\xaf\\xfa\\xa3\\x17\\x02o=y\\xefm}\\x03/\\xec\\xfb\\xe8\\x8e4n\\xa7\\xee\\xe4\\xcd\\xcd\\xd7\\xfce\\x08\\x86?\\xec\\xdd\\xc3n\\xf2\\xfe\\x0e\\xe4\\x1b?`\\x98\\xe5\\x19q\\xce\\xa9Iwu1\\x8f o\\xb4|\\xa6<\\x80s\"\\x89\\xd4\\xaek\\x90\\xb0\\xc7\\xe8c\\xfb7qhO\\x0e9\\xf7R\\xd9\\xff\\xf5\\x1e\\xda\\x834z\\t}(O:\\x9a\\x8c\\x85\\xee9\\x1b\\x9a\\'\\xac\\xcd\\x01\\xa1\\x9d\\x89\\x1a\\x1f\\xd0\\xcf\\x98\\xb1\\xd5\\xf4\\x148`w\\xc0\\x11\\x97\\xeeofhQ\\xe9:\\xf2.\\x16j\\xe1\\xe3\\xa8,\\x17d8/\\xbf\\x1f\\x92^@\\xf4^\\x9c\\xd9\\xff\\xe6\\x02\\r<O\\xb7\\x90qv\\x1c\\x87\\xe9\\xa7\\x19\\xdez%\\xa9W\\xeb\\x86\\xdf\\xc6\\x95\\xbf\\xe9fW\\\\J\\xd2\\xccG\\x15\\xd4\\xee*\\xd5\\xc1\\x9f/\\x95\\x88\\x977y;$\\xfa\\x05w\\xfc>\\xd0\\x1b\\xf9Gwd\\x1a\\x05\\x17\\x86X>H\\xaf\\xaa\\x14IZ\\x9d\\x04 ~\\xedc\\xa8\\xaf'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "Tc3-adu6Ivq9_uMP88mAqAE",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 68,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 645,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 645
+        }
+      ],
+      "thoughts_token_count": 95,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 808,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.0083
+}

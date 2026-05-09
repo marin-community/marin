@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T05:57:06.748620+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "ask_clarifying_questions",
+    "locus": "rubric anchor 5 (gpt vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdUyQOLkNd00fYOFHG3sqOhQQ79jw",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"different_scope\",\n  \"rationale\": \"EDIT_A focuses on respecting user bans on questions and handling high‑stakes cases (e.g., 'are not explicitly forbidden by the user', 'especially when the user has said they will not provide more detail', 'declining unsafe guesses or adding clear safeguards'), while EDIT_B focuses on how to respond when questions are pre‑empted by requiring explicit or structurally evident assumptions (e.g., 'must either explicitly articulate key assumptions OR make them unambiguously evident through structural choices'). Both narrow/clarify behavior around user-preempted questions but regulate different aspects of the response behavior.\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306226,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 143,
+      "prompt_tokens": 687,
+      "total_tokens": 830,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.7295
+}

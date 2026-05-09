@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T05:59:37.525639+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "be_clear",
+    "locus": "rubric anchor 1 (gem vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 05:59:40 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=2610",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits add an exception for user-requested styles, with Edit A adding '(unless explicitly requested by the user)' and Edit B adding a note that if the user 'explicitly requested a stylistic mode... do NOT penalize'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xd4\\x03\\n\\xd1\\x03\\x01\\x0c9\\xd6\\xc7\\xb9\\xb9\\xc9\\x16!\\x8c\\xa6\\xabY\\xe6\\x93m\\xd1\\xd0&u\\xd6\\x9f\\xce\\xb8\\x93\\xe3>1\\x8ar\\xc0P/\\xe9\\xd8\\xd2\\x1fP\\xfc\\x05\\x86?\\xc1\\x1d}\\xf3\\xb3\\xc7\\xad\\x1f\\x8a\\xba9\\xd7\\x81\\xe0V\\xfd\\xf1%q\\xe3\\xf6\\xe9~y\\xcb~G\"E\\xd2\\x8bc\\xca\\x82\\xcf\\x033s\\xe7\\xfb\\xb0\\x9b%\\xcd]\\xf3w\\xe9i\\xb9\\xc4q\\xb7\\xb8\\x86\\x05\\xddP\\x99\\x87\\xb9JT\\xa8r\\xbe\\xdfEO\\xc1g2\\x03u\\xcd\\xa9]\\x95\\xe4\"K^ Yq\\x9f\\x87\\xde\\xbcym\\r\\xd2\\x84\\x17_\\x15Q\\xcd\\t\\x8a\\x07\\x9f\\x86\\xf7lEy\\xdb\\x13\\x03/\\xf3\\xde$\\xcc\\x07\\xf3\\xac\\xf1\\x9bU\\xb4\\xa5A\\xd0,$\\xe5\\xc0\\xa7\\xfb\\xef\\xe8\\xb1\\xcd\\xfdL\\x99|m?\\x9eq\\xa3k\\x16j\\x80^5\\x0c\\xccK\\xc6{\\xc3+\\x87.\\xcd\\xd6\\xa4\\x93\\x120\\x00\\xf6\\xef\\x89\\xbe{\\x07\\xe1\\x94\\xda\\x1f\\xe5\\t\\xee\\x0f\\x1f\\x0e]\\x84\\x0e(1GjJP7\\x9dX\\xfd\\xef^_\\xfc\\xfd\\x13{Gw{\\xcf\\x15\\xc3\\xe6\\x05\\xf1\\x8a\\x0b\\x86\\x905t\\xe0\\xc2a\\xbc\\xb5\\xb1X\\xfd\\x91\\r\\xc5{9\\'6\\xd4o:\\xda6Wk*6\\xad\\x93\\xe26\\xfc\\xb5\\xe1\\xf6\\xa4Q\\x80-\\xf0\\xb2\\x92+\\xd4q\\xac__PS\\x9f\\x1aG(\\xd4\\x1e\\x0b\\x7f\\x10=\\xd3B\\x83\\r\\xa5\\xd7\\xd6s\\xa4\\x84\\x91#\\x8fHx\\xe8L0\\xc1<\\x11\\x06\\xae\\x1dG\\xd4\\x81\\x91\\x8by\\xafU\\x0e@\\xaa\\x149\\x8a\\xc9S~\\x1ej\\xfd,\\xca5.a;t\\x0f\\xefP\\x17\\x0b\\x87\\x19\\xa1\\xac\\x9dOM\\xa1\\x1f\\xa5\\xf1\\xd8V\\xe3\\'\\xa8j\\x89\\x15\\xb1\\xdc\\xbb\\xa5\\x91\\x1a\\xd1\\xe7\\xc3\\x1c\\xc6\\xd9\\xa5\\xa7+e\\x06j\\x9b\\'\\x1f\\xc9\\xfa4}Q\\xe9\\x11\\xcf\\xe6\\x88\\xd5\\x12\\x17H\\x9e\"6#\\x8bNW@3h\\t\\xbe\\xbc\\xa0r\\xcc!\\xde\\xfc^\\x80n\\x95S\\xcf\\xdb4(\\x84:\\xde\\xb2\\xcc\\xfd\\xf8\\xf6\\x11'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "Sc3-abrvJcac_uMPpdjQ6A0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 66,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 633,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 633
+        }
+      ],
+      "thoughts_token_count": 85,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 784,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 2.6151
+}

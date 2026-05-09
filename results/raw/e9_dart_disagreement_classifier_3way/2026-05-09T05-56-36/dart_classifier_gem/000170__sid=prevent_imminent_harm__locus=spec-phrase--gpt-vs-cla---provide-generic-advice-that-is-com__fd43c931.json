@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:05:27.035289+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "prevent_imminent_harm",
+    "locus": "spec phrase (gpt vs cla): provide generic advice that is com"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:05:31 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=4279",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits clarify the restriction by adding similar examples (e.g., 'leave the area and contact emergency services' vs 'leave the area,' 'call emergency services') and explicitly prohibiting 'detailed, technical, or step-by-step instructions' tailored to the user's specific situation.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xb5\\x08\\n\\xb2\\x08\\x01\\x0c9\\xd6\\xc7\\x96g\\xeb\\x93Y\\xa1,I_\\xc0\\xecy\\xef\\xd1\\x84\\xe7\\x82W\\xb6\\xf6\\x8d\\xc2|\\xd8\\xecjkk#\\x1c1K\\xd4\\xb2\\xbc\\x89t]\\xfd\\x8f\\xba\\x94\\x1fn\\x00P\\xf0\\x04zS\\xe1\\x93\\x98\\xf5\\x9e\\xfe\\na\\x94S#fyK\\xd7\\xf5\\xebd<\\xc0\\xd2\\xc2\\xe1 \\xab\\xe4A\\xda^f#H\\xab\\xc8NA\"\\xe2\\xa7\\xe3K\\xa5q\\xb5\\xf0\\x9d\\xfb\\xa6\\xaa;DB4\\xa2\\x06\\x9f\\xfe\\xde\\x1em\\xa2$k\\xffa&\\xcfq5q\\xc5|\\x92R\\x112\\xcdy\\xa9\\x1e\\x14`:\\xc3\\xe7u\\xd1\\xeb\\xf8\\xf1u\\xcf{\\xdf\\xfcW\\xc6\\xd4\\xb7\\x9aO&F\\x0bU\\xb6\\\\\\t\\xf5\\xb5\\xf8:\\x91r\\x89\\xf5c\\x02\\xfb\\xe1zb\\x1f\\x8d$\\xcf\\xb3\\xa3\\xb4\\xc5x&\\x97`\\x9d\\xfcu|{-9\\xc2\\x1bA\\xb0\\x90\\xbd\\xf8H\"H\\xaa\\'(+\\xc4G\\x17\\xc73f\\xb9@\\tvQCp\\xd5:\\x0b\\xdc\\x08\\xc7\\xe0\\xbf\\x11\\x81,{\\xbf\\x86q\\xf3\\xa1{N\\x90\\xc3H\\xd3\\x1c\\xcc\\xbauQ\\xc3iP\\x91\\x03y\\xddm\\xf5\\x1b \\xfe\\x99\\x7f\\x82\\xe5\\x10|\\xe6>\\xc1la\\xcc\\xa5o\\xc7\\xe0\\x93\\x93\\xd5\\x98\\xe8\\xe7}\\x02H\\x01(\\xa8N+\\xaae=1\\x8f\\xbb\\'-\\xed\\t\\x95%;g\\r\\xc7/\\xdex\\x8e\\xdak\\xab\\x8f{\\x9eL\\xae\\xe3 \\xe0\\n\\x9f{p\\x0e|\\xa5,O\\x18\\xba \\x0f\\x87!F\\xc8S)\\xb4\\xa4I\\xd3\\xab)L\\x9d\\xd9\\x02\\xb1\\xc0EI~\\n/s\\x84\\x7f\\xa0\\x1e\\x1c\\xc4\\xf0\\x02\\xbe\\xcc\\x99\\xd8Zz6*\\xbe\\xaa\\x93\\x95\\xce\\x0fJXVz\\x85\\xa0\\xcdsc\\x1b\\x07\\x93 \\n\\xe1J5\\xbaV\\x8e\\x99R\\x7f.\\xfd\\xf4\\x17\\xfe\\xf4\\xe9Qs\\xf3p\\xd7\\x05\\xa0\\xed\\xa6\\x1e\\xee\\xe8\\xd6\\xf9w\\xd2\\xe2X\\x1431\\x15\\x97\\xe3\\xa2\\x99\\xcd\\x82{\\x82\\x1e\\x0e\\xb9\\xf7\\x95\\xdc\\x0b(\\xaf\\xf0g\\xe6$\\xb0a#r\\x88O\\xb70\\x8ei\\xe6M74\\xf0D\\x1f\\x94K\\xc32e\\xacO\\x1a9\\xcbyA\\x8fd\\xf9E=\\xa5tz\\xf5\\xf4\\xcd\\x14\\xad\\xf8\\xbej\\xed\\xbd|f\\x9d\\x8aj\\xacer\\xa1\\x02\\x14~,\\x07J\\xcc_7/d\\xe3\\xded>\\x068\\xcb\\x8e\\t\\'i+\\x95\\xec04lU\\xab\\xf5\\x01i\"\\xfc\\xfa-\\x0c\\xa8\\xf1\\xdcl\\x11P\\xa9\\x9a,\\xb7]\\xf0NN\\xa7G\\x14\\xa6\\x8a\\xc8\\x0c\\x8f\\x7f\\xef]B\\xc6K\\x96+\\xc4\\xb4+W\\xb0\\xfak\\x07\\xe3\\x01s\\xb8H\\xe4-\\xfd\\xc5+\\xb2\\xb5\\x00\\xcc\\x83\\x1d\\xfc\\xda8\\xe2\\xaa]\\xf5A\\x18\\x1dd\\x89\\xa8\\x0e\\xe8\\x96\\xab\\xf5n\\x8b\\xc9^\\x98\\xfd\\xf0\\x0e\\x13\\xb9\\xc9\\x12jO\\x1a\\x0c\\xb4\\xd7\\x95\\xae\\xd6?\\x90\\xd9*\\xe2\\xe9H2\\xcd\\x16\\xf4O\\xe3L\\xe4\\xb6\\xc4 \\xba@(2\\x1br\\x0e\\xda\\xf0`\\xddx\\x8f\\xcd\\xb2\\xd7\\xc8\\xbcuV\\n\\xaa\\x02\\x00\\x98\\xaf\\xd8\\x85o\\x80\\xc2t\\xa8^Ma?\\xd6{h!\\x88\\xf3`\\xc5\\xdb\\xf4\\xa6\\xd5X=\\x97\\xd5\\xbf\\x82\\x9a\\x83\\xe7\\xb4\\x9f\\xc6\\xa2LE\\x9c\\xaf\\xfeG\\xd9\\x8cV\\x8c\\xb8\\x8e\\xed\\x8bM\\x1b/\\xfa\\x8b\\xc1(\\xa6E\\xa9\\xbf\\xc8\\xcePs\\x1d\\x10L\\x1eH1\\xb0\\xb4\\xc3\\x00\\xc3\\xae\\x1eF|\\xd0\\x82b\\x87\\x82^\\x88\\xac\\x0e\\xf8\\x03\\xa1\\x8f\\xb6\\xcb^\\'\\xd1\\xc8\\xce\\x8bh5\\x1a\\xd1*\\'\\x7f\\xdc\\xc0\\xab\\xc9\\xd9*&\\x1b\\x93\\xca\\x98\\x17~$P&\\xbf\\xe2\\x90\\xc6\\xa1$9\\xdfF\\x8fp\\x12\\n#\\x08\\xa9\\xb4\\x82!\\x86\\x1e7js\\xc4\\x99_\\xcf/\\x9d,\\xe6\\xce<\\xe1`\\xaa\\xf7\\x97f\\x13\\xd1n\\x009Q\\x99\\xf16\\x04F\\xfd\\xc7\\xe3+\\xb5\\xfc\\\\\\xe9\\x8a\\x98\\xc3\\xcd\\xd3Y\\x97g\\xe0\\xcd\\xf9\\x02ON\\x01\\x14`KL\\xdc\\x97\\xf4\\xcb\\xd9\\x01\\x0c\\xd4\\xa85\\xe8\\xd6_Qr#\\x02\\xd6H\\x8d\\xd1\\xeb\\xd2\\xfa\\xc8\\xf6Y\\x17\\xf2<\\x18\\x10\\xef\\xcdg\\xb0Pq\\xcc\\xf66\\x919\\xacb\\x139\\xaf@ihs:\\x11)}\\x91\\xb5\\x85?\\x97\\\\3\\x1ew\\x9a\\xe9\\xdd\\xf6y\\xa6\\x80\\\\\\xd9\\x15\\x88\\x17\\xc8\\xea\\\\\\n\\x88\\x98<1/\\x7fe\\xdf\\xb0\\xdc\\xffQ\\x87#MG5\\xa5\\xee\\x9b\\xe9q\\x9e\\x07\\xe88\\xcc\\xdeY\\xeb\"\\xd5\\xa4\\xb0\\xf9\\x10\\xbfR\\xad$\\xb5T\\xaeN_\\x86v\\x98cv\\r\\xe9\\x13\\x9b\\xf2\\xfc\\x13qUk\\xf5o\\xdc\\x18\\xc5\\x92\\xab_\\x7f\"\\x97#F\\xda\\x12\\xed\\x89 \\xc8\\xd5e\\xfb`\\xc3\\xe3\\xb0\\xdaB\\x8b\\x87\\x03G \\xcbX\\xd1#YS\\xa5!\\x03b\\xdc'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "p87-adf9B8DV_uMP8sPW2Q0",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 79,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 503,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 503
+        }
+      ],
+      "thoughts_token_count": 202,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 784,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 4.2835
+}

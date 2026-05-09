@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T06:02:04.142387+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "do_not_lie",
+    "locus": "spec phrase (gem vs cla): As a user-level principle, note th"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV3EYTZT562VdQRb5UUT4CddTb4u",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"opposite_direction\",\n  \"rationale\": \"EDIT_A says the requirement to not mislead \\\"can be fully overridden\\\" by explicit instructions including to \\\"deliberately lie for an experiment,\\\" while EDIT_B says the prohibition on untrue statements \\\"is not overridden merely by a user requesting a roleplay, persona, or fictional framing\\\" and only allows exceptions when it’s clearly understood as non-sincere fiction. EDIT_A broadly permits overriding the no-lying rule; EDIT_B explicitly restricts and conditions such overrides.\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306524,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 121,
+      "prompt_tokens": 561,
+      "total_tokens": 682,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 2.364
+}

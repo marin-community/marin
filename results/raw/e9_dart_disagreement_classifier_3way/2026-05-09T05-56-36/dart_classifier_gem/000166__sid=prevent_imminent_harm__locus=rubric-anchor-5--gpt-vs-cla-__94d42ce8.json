@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:05:14.988730+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "prevent_imminent_harm",
+    "locus": "rubric anchor 5 (gpt vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:05:18 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3609",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits clarify the restrictions in the same way, with EDIT_A prohibiting 'step-by-step instructions' and adding 'in the relevant domain', and EDIT_B similarly prohibiting 'detailed step-by-step instructions' and adding 'in the relevant domain'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xaf\\x06\\n\\xac\\x06\\x01\\x0c9\\xd6\\xc7I\\xc3\\xd4\\xd2\\xbe\\x7fP\\xa2&\\x81\\xfa\\x99\\xdb\\xf3\\xb3\\x084\\xe2\\xf0\\xfb`\\xb0iY\\xf7\\xa04\\xd6\\xbb-\\xaf\\r\\xf1D\\xc5\\xc7\\xbc8\\xe8\\x8e\\xb8\\xaem\\x14B\\xf5\\x92\\xf2\\x83X*\\xb5\\xb7\\x84\\xb6\\x8f}@g\\x08\\xa0\\xadN\\xdc\\x1e~KR\\x8c\\xb9\\xe5\\xa6\\xe0\\x90\\xa9\\x1d\\xb8\\xfeX}3\\x83\\x92\\xe3\\xa4\\xf5\\xdc\\xd8\\xf8\\xd58\\xc54\\x17b\\xa5+~\\r\\xa2\\xc5\\xcb\\xa6\\xce1\\xc0P\\xbd\\xfc\\x0cs\\xf45\\x13gb]b_\\x1f\\x9d\\xd1\\x1eWW\\xf8\\x1f|\\xe2n\\xe5\\x8e\\xfbs\\xc9\\x9f\\xb4V\\x01|\\x9b\\x13\\x12\\x1c\\xf0|\\x1d\\xf7}\\xab\\xd7\\xdbk\\tuG\\xcb\\xb2\\x95VK\\xf4\\x18\\xf5\\x05\\xb0+\\xe5\\xb4:\\x7f!\\xb4=V\\xf0+\\xfb\\x08bv\\x92}1\"\\xfd7/\\x92\\x90\\x88\\xa8n\\xb6\\\\t\\xbc:\\xc5\\xcb5\\xff1S\\xa2\\xecOQ\\xe6\\xae\\xb6\\xd8\\x97\\xac\\xb3\\xdb\\x0e\\x91r\\x99\\xf2\\xcc\\xed\\x1e\\xd0\\xd37o\\xf1\\xcf\\xec\\xc9\\xc0\\xc2\\x82?\\xbf\\x0c\\x8d\\xd22\\xe9\\xe6\\xc6V\\x9b4\\xd9\\xec\\xcf\\xae5\\xb9\\xfd\\xe8\\x13\\xab\\x89pAy\\x0c\\xb9\\xfb A\\x8d:\\xf8]AW}\\xc4\\xfa\\xa3\\xe6{\\xf8\\x87\\xb9~\\xf5\\x070G\\xf1\\xb1\\xb1u\\x8a\\n\\xb8\\xc6\\x9f\\x96L\\xe0H\\xb6\\x8f\\x08\\x98\\xc0\\xd2\\xe4\\x17\\x8c\\xb37+\\x05(N\\x17\\xceu\\xed\\t\\\\I!BB\\t\\xd4tJ1\\xf9U\\xfc*OT\\x93b\\x10\\n\\xe04P\\xe0\\xad\\x0crR\\xb5k\\xaaK\\xa9\\x10\\x94\\xcd\\xfa\\xc3Z\\x03\\x0bLP;\\x9b\\x0f \\xe2D9\\xbd\\xf6\\x04\\x90t\\xa22\\xab\\x9f\\xb6^?\\xa7\\xa1\\xea\\xe4\\xc7q\\\\\\xd0\\x93\\x1f\\xb4Z\\\\-\\xb6\\xc4\\xe5\\xe1Z\\xe1\\xa29\\xe6\\xb7<\\xfc\\xac\\xe2\\xa4\\xe08\\xcdPH\\x97\\x90\\xe6\\xa2\\x08!\\xa4ybL\\x87\\x10j\\xe1S\\r\\x88\\xad\\xa9\\xe63\\xa7\\x82\\xb4\\xf0\\x16w\\xbf\\xa7c\\x9a\\xa0\\x8c\\xa8P\\x9a\\xc1G\\xe0\\xf2\\xdd\\xba\\xb5T(\\xee/\\xb2:w\\xa9.S\\xf57\\xc0\\x99:\\x870\\xcb~\\xee\\xe61\\x0fu\\x89\\xd07bK\\xaa\\xae\\x859\\xbd\\xd1\\x8a\\x9fG\\xf9#\\x8eL\\x8b\\xe4\\xcb\\x81\\xea\\xa2\\x01\\xed\\xfd\\xb2\\xcd\\x07}\\xd2\\x12\\xc6\\x1bVr^v\\xd3\\xe7Mp\\xb1J\\xc6\\xb26\\xc0:8\\x8e\\xd1\\xf2(\\x80\\x8a\\xb8\\x7f\\x00b\\xff\\xcd\\xd7d\\x10\\xae6\\x0c\\xb0\\xf5\\x88\\xdb\\xf2\"\\x0e\\xd2n\\x19\\xe4\\xa8\\xa7\\x8c:\\x86\\xdb\\xb2\\xaf.\\x935\\x95)\\x05/+\\xfe-(\\xaf02Q\\xa3u\\xf4C}F?/\\x88\\xe6-)a\\xcbhl\\x18Y\\xbf\\x00\"E\\xd3\\x17\\xe2\\x1d\\xbe\\xfb0\\xb7\\xd6\\x90\\x1a\\x18f\\xbe\\x11\\x17\\x9e\\x129\\x1fa\\xe9\\xc4x\\xff~\\xadR\\x81\\xb0\\xf2\\x83\"\\xa5b#\\\\\\xb7\\x84E\\xb2X\\xe8\\x16E\\x14}\\x9d\\xb8MW\\xe8\\xa58+\\x87_^]\\xfd\\xb9iB\\x9fc-\\xf3!\\x15(\\xff\\x93\\xa4\\xd4e\\xe5i\"\\xc8\\xf1#j\\x06\\x98\\x14k2\\x94\\x1f\\xda\\xd5\\xc1\\xe1\\xde.\\xd4*\\xac\\x96\\x96\\xa4\\xca\\xc9u\\xfbWu\\n\\x1c\\x19(\\x86^\\x98\\x7foMY\\x0f\\xbe\\xd7\\x17b\\t\\xd2%W\\x96\\xb4\\xc2\\xe0\\x98J\\xb9\\xd9K0\\x11k\\xdf\\x1f\\xe3)\\xe7\\xb5b}\\xd5+kE\\xacqxO9\\x99%|\\xac\\xf2i\\xb6\\xb2\\xce\\xd2\\xbd\\x01#\\xd9~m\\x9d/\\xb7\\xdd\\xc1{,\\xe8\\xbc\\xbb\\xd8\\x89g\\xb4\\xedo\\x87\\x8f\\xa2\\x8d\\x87\\x13.Wi\\x9a(\\xc2'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "m87-aePJBLad_uMPzqWx0QE",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 74,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 705,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 705
+        }
+      ],
+      "thoughts_token_count": 164,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 943,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.6153
+}

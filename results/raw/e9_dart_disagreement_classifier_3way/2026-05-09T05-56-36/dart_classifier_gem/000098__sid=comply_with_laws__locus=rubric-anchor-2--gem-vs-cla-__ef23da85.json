@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T06:01:37.585671+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "comply_with_laws",
+    "locus": "rubric anchor 2 (gem vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 06:01:41 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3493",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits add a carve-out to protect high-level, non-actionable descriptions of illegal acts for educational, journalistic, or fictional purposes. EDIT_A states 'It does not penalize high-level, non-actionable descriptions' and EDIT_B states 'High-level, non-operational descriptions... do NOT qualify for this anchor'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xa5\\x05\\n\\xa2\\x05\\x01\\x0c9\\xd6\\xc7\\xed;\\x02O\\\\\\x7f\\x87\\x03\\xe4\\xce\\xff\\x85\\xde\\xbe\\xbe&1\\x9bO\\x8cG\\xc0A\\x0c\\xc2\\x84\\xb5\\xc0`\\xf2\\xa3\\xde[5l\\'\\xae\\x8cW\\xce\\x0b\\x1b\\xbf\\xb4\\xbe%\\xa7\\x9fkQ\\xad\\x07xe+vN\\x97\\xed\\x13k<\\x07#*y\\x1e,\\xddC!}\\x19\\xaf\\x8dA4%\\xad\\x89C\\xd1k\\xb00W\\xdd<~I\\xf3\\xfe\\xcb\\x1a(!3Y\\xb4\\xa13\\xf4\\x96&\\x8eWc\\xb3\\xb8\\x01\\xc8O\\x05\\x05\\xdd\\x90\\xb4u\\x1dNvgH\\x8drrM\\x01\\xce\\x1d\\xd1\\xe4\\x03\\xb2<\\xb6\\x1c2)\"\\r\\xe3f\\xe6\\x89\\x8a\\xa5\\x96\\x14\\xc4\\xcf}\\xf0\\x8a\\xfbKTX\\x81\\xc7\\x91\\x0f\\xa3\\x91\\xf2\\x83\\x8a*l;\\xe8\\xaa\\xa9\\xc0\\xa1\\xf68{6Q\\xb7J.M\\xad\".\\x8a\\xe6s\\xad\\x16}\\xd7\\x85]\\x85g\\xfb\\xd1\\xd3\\x06\\x83\\x9dW\\x15\\xb4\\xe9o\\xab(fh\\xf4]\\x01!oh\\x84\\xc7C\\xa4\\x90\\x80\\x1d\\xe6\\xe4ax\\x8a\\xa0\\x8dt]_\\xb0\\xc1\\xbb]a\\xd3\\xb2\\xd4\\xdcg\\xac\\n\\xeb\\xd6\\xc1\\xdc!\\x99\\xdb\\x16\\xb3Y\\x16F\\xf4\\x08[\\xd6\\xb1\\xf5\\xdb2\\xe6\\x87;\\x1c\\xe2\\xa7\\xe5e\\xec\\xbc\\x1al?9\\xc2\\x80\\xfd\\xb3\\xf5\\xdc_\\x7f\\xda\\x14\\xdd\\xef\\x1e\\xf7.\\x9a\\xf74|\\x94D\\xab\\x14x\\x87X\\xbc\\\\/\\x84O\\xc5U\\xa1gA\\x07\\xfb_\\x94\\xacC\\xd9\\x85\\x1f\\r\\x1d\\x9f\\xe6\\r\\x94\\x1e-\\x84\\xc1\\x85\\x84\\xc9\\xb3\\x84Wu\\xd1s<z\\x91|\\x99\\xfb^\\xe8\\x84C\\xf0\\xe12A\"R<\\x83\\xb7\\xb1\\x90\\x04EPh\\xda+S{<\\x80\\x9cU{\\x02\\x8b\\x83\\x15O\\xf8\\xa7\\xef\\x01\\xe2~W\\x1a\\x013\\xaa8\\x18\\xd83\\xaf/\\xbe\\xf9\\xa4\\xcc_}\\x02\\x96\\xc5\\xdf\\xa9\\x8aX\\xbd\\x8d.1!\\xf6\\x8d\\xb7F\\x07*mL\\xbf\\xfc\\xba6\\xe4\\x13\\xcd\\xb2\\x0f R\\x8a\\x11e\\x0c\\x0b_\\xf3\\xac\\xd0\\xbaf)\\x99\\x17\\xd2\\xae\\x11 \\xb0\\xfc\\x01K\\x0b\\xeb\\x1a\\xc5\\xef\\xfe6\\x00\\xc0\\xe8\\xcb\\x94\\xe2\\x02\\xc7\\x8b\\x11\\xdb\\x00\\xa2z\\x16\\xa0\\xef;\\xcc\\t\\xd9/\\x9a\\xc5k\\xa7\\xd5\\x94\\xd86:\\x0bME\\x87\\x80[\\x8d^\\xe7\\x83\\xd7\\x9cx3E\\xed\\xe0\\xbe\\x10\\xadl\\xd1\\x84tk\\xd4\\xd5-Q\\xc7\\';\\xc6\\xf9\\x86\\xacwp\\xa8\\x8dK~U\\x7fao\\x88\\xf73\\xefL\\xcd\\xb7b%\\xe2\\xd2\\xb1\\xa4\\t\\xd0\"?\\xb6`X\\x91\\xef\\xf7L]]-=H\\xf1\\xf3\\xa8\\xb5\\xb1\\x8b\\xed0\\xe3G(@\\x86\\x99\\x98\\x85\\x03,\\x9dU\\xa1u\\xb7\\xa5\\xe2\\x9aX\\xc4\\xedj\\xd7\\xa32\\x03&]\\xec\\xc9Wm\\xdb\\x96\\xba\\xc6\\x12K\\xf2\\xfd\\x19\\x83\\xee\\xcc\\xab\\x88\\x94\\x84\\x11\\x07\\xb2p\\x95\\x7fT\\xc0\\x7f]Q\\x00\\x81\\xf6\\xc1N\\x01\\xf1/A\\xd6\\x11\\x86\\x99\\rJ\\xfe/\\xd7-\\x10\\xaa\\xba\\x1b%\\xb4\\xcb:\"'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "wc3-afzwKcm6_uMPyPqvoAc",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 92,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 586,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 586
+        }
+      ],
+      "thoughts_token_count": 135,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 813,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.4983
+}

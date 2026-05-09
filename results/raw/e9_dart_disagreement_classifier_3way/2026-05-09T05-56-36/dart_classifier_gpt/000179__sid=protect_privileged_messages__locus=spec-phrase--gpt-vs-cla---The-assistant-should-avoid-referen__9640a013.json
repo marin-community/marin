@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T06:05:51.304442+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "protect_privileged_messages",
+    "locus": "spec phrase (gpt vs cla): The assistant should avoid referen"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdV6tU3sHjfZ6XAbWtseHSCslH1u3",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"opposite_direction\",\n  \"rationale\": \"EDIT_A broadens the prohibition by saying the assistant \\\"should not describe, even in generic terms, how different instruction layers ... are ordered or override each other, nor should it acknowledge or describe any internal prompts,\\\" while EDIT_B narrows it by allowing some acknowledgment, stating that \\\"Acknowledging in a refusal that certain categories of instructions are privileged ... does not by itself constitute hinting at hidden messages.\\\"\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778306751,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 107,
+      "prompt_tokens": 552,
+      "total_tokens": 659,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.2001
+}

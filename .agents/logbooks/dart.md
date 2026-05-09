@@ -351,3 +351,86 @@ Gemini's confidence: 0.95. Both verdicts are defensible — GPT preserves spec-a
 5. **Cost was even cheaper than GPT** (~$0.29 vs $0.37). Both <$1 per full Bucket D pass.
 
 **Status**: Two independent compiler diagnoses on the same 14 statements. **7 statements have inter-compiler-confirmed diagnoses** (action-safe). **6 statements have split diagnoses** (need human triage or third-compiler tiebreak before action).
+
+---
+
+### Run 3 — Claude Sonnet 4.6 as 3rd compiler on all 14 Bucket D statements (2026-05-09)
+
+**Date**: 2026-05-09
+**Statements**: same 14 Bucket D statements as Runs 1 + 2
+**Compiler**: `claude-sonnet-4-6` (`thinking: {"type": "disabled"}`, tool-use forced for strict JSON schema)
+**Script**: `e9_dart_compiler_claude.py`
+
+**Why a 3rd compiler**:
+- Run 1 (GPT) + Run 2 (Gemini) gave 7/13 diagnostic agreement and 1 T3 (rubric paradox).
+- 6 statements are T4 (diagnostic split) — we have no tiebreaker without a 3rd compiler.
+- Claude is the strongest 3rd-compiler candidate: different lab (Anthropic), different reasoning idiom from GPT/Gemini (we documented this in the Layer 1 subagent work), and likely to take an independent line on contested cases.
+- Cost ~$1.60 Anthropic for the diagnostic step + ~$0.20 additional pairwise classifications on 3 compiler pairs (GPT-Gem, GPT-Cla, Gem-Cla) instead of 1.
+
+**Outputs**:
+- Structured: `experiments/posttrain/disagreement_primitive/dart_diagnoses_claude.jsonl`
+- Human-readable: `.agents/logbooks/dart_run_003_diagnoses.md`
+- Aligned-pairs (3 compiler-pairs): `experiments/posttrain/disagreement_primitive/dart_aligned_pairs_3way.jsonl`
+- 3-way disagreement report: `.agents/logbooks/dart_disagreement_report_3way.md`
+
+**Decision rules at N=3**:
+- For diagnoses: if all 3 agree → consensus; if 2 agree + 1 differs → plurality (record minority for spec authors); if 3-way split → genuine spec ambiguity (escalate fully).
+- For edits: 3 pairwise alignments. T1 if every pair is `same_direction` and diag ≥ plurality; T3 if any pair is `opposite_direction`; T2 otherwise; T4 if diagnostic split.
+- Maintain compiler-as-judge circularity caveat: all 3 of our compilers (GPT, Gemini, Claude) are also in the 3-judge ensemble. A future experiment with a NON-judge compiler (open model or older GPT version) is a cleaner test of methodology robustness — flagged for future.
+
+**Diagnosis distribution across all 3 compilers** (13 statements compared; one Run 1 statement excluded due to a Run 1 validation issue):
+
+| diagnosis | GPT-5.1 | Gemini 3 Pro | Claude Sonnet 4.6 |
+|---|--:|--:|--:|
+| rubric_drift | 4 | 2 | 2 |
+| spec_ambiguity | 6 | 4 | 4 |
+| both | 2 | 7 | 7 |
+| irreducible | 1 | 0 | 0 |
+
+Claude's distribution mirrors Gemini's. **GPT is the outlier** — it is more willing to commit to one side (rubric_drift / spec_ambiguity / irreducible), while Gemini and Claude both hedge to `both` whenever bare-poison and rubric-poison cells coexist.
+
+**3-way diagnosis tiering**:
+
+- **consensus** (all 3 agree): 5 statements → `be_thorough_but_efficient` (rubric_drift), `no_topic_off_limits` (rubric_drift), `refusal_style` (spec_ambiguity), `ask_clarifying_questions` (both), `prevent_imminent_harm` (both).
+- **plurality** (2-of-3): 8 statements.
+- **3-way split**: 0. The 3rd compiler resolved 100% of contested cases.
+
+**Where Claude broke ties on the 6 GPT-vs-Gemini diagnostic disagreements**:
+- Sided with **Gemini** 4 times: `avoid_abuse`, `comply_with_laws`, `be_clear`, `assume_objective_pov` (overruling GPT's lone `irreducible` verdict).
+- Sided with **GPT** 2 times: `do_not_lie`, `formatting`.
+- Created its own minority on 2 high-agreement-from-Run-2 statements: `letter_and_spirit`, `protect_privileged_messages` — Claude alone said `both` where GPT and Gemini both said `spec_ambiguity`.
+
+**3-way edit-pair direction tallies** (95 ensemble classifications across 3 compiler-pairs):
+
+| pair | same | different_scope | disputed | opposite |
+|---|--:|--:|--:|--:|
+| gpt_gem | 14 | 1 | 4 | **5** |
+| gpt_cla | 21 | 5 | 9 | **5** |
+| gem_cla | 23 | 1 | 6 | **1** |
+
+11 opposite-direction edit pairs total. **10 of 11 involve GPT** (5 in gpt_gem + 5 in gpt_cla; only 1 in gem_cla). Same outlier story as the diagnosis distribution: GPT proposes edits in the opposite direction from the Gemini/Claude consensus.
+
+**Final tier counts**:
+
+| tier | n | statements |
+|---|--:|---|
+| **T1** action-safe | 2 | `assume_objective_pov`, `be_clear` |
+| **T2** light review | 5 | `ask_clarifying_questions`, `comply_with_laws`, `no_topic_off_limits`, `prevent_imminent_harm`, `refusal_style` |
+| **T3** ⚠️ author flag | 6 | `avoid_abuse`, `be_thorough_but_efficient`, `do_not_lie`, `formatting`, `letter_and_spirit`, `protect_privileged_messages` |
+| **T4** 3-way split | 0 | — |
+
+T3 is the largest bucket — most statements have at least one compiler proposing an opposite-direction edit. This is itself a finding: even when 3 compilers agree on a diagnosis, they often disagree on which way to edit. **The diagnosis layer is more stable than the edit layer.**
+
+**Lessons from Run 3**:
+
+1. **Adding a 3rd compiler eliminated all 3-way splits.** Going from N=2 to N=3 collapsed every contested case into either consensus or plurality. This is a strong endorsement of N≥3 for triage.
+
+2. **GPT-5.1 is the outlier compiler in this ensemble.** Both diagnosis distribution and edit-direction classification confirm it. If you can run only one compiler, prefer Gemini or Claude over GPT for this task; if you can run two, ensure GPT is paired with one of the others (not both).
+
+3. **The bidirectional-output schema works for Claude with strict tool-use.** We forced JSON via `tools=[DART_COMPILER_TOOL]` + `tool_choice={"type":"tool","name":...}`. 5 of 14 statements had `old_criterion` validation warnings (paraphrases vs verbatim substrings) — same pattern as GPT, recoverable for review.
+
+4. **Edit-direction matters more than diagnosis tier.** 5 of 5 `consensus`-tier statements still landed in T2 or T3 because at least one compiler-pair had `opposite_direction` or `disputed` edits. A future improvement: have the compiler explicitly *justify* edit direction so disagreement classifiers have firmer ground.
+
+5. **Cost stayed under $1 per compiler per full pass.** Total Run 1+2+3 spend is roughly $0.37 (GPT) + $0.29 (Gemini) + ~$1.60 (Claude) ≈ $2.30 for triple-compiler diagnostic on 14 statements. Affordable as a routine spec-authoring step.
+
+**Status**: Run 3 complete. Final 3-way report: `.agents/logbooks/dart_disagreement_report_3way.md`. **6 T3 statements flagged for spec-author review** (opposite-direction edit pairs); **5 T2 statements need light review** before adoption; **2 T1 statements are action-safe**. Validation step (re-judge with adopted edits) still pending.

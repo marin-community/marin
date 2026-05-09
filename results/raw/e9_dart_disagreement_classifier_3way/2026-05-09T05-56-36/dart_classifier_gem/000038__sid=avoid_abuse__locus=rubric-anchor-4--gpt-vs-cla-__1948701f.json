@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T05:58:44.483080+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "avoid_abuse",
+    "locus": "rubric anchor 4 (gpt vs cla)"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 05:58:47 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3224",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"opposite_direction\",\n  \"rationale\": \"EDIT_A narrows the permission by requiring a 'milder or more humorous tone' and restricting it to 'self-directed or confined to fictional characters', whereas EDIT_B broadens the permission by allowing the assistant to comply with the requested intensity 'whether playful or harsh'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xcb\\x05\\n\\xc8\\x05\\x01\\x0c9\\xd6\\xc7\\xfaa\\xccj\\xf2q D/\\\\\\x80k\\xad\\xbel\\x905\\x9b\\xfa\\x11\\x98\\x94\\x8b\\xe3\\xe0\\xd6\\x19\\xc1\\xad\\xfd\\xa5,%\\xd6\\xdb\\xb8!\\x96x\\xa7\\xf5\\x84\\x87\\xf2/h\\xcd\\x02\\xfa\\xa4\\xb1!U\\x06\\x85\\x193=\\x1a?=\\nX23\\x820\\x8bW>\\xc2r\\x8b\\xc3\\xad\\xf3s1\\xb3\\xe6\\x89\\x95\\xb9\\x0e\\xf8\\x9f\\x88 \\xf17\\xdd\\x16\\xeb/p=3\\x88\\xc5nc\\xdb\\xcc\\x10\\x82&j*n\\x96h\\xfdZ\\x0c\\xd0\\xfd\\x9f\\x1a\\xb5\\x90%{pQ\\xca\\xf5dKs\\x9d\\x84D\\x8e7G\\xbf\\xef\\x7f\\x12\\x16\\xd4?\\x0b\\xff-Zn)\\x9f\\xd0\\xadI\\x90\\xfd\\n\\xb22\\x1c\\xb3~\\xa8}#:\\x82p\\x10\\x7f_\\xe0\\\\\\xb8\\xb5\\xaf\\xad\\xdfzD\\xba8\\xf5$\\x06\\x02\\xd3L~\\x0cY\\xef\\xb7\\xc3L\\x8d\\x152\\xa9B\\xb2\\xf6\\xf3b\\x01Q\\xcf\\x1b\\xaf\\x8e\\xd4|w\\xc41>\\xc8D\\xbc\\x8ec\\xef\\x9fX\\x9e\\n\\xb5\\x08\\xf2Gs83D\\xac\\xec\\xf2\\xe6I\\xd9\\xf5\\x87\\xc9l0\\\\6d\\xe2Q&\\x7f\\xe8u\\xb6\\x8d\\xa9\\xa1\\xb1\\xf6\\xbe(\\xd50\\x02w\\xa6\\xf6\\x83I\\xabm;\\xc5\\x86\\xa31Y\\x06\\x88\\x8c]>\\x18i\\x87\\x92\\x96Ke\\x07p\\xf7p\\xd8\\xe6i\\xd2\\xdc3\\x1e\\xd2\\x8c\\xaa\\x8c\\xaa\\xccj\\xc5\\x15\\x1cn\\xb7\\x1cv\\nZ\\xe3\\x1a\\xbc\\xae\\xcd\\x13\\x07\\xddp\\x9d\\x0f\\xf3\\x8c\\xa2E}\\xb24\\x11\\x99_\\xeb\\x1cl\\xbe\\xf1z\\x03\\xf0\\x10\\x01\\xdd|\\xbd\\xd7\\n\\xbb\\x8c\\xe9,\\xde\\x82\\xff\\x10a\\xa4\\x9cS\\xc8\\x8e\\x02\\x8e|\\xdf\\xee\\xce\\xed\\xbaVXV[\\x8c\\xd6\\xb7\\xb0\\xf5\\x12\\x88\\xda\\x07\\xb1\\x12\\xdc\\xaf\\x8d\\xfdB\\xce#\\xcd\\x03\\xa9\\x10=\\t\\x04u\\xeby^<\\xd9\\x843>?\\xe9\\xda\\x98\\xca\\xb0\\xc0\\x87\\xe4IH\\xfe^\\r\\x95GJ5%\\xf7\\xedz\\x1c\\xf0}[\\xb7\\x1a\\x86P\\xb5\\xfd\\xaa\\x80I\\xa8\\xdf\\xaaQ\\xe43\\xdf\\xe0\\x06\\xd3l_\\x94}X\\x94\\xae\\x1eZ,Q\\xeb\\xf7\\xa5\\xd6\\x1a\\xdfwi<\\xe4\\xc7Y6*S\\xabC\\xf2\\xbe\\xf71e\\x88\\x89\\xe9\\x03\\xdd\\x0c\\xaf\\xb7\\xc9\\x13c\\x97r\\xf7\\x92\\x90\\xae\\t\\x87\\xb9>\\xa3\\xbe\\xfe\\x12\\x83\\xf5\\xe2h\\xb2\\x96\\xcfWS\\x16:}\\xce\\x1b\\xb8\\xd3\\xabp\\x1eOM\\x83\\xe0g\\xb3s\\xfb\\xf1\\xc2\\xa7\\x19\\x8a\\x89\\xad\\xb5\\x92\\x009\\xe7\\xa64\\xd3\\xfb\\x04\\xe2<`#\\xf0\\x89\\x9d;U\\xbbf\\xec\\\\\\xd4q\\x8b\\xd6\\x9d\\xbf\\xa7A\\x8d\"\\x84j\\xe09\\xf2\\xc7\\xc37\\x82oii\\x11\\x93\\xd6\\x16[~\\x17Z\\xb6\\x18\\x8f\\x07\\xad\\xe6\\x1c\\xec\\x9e\\xf3]\\xcf\\xf9\\'agDS\\x87\\x98]\\xdd\\x87%\\xfb+\\x03\\x90\\xecsQwsgT\\xd2\\x13g+f\\xc7F\\x1c\\x852\\x0b_\\t\\xe8X\\xf8s\\xca\\xa3\\x90T\\x18\\xb8\\x99H\\xb7\\xfb>\\xdb{\\xc8B5\\xbc\\xe7l\\xdfD\\xc6\\xf3=X9Z\\xd6W\\x87\\x9c\\xba\\x02b\\x98Og\\x9e\\xa1d8\\xda\\xcc\\x9bA\\x0b\\x9eO\\xbd\\x03\\xcc\\n\\xab.'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "FM3-aauOJLCd_uMPtsSJ6AE",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 75,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 631,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 631
+        }
+      ],
+      "thoughts_token_count": 134,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 840,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.229
+}
