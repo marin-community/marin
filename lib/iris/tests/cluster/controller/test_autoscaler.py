@@ -445,6 +445,37 @@ class TestAutoscalerExecution:
         group = empty_autoscaler.groups["test-group"]
         assert group.slice_count() == 1
 
+    def test_rate_limited_decisions_log_once_per_group(
+        self, scale_group_config: config_pb2.ScaleGroupConfig, caplog: pytest.LogCaptureFixture
+    ):
+        """Many rate-limited decisions in one cycle produce one log line and one action per group (#5580)."""
+        # Bucket exhausted after the first scale-up; remaining decisions are deferred.
+        group = ScalingGroup(
+            scale_group_config,
+            make_mock_platform(),
+            scale_up_cooldown=Duration.from_ms(0),
+            scale_up_rate_limit=1,
+        )
+        autoscaler = make_autoscaler({"test-group": group})
+
+        decisions = [
+            ScalingDecision(scale_group="test-group", action=ScalingAction.SCALE_UP, reason=f"slice {i}")
+            for i in range(10)
+        ]
+
+        with caplog.at_level("INFO", logger="iris.cluster.controller.autoscaler.runtime"):
+            autoscaler.execute(decisions, timestamp=Timestamp.from_ms(1000))
+        autoscaler._wait_for_inflight()
+
+        rate_limited_lines = [r for r in caplog.records if "Rate-limited scale-up" in r.getMessage()]
+        assert len(rate_limited_lines) == 1
+        assert "deferred 9" in rate_limited_lines[0].getMessage()
+
+        rate_limited_actions = [a for a in autoscaler.get_status().recent_actions if a.action_type == "rate_limited"]
+        assert len(rate_limited_actions) == 1
+        assert rate_limited_actions[0].scale_group == "test-group"
+        assert "deferred=9" in rate_limited_actions[0].reason
+
     def test_execute_skips_unknown_scale_group(self):
         """execute() skips decisions for unknown scale groups."""
         config = make_scale_group_config(name="known-group", buffer_slices=0, max_slices=5)

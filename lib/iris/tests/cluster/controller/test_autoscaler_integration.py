@@ -629,7 +629,7 @@ class TestScaleUpRateLimiting:
     """Tests for per-group token bucket rate limiting of scale-up execution."""
 
     def test_rate_limited_scale_up_logs_action(self):
-        """With rate_limit=1, 5 decisions produce 1 executed + 4 rate_limited actions."""
+        """With rate_limit=1, 5 decisions produce 1 scale_up + 1 aggregated rate_limited action (#5580)."""
         config = make_scale_group_config(name="test-group", max_slices=10, num_vms=1, priority=10)
         platform, _ = make_gcp_provider(config)
         group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0), scale_up_rate_limit=1)
@@ -655,11 +655,12 @@ class TestScaleUpRateLimiting:
         # Only 1 should have actually executed (rate_limit=1)
         assert group.slice_count() == 1
 
-        # Check action log: 1 scale_up + 4 rate_limited
+        # Action log carries one aggregated rate_limited entry per group per cycle.
         actions = list(autoscaler._action_log)
         rate_limited = [a for a in actions if a.action_type == "rate_limited"]
         scale_ups = [a for a in actions if a.action_type == "scale_up"]
-        assert len(rate_limited) == 4
+        assert len(rate_limited) == 1
+        assert "deferred=4" in rate_limited[0].reason
         assert len(scale_ups) == 1
 
     def test_rate_limited_decisions_served_next_cycle(self):
