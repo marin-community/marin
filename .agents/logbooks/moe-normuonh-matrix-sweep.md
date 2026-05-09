@@ -42,3 +42,12 @@
 - Result: The regression initially failed for both MuonH and NorMuonH with incompatible direction/norm shardings. After resharding direction updates to parameter layouts inside the shared hyperball helper, both variants passed.
 - Interpretation: The sharding fix covers NorMuonH without a separate optimizer-specific path.
 - Next action: Run the full focused optimizer and Grug contract tests, then update PR #5597.
+
+### 2026-05-09 11:37 - MOE-NMH-003 gate-1 launch
+
+- Hypothesis: NorMuon output-axis normalization can be tested under the same gate-1 sizing as the MuonH ablation once the shared expert-sharding fix is in place.
+- Command: `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --preemptible --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -e NORMUONH_MATRIX_GATE 1 -- python -m experiments.grug.moe.normuonh_matrix_sweep`
+- Config: PR #5597 commit `4a7867902`, gate 1, v5p-8 preemptible.
+- Result: Parent `/kaiyue/iris-run-job-20260509-183259` is running. Child jobs `/kaiyue/iris-run-job-20260509-183259/grug-train-normuonh-matrix-d512-2.19e17` and `/kaiyue/iris-run-job-20260509-183259/grug-train-normuonh-matrix-d768-1.70e18` were created and are pending while the Iris autoscaler brings up preemptible v5p-8 workers.
+- Interpretation: The NorMuonH launcher and job tree are accepted by Iris; live TPU compile validation is blocked on capacity.
+- Next action: Wait for workers, confirm W&B startup, and check that lowering passes for both child jobs.

@@ -32,3 +32,12 @@
 - Result: Jobs `/kaiyue/iris-run-job-20260509-181301/grug-train-muonh-matrix-d512-2.19e17` and `/kaiyue/iris-run-job-20260509-181301/grug-train-muonh-matrix-d768-1.70e18` reached W&B startup, then d768 failed during lowering with `ShardingTypeError: mul got incompatible shardings for broadcasting`. The parent job and both children were killed.
 - Interpretation: `_grug_scale_with_muon` can return a direction update whose leading-axis sharding differs from stacked expert parameter sharding. The direction must be resharded to the parameter layout before the hyperball update multiplies by per-expert norms.
 - Next action: Add an abstract-mesh regression covering `P("expert", "data", "model")` expert tensors, fix the shared hyperball helper, then relaunch.
+
+### 2026-05-09 11:37 - MOE-MH-003 gate-1 relaunch after sharding fix
+
+- Hypothesis: Resharding Muon directions to parameter layouts before hyperball norm math removes the stacked-expert lowering failure.
+- Command: `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --preemptible --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -e MUONH_MATRIX_GATE 1 -- python -m experiments.grug.moe.muonh_matrix_sweep`
+- Config: PR #5597 commit `4a7867902`, gate 1, v5p-8 preemptible.
+- Result: Parent `/kaiyue/iris-run-job-20260509-183227` is running. Child jobs `/kaiyue/iris-run-job-20260509-183227/grug-train-muonh-matrix-d512-2.19e17` and `/kaiyue/iris-run-job-20260509-183227/grug-train-muonh-matrix-d768-1.70e18` were created and are pending while the Iris autoscaler brings up preemptible v5p-8 workers.
+- Interpretation: The fixed code was accepted by Iris and progressed past parent submission; live TPU compile validation is blocked on capacity.
+- Next action: Wait for workers, confirm W&B startup, and check that lowering passes for both child jobs.
