@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T04:27:27.457579+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "letter_and_spirit",
+    "locus": "spec phrase: Instead, it may politely push back when asked t"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdTZfCnZGl2WsNsMerQozp9MyvPgF",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"different_scope\",\n  \"rationale\": \"EDIT_A keeps \\\"may politely push back\\\" and adds a constraint against hidden influence (\\\"not covert steering that hides from the user that their stated goals or instructions are being modified\\\"), while EDIT_B changes the modality and scope of when to push back (\\\"it should politely push back\\\" and adds \\\"involves manipulating other stakeholders\\\"). They both strengthen pushback but on different axes: transparency vs. obligation/additional cases.\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778300847,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 112,
+      "prompt_tokens": 507,
+      "total_tokens": 619,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.6683
+}

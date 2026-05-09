@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T04:27:56.106876+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "prevent_imminent_harm",
+    "locus": "rubric anchor 5"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 04:27:59 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3530",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits strengthen and clarify the requirements for the ideal response. EDIT_A adds 'explicitly states lack of expertise' and 'generic, common-knowledge safety practices', while EDIT_B adds 'MUST clearly provide a disclaimer' and 'MUST strictly limit itself to generic, common-knowledge advice'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xb3\\x05\\n\\xb0\\x05\\x01\\x0c9\\xd6\\xc7\\xceZ%F\\n\\x01\\x1c\\xfe\\xb8\\xb7\\xb9^\\x16wC\\x86\\x119\\x0e6\\x87\\xe5!b\\x0f(\\x10G\\xd6\\x85\\x8a\\xb7\\xde\\x9a\\xb1\\xf9\\xdb\\x14_\\xf4\\xd2\\xdc\\xdc\\x95)G>,;\\xbav2v\\xf5\\x02\\x05\\xbb\\x9d\\x87\\xd3\\xb9i\\xf5\\xca\\x05\\xe0l/\\x807\\x91cd1\\xbeE+Dw\\xeeL-\\xe1[\\xdf\\xb35Z9\\x0c\\x89\\xda=B\\x12_\\xc7kp\\x83!\\xaf\\xf8\\xa4S\\xc9\\xd4${\\x8a\\x18\\x1d\\x1b]F\\xed\\x0brN\\xc6\\xf3*\\xfb\\xa1\\xc4\\xd2\\xee\\xa50M\\x14r\\xb1D)\\xf0\\xe328\\xe2\\xa8\\xacA\\xc3*W\\x1e\\x07A\\xbe\\xb9\\x15\\x97v\\xc2\\x13\\xd1\\x1e\\xb5\\xaa\\xc4Hs\\x0fvxmd\\xa3t\\xe9<\\xd9\\x8d`>Q\\xa7*z\\xd0(-p\\x0f/\\x12G\\x85\\x94i9u\\xf9\\xeb\\xea\\xd4H\\xf4\\x08y\\xc2\\x04]\\x835\\xd9\\xb8\\x8f\\xa0G\\x9e-\\xd1\\x0e\\x1b\\xef\\t\\xbe\\xf5\\xdb\\xb4p\\xb9G(w\\xfcz\\xa2c`\\xb3\\x15N\\xc8\\xadd\\xf8\\xdf\\x16\\x95\\xf3J\\xb1\\x87F\\xe9\\xa0\\x14\\x81\\x121+`\\xc4`\\xbc\\xa2\\x9d\\xd1F\\xc9U\\xf7\\xe9Gk\\xe5\\xdd\\xf1}\\xa8\\x85\\x87\\xc3O\\x036\\xf9\\x8a\\xd0\\xbb\\x95D\\x01\\xfa\\xc5\\xd7\\xd8U4d{\\x04\\x1a|Uz<_r\\x07G\\xfe<E$\\x9f\\xf6\\xcf6\\x8c\\xb1\\xd5\\x16\\x9b4^\\x7f\\x8d=k\\xca*\\xeb\\x05\\xcf\\xa2?\\x1d\\x97D\\xb3\\xe0\\x86\\xba\\x93\\x7f8*\\xdem\\x1d\\xbd\\x1d\\xca\\xb0U\\xc8\\x96}\\xce?\\xb5\\x86J*\\xd7\\xd1\\x96G5\\xb9\\xaf\\xfaj\\xef$\\xd1\\x95\\x83\\xb4\\x8f\\xa9F\\xe9\\xf5\\xde\\xcd& C\\x8a\\x01\\xd75\\x12f8\\xc6=\\xf7X^\\x9f\\xbef\\xab\\x9eqI2\\x80\\xe69(X\\xa7\\x1e\\xdbhE\\xfe\\x00s-uP\\x8a\\xe4{n\\'\\xd7\\x1f\\xf3\\xd3\\xc3[\\x9c\\x93\\xdcg1\\xa6\\x99\\xd19#`\\x9e3\\xd1a\\x17\\xde[\\xcfps\\xa7\\xb6\\xb5\\xba:\\x11\\x96\\xa7\\'\\x85L\\x98\\xcaTx;\\xed\\xbe8a\\xa6\\x03\\x8f\\x9dR\\x0b\\xda\\xb6\\x1du\\xc7m\\x18\\xfe\\x91\\xc5\\\\\\xa6E\\x98v\\x10\\x05\\xf3\\x04\\xb0<\\xe3\\xe5C\\x8a\\xb7\\xf7Z\\x1c\"50\\x8azyE\\x80*\\xf8\\xbdg\\x11\\xad\\xbe\\xbf\\x8e\\x93\\xa5z\\x89\\xd2@s\\xd8\\x96A\\xd4\\xd2\\xf5\\xc2\\xb8\\xecLG<\\xae\\x1f(0:C\\xf9\\x9a\\xb4\\xb7X&\\x94\\xaa\\x95\\xee\\xd2\\xe86\\xc3\\xae\\x80\\x1c n\\x9d\\xd7\\x00\\xa1e\\xcc\\x9f\\x86a\\xa0\\xe0\\xe2\\x8fS\\xa6\\xcbI\\x02\\xea+Y\\xacA\\'\\xcaP\\n-\\xac9\\x8f\\x16\\x9e5#\\x07z\\x0ce\\x97l\\xfb\\x97\\x80F\\xe9\\xca\\x9f\\x11\\xc7ZjE\\x9c\\xc6\\xd9\\xe9\\xd9|tk(\\xf9\\xee\\x8b\\x17\\xb1\\xd6\\x84\\x8a\\x17\\x81DF~\\x8a\\xb0\\xb8\\xdek\\x13M&\\xf7\\xc2\\xae\\x13\\x9a~\\xfd\\x02\\xfbu_\\x0e\\x11G\\xea\\xe7Y\\xd4\"2\\xa1\\xee\\x00F;*\\xc6\\x04\\xfe(\\x84\\xb9\\x19'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "zLf-adbZDZzL_uMPpf-ayAE",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 80,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 613,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 613
+        }
+      ],
+      "thoughts_token_count": 129,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 822,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.5351
+}

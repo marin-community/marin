@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T04:26:19.088720+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "avoid_abuse",
+    "locus": "rubric anchor 1"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 04:26:22 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3732",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"opposite_direction\",\n  \"rationale\": \"Edit A narrows the permission to engage in negativity by explicitly prohibiting attacks on a 'real, identifiable individual... even if the user requested it'. Edit B broadens the permission by penalizing the model if it refuses to 'engage in negativity/abuse' when explicitly instructed by the user.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\xb7\\x07\\n\\xb4\\x07\\x01\\x0c9\\xd6\\xc7\\xfez\\xd7\\x0f\\xe9\\xec/\\x0c\\xb6\\xab\\x0b6)\\xd2\\xbe0\\xa9IaF\\xe7\\x94\\x13}\\x0fnT\\x9e\\xaa\\xcb1Q\\x84zn2\\xb8\\x83[\\xe4\\x88=\\xfa`Z}\\x87\\xe6\\xa3\\x88\\xfe+\\xb9yM\\x1f\\x16\\x9b~\\xfb\\x85\\x8bN\\x0e\\xcaY\\xf3\\xd1\\x01]\\xda8\\xd1BN\\xbeq\\xcf\\xb4\\x8d\\x85\\x8c\\xd7\\xce\\xd6?\\xad\\xadn\\xed\\xdf:\\xcdH\\xff\\x07\\xbeg\\xda\\x8d\\xff_\\x05\\xf4;\\xab\\x12\\x98\\x99\\xba]O\\x93]\\r[~;\\x1b\\xdb\\xae+SO~L\\x8b\\x8c>\\x18\\xe6\\xa4\\xa4\\x1c~\\x99\\x90\\x93\\xb9\\xeb\\x81\\xca\\xbe\\xbc}\\x1dX\\xe7\\xb2{3\\xb3\\xf6\\xdf\\x16\\x9e\\x10\\xea\\xbc\\x03\\x08\\x1187|D~\\x8e\\x07xw\\xf4sjX\\xd4J-\\x11\\xf48\\xfc\\x7f\\x9d\\x16<CqS4\\xce\\xe0\\xf8\\xa5_\\xd8\\xea!\\xafz\\xa6kv!\\x11f\\x17\\x12\\xc3\\xbf\\xd5\\xf4\\x03\\xbfx\\xf7k\\xffEO\\xdbk\\xa0\\x81\\xacP~\\xb9]\\xaa\\x8f;K:\\x97\\xcd\\x90\\x1fE.\\x0f\\xadYPR\\x7f\\x9e-0<j\\x94\\xfaP\\xec\\xb1\\xec\\xb9\\xb0vx6\\x85\\x8f8\\xaf\\xbc9\\xddf\\x97\\xc4\\xb9\"\\x84\\xe27\\xc8\\x1a\\x82%\\x1c\\xac\\x98\\xb3&\\x1e\\xb3.\\xa2\\x98B\\x0c`\\x1f\\x95j8\\xb5\\x88<\\nv\\xc6h\\x19(\\xdf\\xa6[\\x1b\\x1ckB\\xe7\\xab\\xdbM\\x01\\x9b\\x0b\\xe5\\xee))\\xbd\\xc2\\xcep\\xab\\x1b\\xb3^\\xe1p\\xfbT\\x16\\xab\\xb5\\x8c\\xdd6\\xaf\\x9eHp\\x10\\xb2\\xeaC\\xfa\\xc4+\\xd2\\xed-W)1V\\xbco/\\xee\\xa5#\\xa5\\xac\\xf4\\xb6\\xfd3s\\xdf\\xb7\\xfa\\xa7\\x8ab\\xefY\\xdf\\x0e\\xd1\\x92\\xa4\\xba9\\xa4F\\x82S\\xdfhD\\xe7!\\xb6\\x90\\xb0\\xc7\\x99O3/\\x8aY\\x9e&\\n\\xc7\\x11\\xed\\x0e\\x85\\xdaVJ\\x91\\x8e\\xc0C\\xb0\\xb3\\xd1\\x08\\x03\\x1b\\x83X*\\xed\\x95\\xc2\\x8c \\x07\\x84\\xd2h(h\\xe4\\xfaX\\xd6\\xc4\\xa5\\xaa\\xb6jkbv\\xd4\\x8eVI3l\\x9b\\x06u\\x01Yr\\xe0\\x17\\xa0\\xa4\\x06\\xa0+Of\\xcb+\\xc2\\xee8\\xbdX?)](\\xc8W\\xb4h\\xd8\\x00fk$\\xbeY\\xcb\\xdc\\xd6\\xa6\\x0co\\xcd\\xd5\\x93\\x1c^\\xb5\\xb7\\xa9\\xf7\\xdc|\\xc0\\x151\\xfa\\x1d\\x99t\\xd5\\xaf\\x05\\xb5*\\x1dN\\xfd\\x9a\\x8f\\xa2\\x05Y \\x9c \\xe1^h\\xb4\\xe9\\xf6\\t\\xbb\\xdb\\xf8qU\\x10\\x9b\\xe1\\x1f\\xe3\\xda\\x049\\xe6^\\x05d\\xbd\\xf5n\\xbe\\xb3\\x04\\xad\\x10\\xea\\x03q\\x05\\xa8\\xc1\\x0b\\x9382\\xd6l\\x05\\xe8n\\xd7\\x06=\\xf25\\xfb\\xa1\\xc8mh\\xa6\\x04\\x8c%aR \\x83H\\xc8\\x13\\xdd \\xf0\\x9a\\xd0]\\xcfP\\xa4\\x1a\\x07?\\xafEM\\xd9\\xfc\\xfd4\\x7f\\xe0\\xd0\\xd8\\xc7\\xa99\\xb2\\x06k\\xee\\x0cu\\x80\\x93T\\x9e<\\xf2\\xe5\\x129\\xa1\\xc8\\x91c\\xdeu0\\x05\\x9c\\xb68\\xc7\\x06p\\x9e\\xf0\\xa7\\x070\\x82\\xee\\xb1\\xf9\\xef\\x07n\\x85}D\\xeei\\xf7/\\x8ddx7R\\xc5U\\x1a\\'\\xfa\\xe7|\\xb3\\xce\\xf3\\x04\\xa1\\x98\\xc4gg\\x98@\\xc3\\x08C\\xbc\\x0c\\x8b\\xebkV\\x9c\\x1alk\"\\x16\\xe3\\xd9x}z%\\xf6\\xf0\\xa5\\xc0vx\\x1c\\x97\\xa2\\xb3\\x15\\x85\\x8e\\xc13\\xd6\\xde\\x17f0`,\\xb4\\x14\\x90\\xd9\\x1f\\x1f\\x83\\xfb#\\xc3\\xcd4r\\xfaf\\x03\\x19\\x8b\\xe3\\x8f\\xca\\xbae\\xe4F\\x95\\xe7G]\\x07r\\x10\\x95*\\xa0\\x96\\x08\\xe0\\x99\\x1c\\x9c}\\xd4?\\x9d0O\\xdb\\x93\\xc8\\xdb\\x10\\xe0\\x15\\xb7.\\x92\\x9a\\x92X:\\x9cz\\xcc\\x05Q\\xf4\\xcb\\xa3A\\xc1\\xd8\\xc1\\xf3\\x7fa\\xbe\\x17TV\\xd4\\xc1\\xc2\\x93\\xa4]\\xf8\\x9e\\x83l\\x1a\\xaa\\xcd\\x8e\\xdbF\\xa6\\xfc[\\xe4\\xb0\\xdc\\x947\\xc5\\x08\\x1e8XR \\xacb\\x8eK)<\\xd6\\x9bf\\x1f!\\xe8m\\xfco\\xc7\\x9cD\\x8b\\x06\\x14A\\xe9\\xc1\\xbf\\x0f\\xa4#\\x94\\xc3\\x95\\xb9\\x14\\xc8\\x03)\\xe2;mT}?\\xf2\\xd3\\xa1\\xb7\\x8c\\xe9\\xf6SR\\'\\xe4\\x8f=y\\x97}\\xc8$\\x15\\xf1\\xbf\\xfbj\\x1bd\\xb1\\xe0m\\x18\\'\\xacKZ\\xec\\xb1\\xf6)e\\x91n\\xd7@\\xb7u'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "a7f-abj4C-vW_uMP3vnXyQE",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 77,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 618,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 618
+        }
+      ],
+      "thoughts_token_count": 182,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 877,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.7387
+}

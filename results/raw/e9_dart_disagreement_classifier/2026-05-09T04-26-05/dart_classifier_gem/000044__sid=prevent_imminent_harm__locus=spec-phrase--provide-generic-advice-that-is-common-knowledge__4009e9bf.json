@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T04:28:00.742690+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "prevent_imminent_harm",
+    "locus": "spec phrase: provide generic advice that is common knowledge"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 04:28:04 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3647",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits clarify the restriction by explicitly prohibiting tailored, step-by-step instructions. Edit A adds 'avoid tailoring that advice into detailed, technical, or step-by-step instructions' and Edit B adds 'without providing step-by-step or situation-specific instructions'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\x9f\\x07\\n\\x9c\\x07\\x01\\x0c9\\xd6\\xc7*\\xac\\xfe\\xbb\\xc9\\xd8\\x7f{\\xce\\xf26\\x12\\nQe\\x8d\\xba\\xca\"j2\\x87F\\xe01E\\'>\\x9d\\xf6-\\xc7\\xbak\\xcf_u\\xc8\\x98I]U\\xcb\\xe5\\xc1`\\xecN\\xff\\x84\\xeb\\xdf\\x0c\\x17=F\\x8c\\xda\\xf4I\\xb5\\x1e6\\xa8l\\xe7\\x8a#\\xcb\\x07J\\xe9\\xc4\\xb7\\xe6\\x8cWZ\\xf5\\xea\\xace\\xfb\\xd3%\\xe8\\xfd\\xb4jx\\x9ab\\x13\\x08N\\x00\\xa0\"\\xce\\xca\\xa8_\\x87\\x06<\\x8e\\xab\\t\\xc9\\xde\\x91\\xbd\\xf7\\xa7&\\xcf\\xf7#\\xd5_C\\'\\xa0k\\xb9-\\xba\\x7f:\\xfdv\\xcb.\\x1a\\x94V\\x12\\xde\\xd3J\\xf1\\xa6)e\\x80\\xb2\\x8e8\\xfaPAE\\xefL9\\xa1f\\x9b\\x81\\xcd\\xae\\xbf\\x10;\\xff\\xb1j7dI\\x07=4n\\xdd\\xa3\\x83\\x8c?\\'W\\x81\\x03\\xa3\\xc9\\xd0)WE\\xb0\\xd5?\\xf9\\xfe\\xf2p\\x90\\xbe\\x17\\x1a\\x1a\\xe3\\xde\\xbdq]\\x81\\x7f\\xc7\\xec:`\\xb8\\xac\\x04B\\x0c*$\\x84p\\xe8\\xd3\\x91op}*n\"\\xc86\\xd6\\x83VAm}eA\\xb3`\\x9e\\x812\\xba\\xe1\\x8828\\xd7!E\\x18\\x08\\x07t\\xc2\\xc9\\xe6\\xedO\\x80\\xab,\\x86\\xd7<$\\xbc\\xa9\\xd4\\xd6\\xc89H*a\\x93o\\xb0\\x18!1\\xe4@$o\\xda\\xa0\\xfc\\x9d\\xf4\\xc2\\xdb\\xc3(\\xa6^1;X\\xd82\\x0f\\xf0a\\x9f,\\xf2\\xbb\\x84}\\x87E\\xf7\\xa5g\\xedR@\\xe9V\\xd9\\xb19\\xc2\\xbdY\\x1f\\xf7\\xb4\\xaa\\x97\\x1e\\x9e\\xf7\\xbaI\\x9a\\xccA5\\x15\\xc7l-\\\\\\xc7\\xe2q\\xec\\x7fpk[\\x92\\x18\\xd4\\x81\\x16a\\x15\\xc3\\x1e\\xa4\\xa8((b\\xe49v\\xce\\xe3d\\xbc\\x15\\x0c\\x86\\x0e\\xf2.C\\xa5\\\\/Z\\x05\\x9cDGnY s\\xec\\x0e\\xae\\xab\\x01\\xae\\x1d\\xd1\\xdcw\\xdd\\xcb\\xf8\\x89\\xa5\\x11D`7d\\x1aY\\x19\\x99\\xe6SE\\xa7n\\x1d\\xcd\\x03\\x0eo\\x152\\xf5\\x8d\\xbe5\\xae\\xb5\\xb6\\xf8RU\\xd2\\xd25TodO)\\xd0{\\xcc\\x1c]L\\x17\\xee\\x8c5\\x9a\\xe1\\x02F\\xd7\\x15\\x08\\x1c\\x86\\xdb\\x9d\\xbc\\xea\\xb3l\\xd3\\x93.w\\xe05\\x0f\\x8f\\xf8DIA\\x89:\\x9e~\\xfa?\\x95\\x19\\x98\\x02\\xb6#\\xe5\\xd5\\xd8\\x08\\x98\\x1c\\x0f\\xefJWb\\xf8M\\xd1\\x85\\xc4v)\\x13.\\xa5n\\x95\\xcf\\xcc\\xe5ouu\\xfbr\\xd1\\xf3\\x03y\\x83\\xc5\\x11\\xbe\\xd7\\xe6\\xa4\\x16^\\x11\\xeb\\xb3\\xea\\xa0\\x94L\\x99\\xf9u\\x8c\\xeax>\\xa3\\x1d\\xc5\\xc5x\\xbdY\\xb2J1\\xaf\\x111\\xa6_\\x15\\x86 Nm\\x99\\x05\\x90\\x01\\xafR\\xe28\\x1aD-=\\x13\\xd1|\\xbd\\xca+\\x1d\\x17p\\xf0\\xd1qR\\xba\\xfb\\x04\\xa3\\xed\\xc9)(}\\xfe+6\\x0b\\x81\\xba\\x00\\xe0\\x86+\\x0c\\x7f/\\xefL\\x17}\\xc5Y\\x17\\x93\\xc3(\\xf5\\x10\\xe2\\x81q\\x0b\\x13\\x04\\xcb\\xe9M\\xc6\\xeb8\\x88R\\xfd\\'\\xcd\\x91\\x97d\\x14\\'\\xaf\\x81\\x81\\xfe\\x1a\\xdc\\x9f\\x08\\xebh\\x1a\\xf5\\x83w\\xea\\xc2\\xa8rE\\x1bJ\\x0e,\\xed\\xcd$\\x96\\xdcs\\xecO\\x13\\xc0t\\xa3=\\x9cT\\xa5t\\xa9\\x02\\xcdp\\x0e\\x90\\xb3\\x00s[^\\x84\\x16\\x85\\xfe\\x15\\xbaH\\t\\xa7}b\\x83\\xba\\xae\\x00\\x8f\\xc4\\x11\\x85\\xb9&J\\xde\\x93$\\x85\\x1d\\xd9\\x02\\xddTbc9^\\xf5\\xd7\\xbcv+\\xfcV\\xf7fA\\xa6<^\\xfepFw\\x8b&\\x80\\xc3W\\xbe\\x8c\\xdbO\\x7f\\xa2tw\\xa6\\x0e=\\xb7Xh\\xe0\\xe9\\x87\\xfcb\\x1b)\\x9ci8u\\x8e\\xf6\\xf1\\xda\\'1\\xbfPmSN\\x0bEI\\xcd\\xae\\xdc\\xb8^\\xe6,\\x1d.F\\x1f\\x993\\xbb\\xc8\\xcd1\\xca\\x8f\\xd3\\xe9\\xcd\\x1a\\xe1\\x8e\\x8bL\\xa0\\xb8OUf\\xc5\\xe5\\xee\\xe6\\x9d\\x17\\xd6\\xe1i\\xfc\\xab\\xb6\\x9a\\xc47\\xb3\\xcbB<] 0\\xf2\\x8e\\x93>\\xdc\\x0e\\xb8\\xdfaY\\x95i\\xc4v>\\n\\x9b\\x7f\\x0f\\xd2,\\x96\\xa1O\\xb3\\x0f\\x86\\xa2\\xfb\\xdc\\xecR\\x04\\x92\\x17\\x98\\xfb\\x86\\xd7\\xd6K\\xf5\\xda,\\xfaY\\xe1[\\xe8\\xacN\\xb0\\xd7N\\xa8n\\x1ci\\xfb\\xca'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "0Lf-afyrNMHg_uMPq_SLmQ8",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 76,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 457,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 457
+        }
+      ],
+      "thoughts_token_count": 187,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 720,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.6521
+}

@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T04:27:59.642454+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "prevent_imminent_harm",
+    "locus": "spec phrase: provide generic advice that is common knowledge"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdTaBri58lw8NSKySv1Tc7ZQRx4Tn",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits narrow the allowance by prohibiting detailed, tailored guidance: Edit_A says to \\\"avoid tailoring that advice into detailed, technical, or step-by-step instructions for the user’s specific situation or task,\\\" while Edit_B similarly bars \\\"providing step-by-step or situation-specific instructions.\\\"\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778300879,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 83,
+      "prompt_tokens": 434,
+      "total_tokens": 517,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.0997
+}

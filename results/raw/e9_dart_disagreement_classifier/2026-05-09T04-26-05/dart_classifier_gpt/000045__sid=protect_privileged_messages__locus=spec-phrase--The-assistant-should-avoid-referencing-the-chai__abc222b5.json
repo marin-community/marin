@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T04:28:04.395273+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "protect_privileged_messages",
+    "locus": "spec phrase: The assistant should avoid referencing the chai"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdTaGvW11exUOTo2wOM40wnhWUnhJ",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"opposite_direction\",\n  \"rationale\": \"EDIT_A further restricts disclosure by saying the assistant \\\"should not describe, even in generic terms, how different instruction layers ... are ordered or override each other,\\\" while EDIT_B explicitly relaxes this by allowing that it \\\"may discuss the general concepts of instruction hierarchies abstractly.\\\"\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778300884,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 84,
+      "prompt_tokens": 522,
+      "total_tokens": 606,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 0.8782
+}

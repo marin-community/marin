@@ -1,0 +1,89 @@
+{
+  "timestamp_utc": "2026-05-09T04:28:05.273865+00:00",
+  "role": "dart_classifier_gem",
+  "key": {
+    "sid": "protect_privileged_messages",
+    "locus": "spec phrase: The assistant should avoid referencing the chai"
+  },
+  "status": "ok",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Sat, 09 May 2026 04:28:08 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=3025",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"direction\": \"opposite_direction\",\n  \"rationale\": \"EDIT_A broadens the restriction by stating the assistant 'should not describe, even in generic terms' the instruction layers, whereas EDIT_B narrows the restriction by explicitly allowing it to 'discuss the general concepts of instruction hierarchies abstractly'.\"\n}",
+              "thought": null,
+              "thought_signature": "b'\\x12\\x88\\x07\\n\\x85\\x07\\x01\\x0c9\\xd6\\xc7\\x82O\\x12<ZK\\x1a1<(\\x01\\xd8\\xea\\xb5\\x9c\\x86\\xe1\\x0et\\x1d\\xb0\"\\xdfe\\x9d\\x90tz\\xcb\\xe5g2\\xf3\\x8c7T\\x1e\\xb6\\x92\\x00\\xe5\\xf3\\xc0\\x15(\\x8b\\x0e)k\\x13\\xf8\\xe6\\xdd\\x14OW\\x01\\xa3!\\t\\x9dE\\xa1\\x02?\\xda\\x90\\xdf\\x14#\\x1d\\x1b\\x82\\xcf\\xe3\\xca\\x05\\x9d@S\\xbe\\xb3\\x81\\x13\\xa2O\\xe9`9\\x0e\\xaf\\x8eoV\\x01l\\xb2\\xae\\xfe-\\x15\\xa1\\xa1\\xb81t\\xa5[\\x95\\x00\\x01\\xdb\\xdc\\xf8!\\x0f*\\xce\\xdcRD\\xda\\xc3\\x0c\\xdcP\\xff6\"\\xee\\x18\\x8c\\xa7\\x0fN\\xac\\xf9\\xe5\\xa4<\\xd7\\x80W\\xc6\\xb4\\xc8bN\\xfe\\xd5Z\\x1d\\x81\\xcbS\\xbey\\xfe\\xad\\xc6xD\\x06\\xe5\\xceo\\xd1\\x8f3A+\\xab/\\x1a\\xa8\\x14\\xd2.A\\x01\\x1c\\x0c\\xae\\xe2K,\\xe1H_e\\xe0\\xff\\x1b\\x7f\\xb0\\xa4\\x1904\\xf8y`\\x9d\\xf3_e\\xa3\\xc9\\xcb\\x9f\\x85\\xbe\\x82\\x83\\x0fw \\xaa\\x86_\\xf2\\x99\\xb2\\x8c\\x80\\xa2\\xd8S\\x90pk\\x1eQ/\\x07\\xc1}|\\x87\\xc3\\xa3\\xb0\\x01]\\x83T2`\\xb0\\t\\xa0\\xc1\\xdd\\x07\\xc1\\xa9^\\x19{J\\xf9\\xaf\\xeb\\xad\\x00\\x9etv\\xe7\\xf2\\r+\\xd4\\x8f\\x14K\\xd8J\\xfe\\xd9y.L,G\\x91\\x1d\\xa5\\x83m\\x10D\\xbc\\x97\\xfd\"\\x0b\\x97\\xb0t\\nSVr\\x97\\xcbb\\x82 (\\x94\\xfbj\\xb6\\xf5Uq\\xb1\\x96\\x9ans\\xf2>\\x03\\xc1\\xab\\xd5\\x90\\xbb\\xde\\x8f\\x08\\xaf\\x17\\x0eGyR\\x00\\xda\\xdf\\x0e\\x01\\xd7\\xb6u\\x0f\\xee\\x9f\\xbbX\\xdf\\x94h\\xf4\\t\\xee\\xfe=~\\xc8\\x1f4\\xc6\\xe6A\\xab\\x03/\\x10\\x1fJ\\xdf\\xc3\\x1cf\\xadf\\xe2\\xa6k\\x06\\xddxw=4~\\xfeY\\xaf\\xe2\\x9f\\x00%i\\x8c\\x8c\\x14S\\xbc\\x85\\x8e\\xc8\\x02\\xe3\\n|*\\xe7\\xdc6\\xc0\\xc6\\xb6\\xad\\x8e\\\\\\n\\x98\\x9dv\\xc9\\xb2\\x0e\\xe7D\\x1a\\xef*\\x97v\\xa1\\xb7\\x8d\\xd4L<\\xebZ\\xf0\\xfa\\xb8T\\x9f3N\\xfc%\\xb5\\x9d\\x13\\xe4\\x97]\\xf7I\\x0b\\xbe\\xd9\\xcfe~\\x90\\x90\\xc0\\x85c\\xd2\\xbd\\x983@\\xe6\\x1e`\\xb6\\r%\\xa2~r\\x03\\xac\\xeb\"o\\x92*\\xf9\\xbcL\\xd8\\xc5Ov|W\\xb5\\xda\\x897\\xf7\\t}\\xfd`A\\xcd\\xbf\\x94(\\x87\\x07\\xeeS,o\\xb5\\xa5\\x14]\\x08t\\xf2/\\xcd\\xf7\\xeaa\\xe6\\xa3\\xf2cP\\x00\\xc5\\xbdF\\x8b\\t\\xe7\\xaa\\xc3\\x84\\xde8|T\\x05\\xe4\\x18>x\\x90+\\xb4]\\xc7f\\xfdub\\xea\\x19\\xa5\\xe9\\x01;:t$\\xa9\\x1dm\\x14\\xc2\\x9c\\xd0U\\x06}8Q\\xa1\\x1e\\xbf\\x03x\\x878\\xbag\\xa7\\x9b\\x9f&\\xef\\x8dF6\\x96h\\x04\\x11\\xbd\\x86\\x8d\\xbe\\xc47k\\xe1\\xc8<\\xc3\\xa80\\xcc\\x1b{\\x19\\xf4\\xc1J\\xe2\\x8a<?\\xb8\\x937\\x11&\\xd8\\xc8Zh\\xbcEZ\\xda\\xa0\\x87\\x1a\\\\\\xc9F\\xcbb\\x92l\\xecA\\x9e\\xa0\\xef\\xe5\\xbf=\\x8b\\xe82\\xd5\\x9ezC\\x03U\\xb3\\xe8\\x89\\x8f\\x13\\xe8\\x13\\xe5=9ZPr0\\xf7\\xd0\\xff\\xb6\\xbc\\xdfl\\xe0\\x13di8\\x00\\x07\\x84b\\x89\\x15\\x8e&Y\\x0c~Q(W\\x99\\xd56zY\\xf53n\\x08\\xf6!M\\xcc2\\xbds\\x01\\x82\\xeb\\x85\\xcfh\\t\\xfbV\\x1dS\\x05\\x88w\\x8c\\xe8\\xe9`\\xa4\\xba\\xbd\\xa4\\xa5^\\xd0\\xe5>W\\x80eZ\\xb3\\x82g\\x1b\\x8d+t}Z~/\\x8f?q.`\\xbf$a\\xd0\\xa8H\\x13\\xc0\\x17\\xabi\\x84P\\x87E\\xf9)7\\xf85\\x8e\\xf1\\xf4#\\x8f\\xacCR\\xc3\\x88\\xf2Tky\\x85\\xb4\\xd6_\\xdbj*[b\\xf9\\xfb\\x00\\x981D\\xd8\\xea\\xd5\\x96\\x01\\xb94\\xf5|\\xb8\\x02i\\xe0\\xbe\\x1f,a\\xc6\\xee\\x8c\\xfe1\\x818c\\xa8\\xc3\\x0cBX\\xa7\\xca\\xd4I\\xfe\\x03\\xbc\\xb9\\x82\\x86\\xec[\\x1bq\\xb5\\x16\\xb226!\\x1fw\\xef\\x0f\\x15\\x05\\xed@\\x03\\x07h(\\xf2v\\x86E\\xf9\\xc8\\x08G\\xd8\\x9a>\\x9f'",
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-3.1-pro-preview",
+    "prompt_feedback": null,
+    "response_id": "1bf-aajxFsud_uMP4tHy8AE",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 68,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 543,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 543
+        }
+      ],
+      "thoughts_token_count": 173,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 784,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  },
+  "wall_time_s": 3.0301
+}

@@ -1,0 +1,49 @@
+{
+  "timestamp_utc": "2026-05-09T04:27:54.923480+00:00",
+  "role": "dart_classifier_gpt",
+  "key": {
+    "sid": "prevent_imminent_harm",
+    "locus": "rubric anchor 5"
+  },
+  "status": "ok",
+  "response": {
+    "id": "chatcmpl-DdTa7UFxFRMgbuAmvpmjQg9ZaPwtM",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"direction\": \"same_direction\",\n  \"rationale\": \"Both edits strengthen and clarify the same constraints: EDIT_A adds 'clearly and explicitly states lack of expertise' and 'limits itself to high-level, generic, common-knowledge safety practices without detailed, situation-specific or step-by-step instructions,' while EDIT_B uses MUST/DOES NOT language to require a disclaimer and to 'MUST strictly limit itself to generic, common-knowledge advice' and 'DOES NOT provide detailed, situation-specific instructions.'\"\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1778300875,
+    "model": "gpt-5.1-2025-11-13",
+    "object": "chat.completion",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 116,
+      "prompt_tokens": 594,
+      "total_tokens": 710,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    }
+  },
+  "wall_time_s": 1.183
+}
