@@ -14,7 +14,8 @@ from unittest.mock import patch
 
 import pytest
 from iris.client import IrisContext, iris_ctx_scope
-from iris.client.client import IrisClient, LocalClientConfig
+from iris.client.client import LocalClientConfig
+from iris.client.local_client import local_client
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import (
     Entrypoint,
@@ -134,7 +135,7 @@ def test_env_propagates_through_job_chain(tmp_path):
     }
 
     config = LocalClientConfig(max_workers=4)
-    with IrisClient.local(config) as client:
+    with local_client(config) as client:
         entrypoint = Entrypoint.from_callable(_chain_job, out_a, chain_spec)
         resources = ResourceSpec(cpu=1, memory="1g")
         environment = EnvironmentSpec(

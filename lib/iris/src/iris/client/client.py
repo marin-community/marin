@@ -39,7 +39,6 @@ from iris.cluster.client import (
 )
 from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
 from iris.cluster.log_store_helpers import build_log_source
-from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -58,6 +57,12 @@ from iris.rpc.proto_utils import job_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
+
+
+class _ClusterLifecycle(Protocol):
+    """Anything IrisClient owns and tears down on shutdown — typically a LocalCluster."""
+
+    def close(self) -> None: ...
 
 
 @dataclass
@@ -440,7 +445,8 @@ class IrisClient:
 
     Example:
         # Local execution
-        with IrisClient.local() as client:
+        from iris.client.local_client import make_local_client
+        with make_local_client() as client:
             job = client.submit(entrypoint, "my-job", resources)
             job.wait()
 
@@ -457,36 +463,21 @@ class IrisClient:
         self,
         cluster: ClusterClient,
         namespace: Namespace = Namespace(""),
-        controller: LocalCluster | None = None,
+        controller: _ClusterLifecycle | None = None,
     ):
         """Initialize IrisClient with a cluster client.
 
-        Prefer using factory methods (local(), remote()) over direct construction.
+        For local execution, prefer ``iris.client.local_client.make_local_client``
+        over direct construction; for RPC use ``IrisClient.remote(...)``.
 
         Args:
             cluster: Low-level cluster client (RemoteClusterClient)
-            controller: Optional LocalCluster to manage lifecycle for local mode.
+            controller: Optional cluster object whose lifecycle this client owns.
+                ``shutdown()`` will call ``controller.close()``.
         """
         self._cluster_client = cluster
         self._namespace = namespace
         self._controller = controller
-
-    @classmethod
-    def local(cls, config: LocalClientConfig | None = None) -> "IrisClient":
-        """Create an IrisClient for local execution using real Controller/Worker.
-
-        Args:
-            config: Configuration for local execution
-
-        Returns:
-            IrisClient wrapping a RemoteClusterClient connected to a local controller.
-        """
-        cfg = config or LocalClientConfig()
-        config_proto = make_local_cluster_config(cfg.max_workers)
-        controller = LocalCluster(config_proto)
-        address = controller.start()
-        cluster = RemoteClusterClient(controller_address=address, timeout_ms=30000)
-        return cls(cluster, controller=controller)
 
     @classmethod
     def remote(

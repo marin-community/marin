@@ -12,7 +12,10 @@ import time
 from collections.abc import Generator, Sequence
 from typing import Any, Protocol
 
+from iris.client.client import get_iris_ctx
+
 from fray.actor import ActorGroup, ActorHandle, HostedActor
+from fray.iris_backend import FrayIrisClient
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, JobRequest, JobStatus, ResourceConfig
 
@@ -172,17 +175,10 @@ def current_client() -> Client:
         logger.info("current_client: using explicitly set client")
         return client
 
-    try:
-        from iris.client.client import get_iris_ctx  # iris has circular imports; keep lazy
-
-        ctx = get_iris_ctx()
-        if ctx is not None:
-            from fray.iris_backend import FrayIrisClient  # iris circular import; keep lazy
-
-            logger.info("current_client: using Iris backend (auto-detected)")
-            return FrayIrisClient.from_iris_client(ctx.client)
-    except ImportError:
-        logger.warning("current_client: iris not installed")
+    ctx = get_iris_ctx()
+    if ctx is not None:
+        logger.info("current_client: using Iris backend (auto-detected)")
+        return FrayIrisClient.from_iris_client(ctx.client)
 
     logger.info("current_client: using LocalClient (fallback)")
     return LocalClient()

@@ -15,9 +15,6 @@ from rigging.config_discovery import resolve_cluster_config
 from rigging.log_setup import configure_logging
 
 from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
-from iris.cluster.config import IrisConfig
-from iris.cluster.providers.k8s.controller import configure_client_s3
-from iris.cluster.providers.local.cluster import LocalCluster
 from iris.rpc import config_pb2, job_pb2
 from iris.rpc import controller_pb2 as _controller_pb2
 from iris.rpc.auth import AuthTokenInjector, GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
@@ -116,6 +113,8 @@ def create_client_token_provider(
 
 def _configure_client_s3(config) -> None:
     """Configure S3 env vars for fsspec access. Delegates to the canonical implementation."""
+    from iris.cluster.providers.k8s.controller import configure_client_s3
+
     configure_client_s3(config)
 
 
@@ -149,11 +148,15 @@ def require_controller_url(ctx: click.Context) -> str:
     # Lazy tunnel establishment from config
     config = ctx.obj.get("config") if ctx.obj else None
     if config:
+        from iris.cluster.config import IrisConfig
+
         iris_config = IrisConfig(config)
         bundle = iris_config.provider_bundle()
         ctx.obj["provider_bundle"] = bundle
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
+            from iris.cluster.providers.local.cluster import LocalCluster
+
             cluster = LocalCluster(iris_config.proto)
             controller_address = cluster.start()
             ctx.call_on_close(cluster.close)
@@ -240,6 +243,8 @@ def iris(
 
     # Load config if provided
     if config_file:
+        from iris.cluster.config import IrisConfig
+
         iris_config = IrisConfig.load(config_file)
         ctx.obj["config"] = iris_config.proto
         ctx.obj["config_file"] = config_file

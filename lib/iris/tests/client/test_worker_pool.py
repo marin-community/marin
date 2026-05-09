@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""E2E tests for WorkerPool using IrisClient.local()."""
+"""E2E tests for WorkerPool using a local IrisClient."""
 
 import pytest
-from iris.client import IrisClient
+from iris.client.local_client import make_local_client
 from iris.client.worker_pool import (
     WorkerPool,
     WorkerPoolConfig,
@@ -16,18 +16,20 @@ pytestmark = pytest.mark.e2e
 
 @pytest.fixture
 def local_client():
-    """Create a local IrisClient for true E2E testing.
+    """Boot an in-process LocalCluster + IrisClient for one WorkerPool test.
 
-    Starts a real Controller and Worker with in-process execution,
-    ensuring WorkerPool tests go through the full job submission infrastructure.
+    Starts a real Controller and Worker so WorkerPool tests go through the full
+    job submission infrastructure rather than mocked client paths.
     """
-    client = IrisClient.local()
-    yield client
-    client.shutdown(wait=True)
+    client = make_local_client()
+    try:
+        yield client
+    finally:
+        client.shutdown(wait=True)
 
 
 class TestWorkerPoolE2E:
-    """True end-to-end tests for WorkerPool using IrisClient.local().
+    """End-to-end tests for WorkerPool against a local IrisClient.
 
     These tests exercise the full job submission flow:
     WorkerPool -> IrisClient -> RemoteClusterClient -> Controller -> Worker -> task execution.

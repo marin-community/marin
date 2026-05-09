@@ -107,6 +107,23 @@ def sentinel(tmp_path) -> SentinelFile:
     return SentinelFile(str(tmp_path / "sentinel"))
 
 
+@pytest.fixture
+def local_iris_client():
+    """Boot an in-process LocalCluster and yield an IrisClient connected to it.
+
+    Cluster is torn down on teardown even if the test raises. For module-scoped
+    reuse, override this fixture in your test file with ``scope="module"`` and
+    the same body — ``make_local_client`` does not depend on per-test state.
+    """
+    from iris.client.local_client import make_local_client
+
+    client = make_local_client()
+    try:
+        yield client
+    finally:
+        client.shutdown()
+
+
 @pytest.fixture(autouse=True)
 def _thread_cleanup(request):
     """Isolate each test's managed threads and warn on leaks.

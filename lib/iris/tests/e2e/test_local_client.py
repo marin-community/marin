@@ -8,7 +8,8 @@ import time
 
 import pytest
 from finelog.rpc import logging_pb2
-from iris.client.client import IrisClient, Job
+from iris.client.client import Job
+from iris.client.local_client import make_local_client
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
 from iris.rpc import job_pb2
 
@@ -22,10 +23,12 @@ def extract_log_text(response: logging_pb2.FetchLogsResponse) -> str:
 
 @pytest.fixture(scope="module")
 def iris_client():
-    """Create a local IrisClient for testing."""
-    client = IrisClient.local()
-    yield client
-    client.shutdown()
+    """Boot a single in-process LocalCluster + IrisClient for the whole module."""
+    client = make_local_client()
+    try:
+        yield client
+    finally:
+        client.shutdown()
 
 
 @pytest.fixture(scope="module")

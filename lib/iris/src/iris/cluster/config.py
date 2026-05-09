@@ -21,23 +21,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import fsspec
-import fsspec.core
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 from rigging.timing import Duration
 
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.autoscaler.scaling_group import (
-    DEFAULT_SCALE_DOWN_RATE_LIMIT,
-    DEFAULT_SCALE_UP_RATE_LIMIT,
-    ScalingGroup,
-)
-from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
-from iris.cluster.providers.factory import create_provider_bundle
+from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.types import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, parse_memory_string, tpu_variant_name
 from iris.managed_thread import ThreadContainer, get_thread_container
@@ -1148,6 +1138,8 @@ class IrisConfig:
         Returns:
             ProviderBundle with controller and optional workers
         """
+        from iris.cluster.providers.factory import create_provider_bundle
+
         return create_provider_bundle(
             platform_config=self._proto.platform,
             cluster_config=self._proto,
@@ -1187,6 +1179,8 @@ def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
     is_local = config.controller.WhichOneof("controller") == "local"
 
     if is_local:
+        from iris.cluster.providers.local.cluster import LocalCluster
+
         cluster = LocalCluster(config)
         address = cluster.start()
         try:
@@ -1232,6 +1226,14 @@ def create_autoscaler(
     Raises:
         ValueError: If autoscaler_config has invalid timing values
     """
+    # Local import: controller modules import config.py, creating a circular dependency.
+    from iris.cluster.controller.autoscaler import Autoscaler
+    from iris.cluster.controller.autoscaler.scaling_group import (
+        DEFAULT_SCALE_DOWN_RATE_LIMIT,
+        DEFAULT_SCALE_UP_RATE_LIMIT,
+        ScalingGroup,
+    )
+
     threads = threads or get_thread_container()
 
     _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
@@ -1306,6 +1308,8 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
             task_env=dict(cluster_config.defaults.task_env),
         )
     if which == "worker_provider":
+        from iris.cluster.controller.worker_provider import RpcWorkerStubFactory
+
         return WorkerProvider(stub_factory=RpcWorkerStubFactory())
     raise ValueError(
         "IrisClusterConfig.provider must be set. Add either:\n"
@@ -1320,6 +1324,8 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
 
 def clear_remote_state(remote_state_dir: str) -> None:
     """Remove all files under the remote state dir so the controller starts fresh."""
+    import fsspec
+
     fs, path = fsspec.core.url_to_fs(remote_state_dir)
     if fs.exists(path):
         fs.rm(path, recursive=True)
