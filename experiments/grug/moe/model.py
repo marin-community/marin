@@ -27,6 +27,7 @@ except ModuleNotFoundError:
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 from levanter.grug.attention import AttentionMask, RotaryConfig, align_kv_heads, apply_rotary_embedding, attention
 from levanter.grug.grug_moe import MoeActivation, MoeImplementation, moe_mlp
+from levanter.grug.linear import DotGeneralOp, default_dot_general, enable_fp8_dot_general, linear_last_dim
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
 from levanter.tracker.histogram import Histogram
@@ -71,6 +72,7 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     moe_implementation: MoeImplementation | None = None
+    fp8_dense: bool = False
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -113,6 +115,10 @@ class CausalSelfAttention(eqx.Module):
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
+    q_dot_general: DotGeneralOp
+    k_dot_general: DotGeneralOp
+    v_dot_general: DotGeneralOp
+    o_dot_general: DotGeneralOp
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -125,6 +131,10 @@ class CausalSelfAttention(eqx.Module):
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            q_dot_general=default_dot_general(),
+            k_dot_general=default_dot_general(),
+            v_dot_general=default_dot_general(),
+            o_dot_general=default_dot_general(),
             cfg=cfg,
         )
 
@@ -134,9 +144,21 @@ class CausalSelfAttention(eqx.Module):
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        q = rearrange(
+            linear_last_dim(x, self.w_q, dot_general=self.q_dot_general),
+            "... (n d) -> ... n d",
+            d=head_dim,
+        )
+        k = rearrange(
+            linear_last_dim(x, self.w_k, dot_general=self.k_dot_general),
+            "... (m d) -> ... m d",
+            d=head_dim,
+        )
+        v = rearrange(
+            linear_last_dim(x, self.w_v, dot_general=self.v_dot_general),
+            "... (m d) -> ... m d",
+            d=head_dim,
+        )
         q = rms_norm(q)
         k = rms_norm(k)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
@@ -153,7 +175,7 @@ class CausalSelfAttention(eqx.Module):
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        return linear_last_dim(attn_out, self.w_o, dot_general=self.o_dot_general, out_sharding=batch_spec)
 
 
 class RMSNorm(eqx.Module):
@@ -203,6 +225,9 @@ class DenseMLP(eqx.Module):
     w_gate: jax.Array
     w_up: jax.Array
     w_down: jax.Array
+    gate_dot_general: DotGeneralOp
+    up_dot_general: DotGeneralOp
+    down_dot_general: DotGeneralOp
 
     @staticmethod
     def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
@@ -211,6 +236,9 @@ class DenseMLP(eqx.Module):
             w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
             w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
             w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", "data")),
+            gate_dot_general=default_dot_general(),
+            up_dot_general=default_dot_general(),
+            down_dot_general=default_dot_general(),
         )
 
     @named_call
@@ -227,9 +255,14 @@ class DenseMLP(eqx.Module):
 
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
-        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
-        up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
+        gate = linear_last_dim(x_flat, self.w_gate, dot_general=self.gate_dot_general)
+        up = linear_last_dim(x_flat, self.w_up, dot_general=self.up_dot_general)
+        out_flat = linear_last_dim(
+            activation_fn(gate) * up,
+            self.w_down,
+            dot_general=self.down_dot_general,
+            out_sharding=_batch_spec(),
+        )
         return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
 
 
@@ -563,6 +596,12 @@ def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float
     return std * random.truncated_normal(key, -3, 3, shape)
 
 
+def enable_dense_fp8(model: Transformer) -> Transformer:
+    """Enable FP8 dot-general state for dense projections in a Grug MoE model."""
+
+    return enable_fp8_dot_general(model)
+
+
 def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractMesh, P]:
     """Return a small abstract mesh and token sharding for lowering contract tests."""
     if num_devices <= 0:
@@ -592,5 +631,6 @@ __all__ = [
     "RMSNorm",
     "Transformer",
     "debug_mesh_and_token_pspec",
+    "enable_dense_fp8",
     "moe_mlp",
 ]

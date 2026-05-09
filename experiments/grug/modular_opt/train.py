@@ -9,6 +9,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+import haliax.quantization as hq
 import jax
 import jax.numpy as jnp
 import jmp
@@ -38,7 +39,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.modular_opt.model import GrugModelConfig, Transformer
+from experiments.grug.modular_opt.model import GrugModelConfig, Transformer, enable_dense_fp8
 
 logger = logging.getLogger(__name__)
 
@@ -235,10 +236,13 @@ def initial_state(
     ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    if model_config.fp8_dense:
+        params = enable_dense_fp8(params)
+    _, optimizer_params = hq.partition_for_grad_overwrite(params)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
-        opt_state=optimizer.init(params),
+        opt_state=optimizer.init(optimizer_params),
         ema_params=params if ema_beta is not None else None,
     )
 
@@ -274,8 +278,10 @@ def _make_train_step(
             )
 
         loss, grads = jax.value_and_grad(loss_fn)(state.params)
-        updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
-        params = optax.apply_updates(state.params, updates)
+        overwrites, train_grads = hq.partition_for_grad_overwrite(grads)
+        _, optimizer_params = hq.partition_for_grad_overwrite(state.params)
+        updates, opt_state = optimizer.update(train_grads, state.opt_state, optimizer_params)
+        params = hq.apply_updates(state.params, updates, overwrites)
 
         if ema_beta is None:
             ema_params = None
@@ -296,8 +302,8 @@ def _make_train_step(
                 include_per_parameter_norms=watch_config.include_per_parameter_norms,
                 include_histogram=watch_config.include_histograms,
                 split_scan_layers=watch_config.split_scan_layers,
-                params=state.params,
-                grads=grads,
+                params=optimizer_params,
+                grads=train_grads,
                 updates=updates,
                 opt_state=state.opt_state,
                 model_tree_type=type(state.params),

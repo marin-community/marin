@@ -23,6 +23,7 @@ import jmp
 import optax
 import pytest
 from fray.cluster import ResourceConfig
+from haliax.quantization import Fp8DotGeneralOp
 from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
@@ -102,6 +103,11 @@ def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
     return model_config_cls(**kwargs)
 
 
+def _fp8_dot_general_leaves(tree) -> list[Fp8DotGeneralOp]:
+    leaves = jax.tree_util.tree_leaves(tree, is_leaf=lambda leaf: isinstance(leaf, Fp8DotGeneralOp))
+    return [leaf for leaf in leaves if isinstance(leaf, Fp8DotGeneralOp)]
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),
@@ -139,6 +145,58 @@ def test_grug_variant_one_step_contract_lowers_with_default_ctor(variant: str):
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
         out_state_shape, out_metrics_shape, out_watch_shape = eqx.filter_eval_shape(one_step)
 
+    assert out_state_shape.step.shape == ()
+    assert "train/loss" in out_metrics_shape
+    assert out_metrics_shape["train/loss"].shape == ()
+    assert out_watch_shape is None
+
+
+@pytest.mark.parametrize(
+    "variant",
+    _discover_grug_variants_with_model_and_train(),
+)
+@pytest.mark.parametrize(
+    "optimizer",
+    [optax.adam(1e-2), optax.lion(1e-2)],
+    ids=["adam", "lion"],
+)
+def test_grug_variant_dense_fp8_one_step_contract_lowers_with_optimizer(variant: str, optimizer):
+    train_module = importlib.import_module(_variant_module_name(variant, "train"))
+    model_module = importlib.import_module(_variant_module_name(variant, "model"))
+    model_config_cls = model_module.GrugModelConfig
+    make_train_step = train_module._make_train_step
+    initial_state = train_module.initial_state
+    mesh_fn = getattr(model_module, "debug_mesh_and_token_pspec", None)
+    if mesh_fn is None:
+        raise AssertionError(f"{_variant_module_name(variant, 'model')} must define debug_mesh_and_token_pspec")
+
+    cfg = _small_model_config(model_config_cls, vocab_size=1024, seq_len=4)
+    cfg = dataclasses.replace(cfg, fp8_dense=True)
+    mp = jmp.get_policy("p=bfloat16,c=bfloat16")
+    train_step = make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    mesh, token_pspec = mesh_fn(num_devices=4)
+    batch = GrugLmExample(
+        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    def init_state():
+        return initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+
+    def one_step():
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        return train_step(init_state(), sharded_batch, compute_watch=False)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        state_shape = eqx.filter_eval_shape(init_state)
+        out_state_shape, out_metrics_shape, out_watch_shape = eqx.filter_eval_shape(one_step)
+
+    assert _fp8_dot_general_leaves(state_shape.params)
     assert out_state_shape.step.shape == ()
     assert "train/loss" in out_metrics_shape
     assert out_metrics_shape["train/loss"].shape == ()

@@ -130,7 +130,14 @@ def dot_general_with_precision(
         #     "values."
         # )
         pass
-    return lax.dot_general(lhs, rhs, dimension_numbers, precision=lax.Precision.DEFAULT, **kwargs)
+    return lax.dot_general(
+        lhs,
+        rhs,
+        dimension_numbers,
+        precision=lax.Precision.DEFAULT,
+        out_sharding=out_sharding,
+        **kwargs,
+    )
 
 
 @dot_general_with_precision.defjvp
@@ -138,13 +145,12 @@ def dot_general_with_precision_jvp(
     dimension_numbers, precision, preferred_element_type, out_sharding, primals, tangents
 ):
     del preferred_element_type
-    del out_sharding
     del precision
     lhs, rhs = primals
     lhs_dot, rhs_dot = tangents
 
-    out = lax.dot_general(lhs, rhs, dimension_numbers, precision=lax.Precision.DEFAULT)
-    grad_out = lax.dot_general(lhs_dot, rhs, dimension_numbers, precision=lax.Precision.HIGHEST) + lax.dot_general(
-        lhs, rhs_dot, dimension_numbers, precision=lax.Precision.HIGHEST
-    )
+    out = lax.dot_general(lhs, rhs, dimension_numbers, precision=lax.Precision.DEFAULT, out_sharding=out_sharding)
+    grad_out = lax.dot_general(
+        lhs_dot, rhs, dimension_numbers, precision=lax.Precision.HIGHEST, out_sharding=out_sharding
+    ) + lax.dot_general(lhs, rhs_dot, dimension_numbers, precision=lax.Precision.HIGHEST, out_sharding=out_sharding)
     return out, grad_out

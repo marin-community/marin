@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass, field
 
 import equinox as eqx
+import haliax.quantization as hq
 import jax
 import jax.numpy as jnp
 import jmp
@@ -39,7 +40,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.model import GrugModelConfig, Transformer, enable_dense_fp8
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -260,11 +261,14 @@ def initial_state(
     ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    if model_config.fp8_dense:
+        params = enable_dense_fp8(params)
     num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
+    _, optimizer_params = hq.partition_for_grad_overwrite(params)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
-        opt_state=optimizer.init(params),
+        opt_state=optimizer.init(optimizer_params),
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
     )
@@ -311,8 +315,10 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
-        updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
-        params = optax.apply_updates(qb_params, updates)
+        overwrites, train_grads = hq.partition_for_grad_overwrite(grads)
+        _, optimizer_params = hq.partition_for_grad_overwrite(qb_params)
+        updates, opt_state = optimizer.update(train_grads, state.opt_state, optimizer_params)
+        params = hq.apply_updates(qb_params, updates, overwrites)
 
         if ema_beta is None:
             ema_params = None
@@ -333,8 +339,8 @@ def _make_train_step(
                 include_per_parameter_norms=watch_config.include_per_parameter_norms,
                 include_histogram=watch_config.include_histograms,
                 split_scan_layers=watch_config.split_scan_layers,
-                params=qb_params,
-                grads=grads,
+                params=optimizer_params,
+                grads=train_grads,
                 updates=updates,
                 opt_state=state.opt_state,
                 model_tree_type=type(state.params),
