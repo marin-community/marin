@@ -447,6 +447,34 @@ These are the failure modes to watch for, learned during the v2 / v2.5 work.
 
 16. **Optimizing α can encode shared judge biases as "the spec means X"**. The compilers, judges, and aggregator are all the same N=3 LM ensemble. High α may converge on "all 3 LMs agree about a rubric they collectively wrote" rather than "the spec is clearer." Goodhart on α is a real risk: a rubric that makes everyone score 5 on everything has α=1.0 and is worthless. Mitigations: a non-judge compiler (DeepSeek, Qwen) breaks one direction of circularity; a held-out validation judge (one of the 3 never compiles) breaks another. We have not yet implemented either; flagged for Run 5+. See §3 experiment H.
 
+17. **Gemini 3.x Pro requires explicit `thinking_level` configuration; `thinking_budget` is unreliable, `minimal` is not supported. Also: `gemini-3-pro-preview` is discontinued on Vertex AI (2026-03-26) — migrate to `gemini-3.1-pro-preview`.**
+
+  **Deprecation status** (verified 2026-05-10):
+  - `gemini-3-pro-preview` is **discontinued on Vertex AI as of 2026-03-26** (`https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro`). Google says new and existing projects should use `gemini-3.1-pro-preview`.
+  - However, the Google AI Studio / Gemini Developer API endpoint (`generativelanguage.googleapis.com`) — which our scripts use via the Python `genai` SDK with API key auth — **still serves `gemini-3-pro-preview` as of 2026-05-10** (probe verified, models.list() returns it, generate_content works). Different deprecation schedules across the two endpoints.
+  - **DART Runs 1-4 all used `gemini-3-pro-preview`** as the Gemini compiler. The raw API responses are persisted under `results/raw/e9_dart_compiler_gemini/...` for reproducibility if the model is withdrawn from the Developer API too.
+  - **Action**: migrate hardcoded `GEMINI_MODEL = "gemini-3-pro-preview"` references in `e9_dart_compiler_gemini.py`, `e9_dart_iter_round_n_compile.py`, `e9_dart_run5.py` to `"gemini-3.1-pro-preview"` for all new code.
+
+  **Configuration rules** (apply to BOTH Pro variants):
+  - `thinking_level="minimal"` → HTTP 400 (not supported on Pro). Lowest available is `"low"`.
+  - `thinking_budget=0` → HTTP 400 (Pro requires thinking).
+  - On **3 Pro**: `thinking_budget` values 1-128 are silently floored to ≈ `thinking_level="low"` (151 thoughts tokens regardless); only takes effect at budgets ≥ 1024 (and is non-linear there).
+  - On **3.1 Pro**: `thinking_budget` is essentially **ignored at all values 1-512** (always 270 thoughts tokens).
+  - Canonical parameter is `thinking_level` (string: `"low" | "medium" | "high"`).
+  - DART Runs 1-4 used `thinking_budget=128` and effectively ran at `thinking_level="low"` — cost was correct, but for the wrong reason.
+
+  **Going forward** for all new code:
+  ```python
+  config = types.GenerateContentConfig(
+      temperature=0,
+      thinking_config=types.ThinkingConfig(thinking_level="low"),
+  )
+  client.models.generate_content(model="gemini-3.1-pro-preview", ...)
+  ```
+  Bump to `"medium"` only if a task needs deeper reasoning (worth testing for compilers — Run 1-4 used effective-low for diagnostic compilation, possibly under-spent).
+
+  **Caveat: `temperature=0` is NOT deterministic on 3.1 Pro** (saw thoughts_token_count of 151 then 370 across two identical calls). 3 Pro IS deterministic at temp=0. If you migrate to 3.1 Pro and need reproducibility, you cannot rely on temp=0 alone.
+
 ---
 
 ## 3. Validation experiments still owed
