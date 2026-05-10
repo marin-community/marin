@@ -234,6 +234,84 @@ Adoption rate of the auto-pipeline could realistically rise from Run 4's 8/13 to
 
 The boundary stays the same: **rubric-style edits fully automate; spec edits human-gate**. §1.8 mostly improves the rubric-edit autonomy by adding catch-failures that previously required human postmortem to find.
 
+### 1.9 The missing third edit type: spec example additions
+
+DART's framing in §1.6 baked in a **binary**: "rubric drift vs spec ambiguity." The compiler output schema (§1.3) reflects this — only two edit fields are exposed:
+
+```json
+"rubric_edits": [...],
+"spec_edits_for_author_review": [...]
+```
+
+But every Model Spec statement has a **third structural component** that DART never exposed to the compiler: `metadata.examples`, a list of `{user_query, good_response, bad_response, description}` tuples that operationalize the spec text. For `no_topic_off_limits` the spec already has 3 such examples. **The compiler sees them in its prompt; the judges see them in theirs; rubric anchors reference them via `example_refs`.** But no compiler in any DART run was ever invited to *propose new ones*.
+
+This is a real gap. The Run 4 postmortem revealed at least three statements (`prevent_imminent_harm`, `comply_with_laws`, `no_topic_off_limits`) where the residual disagreement is **response-interpretation disagreement** (§1.8.5) — judges agree on response facts but disagree on how to map prose to spec concepts ("does cherry-picked statistics count as engaging objectively?"). For these, neither rubric edits nor spec text edits help:
+
+- Rubric edits brittle-ify (see Gotcha 13: MUST-rules and vivid named exemplars become uptake-asymmetric).
+- Spec text edits are categorically high-stakes (Gotcha 3: changes meaning for everyone) and don't reach the response-interpretation disagreement anyway.
+
+**Adding a concrete example does reach it.** An example that says "this exact pattern of cherry-picked statistics → bad_response" gives all 3 judges a fixed reference point to analogize against, instead of forcing them to independently interpret abstract criterion text. The mechanism is identical to what humans do when calibrating a rater.
+
+#### 1.9.1 Why this is a *better* fix than rubric anchor exemplars
+
+Run 4 R2's anchor-2 Tiananmen exemplar (the `no_topic_off_limits` regression case) tried to do something similar — add a vivid example into the *anchor criterion text*. It failed catastrophically because:
+- Embedding the exemplar in `criterion` text creates a quotable hook one judge weights heavily and others don't (uptake asymmetry).
+- The exemplar's framing ("describing X without mentioning Y") is interpretable as a *category description*, not a single calibration point — so judges can over-apply it.
+
+A `metadata.examples[i]` entry is structurally different:
+- It's a **complete tuple**: user_query + good_response + bad_response + description. Judges see it as a calibration pair, not a category rule.
+- It renders into the judge prompt in a separate `=== SPEC EXAMPLES ===` section, not inside an anchor's criterion sentence — so judges don't quote it as an authority on what counts as anchor 2 vs 3.
+- It can be cross-referenced from a rubric anchor via `example_refs` if the compiler wants to bind it to a specific anchor, OR left unbound to act as a general calibration point.
+- It's additive — adding doesn't change existing examples or rubric anchor text.
+
+#### 1.9.2 Why it's lower-risk than rubric or spec edits
+
+| edit type | what it changes | reversibility | propagation risk | authorial-intent risk |
+|---|---|---|---|---|
+| rubric_edits | how WE judge | trivial | none (per-statement) | none (rubric is ours) |
+| **spec_example_additions** | **calibration data, not text** | **trivial** | **none — additive** | **low — preserves text** |
+| spec_edits | what the spec MEANS | high cost | RLHF, downstream evals, other agents | very high |
+
+Spec example additions are the **lowest-risk edit type DART has access to**. Strictly safer than rubric edits (which can introduce MUST-rule brittleness or anchor-text overfitting), strictly safer than spec text edits (which change meaning for everyone). DART should have had this from the start.
+
+#### 1.9.3 Compiler output schema extension
+
+Add a third field:
+
+```json
+"spec_example_additions": [
+  {
+    "user_query": "<a query that produces a borderline response across judges>",
+    "good_response": "<the kind of response the spec wants here>",
+    "bad_response": "<the borderline-failing response — the pattern judges disagree on>",
+    "description": "<what specifically this example disambiguates>",
+    "target_anchor": "2",                                   // optional; if set, append to that anchor's example_refs
+    "rationale": "<why this resolves the disagreement>",
+    "confidence": <float 0.0-1.0>
+  }
+]
+```
+
+The compiler prompt should add a fourth diagnosis case alongside `rubric_drift / spec_ambiguity / both / irreducible`:
+
+> **`response_interpretation_disagreement`** — judges agree on response facts but apply different parses of spec concepts. Use this when high-pwv cells share a recurring linguistic pattern (refusal-plus-alternative; fictional-framing-of-operational-content; engaged-but-cherry-picked) and judges' reasoning shows different operational definitions. Recommendation: `add_examples`. Output `spec_example_additions` non-empty; rubric_edits and spec_edits_for_author_review can both be empty.
+
+This is the §1.8.5 "Step 6 judge calibration" idea collapsed into the existing data structure — same effect, no new plumbing.
+
+#### 1.9.4 Synthesis & re-judging
+
+The synthesizer (`e9_dart_iter_synthesize.py`) needs to:
+1. Cluster `spec_example_additions` across the 3 compilers by `description` similarity (or by user_query similarity).
+2. Adopt examples where ≥2 compilers proposed similar examples (majority rule, mirroring §1.7).
+3. Append to `spec.metadata.examples` (never modify or delete existing entries — authorial intent preserved).
+4. Optionally update referenced anchors' `example_refs` to point at new example indices.
+
+The judging scripts already pull examples via `get_examples()` from `metadata.examples` — no plumbing change needed. The new examples flow through to the judge prompt automatically.
+
+#### 1.9.5 Validation experiment (proposed Run 5 scope)
+
+Run the compiler on `no_topic_off_limits` (the cleanest test case — judges have well-characterized different parses of "engage objectively") with the extended schema. If majority-vote example additions move 3-judge α materially above the v2 ceiling of +0.248 without the regressions seen in v3, this validates the hypothesis. See §3 experiment L below.
+
 #### 1.8.6 Round budget — empirical finding: default to N=1, escalate IMPROVING straight to human queue
 
 **This is a crucial Run 4 finding** that overrides the §1.7 plan's optimism about iteration. The cumulative α trajectory across all 13 statements (see §5 Run 4 postmortem α-trajectory table) shows R2 contributed essentially nothing or actively hurt on **3 of 4 statements that ran it**:
@@ -343,6 +421,7 @@ Run 4 postmortem (2026-05-09) revealed five additional experiments needed before
 | **I** | Judge-calibration exemplar test (Step 6 prototype) | for `prevent_imminent_harm` and `comply_with_laws`, hand-author 3-5 judge-calibration exemplars; re-judge with exemplars in judge prompt; measure α | ❌ not done | ~$3 |
 | **J** | Run 4 baseline α recomputation | re-derive every R1 baseline α with §1.8.1 measurement-universe-consistency rule; identify which "regressions" and "improvements" are universe-confounded | ❌ not done | $0 (analysis only) |
 | **K** | Cross-statement consistency post-Run-4 | are the v2 spec edits we adopted internally consistent across the 13 statements? Cross-tab phrases like "unless explicitly instructed" — did our edits accidentally diverge cross-statement? | ❌ not done | $0 (text analysis) |
+| **L** | Spec example additions on `no_topic_off_limits` (validates §1.9) | extend compiler schema with `spec_example_additions`; run on `no_topic_off_limits` (clean response-interpretation case); 2 rounds with cumulative history; measure α vs v2 ceiling (+0.248) and v3 regression (+0.107). Tests whether examples reach response-interpretation disagreement where rubric edits could not. | ❌ not done | ~$2-3 |
 
 Total to upgrade DART from "promising prototype" to "validated tool" was ~$10-15 originally; with the postmortem additions, **another ~$10-15 of compute + ~2 hours human review** for E–K. Run 1 used $0.37; Runs 1-4 cumulatively used ~$50; remaining experiments collectively under $20.
 
