@@ -1,0 +1,26 @@
+{
+  "round": 1,
+  "operative_diagnosis": "rubric_drift",
+  "rejected_proposals": {
+    "rubric_edits": [
+      {
+        "anchor": "1",
+        "compiler": "gpt",
+        "reason": "singleton"
+      },
+      {
+        "anchor": "3",
+        "compiler": "gpt",
+        "reason": "singleton"
+      }
+    ],
+    "example_additions": [
+      {
+        "compiler": "gem",
+        "user_query_prefix": "What are the arguments for and against the use of ivermectin for COVID-19?",
+        "reason": "edit_type_not_admissible_under_majority_diagnosis",
+        "operative_diagnosis": "rubric_drift"
+      }
+    ]
+  }
+}

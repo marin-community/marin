@@ -1223,3 +1223,96 @@ The three subagent reports above (A/B/C) are condensed in this logbook. The **fu
 Spawn provenance: parallel `Agent` calls, `subagent_type: general-purpose`, `model: opus` (claude-opus-4-7 1M context), `run_in_background: true`, with explicit `ultrathink` directive per agent and per-statement hypothesis sets. Each subagent had access to full per-cell judgment data, rubric/spec diffs, compiler reasoning. They reported with concrete file-line references, per-cell evidence, per-judge score traces; quoted numbers and judge-reasoning excerpts in postmortems A/B/C above are direct from those reports.
 
 **Status**: Run 4 closes with the postmortem above. The §1.8 detectors and §3 experiments E–K are the operational follow-ups. No new compute jobs needed for J/F/E (all free re-analysis of existing data); G/H/I gate on willingness to spend ~$10-15 more on the methodology validation.
+
+---
+
+### Run 5 — Spec example additions on `no_topic_off_limits` (validates §1.9, 2026-05-10)
+
+**Date**: 2026-05-10 ~03:30 UTC
+**Statement**: `no_topic_off_limits` (single-statement scoped experiment per §3 experiment L)
+**Compilers**: GPT-5.1 (`reasoning_effort=none`), Gemini 3 Pro (thinking_budget=128), Claude Sonnet 4.6 (tool-use forced)
+**Judges**: same 3-judge ensemble (GPT-5.1, Gemini 3 Flash, Claude Sonnet 4.6)
+**New schema**: `spec_example_additions` field + `response_interpretation_disagreement` diagnosis category (§1.9.3)
+**Decision rule**: hierarchical L1→L2→L3 (§1.9.4)
+
+**Why this statement**: in Run 4, `no_topic_off_limits` was one of the 5 STUCK statements. Postmortem C identified the residual as a "response-interpretation disagreement" — judges agree on response facts but disagree on what "engage objectively" means in prose-to-anchor mapping. §1.9 hypothesized that adding concrete examples would reach this disagreement where rubric edits can't.
+
+**The user's exact worry case manifested at compile time**:
+
+| compiler | diagnosis | rubric_edits | spec_edits | example_additions |
+|---|---|--:|--:|--:|
+| GPT-5.1 | `rubric_drift` | 5 | 0 | 0 |
+| Gemini 3 Pro | `response_interpretation_disagreement` | 0 | 0 | **1** |
+| Claude Sonnet 4.6 | `rubric_drift` | 3 | 0 | 0 |
+
+Diagnosis-vote: 2-of-3 plurality `rubric_drift`. Per §1.9.4 hierarchical rule:
+- **Level 2**: admissible edit types under `rubric_drift` = `rubric_edits` only.
+- **Level 3**: 3 rubric anchors had ≥2 compiler concurrence → adopted.
+- **Gemini's example proposal was REJECTED from auto-adoption** (operative diagnosis didn't admit example_additions) and queued in `escalation_log_round_1.json`.
+
+**Notably**, Gemini-the-compiler **correctly diagnosed the actual response-interpretation problem** in its evidence summary:
+
+> *"Judges agree that the responses fully engage with the controversial topics without avoidance. However, GPT penalizes responses (giving scores of 2 or 4) when it detects 'misleading or incorrect factual claims' or 'questionable legal claims' within the engagement, whereas Gemini and Claude award 5s because the primary directive of the spec — not avoiding the topic — was met. The disagreement is over whether factual inaccuracies constitute a failure to 'engage objectively' under this specific guideline."*
+
+This matches the postmortem C and `no_topic_off_limits` analysis exactly. But Gemini's *proposed example* would codify Gemini's own reading ("presenting both sides = good even if factually contested") as canonical — a Goodhart risk. Per the hierarchical rule, this is the right behavior: the example is queued for human review rather than silently adopted by the methodology.
+
+**Counterfactual: what would Gemini's example have done if adopted?**
+
+To test the §1.9 thesis directly, we ran a second judging condition `C_EXAMPLES` that adopts Gemini's example alone (no rubric changes). This is the case the hierarchical rule rejected; we score it to see what would have happened.
+
+**Two conditions judged**:
+- `C_RUBRIC`: spec_v1 + rubric_v2 (what §1.9.4 actually adopted)
+- `C_EXAMPLES`: spec_v1 + Gemini's proposed example appended to `metadata.examples` + rubric_v1 (counterfactual)
+
+Each condition: 80 cells × 3 judges. Anthropic batch + sync GPT/Gemini.
+
+**α results** (3-judge interval Krippendorff):
+
+| state | 3-judge α | gpt+gem | gpt+cla | gem+cla |
+|---|--:|--:|--:|--:|
+| v1 baseline (limited cell universe) | −0.135 (n=20) | −0.219 | n/a | n/a |
+| Run 4 R1 v2 (rubric only, prior majority-vote) | +0.248 (n=80) | −0.095 | +0.404 | +0.386 |
+| **Run 5 R1 C_RUBRIC** (hierarchical pick) | **+0.309** (n=80) | +0.129 | **+0.515** | +0.251 |
+| **Run 5 R1 C_EXAMPLES** (Gem's example alone, counterfactual) | **+0.304** (n=80) | +0.039 | +0.405 | +0.439 |
+
+**Three findings**:
+
+1. **The new compiler schema produced a BETTER rubric than Run 4 did**, even though the hierarchical rule chose rubric_drift. Run 5 C_RUBRIC α=+0.309 vs Run 4 v2 C3 α=+0.248 (Δ=+0.061). The hypothesis: with `response_interpretation_disagreement` as an option, GPT and Claude could "set aside" the response-interpretation pattern and write tighter, more focused rubric edits — knowing they didn't have to address every cell with a rubric tweak. Schema design influences edit quality.
+
+2. **Examples alone are competitive but don't beat rubric on this statement**. C_EXAMPLES α=+0.304 ≈ C_RUBRIC α=+0.309. Mechanism difference per per-judge means:
+   - C_RUBRIC pulled GPT UP (4.11 → 4.33) toward Gem/Cla.
+   - C_EXAMPLES left GPT alone (4.11 → 4.11) but pulled Gem/Cla DOWN slightly (Cla 4.79 → 4.61).
+   - Both yield similar α; different edits act on different judges.
+
+3. **GPT+Claude α under C_RUBRIC = +0.515** — well above T₁=0.5. The residual disagreement is **entirely Gemini**: Gemini scoring 5 in 67/80 cells (down from 75 in Run 4 baseline, but still degenerate-ish) prevents the 3-judge α from crossing threshold. This is the Run 4 Postmortem B finding (broken-judge pathology) reappearing. The §1.8.2 per-judge-bias detector would flag Gemini here.
+
+**Stopping decision** — per §1.8.6, default round budget = N=1. Both conditions are IMPROVING (Δα ≥ +0.05 vs Run 4's v2 ceiling at +0.248) but not CONVERGED at 3-judge. R2 not fired:
+- The remaining gap is Gemini-judge bias, not anything compiler edits can fix.
+- §1.8.6 routes IMPROVING-but-not-CONVERGED statements to human queue, not auto-iteration.
+- The R2 expected value here is roughly zero (median R2 contribution across Run 4 was +0.022).
+
+**Recommendation for `no_topic_off_limits`**:
+- Adopt Run 5 R1 C_RUBRIC over Run 4 v2 (it's strictly better, +0.309 vs +0.248).
+- Mark CONVERGED-with-Gemini-flag at α=+0.515 GPT+Claude (drop Gemini per §1.8.2 detector).
+- Queue Gemini's example proposal for human review — it might be a useful calibration tool but encodes a normative call about "what 'engage objectively' should mean" that authors should decide.
+
+**Findings about §1.9 itself**:
+
+1. **The hierarchical rule worked exactly as designed.** The user's worry case (1 compiler suggests examples, others don't) resolved cleanly: rubric adopted via plurality, example queued for review (not silently dropped, not auto-adopted).
+2. **Schema design matters**: just exposing the new option made compilers produce better rubric edits, even when the new option wasn't selected. Implication: the §1.9.3 schema extension should be deployed for all future runs regardless of whether examples typically get adopted.
+3. **Compilers self-diagnose accurately when given the option** — Gemini correctly named the response-interpretation disagreement that we'd identified by hand in postmortem C. But "accurate diagnosis" doesn't mean "the proposed example is right" — Gemini's example would codify Gemini-judge's own reading. **Examples are at least as Goodhart-vulnerable as rubric edits**.
+4. **Compiler-as-judge circularity is sharper for examples than for rubrics.** A rubric edit affects all 3 judges roughly symmetrically; an example proposal can codify the proposing model's interpretation. Future work: prefer non-judge compiler for example-addition proposals specifically, or require ≥2 compilers from different vendors to concur.
+
+**Cost**: ~$2.10 ($0.50 compile + $0.30 Claude batch + $0.30 GPT sync + $1.00 Gemini sync incl. JSON-error retries).
+
+**Outputs (committed)**:
+- `dart_iteration/no_topic_off_limits/run5_round_1_diagnoses_*.json` — per-compiler raw outputs
+- `dart_iteration/no_topic_off_limits/run5_history.json` — round 1 history with hierarchical-rule trace
+- `dart_iteration/no_topic_off_limits/run5_escalation_log_round_1.json` — Gemini's example proposal queued for human review
+- `dart_iteration/no_topic_off_limits/run5_rubric_v2.json` — adopted rubric
+- `dart_iteration/no_topic_off_limits/run5_per_judgment_round_1.jsonl` — 480 judgment rows
+- `dart_iteration/no_topic_off_limits/run5_round_1_batches.json` — batch tracking
+- `dart_iteration/no_topic_off_limits/run5_round_1_analysis_summary.json` — α summary
+- `experiments/posttrain/disagreement_primitive/e9_dart_run5{,_judge,_judge_recover,_fetch_and_analyze}.py` — pipeline scripts
+
+**§3 experiment L: ✅ done.** Validated §1.9 hypothesis: schema extension produces better rubric edits even when examples not adopted; the hierarchical rule cleanly resolves the cross-type-fragmentation case the user worried about.

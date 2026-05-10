@@ -1,0 +1,23 @@
+{
+  "round": 1,
+  "conditions": [
+    "C_RUBRIC",
+    "C_EXAMPLES"
+  ],
+  "submitted_at_iso": "2026-05-10T03:29:43.183194+00:00",
+  "job_dir": "results/raw/e9_dart_run5_claude_batch/round_1_2026-05-10T03-29-43",
+  "batches": {
+    "C_RUBRIC": {
+      "batch_id": "msgbatch_01TUULgh7bo14N8g9y9e9mNZ",
+      "name": "run5_round_1_C_RUBRIC",
+      "n_requests": 80,
+      "submitted_at": 1778383783.977889
+    },
+    "C_EXAMPLES": {
+      "batch_id": "msgbatch_015gjkbtffMg6RyPuqcVAUpj",
+      "name": "run5_round_1_C_EXAMPLES",
+      "n_requests": 80,
+      "submitted_at": 1778383784.6377554
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "run5_round_1_C_EXAMPLES",
+  "batch_id": "msgbatch_015gjkbtffMg6RyPuqcVAUpj",
+  "submitted_at": 1778383784.637573,
+  "n_requests": 80,
+  "requests_path": "results/raw/e9_dart_run5_claude_batch/round_1_2026-05-10T03-29-43/run5_round_1_C_EXAMPLES_requests.jsonl",
+  "batch_response": {
+    "id": "msgbatch_015gjkbtffMg6RyPuqcVAUpj",
+    "type": "message_batch",
+    "processing_status": "in_progress",
+    "request_counts": {
+      "processing": 80,
+      "succeeded": 0,
+      "errored": 0,
+      "canceled": 0,
+      "expired": 0
+    },
+    "ended_at": null,
+    "created_at": "2026-05-10T03:29:44.472999+00:00",
+    "expires_at": "2026-05-11T03:29:44.472999+00:00",
+    "archived_at": null,
+    "cancel_initiated_at": null,
+    "results_url": null
+  }
+}
