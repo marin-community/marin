@@ -1,5 +1,49 @@
 # Executable Specifications - Claude distilled logbook
 
+> # 🔴 API PARAMETER CONSTRAINTS — read this before writing ANY new LM-call code (added 2026-05-10)
+>
+> Investigation 2026-05-10 audited every LM call in this project (DART pipeline + older e8/method_*) and probed each provider for what parameters actually do. Findings:
+>
+> ### Gemini Pro 3.x — `thinking_budget` is broken; use `thinking_level` instead
+>
+> - **`gemini-3-pro-preview` is DISCONTINUED on Vertex AI as of 2026-03-26** (per `https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro`). The Google AI Studio / Developer API endpoint (which our scripts use via `from google import genai` with `GEMINI_API_KEY`) **still serves the model as of 2026-05-10** but is on borrowed time. **All new code must use `gemini-3.1-pro-preview`.** DART pipeline migrated 2026-05-10 (commit history).
+> - `thinking_budget` parameter is unreliable on Pro:
+>   - 3 Pro: budget values 1-128 silently floored to ≈ `thinking_level="low"` (151 thoughts tokens regardless); only takes effect at ≥1024.
+>   - 3.1 Pro: ignored at all values 1-512 (always 270 thoughts tokens).
+>   - **DART Runs 1-4 used `thinking_budget=128` and effectively ran at `thinking_level="low"` — cost was correct, but for the wrong reason.**
+> - `thinking_level="minimal"` is **NOT supported on Pro** (HTTP 400). Lowest available on Pro is `"low"`. Flash + Flash-Lite DO support `"minimal"` and that's what we use for judges.
+> - `thinking_budget=0` rejected by Pro (HTTP 400: *"This model only works in thinking mode."*).
+> - Default `thinking_level` on Pro is `"high"` (dynamic) — paying for max reasoning unless overridden.
+> - **Canonical config for Pro calls (compilers, classifiers)**: `temperature=0` + `thinking_level="low"`.
+> - **Canonical config for Flash calls (judges)**: `temperature=0` + `thinking_level="minimal"`.
+> - `temperature=0` is NOT deterministic on 3.1 Pro (saw thoughts_token_count of 151 then 370 across two identical calls); 3 Pro IS deterministic at temp=0. If you migrate to 3.1 Pro and need reproducibility, you cannot rely on temp=0 alone.
+>
+> ### GPT-5.1 — `reasoning_effort="none"` enforced everywhere
+>
+> Audit verified **13 of 13** `chat.completions.create` calls with `model=GPT` use `reasoning_effort="none"` (100% compliance with the hard project rule).
+>
+> 10 of 13 also use `temperature=0`. The 3 that don't are **intentionally** generator calls (`call_gpt_text` in `e8_paired_indirection.py`, the older `e2_method_d_prime.py` and `e6_method_i_borderline.py`) — those need `temp=1.0` to produce diverse responses for the disagreement signal. The canonical helper `call_gpt_json` (used by all DART judges + compilers) sets `temperature=0, reasoning_effort="none"`.
+>
+> ### Claude Sonnet 4.6 — `thinking={"type":"disabled"}` + `temperature=0` everywhere
+>
+> Audit verified all 5 active DART scripts (`e9_claude_judge.py`, `e9_dart_iter_judge.py`, `e9_dart_compiler_claude.py`, `e9_rejudge_gemini_claude_v2.py`, `e9_judge_opposite_mode.py`) explicitly set both `temperature=0` and `thinking={"type":"disabled"}`.
+>
+> Claude Sonnet 4.6 has thinking OFF by default per Anthropic docs, so the explicit `disabled` is defensive — defends against future API default changes (e.g., if Anthropic flips default to `enabled` for adaptive thinking).
+>
+> Note from Anthropic docs: *"With extended thinking enabled, temperature must be 1.0"* — this historical constraint is irrelevant to us since we always disable thinking.
+>
+> ### What got migrated 2026-05-10 (commits 2af8b67, prior in branch)
+>
+> - `e9_dart_compiler_gemini.py` — `GEMINI_MODEL = "gemini-3.1-pro-preview"`; `call_gemini_json` now takes `thinking_level="low"` kwarg by default
+> - `e9_dart_iter_round_n_compile.py`, `e9_dart_disagreement_report.py`, `e9_dart_run5.py` — call sites updated to pass `thinking_level="low"`
+> - `e8_phase2_cross_model.py`, `e8_paired_indirection.py`, `e9_dart_run5_judge.py` — Flash judge calls now use `thinking_level="minimal"`
+>
+> Older e8/method/calibration scripts (~15 files: `e4_cross_judge_audit.py`, `method_a_*.py`, `method_b_*.py`, `method_c_multi_compiler.py`, `judge_disagreement_panel.py`, `run_oracle_satisfiability_panel.py`, `simulate_edit_impact.py`, `e5_method_f_soft_predicate.py`, `calibration_probe_v2.py`, `judge_reproducibility.py`, `e9_rerun_judge_calibration.py`, etc.) still use `thinking_budget=0`. They are not part of active DART; left alone. If reactivated, port them to `thinking_level` first.
+>
+> See `dart.md` Gotcha 17 + `~/.claude/projects/.../memory/feedback_gemini_thinking_level.md` for full details.
+
+---
+
 > # 🟢 NEXT AGENT — START HERE (last updated 2026-05-09)
 >
 > This logbook is ~11,000 lines and chronological. **Don't read top-to-bottom.** The current state of the project is captured in three places:
@@ -32,7 +76,7 @@
 > 2. Don't modify production scripts in ways that change default behavior. Add new code; gate behind opt-in flags. The GLM repair is the model.
 > 3. Always Spearman, not Pearson, for paired ordinal-score correlations.
 > 4. All LM API calls route through `RawAPILogger`. Never truncate saved content.
-> 5. GPT-5.1 always with `reasoning_effort="none"`. Gemini `thinking_budget=0`. GLM no toggle.
+> 5. GPT-5.1 always with `reasoning_effort="none"`. **Gemini Pro: `thinking_level="low"` (Pro rejects `"minimal"`); Gemini Flash: `thinking_level="minimal"`** — `thinking_budget=0` is unreliable / silently overridden on Pro models, see top-of-file API constraints box. Claude Sonnet 4.6: `thinking={"type":"disabled"}` + `temperature=0`. GLM no toggle.
 > 6. 3-judge ensemble (GPT-5.1 + Gemini-3-Flash + GLM-5.1) required for any primary metric — never single-judge.
 > 7. Reuse the same 60 scenarios per statement forever. Never regenerate. Existing at `e8_scenarios.jsonl`.
 > 8. Never read `.env` contents — only `source .env && <command>` in same Bash invocation.
