@@ -88,7 +88,7 @@ def _make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
     return entrypoint
 
 
-pytestmark = pytest.mark.e2e
+pytestmark = pytest.mark.requires_cluster
 
 KIND_CLUSTER = "iris-gpu-test"
 KIND_CONTEXT = f"kind-{KIND_CLUSTER}"

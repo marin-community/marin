@@ -18,7 +18,7 @@ from iris.rpc import config_pb2, job_pb2
 
 from tests.e2e._docker_cluster import E2ECluster
 
-pytestmark = [pytest.mark.e2e, pytest.mark.docker]
+pytestmark = [pytest.mark.requires_cluster, pytest.mark.docker]
 
 
 def unique_name(prefix: str) -> str:

@@ -90,11 +90,11 @@ packages = ["src/iris"]
 [tool.pytest.ini_options]
 timeout = 10
 timeout_method = "thread"
-addopts = "-n auto --durations=25 -m 'not slow and not docker and not e2e' -v"
+addopts = "-n auto --durations=25 -m 'not slow and not docker and not requires_cluster' -v"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "docker: marks tests requiring Docker runtime (slow, needs daemon)",
-    "e2e: end-to-end cluster tests (chaos, dashboard, scheduling)",
+    "requires_cluster: mark tests that need a running iris cluster",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 # Cap assertion-diff output even under -v, so a single bad assertion

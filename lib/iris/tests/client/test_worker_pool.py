@@ -11,7 +11,7 @@ from iris.client.worker_pool import (
 )
 from iris.cluster.types import ResourceSpec
 
-pytestmark = pytest.mark.e2e
+pytestmark = pytest.mark.requires_cluster
 
 
 @pytest.fixture

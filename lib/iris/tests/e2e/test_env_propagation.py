@@ -23,7 +23,7 @@ from iris.cluster.types import (
     ResourceSpec,
 )
 
-pytestmark = pytest.mark.e2e
+pytestmark = pytest.mark.requires_cluster
 
 
 def _parent_job_info(env: dict[str, str]) -> JobInfo:

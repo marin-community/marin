@@ -577,7 +577,6 @@ def test_batch_chunks_rejects_oversized_chunks():
         list(batch_chunks([chunk], batch_size=1, max_eval_length=3))
 
 
-@pytest.mark.entry
 def test_perplexity_gap_main_same_model_zero_gap():
     model_config = LlamaConfig(
         num_layers=2,

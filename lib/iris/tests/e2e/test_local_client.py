@@ -13,7 +13,7 @@ from iris.client.client import IrisClient, Job
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
 from iris.rpc import job_pb2
 
-pytestmark = pytest.mark.e2e
+pytestmark = pytest.mark.requires_cluster
 
 
 def extract_log_text(response: logging_pb2.FetchLogsResponse) -> str:

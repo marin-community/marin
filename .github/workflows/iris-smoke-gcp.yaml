@@ -161,7 +161,7 @@ jobs:
           mkdir -p ${{ github.workspace }}/iris-cloud-screenshots
           cd lib/iris && uv run --group dev python -m pytest \
             tests/e2e/test_smoke.py \
-            -m e2e \
+            -m requires_cluster \
             --iris-controller-url "$IRIS_CONTROLLER_URL" \
             -o "addopts=" \
             --tb=short -v \

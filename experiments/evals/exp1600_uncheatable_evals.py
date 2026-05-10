@@ -17,14 +17,13 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from fray.cluster import ResourceConfig
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from marin.datakit.download.uncheatable_eval import make_uncheatable_eval_step
-from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep, mixture_for_evaluation
 
 from experiments.defaults import default_tokenize
+from experiments.evals.hf_log_probs import default_hf_lm_log_probs
 from experiments.llama import llama3_tokenizer
 from experiments.models import ModelConfig as HFModelConfig
 from experiments.models import download_model_step
@@ -135,21 +134,17 @@ def build_steps() -> list[ExecutorStep]:
         uncheatable_eval_tokenized_dict = uncheatable_eval_tokenized(tokenizer=tokenizer)
         eval_data = mixture_for_evaluation(uncheatable_eval_tokenized_dict)
 
-        # Download model and load config dynamically from HuggingFace
-        model_identifier = f"{model_config.model_name}@{model_config.revision}"
         model_instance = download_model_step(
             HFModelConfig(hf_repo_id=model_config.model_name, hf_revision=model_config.revision)
         )
-        hf_model_config = HFCheckpointConverter.from_hf(model_identifier).config_from_hf_checkpoint(model_identifier)
-
         directory_friendly_name = get_directory_friendly_name(model_config.model_name)
         steps.append(
-            default_lm_log_probs(
+            default_hf_lm_log_probs(
+                hf_repo_id=model_config.model_name,
+                hf_revision=model_config.revision,
                 checkpoint=output_path_of(model_instance),
-                model=hf_model_config,
                 data=eval_data,
                 resource_config=ResourceConfig.with_tpu("v5p-8"),
-                checkpoint_is_hf=True,
                 per_device_batch_size=1,
                 name=f"{directory_friendly_name}-uncheatable-eval-logprobs",
                 wandb_tags=[

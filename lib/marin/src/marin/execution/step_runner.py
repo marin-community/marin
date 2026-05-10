@@ -264,6 +264,11 @@ class StepRunner:
         step_name = step.name_with_hash
         logger.info(f"Step = {step_name}\tParams = {step.hash_attrs}\tOutput_path = {output_path}")
 
+        # Short-circuit before any I/O so dry-run never touches remote status.
+        if dry_run:
+            logger.info(f"[DRY RUN] Would run {step_name}")
+            return None
+
         # Quick read-only status check to avoid submitting unnecessary jobs
         status = StatusFile(output_path, worker_id="check").status
         if status == STATUS_SUCCESS:
@@ -272,10 +277,6 @@ class StepRunner:
 
         if not force_run_failed and status in (STATUS_FAILED, STATUS_DEP_FAILED):
             raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
-
-        if dry_run:
-            logger.info(f"[DRY RUN] Would run {step_name} (status: {status})")
-            return None
 
         _write_executor_info(step)
 

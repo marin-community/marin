@@ -49,7 +49,7 @@ from .helpers import TestJobs
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.e2e
+pytestmark = pytest.mark.requires_cluster
 
 
 # ---------------------------------------------------------------------------
