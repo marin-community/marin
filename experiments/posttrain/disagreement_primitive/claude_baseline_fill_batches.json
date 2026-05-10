@@ -1,0 +1,19 @@
+{
+  "submitted_at_iso": "2026-05-10T04:48:18.003491+00:00",
+  "job_dir": "results/raw/e9_dart_claude_baseline_fill/2026-05-10T04-48-18",
+  "batches": {
+    "variant_A": {
+      "batch_id": "msgbatch_01AbGARvHxxfix8M6aJaE7c2",
+      "name": "claude_baseline_fill_variant_A",
+      "n_requests": 751,
+      "submitted_at": 1778388498.9458942
+    },
+    "rubric_plus_spec": {
+      "batch_id": "msgbatch_017K3CoBTWSZVi4n3BDNGqBM",
+      "name": "claude_baseline_fill_rubric_plus_spec",
+      "n_requests": 751,
+      "submitted_at": 1778388499.9987202
+    }
+  },
+  "n_target_statements": 38
+}

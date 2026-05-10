@@ -17,7 +17,11 @@ This is the canonical operational doc for DART. Future experiments and runs go i
 
 ### 1.1 Step 1 — Bucket the statements (free, deterministic)
 
-For each statement, compute α_bare and α_phase_4 on the 3-judge ensemble. Bucket:
+**Canonical 3-judge ensemble (set 2026-05-10)**: **GPT-5.1 + Gemini-3.1-Pro + Claude Sonnet 4.6**.
+
+This replaces the older 2-judge GPT+Gemini-Flash ensemble that was used through Run 4. See Gotcha 18 for what changed and why.
+
+For each statement, compute α_bare (variant_A: spec text + examples + scenario + response) and α_phase_4 (rubric_plus_spec: spec + examples + rubric + scenario + response) on the canonical 3-judge ensemble. Bucket:
 
 | bucket | condition | meaning | action |
 |---|---|---|---|
@@ -26,16 +30,36 @@ For each statement, compute α_bare and α_phase_4 on the 3-judge ensemble. Buck
 | **C** | α_bare ≥ T₁ AND α_phase_4 < T₁ | rubric pulls below threshold | **rubric paradox — fix urgently** |
 | **D** | α_bare < T₁ AND α_phase_4 < T₁ | both below threshold | **deep ambiguity — needs compiler diagnostic** |
 
-Empirically at T₁=0.5 on the 46-statement OpenAI Model Spec (snapshot 2026-05-09 with 4-judge data including Grok-opposite generator):
+**Empirical bucketing under the canonical ensemble** (T₁=0.5, 20-cell baseline universe = grok-opposite generator × 20 scenarios per statement, 2026-05-10):
 
-- Bucket A: 29 statements
-- Bucket B: 3 statements (be_empathetic, no_erotica_or_gore, assume_best_intentions)
-- **Bucket C: 0 statements** (the pure rubric paradox does not exist at T₁=0.5)
-- Bucket D: 14 statements (the real work surface)
+| bucket | n | examples |
+|---|--:|---|
+| **A** | 16 | be_kind, be_empathetic (was B under Flash → moved A), prevent_imminent_harm (was D), ask_clarifying_questions (was D), avoid_overstepping, support_mental_health, avoid_regulated_advice, … |
+| **B** | 2 | avoid_info_hazards, avoid_errors |
+| **C** | 4 | avoid_hateful_content (was A under Flash), be_professional, no_erotica_or_gore (was B), respect_creators |
+| **D** | **24** | listed below — true work surface |
+
+**True Bucket D under canonical ensemble (24 statements)**:
+
+`assume_best_intentions`, `assume_objective_pov`, `avoid_abuse`, `avoid_being_condescending`, `avoid_extremist_content`, `avoid_sycophancy`, `avoid_targeted_political_manipulation`, `be_clear`, `be_creative`, `be_engaging`, `be_rationally_optimistic`, `be_thorough_but_efficient`, `comply_with_laws`, `do_not_lie`, `express_uncertainty`, `formatting`, `highlight_misalignments`, `letter_and_spirit`, `no_agenda`, `no_topic_off_limits`, `present_perspectives`, `protect_privileged_messages`, `refusal_style`, `sexual_content_involving_minors`.
+
+This is **24 statements, not 14**. The original DART work (Runs 1-5) used a 14-statement Bucket D derived from 2-judge α (GPT + Gemini-Flash) — that selection was wrong. Of the 14 we worked on:
+- **12 are still in canonical Bucket D** (the work was on real D statements)
+- **2 are NOT actually D**: `ask_clarifying_questions` (canonical A; Flash α=−0.083 → 3-judge α=+0.601 — Flash was creating spurious disagreement) and `prevent_imminent_harm` (canonical A; the postmortem A finding that v2 regressed a healthy statement is now confirmed beyond just "measurement universe")
+- **12 hidden Bucket D statements were missed**: `assume_best_intentions`, `avoid_being_condescending`, `avoid_extremist_content`, `avoid_sycophancy`, `avoid_targeted_political_manipulation`, `be_creative`, `be_engaging`, `be_rationally_optimistic`, `express_uncertainty`, `highlight_misalignments`, `no_agenda`, `present_perspectives`. These were "Bucket A" under 2-judge GPT+Flash because Flash was masking real disagreement via lenient scoring.
+
+**Pairwise α structure of the canonical ensemble** (pooled across 46 statements, grok cells, 2026-05-10):
+
+| condition | 3-judge α | GPT+Pro | GPT+Claude | Pro+Claude |
+|---|--:|--:|--:|--:|
+| variant_A | +0.732 | +0.651 | **+0.816** | +0.738 |
+| rubric_plus_spec | +0.714 | +0.608 | **+0.794** | +0.742 |
+
+**GPT and Claude agree most strongly with each other.** Pro is the discriminating outlier — it scores bimodally (most cells get either 1 or 5, very few intermediate scores). GPT and Claude use the full scale similarly. Pro-as-judge is therefore the source of most low-α cells; this is genuinely useful (Pro flags real disagreement Flash hid) but we should remember Pro's calibration when reading any single-statement α.
 
 Within Bucket D, sub-classify by Δα sign:
-- **D1** (Δα < 0, rubric makes a poor situation worse): 8 statements — rubric drift likely dominates
-- **D2** (Δα > 0, rubric helps modestly but absolute α still poor): 6 statements — spec ambiguity likely dominates
+- **D1** (Δα < 0, rubric makes a poor situation worse): rubric drift likely dominates
+- **D2** (Δα > 0, rubric helps modestly but absolute α still poor): spec ambiguity likely dominates
 
 ### 1.2 Step 2 — Per-statement diagnostic ranking (free, deterministic)
 
@@ -446,6 +470,8 @@ These are the failure modes to watch for, learned during the v2 / v2.5 work.
 15. **"Spec ambiguity" and "response-interpretation disagreement" look identical from outside, but only the first is fixable by spec/rubric edits**. Run 4's `prevent_imminent_harm` and `comply_with_laws` both look like spec ambiguity (judges disagree, compilers diagnose it). But forensic analysis showed: judges agree on response *facts*, disagree on *mapping prose to spec concepts*. GPT reads "I can't safely help" as a disclaimer of expertise; Gemini reads it as a topical refusal. GPT/Claude evaluate response content for "specific, actionable assistance"; Gemini takes user-stated framing at face value. **No spec text fixes a disagreement about response interpretation. The fix is judge calibration via few-shot exemplars showing borderline prose-to-anchor mappings**, not spec or rubric edits. DART has no Step 6 for this yet — flag it in escalation queue, do not run more rounds. See §1.8.5.
 
 16. **Optimizing α can encode shared judge biases as "the spec means X"**. The compilers, judges, and aggregator are all the same N=3 LM ensemble. High α may converge on "all 3 LMs agree about a rubric they collectively wrote" rather than "the spec is clearer." Goodhart on α is a real risk: a rubric that makes everyone score 5 on everything has α=1.0 and is worthless. Mitigations: a non-judge compiler (DeepSeek, Qwen) breaks one direction of circularity; a held-out validation judge (one of the 3 never compiles) breaks another. We have not yet implemented either; flagged for Run 5+. See §3 experiment H.
+
+18. **The original Bucket D was selected on 2-judge α (GPT + Gemini-Flash), not 3-judge.** Until 2026-05-10, Claude had judgments on only 8 of 46 statements (and not the Bucket D set — Claude had been added piecemeal on a different pilot subset). The "3-judge ensemble" framing in earlier dart.md drafts was aspirational; the actual bucketing data was 2-judge. Run 7 (2026-05-10) filled Claude on the missing 38 statements via Anthropic batch (~$10), recomputed the bucketing on the canonical 3-judge ensemble (GPT-5.1 + Gemini-3.1-Pro + Claude Sonnet 4.6), and produced the corrected Bucket D in §1.1. Practical consequences: 13 of 46 statements changed bucket; 12 statements that were "Bucket A" under 2-judge are actually Bucket D under 3-judge (Flash was hiding real disagreement via lenient scoring); 2 statements we worked on (`ask_clarifying_questions`, `prevent_imminent_harm`) were not actually Bucket D. **The §1.1 list is now canonical; ignore any earlier 14-statement DEFAULT_BUCKET_D references in code.**
 
 17. **Gemini 3.x Pro requires explicit `thinking_level` configuration; `thinking_budget` is unreliable, `minimal` is not supported. Also: `gemini-3-pro-preview` is discontinued on Vertex AI (2026-03-26) — migrate to `gemini-3.1-pro-preview`.**
 
@@ -1344,3 +1370,106 @@ Each condition: 80 cells × 3 judges. Anthropic batch + sync GPT/Gemini.
 - `experiments/posttrain/disagreement_primitive/e9_dart_run5{,_judge,_judge_recover,_fetch_and_analyze}.py` — pipeline scripts
 
 **§3 experiment L: ✅ done.** Validated §1.9 hypothesis: schema extension produces better rubric edits even when examples not adopted; the hierarchical rule cleanly resolves the cross-type-fragmentation case the user worried about.
+
+---
+
+### Run 7 — Bucketing rectification: canonical 3-judge ensemble across all 46 (2026-05-10)
+
+**Date**: 2026-05-10
+**Scope**: All 46 spec statements × all 4 generators × 2 conditions
+**Canonical 3-judge ensemble**: **GPT-5.1 + Gemini-3.1-Pro + Claude Sonnet 4.6**
+
+#### What this run rectified
+
+Through Run 6, the dart.md doc claimed the bucketing was "3-judge α." It wasn't — Claude had judgments on only 8 of 46 statements (and not the Bucket D set). The actual bucketing was 2-judge GPT+Gemini-Flash. See Gotcha 18.
+
+This run filled the gap: Claude judging on the 38 missing statements via Anthropic batch, then recomputed bucketing on the canonical 3-judge ensemble (GPT + Pro + Claude). The Pro audit done earlier today provides Gemini-Pro coverage on all 46.
+
+#### Operations
+
+**Pro audit** (earlier 2026-05-10): `gemini-3.1-pro-preview` with `thinking_level="low"` + `temperature=0`, all 46 statements × 80 cells × 2 conditions = 7,360 calls. ~$65, 11 min wall, 99.5% scored. Output: `per_judgment_pro_audit.jsonl`.
+
+**Claude baseline fill** (this run): `claude-sonnet-4-6` Anthropic batch with `thinking={"type":"disabled"}` + `temperature=0` + tool-use forced (JUDGMENT_TOOL_1_5). 38 missing statements × 20 cells (grok-opposite generator only, matching the existing GPT/Flash baseline universe) × 2 conditions = 1,502 calls submitted, 1,501 scored. ~$10, ~5 min wall. Output appended to `per_judgment_opposite.jsonl` with `judge="claude"`.
+
+**Total Run 7 cost**: ~$75 ($65 Pro + $10 Claude).
+
+#### Pairwise α structure of canonical ensemble (pooled, 20-cell baseline universe)
+
+| condition | 3-judge α | GPT+Pro | GPT+Claude | Pro+Claude |
+|---|--:|--:|--:|--:|
+| variant_A (bare) | +0.732 | +0.651 | **+0.816** | +0.738 |
+| rubric_plus_spec (phase_4) | +0.714 | +0.608 | **+0.794** | +0.742 |
+
+**GPT and Claude agree most strongly.** Pro is the discriminating outlier — bimodal scoring (most cells score 1 or 5; ~10% in the middle). GPT and Claude use the full scale similarly.
+
+#### Per-judge score distributions (variant_A pooled, n=911 cells × 46 statements)
+
+| judge | mean | distribution {score:n} | character |
+|---|--:|---|---|
+| GPT-5.1 | 3.23 | {1:210, 2:189, 3:24, 4:154, 5:334} | uses full scale |
+| Gemini-3.1-Pro | 3.58 | {1:**264**, 2:67, 3:7, 4:19, 5:**550**} | bimodal (binary-ish) |
+| Claude Sonnet 4.6 | 3.33 | {1:201, 2:153, 3:77, 4:106, 5:374} | uses full scale, slightly leans high |
+
+#### Bucket distributions: 2-judge (old) vs 3-judge canonical (new)
+
+| bucket | 2-judge (GPT+Flash) | 3-judge canonical |
+|---|--:|--:|
+| A | 14 | **16** |
+| B | 6 | **2** |
+| C | 2 | **4** |
+| D | 21 | **24** |
+| ? | 3 | 0 |
+
+13 of 46 statements changed bucket.
+
+#### Bucket movements (canonical vs old)
+
+**D → A** (Flash created spurious disagreement; canonical agrees these are fine):
+- `ask_clarifying_questions`: Flash α=−0.083 → 3-judge α=+0.601
+- `prevent_imminent_harm`: Flash α=+0.815 → 3-judge α=+0.818 (was already A; Flash baseline universe was 2-judge so technically D under combined criteria)
+
+**B → A**: `be_empathetic`
+
+**B → D** (Flash inflated α via leniency; real disagreement):
+- `be_clear`: Flash α=+0.599 → 3-judge α=−0.051 (Δ −0.650 — biggest negative shift)
+- `express_uncertainty`: Flash α=+0.663 → 3-judge α=+0.306
+- `protect_privileged_messages`: Flash α=+0.522 → 3-judge α=+0.370
+
+**A → C**: `avoid_hateful_content` (Flash +0.629 → 3-judge +0.452)
+
+**B → C**: `no_erotica_or_gore` (Flash +0.735 → 3-judge +0.357)
+
+**D → B**: `avoid_errors` (Flash +0.313 → 3-judge +0.689)
+
+**C → A**: `transformation_exception`
+
+**D → C**: `be_professional`
+
+**? → D** (resolved with Claude data filled in): `sexual_content_involving_minors`, `avoid_targeted_political_manipulation`, `no_agenda`
+
+#### Implications for prior runs
+
+1. **Runs 1-5 worked on 14 statements, 12 of which are still canonical Bucket D, 2 are not**. The work on the 12 is salvageable. The work on `ask_clarifying_questions` and `prevent_imminent_harm` was solving non-existent problems — their v2 edits should be reverted or carefully re-examined.
+
+2. **12 hidden Bucket D statements were never worked on**: `assume_best_intentions`, `avoid_being_condescending`, `avoid_extremist_content`, `avoid_sycophancy`, `avoid_targeted_political_manipulation`, `be_creative`, `be_engaging`, `be_rationally_optimistic`, `express_uncertainty`, `highlight_misalignments`, `no_agenda`, `present_perspectives`. These are the genuine work surface for any future DART runs.
+
+3. **The Gotcha 1 ("agreement ≠ correctness") + Gotcha 12 ("broken-judge can dominate ensemble α") combination was bigger than we measured**. Pro+Claude reveal that Flash was the broken judge in both directions: Flash sometimes scored constants forcing low α (the comply_with_laws / no_topic_off_limits pattern in Run 4), and Flash sometimes scored leniently forcing high α (the be_clear / no_erotica_or_gore / express_uncertainty pattern revealed today). The canonical ensemble eliminates Flash entirely.
+
+4. **The Run-4 escalation queue mostly remains valid**: 4 of 5 STUCK statements are still canonical Bucket D (`comply_with_laws`, `no_topic_off_limits`, `letter_and_spirit`, `refusal_style`). Only `prevent_imminent_harm` was misclassified.
+
+5. **Per-judge calibration for future runs**: Pro is the categorical scorer. When a single statement's α is dragged down primarily by Pro disagreeing with a GPT/Claude consensus, that's a calibration issue, not necessarily a real spec problem. Consider GPT+Claude α as a cross-check on every Bucket D candidate.
+
+#### Outputs
+
+- `experiments/posttrain/disagreement_primitive/per_judgment_pro_audit.jsonl` — Pro judgments, all 46 × 80 × 2
+- `experiments/posttrain/disagreement_primitive/per_judgment_opposite.jsonl` — updated with 1,501 new Claude rows (now full 46-statement coverage at 20-cell baseline)
+- `experiments/posttrain/disagreement_primitive/claude_baseline_fill_batches.json` — Claude batch tracker
+- `experiments/posttrain/disagreement_primitive/e9_dart_pro_judge_audit.py`, `e9_dart_pro_judge_analyze.py`, `e9_dart_pro_3judge_analyze.py`, `e9_dart_claude_baseline_fill.py`, `e9_dart_claude_baseline_fetch.py` — pipeline scripts
+- `.agents/logbooks/dart_pro_judge_audit.md` — earlier (Pro-vs-Flash) analysis report (now superseded by canonical 3-judge bucketing in §1.1)
+- raw API dumps under `results/raw/e9_dart_pro_judge_audit/...` and `results/raw/e9_dart_claude_baseline_fill/...`
+
+#### Pending follow-ups
+
+- **§1.1 §3 §5 cross-references** to the 14-statement old Bucket D should be audited and corrected over time. Run 1-5 entries reference statements that may not be in canonical Bucket D — those entries are historically accurate but the methodology framing should be read with Gotcha 18 in mind.
+- **DEFAULT_BUCKET_D constant in `e9_dart_compiler.py`** is now stale. Update or replace with a config-driven bucketing.
+- **Decide whether to run DART on the 12 hidden Bucket D statements** (a "Run 8" — would cost ~$50 for 3-compiler diagnostic + judging at the same scope as Run 4).
