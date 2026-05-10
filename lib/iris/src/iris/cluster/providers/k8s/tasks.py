@@ -1207,7 +1207,7 @@ class K8sTaskProvider:
         except Exception as e:
             return job_pb2.ProfileTaskResponse(error=str(e))
 
-        if self.profile_table is not None:
+        if self.profile_table is not None and resp.profile_data:
             pod_node_name = _get_pod_node_name(self.kubectl, pod_name)
             row = build_profile_row(
                 source=request.target,

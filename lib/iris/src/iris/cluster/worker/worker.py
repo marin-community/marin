@@ -1081,7 +1081,7 @@ class Worker:
         limiter = RateLimiter(interval_seconds=self._profile_interval.to_seconds())
         cpu_request = job_pb2.ProfileTaskRequest(
             duration_seconds=self._profile_duration_seconds,
-            profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.RAW)),
+            profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE)),
         )
         while not stop_event.is_set():
             remaining = limiter.time_until_next()
@@ -1149,6 +1149,10 @@ class Worker:
             data = attempt.profile(duration, request.profile_type)
             row_source = task_id_wire
             row_attempt_id = resolved_attempt_id
+
+        if not data:
+            logger.debug("Empty profile for %s (trigger=%s); skipping iris.profile write", row_source, trigger.value)
+            return data
 
         assert self._profile_table is not None, "profile_table must be initialized before capture"
         self._profile_table.write(
