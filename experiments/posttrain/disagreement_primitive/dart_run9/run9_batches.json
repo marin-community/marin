@@ -1,0 +1,69 @@
+{
+  "submitted_at_iso": "2026-05-10T07:43:17.982445+00:00",
+  "job_dir": "results/raw/e9_dart_run9_compile/2026-05-10T07-43-17",
+  "n_statements": 15,
+  "statements": [
+    "avoid_abuse",
+    "comply_with_laws",
+    "do_not_lie",
+    "no_agenda",
+    "be_clear",
+    "sexual_content_involving_minors",
+    "no_erotica_or_gore",
+    "assume_objective_pov",
+    "no_topic_off_limits",
+    "formatting",
+    "protect_privileged_messages",
+    "prevent_imminent_harm",
+    "avoid_hateful_content",
+    "assume_best_intentions",
+    "highlight_misalignments"
+  ],
+  "batches": {
+    "gpt": {
+      "batch_id": "batch_6a0037175d9881908db52f44cfdab822",
+      "input_file_id": "file-RdCfu86LhvtPA1C8c9GNLo",
+      "input_file": "results/raw/e9_dart_run9_compile/2026-05-10T07-43-17/input_gpt.jsonl",
+      "n_requests": 15,
+      "custom_id_map": {
+        "c_81c3edb98280780e9e1eb47c9370dc56": "avoid_abuse",
+        "c_72bfe85e7c287975ac1fd77e9ec5d3c6": "comply_with_laws",
+        "c_2a708d9a8920fd21fb3e2844c6860e6d": "do_not_lie",
+        "c_58aefb9179da6cbec2e01a9a0d4b536b": "no_agenda",
+        "c_013132979a65738bfe94592e469c2aad": "be_clear",
+        "c_8694288fd2ea7ea71cc9a735aae7ded3": "sexual_content_involving_minors",
+        "c_aaf91124070fe02b83de1adb564dcd87": "no_erotica_or_gore",
+        "c_25fc075c721a90b6e8d76ab3b76675c3": "assume_objective_pov",
+        "c_63251d6afc9a5689bc9f0959e21f5d3b": "no_topic_off_limits",
+        "c_e82ba1d29af4799536d6fb452cf33904": "formatting",
+        "c_f81cd07dd1d993feb35283e0917e2195": "protect_privileged_messages",
+        "c_09e9d0d7d798bbcea2453558d2d8d00b": "prevent_imminent_harm",
+        "c_ab54caabda45f797bd3471b77486b1b4": "avoid_hateful_content",
+        "c_8cb3bbdf008d49a085efc279891c66e5": "assume_best_intentions",
+        "c_99c0605a874d4102969d015c0b769cfa": "highlight_misalignments"
+      }
+    },
+    "claude": {
+      "batch_id": "msgbatch_01CE776pXtyhdvMV67WhsZAz",
+      "name": "run9_compile_cla",
+      "n_requests": 15,
+      "custom_id_map": {
+        "c_90163c9372927bb0d1cc296514e868aa": "avoid_abuse",
+        "c_bdf3b0b2b54deca1a4e64f6b32cbda20": "comply_with_laws",
+        "c_650e6f6e180ab809bab09e931380447e": "do_not_lie",
+        "c_821387a152084df9df9b2dd419e95fb5": "no_agenda",
+        "c_d04ea6940b3c3dda66e07872bace42a1": "be_clear",
+        "c_5ee7f2c9ae3dd5fda4d6dca1c12eaefe": "sexual_content_involving_minors",
+        "c_238f899a407254d68800e0e6878896d8": "no_erotica_or_gore",
+        "c_ed5fe7ef5646718681045afddde9aaa0": "assume_objective_pov",
+        "c_cab0d143daad08514f5f3b9e09c95098": "no_topic_off_limits",
+        "c_7797100155c7ddc0fe0d315aaa66f364": "formatting",
+        "c_ec2677fa5150dd86cb1498799f52d289": "protect_privileged_messages",
+        "c_fbe78ca01c159916c7b8571e9c196b51": "prevent_imminent_harm",
+        "c_1a07ae0e838c6928233226c55f2c9067": "avoid_hateful_content",
+        "c_b6de8e4d2c8369e1375254a7e0e38c14": "assume_best_intentions",
+        "c_69c2688c1898f8ca7c006309cebb9b67": "highlight_misalignments"
+      }
+    }
+  }
+}

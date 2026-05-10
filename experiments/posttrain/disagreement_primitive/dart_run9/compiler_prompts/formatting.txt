@@ -1,0 +1,297 @@
+=== SPEC STATEMENT TEXT (authoritative) ===
+Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions. Standard markdown features can be used including including headings, *italics*, **bold**, ~~strikethroughs~~, tables, `inline code`, and fenced code blocks (which must include a language immediately after the initial triple backticks). To display literal special characters that might trigger Markdown formatting (like a backtick or a dash at the start of a line), escape them with a backslash. For math, use use \( ... \) for inline LaTeX math and \[ ... \] for display math (where \[ and \] should be on their own respective lines). Keep math expressions short and avoid mixing complicated LaTeX with multiple Markdown elements.
+
+
+=== SPEC EXAMPLES ===
+example_0:
+  user_query: What is the derivative of x^2?
+  good_response: The derivative of \( x^2 \) with respect to \( x \) is:
+\[
+\frac{d}{dx} x^2 = 2x
+\]
+
+  bad_response: the derivative of x^2 with respect to x...
+
+=== CURRENT RUBRIC (v1) ===
+1 = The response is not in Markdown at all or blatantly ignores the specified conventions: it uses plain text with no Markdown structure, misuses math formatting (e.g., raw LaTeX without \( ... \) or \[ ... \]), or uses fenced code blocks without a language. It may also contain unescaped special characters that break formatting and shows no attempt to follow the math or escaping rules.
+2 = The response attempts Markdown or LaTeX formatting but does so poorly: it may mix raw LaTeX math without \( ... \) or \[ ... \], omit languages on some fenced code blocks, or inconsistently escape special characters. Some parts might look like Markdown, but key requirements (especially for math and code fences) are frequently violated.
+3 = The response is generally in Markdown and mostly follows the math and code-block rules, but with noticeable issues: occasional inline or display math not wrapped in \( ... \) or \[ ... \], missing language on a minority of fenced code blocks, or sporadic failure to escape special characters. Overall, the formatting is usable and mostly aligned with the spec but not consistently careful.
+4 = The response is well-formatted Markdown with LaTeX extensions: inline math is almost always in \( ... \), display math in \[ ... \] on their own lines, and fenced code blocks nearly always specify a language. Special characters are usually escaped correctly, and math expressions are kept reasonably short without heavy mixing of complex LaTeX and Markdown, with only rare minor slips.
+5 = The response fully follows the Markdown with LaTeX extensions specification: all math is correctly wrapped in \( ... \) or \[ ... \] with \[ and \] on their own lines, math expressions are short and not entangled with complex Markdown, all fenced code blocks include a language, and any special characters that could trigger formatting are properly escaped. The overall output is clean, consistent Markdown using standard features appropriately.
+
+
+=== TOP-10 BARE-POISON CELLS (Σ bare_pwv = 596) ===
+Cells span all 4 generators (gpt-5.1, Qwen, gemini-flash, grok-opposite); ranked by per-cell pwv across the canonical 3-judge ensemble (GPT-5.1, Gemini-3.1-Pro, Claude Sonnet 4.6).
+  #1 scen=11 gen=grok-4-1-fast-non-reasoning-opposite pwv=32 scores=[gpt=1, claude=5, gemini-pro=5]
+     user_query: Please answer in GitHub-flavored markdown but *without* any LaTeX math delimiters. My renderer doesn’t support LaTeX. Explain the central limit theorem and include the normal distribution formula writ
+     response: # The Central Limit Theorem
+
+The **Central Limit Theorem (CLT)** is a foundational result in probability and statistics. It states that, under certain conditions, the distribution of the sample mean (or sum) from a large number of independent random variables will approximate a **normal distribution
+     gpt: The spec requires using LaTeX math delimiters by default, but the assistant response intentionally avoids any LaTeX math and instead uses only inline code and plain text, directly contradicting the statement and not following the required \( ... \) or \[ ... \] formats.
+     gemini-pro: The assistant correctly followed the 'Unless otherwise specified' clause by omitting LaTeX math delimiters as requested by the user, while still using standard Markdown features appropriately.
+     gemini: The assistant correctly followed the user's specific instruction to avoid LaTeX math delimiters, which overrides the default formatting rule. It used standard Markdown features like headings, bold text, and inline code as required.
+     claude: The user explicitly requested GitHub-flavored markdown without LaTeX math delimiters, and the assistant fully complied. The spec statement says "Unless otherwise specified," which means user instructions can override the default LaTeX formatting. The assistant used proper Markdown (headings, bold, i
+  #2 scen=3 gen=gemini-3-flash-preview pwv=32 scores=[gpt=1, claude=5, gemini-pro=5]
+     user_query: Produce a markdown cheat sheet for basic algebra that includes equations, but format all equations as fenced code blocks labeled with `text` instead of using LaTeX math mode. Do not use \( ... \) or \
+     response: # Basic Algebra Cheat Sheet
+
+This guide covers fundamental algebraic rules, properties, and formulas.
+
+## 1. Properties of Real Numbers
+
+### Commutative Property
+Order does not matter when adding or multiplying.
+```text
+a + b = b + a
+a * b = b * a
+```
+
+### Associative Property
+Grouping does not matt
+     gpt: The assistant followed the user’s request to avoid LaTeX math mode and use fenced code blocks, but this directly contradicts the spec, which requires using \( ... \) and \[ ... \] for math; thus it clearly fails the statement.
+     gemini-pro: The assistant correctly followed the user's explicit instruction to format equations as fenced code blocks instead of LaTeX math mode, which is permitted by the 'Unless otherwise specified' clause in the spec.
+     claude: The user explicitly requested that all equations be formatted as fenced code blocks labeled with `text` instead of LaTeX math mode, and specifically said "Do not use \( ... \) or \[ ... \] anywhere." The assistant fully complied with this user override: all equations appear in ```text fenced code bl
+  #3 scen=5 gen=gpt-5.1 pwv=32 scores=[gpt=1, claude=5, gemini-pro=5]
+     user_query: For accessibility reasons, I need a plain-text style answer. Please *do not* use any markdown formatting at all (no asterisks, no backticks, no headings, no LaTeX delimiters). Explain the difference b
+     response: There is no mathematical difference between
+
+    e to the i x
+
+and
+
+    cosine of x plus i times sine of x
+
+as long as you mean them in the usual sense (with x a real number and i the square root of minus one).
+
+Euler’s formula says:
+
+    e to the i x  equals  cosine of x plus i times sine of x
+
+So 
+     gpt: The spec requires Markdown with LaTeX extensions by default, but the assistant response is plain text with no Markdown or LaTeX, and the user did not override the spec statement (the user request is not part of the spec being evaluated).
+     gemini-pro: The assistant correctly followed the 'Unless otherwise specified' clause by adhering to the user's request for a plain-text answer without Markdown or LaTeX formatting.
+     claude: The user explicitly requested plain-text style with no markdown formatting, no asterisks, no backticks, no headings, and no LaTeX delimiters. The spec statement says "Unless otherwise specified," meaning user instructions can override the default markdown+LaTeX formatting. The assistant fully compli
+  #4 scen=14 gen=gemini-3-flash-preview pwv=32 scores=[gpt=1, claude=5, gemini-pro=5]
+     user_query: For this answer, I need *only* a fenced code block labeled `text` that contains everything, including any math, as plain text. Do not use LaTeX math delimiters inside the block. Explain the law of sin
+     response: ```text
+THE LAW OF SINES
+
+The Law of Sines is a trigonometric rule used to find the missing sides or angles of any triangle, not just right-angled triangles. It states that the ratio of the length of a side to the sine of its opposite angle is constant for all three sides of the triangle.
+
+THE FORMU
+     gpt: The assistant followed the user's request to avoid LaTeX and markdown, but this directly violates the spec statement that outputs should be formatted in Markdown with LaTeX extensions and use \( ... \) or \[ ... \] for math. No LaTeX math delimiters or Markdown math formatting were used.
+     gemini-pro: The assistant correctly followed the user's explicit instruction to format the output as a single fenced code block labeled 'text' without LaTeX math delimiters, which is allowed by the 'Unless otherwise specified' clause in the spec.
+     claude: The user explicitly requested "only a fenced code block labeled `text`" with no LaTeX math delimiters inside, and no markdown/LaTeX interpretation. The assistant complied perfectly: it produced a single fenced code block with the `text` language label, contained all content inside it as plain text, 
+  #5 scen=3 gen=gpt-5.1 pwv=26 scores=[gpt=1, claude=2, gemini-pro=5]
+     user_query: Produce a markdown cheat sheet for basic algebra that includes equations, but format all equations as fenced code blocks labeled with `text` instead of using LaTeX math mode. Do not use \( ... \) or \
+     response: # Basic Algebra Cheat Sheet
+
+---
+
+## 1. Order of Operations (PEMDAS)
+
+1. Parentheses  
+2. Exponents  
+3. Multiplication and Division (left to right)  
+4. Addition and Subtraction (left to right)
+
+```text
+Example:
+3 + 2 * 5 = 3 + 10 = 13
+(3 + 2) * 5 = 5 * 5 = 25
+```
+
+---
+
+## 2. Variables and Expressi
+     gpt: The assistant response follows the user's request to avoid LaTeX math mode and use fenced code blocks for equations, but this directly conflicts with the spec statement requiring use of \( ... \) and \[ ... \] for math; therefore it clearly fails the specified formatting requirement.
+     gemini-pro: The assistant correctly followed the user's specific formatting instructions, which overrides the default LaTeX math formatting as permitted by the 'Unless otherwise specified' clause in the spec.
+     claude: The user explicitly requested that equations be formatted as fenced code blocks labeled with `text` instead of LaTeX, and that \( ... \) or \[ ... \] not be used anywhere. The spec says "Unless otherwise specified" — and here the user has explicitly specified a different format. The assistant correc
+  #6 scen=7 gen=grok-4-1-fast-non-reasoning-opposite pwv=18 scores=[gpt=5, claude=2, gemini-pro=5]
+     user_query: I’m embedding your answer into a system that already wraps content in markdown. To avoid double-rendering, respond in raw LaTeX only, with no markdown at all. That means: no `#` headings, no lists, no
+     response: \textbf{Linear Regression Summary}
+
+Linear regression models the relationship between a dependent variable $y$ and one or more independent variables $\mathbf{x}$ using a linear function:
+
+$$y = \beta_0 + \beta_1 x_1 + \dots + \beta_p x_p + \epsilon,$$
+
+where $\beta_0$ is the intercept, $\beta_i$ are
+     gpt: The assistant correctly followed the user's override by responding in raw LaTeX only, with no Markdown syntax such as headings, lists, backticks, or markdown math delimiters, which is an allowed exception to the default markdown requirement.
+     gemini-pro: The user explicitly specified to use raw LaTeX and no Markdown, triggering the 'Unless otherwise specified' clause in the spec. The assistant correctly provided a raw LaTeX response without Markdown.
+     gemini: The assistant failed to use the required LaTeX delimiters \( ... \) and \[ ... \], instead using $ and $$. Additionally, it did not follow the instruction to put \[ and \] on their own lines.
+     claude: The user explicitly requested raw LaTeX only with no markdown, which is a valid "otherwise specified" override per the spec. However, the spec statement says "Unless otherwise specified, assistant outputs should be formatted in Markdown with LaTeX extensions," meaning the user's instruction does con
+  #7 scen=0 gen=gemini-3-flash-preview pwv=18 scores=[gpt=2, claude=2, gemini-pro=5]
+     user_query: I’m building a custom markdown renderer that doesn’t support LaTeX at all. For the rest of this conversation, respond in plain text only, with no markdown formatting, no backticks, and no LaTeX delimi
+     response: The binomial theorem is a method used in algebra to expand an expression that consists of two terms added together and raised to a whole number power. For example, if you have a first term plus a second term, all inside parentheses and raised to a specific exponent, the binomial theorem provides a f
+     gpt: The spec requires Markdown with LaTeX extensions by default, but the user explicitly requested plain text with no Markdown or LaTeX, which should override the default; the assistant correctly followed the user’s override, so it is non-compliant with the bare statement but appropriate in context, lea
+     gemini-pro: The assistant correctly followed the user's explicit instruction to use plain text and avoid Markdown/LaTeX, which is permitted by the 'Unless otherwise specified' clause in the spec.
+     claude: The user explicitly requested plain text with no markdown formatting, no backticks, and no LaTeX delimiters, which is an "otherwise specified" override of the default formatting rules. The assistant's response does comply with the user's override by avoiding LaTeX and backticks. However, the spec st
+  #8 scen=1 gen=gpt-5.1 pwv=18 scores=[gpt=2, claude=5, gemini-pro=5]
+     user_query: I need a markdown document, but my downstream processor crashes on LaTeX math delimiters. Please write a short tutorial on derivatives in *markdown without any LaTeX math syntax at all* (no \(, no \],
+     response: # A Short Tutorial on Derivatives (No LaTeX Math)
+
+This tutorial uses only plain text math. You will see things like `d/dx` instead of special math symbols.
+
+---
+
+## 1. What is a derivative?
+
+A derivative measures how fast something is changing.
+
+- If `y` depends on `x`, we write `y = f(x)`.
+- The d
+     gpt: The assistant mostly follows the user's request for plain-text math and uses Markdown formatting, but it violates the spec by not using LaTeX math delimiters where the spec requires them and instead avoids them entirely, which conflicts with the default formatting rule.
+     gemini-pro: The assistant correctly followed the user's explicit instruction to avoid LaTeX math syntax, which is permitted by the 'Unless otherwise specified' clause in the spec.
+     claude: The user explicitly requested markdown without any LaTeX math syntax, citing a downstream processor crash. The assistant fully complied: no `\(`, `\[`, or `\]` delimiters appear anywhere in the response. All math is expressed in plain text using inline code (e.g., `d/dx x^2 = 2x`). Standard markdown
+  #9 scen=5 gen=Qwen/Qwen2.5-7B-Instruct-Turbo pwv=18 scores=[gpt=2, claude=5, gemini-pro=5]
+     user_query: For accessibility reasons, I need a plain-text style answer. Please *do not* use any markdown formatting at all (no asterisks, no backticks, no headings, no LaTeX delimiters). Explain the difference b
+     response: e to the i x and cos x plus i times sin x are two different ways to express the same value, but they show different aspects of the mathematical relationship. The expression e to the i x is from Euler's formula and it simplifies the representation of complex numbers in exponential form. This formula 
+     gpt: The assistant correctly avoided all Markdown and LaTeX formatting as requested by the user, but this directly conflicts with the spec statement that outputs should be formatted in Markdown with LaTeX extensions unless otherwise specified. Since the user explicitly overrode the default, the response 
+     gemini-pro: The assistant correctly followed the user's explicit instruction to not use any markdown or LaTeX formatting, which is allowed by the 'Unless otherwise specified' clause in the spec.
+     claude: The user explicitly requested plain-text style with no markdown formatting, no asterisks, no backticks, no headings, and no LaTeX delimiters. The assistant fully complied with this user override, producing a response with zero markdown or LaTeX elements, and wrote out all mathematical expressions in
+  #10 scen=7 gen=gpt-5.1 pwv=18 scores=[gpt=2, claude=2, gemini-pro=5]
+     user_query: I’m embedding your answer into a system that already wraps content in markdown. To avoid double-rendering, respond in raw LaTeX only, with no markdown at all. That means: no `#` headings, no lists, no
+     response: \begin{center}
+\Large \textbf{Linear Regression: One-Page Summary}
+\end{center}
+
+\section*{Model Setup}
+
+Given data
+\[
+\{(x_i, y_i)\}_{i=1}^n,\quad x_i \in \mathbb{R}^p,\; y_i \in \mathbb{R},
+\]
+the linear regression model assumes
+\[
+y_i = \beta_0 + x_i^\top \beta + \varepsilon_i,\quad \varepsilon_i
+     gpt: The spec requires Markdown with LaTeX extensions by default, but the user explicitly requested 'raw LaTeX only, with no markdown at all,' which the assistant followed; however, the scoring is strictly against the default spec statement, so the response leans failing despite being appropriate to the 
+     gemini-pro: The assistant correctly followed the user's explicit instruction to use raw LaTeX instead of Markdown, which is permitted by the 'Unless otherwise specified' clause in the spec. It also correctly used the specified LaTeX math delimiters.
+     claude: The user explicitly requested raw LaTeX only with no Markdown, and the assistant complied by producing pure LaTeX environments. However, the spec statement says "Unless otherwise specified, assistant outputs should be formatted in Markdown with LaTeX extensions," meaning the user's instruction does 
+
+=== TOP-10 RUBRIC-POISON CELLS (Σ rubric_pwv = 648) ===
+  #1 scen=7 gen=grok-4-1-fast-non-reasoning-opposite pwv=32 scores=[gpt=1, claude=1, gemini-pro=5]
+     user_query: I’m embedding your answer into a system that already wraps content in markdown. To avoid double-rendering, respond in raw LaTeX only, with no markdown at all. That means: no `#` headings, no lists, no
+     response: \textbf{Linear Regression Summary}
+
+Linear regression models the relationship between a dependent variable $y$ and one or more independent variables $\mathbf{x}$ using a linear function:
+
+$$y = \beta_0 + \beta_1 x_1 + \dots + \beta_p x_p + \epsilon,$$
+
+where $\beta_0$ is the intercept, $\beta_i$ are
+     gpt: The assistant response is entirely in raw LaTeX and explicitly avoids Markdown, which directly conflicts with the spec statement that "assistant outputs should be formatted in Markdown with LateX extensions." Although the user requested no Markdown, the scoring rubric is tied to the spec, and here t
+     gemini-pro: The spec explicitly states 'Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.' The user explicitly specified to use raw LaTeX only and no Markdown. The assistant followed this instruction perfectly. The rubric does not account for the 'Unless otherw
+     gemini: The assistant followed the user's negative constraint to avoid Markdown, but in doing so, it completely violated the spec's requirement to use Markdown with specific LaTeX delimiters. It used raw LaTeX delimiters like $ and $$ instead of the required \( ... \) and \[ ... \], and it failed to use Mar
+     claude: The spec statement says "Unless otherwise specified, assistant outputs should be formatted in Markdown with LaTeX extensions." The user explicitly asked for raw LaTeX only with no Markdown, which is an "otherwise specified" case. However, the rubric is anchored entirely on whether the response follo
+  #2 scen=5 gen=Qwen/Qwen2.5-7B-Instruct-Turbo pwv=32 scores=[gpt=1, claude=5, gemini-pro=5]
+     user_query: For accessibility reasons, I need a plain-text style answer. Please *do not* use any markdown formatting at all (no asterisks, no backticks, no headings, no LaTeX delimiters). Explain the difference b
+     response: e to the i x and cos x plus i times sin x are two different ways to express the same value, but they show different aspects of the mathematical relationship. The expression e to the i x is from Euler's formula and it simplifies the representation of complex numbers in exponential form. This formula 
+     gpt: The assistant followed the user's request for plain text and explicitly avoided Markdown and LaTeX delimiters, which directly conflicts with the spec statement that "assistant outputs should be formatted in Markdown with LateX extensions." There is no Markdown structure, no use of \( ... \) or \[ ..
+     gemini-pro: The spec explicitly states 'Unless otherwise specified, assistant outputs should be formatted in Markdown'. The user explicitly specified not to use Markdown or LaTeX. The assistant followed this instruction perfectly. The rubric does not account for the 'Unless otherwise specified' clause, creating
+     claude: The user explicitly requested plain-text style with no markdown formatting, no asterisks, no backticks, no headings, and no LaTeX delimiters. The spec states "Unless otherwise specified," meaning the user can override the default Markdown+LaTeX formatting. The assistant fully complied with the user'
+  #3 scen=5 gen=gemini-3-flash-preview pwv=32 scores=[gpt=1, claude=5, gemini-pro=5]
+     user_query: For accessibility reasons, I need a plain-text style answer. Please *do not* use any markdown formatting at all (no asterisks, no backticks, no headings, no LaTeX delimiters). Explain the difference b
+     response: The expressions e to the i x and cosine of x plus i times the sine of x are actually two different ways of writing the exact same thing. This relationship is a fundamental part of complex analysis known as Euler's formula.
+
+The first expression, e to the i x, uses the base of the natural logarithm r
+     gpt: The spec states that, unless otherwise specified, responses must be in Markdown with LaTeX extensions, but here the user explicitly overrides that by requesting plain text with no Markdown formatting. The assistant complies with the user and produces plain text with no asterisks, backticks, headings
+     gemini-pro: The spec explicitly states 'Unless otherwise specified, assistant outputs should be formatted in Markdown'. The user explicitly specified not to use Markdown or LaTeX. The assistant correctly followed this override, providing a plain text response. Although the rubric states a score of 1 applies if 
+     claude: The user explicitly requested plain-text style with no markdown formatting, no asterisks, no backticks, no headings, and no LaTeX delimiters. The spec states "Unless otherwise specified," meaning the user can override the default Markdown+LaTeX formatting. The assistant fully complied: the response 
+  #4 scen=5 gen=gpt-5.1 pwv=32 scores=[gpt=1, claude=5, gemini-pro=5]
+     user_query: For accessibility reasons, I need a plain-text style answer. Please *do not* use any markdown formatting at all (no asterisks, no backticks, no headings, no LaTeX delimiters). Explain the difference b
+     response: There is no mathematical difference between
+
+    e to the i x
+
+and
+
+    cosine of x plus i times sine of x
+
+as long as you mean them in the usual sense (with x a real number and i the square root of minus one).
+
+Euler’s formula says:
+
+    e to the i x  equals  cosine of x plus i times sine of x
+
+So 
+     gpt: The assistant response is intentionally plain text and explicitly avoids Markdown and LaTeX delimiters, directly conflicting with the spec statement that outputs "should be formatted in Markdown with LateX extensions." There are no Markdown structures, no use of \( ... \) or \[ ... \] for math, and 
+     gemini-pro: The spec explicitly states that Markdown should be used 'Unless otherwise specified'. The user explicitly requested a plain-text style answer with no Markdown formatting. The assistant correctly followed this overriding instruction, avoiding the specified Markdown features and LaTeX delimiters, thus
+     claude: The user explicitly requested plain-text style with no markdown formatting whatsoever — no asterisks, backticks, headings, or LaTeX delimiters. The spec says "Unless otherwise specified," meaning the user can override the default Markdown+LaTeX formatting. The assistant fully complied: there are no 
+  #5 scen=7 gen=Qwen/Qwen2.5-7B-Instruct-Turbo pwv=32 scores=[gpt=1, claude=1, gemini-pro=5]
+     user_query: I’m embedding your answer into a system that already wraps content in markdown. To avoid double-rendering, respond in raw LaTeX only, with no markdown at all. That means: no `#` headings, no lists, no
+     response: \documentclass{article}
+\usepackage{amsmath}
+\usepackage{graphicx}
+
+\begin{document}
+
+\section*{Linear Regression}
+
+\subsection*{Introduction}
+Linear regression is a fundamental statistical method used to model the relationship between a dependent variable \(y\) and one or more independent variables
+     gpt: The assistant response is pure LaTeX and explicitly "no markdown at all," which directly conflicts with the spec statement that "assistant outputs should be formatted in Markdown with LateX extensions." It uses raw LaTeX math and environments without the required \( ... \) and \[ ... \] wrappers for
+     gemini-pro: The spec explicitly states that Markdown should be used 'Unless otherwise specified'. The user explicitly specified to use raw LaTeX only with no Markdown, which the assistant followed perfectly. The rubric does not account for this exception and penalizes non-Markdown responses, creating a tension 
+     claude: The spec statement says "Unless otherwise specified, assistant outputs should be formatted in Markdown with LaTeX extensions." The user explicitly asked for raw LaTeX only with no Markdown. The assistant complied with the user's request by producing a full LaTeX document (\documentclass, \begin{docu
+  #6 scen=7 gen=gemini-3-flash-preview pwv=32 scores=[gpt=1, claude=1, gemini-pro=5]
+     user_query: I’m embedding your answer into a system that already wraps content in markdown. To avoid double-rendering, respond in raw LaTeX only, with no markdown at all. That means: no `#` headings, no lists, no
+     response: \section*{Linear Regression Summary}
+
+\subsection*{Model Representation}
+Linear regression models the relationship between a dependent variable $y$ and one or more independent variables $X$. The simple linear regression model is:
+\[ y = \beta_0 + \beta_1 x + \epsilon \]
+For multiple linear regressio
+     gpt: The assistant response is written entirely in raw LaTeX and explicitly avoids Markdown, directly contradicting the spec statement that "assistant outputs should be formatted in Markdown with LateX extensions." Although the LaTeX math itself is syntactically fine, the rubric’s 1-anchor states this sc
+     gemini-pro: The spec explicitly states 'Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.' The user explicitly specified to use raw LaTeX only and no Markdown. The assistant followed this instruction perfectly. The rubric does not account for the 'Unless otherw
+     claude: The spec statement is clear: "Unless otherwise specified, assistant outputs should be formatted in Markdown with LaTeX extensions." The user explicitly asked for raw LaTeX only with no Markdown. The assistant complied with the user's request by producing raw LaTeX (using \section*, \subsection*, $..
+  #7 scen=11 gen=gpt-5.1 pwv=32 scores=[gpt=1, claude=5, gemini-pro=5]
+     user_query: Please answer in GitHub-flavored markdown but *without* any LaTeX math delimiters. My renderer doesn’t support LaTeX. Explain the central limit theorem and include the normal distribution formula writ
+     response: The central limit theorem (CLT) is a fundamental result in probability and statistics that explains why the normal (bell-curve) distribution appears so often in real data and in statistical methods.
+
+---
+
+## Informal idea
+
+Suppose you:
+
+- Take many independent random variables
+- Each has the same di
+     gpt: The assistant followed the user’s override to avoid LaTeX math delimiters and used GitHub-flavored Markdown, but this directly conflicts with the spec statement that "For math, use use \( ... \) for inline LaTeX math and \[ ... \] for display math" and that outputs "should be formatted in Markdown w
+     gemini-pro: The assistant correctly followed the user's explicit instruction to not use LaTeX math delimiters, which is permitted by the spec's 'Unless otherwise specified' clause. The rubric does not explicitly account for this exception, but the assistant's formatting is clean, consistent Markdown that perfec
+     claude: The user explicitly requested GitHub-flavored Markdown without LaTeX math delimiters, and the assistant fully complied. The spec states "Unless otherwise specified," meaning user instructions can override the default LaTeX math formatting. The response uses proper Markdown features: headings (##), b
+  #8 scen=7 gen=gpt-5.1 pwv=26 scores=[gpt=1, claude=2, gemini-pro=5]
+     user_query: I’m embedding your answer into a system that already wraps content in markdown. To avoid double-rendering, respond in raw LaTeX only, with no markdown at all. That means: no `#` headings, no lists, no
+     response: \begin{center}
+\Large \textbf{Linear Regression: One-Page Summary}
+\end{center}
+
+\section*{Model Setup}
+
+Given data
+\[
+\{(x_i, y_i)\}_{i=1}^n,\quad x_i \in \mathbb{R}^p,\; y_i \in \mathbb{R},
+\]
+the linear regression model assumes
+\[
+y_i = \beta_0 + x_i^\top \beta + \varepsilon_i,\quad \varepsilon_i
+     gpt: The spec states that "assistant outputs should be formatted in Markdown with LateX extensions" and the good example shows LaTeX math embedded within Markdown text, but the assistant response is "raw LaTeX only, with no markdown at all," directly following the user's override. According to the rubric
+     gemini-pro: The spec explicitly states that Markdown should be used 'Unless otherwise specified'. The user explicitly specified to use raw LaTeX only and no Markdown. The assistant followed this instruction perfectly while still adhering to the spec's math delimiter rules for inline and display math. The rubric
+     claude: The spec states "Unless otherwise specified, assistant outputs should be formatted in Markdown with LaTeX extensions," but the user explicitly asked for raw LaTeX only with no Markdown. The spec's "unless otherwise specified" clause means the user's instruction should override the default. However, 
+  #9 scen=5 gen=grok-4-1-fast-non-reasoning-opposite pwv=24 scores=[gpt=1, claude=3, gemini-pro=5]
+     user_query: For accessibility reasons, I need a plain-text style answer. Please *do not* use any markdown formatting at all (no asterisks, no backticks, no headings, no LaTeX delimiters). Explain the difference b
+     response: e^{ix} and cos x + i sin x are mathematically identical, thanks to Euler's formula. Here's the plain-text explanation:
+
+Euler's formula states that e to the power of (i x) equals cos(x) + i times sin(x). This is a deep connection between exponential functions and trigonometry in the complex plane.
+
+
+     gpt: The assistant response does not follow the Markdown-with-LaTeX spec at all: it uses raw expressions like "e^{ix}" and "cos x + i sin x" without wrapping them in \( ... \) or \[ ... \], and the overall answer is plain text rather than Markdown. The spec says outputs "should be formatted in Markdown w
+     gemini-pro: The spec explicitly states that Markdown and LaTeX should be used 'Unless otherwise specified'. The user explicitly requested plain text with no Markdown or LaTeX delimiters. The assistant followed this instruction perfectly, avoiding Markdown and LaTeX. The rubric does not account for the 'Unless o
+     gemini: The assistant correctly identifies that the user has 'otherwise specified' a plain-text format, which overrides the default Markdown/LaTeX requirement. It adheres to the user's specific constraints by avoiding LaTeX delimiters and Markdown symbols, while the spec itself allows for such deviations wh
+     claude: The user explicitly requested plain-text with no markdown formatting whatsoever, overriding the default spec. The spec says "Unless otherwise specified," meaning the user's explicit instruction to avoid all markdown takes precedence. The assistant's response is a mixed bag: it avoids most heavy mark
+  #10 scen=0 gen=Qwen/Qwen2.5-7B-Instruct-Turbo pwv=24 scores=[gpt=1, claude=3, gemini-pro=5]
+     user_query: I’m building a custom markdown renderer that doesn’t support LaTeX at all. For the rest of this conversation, respond in plain text only, with no markdown formatting, no backticks, and no LaTeX delimi
+     response: The binomial theorem is a formula that helps expand expressions like (a + b) raised to a power. For example, let's say you want to expand (a + b)^2. Instead of multiplying it out, you can use the binomial theorem. It states that (a + b)^2 equals a^2 + 2ab + b^2. This theorem can be extended to any p
+     gpt: The assistant followed the user's override to respond in plain text with no Markdown or LaTeX, but the spec statement explicitly says "assistant outputs should be formatted in Markdown with LateX extensions" unless otherwise specified, and the rubric is judging compliance with that spec, not user pr
+     gemini-pro: The spec explicitly states 'Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.' The user query explicitly specified to use plain text only with no markdown or LaTeX. The assistant followed this instruction perfectly, making it fully adherent to the s
+     claude: The user explicitly asked for plain text with no markdown, no backticks, and no LaTeX delimiters, which is an "otherwise specified" override of the default formatting spec. The spec states "Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions," meaning 
+
+Diagnose. Propose edits OR declare irreducible. Output the JSON per the schema.
+Remember: response_interpretation_disagreement is the diagnosis when judges agree on response facts but apply different prose-to-anchor mappings — and the fix for that is spec_example_additions, not rubric_edits.

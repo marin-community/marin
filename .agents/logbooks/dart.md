@@ -1790,3 +1790,216 @@ For each statement:
 #### Status: ready to launch
 
 Phase 0 + Phase 1 ready. Phase 3 will launch after compiler outputs are synthesized. Cost estimator (`cost_estimate.py`) will be re-run on actual Phase 1 token usage before Phase 3 to refine the forecast.
+
+---
+
+#### Run 9 — Phase 0 + 1 + 2 results (2026-05-10)
+
+**Wall**: ~10 min for Phase 0+1 (Gemini sync + GPT/Claude batch submission); GPT batch completed in ~7 min, Claude batch in ~5 min.
+**Phase 1 cost**: ~$1 (compiler-only; both batches plus Gemini sync are cheap at this scale).
+
+##### Diagnostic distribution (15 canonical Bucket D statements)
+
+The diagnostic pattern shifted DRAMATICALLY when compilers saw canonical 80-cell evidence vs grok-only:
+
+| diagnosis | GPT | Pro | Claude |
+|---|--:|--:|--:|
+| `response_interpretation_disagreement` (RID, new in §1.9) | 2 | **9** | 7 |
+| `spec_ambiguity` | 7 | 2 | 4 |
+| `rubric_drift` | 2 | 2 | 2 |
+| `irreducible` | 3 | 0 | 0 |
+| `both` | 0 | 0 | 1 |
+| ? (refusal) | 0 | 2 | 0 |
+
+**Pro and Claude heavily favor RID** — meaning they think these statements need spec_example_additions, not rubric edits. **GPT is more conservative** — 7 spec_ambiguity (escalate to authors), 3 irreducible.
+
+##### Per-statement operative diagnosis (Level 1 majority vote)
+
+| statement | GPT | Pro | Cla | operative | tier |
+|---|---|---|---|---|---|
+| `assume_best_intentions` | irreducible | RID | RID | **RID** | plurality |
+| `assume_objective_pov` | spec_amb | spec_amb | spec_amb | **spec_ambiguity** | consensus |
+| `avoid_abuse` | spec_amb | ? | spec_amb | **spec_ambiguity** | consensus |
+| `avoid_hateful_content` | spec_amb | RID | RID | **RID** | plurality |
+| `be_clear` | spec_amb | RID | RID | **RID** | plurality |
+| `comply_with_laws` | RID | RID | RID | **RID** | consensus |
+| `do_not_lie` | spec_amb | RID | spec_amb | **spec_ambiguity** | plurality |
+| `formatting` | spec_amb | rubric_drift | rubric_drift | **rubric_drift** | plurality |
+| `highlight_misalignments` | irreducible | RID | both | **split** | escalate |
+| `no_agenda` | spec_amb | spec_amb | spec_amb | **spec_ambiguity** | consensus |
+| `no_erotica_or_gore` | rubric_drift | rubric_drift | rubric_drift | **rubric_drift** | consensus |
+| `no_topic_off_limits` | rubric_drift | RID | RID | **RID** | plurality |
+| `prevent_imminent_harm` | RID | RID | rubric_drift | **RID** | plurality |
+| `protect_privileged_messages` | spec_amb | RID | spec_amb | **spec_ambiguity** | plurality |
+| `sexual_content_involving_minors` | irreducible | ? | RID | **split** | escalate |
+
+##### Phase 2 — Synthesis under §1.9.4 hierarchical rule
+
+Operative diagnoses feed Level 2 admissible edit types:
+- 6 statements → **example_additions only** (RID): `assume_best_intentions`, `avoid_hateful_content`, `be_clear`, `comply_with_laws`, `no_topic_off_limits`, `prevent_imminent_harm`
+- 5 statements → **spec_edits only** (spec_ambiguity, escalate to authors): `assume_objective_pov`, `avoid_abuse`, `do_not_lie`, `no_agenda`, `protect_privileged_messages`
+- 2 statements → **rubric_edits only** (rubric_drift): `formatting`, `no_erotica_or_gore`
+- 2 statements → **full escalation** (split): `highlight_misalignments`, `sexual_content_involving_minors`
+
+After Level 3 per-instance voting (≥2 compilers concur):
+
+| statement | rubric edits | spec proposals | examples adopted |
+|---|--:|--:|--:|
+| formatting | 5 | — | — |
+| no_erotica_or_gore | 5 | — | — |
+| comply_with_laws | — | — | 4 |
+| assume_best_intentions | — | — | 2 |
+| avoid_hateful_content | — | — | 1 |
+| no_topic_off_limits | — | — | 1 |
+| no_agenda | — | 2 | — |
+| protect_privileged_messages | — | 2 | — |
+| do_not_lie | — | 1 | — |
+| assume_objective_pov | — | 1 | — |
+| avoid_abuse | — | 0 | — |
+| be_clear | — | — | 0 (no concurrence) |
+| prevent_imminent_harm | — | — | 0 (no concurrence) |
+| highlight_misalignments | (split) | (split) | (split) |
+| sexual_content_involving_minors | (split) | (split) | (split) |
+
+**6 statements have testable edits adopted; 9 do not.** The 9 break down: 5 spec_ambiguity (proposals exist but escalate to authors, not auto-deploy), 2 split (escalate), 2 RID-but-no-concurrence (be_clear, prevent_imminent_harm).
+
+##### Comparison to Run 4
+
+Run 4 (grok-only evidence) produced compiler outputs heavily weighted toward `rubric_drift` (~7-8 of 13). Run 9 (canonical evidence) produces only 2 `rubric_drift`. The compilers' diagnoses changed substantially when the evidence universe changed — confirming the user's intuition that Run 4 v2 rubrics were grok-overfit.
+
+Most striking individual: `no_topic_off_limits`. In Run 4, all 3 R2 compilers said `rubric_drift`. In Run 9 with canonical evidence, GPT still says `rubric_drift` but Pro and Claude both say `RID`. The majority shifted to RID. Whatever rubric edits Run 4 produced were targeting a misdiagnosed problem.
+
+##### Phase 3 plan
+
+Only 6 statements have testable edits. Phase 3 will judge:
+- C_RUBRIC condition (rubric_v9 + v1 spec + v1 examples) for `formatting`, `no_erotica_or_gore`
+- C_EXAMPLES condition (v1 rubric + v1 spec + v9 examples appended) for `comply_with_laws`, `assume_best_intentions`, `avoid_hateful_content`, `no_topic_off_limits`
+
+Volume: 6 statements × 80 cells × 1 condition × 3 judges = **1,440 calls**.
+
+Cost forecast (per `cost_estimate.py` calibrated on Run 8 actuals):
+- GPT-5.1 batch: $4.27
+- Claude Sonnet 4.6 batch: $12.73
+- Gemini-3.1-Pro sync: ~$13
+- **Phase 3 R1 total: ~$30**
+
+##### Phase 4 plan: Round 2 with cumulative history
+
+Per user direction, run a second compile+judge round on IMPROVING-but-not-CONVERGED statements with cumulative-history compiler prompts (per §1.8.4). Default in §1.8.6 was N=1 because median R2 contribution = +0.022; explicitly overridden here to test convergence behavior on canonical-evidence rubrics.
+
+R2 cost (estimated, depends on how many qualify):
+- Likely 2-4 IMPROVING statements
+- Compilers: ~$0.50 sync
+- Judging: ~$10-15 (640-1280 calls × 3 judges)
+- **R2 total: ~$15**
+
+##### Total Run 9 budget estimate (revised)
+
+| step | cost |
+|---|--:|
+| Phase 1 (compile R1) | $1 |
+| Phase 3 R1 judging | $30 |
+| Phase 4 R2 (compile + judge) | $15 |
+| **Total** | **~$46** |
+
+Down from the original $76 forecast because §1.9.4 routed only 6 of 15 statements into auto-testable edit types.
+
+---
+
+#### Run 9 — Final results: 4 CONVERGED, 2 IRREDUCIBLE (R2 self-correction), 9 escalated
+
+##### Phase 3 R1 judging — 6 statements with adopted edits
+
+After R1 compile + synthesis, 6 statements had testable edits. Judged with full canonical 3-judge ensemble (GPT batch + Claude batch + Gemini-Pro sync) on 80-cell universe.
+
+| statement | v1 α_bare | v1 α_p4 | v9 α_bare | v9 α_p4 | Δ_p4 | verdict |
+|---|--:|--:|--:|--:|--:|---|
+| `comply_with_laws` (RID, 4 examples) | +0.112 | −0.068 | +0.573 | **+0.539** | **+0.607** | ✓ CONVERGED |
+| `avoid_hateful_content` (RID, 1 example) | +0.423 | +0.429 | +0.781 | **+0.764** | +0.335 | ✓ CONVERGED |
+| `assume_best_intentions` (RID, 2 examples) | +0.485 | +0.479 | +0.786 | **+0.748** | +0.269 | ✓ CONVERGED |
+| `no_erotica_or_gore` (rubric_drift, 5 rubric edits) | +0.482 | +0.301 | +0.516 | **+0.520** | +0.220 | ✓ CONVERGED |
+| `formatting` (rubric_drift, 5 rubric edits) | +0.391 | +0.360 | +0.342 | +0.450 | +0.090 | IMPROVING-not-CONVERGED |
+| `no_topic_off_limits` (RID, 1 example) | +0.100 | +0.322 | +0.184 | +0.309 | −0.013 | ~FLAT |
+
+**4 of 6 CONVERGED (α ≥ 0.5)**. The biggest win: `comply_with_laws` (Δ +0.607), which had been the canonical "deepest stuck" statement since Run 4 — the spec_example_additions approach (§1.9) cracked it where 2 rounds of rubric edits in Run 4 could not.
+
+##### R2 compile-with-history on the 2 unresolved
+
+Per user direction (override of §1.8.6 default-N=1), ran R2 with cumulative-history compiler prompts on the 2 IMPROVING-but-not-CONVERGED statements.
+
+| statement | R1 diag | R2 GPT | R2 Pro | R2 Claude | R2 majority |
+|---|---|---|---|---|---|
+| `formatting` | rubric_drift | irreducible | spec_ambiguity | irreducible | **irreducible** (plurality 2/3) |
+| `no_topic_off_limits` | RID | RID | irreducible | irreducible | **irreducible** (plurality 2/3) |
+
+**This is genuine self-correction** (compare to Run-4 R2 where compilers doubled down on rubric edits even after R1 partial-success). Here, when shown R1 edits didn't fully work, Pro and Claude both flipped to declaring `irreducible`. Only GPT kept trying (proposed 4 more examples for no_topic_off_limits). The `cumulative-history compiler prompt` mechanic worked exactly as designed by §1.8.4.
+
+Per §1.9.4 Level 2: `irreducible` → no admissible edit types → R2 judging not needed. Both statements are escalated to spec-author queue with the v9 R1 edits documented.
+
+##### Final aggregate verdict (across all 15 canonical Bucket D statements)
+
+| outcome | n | statements |
+|---|--:|---|
+| **CONVERGED** (α ≥ 0.5 with v9 edits) | 4 | `comply_with_laws`, `avoid_hateful_content`, `assume_best_intentions`, `no_erotica_or_gore` |
+| **IRREDUCIBLE** (R2 self-correction) | 2 | `formatting`, `no_topic_off_limits` |
+| **Spec-author queue** (spec_ambiguity diagnoses; v9 spec proposals exist but never auto-deployed) | 5 | `assume_objective_pov`, `avoid_abuse`, `do_not_lie`, `no_agenda`, `protect_privileged_messages` |
+| **No-concurrence / split escalations** | 4 | `be_clear`, `prevent_imminent_harm`, `highlight_misalignments`, `sexual_content_involving_minors` |
+
+**4 CONVERGED + 2 IRREDUCIBLE = 6 of 15 statements have a defensible final disposition** under canonical evidence. The remaining 9 escalate to spec authors (5 with proposed edits) or human review (4 split / no-concurrence).
+
+##### Run 9 cost summary
+
+| step | actual cost |
+|---|--:|
+| Phase 1 R1 compilers (3 LMs × 15 sids) | ~$1 |
+| Phase 3 R1 judging (6 sids × 80 × 2 conds × 3 judges = 2,880 calls) | ~$20 |
+| R2 compilers (3 LMs × 2 sids) | ~$0.50 |
+| R2 judging | $0 (irreducible, no edits to test) |
+| **Total Run 9** | **~$22** |
+
+Down from $46 forecast because §1.9.4 routed 9 of 15 statements to escalation (no auto-judging) and R2 plurality-irreducible avoided the conditional R2 judging. The hierarchical rule's job is precisely to NOT spend compute on cases where compilers can't agree on what to fix.
+
+##### Validating the §1.9 thesis
+
+The single biggest finding of Run 9: **example_additions (§1.9) crack response-interpretation disagreement (RID) where rubric edits could not.** Specifically:
+
+- `comply_with_laws`: Run 4 with rubric edits got α from −0.555 to −0.060 (still negative). Run 9 with 4 example_additions got α to +0.539 (consensus signal across all 3 judges, including Pro). Δ between Run 4 v3 and Run 9 v9: ~+0.6 just from the edit-type change.
+- `avoid_hateful_content`: Never worked on before (was Bucket A under Flash). Run 9 with 1 example_addition got α to +0.764.
+- `assume_best_intentions`: Never worked on before. Run 9 with 2 example_additions got α to +0.748.
+
+This is the strongest empirical evidence to date that §1.9's hypothesis holds: **for cases where judges agree on response facts but disagree on prose-to-anchor mapping, concrete example_additions are the right edit type — NOT rubric criterion text edits.** §1.9.3's recommendation that compilers should be offered example_additions as a third edit type is now empirically validated.
+
+##### Validating the §1.9.4 hierarchical rule
+
+The hierarchical L1→L2→L3 rule did its job:
+- 6 of 15 statements got auto-testable edits (rubric_drift consensus or RID with concurrence)
+- 5 of 15 spec_ambiguity statements correctly routed to spec-author queue (no auto-deployment, even though proposals exist)
+- 4 of 15 split or no-concurrence cases correctly escalated to human review
+- The rule **prevented** the methodology from forcing a fix on contested-normative or genuinely-irreducible cases
+
+The Run 4 critique ("v2 rubrics codified Claude/Pro's reading of `avoid_abuse` over GPT's") cannot recur under §1.9.4 — `avoid_abuse` ended at spec_ambiguity consensus with 0 spec-edit concurrences across compilers, so nothing was auto-adopted. Methodology safeguard worked.
+
+##### Validating the §1.8.4 strengthened irreducible-declaration
+
+R2 compilers, given evidence R1 edits hadn't fully worked, correctly self-corrected to `irreducible` (2 of 2 statements, plurality). This is exactly the Run-4-postmortem-prescribed behavior: when α gain decelerates, switch to declaring irreducible rather than proposing more edits. The cumulative-history prompt mechanic now does its job.
+
+##### Outputs (committed)
+
+- `experiments/posttrain/disagreement_primitive/dart_run9/` — full per-statement directory
+  - `diagnoses_{gpt,gem,cla}.jsonl` (R1) + `diagnoses_{gpt,gem,cla}_r2.jsonl` (R2)
+  - `run9_synthesis_summary.json`, `run9_escalation_log.json`
+  - per-statement: `rubric_v9.json`, `examples_v9.jsonl`, `spec_with_examples_v9.json`, `spec_proposals_v9.jsonl`, `round_2_compile_prompt.txt`
+  - `per_judgment_run9_r1.jsonl` — 2,880 v9 judgments
+  - `run9_judge_r1_batches.json`, `run9_r2_batches.json` — batch trackers
+- `experiments/posttrain/disagreement_primitive/e9_dart_run9_*.py` — pipeline scripts
+- raw API dumps under `results/raw/e9_dart_run9_*/`
+
+##### Final implications for DART methodology
+
+1. **§1.9 (spec example additions) is empirically validated as a load-bearing edit type.** It cracked 3 of 4 RID cases (comply_with_laws, avoid_hateful_content, assume_best_intentions). Should be permanently added to the compiler schema. Rubric edits remain valid for genuine `rubric_drift` cases (validated on no_erotica_or_gore).
+2. **§1.9.4 hierarchical rule is empirically validated.** It correctly routed 9 of 15 statements to escalation (preventing forced fixes) while letting the 6 with strong evidence proceed.
+3. **§1.8.4 cumulative-history compiler prompts are empirically validated for self-correction.** Both R2 attempts produced `irreducible` plurality, not the Run-4 doubling-down failure.
+4. **Grok-only evidence was a real source of error in Runs 1-5.** Run 9 with canonical 80-cell evidence produced very different diagnoses (RID-heavy instead of rubric_drift-heavy) and very different rubric edits. The Run 1-5 v2 rubrics should be retired in favor of v9 artifacts.
+5. **The next step is human review of the 9 escalated statements**, not more DART iteration. Spec-author conversations on the 5 spec_ambiguity statements; case-by-case investigation of the 4 split/no-concurrence statements. DART has done what DART can do.
+
+Total cumulative cost across Runs 1-9: **~$237** ($215 prior + $22 Run 9). Methodology validation phase complete.

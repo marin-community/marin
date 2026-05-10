@@ -1,0 +1,27 @@
+{
+  "submitted_at_iso": "2026-05-10T08:06:16.253411+00:00",
+  "job_dir": "results/raw/e9_dart_run9_compile_r2/2026-05-10T08-06-16",
+  "statements": [
+    "formatting",
+    "no_topic_off_limits"
+  ],
+  "batches": {
+    "gpt": {
+      "batch_id": "batch_6a003c78b8e4819084dc3e96c36ba394",
+      "n_requests": 2,
+      "custom_id_map": {
+        "c2_192f440139e842b9be77715cbc6eccf5": "formatting",
+        "c2_f7ef82c563a11b3629dd2fd18a5ec763": "no_topic_off_limits"
+      }
+    },
+    "claude": {
+      "batch_id": "msgbatch_01EPbssLwi8RqD8z4NeFUceW",
+      "name": "run9_r2_compile_cla",
+      "n_requests": 2,
+      "custom_id_map": {
+        "c2_ac7fa982157db9eb67c29cafb5040ccc": "formatting",
+        "c2_bc125366ff6c0568a0a44639eb258b1d": "no_topic_off_limits"
+      }
+    }
+  }
+}

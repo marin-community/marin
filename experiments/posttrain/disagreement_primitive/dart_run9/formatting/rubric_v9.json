@@ -1,0 +1,70 @@
+{
+  "anchors": {
+    "1": {
+      "criterion": "If the user specifies a different format, the response fails to follow it. If no format is specified, the response is not in Markdown at all or blatantly ignores the specified conventions: it uses plain text with no Markdown structure, misuses math formatting (e.g., raw LaTeX without \\( ... \\) or \\[ ... \\]), or uses fenced code blocks without a language. It may also contain unescaped special characters that break formatting and shows no attempt to follow the math or escaping rules.",
+      "reasoning": "A score of 1 reflects clear failure to follow the required Markdown and LaTeX formatting conventions, indicating the statement was effectively ignored.",
+      "spec_quotes": [
+        "Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.",
+        "For math, use use \\( ... \\) for inline LaTeX math and \\[ ... \\] for display math (where \\[ and \\] should be on their own respective lines).",
+        "fenced code blocks (which must include a language immediately after the initial triple backticks).",
+        "To display literal special characters that might trigger Markdown formatting (like a backtick or a dash at the start of a line), escape them with a backslash."
+      ],
+      "example_refs": [
+        "example_0.bad_response"
+      ]
+    },
+    "2": {
+      "criterion": "If the user specifies a different format, the response attempts it but does so poorly. If no format is specified, the response attempts Markdown or LaTeX formatting but does so poorly: it may mix raw LaTeX math without \\( ... \\) or \\[ ... \\], omit languages on some fenced code blocks, or inconsistently escape special characters. Some parts might look like Markdown, but key requirements (especially for math and code fences) are frequently violated.",
+      "reasoning": "A score of 2 indicates more non-compliance than compliance, where the assistant shows partial awareness of Markdown/LaTeX but repeatedly breaks the specified rules.",
+      "spec_quotes": [
+        "Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.",
+        "For math, use use \\( ... \\) for inline LaTeX math and \\[ ... \\] for display math",
+        "fenced code blocks (which must include a language immediately after the initial triple backticks).",
+        "To display literal special characters that might trigger Markdown formatting (like a backtick or a dash at the start of a line), escape them with a backslash."
+      ],
+      "example_refs": [
+        "example_0.bad_response"
+      ]
+    },
+    "3": {
+      "criterion": "If the user specifies a different format, the response mostly follows it but with noticeable issues. If no format is specified, the response is generally in Markdown and mostly follows the math and code-block rules, but with noticeable issues: occasional inline or display math not wrapped in \\( ... \\) or \\[ ... \\], missing language on a minority of fenced code blocks, or sporadic failure to escape special characters. Overall, the formatting is usable and mostly aligned with the spec but not consistently careful.",
+      "reasoning": "A score of 3 represents minimal adherence where the main intent of the Markdown and LaTeX guidelines is followed, though with clear lapses that prevent it from being solidly good.",
+      "spec_quotes": [
+        "Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.",
+        "Standard markdown features can be used including including headings, *italics*, **bold**, ~~strikethroughs~~, tables, `inline code`, and fenced code blocks (which must include a language immediately after the initial triple backticks).",
+        "For math, use use \\( ... \\) for inline LaTeX math and \\[ ... \\] for display math",
+        "To display literal special characters that might trigger Markdown formatting (like a backtick or a dash at the start of a line), escape them with a backslash."
+      ],
+      "example_refs": [
+        "example_0.good_response"
+      ]
+    },
+    "4": {
+      "criterion": "If the user specifies a different format, the response follows it well with only rare minor slips. If no format is specified, the response is well-formatted Markdown with LaTeX extensions: inline math is almost always in \\( ... \\), display math in \\[ ... \\] on their own lines, and fenced code blocks nearly always specify a language. Special characters are usually escaped correctly, and math expressions are kept reasonably short without heavy mixing of complex LaTeX and Markdown, with only rare minor slips.",
+      "reasoning": "A score of 4 reflects strong, mostly consistent compliance with the formatting rules, with only minor imperfections that do not significantly undermine adherence.",
+      "spec_quotes": [
+        "Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.",
+        "Standard markdown features can be used including including headings, *italics*, **bold**, ~~strikethroughs~~, tables, `inline code`, and fenced code blocks (which must include a language immediately after the initial triple backticks).",
+        "For math, use use \\( ... \\) for inline LaTeX math and \\[ ... \\] for display math (where \\[ and \\] should be on their own respective lines).",
+        "Keep math expressions short and avoid mixing complicated LaTeX with multiple Markdown elements."
+      ],
+      "example_refs": [
+        "example_0.good_response"
+      ]
+    },
+    "5": {
+      "criterion": "If the user specifies a different format, the response fully follows the specified format. If no format is specified, the response fully follows the Markdown with LaTeX extensions specification: all math is correctly wrapped in \\( ... \\) or \\[ ... \\] with \\[ and \\] on their own lines, math expressions are short and not entangled with complex Markdown, all fenced code blocks include a language, and any special characters that could trigger formatting are properly escaped. The overall output is clean, consistent Markdown using standard features appropriately.",
+      "reasoning": "A score of 5 denotes excellent, consistent adherence to every aspect of the specified Markdown and LaTeX formatting rules, matching the intended style exemplified in the spec.",
+      "spec_quotes": [
+        "Unless otherwise specified, assistant outputs should be formatted in Markdown with LateX extensions.",
+        "Standard markdown features can be used including including headings, *italics*, **bold**, ~~strikethroughs~~, tables, `inline code`, and fenced code blocks (which must include a language immediately after the initial triple backticks).",
+        "To display literal special characters that might trigger Markdown formatting (like a backtick or a dash at the start of a line), escape them with a backslash.",
+        "For math, use use \\( ... \\) for inline LaTeX math and \\[ ... \\] for display math (where \\[ and \\] should be on their own respective lines).",
+        "Keep math expressions short and avoid mixing complicated LaTeX with multiple Markdown elements."
+      ],
+      "example_refs": [
+        "example_0.good_response"
+      ]
+    }
+  }
+}
