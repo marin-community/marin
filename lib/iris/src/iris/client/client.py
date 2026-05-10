@@ -23,10 +23,11 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from rigging.timing import Duration, Timestamp
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
@@ -36,10 +37,9 @@ from iris.cluster.client import (
     get_job_info,
     resolve_job_user,
 )
-from iris.rpc.auth import AuthTokenInjector, TokenProvider
-from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
 from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
-from iris.cluster.log_store import build_log_source
+from iris.cluster.log_store_helpers import build_log_source
+from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -50,10 +50,12 @@ from iris.cluster.types import (
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
+    is_job_finished,
 )
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.rpc.proto_utils import job_state_friendly
 from iris.time_proto import timestamp_from_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -224,18 +226,14 @@ class Job:
         """
         return self._client._cluster_client.get_job_status(self._job_id)
 
-    def state_only(self) -> int:
+    def state_only(self) -> job_pb2.JobState:
         """Lightweight state query that avoids loading tasks/attempts/workers."""
-        states = self._client._cluster_client.get_job_states([self._job_id])
-        wire_id = self._job_id.to_wire()
-        if wire_id not in states:
-            raise KeyError(f"Job {wire_id} not found")
-        return states[wire_id]
+        return self._client.job_state(self._job_id)
 
     @property
     def state(self) -> job_pb2.JobState:
-        """Get current job state (shortcut for status().state)."""
-        return self.status().state
+        """Get current job state via the lightweight state-only RPC."""
+        return self.state_only()
 
     def tasks(self) -> list[Task]:
         """Get all tasks for this job.
@@ -249,7 +247,7 @@ class Job:
     def wait(
         self,
         timeout: float = 300.0,
-        poll_interval: float = 5.0,
+        poll_interval: float = 30.0,
         *,
         raise_on_failure: bool = True,
         stream_logs: bool = False,
@@ -260,7 +258,10 @@ class Job:
 
         Args:
             timeout: Maximum wait time in seconds
-            poll_interval: Maximum time between status checks
+            poll_interval: Upper bound on the state-poll backoff. The loop
+                starts at 100ms and grows exponentially until it reaches this
+                cap (default 30s), so long-running jobs cost ~1 state RPC per
+                ``poll_interval``.
             raise_on_failure: If True, raise JobFailedError on any non-SUCCESS terminal state
             stream_logs: If True, stream logs from all tasks interleaved
             since_ms: Only show logs after this epoch millisecond timestamp
@@ -703,6 +704,17 @@ class IrisClient:
         """
         return self._cluster_client.get_job_status(job_id)
 
+    def job_state(self, job_id: JobName) -> job_pb2.JobState:
+        """Lightweight state query that avoids loading tasks/attempts/workers.
+
+        Prefer this over ``status(job_id).state`` for polling loops.
+        """
+        states = self._cluster_client.get_job_states([job_id])
+        wire_id = job_id.to_wire()
+        if wire_id not in states:
+            raise ConnectError(Code.NOT_FOUND, f"Job {wire_id} not found")
+        return cast(job_pb2.JobState, states[wire_id])
+
     def terminate(self, job_id: JobName) -> None:
         """Terminate a running job.
 
@@ -714,28 +726,36 @@ class IrisClient:
     def list_jobs(
         self,
         *,
-        states: list[job_pb2.JobState] | None = None,
+        state: job_pb2.JobState | None = None,
         prefix: JobName | None = None,
     ) -> list[job_pb2.JobStatus]:
         """List jobs with optional filtering.
 
+        Filters are pushed down to the server via ``JobQuery`` so the
+        controller does not page-walk its entire jobs table: ``state`` becomes
+        ``state_filter`` and ``prefix`` becomes a ``name_filter`` substring
+        match. The prefix is re-validated client-side because ``name_filter``
+        is a substring, not an anchored prefix.
+
         Args:
-            states: If provided, only return jobs in these states
+            state: If provided, only return jobs in this state
             prefix: If provided, only return jobs whose JobName starts with this prefix
 
         Returns:
             List of JobStatus matching the filters
         """
-        all_jobs = self._cluster_client.list_jobs()
-        result = []
-        for job in all_jobs:
-            if states is not None and job.state not in states:
-                continue
-            job_name = JobName.from_wire(job.job_id)
-            if prefix is not None and not job_name.to_wire().startswith(prefix.to_wire()):
-                continue
-            result.append(job)
-        return result
+        query = controller_pb2.Controller.JobQuery()
+        if state is not None:
+            query.state_filter = job_state_friendly(state)
+        if prefix is not None:
+            query.name_filter = prefix.to_wire()
+
+        all_jobs = self._cluster_client.list_jobs(query=query)
+        if prefix is None:
+            return list(all_jobs)
+
+        prefix_wire = prefix.to_wire()
+        return [job for job in all_jobs if JobName.from_wire(job.job_id).to_wire().startswith(prefix_wire)]
 
     def terminate_prefix(
         self,
@@ -752,17 +772,10 @@ class IrisClient:
         Returns:
             List of job IDs that were terminated
         """
-        terminal_states = {
-            job_pb2.JOB_STATE_SUCCEEDED,
-            job_pb2.JOB_STATE_FAILED,
-            job_pb2.JOB_STATE_KILLED,
-            job_pb2.JOB_STATE_UNSCHEDULABLE,
-        }
-
         jobs = self.list_jobs(prefix=prefix)
         terminated = []
         for job in jobs:
-            if exclude_finished and job.state in terminal_states:
+            if exclude_finished and is_job_finished(job.state):
                 continue
             job_id = JobName.from_wire(job.job_id)
             self.terminate(job_id)
@@ -779,6 +792,18 @@ class IrisClient:
             TaskStatus proto containing state, worker assignment, and metrics
         """
         return self._cluster_client.get_task_status(task_name)
+
+    def report_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
+        """Push markdown status text to the controller for UI display.
+
+        Called from within a running task to report progress or state.
+
+        Args:
+            task_id: Full task ID of the currently-running task.
+            detail_md: Full markdown for the task detail page.
+            summary_md: Short summary (up to ~3 lines) for the task list table.
+        """
+        self._cluster_client.report_task_status_text(task_id, detail_md, summary_md)
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.

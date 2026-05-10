@@ -19,9 +19,8 @@ import os
 import sys
 from collections.abc import Callable
 
-from rigging.filesystem import open_url
-
 from marin.execution.executor import Executor
+from rigging.filesystem import open_url
 
 
 def _env_float(key: str, default: float) -> float:

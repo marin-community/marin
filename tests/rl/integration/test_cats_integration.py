@@ -10,10 +10,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
+
 from tests.rl.integration.config import (
     DummyTokenizer,
     RolloutBatchFeeder,
@@ -23,11 +23,11 @@ from tests.rl.integration.config import (
     create_nano_llama_config,
     create_nano_optimizer_config,
     create_nano_trainer_config,
+    create_qwen_config,
+    create_qwen_tokenizer,
     create_test_curriculum_config,
     create_test_rollout_storage_config,
     create_vllm_inference_config,
-    create_qwen_config,
-    create_qwen_tokenizer,
 )
 from tests.rl.integration.tasks import create_cats_rollout_batch, validate_cats_model
 

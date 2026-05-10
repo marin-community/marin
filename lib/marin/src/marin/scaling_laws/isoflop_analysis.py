@@ -25,7 +25,6 @@ from typing import NamedTuple, Protocol
 
 import jax.numpy as jnp
 from jaxopt import ScipyMinimize
-
 from levanter.optim.config import OptimizerConfig
 
 logger = logging.getLogger(__name__)

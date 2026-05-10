@@ -46,52 +46,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dupekit"
-version = "0.1.0"
-source = { editable = "." }
-
-[package.optional-dependencies]
-benchmark = [
-    { name = "pytest-benchmark" },
-    { name = "pytest-memray" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "huggingface-hub" },
-    { name = "pyarrow" },
-    { name = "pytest" },
-    { name = "pytest-timeout" },
-]
-test = [
-    { name = "huggingface-hub" },
-    { name = "pyarrow" },
-    { name = "pytest" },
-    { name = "pytest-timeout" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "pytest-benchmark", marker = "extra == 'benchmark'", specifier = ">=5.2.3" },
-    { name = "pytest-memray", marker = "extra == 'benchmark'", specifier = ">=1.8.0" },
-]
-provides-extras = ["benchmark"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "huggingface-hub" },
-    { name = "pyarrow", specifier = ">=11.0.0" },
-    { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-timeout" },
-]
-test = [
-    { name = "huggingface-hub" },
-    { name = "pyarrow", specifier = ">=11.0.0" },
-    { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-timeout" },
-]
-
-[[package]]
 name = "filelock"
 version = "3.20.3"
 source = { registry = "https://pypi.org/simple" }
@@ -236,6 +190,52 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/2a/ae/bb56c6828e4797ba5a4821eec7c43b8bf40f69cda4d4f5f8c8a2810ec96a/linkify-it-py-2.0.3.tar.gz", hash = "sha256:68cda27e162e9215c17d786649d1da0021a451bdc436ef9e0fa0ba5234b9b048", size = 27946, upload-time = "2024-02-04T14:48:04.179Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/1e/b832de447dee8b582cac175871d2f6c3d5077cc56d5575cadba1fd1cccfa/linkify_it_py-2.0.3-py3-none-any.whl", hash = "sha256:6bcbc417b0ac14323382aef5c5192c0075bf8a9d6b41820a2b66371eac6b6d79", size = 19820, upload-time = "2024-02-04T14:48:02.496Z" },
+]
+
+[[package]]
+name = "marin-dupekit"
+version = "0.1.0"
+source = { editable = "." }
+
+[package.optional-dependencies]
+benchmark = [
+    { name = "pytest-benchmark" },
+    { name = "pytest-memray" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "huggingface-hub" },
+    { name = "pyarrow" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+test = [
+    { name = "huggingface-hub" },
+    { name = "pyarrow" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pytest-benchmark", marker = "extra == 'benchmark'", specifier = ">=5.2.3" },
+    { name = "pytest-memray", marker = "extra == 'benchmark'", specifier = ">=1.8.0" },
+]
+provides-extras = ["benchmark"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "huggingface-hub" },
+    { name = "pyarrow", specifier = ">=11.0.0" },
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+]
+test = [
+    { name = "huggingface-hub" },
+    { name = "pyarrow", specifier = ">=11.0.0" },
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
 ]
 
 [[package]]

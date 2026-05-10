@@ -26,20 +26,20 @@ import math
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 
+from fray.cluster import ResourceConfig
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig
+from marin.execution.executor import ExecutorStep, InputName
+from marin.processing.tokenize import get_vocab_size_for_tokenizer
+from marin.scaling_laws import CandidateConfig, pick_v5p_type
 
 from experiments.defaults import default_train
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import EvalTaskConfig
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, InputName
-from marin.processing.tokenize import get_vocab_size_for_tokenizer
-from marin.scaling_laws import CandidateConfig, pick_v5p_type
 
 # --- Constants ---
 SEQ_LEN: int = 4096
@@ -68,7 +68,7 @@ class CAdamCHeuristic:
     """C-AdamC scaling heuristic using CautiousConfig optimizer."""
 
     name: str = "c-adamc"
-    tokenizer: str = "stanford-crfm/marin-tokenizer"
+    tokenizer: str = "marin-community/marin-tokenizer"
 
     @property
     def vocab_size(self) -> int:

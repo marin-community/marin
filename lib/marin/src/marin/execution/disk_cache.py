@@ -9,16 +9,16 @@ import functools
 import hashlib
 import logging
 from collections.abc import Callable
-from typing import Generic, TypeVar, ParamSpec
+from typing import Generic, ParamSpec, TypeVar
 
 import cloudpickle
 from rigging.filesystem import marin_temp_bucket, open_url
 
 from marin.execution.executor_step_status import (
-    StepAlreadyDone,
     STATUS_FAILED,
     STATUS_SUCCESS,
     StatusFile,
+    StepAlreadyDone,
     worker_id,
 )
 

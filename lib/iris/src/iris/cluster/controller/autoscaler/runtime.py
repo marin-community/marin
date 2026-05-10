@@ -23,14 +23,9 @@ import logging
 from collections import deque
 from collections.abc import Sequence
 
-from iris.cluster.constraints import Constraint, WellKnownAttribute
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import (
-    CloudSliceState,
-    QuotaExhaustedError,
-    RemoteWorkerHandle,
-    SliceHandle,
-)
+from rigging.timing import Duration, Timestamp
+
+from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
     ScalingAction,
@@ -38,6 +33,8 @@ from iris.cluster.controller.autoscaler.models import (
 )
 from iris.cluster.controller.autoscaler.operations import (
     restart_worker as restart_worker_operation,
+)
+from iris.cluster.controller.autoscaler.operations import (
     terminate_slices_for_workers as terminate_slices_for_workers_operation,
 )
 from iris.cluster.controller.autoscaler.planning import ScalePlan, build_scale_plan
@@ -46,15 +43,21 @@ from iris.cluster.controller.autoscaler.recovery import (
     restore_autoscaler_state,
 )
 from iris.cluster.controller.autoscaler.routing import job_feasibility, route_demand
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
-from iris.cluster.controller.autoscaler.status import routing_decision_to_proto
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build_worker_config_for_group
+from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.providers.protocols import WorkerInfraProvider
+from iris.cluster.providers.types import (
+    CloudSliceState,
+    QuotaExhaustedError,
+    RemoteWorkerHandle,
+    SliceHandle,
+)
 from iris.cluster.types import WorkerStatusMap
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_proto import duration_from_proto, timestamp_to_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +120,13 @@ class Autoscaler:
         # Most recent routing decision (for status API)
         self._last_scale_plan: ScalePlan | None = None
         self._last_evaluation: Timestamp = Timestamp.from_ms(0)
+
+        # Derived views of _last_scale_plan, built lazily and invalidated by
+        # evaluate(). Dashboard polls (GetJobStatus, ListJobs) hit these on
+        # every pending job; building them per request was the bottleneck
+        # described in #4844.
+        self._last_routing_decision_proto: vm_pb2.RoutingDecision | None = None
+        self._last_pending_hints: dict[str, PendingHint] | None = None
 
         # Thread management
         self._threads = threads if threads is not None else get_thread_container()
@@ -221,6 +231,14 @@ class Autoscaler:
             status=status,
         )
         self._action_log.append(action)
+        logger.info(
+            "event=autoscaler action=%s entity=%s trigger=- group=%s status=%s reason=%s",
+            action_type,
+            slice_id or scale_group,
+            scale_group,
+            status,
+            reason,
+        )
         return action
 
     def evaluate(
@@ -246,6 +264,13 @@ class Autoscaler:
         routing_decision = route_demand(list(self._groups.values()), demand_entries, ts)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
         self._last_scale_plan = scale_plan
+        # Build cached views eagerly here so dashboard/service RPCs never pay
+        # the conversion cost on the hot path (#4844).
+        self._last_routing_decision_proto = routing_decision_to_proto(
+            routing_decision,
+            group_to_launch=scale_plan.launch_counts(),
+        )
+        self._last_pending_hints = build_job_pending_hints(self._last_routing_decision_proto)
 
         if routing_decision.unmet_entries:
             logger.debug(
@@ -283,6 +308,9 @@ class Autoscaler:
             decisions: List of scaling decisions to execute.
             timestamp: Current timestamp.
         """
+        # Aggregate rate-limited decisions per group so we emit a single summary
+        # line per group per cycle instead of one per deferred slice (#5580).
+        rate_limited: dict[str, list[ScalingDecision]] = {}
         for decision in decisions:
             group = self._groups.get(decision.scale_group)
             if not group:
@@ -291,14 +319,26 @@ class Autoscaler:
 
             if decision.action == ScalingAction.SCALE_UP:
                 if not group.acquire_scale_up_token(timestamp):
-                    logger.info("Rate-limited scale-up for %s: %s", decision.scale_group, decision.reason)
-                    self._log_action(
-                        "rate_limited",
-                        decision.scale_group,
-                        reason=decision.reason,
-                    )
+                    rate_limited.setdefault(decision.scale_group, []).append(decision)
                     continue
                 self._execute_scale_up(group, timestamp, reason=decision.reason)
+
+        for scale_group, deferred in rate_limited.items():
+            # All decisions in a cycle share the same target/demand snapshot;
+            # the first reason is representative of the whole batch.
+            sample_reason = deferred[0].reason
+            summary = f"deferred={len(deferred)} sample_reason={sample_reason}"
+            logger.info(
+                "Rate-limited scale-up for %s: deferred %d slice(s) (sample reason: %s)",
+                scale_group,
+                len(deferred),
+                sample_reason,
+            )
+            self._log_action(
+                "rate_limited",
+                scale_group,
+                reason=summary,
+            )
 
     def _execute_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> None:
         """Initiate async scale-up for a scale group.
@@ -358,39 +398,7 @@ class Autoscaler:
 
     def _per_group_worker_config(self, group: ScalingGroup) -> config_pb2.WorkerConfig | None:
         """Build per-group WorkerConfig by merging base config with scale group overrides."""
-        if not self._base_worker_config:
-            return None
-
-        wc = config_pb2.WorkerConfig()
-        wc.CopyFrom(self._base_worker_config)
-
-        # Accelerator config from scale group resources
-        resources = group.config.resources if group.config.HasField("resources") else None
-        if resources is not None:
-            wc.accelerator_type = resources.device_type
-            if resources.device_variant:
-                wc.accelerator_variant = resources.device_variant
-            if resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and resources.device_count > 0:
-                wc.gpu_count = resources.device_count
-            wc.capacity_type = resources.capacity_type
-
-        # Worker attributes from scale group
-        if group.config.HasField("worker"):
-            for k, v in group.config.worker.attributes.items():
-                wc.worker_attributes[k] = v
-
-        region = group.region
-        if region and not wc.worker_attributes.get(WellKnownAttribute.REGION):
-            wc.worker_attributes[WellKnownAttribute.REGION] = region
-
-        zone = group.zone
-        if zone and not wc.worker_attributes.get(WellKnownAttribute.ZONE):
-            wc.worker_attributes[WellKnownAttribute.ZONE] = zone
-
-        if group.config.name:
-            wc.worker_attributes["scale-group"] = group.config.name
-
-        return wc
+        return build_worker_config_for_group(self._base_worker_config, group.config)
 
     def _register_slice_workers(
         self,
@@ -555,6 +563,26 @@ class Autoscaler:
         result = job_feasibility(self._groups.values(), constraints, replicas=replicas)
         return result.reason
 
+    def get_last_routing_decision_proto(self) -> vm_pb2.RoutingDecision | None:
+        """Return the last routing decision as a proto.
+
+        Populated by evaluate() so dashboard/service callers (GetJobStatus,
+        ListJobs) never pay the per-entry conversion cost on the hot path
+        (#4844). Returns None before the first evaluate() cycle.
+        """
+        return self._last_routing_decision_proto
+
+    def get_pending_hints(self) -> dict[str, PendingHint]:
+        """Return autoscaler pending hints keyed by job id.
+
+        Populated by evaluate(); the service never triggers a live rebuild.
+        Returns an empty dict before the first evaluate() cycle or if no
+        hints are cached yet (#4844).
+        """
+        if self._last_pending_hints is None:
+            return {}
+        return self._last_pending_hints
+
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""
         status = vm_pb2.AutoscalerStatus(
@@ -563,13 +591,9 @@ class Autoscaler:
             last_evaluation=timestamp_to_proto(self._last_evaluation),
             recent_actions=list(self._action_log),
         )
-        if self._last_scale_plan is not None:
-            status.last_routing_decision.CopyFrom(
-                routing_decision_to_proto(
-                    self._last_scale_plan.routing_decision,
-                    group_to_launch=self._last_scale_plan.launch_counts(),
-                )
-            )
+        routing_proto = self.get_last_routing_decision_proto()
+        if routing_proto is not None:
+            status.last_routing_decision.CopyFrom(routing_proto)
         return status
 
     def get_group(self, name: str) -> ScalingGroup | None:

@@ -6,7 +6,6 @@ import threading
 import time
 
 import pytest
-
 from rigging.timing import (
     Deadline,
     Duration,

@@ -12,9 +12,9 @@ from urllib.parse import urlparse
 import fsspec
 import humanfriendly
 from fsspec.implementations.local import LocalFileSystem
+from huggingface_hub import create_commit, upload_folder
 from rigging.filesystem import open_url
 from rigging.timing import ExponentialBackoff, retry_with_backoff
-from huggingface_hub import create_commit, upload_folder
 from tqdm_loggable.auto import tqdm
 
 from marin.execution import ExecutorStep, InputName

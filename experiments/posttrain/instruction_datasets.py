@@ -46,24 +46,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from experiments.defaults import default_tokenize
-from experiments.llama import llama3_tokenizer
-from marin.execution.executor import (
-    ExecutorStep,
-    executor_main,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
     convert_conversation_to_dolma,
 )
-from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
     transform_hf_dataset,
 )
+
+from experiments.defaults import default_tokenize
+from experiments.llama import llama3_tokenizer
 
 SMOLTALK2_SPLITS = [
     "LongAlign_64k_Qwen3_32B_yarn_131k_think",

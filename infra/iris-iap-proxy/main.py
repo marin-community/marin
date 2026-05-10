@@ -13,12 +13,11 @@ import logging
 from contextlib import asynccontextmanager
 
 import httpx
+from discovery import get_controller_url
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
-
-from discovery import get_controller_url
 
 logger = logging.getLogger(__name__)
 

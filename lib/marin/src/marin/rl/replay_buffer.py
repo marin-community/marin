@@ -16,7 +16,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import numpy as np
-
 from marin.rl.rl_losses import RLLossModule
 
 from .rollout_storage import RolloutReader

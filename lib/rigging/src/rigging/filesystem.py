@@ -5,8 +5,8 @@
 and cross-region read guards.
 
 Provides a unified API for resolving the marin storage prefix and building
-GCS paths with lifecycle-managed TTL prefixes. The canonical temp-bucket
-definitions live in ``infra/configure_temp_buckets.py``.
+GCS paths with lifecycle-managed TTL prefixes. Lifecycle rules on the
+``marin-{region}`` buckets are managed by ``infra/configure_buckets.py``.
 
 Resolution chain for the storage prefix:
   1. ``MARIN_PREFIX`` environment variable
@@ -49,18 +49,6 @@ _GCP_METADATA_ZONE_URL = "http://metadata.google.internal/computeMetadata/v1/ins
 
 _DEFAULT_LOCAL_PREFIX = "/tmp/marin"
 
-# Canonical mapping from GCP region to marin-tmp bucket name.
-# Must stay in sync with infra/configure_temp_buckets.py BUCKETS dict.
-REGION_TO_TMP_BUCKET: dict[str, str] = {
-    "us-central1": "marin-tmp-us-central1",
-    "us-central2": "marin-tmp-us-central2",
-    "europe-west4": "marin-tmp-eu-west4",
-    "eu-west4": "marin-tmp-eu-west4",
-    "us-west4": "marin-tmp-us-west4",
-    "us-east1": "marin-tmp-us-east1",
-    "us-east5": "marin-tmp-us-east5",
-}
-
 # Special-case overrides for primary Marin buckets that do not follow the
 # default `marin-{region}` naming convention.
 _REGION_TO_MARIN_BUCKET_OVERRIDES: dict[str, str] = {
@@ -68,7 +56,8 @@ _REGION_TO_MARIN_BUCKET_OVERRIDES: dict[str, str] = {
 }
 
 # All known primary marin data buckets, keyed by region.
-# Used by the mirror filesystem to scan for files across regions.
+# Used by the mirror filesystem to scan for files across regions, and by
+# `marin_temp_bucket` to address the region-local TTL-managed scratch area.
 REGION_TO_DATA_BUCKET: dict[str, str] = {
     "us-central1": "marin-us-central1",
     "us-central2": "marin-us-central2",
@@ -77,6 +66,21 @@ REGION_TO_DATA_BUCKET: dict[str, str] = {
     "us-west4": "marin-us-west4",
     "europe-west4": "marin-eu-west4",
 }
+
+# Region aliases that resolve to the same physical region (e.g. the "eu-west4"
+# label that some legacy paths and metadata tools surface).
+_REGION_ALIASES: dict[str, str] = {
+    "eu-west4": "europe-west4",
+}
+
+# Allowed TTL-day values. Each value N corresponds to a lifecycle rule on every
+# ``marin-{region}`` bucket that deletes objects under ``tmp/ttl=Nd/`` after N
+# days. Keep in sync with ``infra/configure_buckets.py``.
+ALLOWED_TTL_DAYS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
+
+# Path prefix under each ``marin-{region}`` bucket where TTL-managed scratch
+# data lives. Lifecycle rules live under ``{TEMP_PATH_PREFIX}/ttl=Nd/``.
+TEMP_PATH_PREFIX: str = "tmp"
 
 # Reverse lookup: bucket name → canonical GCP region.
 # Derived from REGION_TO_DATA_BUCKET so that region_from_prefix can return
@@ -157,45 +161,79 @@ def marin_region() -> str | None:
     return region_from_metadata() or region_from_prefix(os.environ.get("MARIN_PREFIX", ""))
 
 
-def marin_temp_bucket(ttl_days: int, prefix: str = "") -> str:
+def _append_path_prefix(path: str, prefix: str) -> str:
+    if prefix:
+        return f"{path}/{prefix.strip('/')}"
+    return path
+
+
+def _resolve_ttl_days(ttl_days: int) -> int:
+    """Map *ttl_days* to the smallest configured value that is ``>= ttl_days``.
+
+    Requests above the largest configured value clamp to that maximum (with
+    a warning) — temp data is by definition disposable, so capping the TTL
+    is preferable to forcing the caller to handle an exception. Logs a
+    warning whenever the requested value is rounded.
+    """
+    if ttl_days <= 0:
+        raise ValueError(f"ttl_days={ttl_days} must be positive. Allowed values: {ALLOWED_TTL_DAYS}.")
+    if ttl_days in ALLOWED_TTL_DAYS:
+        return ttl_days
+    for n in ALLOWED_TTL_DAYS:
+        if n > ttl_days:
+            logger.warning("ttl_days=%d not configured; rounding up to %d", ttl_days, n)
+            return n
+    capped = max(ALLOWED_TTL_DAYS)
+    logger.warning("ttl_days=%d exceeds the configured maximum; clamping to %d", ttl_days, capped)
+    return capped
+
+
+def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | None = None) -> str:
     """Return a path on region-local temp storage. Never returns ``None``.
 
-    For a GCS marin prefix with a known region, returns a path on the
-    dedicated temp bucket::
+    For a GCS marin prefix with a known region, or an explicitly provided
+    ``source_prefix`` with a known region, returns a path under the
+    region-local marin bucket::
 
-        gs://marin-tmp-{region}/ttl={N}d/{prefix}
+        gs://marin-{region}/tmp/ttl={N}d/{prefix}
 
     Otherwise falls back to a flat path under the marin prefix::
 
         {marin_prefix}/tmp/{prefix}
 
-    The temp buckets are provisioned by ``infra/configure_temp_buckets.py``
-    with lifecycle rules that auto-delete objects under ``ttl=Nd/`` after
-    *N* days.
+    Lifecycle rules on each ``marin-{region}`` bucket — managed by
+    ``infra/configure_buckets.py`` — auto-delete objects under
+    ``tmp/ttl=Nd/`` after *N* days.
 
     Args:
-        ttl_days: Lifecycle TTL in days.  Should match one of the configured
-            values (1-7, 14, 30) in ``infra/configure_temp_buckets.py``.
+        ttl_days: Lifecycle TTL in days.  Values not in
+            :data:`ALLOWED_TTL_DAYS` are rounded up to the nearest configured
+            value (with a warning); values above the maximum clamp to it.
+            Non-positive values raise :class:`ValueError`.
         prefix: Optional sub-path appended after the TTL directory.
+        source_prefix: Optional path used to choose the temp bucket region.
+            Useful when configuring a remote job from a launcher that may be in
+            a different region than the job output path.
     """
+    ttl_days = _resolve_ttl_days(ttl_days)
+
     mp = marin_prefix()
 
-    if mp.startswith("gs://"):
+    region = region_from_prefix(source_prefix) if source_prefix is not None else None
+    if region is None and mp.startswith("gs://"):
         region = marin_region()
-        if region:
-            bucket = REGION_TO_TMP_BUCKET.get(region)
-            if bucket:
-                path = f"gs://{bucket}/ttl={ttl_days}d"
-                if prefix:
-                    path = f"{path}/{prefix.strip('/')}"
-                return path
+
+    if region:
+        canonical = _REGION_ALIASES.get(region, region)
+        bucket = REGION_TO_DATA_BUCKET.get(canonical)
+        if bucket:
+            path = f"gs://{bucket}/{TEMP_PATH_PREFIX}/ttl={ttl_days}d"
+            return _append_path_prefix(path, prefix)
 
     if "://" not in mp:
         mp = f"file://{mp}"
-    path = f"{mp}/tmp"
-    if prefix:
-        path = f"{path}/{prefix.strip('/')}"
-    return path
+    path = f"{mp}/{TEMP_PATH_PREFIX}"
+    return _append_path_prefix(path, prefix)
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +576,57 @@ def _is_gcs_url(url: str) -> bool:
 def _is_gcs_protocol(protocol: str) -> bool:
     """Return True if *protocol* names a GCS filesystem."""
     return protocol in ("gs", "gcs")
+
+
+def _bucket_from_gcs_url(url: str) -> str | None:
+    """Return the bucket name from a ``gs://``/``gcs://`` URL, or ``None``."""
+    for scheme in ("gs://", "gcs://"):
+        if url.startswith(scheme):
+            return url[len(scheme) :].split("/", 1)[0]
+    return None
+
+
+def _is_cross_region_url(url: str) -> bool:
+    """Return True if *url* points to a GCS bucket in a different region than the VM."""
+    if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+        return False
+    bucket = _bucket_from_gcs_url(url)
+    if bucket is None:
+        return False
+    vm_region = _cached_marin_region()
+    if vm_region is None:
+        return False
+    bucket_location = _cached_bucket_location(bucket)
+    if bucket_location is None:
+        return False
+    return not _regions_match(vm_region, bucket_location)
+
+
+def record_transfer(size: int, url: str, *, budget: TransferBudget | None = None) -> None:
+    """Charge *size* bytes against the cross-region transfer budget.
+
+    Always safe to call: no-op for non-GCS URLs, same-region buckets, when the
+    VM region is unknown, or when the override env var is set.  Raises
+    :class:`TransferBudgetExceeded` if the recorded transfer would push the
+    cumulative total past the budget.
+
+    Used by callers (e.g. tensorstore-based code) that bypass fsspec but still
+    want to charge against the shared cross-region transfer budget.
+
+    Args:
+        size: Number of bytes to charge.
+        url: GCS URL (``gs://bucket/key``) being read or written.  Used both
+            to decide whether the transfer is cross-region and as the path
+            string in any raised :class:`TransferBudgetExceeded`.
+        budget: Budget to charge against.  Defaults to the process-global
+            singleton shared with :class:`CrossRegionGuardedFS` and
+            :class:`MirrorFileSystem`.
+    """
+    if size <= 0:
+        return
+    if not _is_cross_region_url(url):
+        return
+    (budget if budget is not None else _global_transfer_budget).record(size, url)
 
 
 class CrossRegionGuardedFS:

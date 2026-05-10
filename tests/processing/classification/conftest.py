@@ -1,9 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import os
 import tempfile
+
+import pytest
 from zephyr import write_jsonl_file
 
 

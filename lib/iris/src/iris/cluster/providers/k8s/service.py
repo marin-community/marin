@@ -9,6 +9,7 @@ import logging
 import os
 import socket
 import subprocess
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -31,6 +32,9 @@ except ImportError:
     DynamicClient = None  # type: ignore[assignment,misc]
 
 
+from rigging.log_setup import slow_log
+from rigging.timing import Deadline, ExponentialBackoff
+
 from iris.cluster.providers.k8s.types import (
     ExecResult,
     K8sResource,
@@ -42,8 +46,6 @@ from iris.cluster.providers.k8s.types import (
     parse_k8s_quantity,
 )
 from iris.cluster.providers.types import find_free_port
-from rigging.log_setup import slow_log
-from rigging.timing import Deadline, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -181,15 +183,7 @@ class CloudK8sService:
             raise ImportError("Install iris[controller] to use CloudK8sService")
         if self.kubeconfig_path:
             self.kubeconfig_path = os.path.expanduser(self.kubeconfig_path)
-            self._api_client = kubernetes.config.new_client_from_config(
-                config_file=self.kubeconfig_path,
-            )
-        else:
-            try:
-                kubernetes.config.load_incluster_config()
-                self._api_client = kubernetes.client.ApiClient()
-            except kubernetes.config.ConfigException:
-                self._api_client = kubernetes.config.new_client_from_config()
+        self._api_client = self.create_api_client()
 
         assert DynamicClient is not None
         self._dyn = DynamicClient(self._api_client)
@@ -201,6 +195,18 @@ class CloudK8sService:
         if self.kubeconfig_path:
             cmd.extend(["--kubeconfig", self.kubeconfig_path])
         self._kubectl_prefix = cmd
+
+    def create_api_client(self) -> kubernetes.client.ApiClient:
+        if self.kubeconfig_path:
+            return kubernetes.config.new_client_from_config(
+                config_file=self.kubeconfig_path,
+            )
+
+        try:
+            kubernetes.config.load_incluster_config()
+            return kubernetes.client.ApiClient()
+        except kubernetes.config.ConfigException:
+            return kubernetes.config.new_client_from_config()
 
     def _resource_api(self, resource: K8sResource):
         """Get the DynamicClient resource handle for a K8sResource enum member."""
@@ -566,10 +572,11 @@ class CloudK8sService:
                 if container:
                     kwargs["container"] = container
 
-                resp = kubernetes.stream.stream(
-                    self._core_v1.connect_get_namespaced_pod_exec,
-                    **kwargs,
-                )
+                with self.create_api_client() as exec_api_client:
+                    resp = kubernetes.stream.stream(
+                        kubernetes.client.CoreV1Api(exec_api_client).connect_get_namespaced_pod_exec,
+                        **kwargs,
+                    )
                 return ExecResult(returncode=0, stdout=resp, stderr="")
             except ApiException as e:
                 return ExecResult(returncode=1, stdout="", stderr=str(e))
@@ -639,42 +646,64 @@ class CloudK8sService:
         local_port: int | None = None,
         timeout: float = 90.0,
     ) -> Iterator[str]:
-        """Port-forward to a K8s Service, yielding the local URL."""
+        """Port-forward to a K8s Service, yielding the local URL.
+
+        kubectl port-forward's spdy stream is fragile — idle drops, network
+        blips, or transient api-server hiccups exit the process and leave
+        the local listener gone for the rest of the session. A daemon
+        watchdog keeps the listener self-healing for the lifetime of the
+        context: on exit it respawns kubectl with bounded backoff. Brief
+        gaps between respawn cycles are expected and callers should already
+        retry connection errors.
+        """
         if local_port is None:
             local_port = find_free_port(start=10000)
 
-        proc: subprocess.Popen | None = None
+        # Mutable ref shared with the watchdog so _stop() always sees the
+        # currently-live process, not the one we started with.
+        proc_lock = threading.Lock()
+        proc_ref: list[subprocess.Popen | None] = [None]
+        shutdown = threading.Event()
+
+        def _spawn() -> subprocess.Popen:
+            return self._popen(
+                ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
+                namespaced=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
 
         def _stop() -> None:
-            nonlocal proc
-            if proc is None:
+            with proc_lock:
+                current = proc_ref[0]
+                proc_ref[0] = None
+            if current is None or current.poll() is not None:
                 return
-            proc.terminate()
+            current.terminate()
             try:
-                proc.wait(timeout=5)
+                current.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-            proc = None
+                current.kill()
+                current.wait()
 
         deadline = Deadline.from_seconds(timeout)
         backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
 
         while not deadline.expired():
-            if proc is None:
-                proc = self._popen(
-                    ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
-                    namespaced=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    start_new_session=True,
-                )
+            with proc_lock:
+                current = proc_ref[0]
+            if current is None:
+                current = _spawn()
+                with proc_lock:
+                    proc_ref[0] = current
 
-            if proc.poll() is not None:
-                stderr = proc.stderr.read() if proc.stderr else ""
+            if current.poll() is not None:
+                stderr = current.stderr.read() if current.stderr else ""
                 logger.warning("Port-forward exited (retrying): %s", stderr.strip())
-                proc = None
+                with proc_lock:
+                    proc_ref[0] = None
                 time.sleep(min(backoff.next_interval(), max(0, deadline.remaining_seconds())))
                 continue
 
@@ -700,9 +729,39 @@ class CloudK8sService:
             raise RuntimeError(f"kubectl port-forward to {service_name}:{remote_port} failed after {timeout}s")
 
         logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, service_name, remote_port)
+
+        def _watchdog() -> None:
+            wd_backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
+            while not shutdown.wait(timeout=1.0):
+                with proc_lock:
+                    current = proc_ref[0]
+                if current is None or current.poll() is None:
+                    continue
+                stderr = current.stderr.read() if current.stderr else ""
+                logger.warning(
+                    "port-forward to svc/%s died (%s); respawning",
+                    service_name,
+                    stderr.strip()[:200],
+                )
+                if shutdown.wait(timeout=min(wd_backoff.next_interval(), 5.0)):
+                    return
+                with proc_lock:
+                    if shutdown.is_set():
+                        return
+                    proc_ref[0] = _spawn()
+
+        watchdog = threading.Thread(
+            target=_watchdog,
+            name=f"port-forward-watchdog-{service_name}",
+            daemon=True,
+        )
+        watchdog.start()
+
         try:
             yield f"http://127.0.0.1:{local_port}"
         finally:
+            shutdown.set()
+            watchdog.join(timeout=2)
             _stop()
 
 

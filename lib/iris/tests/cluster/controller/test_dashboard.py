@@ -11,38 +11,40 @@ import re
 from unittest.mock import Mock
 
 import pytest
-from starlette.testclient import TestClient
-
+from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
+from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.db import (
     healthy_active_workers_with_attributes,
 )
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     EndpointRow,
 )
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
-from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import config_pb2, vm_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
+from starlette.testclient import TestClient
+
+from tests.cluster.conftest import fake_log_client_from_service
 
 from .conftest import (
     check_task_can_be_scheduled,
     make_test_entrypoint,
     make_worker_metadata,
-    query_tasks_with_attempts as _query_tasks_with_attempts,
     register_worker,
+)
+from .conftest import (
+    query_tasks_with_attempts as _query_tasks_with_attempts,
 )
 
 # =============================================================================
@@ -58,7 +60,8 @@ def submit_job(
     """Submit a job through the state command API."""
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
-    state.submit_job(jid, request, Timestamp.now())
+    with state._store.transaction() as cur:
+        state.submit_job(cur, jid, request, Timestamp.now())
     return jid
 
 
@@ -123,7 +126,10 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
                 decoders={"worker_id": WorkerId, "c": int},
             )
         building_counts = {row.worker_id: row.c for row in rows}
-        return scheduler.create_scheduling_context(workers, building_counts=building_counts)
+        with state._db.read_snapshot() as snap:
+            usage_by_worker = state._store.attempts.resource_usage_by_worker(snap)
+        snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
+        return scheduler.create_scheduling_context(snapshots, building_counts=building_counts)
 
     def _get_job_scheduling_diagnostics(job_wire_id):
         """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
@@ -149,7 +155,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         )
         tasks = _query_tasks_with_attempts(state, job.job_id)
         schedulable_task_id = next((t.task_id for t in tasks if check_task_can_be_scheduled(t)), None)
-        workers = healthy_active_workers_with_attributes(state._db)
+        workers = healthy_active_workers_with_attributes(state._db, state._store.health)
         context = _create_scheduling_context(workers)
         return scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
 
@@ -164,35 +170,37 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 
 
 @pytest.fixture
-def service(state, scheduler, tmp_path):
+def log_service() -> LogServiceImpl:
+    return LogServiceImpl()
+
+
+@pytest.fixture
+def service(state, scheduler, tmp_path, log_service):
     controller_mock = _make_controller_mock(state, scheduler)
-    log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
 
 
 @pytest.fixture
-def client(service):
-    dashboard = ControllerDashboard(service, log_service=service._log_service)
+def client(service, log_service):
+    dashboard = ControllerDashboard(service, log_service=log_service)
     return TestClient(dashboard.app)
 
 
 @pytest.fixture
-def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
-    """Service with autoscaler enabled for tests."""
+def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_service):
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
-    log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
 
 
@@ -300,26 +308,30 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     set_job_state(state, succeeded_id, job_pb2.JOB_STATE_SUCCEEDED)
 
     # Add endpoints only for non-terminal jobs
-    state.add_endpoint(
-        EndpointRow(
-            endpoint_id="ep1",
-            name="pending-svc",
-            address="h:1",
-            task_id=pending_id.task(0),
-            metadata={},
-            registered_at=Timestamp.now(),
-        ),
-    )
-    state.add_endpoint(
-        EndpointRow(
-            endpoint_id="ep2",
-            name="running-svc",
-            address="h:2",
-            task_id=running_id.task(0),
-            metadata={},
-            registered_at=Timestamp.now(),
-        ),
-    )
+    with state._store.transaction() as cur:
+        state.add_endpoint(
+            cur,
+            EndpointRow(
+                endpoint_id="ep1",
+                name="pending-svc",
+                address="h:1",
+                task_id=pending_id.task(0),
+                metadata={},
+                registered_at=Timestamp.now(),
+            ),
+        )
+    with state._store.transaction() as cur:
+        state.add_endpoint(
+            cur,
+            EndpointRow(
+                endpoint_id="ep2",
+                name="running-svc",
+                address="h:2",
+                task_id=running_id.task(0),
+                metadata={},
+                registered_at=Timestamp.now(),
+            ),
+        )
 
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
     endpoints = resp.get("endpoints", [])
@@ -335,16 +347,18 @@ def test_list_endpoints_returns_task_id(client, state, job_request):
     set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING)
 
     task_id = job_id.task(0)
-    state.add_endpoint(
-        EndpointRow(
-            endpoint_id="ep-task",
-            name="my-actor",
-            address="h:1",
-            task_id=task_id,
-            metadata={},
-            registered_at=Timestamp.now(),
-        ),
-    )
+    with state._store.transaction() as cur:
+        state.add_endpoint(
+            cur,
+            EndpointRow(
+                endpoint_id="ep-task",
+                name="my-actor",
+                address="h:1",
+                task_id=task_id,
+                metadata={},
+                registered_at=Timestamp.now(),
+            ),
+        )
 
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
     endpoints = resp.get("endpoints", [])
@@ -532,6 +546,7 @@ def test_get_autoscaler_status_returns_disabled_when_no_autoscaler(client):
 def mock_autoscaler():
     """Create a mock autoscaler that returns a status proto."""
     autoscaler = Mock()
+    autoscaler.get_pending_hints.return_value = {}
     autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
         groups=[
             vm_pb2.ScaleGroupStatus(
@@ -584,9 +599,9 @@ def mock_autoscaler():
 
 
 @pytest.fixture
-def client_with_autoscaler(service_with_autoscaler):
+def client_with_autoscaler(service_with_autoscaler, log_service):
     """Dashboard test client with autoscaler enabled."""
-    dashboard = ControllerDashboard(service_with_autoscaler, log_service=service_with_autoscaler._log_service)
+    dashboard = ControllerDashboard(service_with_autoscaler, log_service=log_service)
     return TestClient(dashboard.app)
 
 
@@ -642,21 +657,22 @@ def test_pending_reason_uses_autoscaler_hint_for_scale_up(
     """Pending jobs surface autoscaler scale-up wait hints in job/detail APIs."""
     submit_job(state, "pending-scale", job_request)
 
-    task_id = JobName.root("test-user", "pending-scale").task(0).to_wire()
-    mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
-        last_routing_decision=vm_pb2.RoutingDecision(
-            group_to_launch={"tpu_v5e_32": 1},
-            routed_entries={
-                "tpu_v5e_32": vm_pb2.DemandEntryStatusList(entries=[vm_pb2.DemandEntryStatus(task_ids=[task_id])])
-            },
+    job_wire = JobName.root("test-user", "pending-scale").to_wire()
+    mock_autoscaler.get_pending_hints.return_value = {
+        job_wire: PendingHint(
+            message="Waiting for worker scale-up in scale group 'tpu_v5e_32' (1 slice(s) requested)",
+            is_scaling_up=True,
         )
-    )
+    }
 
+    # GetJobStatus appends this job's autoscaler hint via the per-cycle hint
+    # cache (#4848) — a single dict lookup, no routing-table serialization.
     job_resp = rpc_post(
         client_with_autoscaler, "GetJobStatus", {"jobId": JobName.root("test-user", "pending-scale").to_wire()}
     )
     pending_reason = job_resp.get("job", {}).get("pendingReason", "")
     assert "Waiting for worker scale-up in scale group 'tpu_v5e_32'" in pending_reason
+    assert "(scaling up)" in pending_reason
 
     jobs_resp = rpc_post(client_with_autoscaler, "ListJobs")
     listed = [
@@ -689,22 +705,20 @@ def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
         ],
     )
     submit_job(state, "diag-constraint", request)
-    task_id = JobName.root("test-user", "diag-constraint").task(0).to_wire()
+    job_wire = JobName.root("test-user", "diag-constraint").to_wire()
 
-    mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
-        last_routing_decision=vm_pb2.RoutingDecision(
-            group_to_launch={"tpu_v5e_32": 0},
-            routed_entries={
-                "tpu_v5e_32": vm_pb2.DemandEntryStatusList(entries=[vm_pb2.DemandEntryStatus(task_ids=[task_id])])
-            },
+    mock_autoscaler.get_pending_hints.return_value = {
+        job_wire: PendingHint(
+            message="Waiting for workers in scale group 'tpu_v5e_32' to become ready",
+            is_scaling_up=False,
         )
-    )
+    }
 
+    # GetJobStatus appends this job's autoscaler passive-wait hint.
     job_resp = rpc_post(
         client_with_autoscaler, "GetJobStatus", {"jobId": JobName.root("test-user", "diag-constraint").to_wire()}
     )
     pending_reason = job_resp.get("job", {}).get("pendingReason", "")
-    assert pending_reason
     assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" in pending_reason
 
 
@@ -716,16 +730,14 @@ def test_list_jobs_shows_passive_autoscaler_wait_hint(
 ):
     """ListJobs should show passive autoscaler wait hints for pending jobs."""
     submit_job(state, "pending-no-launch", job_request)
-    task_id = JobName.root("test-user", "pending-no-launch").task(0).to_wire()
+    job_wire = JobName.root("test-user", "pending-no-launch").to_wire()
 
-    mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
-        last_routing_decision=vm_pb2.RoutingDecision(
-            group_to_launch={"tpu_v5e_32": 0},
-            routed_entries={
-                "tpu_v5e_32": vm_pb2.DemandEntryStatusList(entries=[vm_pb2.DemandEntryStatus(task_ids=[task_id])])
-            },
+    mock_autoscaler.get_pending_hints.return_value = {
+        job_wire: PendingHint(
+            message="Waiting for workers in scale group 'tpu_v5e_32' to become ready",
+            is_scaling_up=False,
         )
-    )
+    }
 
     jobs_resp = rpc_post(client_with_autoscaler, "ListJobs")
     listed = [
@@ -749,34 +761,110 @@ def test_worker_detail_page_escapes_id(client):
     assert "onmouseover" not in response.text or "&quot;" in response.text
 
 
-def test_get_worker_status_recent_tasks_have_timestamps(client, state, job_request):
-    """GetWorkerStatus returns recent_tasks with started_at populated from attempt timestamps."""
+def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_request):
+    """Verify GetWorkerStatus returns per-attempt rows with distinct
+    timestamps, preserving retry history."""
     wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
     job_id = submit_job(state, "ts-job", job_request)
     task_id = job_id.task(0)
 
-    state.queue_assignments([Assignment(task_id=task_id, worker_id=wid)])
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=wid,
-            worker_resource_snapshot=None,
-            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+            ),
         )
-    )
-    state.apply_task_updates(
-        HeartbeatApplyRequest(
-            worker_id=wid,
-            worker_resource_snapshot=None,
-            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
+            ),
         )
-    )
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
-    tasks = resp.get("recentTasks", [])
-    assert len(tasks) == 1
-    assert tasks[0]["taskId"] == task_id.to_wire()
-    assert tasks[0].get("startedAt"), "started_at must be populated from attempt timestamps"
-    assert tasks[0].get("finishedAt"), "finished_at must be populated from attempt timestamps"
+    attempts = resp.get("recentAttempts", [])
+    assert len(attempts) == 1
+    assert attempts[0]["taskId"] == task_id.to_wire()
+    attempt = attempts[0].get("attempt", {})
+    assert attempt.get("attemptId") == 0
+    assert attempt.get("state") == "TASK_STATE_SUCCEEDED"
+    assert attempt.get("startedAt"), "started_at must be populated from attempt timestamps"
+    assert attempt.get("finishedAt"), "finished_at must be populated from attempt timestamps"
+
+
+def test_get_worker_status_recent_attempts_separates_retries(client, state):
+    """Two attempts of the same task on the same worker get two distinct rows
+    with per-attempt state. Regression for the dashboard rendering bug where
+    one task with multiple attempts on a worker showed up as N duplicate
+    'RUNNING' rows because the server returned per-task entries that the UI
+    rendered with the parent task's state."""
+    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
+    # Need preemption budget so the first WORKER_FAILED retries instead of
+    # killing the job; otherwise the second attempt's heartbeat is dropped.
+    request = controller_pb2.Controller.LaunchJobRequest(
+        name=JobName.root("test-user", "retry-job").to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=1,
+        max_retries_preemption=2,
+    )
+    job_id = submit_job(state, "retry-job", request)
+    task_id = job_id.task(0)
+
+    # First attempt: BUILDING -> WORKER_FAILED (retriable, retries to PENDING).
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                updates=[
+                    TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_BUILDING),
+                ],
+            ),
+        )
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                updates=[
+                    TaskUpdate(
+                        task_id=task_id,
+                        attempt_id=0,
+                        new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                        error="TPU init failure",
+                    ),
+                ],
+            ),
+        )
+    # Second attempt: re-dispatch to the same worker, RUNNING.
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=1, new_state=job_pb2.TASK_STATE_RUNNING)],
+            ),
+        )
+
+    resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
+    attempts = resp.get("recentAttempts", [])
+    assert len(attempts) == 2, f"expected one row per attempt, got {len(attempts)}: {attempts}"
+    by_attempt_id = {a["attempt"]["attemptId"]: a for a in attempts}
+    assert by_attempt_id[0]["attempt"]["state"] == "TASK_STATE_WORKER_FAILED"
+    assert by_attempt_id[1]["attempt"]["state"] == "TASK_STATE_RUNNING"
+    assert all(a["taskId"] == task_id.to_wire() for a in attempts)
 
 
 def test_get_worker_status_by_worker_id(client, state):
@@ -789,23 +877,27 @@ def test_get_worker_status_by_worker_id(client, state):
     assert resp.get("worker", {}).get("address") == "10.0.0.5:8080"
 
 
-def test_get_worker_status_includes_running_tasks_and_resource_history(client, state, job_request):
-    """GetWorkerStatus assembles running tasks and resource history explicitly."""
+def test_get_worker_status_includes_running_tasks(client, state, job_request):
+    """GetWorkerStatus assembles running tasks for the worker.
+
+    Per-tick resource history is populated from the ``iris.worker`` stats
+    namespace, not the controller DB; this test covers only DB-backed
+    fields.
+    """
     wid = register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
     job_id = submit_job(state, "worker-detail-res", job_request)
     task_id = job_id.task(0)
-    state.queue_assignments([Assignment(task_id=task_id, worker_id=wid)])
+    with state._store.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
 
-    first = job_pb2.WorkerResourceSnapshot(host_cpu_percent=25, running_task_count=1)
-    second = job_pb2.WorkerResourceSnapshot(host_cpu_percent=50, running_task_count=1)
-    state.apply_task_updates(HeartbeatApplyRequest(worker_id=wid, worker_resource_snapshot=first, updates=[]))
-    state.apply_task_updates(HeartbeatApplyRequest(worker_id=wid, worker_resource_snapshot=second, updates=[]))
+    with state._store.transaction() as cur:
+        state.apply_task_updates(cur, HeartbeatApplyRequest(worker_id=wid, updates=[]))
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
     running_job_ids = resp.get("worker", {}).get("runningJobIds", [])
     assert task_id.to_wire() in running_job_ids
-    assert [entry.get("hostCpuPercent") for entry in resp.get("resourceHistory", [])] == [25, 50]
-    assert resp.get("currentResources", {}).get("hostCpuPercent") == 50
+    assert "resourceHistory" not in resp
+    assert "currentResources" not in resp
 
 
 def test_get_worker_status_unknown_id_returns_error(client):
@@ -835,7 +927,7 @@ def test_fetch_logs_for_missing_task_returns_empty_entries(client):
     """FetchLogs on LogService returns empty entries for a nonexistent task."""
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
-        "/iris.logging.LogService/FetchLogs",
+        "/finelog.logging.LogService/FetchLogs",
         json={"source": re.escape(task_id) + ":.*"},
         headers={"Content-Type": "application/json"},
     )
@@ -859,7 +951,7 @@ def test_fetch_logs_backward_compat_proxy(client):
 
 def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     """Old clients using default Connect proto encoding hit the compat endpoint."""
-    from iris.rpc import logging_pb2
+    from finelog.rpc import logging_pb2
 
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     req = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
@@ -872,6 +964,18 @@ def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     parsed = logging_pb2.FetchLogsResponse()
     parsed.ParseFromString(resp.content)
     assert list(parsed.entries) == []
+
+
+def test_fetch_logs_legacy_iris_logging_path(client):
+    """Pre-finelog-lift clients call /iris.logging.LogService/FetchLogs."""
+    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
+    resp = client.post(
+        "/iris.logging.LogService/FetchLogs",
+        json={"source": re.escape(task_id) + ":.*"},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("entries", []) == []
 
 
 # =============================================================================
@@ -1011,14 +1115,12 @@ def test_auth_config_returns_disabled_by_default(client):
     assert data["provider"] is None
 
 
-def test_auth_config_returns_enabled_when_verifier_set(service):
+def test_auth_config_returns_enabled_when_verifier_set(service, log_service):
     """Auth config endpoint reports auth enabled with provider name."""
     from iris.rpc.auth import StaticTokenVerifier
 
     verifier = StaticTokenVerifier({"test-token": "test-user"})
-    dashboard = ControllerDashboard(
-        service, log_service=service._log_service, auth_verifier=verifier, auth_provider="gcp"
-    )
+    dashboard = ControllerDashboard(service, log_service=log_service, auth_verifier=verifier, auth_provider="gcp")
     authed_client = TestClient(dashboard.app)
 
     resp = authed_client.get("/auth/config")
@@ -1043,12 +1145,12 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
-    dashboard = ControllerDashboard(svc, log_service=svc._log_service)
+    dashboard = ControllerDashboard(svc, log_service=log_service)
     k8s_client = TestClient(dashboard.app)
 
     resp = k8s_client.get("/auth/config")
@@ -1075,12 +1177,12 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         state,
-        state._db,
+        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
-    dashboard = ControllerDashboard(svc, log_service=svc._log_service)
+    dashboard = ControllerDashboard(svc, log_service=log_service)
     return TestClient(dashboard.app), k8s, provider
 
 
@@ -1120,7 +1222,7 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
     )
 
     # Sync to populate ClusterState.
-    provider.sync(DirectProviderBatch(tasks_to_run=[], running_tasks=[], tasks_to_kill=[]))
+    provider.sync(DirectProviderBatch(tasks_to_run=[], running_tasks=[]))
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",

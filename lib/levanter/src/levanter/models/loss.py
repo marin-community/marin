@@ -12,6 +12,7 @@ from haliax.core import flatten_all_axes_but
 from haliax.nn import cross_entropy_loss_and_log_normalizers
 from haliax.partitioning import _get_mesh, current_thread_local_mapping, shard_map
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
+    Implementation,
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
 )
 
@@ -173,6 +174,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    implementation: Implementation | None = None,
     return_argmax: Literal[False] = False,
 ) -> NamedArray: ...
 
@@ -193,6 +195,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    implementation: Implementation | None = None,
     return_argmax: Literal[True] = True,
 ) -> tuple[NamedArray, NamedArray]: ...
 
@@ -212,6 +215,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    implementation: Implementation | None = None,
     return_argmax: bool = False,
 ) -> NamedArray | tuple[NamedArray, NamedArray]:
     """
@@ -230,6 +234,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         block_size (int | None): Optional vocabulary block size for processing.
         dtype (Optional[jnp.dtype]): Data type for the loss.
         precision (Optional[jax.lax.PrecisionLike]): Optional matmul precision override for the fused kernel.
+        implementation (Implementation | None): Backend selector ("xla", "pallas_tpu", etc.).
         return_argmax (bool): Whether to return per-position argmax token ids as well.
 
     Returns:
@@ -263,6 +268,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
+            implementation=implementation,
             return_argmax=return_argmax,
         )
         if return_argmax:

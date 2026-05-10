@@ -5,15 +5,15 @@ description: Marin architecture overview and repository structure reference. Use
 
 # Skill: Marin Architecture
 
-Marin is a framework for building reproducible language model training pipelines. At its core, Marin executes DAGs of steps using Ray for distributed processing, with automatic versioning based on code and configuration. Pipeline: data curation → transformation → tokenization → training → evaluation.
+Marin is a framework for building reproducible language model training pipelines. At its core, Marin executes DAGs of steps using [Fray](https://github.com/marin-community/marin/tree/main/lib/fray) (dispatched onto [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) on shared clusters) for distributed processing, with automatic versioning based on code and configuration. Pipeline: data curation → transformation → tokenization → training → evaluation.
 
 ## Core Architecture
 
 **Executor Pattern**: Experiments are DAGs of `ExecutorStep` objects (`lib/marin/src/marin/execution/executor.py`). Output path = `<base>/<name>-<hash>` where hash covers versioned fields and dependencies. Only changed steps re-run.
 
-**Ray Distribution**: Steps can be normal or `@ray.remote` functions. Ray ships code to workers with step-specific dependency groups from `pyproject.toml`.
+**Fray/Iris Distribution**: Steps that need remote execution wrap their function with `remote()` (see `experiments/defaults.py`). Fray launches each remote step as a sub-job against the current cluster (Iris on shared infra, Local for laptop runs). Step-specific dependency groups are drawn from `pyproject.toml`.
 
-**Entry Point**: `executor_main()` or [`lib/marin/src/marin/run/ray_run.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/run/ray_run.py) for cluster execution.
+**Entry Point**: Call `executor_main()` at the bottom of the script; launch the script itself as a CPU-only Iris job (`uv run iris --cluster=marin job run -- python -m experiments.<script>`) for cluster execution. See [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) for the full launch reference.
 
 ## Repository Structure
 
@@ -24,7 +24,7 @@ marin/
 │
 ├── lib/marin/src/marin/                  # Core library organized by function
 │   ├── execution/              # DAG executor (executor.py, status_actor.py)
-│   ├── run/                    # Job launchers (ray_run.py, slurm_run.py)
+│   ├── run/                    # Legacy launcher stubs (slurm_run.py); submit via `iris job run` on shared clusters
 │   ├── download/               # Dataset downloaders (huggingface/, ar5iv/, wikipedia/, nemotron_cc/, filesystem/)
 │   ├── transform/              # Raw data → text (ar5iv/, stackexchange/, wikipedia/, conversation/, domain-specific)
 │   ├── crawl/                  # Web crawling (fetch_links.py, minhash/, fineweb_edu/, open_web_math/)
@@ -55,8 +55,8 @@ marin/
 │   └── quickstart-data/
 │
 ├── docs/                       # Documentation (tutorials/, explanations/, references/, recipes/, reports/, design/, dev-guide/, model-cards/)
-├── infra/                      # Ray cluster configs (marin-*.yaml, configure_gcp_registry.py)
-├── scripts/                    # Utilities (ray/, training/, pm/, debug/, gpu_eval/)
+├── infra/                      # Cluster configs (configure_gcp_registry.py, configure_buckets.py). Iris cluster configs live under lib/iris/examples/.
+├── scripts/                    # Utilities (iris/, training/, pm/, debug/, gpu_eval/)
 └── docker/                     # Docker configs (marin/, levanter/)
 ```
 
@@ -72,7 +72,7 @@ marin/
 5. **Train** (`lib/marin/src/marin/training/`): Levanter (JAX) on TPU/GPU
 6. **Evaluate** (`lib/marin/src/marin/evaluation/`): lm-eval-harness or vLLM
 
-**Cluster Infrastructure** (`infra/README.md`): Ray on GCP, on-demand head + preemptible TPU workers (v4/v5e/v6e), autoscaling 4-1024 workers, managed via `scripts/ray/cluster.py`
+**Cluster Infrastructure** ([`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)): Iris on GCP (TPU v4/v5e/v6e) and CoreWeave (H100 GPUs); on-demand controller + autoscaling preemptible workers. Submit jobs with `uv run iris --cluster=marin job run ...`.
 
 **Default Helpers** (`experiments/defaults.py`): `default_download()`, `default_tokenize()`, `default_train()`, `default_eval()`
 

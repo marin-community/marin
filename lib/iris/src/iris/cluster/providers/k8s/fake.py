@@ -22,8 +22,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from iris.cluster.service_mode import ServiceMode
-
 from iris.cluster.providers.k8s.types import (
     ExecResult,
     K8sResource,
@@ -33,6 +31,7 @@ from iris.cluster.providers.k8s.types import (
     PodResourceUsage,
     parse_k8s_quantity,
 )
+from iris.cluster.service_mode import ServiceMode
 
 # Resource types that K8s recognizes in container resource requests/limits.
 logger = logging.getLogger(__name__)

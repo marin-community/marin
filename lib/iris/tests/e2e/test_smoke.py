@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 from connectrpc.errors import ConnectError
+from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.client import IrisClient
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
@@ -26,11 +28,9 @@ from iris.cluster.types import (
     ResourceSpec,
     gpu_device,
 )
-from iris.rpc import config_pb2, logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
+from iris.version import client_revision_date
 from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import (
@@ -38,8 +38,8 @@ from .conftest import (
     MARIN_ROOT,
     ClusterCapabilities,
     IrisTestCluster,
-    _NoOpPage,
     _add_coscheduling_group,
+    _NoOpPage,
     assert_visible,
     dashboard_goto,
     discover_capabilities,
@@ -200,6 +200,32 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     return capture
 
 
+def _wait_for_job_detail_screenshot_ready(page, job_id: str) -> None:
+    page.wait_for_function(
+        """
+        (jobId) => {
+            const text = document.body.textContent || "";
+            const routeReady = decodeURIComponent(window.location.hash) === `#/job/${jobId}`;
+            const headings = Array.from(document.querySelectorAll("h3"))
+                .map((heading) => (heading.textContent || "").trim().toLowerCase());
+            const taskRowReady = Array.from(document.querySelectorAll("table tbody tr"))
+                .some((row) => (row.textContent || "").includes("Succeeded"));
+            const pageHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+            return routeReady
+                && !text.includes("Loading...")
+                && text.includes("Job Status")
+                && text.includes("Task Summary")
+                && headings.includes("tasks")
+                && headings.includes("job logs")
+                && taskRowReady
+                && pageHeight > window.innerHeight;
+        }
+        """,
+        arg=job_id,
+        timeout=10000,
+    )
+
+
 @pytest.fixture(scope="module")
 def verbose_job(smoke_cluster):
     """Shared verbose log job — submits once, used by log-related tests."""
@@ -297,12 +323,10 @@ def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
     job = smoke_cluster.submit(TestJobs.quick, "smoke-detail")
     smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
+    job_id = job.job_id.to_wire()
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}")
     wait_for_dashboard_ready(smoke_page)
-    smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Succeeded')",
-        timeout=10000,
-    )
+    _wait_for_job_detail_screenshot_ready(smoke_page, job_id)
     smoke_screenshot(
         "job-detail", "Job detail page for succeeded job with state badge, task table, and job-level log viewer"
     )
@@ -435,10 +459,13 @@ def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
+    # Wait for actual scale group content, not just the tab heading ("Autoscaler")
+    # which appears before the API response loads.
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Autoscaler') || "
-        "document.body.textContent.includes('Scale Group') || "
-        "document.body.textContent.includes('scale group')",
+        "() => !document.body.textContent.includes('Loading') && "
+        "(document.body.textContent.includes('Scale Group') || "
+        "document.body.textContent.includes('scale group') || "
+        "document.body.textContent.includes('local-cpu'))",
         timeout=10000,
     )
     smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
@@ -463,8 +490,9 @@ def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, 
     job_id = verbose_job.job_id.to_wire()
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}")
     wait_for_dashboard_ready(smoke_page)
+    _wait_for_job_detail_screenshot_ready(smoke_page, job_id)
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Job Logs')",
+        "() => document.body.textContent.includes('DONE: all lines emitted')",
         timeout=10000,
     )
     smoke_screenshot(
@@ -724,75 +752,12 @@ def test_exec_in_container(smoke_cluster):
     smoke_cluster.kill(job)
 
 
-@pytest.mark.timeout(180)
-def test_worker_restart_preserves_task(smoke_cluster):
-    """Restarting a worker preserves its running task via container adoption.
-
-    Submits a task that logs every second, restarts the worker running it,
-    then verifies the task is still RUNNING and eventually succeeds. Fetches
-    logs to confirm continuity across the restart.
-    """
-    # Use shorter duration in local mode (restart is a no-op there)
-    is_local = not smoke_cluster.is_cloud
-    task_duration = 30 if is_local else 90
-
-    job = smoke_cluster.submit(TestJobs.log_periodic, "smoke-restart", task_duration, 1.0)
-    smoke_cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
-
-    # Wait for task itself to be RUNNING (not just BUILDING)
-    deadline = time.monotonic() + smoke_cluster.job_timeout
-    while time.monotonic() < deadline:
-        task = smoke_cluster.task_status(job, task_index=0)
-        if task.state == job_pb2.TASK_STATE_RUNNING:
-            break
-        time.sleep(0.5)
-    assert task.state == job_pb2.TASK_STATE_RUNNING, f"Task stuck in {job_pb2.TaskState.Name(task.state)}"
-
-    # Let a few ticks log before we restart
-    time.sleep(3)
-
-    # Find the worker running this task
-    worker_id = task.worker_id
-    assert worker_id, "Task has no worker_id"
-
-    # Restart the worker via the controller RPC
-    restart_resp = smoke_cluster.controller_client.restart_worker(
-        controller_pb2.Controller.RestartWorkerRequest(worker_id=worker_id),
-        timeout_ms=60_000,
-    )
-    assert restart_resp.accepted, f"Restart rejected: {restart_resp.error}"
-
-    # In cloud mode, wait for the worker to come back as healthy after real restart.
-    # In local mode, restart_worker is a no-op so the worker stays healthy.
-    if not is_local:
-        worker_back = False
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            time.sleep(5)
-            workers_resp = smoke_cluster.controller_client.list_workers(controller_pb2.Controller.ListWorkersRequest())
-            for w in workers_resp.workers:
-                if w.worker_id == worker_id and w.healthy:
-                    worker_back = True
-                    break
-            if worker_back:
-                break
-        assert worker_back, f"Worker {worker_id} did not re-register within 120s"
-
-    # Wait for the job to complete — the task should either be adopted by
-    # the new worker (RUNNING → SUCCEEDED) or retried by the controller
-    # (WORKER_FAILED → re-scheduled → SUCCEEDED). Either path validates
-    # that the restart didn't permanently break the task.
-    final = smoke_cluster.wait(job, timeout=120)
-    assert (
-        final.state == job_pb2.JOB_STATE_SUCCEEDED
-    ), f"Job should succeed after restart, got {job_pb2.JobState.Name(final.state)}"
-
-
 # ============================================================================
 # Checkpoint / restore
 # ============================================================================
 
 
+@pytest.mark.timeout(120)
 def test_checkpoint_restore():
     """Controller restart resumes from checkpoint: completed jobs visible, cluster functional.
 
@@ -1074,6 +1039,7 @@ def test_static_auth_job_ownership():
             name="/user-a/auth-owned-job",
             entrypoint=entrypoint.to_proto(),
             resources=ResourceSpec(cpu=1, memory="1g").to_proto(),
+            client_revision_date=client_revision_date(),
         )
         resp = client_a.launch_job(launch_req)
         job_id = resp.job_id

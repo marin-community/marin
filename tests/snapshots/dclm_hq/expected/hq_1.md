@@ -2,14 +2,16 @@
 
 # Schrödinger's cat in popular culture
 
-From Wikipedia, the free encyclopedia   Jump to: navigation, search   
+From Wikipedia, the free encyclopedia
+
+Jump to: navigation, search
 
 **Schrödinger's cat** is a thought experiment, usually described as a paradox, devised by Austrian physicist Erwin Schrödinger in 1935. It illustrates what he saw as the problem of the Copenhagen interpretation of quantum mechanics applied to everyday objects. The thought experiment presents a cat that might be alive or dead, depending on an earlier random event. In the course of developing this experiment, he coined the term Verschränkung (entanglement).<sup>\[1\]</sup>
 
 ## Contents
 
 * 1 Literature
-    + 1.1 Animals other than cats
++ 1.1 Animals other than cats
 * 2 Television
 * 3 Film
 * 4 Video games
@@ -22,7 +24,7 @@ From Wikipedia, the free encyclopedia   Jump to: navigation, search
 
 ## Literature\[edit\]
 
-This artwork by F. Gwynplaine MacIntyre, originally published in *Analog* magazine, illustrates MacIntyre's science-fiction story "Schrödinger's Cat-Sitter". The cat occupies a quantum superposition relative to the tined object, being simultaneously in front of and behind the object, which itself occupies a quantum superposition because it is simultaneously a square-edged object with two tines and a round-edged object with three tines.   
+This artwork by F. Gwynplaine MacIntyre, originally published in *Analog* magazine, illustrates MacIntyre's science-fiction story "Schrödinger's Cat-Sitter". The cat occupies a quantum superposition relative to the tined object, being simultaneously in front of and behind the object, which itself occupies a quantum superposition because it is simultaneously a square-edged object with two tines and a round-edged object with three tines.
 
 It was not long before science-fiction writers picked up this evocative concept, often using it in a humorous vein.<sup>\[2\]</sup> Several have taken the thought experiment a step further, pointing out extra complications which might arise should the experiment actually be performed. For example, in his novel *American Gods,* Neil Gaiman has a character observe, "if they don't ever open the box to feed it, it'll eventually just be two different kinds of dead." Likewise, Terry Pratchett's *Lords and Ladies* adds the issue of a third possible state, in the case of Greebo, "Bloody Furious". (In Pratchett's later novel *The Last Hero*, Death attempts the experiment himself, but cannot understand the mechanics of it, wondering if it implies that he will kill the cat just by looking at it.) In *Will Grayson, Will Grayson*, by John Green and David Levithan, the Cat makes an appearance as an analogy for Will and Jane's relationship.
 
@@ -52,7 +54,7 @@ Also, in the young adult novel *Will Grayson, Will Grayson*, by authors John Gre
 
 In the play Schrodinger's Girlfriend, the future Nobel Prize winner finds himself falling under the spell of cabaret singer and seductress Hansi Haas, who has already had her way with Einstein, Planck and Bohr. As he wrestles with his love and the problems of wave theory, Hass throws him over for Paul Dirac, revealing a truth that holds for both love and quantum physics: if you never ask the question, the answer can still be yes. (See: http://www.playbill.com/news/article/63363-World-Premiere-Schrodingers-Girlfriend-Closes-Nov-18-at-San-Frans-Magic and http://web.gc.cuny.edu/sciart/0102/schrod.html)
 
-This artwork by ADA+Neagoe, originally published in *Omagiu* magazine.   
+This artwork by ADA+Neagoe, originally published in *Omagiu* magazine.
 
 ### Animals other than cats\[edit\]
 
@@ -137,9 +139,9 @@ In Peter Milligan's metaphysical comic Animal Man, Schrödinger's Cat is explain
 * GoblynsComics featured Schrödinger's cat, "out of the bag", in March 29, 2013 comic.
 * Dilbert featured Schrödinger's cat in some comics in 2013.
 
-* This comic in June where the cat is referred to as a zombie<sup>\[23\]</sup>
-* This comic in June where the cat discusses the afterlife<sup>\[23\]</sup>
-* This comic in December where Dogbert presents Dilbert with the cat as a Christmas Gift<sup>\[23\]</sup>
+:   * This comic in June where the cat is referred to as a zombie<sup>\[23\]</sup>
+    * This comic in June where the cat discusses the afterlife<sup>\[23\]</sup>
+    * This comic in December where Dogbert presents Dilbert with the cat as a Christmas Gift<sup>\[23\]</sup>
 
 ## Music\[edit\]
 
@@ -204,22 +206,24 @@ In Peter Milligan's metaphysical comic Animal Man, Schrödinger's Cat is explain
 * Discussion about the Schrödinger's Cat at the Copenhagen Interpretation Fantasy Camp: Djinn and Juice
 * Schrodinger's cat versus Darwin
 
-Retrieved from "http://en.wikipedia.org/w/index.php?title=Schrödinger%27s\_cat\_in\_popular\_culture&oldid=617435481"      
+Retrieved from "http://en.wikipedia.org/w/index.php?title=Schrödinger%27s\_cat\_in\_popular\_culture&oldid=617435481"
 
 ## Navigation menu
 
-Schrödinger's cat in popular culture - Wikipedia, the free encyclopedia                    
+Schrödinger's cat in popular culture - Wikipedia, the free encyclopedia                 
 
 # Schrödinger's cat in popular culture
 
-From Wikipedia, the free encyclopedia   Jump to: navigation, search   
+From Wikipedia, the free encyclopedia
+
+Jump to: navigation, search
 
 **Schrödinger's cat** is a thought experiment, usually described as a paradox, devised by Austrian physicist Erwin Schrödinger in 1935. It illustrates what he saw as the problem of the Copenhagen interpretation of quantum mechanics applied to everyday objects. The thought experiment presents a cat that might be alive or dead, depending on an earlier random event. In the course of developing this experiment, he coined the term Verschränkung (entanglement).<sup>\[1\]</sup>
 
 ## Contents
 
 * 1 Literature
-    + 1.1 Animals other than cats
++ 1.1 Animals other than cats
 * 2 Television
 * 3 Film
 * 4 Video games
@@ -232,7 +236,7 @@ From Wikipedia, the free encyclopedia   Jump to: navigation, search
 
 ## Literature\[edit\]
 
-This artwork by F. Gwynplaine MacIntyre, originally published in *Analog* magazine, illustrates MacIntyre's science-fiction story "Schrödinger's Cat-Sitter". The cat occupies a quantum superposition relative to the tined object, being simultaneously in front of and behind the object, which itself occupies a quantum superposition because it is simultaneously a square-edged object with two tines and a round-edged object with three tines.   
+This artwork by F. Gwynplaine MacIntyre, originally published in *Analog* magazine, illustrates MacIntyre's science-fiction story "Schrödinger's Cat-Sitter". The cat occupies a quantum superposition relative to the tined object, being simultaneously in front of and behind the object, which itself occupies a quantum superposition because it is simultaneously a square-edged object with two tines and a round-edged object with three tines.
 
 It was not long before science-fiction writers picked up this evocative concept, often using it in a humorous vein.<sup>\[2\]</sup> Several have taken the thought experiment a step further, pointing out extra complications which might arise should the experiment actually be performed. For example, in his novel *American Gods,* Neil Gaiman has a character observe, "if they don't ever open the box to feed it, it'll eventually just be two different kinds of dead." Likewise, Terry Pratchett's *Lords and Ladies* adds the issue of a third possible state, in the case of Greebo, "Bloody Furious". (In Pratchett's later novel *The Last Hero*, Death attempts the experiment himself, but cannot understand the mechanics of it, wondering if it implies that he will kill the cat just by looking at it.) In *Will Grayson, Will Grayson*, by John Green and David Levithan, the Cat makes an appearance as an analogy for Will and Jane's relationship.
 
@@ -262,7 +266,7 @@ Also, in the young adult novel *Will Grayson, Will Grayson*, by authors John Gre
 
 In the play Schrodinger's Girlfriend, the future Nobel Prize winner finds himself falling under the spell of cabaret singer and seductress Hansi Haas, who has already had her way with Einstein, Planck and Bohr. As he wrestles with his love and the problems of wave theory, Hass throws him over for Paul Dirac, revealing a truth that holds for both love and quantum physics: if you never ask the question, the answer can still be yes. (See: http://www.playbill.com/news/article/63363-World-Premiere-Schrodingers-Girlfriend-Closes-Nov-18-at-San-Frans-Magic and http://web.gc.cuny.edu/sciart/0102/schrod.html)
 
-This artwork by ADA+Neagoe, originally published in *Omagiu* magazine.   
+This artwork by ADA+Neagoe, originally published in *Omagiu* magazine.
 
 ### Animals other than cats\[edit\]
 
@@ -347,9 +351,9 @@ In Peter Milligan's metaphysical comic Animal Man, Schrödinger's Cat is explain
 * GoblynsComics featured Schrödinger's cat, "out of the bag", in March 29, 2013 comic.
 * Dilbert featured Schrödinger's cat in some comics in 2013.
 
-* This comic in June where the cat is referred to as a zombie<sup>\[23\]</sup>
-* This comic in June where the cat discusses the afterlife<sup>\[23\]</sup>
-* This comic in December where Dogbert presents Dilbert with the cat as a Christmas Gift<sup>\[23\]</sup>
+:   * This comic in June where the cat is referred to as a zombie<sup>\[23\]</sup>
+    * This comic in June where the cat discusses the afterlife<sup>\[23\]</sup>
+    * This comic in December where Dogbert presents Dilbert with the cat as a Christmas Gift<sup>\[23\]</sup>
 
 ## Music\[edit\]
 
@@ -414,6 +418,6 @@ In Peter Milligan's metaphysical comic Animal Man, Schrödinger's Cat is explain
 * Discussion about the Schrödinger's Cat at the Copenhagen Interpretation Fantasy Camp: Djinn and Juice
 * Schrodinger's cat versus Darwin
 
-Retrieved from "http://en.wikipedia.org/w/index.php?title=Schrödinger%27s\_cat\_in\_popular\_culture&oldid=617435481"      
+Retrieved from "http://en.wikipedia.org/w/index.php?title=Schrödinger%27s\_cat\_in\_popular\_culture&oldid=617435481"
 
 ## Navigation menu

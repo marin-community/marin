@@ -70,25 +70,25 @@ function formatBytes(bytes: number): string {
 // would never get set up. A callback ref stores the element in state,
 // which triggers the effect as soon as React mounts the element.
 // Rendered inline in the header row next to the big `healthy` count.
-// CPU and memory are the currently-unallocated ("free") amounts across
-// healthy workers; `chips` is the raw total of TPU chips across healthy
-// workers regardless of commitment (iris schedules at whole-VM grain,
-// so "available chips" collapses to a tiny and misleading number on a
-// busy cluster).
+// CPU, memory, and chips are all totals across healthy workers — the
+// proto returned by ListWorkers doesn't carry the committed-resource
+// columns, so we no longer subtract them. Iris schedules at whole-VM
+// grain anyway, which made "currently unallocated" a thin proxy for
+// "idle VMs × resources" on a busy cluster.
 function ResourceLine({ resources }: { resources: WorkerResourceTotals }) {
   return (
     <>
       <span className="text-slate-600">·</span>
       <span className="text-sm text-slate-400">
         <span className="font-mono text-slate-200">
-          {formatCores(resources.cpuAvailableMillicores)}
+          {formatCores(resources.cpuTotalMillicores)}
         </span>{" "}
         CPU
       </span>
       <span className="text-slate-600">·</span>
       <span className="text-sm text-slate-400">
         <span className="font-mono text-slate-200">
-          {formatBytes(resources.memoryAvailableBytes)}
+          {formatBytes(resources.memoryTotalBytes)}
         </span>{" "}
         memory
       </span>

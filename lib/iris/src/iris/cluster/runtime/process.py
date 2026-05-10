@@ -17,8 +17,6 @@ Lifecycle management includes:
 from __future__ import annotations
 
 import atexit
-import ctypes
-import ctypes.util
 import logging
 import os
 import select
@@ -43,8 +41,8 @@ from iris.cluster.runtime.profile import (
     build_pyspy_cmd,
     resolve_cpu_spec,
     resolve_memory_spec,
+    run_pyspy_dump,
 )
-from iris.cluster.runtime.profile import run_pyspy_dump
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerPhase,
@@ -55,7 +53,7 @@ from iris.cluster.runtime.types import (
     RuntimeLogReader,
 )
 from iris.cluster.worker.worker_types import LogLine
-from iris.managed_thread import ManagedThread, get_thread_container
+from iris.managed_thread import get_thread_container
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -86,22 +84,16 @@ atexit.register(_cleanup_all_runtimes)
 # =============================================================================
 
 
-def set_pdeathsig_preexec():
-    """Use prctl(PR_SET_PDEATHSIG, SIGKILL) to kill subprocess if parent dies.
-
-    This is a Linux-specific feature that ensures container processes are
-    automatically killed if the worker process dies unexpectedly. On other
-    platforms, this is a no-op.
-    """
-    if sys.platform == "linux":
-        PR_SET_PDEATHSIG = 1
-        try:
-            libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-            if libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL) != 0:
-                errno = ctypes.get_errno()
-                logger.warning(f"Failed to set parent death signal: errno {errno}")
-        except Exception as e:
-            logger.debug(f"Could not set parent death signal: {e}")
+# Set PR_SET_PDEATHSIG in a tiny launcher then exec the real command.
+# ``preexec_fn`` would force CPython onto fork()+exec, which trips Linux's
+# overcommit heuristic on workers with large VMS; this path keeps
+# vfork()/posix_spawn. PDEATHSIG survives execve.
+_PDEATHSIG_LAUNCHER_CODE = (
+    "import ctypes,ctypes.util,os,signal,sys;"
+    "ctypes.CDLL(ctypes.util.find_library('c'),use_errno=True)"
+    ".prctl(1,signal.SIGKILL,0,0,0);"
+    "os.execvp(sys.argv[1],sys.argv[1:])"
+)
 
 
 # =============================================================================
@@ -121,7 +113,6 @@ class ProcessContainer:
     config: ContainerConfig
     command: list[str]  # Pre-computed command with remapped paths
     _process: subprocess.Popen | None = field(default=None, repr=False)
-    _log_thread: ManagedThread | None = field(default=None, repr=False)
     _running: bool = False
     _exit_code: int | None = None
     _error: str | None = None
@@ -150,8 +141,6 @@ class ProcessContainer:
             prefix = os.pathsep.join(p for p in extra_paths if p not in existing.split(os.pathsep))
             env["PYTHONPATH"] = f"{prefix}{os.pathsep}{existing}" if existing else prefix
 
-            # Use process groups on Unix for clean termination
-            # Set PR_SET_PDEATHSIG on Linux for automatic cleanup if parent dies
             popen_kwargs: dict[str, object] = {
                 "stdout": subprocess.PIPE,
                 "stderr": subprocess.PIPE,
@@ -161,16 +150,21 @@ class ProcessContainer:
             }
 
             if sys.platform != "win32":
-                # Create new process group for clean termination
+                # New session/process group for clean termination.
                 popen_kwargs["start_new_session"] = True
-                # Set up automatic termination if parent dies (Linux only)
-                popen_kwargs["preexec_fn"] = set_pdeathsig_preexec
+
+            # On Linux, wrap the command in a tiny Python launcher that sets
+            # PR_SET_PDEATHSIG before exec'ing the user command. We avoid
+            # preexec_fn because that forces fork()+exec, which fails with
+            # ENOMEM on workers with large VMS under default overcommit.
+            if sys.platform == "linux":
+                cmd = [sys.executable, "-c", _PDEATHSIG_LAUNCHER_CODE, *cmd]
 
             self._process = subprocess.Popen(cmd, **popen_kwargs)
 
             # Spawn thread to stream logs asynchronously
             name_suffix = self.config.task_id or self.config.job_id or "unnamed"
-            self._log_thread = get_thread_container().spawn(
+            get_thread_container().spawn(
                 target=self._stream_logs,
                 name=f"logs-{name_suffix}",
             )

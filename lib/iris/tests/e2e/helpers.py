@@ -155,38 +155,3 @@ class TestJobs:
 
         s.wait(timeout=Duration.from_seconds(2))
         return "done"
-
-
-# Cloud task pods run `uv sync` per pod and need ~4GB; local workers share
-# a pre-built venv and would be fine with 1GB. Since these helpers execute
-# inside a worker with no access to the test fixture's is_cloud flag, we
-# use the cloud default unconditionally — local workers can absorb it.
-_NESTED_JOB_MEMORY = "4g"
-
-
-def _tree_middle_job():
-    """Iris job callable: submits TestJobs.quick as a grandchild named 'tree-grandchild'."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import Entrypoint, ResourceSpec
-
-    ctx = iris_ctx()
-    grandchild = ctx.client.submit(
-        Entrypoint.from_callable(TestJobs.quick),
-        "tree-grandchild",
-        ResourceSpec(cpu=1, memory=_NESTED_JOB_MEMORY),
-    )
-    grandchild.wait(timeout=120)
-
-
-def _tree_parent_job():
-    """Iris job callable: submits _tree_middle_job as a child named 'tree-child'."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import Entrypoint, ResourceSpec
-
-    ctx = iris_ctx()
-    child = ctx.client.submit(
-        Entrypoint.from_callable(_tree_middle_job),
-        "tree-child",
-        ResourceSpec(cpu=1, memory=_NESTED_JOB_MEMORY),
-    )
-    child.wait(timeout=120)

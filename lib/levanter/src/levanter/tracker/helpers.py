@@ -9,6 +9,7 @@ import time
 from typing import Optional
 
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
+from optax._src.wrappers import MultiStepsState
 
 import levanter.tracker
 from levanter.utils.jax_utils import jnp_to_python
@@ -18,13 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 def log_optimizer_hyperparams(opt_state, prefix: Optional[str] = None, *, step=None):
-    try:
-        from optax._src.wrappers import MultiStepsState
-
-        if isinstance(opt_state, MultiStepsState):
-            opt_state = opt_state.inner_opt_state
-    except ImportError:
-        pass
+    if isinstance(opt_state, MultiStepsState):
+        opt_state = opt_state.inner_opt_state
 
     def wrap_key(key):
         if prefix:
@@ -51,7 +47,6 @@ def hparams_to_dict(hparams, **extra_hparams):
 def infer_experiment_git_root() -> Optional[str | os.PathLike[str]]:
     # sniff out the main directory (since we typically don't run from the root of the repo)
     # we'll walk the stack and directories for the files in the stack the until we're at a git root
-    import os
     import traceback
 
     stack = traceback.extract_stack()
@@ -69,7 +64,6 @@ def infer_experiment_git_root() -> Optional[str | os.PathLike[str]]:
             break
         except (NoSuchPathError, InvalidGitRepositoryError):
             logger.debug(f"Skipping {dirname} since it's not a git root")
-            pass
     return top_git_root
 
 
