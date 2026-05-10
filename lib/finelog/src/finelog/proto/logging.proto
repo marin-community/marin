@@ -67,11 +67,15 @@ message PushLogsResponse {}
 //
 // `source` is always treated as a literal string for EXACT and PREFIX. The
 // server never inspects it for regex metacharacters; literal `+`, `.`, etc.
-// match themselves. Use REGEX explicitly when regex semantics are wanted.
+// match themselves. UNSPECIFIED is treated as PREFIX so old callers get
+// path-style reads (everything under `/job/<job>/<task>`); set EXACT
+// explicitly when only the literal key should match. Use REGEX explicitly
+// when regex semantics are wanted.
 enum MatchScope {
-  // Treated as MATCH_SCOPE_EXACT by the server. Old clients that omit the
-  // field get exact-key reads, which is the safe default and avoids
-  // silently reinterpreting literal keys with regex metacharacters.
+  // Treated as MATCH_SCOPE_PREFIX by the server. Old callers that pass a
+  // path-style key (`/job/<job>/<task>`) without a scope read every entry
+  // under that path. Set MATCH_SCOPE_EXACT explicitly when only the
+  // literal key should match.
   MATCH_SCOPE_UNSPECIFIED = 0;
   // Exact match: read entries whose key equals `source` byte-for-byte.
   MATCH_SCOPE_EXACT = 1;
@@ -94,7 +98,7 @@ message FetchLogsRequest {
   int32 max_lines = 5;         // Max entries to return (0 = server default 1000)
   bool tail = 6;               // Return last N entries instead of first N
   string min_level = 7;        // Minimum level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
-  MatchScope match_scope = 8;  // How `source` is interpreted (UNSPECIFIED == EXACT)
+  MatchScope match_scope = 8;  // How `source` is interpreted (UNSPECIFIED == PREFIX)
 }
 
 message FetchLogsResponse {

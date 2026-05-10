@@ -1747,15 +1747,17 @@ def _scope_query(
 
     Returns ``(where_parts, params, include_key_in_select, exact_key)``.
 
-    UNSPECIFIED is treated as EXACT — old clients get safe literal-key reads
-    instead of silently being dispatched to regex on metacharacter content.
+    UNSPECIFIED is treated as PREFIX — old callers that pass a path-style
+    key without a scope (e.g. ``/job/<job>/<task>``) read every entry under
+    that path. Use MATCH_SCOPE_EXACT explicitly when only the literal key
+    should match.
     """
-    if match_scope in (logging_pb2.MATCH_SCOPE_UNSPECIFIED, logging_pb2.MATCH_SCOPE_EXACT):
+    if match_scope == logging_pb2.MATCH_SCOPE_EXACT:
         where_parts = ["key = $key", "seq > $cursor"]
         params: dict = {"key": source, "cursor": cursor}
         return where_parts, params, False, source
 
-    if match_scope == logging_pb2.MATCH_SCOPE_PREFIX:
+    if match_scope in (logging_pb2.MATCH_SCOPE_UNSPECIFIED, logging_pb2.MATCH_SCOPE_PREFIX):
         # `prefix(key, $p)` is DuckDB's literal-prefix predicate. It's pushed
         # into Parquet row-group min/max stats the same way an `=` is, so
         # PREFIX reads keep the pruning of EXACT.

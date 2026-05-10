@@ -13,9 +13,9 @@ KEY = "/job/test/0:0"
 
 # Each char is a regex metacharacter that, under the old auto-detect
 # dispatch, silently turned literal-key reads into regex queries and
-# dropped the row. Reads must return the literal entry under EXACT
-# (the unspecified default) and PREFIX. Backslash is escaped twice
-# for Python and once for the literal in the key.
+# dropped the row. Reads must return the literal entry under EXACT and
+# PREFIX (the unspecified default). Backslash is escaped twice for
+# Python and once for the literal in the key.
 _REGEX_METACHARS = list(".*+?[](){}^$|\\")
 
 
@@ -72,30 +72,35 @@ def test_prefix_scope_query(store: DuckDBLogStore):
     assert sorted(e.data for e in result.entries) == ["a", "b"]
 
 
-def test_unspecified_scope_defaults_to_exact(store: DuckDBLogStore):
-    """Unspecified scope must read literal keys, not be reinterpreted as regex.
+def test_unspecified_scope_defaults_to_prefix(store: DuckDBLogStore):
+    """Unspecified scope must read literal-prefix matches, not be reinterpreted
+    as regex.
 
     Regression for the issue where job names containing scientific notation
-    (e.g. ``9e+20``) were silently dispatched to regex and dropped.
+    (e.g. ``9e+20``) were silently dispatched to regex and dropped. Prefix
+    semantics under the new default still return the row, and a sibling job
+    with the same leader stays out as long as its key isn't a prefix.
     """
     store.append("/job/curation-9e+20", [_entry("hit", epoch_ms=1)])
     store.append("/job/curation-other", [_entry("miss", epoch_ms=2)])
-    # No match_scope passed → UNSPECIFIED → EXACT.
+    # No match_scope passed → UNSPECIFIED → PREFIX. The full literal key is
+    # its own prefix; the sibling does not start with it.
     result = store.get_logs("/job/curation-9e+20")
     assert [e.data for e in result.entries] == ["hit"]
 
 
 @pytest.mark.parametrize("meta", _REGEX_METACHARS)
-def test_exact_scope_returns_literal_key_with_metachar(store: DuckDBLogStore, meta: str):
-    """EXACT (the unspecified default) must return rows for keys containing
-    every regex metacharacter — none of them should be reinterpreted as
-    regex syntax on the read path."""
+def test_literal_key_read_with_metachar(store: DuckDBLogStore, meta: str):
+    """EXACT and PREFIX (the unspecified default) must both return rows for
+    keys containing every regex metacharacter — none of them should be
+    reinterpreted as regex syntax on the read path."""
     key = f"/job/literal{meta}value:0"
     store.append(key, [_entry(f"line-with-{meta}", epoch_ms=1)])
     # Sentinel under a different key must not leak in.
     store.append("/job/literal-other:0", [_entry("decoy", epoch_ms=2)])
 
-    # Default (UNSPECIFIED → EXACT) reads return the literal row.
+    # Default (UNSPECIFIED → PREFIX) reads return the literal row: the full
+    # key is its own prefix and the decoy is not.
     default = store.get_logs(key)
     assert [e.data for e in default.entries] == [f"line-with-{meta}"]
 
