@@ -104,7 +104,7 @@ def main():
             data = call_gemini_json(log, gem, role=f"dart_iter_round_{args.round}_compile_gem",
                                     key={"statement_id": sid, "round": args.round},
                                     system=COMPILER_SYSTEM, user=prompts[sid],
-                                    thinking_budget=128)
+                                    thinking_level="low")
             return sid, data, None
         except Exception as e:
             return sid, None, str(e)[:300]

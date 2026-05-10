@@ -128,11 +128,15 @@ def make_conditions(round_n: int) -> dict:
 def call_gemini_judge(client: genai.Client, log: RawAPILogger, role: str, key: dict,
                       system: str, user: str, max_tokens: int = 1500) -> dict:
     from google.genai import types
+    # Flash supports thinking_level="minimal" (Pro does not). Use minimal for
+    # judge-side calls — high throughput, classification-style task. See
+    # dart.md Gotcha 17.
     cfg = types.GenerateContentConfig(
         system_instruction=system,
         response_mime_type="application/json",
         max_output_tokens=max_tokens,
         temperature=0,
+        thinking_config=types.ThinkingConfig(thinking_level="minimal"),
     )
     raw = log.call(role=role, key=key,
                    fn=lambda: client.models.generate_content(

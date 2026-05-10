@@ -151,20 +151,20 @@ def classify_direction_gpt(log, oai, sid, locus, original, edit_a, edit_b) -> di
 
 
 def classify_direction_gem(log, gem, sid, locus, original, edit_a, edit_b,
-                           thinking_budget=128) -> dict:
+                           thinking_level: str = "low") -> dict:
     user = (
         f"STATEMENT: {sid}\n"
         f"LOCUS: {locus}\n\n"
         f"ORIGINAL:\n{original}\n\n"
         f"EDIT_A (GPT-5.1):\n{edit_a}\n\n"
-        f"EDIT_B (Gemini 3 Pro):\n{edit_b}\n\n"
+        f"EDIT_B (Gemini 3.x Pro):\n{edit_b}\n\n"
         "Classify per the schema."
     )
     config = types.GenerateContentConfig(
         system_instruction=CLASSIFIER_SYSTEM,
         max_output_tokens=600,
         temperature=0,
-        thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
+        thinking_config=types.ThinkingConfig(thinking_level=thinking_level),
         response_mime_type="application/json",
         safety_settings=_GEMINI_SAFETY_BLOCK_NONE,
     )

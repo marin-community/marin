@@ -109,11 +109,13 @@ def call_gemini_json(log: RawAPILogger, gem: genai.Client, role: str, key: dict[
     Note: Gemini still hard-refuses some categories (e.g., CSAM) even at
     BLOCK_NONE — those will continue to fail and must be excluded.
     """
+    # Per dart.md Gotcha 17: Flash supports thinking_level="minimal" (Pro doesn't).
+    # Use minimal for judge calls — high throughput, classification-style.
     config = types.GenerateContentConfig(
         system_instruction=system,
         max_output_tokens=max_tokens,
         temperature=0,
-        thinking_config=types.ThinkingConfig(thinking_budget=0),
+        thinking_config=types.ThinkingConfig(thinking_level="minimal"),
         response_mime_type="application/json",
         safety_settings=_GEMINI_SAFETY_BLOCK_NONE,
     )

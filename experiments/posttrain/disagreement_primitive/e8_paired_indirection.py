@@ -288,10 +288,12 @@ def call_weak_text(log: RawAPILogger, weak: OpenAI, role: str, key: dict[str, An
 
 def call_gemini_text(log: RawAPILogger, gem: genai.Client, role: str, key: dict[str, Any],
                      user: str, max_tokens: int = 1000, temp: float = 1.0) -> str:
+    # Per dart.md Gotcha 17: thinking_level instead of thinking_budget.
+    # GEMINI is Flash (judge-side default) so "minimal" is allowed.
     config = types.GenerateContentConfig(
         max_output_tokens=max_tokens,
         temperature=temp,
-        thinking_config=types.ThinkingConfig(thinking_budget=0),
+        thinking_config=types.ThinkingConfig(thinking_level="minimal"),
     )
     raw = log.call(
         role=role,

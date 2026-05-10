@@ -263,7 +263,7 @@ def call_all_three(round_n: int, prompt: str, log: RawAPILogger) -> dict:
         return call_gemini_json(log, gem, role=f"run5_round_{round_n}_compile_gem",
                                 key={"sid": SID, "round": round_n},
                                 system=COMPILER_SYSTEM_V5, user=prompt,
-                                thinking_budget=128, max_tokens=10000)
+                                thinking_level="low", max_tokens=10000)
 
     def cla_call():
         api_resp = log.call(role=f"run5_round_{round_n}_compile_cla",

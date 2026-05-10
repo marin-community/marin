@@ -51,7 +51,7 @@ RUBRICS_V1_PATH = DIR / "e8_rubrics.jsonl"
 DIAGNOSES_OUT = DIR / "dart_diagnoses_gemini.jsonl"
 REPORT_OUT = Path(".agents/logbooks/dart_run_002_diagnoses.md")
 
-GEMINI_MODEL = "gemini-3-pro-preview"
+GEMINI_MODEL = "gemini-3.1-pro-preview"
 
 
 def parse_json_strict(text: str) -> dict:
@@ -70,13 +70,27 @@ def parse_json_strict(text: str) -> dict:
 
 def call_gemini_json(log: RawAPILogger, gem: genai.Client, role: str, key: dict[str, Any],
                      system: str, user: str, max_tokens: int = 8000,
-                     thinking_budget: int = 0) -> dict[str, Any]:
-    """Gemini 3 Pro JSON-mode call with explicit thinking budget."""
+                     thinking_level: str = "low",
+                     thinking_budget: int | None = None) -> dict[str, Any]:
+    """Gemini 3.x Pro JSON-mode call.
+
+    Per Gotcha 17 in dart.md: 3.x Pro models reject thinking_level="minimal"
+    and thinking_budget=0; thinking_budget is silently ignored / floored on
+    Pro. Use thinking_level ("low" | "medium" | "high"). Default "low" =
+    minimum allowed on Pro, "Minimizes latency and cost. Best for simple
+    instruction following, chat, or high-throughput applications" per
+    Google docs. The thinking_budget kwarg is retained for back-compat with
+    older callers but is ignored unless thinking_level is None.
+    """
+    if thinking_level is None and thinking_budget is not None:
+        thinking_cfg = types.ThinkingConfig(thinking_budget=thinking_budget)
+    else:
+        thinking_cfg = types.ThinkingConfig(thinking_level=thinking_level)
     config = types.GenerateContentConfig(
         system_instruction=system,
         max_output_tokens=max_tokens,
         temperature=0,
-        thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
+        thinking_config=thinking_cfg,
         response_mime_type="application/json",
         safety_settings=_GEMINI_SAFETY_BLOCK_NONE,
     )
@@ -93,8 +107,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--statement-ids", nargs="*", default=DEFAULT_BUCKET_D)
     ap.add_argument("--top-k", type=int, default=10)
-    ap.add_argument("--thinking-budget", type=int, default=0,
-                    help="Gemini thinking budget tokens (0 = disabled if model allows; else minimum)")
+    ap.add_argument("--thinking-level", type=str, default="low",
+                    choices=["low", "medium", "high"],
+                    help="Gemini thinking_level (Pro models reject 'minimal'). 'low' = lowest cost.")
     args = ap.parse_args()
 
     spec = {json.loads(l)["id"]: json.loads(l) for l in SPEC_PATH.open() if l.strip()}
@@ -105,7 +120,7 @@ def main() -> int:
     gem = genai.Client(api_key=os.environ.get("GEMINI_API_KEY") or os.environ["GOOGLE_API_KEY"], vertexai=False)
     log = RawAPILogger("e9_dart_compiler_gemini")
     print(f"DART Step 3 (Gemini variant) — bidirectional compiler diagnostic")
-    print(f"  model: {GEMINI_MODEL}, thinking_budget={args.thinking_budget}")
+    print(f"  model: {GEMINI_MODEL}, thinking_level={args.thinking_level}, temperature=0")
     print(f"  statements: {len(args.statement_ids)}")
     print(f"  raw log dir: {log.run_dir}\n")
 
@@ -134,7 +149,7 @@ def main() -> int:
             data = call_gemini_json(log, gem, role="dart_compiler_gemini",
                                     key={"statement_id": sid},
                                     system=COMPILER_SYSTEM, user=user,
-                                    max_tokens=8000, thinking_budget=args.thinking_budget)
+                                    max_tokens=8000, thinking_level=args.thinking_level)
         except Exception as e:
             print(f"  ERROR: {e}")
             out_rows.append({"statement_id": sid, "error": str(e)[:300]})
@@ -154,7 +169,7 @@ def main() -> int:
             "statement_id": sid,
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "compiler": GEMINI_MODEL,
-            "thinking_budget": args.thinking_budget,
+            "thinking_level": args.thinking_level,
             "bare_pwv_total": bare_pwv_total,
             "rubric_pwv_total": rub_pwv_total,
             "diagnosis": data.get("diagnosis"),
@@ -171,7 +186,7 @@ def main() -> int:
     # Render markdown report
     parts = ["# DART Run 002 — Gemini 3 Pro compiler diagnoses\n"]
     parts.append(f"Run date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}")
-    parts.append(f"Compiler: **{GEMINI_MODEL}** (thinking_budget={args.thinking_budget})")
+    parts.append(f"Compiler: **{GEMINI_MODEL}** (thinking_level={args.thinking_level}, temperature=0)")
     parts.append(f"Statements: {len(out_rows)} Bucket D statements at T₁=0.5\n")
     parts.append(f"Pairs with Run 001 (GPT-5.1 compiler): see `.agents/logbooks/dart_run_001_diagnoses.md`\n")
 
