@@ -8,6 +8,22 @@
 # The controller and worker share all layers up to and including Python
 # dependencies. The worker adds only the Docker CLI on top.
 
+# ── Stage: dashboard ─────────────────────────────────────────────────
+# Build the Vue SPA. Output is consumed by the deps stage at
+# /app/lib/iris/dashboard/dist; the controller/worker ASGI apps serve it
+# (see lib/iris/src/iris/cluster/dashboard_common.py).
+FROM node:22-slim AS dashboard
+
+WORKDIR /build/dashboard
+
+# Copy manifests first so dependency install is cached across source edits.
+COPY lib/iris/dashboard/package.json lib/iris/dashboard/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY lib/iris/dashboard/ ./
+RUN npm run build
+
+
 # ── Stage: base ──────────────────────────────────────────────────────
 # System dependencies shared by controller and worker.
 FROM python:3.12-slim AS base
@@ -77,8 +93,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install py-spy memray
 
-# Dashboard assets (pre-built by `iris build dashboard` before docker build)
-COPY lib/iris/dashboard/dist ./lib/iris/dashboard/dist
+# Dashboard assets — built by the `dashboard` stage above.
+COPY --from=dashboard /build/dashboard/dist ./lib/iris/dashboard/dist
 
 RUN mkdir -p /var/cache/iris
 
