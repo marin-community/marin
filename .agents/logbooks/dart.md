@@ -1626,3 +1626,167 @@ GPT+Claude remain the strongest pair. Pro is the discriminating outlier. Same pa
 3. **`refusal_style` is the canonical example of rubric paradox** under 80-cell (D→C: rubric pulls α below T₁ where bare was above). The rubric is actively making things worse. Strong candidate for "drop the rubric, judge bare."
 
 4. **Total cost so far across Runs 1-8: ~$215**. Methodology-validation phase is concluding — we now have a defensible 3-judge canonical bucketing on the full 4-generator universe with empirically calibrated cost forecasting.
+
+---
+
+### Run 9 — Plan: Re-derive DART rubrics on the canonical 80-cell universe (2026-05-10)
+
+**Status**: Plan locked, awaiting launch.
+**Date launched**: 2026-05-10 (pending).
+**Scope**: 15 canonical Bucket D statements at T₁=0.5 (full 4-generator × 80-cell × 3-judge ensemble).
+**Why this is needed**: Runs 1-5 v2/v3 rubrics were derived from poison evidence the compilers saw — and **that evidence was 100% grok-opposite cells**. Compilers wrote v2 to fix grok-style adversarial disagreement; they never saw a single high-pwv example from gpt-5.1 / Qwen / gemini-flash responses. Three known failure modes for those v2 rubrics on natural content:
+
+1. **Over-restrictive on natural content**: rubric anchors tightened beyond what's needed for normal user prompts (e.g. `prevent_imminent_harm` v2's MUST-disclaimer rule was authored from grok "give me dangerous instructions" prompts).
+2. **Misses disagreement that only appears on natural content**: judges may disagree on borderline gpt-5.1 responses in patterns the grok-opposite generator never surfaces.
+3. **Spec-edit proposals codify grok-specific reading**: e.g., `avoid_abuse` v2's "roasts, dark comedy, fictional villain dialogue" carve-out enumeration was grok-prompt-shaped; might over-permit on natural content.
+
+Run 9 corrects this by re-running the full DART loop with poison evidence drawn from the canonical 80-cell universe (all 4 generators × 3 judges).
+
+#### What this run incorporates from prior runs
+
+| from | what we use |
+|---|---|
+| Runs 1-3 | 3-compiler ensemble (GPT + Pro + Claude) with majority vote (§1.7). Priority: Gem > Cla > GPT for tie-break (Gem/Cla are consensus pole). |
+| Run 4 | 4-condition factorial (C0/C1/C2/C3); per-statement state machine (CONVERGED / IMPROVING / STUCK); cumulative-history compiler prompts for Round 2+. **But we do NOT auto-iterate to R2** — §1.8.6 found median R2 contribution = +0.022 (within noise). |
+| Run 5 | Three edit types (rubric / spec / examples) with §1.9.4 hierarchical rule. |
+| Postmortems A/B/C | §1.8 detectors: measurement-universe consistency, per-judge bias, anchor-text uptake asymmetry, regime-check before R2, response_interpretation_disagreement diagnosis. |
+| Run 7 (false starts) | Range-restriction filter (avoid the avoid_sycophancy ceiling artifact). |
+| Run 8 | Canonical 80-cell ensemble. Cost estimator. |
+| 8 forensic subagents | **Pathology-aware approach**: different statements need different fixes (see "expected pathology distribution" below). |
+
+#### Expected pathology distribution (from Run-8 forensic analysis on the 15 canonical D statements)
+
+| pathology | prediction for | expected fix type |
+|---|---|---|
+| **Pro literalist outlier** (override-clause loophole) | `no_agenda`, `do_not_lie`, `comply_with_laws`, `prevent_imminent_harm` | rubric edit closing scope-of-override loophole |
+| **Spec-clause priority unspecified** | `letter_and_spirit`, `assume_objective_pov`, `be_engaging`, `formatting`, `protect_privileged_messages` | escalate to spec authors; rubric can't fix |
+| **Response-interpretation disagreement** (§1.8.5) | `no_topic_off_limits`, `refusal_style`, `express_uncertainty` (B-bucket), `avoid_abuse` | spec_example_additions (§1.9) |
+| **Legitimate value contestation** | `avoid_abuse`, `be_rationally_optimistic` (now A) | DON'T auto-fix; flag to author |
+| **Hard refusal / rubric brittleness** | `sexual_content_involving_minors`, `no_erotica_or_gore` | rubric edit restoring tolerance bands |
+
+This is a prior, not a constraint. Compilers may diagnose differently when shown the new 80-cell evidence.
+
+#### Phase plan (4 phases + analysis)
+
+##### Phase 0 — Preparation (free)
+
+1. **Range-restriction filter** (§1.8.2 detector): for each of 15 D statements, compute per-judge score variance on the 80-cell universe. Skip statements where ≥80% of cells are score-constant for ≥2 judges. (None expected; this is a sanity check.)
+2. **Compute new poison cell rankings** under canonical ensemble:
+   - Per cell: `pwv = Σ_{i<j}(s_i − s_j)²` over the 3 judges
+   - Top-K=10 bare-poison cells (highest pwv under variant_A)
+   - Top-K=10 rubric-poison cells (highest pwv under rubric_plus_spec)
+   - **Critical**: cells should span all 4 generators based on actual pwv ranking (not a per-generator quota); the natural-generator high-pwv cells are exactly what compilers haven't seen before.
+3. **Prepare compiler prompts** with extended schema (§1.9.3): include `spec_example_additions` field + `response_interpretation_disagreement` diagnosis option.
+
+##### Phase 1 — Compiler diagnostic (Anthropic batch + OpenAI batch + Gemini sync)
+
+15 statements × 3 compilers = **45 calls**.
+
+- **GPT-5.1**: OpenAI batch, `reasoning_effort="none"`, `temperature=0`, response_format=json_object
+- **Claude Sonnet 4.6**: Anthropic batch, `thinking={"type":"disabled"}`, `temperature=0`, tool-use forced (DART_COMPILER_TOOL)
+- **Gemini-3.1-Pro**: sync, `thinking_level="low"`, `temperature=0`, response_mime_type=application/json (Gemini Developer API has no batch)
+
+Cost forecast per `cost_estimate.py` (will use empirical rates from completed Run 8 batches):
+- GPT batch: ~10K input + ~2K output × 15 calls ≈ **$0.25**
+- Claude batch: same prompt size ≈ **$0.45**
+- Pro sync: ~10K input + ~2K output + ~300 thinking × 15 ≈ **$0.50**
+- **Phase 1 total: ~$1.20**
+
+##### Phase 2 — Synthesis with hierarchical rule (free, deterministic)
+
+Apply §1.9.4 L1→L2→L3:
+- L1: diagnosis vote (5 options). Operative diagnosis = consensus or plurality.
+- L2: from operative diagnosis, look up admissible edit types.
+- L3: per-instance majority within admissible types. Pick text by Gem > Cla > GPT priority.
+
+Output per statement:
+- `rubric_v9.json` (if rubric edits adopted)
+- `spec_v9_proposals.txt` (if spec edits — escalate to author queue, never auto-deploy)
+- `examples_v9.jsonl` (if example additions adopted)
+- `escalation_log_run9.json` (rejected proposals, by which level)
+
+##### Phase 3 — Judging v2 — full canonical 3-judge ensemble at 80 cells
+
+Three conditions per statement:
+- **C1**: rubric_v9 + v1 spec + v1 examples (rubric-only change)
+- **C2**: v1 rubric + v9 spec edits + v9 example additions (no rubric change)
+- **C3**: rubric_v9 + v9 spec + v9 examples (full)
+
+C0 is the existing canonical baseline — no re-judging needed.
+
+Volume per condition: 15 × 80 cells × 3 judges = 3,600 calls. Across 3 conditions: 10,800 per judge.
+
+Cost forecast (using empirical Run 8 rates):
+
+| step | per-call | × 10,800 | total |
+|---|--:|--:|--:|
+| GPT batch (`reasoning_effort=none`) | $0.003 | 10,800 | **~$32** |
+| Claude batch (Sonnet 4.6, `thinking=disabled`) | $0.00884 | 10,800 | **~$95** |
+| Pro sync (`thinking_level=low`) | $0.009 | 10,800 | **~$97** |
+| **Phase 3 total (C1+C2+C3, all 15 statements)** | | | **~$224** |
+
+This is more than the Anthropic-cost-sensitive user wants. **Cost-reduction options**:
+
+**Reduction A — single condition (C3 only)**: just judge full v2. Tests "does the package help?" without per-component ablation. 1/3 the cost: **~$75**.
+
+**Reduction B — 10 statements at T=0.4 instead of 15 at T=0.5**: drop the 5 statements where α is already in [0.4, 0.5] borderline. Saves 1/3: **~$150** for full 3-condition or **~$50** for C3-only.
+
+**Reduction C — defer Pro re-judging on previously-Run-4-judged statements**: 11 of 15 already have v2/v3 cell-level judgments under Flash. We could re-use those + only generate Pro fresh judgments on the new v2. But this conflates Run 4 v2 with Run 9 v2 (different rubrics). **Probably not viable** — the rubrics differ.
+
+**Reduction D — use fewer judges**: 2-judge GPT+Claude (the strongest pair, α≈0.78) instead of 3. Skip Pro entirely. Saves ~$97: **~$130** for full 3-condition. Drawback: loses the Pro signal that revealed the override-clause-loophole pathology.
+
+**Recommended scope**: **Reduction A applied to all 15 statements** (C3 only, full canonical 3-judge). **Cost: ~$75**. If C3 helps, Phase 3.5 ablates with C1/C2 only on the statements where C3 helps. If C3 doesn't help, no further spending — investigate.
+
+##### Phase 4 — Analysis with §1.8 detectors
+
+For each statement:
+1. Compute α_bare and α_p4 under v9 (v1 spec + v1 rubric + v9 examples for spec_ambiguity-only diagnoses; v1+v9 rubric for rubric_drift; full v9 for "both").
+2. Apply §1.8.1 measurement-universe check (compare on intersection cells).
+3. Apply §1.8.2 per-judge bias detector — if any judge degenerate on the new judgments, flag.
+4. Apply §1.8.3 anchor-text uptake asymmetry — for any v9 anchor edit with new vivid-exemplar text, count cite-rate per judge. Asymmetric uptake (one judge >3× others) → flag the edit.
+5. Per-statement verdict: CONVERGED / IMPROVING / STUCK.
+6. **Default: NO Round 2** (§1.8.6). IMPROVING-but-not-CONVERGED routes to human queue, not automatic R2.
+
+##### Stopping rules
+
+- **Hard cost cap**: $150 across Phases 1+3+analysis. If exceeded mid-run, abort and report partial.
+- **Round budget**: N=1. R2 only fires if a statement has α_v9 < 0 AND no opposite-direction edits AND CI lower bound < 0 (per §1.8.6 strict criteria). Median R2 expected value = 0; this is gated.
+- **Anchor-text-overfitting circuit-breaker**: if Phase 4 detects asymmetric uptake on any v9 edit (one judge cites it >3× others), reject that edit, recompute α without it, mark for human review.
+
+##### Backup plans by outcome
+
+**Outcome A — v9 helps on most statements (Δα ≥ +0.05 on ≥10/15)**: methodology validated under canonical universe. Update DEFAULT_BUCKET_D in `e9_dart_compiler.py`. Document Run 9 as the canonical DART output. Optional Phase 3.5 ablation ($50) to confirm which edit types are doing the work.
+
+**Outcome B — v9 marginal (Δα ∈ [+0.02, +0.05] on most)**: rubric tweaks aren't reaching the residual disagreement. Two interpretations:
+- B1. Statements need spec-author escalation (the diagnoses say so) — escalate, write Run 10 as a "spec-author conversation queue" doc.
+- B2. The v9 example additions are the bottleneck; we need MORE examples per statement. Run a Phase 5 fresh compile asking specifically for example_additions only (cheap, ~$1).
+
+**Outcome C — v9 regresses on >2 statements**: anchor-text overfitting happened. Apply §1.8.3 detector retroactively. Revert the offending edits. Investigate and write postmortem.
+
+**Outcome D — Pro is degenerate (`thinking_level="low"` produces score-5-everywhere on some statements)**: drop Pro for those statements, report 2-judge α GPT+Claude. Document as a per-judge calibration issue, not a methodology problem.
+
+**Outcome E — Compilers all diagnose `irreducible` or `response_interpretation_disagreement` on a statement**: don't propose rubric edits. Either escalate (irreducible) or queue example-additions for human review. Save spending on judgment for these statements.
+
+##### Total Run 9 budget estimate
+
+| line item | recommended | upper |
+|---|--:|--:|
+| Phase 1 — compilers | $1.20 | $1.50 |
+| Phase 3 — judging (C3 only, all 15) | $75 | $75 |
+| Phase 3.5 — ablation (conditional) | $0 (deferred) | $50 |
+| Postmortem subagent (free per memory) | $0 | $0 |
+| **Grand total** | **~$76** | **~$130** |
+
+##### Outputs (planned)
+
+- `experiments/posttrain/disagreement_primitive/dart_run9/` directory tree per-statement
+- `experiments/posttrain/disagreement_primitive/e9_dart_run9_*.py` pipeline scripts (compile / synthesize / judge / analyze / render)
+- `dart_run9_diagnoses_{gpt,gem,cla}.jsonl` raw compiler outputs
+- `per_judgment_run9.jsonl` v9 judgments (canonical 3-judge × 80 cells × 1-3 conditions)
+- `dart_run9_analysis.md` — final report
+- §5 Run 9 entry in dart.md (this entry, replacing the "plan" section after results)
+- Updates to dart.md §1.1 if bucketing shifts
+
+#### Status: ready to launch
+
+Phase 0 + Phase 1 ready. Phase 3 will launch after compiler outputs are synthesized. Cost estimator (`cost_estimate.py`) will be re-run on actual Phase 1 token usage before Phase 3 to refine the forecast.
