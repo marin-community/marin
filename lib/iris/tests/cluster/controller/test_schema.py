@@ -12,7 +12,6 @@ import pytest
 from iris.cluster.controller.schema import (
     JOBS,
     MAIN_TABLES,
-    PROFILES_TABLES,
     generate_full_ddl,
 )
 
@@ -23,9 +22,6 @@ def _create_db() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     ddl = generate_full_ddl(MAIN_TABLES)
     conn.executescript(ddl)
-    conn.execute("ATTACH ':memory:' AS profiles")
-    profiles_ddl = generate_full_ddl(PROFILES_TABLES)
-    conn.executescript(profiles_ddl)
     return conn
 
 

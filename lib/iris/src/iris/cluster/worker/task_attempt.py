@@ -14,9 +14,19 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
+from finelog.client import LogClient, Table
+from finelog.rpc import logging_pb2
+from finelog.types import str_to_log_level
+from rigging.log_setup import parse_log_level
+from rigging.timing import Duration, Timestamp
+
 from iris.chaos import chaos, chaos_raise
+from iris.cluster.bundle import BundleStore
+from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.log_store_helpers import task_log_key
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
@@ -25,35 +35,31 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerRuntime,
     DiscoveredContainer,
-    RuntimeLogReader,
     MountKind,
     MountSpec,
+    RuntimeLogReader,
 )
 from iris.cluster.types import (
     JobName,
-    TaskAttempt as TaskAttemptIdentity,
     is_task_finished,
 )
-from iris.cluster.bundle import BundleStore
+from iris.cluster.types import (
+    TaskAttempt as TaskAttemptIdentity,
+)
 from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
-from iris.cluster.log_store._types import task_log_key
-from iris.log_server.client import LogPusher
-from iris.logging import str_to_log_level
-from rigging.log_setup import parse_log_level
-from iris.rpc import logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import worker_pb2
-from iris.rpc.job_pb2 import TaskState, WorkerMetadata
+from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import format_exception_with_traceback
+from iris.rpc.job_pb2 import TaskState, WorkerMetadata
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
 # Trailing stderr lines scanned for TPU bad-node signatures on non-zero exit.
 _TPU_STDERR_TAIL_LINES = 200
+
 
 # Signal numbers for interpreting exit codes > 128
 _SIGNAL_NAMES = {
@@ -202,7 +208,7 @@ class TaskAttempt:
         default_task_image: str | None,
         resolve_image: Callable[[str], str] | None,
         port_allocator: PortAllocator,
-        log_pusher: LogPusher | None,
+        log_client: LogClient | None,
         poll_interval_seconds: float = 5.0,
         *,
         container_handle: ContainerHandle | None = None,
@@ -230,7 +236,7 @@ class TaskAttempt:
             default_task_image: Fully-qualified task container image from cluster config
             resolve_image: Resolves image tags for the current platform (None for adopted tasks)
             port_allocator: Port allocator for releasing ports on cleanup
-            log_pusher: Pushes log entries to the central LogService.
+            log_client: Streams log entries to the central LogService.
             poll_interval_seconds: How often to poll container status
             container_handle: Pre-existing container handle for adopted tasks
             initial_status: Starting status (default PENDING, use RUNNING for adopted tasks)
@@ -245,8 +251,15 @@ class TaskAttempt:
         self._resolve_image_fn = resolve_image or (lambda x: x)
         self._port_allocator = port_allocator
         self._poll_interval_seconds = poll_interval_seconds
-        self._log_pusher = log_pusher
+        self._log_client = log_client
         self._log_key = task_log_key(config.task_attempt)
+        # Stats Table for the iris.task namespace. Tables are cached by the
+        # LogClient by namespace, so this fetch is cheap. Schema bugs surface
+        # here at construction (the same LogClient also registered the table
+        # eagerly in Worker.start()).
+        self._task_stats_table: Table | None = (
+            log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat) if log_client is not None else None
+        )
 
         # Task identity (from config)
         self.task_attempt: TaskAttemptIdentity = config.task_attempt
@@ -291,7 +304,7 @@ class TaskAttempt:
         cls,
         discovered: DiscoveredContainer,
         container_handle: ContainerHandle,
-        log_pusher: LogPusher | None,
+        log_client: LogClient | None,
         port_allocator: PortAllocator,
         poll_interval_seconds: float = 5.0,
     ) -> "TaskAttempt":
@@ -328,7 +341,7 @@ class TaskAttempt:
             default_task_image=None,
             resolve_image=None,
             port_allocator=port_allocator,
-            log_pusher=log_pusher,
+            log_client=log_client,
             poll_interval_seconds=poll_interval_seconds,
             container_handle=container_handle,
             initial_status=job_pb2.TASK_STATE_RUNNING,
@@ -687,16 +700,17 @@ class TaskAttempt:
         )
         env = dict(iris_env)
 
-        # Expose the worker's region so child jobs can inherit a region
-        # constraint (e.g. when the parent holds a reservation).
-        from iris.cluster.constraints import WellKnownAttribute
+        env.update(self._task_env)
+        env.update(dict(self.request.environment.env_vars))
 
+        # Surface the worker's region so in-task code (e.g. the Marin
+        # executor) and IrisClient.submit_job's parent->child region
+        # inheritance can read it via get_job_info().worker_region.
+        # Set last: this is a physical fact about the worker, not a
+        # user-configurable preference, so task/user env_vars cannot spoof it.
         region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
         if region_attr and region_attr.string_value:
             env["IRIS_WORKER_REGION"] = region_attr.string_value
-
-        env.update(self._task_env)
-        env.update(dict(self.request.environment.env_vars))
 
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint
@@ -889,6 +903,9 @@ class TaskAttempt:
                 if now - last_disk_check >= _DISK_CHECK_INTERVAL_SECONDS:
                     self.disk_mb = handle.disk_usage_mb()
                     last_disk_check = now
+
+                if stats.available:
+                    self._emit_task_stat()
             except Exception:
                 logger.debug("Stats collection failed for task %s", self.task_id, exc_info=True)
 
@@ -903,12 +920,38 @@ class TaskAttempt:
         entry.timestamp.epoch_ms = Timestamp.now().epoch_ms()
         return entry
 
+    def _emit_task_stat(self) -> None:
+        """Append one resource-usage row to the ``iris.task`` stats namespace.
+
+        Non-blocking: queues for the LogClient bg flush. Schema-validation
+        ``TypeError`` from the row encoder deliberately propagates.
+        """
+        table = self._task_stats_table
+        if table is None or not self._worker_id:
+            return
+        usage = job_pb2.ResourceUsage(
+            memory_mb=self.current_memory_mb,
+            memory_peak_mb=self.peak_memory_mb,
+            disk_mb=self.disk_mb,
+            cpu_millicores=self.current_cpu_millicores,
+            process_count=self.process_count,
+        )
+        ts = datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
+        stat = build_task_stat(
+            task_id=self.task_id.to_wire(),
+            attempt_id=self.attempt_id,
+            worker_id=self._worker_id,
+            ts=ts,
+            usage=usage,
+        )
+        table.write([stat])
+
     def _push_logs(self, entries: list[logging_pb2.LogEntry]) -> None:
         """Push a batch of log entries to the central LogService."""
-        if not self._log_pusher or not entries:
+        if not self._log_client or not entries:
             return
         try:
-            self._log_pusher.push(self._log_key, entries)
+            self._log_client.write_batch(self._log_key, entries)
         except Exception:
             logger.debug("Failed to push %d logs for task %s", len(entries), self.task_id, exc_info=True)
 
@@ -939,11 +982,11 @@ class TaskAttempt:
         self.cleanup_done = True
 
         # Flush buffered log entries so they reach the server before the task
-        # is reported as complete. The pusher is shared across tasks so we
+        # is reported as complete. The client is shared across tasks so we
         # flush rather than close.
-        if self._log_pusher is not None:
+        if self._log_client is not None:
             try:
-                self._log_pusher.flush()
+                self._log_client.flush()
             except Exception as e:
                 logger.debug("Failed to flush logs for task %s: %s", self.task_id, e)
 

@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 import zstandard as zstd
-
 from marin.datakit.download.nemotron_v1 import NCC_PATHS_SUFFIX, download_nemotron_cc
 
 SAMPLE_NEMOTRON_RECORDS = [

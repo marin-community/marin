@@ -33,6 +33,9 @@ __pycache__/
 # C extensions
 *.so
 
+# pypa/gh-action-pypi-publish caches its Docker action manifest here.
+.github/.tmp/
+
 # Distribution / packaging
 .Python
 build/
@@ -239,3 +242,5 @@ scr/*
 # Excluded via .git/info/exclude instead of here, so Ray job submission includes them.
 
 .worktrees
+.obsidian
+.cw_env

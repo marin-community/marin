@@ -6,7 +6,6 @@
 import time
 
 import pytest
-
 from fray.iris_backend import OperationFuture
 from iris.actor import ActorClient, ActorServer
 from iris.actor.resolver import FixedResolver

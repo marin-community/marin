@@ -23,14 +23,9 @@ import logging
 from collections import deque
 from collections.abc import Sequence
 
+from rigging.timing import Duration, Timestamp
+
 from iris.cluster.constraints import Constraint
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import (
-    CloudSliceState,
-    QuotaExhaustedError,
-    RemoteWorkerHandle,
-    SliceHandle,
-)
 from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
     ScalingAction,
@@ -38,6 +33,8 @@ from iris.cluster.controller.autoscaler.models import (
 )
 from iris.cluster.controller.autoscaler.operations import (
     restart_worker as restart_worker_operation,
+)
+from iris.cluster.controller.autoscaler.operations import (
     terminate_slices_for_workers as terminate_slices_for_workers_operation,
 )
 from iris.cluster.controller.autoscaler.planning import ScalePlan, build_scale_plan
@@ -50,11 +47,17 @@ from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.providers.protocols import WorkerInfraProvider
+from iris.cluster.providers.types import (
+    CloudSliceState,
+    QuotaExhaustedError,
+    RemoteWorkerHandle,
+    SliceHandle,
+)
 from iris.cluster.types import WorkerStatusMap
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_proto import duration_from_proto, timestamp_to_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +308,9 @@ class Autoscaler:
             decisions: List of scaling decisions to execute.
             timestamp: Current timestamp.
         """
+        # Aggregate rate-limited decisions per group so we emit a single summary
+        # line per group per cycle instead of one per deferred slice (#5580).
+        rate_limited: dict[str, list[ScalingDecision]] = {}
         for decision in decisions:
             group = self._groups.get(decision.scale_group)
             if not group:
@@ -313,14 +319,26 @@ class Autoscaler:
 
             if decision.action == ScalingAction.SCALE_UP:
                 if not group.acquire_scale_up_token(timestamp):
-                    logger.info("Rate-limited scale-up for %s: %s", decision.scale_group, decision.reason)
-                    self._log_action(
-                        "rate_limited",
-                        decision.scale_group,
-                        reason=decision.reason,
-                    )
+                    rate_limited.setdefault(decision.scale_group, []).append(decision)
                     continue
                 self._execute_scale_up(group, timestamp, reason=decision.reason)
+
+        for scale_group, deferred in rate_limited.items():
+            # All decisions in a cycle share the same target/demand snapshot;
+            # the first reason is representative of the whole batch.
+            sample_reason = deferred[0].reason
+            summary = f"deferred={len(deferred)} sample_reason={sample_reason}"
+            logger.info(
+                "Rate-limited scale-up for %s: deferred %d slice(s) (sample reason: %s)",
+                scale_group,
+                len(deferred),
+                sample_reason,
+            )
+            self._log_action(
+                "rate_limited",
+                scale_group,
+                reason=summary,
+            )
 
     def _execute_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> None:
         """Initiate async scale-up for a scale group.

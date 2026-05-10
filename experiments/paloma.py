@@ -9,7 +9,8 @@ https://huggingface.co/datasets/allenai/paloma
 
 import os.path
 
-from marin.datakit.download.huggingface import DownloadConfig as HfDownloadConfig, download_hf
+from marin.datakit.download.huggingface import DownloadConfig as HfDownloadConfig
+from marin.datakit.download.huggingface import download_hf
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer

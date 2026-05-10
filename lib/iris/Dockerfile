@@ -8,6 +8,22 @@
 # The controller and worker share all layers up to and including Python
 # dependencies. The worker adds only the Docker CLI on top.
 
+# ── Stage: dashboard ─────────────────────────────────────────────────
+# Build the Vue SPA. Output is consumed by the deps stage at
+# /app/lib/iris/dashboard/dist; the controller/worker ASGI apps serve it
+# (see lib/iris/src/iris/cluster/dashboard_common.py).
+FROM node:22-slim AS dashboard
+
+WORKDIR /build/dashboard
+
+# Copy manifests first so dependency install is cached across source edits.
+COPY lib/iris/dashboard/package.json lib/iris/dashboard/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY lib/iris/dashboard/ ./
+RUN npm run build
+
+
 # ── Stage: base ──────────────────────────────────────────────────────
 # System dependencies shared by controller and worker.
 FROM python:3.12-slim AS base
@@ -35,8 +51,9 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.
     google-cloud-cli \
     && rm -rf /var/lib/apt/lists/*
 
-# kubectl
-RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+# kubectl — TARGETARCH is auto-set by buildx (amd64 on x86 nodes, arm64 on Grace).
+ARG TARGETARCH
+RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
         -o /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl \
     && kubectl version --client
@@ -52,16 +69,21 @@ FROM base AS deps
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Rigging is a workspace-local dep not on PyPI with a compatible API.
+# Rigging and finelog are workspace-local deps not on PyPI with compatible APIs.
 # Copy only metadata first so source changes don't bust the dep cache.
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
+COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
+# finelog's pyproject force-includes config/ in the wheel, so the directory
+# must exist even for `uv sync --no-install-project`.
+COPY lib/finelog/config/ ./lib/finelog/config/
 COPY lib/iris/pyproject.toml ./lib/iris/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\n' > pyproject.toml \
+    printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging", "lib/finelog"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\nmarin-finelog = { workspace = true }\n' > pyproject.toml \
     && uv sync --package marin-iris --no-install-project
 
-# Now copy full source for both rigging and iris, then install.
+# Now copy full source for rigging, finelog, and iris, then install.
 COPY lib/rigging/src/ ./lib/rigging/src/
+COPY lib/finelog/src/ ./lib/finelog/src/
 COPY lib/iris/src/ ./lib/iris/src/
 COPY lib/iris/examples/ ./lib/iris/examples/
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -71,8 +93,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install py-spy memray
 
-# Dashboard assets (pre-built by `iris build dashboard` before docker build)
-COPY lib/iris/dashboard/dist ./lib/iris/dashboard/dist
+# Dashboard assets — built by the `dashboard` stage above.
+COPY --from=dashboard /build/dashboard/dist ./lib/iris/dashboard/dist
 
 RUN mkdir -p /var/cache/iris
 

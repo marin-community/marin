@@ -27,18 +27,12 @@ import fsspec
 from fray import ResourceConfig, set_current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint, JobRequest, create_environment
-from rigging.log_setup import configure_logging
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import Artifact
-from marin.execution.executor import (
-    ExecutorMainConfig,
-    ExecutorStep,
-    executor_main,
-    this_output_path,
-)
+from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, this_output_path
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
@@ -47,6 +41,7 @@ from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from marin.schemas.web.convert import ResiliparseConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
+from rigging.log_setup import configure_logging
 
 configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)

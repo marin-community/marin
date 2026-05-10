@@ -7,7 +7,7 @@ import { SLICE_STATE_STYLES, SLICE_BADGE_ORDER, CATEGORICAL_COLORS, vmStateToNam
 import type {
   GetAutoscalerStatusResponse,
   GetSchedulerStateResponse,
-  SchedulerRunningTask,
+  RunningTaskBucket,
   AutoscalerStatus,
   ScaleGroupStatus,
   SliceInfo,
@@ -505,33 +505,40 @@ interface FleetChipSummary {
   capacity: RegionCapacity[]
 }
 
-/** Map workerId → list of bands consuming that worker. */
+/** Map workerId → band (lowercased, no prefix) → task count. */
 const workerBands = computed<Map<string, Map<string, number>>>(() => {
   const map = new Map<string, Map<string, number>>()
-  for (const task of (schedulerData.value?.runningTasks ?? []) as SchedulerRunningTask[]) {
-    if (!task.workerId || !task.effectiveBand) continue
-    const band = task.effectiveBand.replace(/^PRIORITY_BAND_/, '').toLowerCase()
-    if (!map.has(task.workerId)) map.set(task.workerId, new Map())
-    const bands = map.get(task.workerId)!
-    bands.set(band, (bands.get(band) ?? 0) + 1)
+  for (const bucket of (schedulerData.value?.runningBuckets ?? []) as RunningTaskBucket[]) {
+    if (!bucket.workerId || !bucket.band) continue
+    const band = bucket.band.replace(/^PRIORITY_BAND_/, '').toLowerCase()
+    if (!map.has(bucket.workerId)) map.set(bucket.workerId, new Map())
+    const bands = map.get(bucket.workerId)!
+    bands.set(band, (bands.get(band) ?? 0) + bucket.count)
   }
   return map
 })
 
-/** Map workerId → running tasks currently assigned to that worker. */
-const workerTasks = computed<Map<string, SchedulerRunningTask[]>>(() => {
-  const map = new Map<string, SchedulerRunningTask[]>()
-  for (const task of (schedulerData.value?.runningTasks ?? []) as SchedulerRunningTask[]) {
-    if (!task.workerId) continue
-    if (!map.has(task.workerId)) map.set(task.workerId, [])
-    map.get(task.workerId)!.push(task)
+/** One job's worth of tasks running on a single VM. */
+interface VmJobChip {
+  jobId: string
+  userId: string
+  count: number
+}
+
+/** Map workerId → list of (jobId, userId, count) chips, one per distinct job. */
+const workerJobs = computed<Map<string, VmJobChip[]>>(() => {
+  const map = new Map<string, VmJobChip[]>()
+  for (const bucket of (schedulerData.value?.runningBuckets ?? []) as RunningTaskBucket[]) {
+    if (!bucket.workerId || !bucket.jobId) continue
+    if (!map.has(bucket.workerId)) map.set(bucket.workerId, [])
+    map.get(bucket.workerId)!.push({ jobId: bucket.jobId, userId: bucket.userId, count: bucket.count })
   }
   return map
 })
 
-function tasksForVm(vm: VmInfo): SchedulerRunningTask[] {
+function jobsForVm(vm: VmInfo): VmJobChip[] {
   if (!vm.workerId) return []
-  return workerTasks.value.get(vm.workerId) ?? []
+  return workerJobs.value.get(vm.workerId) ?? []
 }
 
 /** Extract chip type + size from scale group name.
@@ -1087,15 +1094,15 @@ function formatUptimeShort(ms: number | null): string {
                           <span :title="`${vm.vmId}: ${vm.runningTaskCount ?? 0} tasks`">
                             vm{{ vi }}: {{ vm.runningTaskCount ?? 0 }}t
                           </span>
-                          <template v-if="tasksForVm(vm).length > 0">
+                          <template v-if="jobsForVm(vm).length > 0">
                             <RouterLink
-                              v-for="task in tasksForVm(vm)"
-                              :key="task.taskId"
-                              :to="`/job/${encodeURIComponent(task.jobId)}`"
+                              v-for="chip in jobsForVm(vm)"
+                              :key="chip.jobId"
+                              :to="`/job/${encodeURIComponent(chip.jobId)}`"
                               class="text-accent hover:underline font-mono"
-                              :title="`${task.jobId} (user: ${task.userId})`"
+                              :title="`${chip.jobId} (user: ${chip.userId}, ${chip.count} tasks)`"
                             >
-                              {{ task.jobId }}<span v-if="task.userId" class="text-text-muted"> · {{ task.userId }}</span>
+                              {{ chip.jobId }}<span v-if="chip.count > 1" class="text-text-muted"> ×{{ chip.count }}</span><span v-if="chip.userId" class="text-text-muted"> · {{ chip.userId }}</span>
                             </RouterLink>
                           </template>
                         </template>

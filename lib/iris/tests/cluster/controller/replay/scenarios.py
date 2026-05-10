@@ -31,7 +31,6 @@ from tests.cluster.controller.replay.events import (
     AddEndpoint,
     ApplyDirectProviderUpdates,
     ApplyTaskUpdates,
-    BufferDirectKill,
     CancelJob,
     CancelTasksForTimeout,
     DrainForDirectProvider,
@@ -243,7 +242,6 @@ def scenario_register_assign_run_succeed(transitions: ControllerTransitions, clo
         ApplyTaskUpdates(
             request=HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=attempt, new_state=job_pb2.TASK_STATE_RUNNING)],
             ),
         ),
@@ -253,7 +251,6 @@ def scenario_register_assign_run_succeed(transitions: ControllerTransitions, clo
         ApplyTaskUpdates(
             request=HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=attempt, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
             ),
         ),
@@ -272,7 +269,6 @@ def scenario_task_failure_with_retry(transitions: ControllerTransitions, clock: 
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task_id,
@@ -291,7 +287,6 @@ def scenario_task_failure_with_retry(transitions: ControllerTransitions, clock: 
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=second_attempt, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
             )
         ),
@@ -347,6 +342,99 @@ def scenario_coscheduled_timeout(transitions: ControllerTransitions, clock: Froz
     apply_event(transitions, CancelTasksForTimeout(task_ids=frozenset({tasks[0]}), reason="execution-timeout"))
 
 
+def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+    """Coscheduled 2-replica job; one task hits a transient failure with retry
+    budget remaining. Siblings must bounce to PENDING so the retry re-coschedules
+    atomically — otherwise the lone PENDING retry can land on a different slice
+    and split the SPMD mesh.
+    """
+    worker_a = _register_worker(transitions, clock, "w-cosched-fail-a", address="w-cosched-fail-a:8080")
+    worker_b = _register_worker(transitions, clock, "w-cosched-fail-b", address="w-cosched-fail-b:8080")
+    job_id = _submit(
+        transitions,
+        clock,
+        "cosched-fail",
+        replicas=2,
+        coscheduled=True,
+        max_retries_failure=2,
+    )
+    tasks = _task_ids(transitions, job_id)
+    apply_event(
+        transitions,
+        QueueAssignments(
+            [
+                Assignment(task_id=tasks[0], worker_id=worker_a),
+                Assignment(task_id=tasks[1], worker_id=worker_b),
+            ],
+        ),
+    )
+    # Drive task-0 to RUNNING then fail it transiently.
+    a0 = _current_attempt(transitions, tasks[0])
+    a1 = _current_attempt(transitions, tasks[1])
+    apply_event(
+        transitions,
+        ApplyTaskUpdates(
+            HeartbeatApplyRequest(
+                worker_id=worker_a,
+                updates=[TaskUpdate(task_id=tasks[0], attempt_id=a0, new_state=job_pb2.TASK_STATE_RUNNING)],
+            )
+        ),
+    )
+    apply_event(
+        transitions,
+        ApplyTaskUpdates(
+            HeartbeatApplyRequest(
+                worker_id=worker_b,
+                updates=[TaskUpdate(task_id=tasks[1], attempt_id=a1, new_state=job_pb2.TASK_STATE_RUNNING)],
+            )
+        ),
+    )
+    apply_event(
+        transitions,
+        ApplyTaskUpdates(
+            HeartbeatApplyRequest(
+                worker_id=worker_a,
+                updates=[
+                    TaskUpdate(
+                        task_id=tasks[0],
+                        attempt_id=a0,
+                        new_state=job_pb2.TASK_STATE_FAILED,
+                        error="transient-tpu-init",
+                    )
+                ],
+            )
+        ),
+    )
+
+
+def scenario_coscheduled_preempt_retry_bounces_siblings(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+    """Coscheduled 2-replica job; controller preempts one task with budget remaining.
+    Siblings must bounce to PENDING and the original worker must be in the kill set
+    so a stale TPU process doesn't outlive its bookkeeping.
+    """
+    worker_a = _register_worker(transitions, clock, "w-cosched-preempt-a", address="w-cosched-preempt-a:8080")
+    worker_b = _register_worker(transitions, clock, "w-cosched-preempt-b", address="w-cosched-preempt-b:8080")
+    job_id = _submit(
+        transitions,
+        clock,
+        "cosched-preempt",
+        replicas=2,
+        coscheduled=True,
+        max_retries_preemption=2,
+    )
+    tasks = _task_ids(transitions, job_id)
+    apply_event(
+        transitions,
+        QueueAssignments(
+            [
+                Assignment(task_id=tasks[0], worker_id=worker_a),
+                Assignment(task_id=tasks[1], worker_id=worker_b),
+            ],
+        ),
+    )
+    apply_event(transitions, PreemptTask(task_id=tasks[0], reason="evicted-by-prod"))
+
+
 def scenario_direct_provider_cycle(transitions: ControllerTransitions, clock: FrozenClock) -> None:
     """Submit a job with no worker, drain to direct-provider, then mark RUNNING."""
     job_id = _submit(transitions, clock, "direct-job")
@@ -373,7 +461,6 @@ def scenario_prune_old_data(transitions: ControllerTransitions, clock: FrozenClo
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=attempt, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
             )
         ),
@@ -390,7 +477,6 @@ def scenario_prune_old_data(transitions: ControllerTransitions, clock: FrozenClo
     transitions.prune_old_data(
         job_retention=Duration.from_seconds(0),
         worker_retention=Duration.from_seconds(3600),
-        profile_retention=Duration.from_seconds(3600),
         pause_between_s=0.0,
     )
 
@@ -426,16 +512,10 @@ def scenario_replace_reservation_claims(transitions: ControllerTransitions, cloc
     apply_event(transitions, ReplaceReservationClaims(claims={}))
 
 
-def scenario_buffer_direct_kill(transitions: ControllerTransitions, clock: FrozenClock) -> None:
-    """Buffer a kill request for a direct-provider task."""
-    job_id = _submit(transitions, clock, "buffer-direct")
-    (task_id,) = _task_ids(transitions, job_id)
-    apply_event(transitions, BufferDirectKill(task_id=task_id.to_wire()))
-
-
 SCENARIOS: dict[str, Callable[[ControllerTransitions, FrozenClock], None]] = {
-    "buffer_direct_kill": scenario_buffer_direct_kill,
     "cancel_running_job": scenario_cancel_running_job,
+    "coscheduled_failure_retry_bounces_siblings": scenario_coscheduled_failure_retry_bounces_siblings,
+    "coscheduled_preempt_retry_bounces_siblings": scenario_coscheduled_preempt_retry_bounces_siblings,
     "coscheduled_timeout": scenario_coscheduled_timeout,
     "direct_provider_cycle": scenario_direct_provider_cycle,
     "endpoint_register_remove": scenario_endpoint_register_remove,

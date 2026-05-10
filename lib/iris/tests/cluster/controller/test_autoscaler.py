@@ -13,8 +13,8 @@ Integration tests with real GcpWorkerProvider are in test_autoscaler_integration
 import time
 
 import pytest
-
-from iris.cluster.controller.autoscaler import Autoscaler, DEFAULT_UNRESOLVABLE_TIMEOUT
+from iris.cluster.constraints import DeviceType, WellKnownAttribute
+from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Autoscaler
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
@@ -23,23 +23,27 @@ from iris.cluster.providers.types import (
     QuotaExhaustedError,
     SliceStatus,
 )
+from iris.cluster.types import WorkerStatus
+from iris.rpc import config_pb2, vm_pb2
+from iris.time_proto import duration_to_proto
+from rigging.timing import Duration, Timestamp
+
 from tests.cluster.providers.conftest import (
     FakeSliceHandle,
     make_mock_platform,
     make_mock_slice_handle,
     make_mock_worker_handle,
 )
-from iris.cluster.constraints import DeviceType, WellKnownAttribute
-from iris.cluster.types import WorkerStatus
-from iris.rpc import config_pb2, vm_pb2
-from iris.time_proto import duration_to_proto
-from rigging.timing import Duration, Timestamp
 
 from .conftest import (
     make_autoscaler,
     make_demand_entries,
-    make_big_demand_entries as _make_big_demand_entries,
     make_scale_group_config,
+)
+from .conftest import (
+    make_big_demand_entries as _make_big_demand_entries,
+)
+from .conftest import (
     mark_discovered_ready as _mark_discovered_ready,
 )
 
@@ -235,7 +239,9 @@ class TestAutoscalerScaleDown:
             slice_002_wid: WorkerStatus(worker_id=slice_002_wid, running_task_ids=frozenset()),
         }
 
-        # Timestamp must be past idle_threshold (1000ms) from when slices became ready
+        # First idle observation stamps quiet_since at t=2000.
+        group.update_slice_activity(vm_status_map, Timestamp.from_ms(2_000))
+        # At t=10_000 dwell=8s, well past the 1s threshold.
         autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
 
         assert group.slice_count() == 1
@@ -382,7 +388,10 @@ class TestAutoscalerScaleDown:
             slice_003_wid: WorkerStatus(worker_id=slice_003_wid, running_task_ids=frozenset()),
         }
 
+        # First idle observation at t=2000 stamps quiet_since on all three.
+        group.update_slice_activity(vm_status_map, Timestamp.from_ms(2_000))
         # With rate_limit=5, all 3 idle slices should be scaled down in one cycle
+        # at t=10_000 (8s dwell, past 1s threshold).
         autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
         assert group.slice_count() == 0
 
@@ -1214,6 +1223,46 @@ class TestPerGroupWorkerConfig:
         assert wc is not None
         assert wc.worker_attributes["team"] == "euw4"
 
+    def test_worker_cache_dir_override_applied(self):
+        """WorkerSettings.cache_dir overrides the base WorkerConfig.cache_dir."""
+        base_wc = config_pb2.WorkerConfig(
+            docker_image="test:latest",
+            port=10001,
+            controller_address="controller:10000",
+            cache_dir="/dev/shm/iris",
+        )
+        sg_config = make_scale_group_config(name="cpu-group", max_slices=5)
+        sg_config.worker.cache_dir = "/var/lib/iris-cache"
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"cpu-group": group}, base_worker_config=base_wc)
+
+        wc = autoscaler._per_group_worker_config(group)
+
+        assert wc is not None
+        assert wc.cache_dir == "/var/lib/iris-cache"
+        # base is unchanged
+        assert base_wc.cache_dir == "/dev/shm/iris"
+
+    def test_worker_cache_dir_falls_through_when_unset(self):
+        """When WorkerSettings.cache_dir is empty, base cache_dir is preserved."""
+        base_wc = config_pb2.WorkerConfig(
+            docker_image="test:latest",
+            port=10001,
+            controller_address="controller:10000",
+            cache_dir="/dev/shm/iris",
+        )
+        sg_config = make_scale_group_config(name="tpu-group", max_slices=5)
+        sg_config.worker.attributes["custom-label"] = "value"
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"tpu-group": group}, base_worker_config=base_wc)
+
+        wc = autoscaler._per_group_worker_config(group)
+
+        assert wc is not None
+        assert wc.cache_dir == "/dev/shm/iris"
+
     def test_derives_region_and_zone_from_scale_group_when_missing(self):
         """Derived region and zone are injected when worker attrs omit them."""
         base_wc = config_pb2.WorkerConfig(
@@ -1236,8 +1285,10 @@ class TestPerGroupWorkerConfig:
 class TestGpuScaleGroupBugs:
     """Reproduction tests for GPU scale group bugs observed on CoreWeave."""
 
-    def test_freshly_ready_slice_has_nonzero_last_active(self):
-        """When a slice transitions to READY, last_active should be initialized."""
+    def test_freshly_ready_slice_not_eligible_for_scaledown(self):
+        """A freshly-READY slice is treated as currently active (quiet_since=None)
+        and is not eligible for scale-down until an autoscaler tick observes it idle.
+        """
         config = make_scale_group_config(
             name="h100-8x",
             buffer_slices=0,
@@ -1253,28 +1304,18 @@ class TestGpuScaleGroupBugs:
 
         ts = Timestamp.from_ms(1_000_000)
 
-        # Scale up and complete
         group.begin_scale_up(timestamp=ts)
         handle = group.scale_up(timestamp=ts)
         group.complete_scale_up(handle, ts)
 
-        # Mark the slice as READY (simulates bootstrap completion)
         worker_ids = [w.worker_id for w in handle.describe().workers]
         group.mark_slice_ready(handle.slice_id, worker_ids)
 
-        # last_active should be initialized to at least the ready time
         with group._slices_lock:
             state = group._slices[handle.slice_id]
 
-        assert state.last_active.epoch_ms() > 0, (
-            "Freshly READY slice should have last_active set to at least the ready time, "
-            f"not epoch(0). Got last_active={state.last_active.epoch_ms()}"
-        )
-
-        # Consequently, the slice should NOT be eligible for scaledown immediately
-        assert not group.is_slice_eligible_for_scaledown(
-            handle.slice_id, ts
-        ), "Freshly READY slice should not be eligible for scaledown immediately"
+        assert state.quiet_since is None
+        assert not group.is_slice_eligible_for_scaledown(handle.slice_id, ts)
 
     def test_idle_threshold_protects_freshly_ready_slice(self):
         """A freshly-ready slice should be protected by idle_threshold even when
@@ -1513,6 +1554,8 @@ class TestMultiSliceScaleUp:
             wid_0: WorkerStatus(worker_id=wid_0, running_task_ids=frozenset()),
             wid_1: WorkerStatus(worker_id=wid_1, running_task_ids=frozenset()),
         }
+        # First idle observation stamps quiet_since at t=2_000.
+        group.update_slice_activity(vm_status_map, Timestamp.from_ms(2_000))
         autoscaler.run_once([], vm_status_map, timestamp=Timestamp.from_ms(10_000))
 
         # One idle slice should be scaled down.

@@ -521,14 +521,15 @@ class Checkpointer:
         my_should_save = force
         my_save_permanent_ckpt = force
 
-        current_every = self._get_current_step_save_interval(step)
-        last_save_time = self._dt_now_injection() - self._last_save_time
-        if current_every is not None and step % current_every == 0:
-            my_should_save = True
-            my_save_permanent_ckpt = True
-        elif self.save_interval and last_save_time >= self.save_interval:
-            my_should_save = True
-            my_save_permanent_ckpt = False
+        if not force:
+            current_every = self._get_current_step_save_interval(step)
+            last_save_time = self._dt_now_injection() - self._last_save_time
+            if current_every is not None and step % current_every == 0:
+                my_should_save = True
+                my_save_permanent_ckpt = True
+            elif self.save_interval and last_save_time >= self.save_interval:
+                my_should_save = True
+                my_save_permanent_ckpt = False
 
         should_save, save_permanent_ckpt = broadcast_one_to_all(
             jnp.array([my_should_save, my_save_permanent_ckpt], dtype=jnp.bool_)
@@ -625,7 +626,7 @@ class Checkpointer:
             time_out = time.time()
             logger.info(f"Deleted old checkpoint from {cp_path} in {time_out - time_in:.2f} seconds")
         except Exception:  # pylint: disable=broad-except
-            logger.exception(f"Failed to delete checkpoint {cp_path}", exc_info=True)
+            logger.exception(f"Failed to delete checkpoint {cp_path}")
 
     def save_checkpoint(
         self,

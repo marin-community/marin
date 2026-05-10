@@ -3,6 +3,10 @@
 data:
   tokenizer: gpt2
   cache_dir: cache/dpo_tiny
+  shuffle:
+    io_block_size: 256
+    window_blocks: 512
+    perm_type: feistel
   components:
     default:
       source:
@@ -21,7 +25,6 @@ data:
           {% endfor %}
         pack: false
         slice_strategy: raise
-      shuffle: true
 
 model:
   type: gpt2

@@ -50,6 +50,6 @@ Shared data is uploaded to filesystem by `ZephyrContext._upload_shared_data()` b
 
 ## Notes
 
-### MacOS
+### Backends
 
-Ray 2.53 enables a `uv run` runtime_env hook by default. When tests run via `uv run pytest`, this can start workers with a different Python version or fail with psutil errors in sandboxed environments. Disable it for tests. See https://github.com/ray-project/ray/issues/59639.
+`ZephyrContext` uses `fray.current_client()`: Iris is auto-detected inside an Iris job, and `LocalClient` is the fallback for local tests and scripts.

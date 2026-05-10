@@ -19,6 +19,8 @@ from iris.cluster.providers.types import (
     CommandResult,
     Labels,
     SliceStatus,
+)
+from iris.cluster.providers.types import (
     WorkerStatus as CloudWorkerStatus,
 )
 from iris.rpc import config_pb2, vm_pb2

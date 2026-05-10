@@ -40,15 +40,15 @@ from typing import Any, Generic, TypeVar
 
 import cloudpickle
 from connectrpc.errors import ConnectError
+from rigging.timing import Duration, ExponentialBackoff
 
 from iris.actor import ActorServer
 from iris.actor.client import ActorClient
 from iris.actor.resolver import Resolver
 from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.client import get_job_info
-from iris.cluster.types import EnvironmentSpec, Entrypoint, JobName, ResourceSpec
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.managed_thread import ThreadContainer, get_thread_container
-from rigging.timing import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 

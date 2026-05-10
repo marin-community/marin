@@ -22,7 +22,8 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
-
+from finelog.rpc import logging_pb2
+from finelog.server.service import LogServiceImpl
 from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint as FrayEntrypoint
 from fray.types import GpuConfig, JobRequest, ResourceConfig
@@ -33,14 +34,12 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.log_server.server import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.service import CloudK8sService
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider, _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
+from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE, K8sTaskProvider
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, TaskAttempt
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration
 
 # ---------------------------------------------------------------------------
@@ -139,6 +138,27 @@ def _get_iris_pods(k8s: InMemoryK8sService) -> list[dict]:
     return k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
 
 
+class _FakeLogClient:
+    """In-process LogClient adapter that calls LogServiceImpl.fetch_logs directly."""
+
+    def __init__(self, log_service: LogServiceImpl) -> None:
+        self._log_service = log_service
+
+    def query(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
+        return self._log_service.fetch_logs(request, ctx=None)
+
+    def fetch_logs(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
+        return self._log_service.fetch_logs(request, ctx=None)
+
+    def get_table(self, namespace: str, schema: object) -> None:
+        # Profile namespace writes are not exercised by these integration tests;
+        # ControllerServiceImpl guards on self._profile_table is not None.
+        return None
+
+    def close(self) -> None:
+        return
+
+
 def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "cw_db")
     log_service = LogServiceImpl(log_dir=tmp_path / "cw_logs")
@@ -188,7 +208,7 @@ def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
         store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "cw_bundles")),
-        log_service=log_service,
+        log_client=_FakeLogClient(log_service),
     )
 
     return ServiceTestHarness(

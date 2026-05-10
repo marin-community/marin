@@ -6,8 +6,8 @@ import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh
 import type {
   GetSchedulerStateResponse,
   SchedulerUserBudget,
-  SchedulerBandGroup,
-  SchedulerRunningTask,
+  PendingTaskBucket,
+  RunningTaskBucket,
   ListUsersResponse,
   UserSummary,
   ListJobsResponse,
@@ -124,35 +124,31 @@ function bandBreakdownTotal(b: BandBreakdown): number {
 
 const userBandCounts = computed<Map<string, BandBreakdown>>(() => {
   const out = new Map<string, BandBreakdown>()
-  const pending: SchedulerBandGroup[] = schedulerData.value?.pendingQueue ?? []
-  for (const group of pending) {
-    for (const task of group.tasks) {
-      const band = task.effectiveBand as Band
-      if (!BANDS.includes(band)) continue
-      const entry = out.get(task.userId) ?? emptyBandBreakdown()
-      entry.pending[band] += 1
-      out.set(task.userId, entry)
-    }
-  }
-  const running: SchedulerRunningTask[] = schedulerData.value?.runningTasks ?? []
-  for (const task of running) {
-    const band = task.effectiveBand as Band
+  const pending: PendingTaskBucket[] = schedulerData.value?.pendingBuckets ?? []
+  for (const bucket of pending) {
+    const band = bucket.band as Band
     if (!BANDS.includes(band)) continue
-    const entry = out.get(task.userId) ?? emptyBandBreakdown()
-    entry.running[band] += 1
-    out.set(task.userId, entry)
+    const entry = out.get(bucket.userId) ?? emptyBandBreakdown()
+    entry.pending[band] += bucket.count
+    out.set(bucket.userId, entry)
+  }
+  const running: RunningTaskBucket[] = schedulerData.value?.runningBuckets ?? []
+  for (const bucket of running) {
+    const band = bucket.band as Band
+    if (!BANDS.includes(band)) continue
+    const entry = out.get(bucket.userId) ?? emptyBandBreakdown()
+    entry.running[band] += bucket.count
+    out.set(bucket.userId, entry)
   }
   return out
 })
 
-// jobId -> effective band, derived from pending task entries. Used to annotate
-// the Pending Jobs table with the scheduling band for each job.
+// jobId -> effective band, derived from the pending bucket aggregates. Used to
+// annotate the Pending Jobs table with the scheduling band for each job.
 const pendingJobBand = computed<Map<string, string>>(() => {
   const out = new Map<string, string>()
-  for (const group of schedulerData.value?.pendingQueue ?? []) {
-    for (const task of group.tasks) {
-      if (!out.has(task.jobId)) out.set(task.jobId, task.effectiveBand)
-    }
+  for (const bucket of schedulerData.value?.pendingBuckets ?? []) {
+    if (!out.has(bucket.jobId)) out.set(bucket.jobId, bucket.band)
   }
   return out
 })

@@ -78,8 +78,8 @@ uv run iris --config lib/iris/examples/marin.yaml job run \
 # List jobs (filter by --state, --user, --prefix, etc).
 uv run iris --config lib/iris/examples/marin.yaml job list
 
-# Follow logs (--include-children streams per-task output as well).
-uv run iris --config lib/iris/examples/marin.yaml job logs --include-children /<user>/<job-name>
+# Follow logs (includes child-job task logs by default).
+uv run iris --config lib/iris/examples/marin.yaml job logs /<user>/<job-name>
 
 # Kill / Stop Job (if necessary / error / bug) -- kills the job and all its child tasks.
 uv run iris --config lib/iris/examples/marin.yaml job stop /<user>/<job-name>
@@ -88,7 +88,8 @@ uv run iris --config lib/iris/examples/marin.yaml job stop /<user>/<job-name>
 Notes:
 
 - `--extra marin:tpu` installs the Marin TPU deps into the task container; use `--extra marin:cpu` for CPU-only
-  entrypoints and `--extra gpu` (with `--gpu H100x8`) on CoreWeave.
+  entrypoints. On CoreWeave, `--gpu` requests hardware and `--extra gpu` requests the Python deps; see
+  [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) for current request names.
 - Request TPU hardware with `--tpu v5litepod-16` (or similar). `--reserve` only holds capacity for scheduling; it does
   not attach accelerator devices to the task container.
 - `WANDB_API_KEY`, `HF_TOKEN`, `HF_DATASETS_TRUST_REMOTE_CODE`, and `TOKENIZERS_PARALLELISM` are auto-injected from

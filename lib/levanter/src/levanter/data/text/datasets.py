@@ -548,6 +548,14 @@ class BlockShuffleConfig:
     perm_type: Literal["feistel", "linear"] = "feistel"
 
 
+DEFAULT_LM_DATA_SHUFFLE = BlockShuffleConfig(
+    io_block_size=256,
+    window_blocks=512,
+    perm_type="feistel",
+)
+"""Default hierarchical block-shuffle policy for LM training data."""
+
+
 @dataclass(frozen=True)
 class LmDataConfig:
     """Unified LM data config built from components."""
@@ -568,19 +576,16 @@ class LmDataConfig:
 
     chat_template: str | None = None  # If set, use this template for chat datasets. Otherwise, use the tokenizer's.
 
-    shuffle: bool | int | BlockShuffleConfig = False
+    shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE
     """Shuffle policy.
 
     - `True`: full permutation shuffle
     - `False`: no shuffle
-    - positive `int`: era shuffle with this era length
     - `BlockShuffleConfig`: hierarchical block shuffle
     """
-    permutation_type: Literal["feistel", "linear"] | None = None
+    permutation_type: Literal["feistel", "linear"] = "feistel"
     """
-    Type of permutation to use for shuffle.
-
-    If None, defaults to linear, but this will change in the future since Feistel is better.
+    Type of permutation to use for full shuffle.
     """
 
     block_cross_document_attention: bool = True
@@ -731,11 +736,6 @@ class LmDataConfig:
 
         shuffle_cfg = self.shuffle
         perm_type = self.permutation_type
-        if perm_type is None and shuffle_cfg is not False and not isinstance(shuffle_cfg, BlockShuffleConfig):
-            logger.warning(
-                "Defaulting to linear permutation for shuffling. This will change to Feistel in the future."
-            )
-            perm_type = "linear"
 
         def shuffle_ds(ds, k):
             if isinstance(shuffle_cfg, BlockShuffleConfig):
@@ -747,8 +747,6 @@ class LmDataConfig:
                 )
             elif shuffle_cfg is True:
                 ds = ds.shuffle(k, perm_type=perm_type)
-            elif isinstance(shuffle_cfg, int) and not isinstance(shuffle_cfg, bool) and shuffle_cfg > 0:
-                ds = ds.era_shuffle(shuffle_cfg, key=k, perm_type=perm_type)
             return ds
 
         if shuffle_cfg:

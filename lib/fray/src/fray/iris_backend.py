@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import cloudpickle
-
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient as IrisClientLib
@@ -66,15 +65,12 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingConfig | None:
-    """Determine coscheduling config for multi-host jobs.
-
-    Multi-host GPU jobs need coscheduling by pool to ensure all replicas land
-    in the same node pool for NCCL connectivity. Multi-host TPU jobs
-    coschedule by tpu-name so all workers share the same TPU slice.
-    """
+    """Determine coscheduling config for multi-host jobs."""
     if replicas <= 1:
         return None
     if isinstance(device, TpuConfig):
+        if device.vm_count() <= 1:
+            return None
         return CoschedulingConfig(group_by="tpu-name")
     if isinstance(device, GpuConfig):
         return CoschedulingConfig(group_by="pool")

@@ -24,12 +24,13 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
+from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_validation_sets
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
-from experiments.pretraining_datasets import nemotron_mix_block_shuffle
+from experiments.pretraining_datasets import nemotron_mix
 
 
 @dataclass(frozen=True)
@@ -56,8 +57,8 @@ class GrugMoeLaunchConfig:
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
-    nemotron_mix_block_shuffle,
-    default_validation_sets(tokenizer=nemotron_mix_block_shuffle.tokenizer),
+    nemotron_mix,
+    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
 )
 
 
@@ -92,6 +93,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(
             base_path=os.path.join(config.output_path, "checkpoints"),
+            temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
             keep=[{"every": 1000}],

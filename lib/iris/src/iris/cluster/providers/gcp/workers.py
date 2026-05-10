@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
+
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.cluster.providers.gcp.bootstrap import (
     build_worker_bootstrap_script,
@@ -24,11 +26,11 @@ from iris.cluster.providers.gcp.bootstrap import (
     zone_to_multi_region,
 )
 from iris.cluster.providers.gcp.handles import (
+    _ACTIVE_VM_SLICE_STATES,
     CloudSliceState,
     GcpSliceHandle,
     GcpStandaloneWorkerHandle,
     GcpVmSliceHandle,
-    _ACTIVE_VM_SLICE_STATES,
     _build_gce_resource_name,
 )
 from iris.cluster.providers.gcp.service import (
@@ -40,6 +42,7 @@ from iris.cluster.providers.gcp.service import (
     VmCreateRequest,
 )
 from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA, ssh_impersonate_service_account, ssh_key_file
+from iris.cluster.providers.remote_exec import GceRemoteExec
 from iris.cluster.providers.types import (
     InfraError,
     Labels,
@@ -49,9 +52,7 @@ from iris.cluster.providers.types import (
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import get_tpu_topology
 from iris.cluster.worker.env_probe import construct_worker_id
-from iris.cluster.providers.remote_exec import GceRemoteExec
 from iris.rpc import config_pb2
-from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,13 @@ def _gcp_instance_metadata(
     if ssh_config and ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
         result.update(OS_LOGIN_METADATA)
     return result
+
+
+def _slice_external_ip_enabled(gcp: config_pb2.GcpSliceConfig) -> bool:
+    """Return enable_external_ip from a GcpSliceConfig, defaulting to True for unset/legacy configs."""
+    if not gcp.HasField("enable_external_ip"):
+        return True
+    return gcp.enable_external_ip
 
 
 def _validate_slice_config(config: config_pb2.SliceConfig) -> None:
@@ -416,6 +424,7 @@ class GcpWorkerProvider:
             metadata=metadata,
             service_account=gcp.service_account or None,
             network="default",
+            enable_external_ip=_slice_external_ip_enabled(gcp),
         )
 
         logger.info("Creating TPU slice: %s (type=%s, zone=%s)", slice_id, config.accelerator_variant, gcp.zone)
@@ -477,6 +486,7 @@ class GcpWorkerProvider:
             metadata=metadata,
             service_account=gcp.service_account or None,
             network="default",
+            enable_external_ip=_slice_external_ip_enabled(gcp),
         )
 
         logger.info(
@@ -835,6 +845,7 @@ def _run_tpu_bootstrap(
     # Phase 1: once the QR is ACTIVE (or immediately for non-queued TPUs),
     # wait for the TPU VM to reach READY with all worker IPs.
     cloud_deadline = Deadline.from_now(Duration.from_seconds(effective_cloud_ready_timeout))
+    cloud_backoff = ExponentialBackoff(initial=1.0, maximum=30.0, factor=1.5)
 
     while not cloud_deadline.expired():
         cloud_status = handle._describe_cloud()
@@ -850,7 +861,7 @@ def _run_tpu_bootstrap(
                 sum(1 for w in cloud_status.workers if w.internal_address),
                 cloud_status.worker_count,
             )
-        time.sleep(poll_interval)
+        time.sleep(cloud_backoff.next_interval())
     else:
         raise InfraError(f"Slice {handle.slice_id} did not reach cloud READY within {effective_cloud_ready_timeout}s")
 

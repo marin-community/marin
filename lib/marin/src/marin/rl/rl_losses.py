@@ -8,15 +8,14 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
-import haliax as hax
 from levanter.layers.attention import AttentionMask
+from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmHeadModel
 from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
-from levanter.metrics import Metric, ReductionType
-
 from marin.rl.types import Rollout, TrainingBatch
 
 # TODO(power) - these should be refactored to accept the precomputed logits instead

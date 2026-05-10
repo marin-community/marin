@@ -7,29 +7,39 @@ import random
 import re
 import tempfile
 import time
-from dataclasses import asdict, dataclass
-from threading import Thread
+from dataclasses import asdict, dataclass, field
+from threading import Event, Thread
+from typing import NamedTuple
 
+import marin.execution.executor_step_status as executor_step_status
 import pytest
 from draccus.utils import Dataclass
 from fray.types import ResourceConfig
-from marin.execution import THIS_OUTPUT_PATH
-from marin.evaluation.perplexity_gap import GapFinderModelConfig, default_model_perplexity_gap, raw_text_dataset
+from marin.evaluation.perplexity_gap import (
+    GapFinderModelConfig,
+    model_perplexity_scores,
+    raw_text_dataset,
+)
 from marin.execution.executor import (
+    THIS_OUTPUT_PATH,
     Executor,
     ExecutorStep,
     InputName,
     _get_info_path,
     collect_dependencies_and_version,
+    compute_output_path,
     instantiate_config,
+    materialize,
     mirrored,
     output_path_of,
     this_output_path,
+    upstream_steps,
     versioned,
 )
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
+    step_lock,
 )
 
 
@@ -41,7 +51,7 @@ class MyConfig:
     m: int
 
 
-# Different Ray processes running `ExecutorStep`s cannot share variables, so use filesystem.
+# Different processes running `ExecutorStep`s cannot share variables, so use filesystem.
 # Helper functions
 
 
@@ -153,31 +163,51 @@ def test_status_file_reads_legacy_format(tmp_path):
     assert status_file.status == "SUCCESS"
 
 
-def test_perplexity_gap_step_hash_changes_when_tokenizer_changes():
+def test_step_lock_terminal_status_does_not_race_heartbeat(tmp_path, monkeypatch):
+    terminal_status_written = Event()
+    heartbeat_waiting = Event()
+    heartbeat_after_terminal_status = Event()
+    original_refresh_lock = StatusFile.refresh_lock
+
+    def refresh_lock(status_file: StatusFile) -> None:
+        heartbeat_waiting.set()
+        assert terminal_status_written.wait(timeout=1)
+        try:
+            original_refresh_lock(status_file)
+        finally:
+            heartbeat_after_terminal_status.set()
+
+    monkeypatch.setattr(executor_step_status, "HEARTBEAT_INTERVAL", 0)
+    monkeypatch.setattr(StatusFile, "refresh_lock", refresh_lock)
+
+    with step_lock(str(tmp_path), "step") as status_file:
+        assert heartbeat_waiting.wait(timeout=1)
+        status_file.write_status(STATUS_SUCCESS)
+        terminal_status_written.set()
+        assert heartbeat_after_terminal_status.wait(timeout=1)
+    assert not StatusFile(str(tmp_path), "check").has_active_lock()
+
+
+def test_model_perplexity_score_step_hash_changes_when_tokenizer_changes():
     base_kwargs = dict(
-        name="marin-vs-qwen",
-        model_a=GapFinderModelConfig(
+        name="marin-score",
+        datasets={"eval": raw_text_dataset("gs://example-bucket/eval.jsonl")},
+        resource_config=ResourceConfig.with_tpu("v5p-8", regions=["us-central1"]),
+    )
+    step_a = model_perplexity_scores(
+        **base_kwargs,
+        model=GapFinderModelConfig(
             checkpoint_path="marin-community/marin-8b-base",
             checkpoint_is_hf=True,
             tokenizer="meta-llama/Llama-3.1-8B",
         ),
-        datasets={"eval": raw_text_dataset("gs://example-bucket/eval.jsonl")},
-        resource_config=ResourceConfig.with_tpu("v5p-8", regions=["us-central1"]),
     )
-    step_a = default_model_perplexity_gap(
+    step_b = model_perplexity_scores(
         **base_kwargs,
-        model_b=GapFinderModelConfig(
-            checkpoint_path="Qwen/Qwen3-8B-Base",
+        model=GapFinderModelConfig(
+            checkpoint_path="marin-community/marin-8b-base",
             checkpoint_is_hf=True,
-            tokenizer="Qwen/Qwen3-8B",
-        ),
-    )
-    step_b = default_model_perplexity_gap(
-        **base_kwargs,
-        model_b=GapFinderModelConfig(
-            checkpoint_path="Qwen/Qwen3-8B-Base",
-            checkpoint_is_hf=True,
-            tokenizer="meta-llama/Llama-3.1-8B",
+            tokenizer="marin-community/marin-tokenizer",
         ),
     )
 
@@ -430,6 +460,66 @@ def test_versioning():
         assert_same_version(b_m=2)
 
 
+def test_executor_version_stable_across_prefixes():
+    """Regression for marin-community/marin#5216 (legacy ``Executor`` path).
+
+    Identity hashes for ``ExecutorStep`` chains must not depend on the Marin
+    bucket prefix. The same logical pipeline resolved under
+    ``gs://marin-us-central1`` vs ``gs://marin-us-east5`` was producing
+    distinct hashes once the chain exceeded ``Executor._MAX_INLINE_DEPTH``,
+    because ``_dep_version`` falls back to the deep dep's absolute
+    ``output_paths[dep]`` which carries the prefix.
+
+    The chain below has depth 6 at the leaf, which exceeds the default
+    ``_MAX_INLINE_DEPTH`` of 4 and forces the fallback for every step from
+    ``f`` onward.
+    """
+
+    def fn(config):
+        pass
+
+    def build_chain_leaf():
+        prev = ExecutorStep(name="a", fn=fn, config=None)
+        for name in ("b", "c", "d", "e", "f", "g"):
+            prev = ExecutorStep(
+                name=name,
+                fn=fn,
+                config=MyConfig(
+                    input_path=output_path_of(prev),
+                    output_path=this_output_path(),
+                    n=1,
+                    m=1,
+                ),
+            )
+        return prev  # leaf "g" has depth 6
+
+    leaf_central = build_chain_leaf()
+    leaf_east = build_chain_leaf()
+
+    central = Executor(prefix="gs://marin-us-central1", executor_info_base_path="gs://marin-us-central1")
+    central.compute_version(leaf_central, is_pseudo_dep=False)
+
+    east = Executor(prefix="gs://marin-us-east5", executor_info_base_path="gs://marin-us-east5")
+    east.compute_version(leaf_east, is_pseudo_dep=False)
+
+    # Sanity: deep-dep fallback must actually be active, otherwise the test
+    # would silently pass even with the bug present.
+    assert central._dep_depth(leaf_central) > Executor._MAX_INLINE_DEPTH
+
+    # Per-step hashes must match across regions.
+    central_steps = sorted(central.steps, key=lambda s: s.name)
+    east_steps = sorted(east.steps, key=lambda s: s.name)
+    for c, e in zip(central_steps, east_steps, strict=True):
+        assert c.name == e.name
+        c_hash = central.output_paths[c].rsplit("-", 1)[-1]
+        e_hash = east.output_paths[e].rsplit("-", 1)[-1]
+        assert c_hash == e_hash, f"{c.name} hash flipped across prefixes: {c_hash} vs {e_hash}"
+
+    # Output paths themselves must still differ — that's where the prefix lives.
+    assert central.output_paths[leaf_central].startswith("gs://marin-us-central1/")
+    assert east.output_paths[leaf_east].startswith("gs://marin-us-east5/")
+
+
 def test_dedup_version():
     """Make sure that two `ExecutorStep`s resolve to the same."""
 
@@ -680,6 +770,80 @@ def test_mirrored_instantiate_config():
     assert resolved.input_path == "mirror://documents/data"
 
 
+def test_tuple_values_are_resolved_in_executor_configs():
+    @dataclass(frozen=True)
+    class Cfg:
+        values: tuple[object, ...]
+
+    dependency = ExecutorStep(name="dependency", fn=lambda _: None, config=None)
+    cfg = Cfg(
+        values=(
+            output_path_of(dependency, "artifact"),
+            this_output_path("tracker"),
+            {"mirrored": mirrored(versioned("documents/data"), budget_gb=10)},
+        )
+    )
+
+    deps = collect_dependencies_and_version(cfg)
+    assert deps.dependencies == [dependency]
+    assert deps.version == {
+        "values.[0]": "DEP[0]/artifact",
+        "values.[2].mirrored": "documents/data",
+    }
+
+    resolved = instantiate_config(cfg, output_path="/out", output_paths={dependency: "/dependency"}, prefix="/bucket")
+    assert resolved.values == (
+        "/dependency/artifact",
+        "/out/tracker",
+        {"mirrored": "mirror://documents/data"},
+    )
+
+
+def test_plain_tuple_values_are_resolved_without_type_error():
+    @dataclass(frozen=True)
+    class Cfg:
+        values: tuple[object, ...]
+
+    dependency = ExecutorStep(name="dependency", fn=lambda _: None, config=None)
+    cfg = Cfg(
+        values=(
+            output_path_of(dependency, "artifact"),
+            this_output_path("tracker"),
+        )
+    )
+
+    resolved = instantiate_config(cfg, output_path="/out", output_paths={dependency: "/dependency"}, prefix="/bucket")
+
+    assert resolved.values == (
+        "/dependency/artifact",
+        "/out/tracker",
+    )
+
+
+def test_namedtuple_values_are_resolved_without_losing_type():
+    class Coords(NamedTuple):
+        x: object
+        y: object
+
+    @dataclass(frozen=True)
+    class Cfg:
+        coords: Coords
+
+    dependency = ExecutorStep(name="dependency", fn=lambda _: None, config=None)
+    cfg = Cfg(
+        coords=Coords(
+            output_path_of(dependency, "artifact"),
+            this_output_path("tracker"),
+        )
+    )
+
+    resolved = instantiate_config(cfg, output_path="/out", output_paths={dependency: "/dependency"}, prefix="/bucket")
+
+    assert isinstance(resolved.coords, Coords)
+    assert resolved.coords.x == "/dependency/artifact"
+    assert resolved.coords.y == "/out/tracker"
+
+
 def test_mirrored_nesting_raises():
     with pytest.raises(ValueError, match="nest"):
         mirrored(mirrored("x"))
@@ -732,3 +896,424 @@ def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
     _, lease_after_refresh = live_worker._lock._read_with_generation()
     assert lease_after_refresh.worker_id == "live-worker"
     assert lease_after_refresh.timestamp > lease_after_takeover.timestamp
+
+
+# ---------------------------------------------------------------------------
+# Placeholder traversal and materialization
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Cfg:
+    output_path: str
+    x: int = 0
+
+
+def _step(name: str = "step", x: int = 0) -> ExecutorStep:
+    """Build a throwaway ExecutorStep. The fn is never invoked in these tests."""
+    return ExecutorStep(name=name, fn=lambda c: None, config=_Cfg(output_path="", x=x))
+
+
+@pytest.mark.parametrize("value", [None, 0, "", "abc", 3.14, True])
+def test_primitive_returns_empty(value):
+    assert upstream_steps(value) == []
+
+
+@pytest.mark.parametrize("empty", [[], {}, (), set()], ids=["list", "dict", "tuple", "set"])
+def test_empty_collections_return_empty(empty):
+    assert upstream_steps(empty) == []
+
+
+def test_single_executor_step():
+    step = _step()
+    assert upstream_steps(step) == [step]
+
+
+@dataclass
+class _OuterWithStep:
+    inner: ExecutorStep
+    other: int = 0
+
+
+@pytest.fixture
+def step():
+    return _step()
+
+
+@pytest.mark.parametrize(
+    "make_container",
+    [
+        pytest.param(lambda s: _OuterWithStep(inner=s), id="dataclass"),
+        pytest.param(lambda s: {"a": s, "b": 1}, id="dict"),
+        pytest.param(lambda s: [1, s, "x"], id="list"),
+        pytest.param(lambda s: (1, s, "x"), id="tuple"),
+        # ExecutorStep is hashable (id-based), so it can live in a set.
+        pytest.param(lambda s: {s}, id="set"),
+    ],
+)
+def test_container_with_embedded_step(step, make_container):
+    assert upstream_steps(make_container(step)) == [step]
+
+
+def test_duplicate_step_returned_once(step):
+    @dataclass
+    class Cfg:
+        a: ExecutorStep
+        b: ExecutorStep
+        c: list
+
+    result = upstream_steps(Cfg(a=step, b=step, c=[step, step]))
+    assert result == [step]
+
+
+def test_input_name_with_step_included(step):
+    inp = InputName(step=step, name="ckpt.pt")
+    assert upstream_steps(inp) == [step]
+
+
+def test_input_name_without_step_returns_empty():
+    # Hardcoded path: no step reference.
+    inp = InputName.hardcoded("some/path")
+    assert upstream_steps(inp) == []
+
+
+def test_input_name_nonblocking_still_included(step):
+    inp = InputName(step=step, name="ckpt.pt").nonblocking()
+    assert upstream_steps(inp) == [step]
+
+
+def test_versioned_value_is_leaf():
+    # versioned() rejects InputName; its inner value is a primitive for dep purposes.
+    assert upstream_steps(versioned(42)) == []
+
+
+def test_mirrored_value_unwrapped():
+    # MirroredValue wraps a path string; no embedded steps, but the walker
+    # must descend without raising.
+    assert upstream_steps(mirrored(versioned("data/v1"))) == []
+
+
+def test_determinism_repeated_walk():
+    a, b, c = _step("a"), _step("b"), _step("c")
+
+    @dataclass
+    class Cfg:
+        items: list
+        extra: dict
+
+    cfg = Cfg(items=[a, b], extra={"k1": c, "k2": a})
+    first = upstream_steps(cfg)
+    second = upstream_steps(cfg)
+    assert first == second
+    assert first == [a, b, c]
+
+
+def test_depth_first_field_declaration_order():
+    """Walk must be depth-first in field-declaration order, not BFS or sorted."""
+    leaf_a = _step("leaf_a")
+    leaf_b = _step("leaf_b")
+    leaf_c = _step("leaf_c")
+
+    @dataclass
+    class Inner:
+        # field order matters: leaf_a before leaf_b
+        x: ExecutorStep
+        y: ExecutorStep
+
+    @dataclass
+    class Outer:
+        # depth-first: descend into `first` (yielding leaf_a, leaf_b) BEFORE
+        # visiting `second` (leaf_c). BFS would give [leaf_c, leaf_a, leaf_b].
+        first: Inner
+        second: ExecutorStep
+
+    cfg = Outer(first=Inner(x=leaf_a, y=leaf_b), second=leaf_c)
+    assert upstream_steps(cfg) == [leaf_a, leaf_b, leaf_c]
+
+
+def test_order_distinguishes_from_sorted():
+    """Order is traversal-driven, not name-sorted."""
+    z = _step("z_first")
+    a = _step("a_second")
+
+    @dataclass
+    class Cfg:
+        head: ExecutorStep  # 'z_first' name but encountered first
+        tail: ExecutorStep
+
+    assert upstream_steps(Cfg(head=z, tail=a)) == [z, a]
+
+
+def test_dict_value_order_preserved():
+    # Python dicts preserve insertion order (3.7+); the walker must follow that.
+    a, b, c = _step("a"), _step("b"), _step("c")
+    d = {"second": b, "first": a, "third": c}
+    assert upstream_steps(d) == [b, a, c]
+
+
+def test_nested_dataclass_dict_list():
+    """Mixed-container traversal stays depth-first in declaration order."""
+    s1, s2, s3, s4 = _step("s1"), _step("s2"), _step("s3"), _step("s4")
+
+    @dataclass
+    class Cfg:
+        a: dict = field(default_factory=dict)
+        b: list = field(default_factory=list)
+
+    cfg = Cfg(a={"k1": s1, "k2": [s2, s3]}, b=[s4])
+    # Expected: dict values in insertion order, then list elements, depth-first.
+    # `a` first, descend: s1, then [s2, s3] -> s2, s3; then `b`: s4.
+    assert upstream_steps(cfg) == [s1, s2, s3, s4]
+
+
+def test_input_name_inside_dataclass():
+    parent = _step("parent")
+
+    @dataclass
+    class Cfg:
+        ckpt: InputName
+
+    assert upstream_steps(Cfg(ckpt=InputName(step=parent, name="ckpt.pt"))) == [parent]
+
+
+def test_does_not_walk_into_step_config():
+    """The walker must not descend into a returned step's own config."""
+    grandparent = _step("grandparent")
+
+    @dataclass
+    class ParentCfg:
+        output_path: str
+        upstream: ExecutorStep
+
+    parent = ExecutorStep(
+        name="parent",
+        fn=lambda c: None,
+        config=ParentCfg(output_path="", upstream=grandparent),
+    )
+
+    # Walking `parent` directly returns only `parent`, not its embedded
+    # `grandparent`. Transitive deps are the executor's job.
+    assert upstream_steps(parent) == [parent]
+
+
+# ---------------------------------------------------------------------------
+# materialize
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _LeafCfg:
+    """Tokenize-style step config — no embedded ExecutorSteps."""
+
+    output_path: str
+    n: int = 1
+
+
+@dataclass(frozen=True)
+class _TrainCfg:
+    """Training-style config that references an upstream tokenize step."""
+
+    output_path: str
+    tokens: str  # holds an InputName placeholder until materialize substitutes it
+    n: int = 0
+
+
+def test_materialize_idempotent_for_placeholder_free_config(tmp_path):
+    """A config with no embedded ExecutorSteps round-trips unchanged."""
+    cfg = _TrainCfg(output_path=str(tmp_path / "train"), tokens="/already/concrete", n=7)
+
+    # Sanity check the precondition: no embedded steps to materialize.
+    assert upstream_steps(cfg) == []
+
+    result = materialize(cfg, prefix=str(tmp_path))
+
+    assert result == cfg
+    # And no executor metadata should have been written — `materialize` must
+    # short-circuit when there is nothing to do.
+    assert not (tmp_path / "experiments").exists()
+
+
+def test_materialize_substitutes_upstream_step_path(tmp_path):
+    """A config with one InputName referencing an upstream step gets a concrete path."""
+    call_count = {"n": 0}
+    seen_output_paths: list[str] = []
+
+    def tokenize_fn(cfg: _LeafCfg) -> None:
+        call_count["n"] += 1
+        seen_output_paths.append(cfg.output_path)
+        # Simulate writing some output so the directory exists.
+        os.makedirs(cfg.output_path, exist_ok=True)
+
+    tok_step = ExecutorStep(
+        name="tok",
+        fn=tokenize_fn,
+        config=_LeafCfg(output_path=this_output_path(), n=versioned(1)),
+    )
+
+    # The training config references the upstream step's output.
+    train_output_path = str(tmp_path / "train-run")
+    train_cfg = _TrainCfg(
+        output_path=train_output_path,
+        tokens=output_path_of(tok_step, "tokens.bin"),
+    )
+
+    result = materialize(train_cfg, prefix=str(tmp_path))
+
+    # The fake fn ran exactly once.
+    assert call_count["n"] == 1
+    # The placeholder was replaced with a concrete path under tmp_path.
+    assert isinstance(result.tokens, str)
+    assert result.tokens.startswith(str(tmp_path) + "/tok-")
+    assert result.tokens.endswith("/tokens.bin")
+    # And it is the same path the fn saw.
+    assert result.tokens.startswith(seen_output_paths[0])
+    # The training output_path passes through unchanged (already concrete).
+    assert result.output_path == train_output_path
+
+
+def test_materialize_uses_provided_prefix(tmp_path):
+    """Sub-step output paths land under the provided prefix, not marin_prefix()."""
+
+    def tokenize_fn(cfg: _LeafCfg) -> None:
+        os.makedirs(cfg.output_path, exist_ok=True)
+
+    tok_step = ExecutorStep(
+        name="tok",
+        fn=tokenize_fn,
+        config=_LeafCfg(output_path=this_output_path()),
+    )
+    train_cfg = _TrainCfg(
+        output_path=str(tmp_path / "train"),
+        tokens=output_path_of(tok_step, "tokens.bin"),
+    )
+
+    result = materialize(train_cfg, prefix=str(tmp_path))
+
+    # The substituted path must be under the explicit prefix we passed.
+    assert result.tokens.startswith(str(tmp_path) + "/")
+
+
+def test_materialize_rejects_unresolved_output_path_placeholder(tmp_path):
+    """If the caller forgot to resolve config.output_path, fail loudly."""
+    cfg = _TrainCfg(
+        output_path=this_output_path(),  # OutputName placeholder, not a concrete str
+        tokens="/already/concrete",
+    )
+    with pytest.raises(TypeError, match="OutputName"):
+        materialize(cfg, prefix=str(tmp_path))
+
+
+def test_materialize_concurrent_callers_run_step_once(tmp_path):
+    """Two callers materializing configs that share an upstream step
+    must run that step exactly once across them."""
+
+    @dataclass(frozen=True)
+    class SlowLeafCfg:
+        output_path: str
+        marker_dir: str
+
+    call_count = {"n": 0}
+
+    def tokenize_fn(cfg: SlowLeafCfg) -> None:
+        # The step_lock + status protocol guarantees only one caller actually
+        # invokes fn; sibling callers see STATUS_SUCCESS and skip.
+        call_count["n"] += 1
+        os.makedirs(cfg.output_path, exist_ok=True)
+        # Write a marker so we can verify completion.
+        with open(os.path.join(cfg.marker_dir, f"call-{call_count['n']}"), "w") as f:
+            f.write("done")
+
+    marker_dir = tempfile.mkdtemp(prefix="materialize-marker-")
+
+    tok_step = ExecutorStep(
+        name="shared-tok",
+        fn=tokenize_fn,
+        config=SlowLeafCfg(output_path=this_output_path(), marker_dir=marker_dir),
+    )
+
+    # Both training configs reference the same upstream step.
+    train_cfg_a = _TrainCfg(
+        output_path=str(tmp_path / "train-a"),
+        tokens=output_path_of(tok_step, "tokens.bin"),
+    )
+    train_cfg_b = _TrainCfg(
+        output_path=str(tmp_path / "train-b"),
+        tokens=output_path_of(tok_step, "tokens.bin"),
+    )
+
+    results: dict[str, _TrainCfg] = {}
+
+    def run(label: str, cfg: _TrainCfg) -> None:
+        results[label] = materialize(cfg, prefix=str(tmp_path))
+
+    threads = [
+        Thread(target=run, args=("a", train_cfg_a)),
+        Thread(target=run, args=("b", train_cfg_b)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Exactly one caller ran the upstream step.
+    assert call_count["n"] == 1
+    # Both substituted paths point at the same upstream output.
+    assert results["a"].tokens == results["b"].tokens
+    assert results["a"].tokens.startswith(str(tmp_path) + "/shared-tok-")
+
+
+# ---------------------------------------------------------------------------
+# compute_output_path
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _SubmitCfg:
+    """Launcher-style config: own output_path is OutputName, plus an
+    upstream InputName placeholder."""
+
+    output_path: object  # str at runtime, but starts as OutputName(None)
+    tokenized: object = None  # may hold an InputName referencing upstream
+    extra: object = None  # may hold a nested OutputName(name="X")
+
+
+def _noop_fn(config) -> None:
+    return None
+
+
+def test_compute_output_path_returns_concrete_path(tmp_path):
+    """``compute_output_path`` produces a concrete path under the given prefix
+    without running anything or touching GCS."""
+    config = _SubmitCfg(output_path=this_output_path())
+
+    path = compute_output_path("my-step", config, prefix=str(tmp_path))
+
+    assert isinstance(path, str)
+    assert path.startswith(str(tmp_path) + "/my-step-")
+    # No GCS / disk side-effects: compute_version only walks in-memory state.
+    assert not (tmp_path / "experiments").exists()
+
+
+def test_compute_output_path_honors_override(tmp_path):
+    """``override_output_path`` short-circuits hash derivation and returns the
+    override verbatim (after prefix resolution)."""
+    config = _SubmitCfg(output_path=this_output_path())
+    override = "gs://some-bucket/exact/path"
+
+    path = compute_output_path("my-step", config, override_output_path=override, prefix=str(tmp_path))
+
+    assert path == override
+
+
+def test_compute_output_path_is_deterministic_and_versioned(tmp_path):
+    """Same (name, config) -> same path across calls; different versioned
+    values -> different paths."""
+    cfg_a = _SubmitCfg(output_path=this_output_path(), extra=versioned("a"))
+    cfg_b = _SubmitCfg(output_path=this_output_path(), extra=versioned("b"))
+
+    path_a1 = compute_output_path("step", cfg_a, prefix=str(tmp_path))
+    path_a2 = compute_output_path("step", cfg_a, prefix=str(tmp_path))
+    path_b = compute_output_path("step", cfg_b, prefix=str(tmp_path))
+
+    assert path_a1 == path_a2
+    assert path_a1 != path_b

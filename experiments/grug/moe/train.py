@@ -9,9 +9,12 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import levanter.callbacks as callbacks
+import levanter.tracker
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
@@ -19,9 +22,6 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
-
-import levanter.callbacks as callbacks
-import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data import AsyncDataset, DataLoader
@@ -37,7 +37,6 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-import equinox as eqx
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer

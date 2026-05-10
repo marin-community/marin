@@ -12,16 +12,17 @@ They focus on:
 
 import threading
 
-
+from finelog.rpc import logging_pb2
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
-from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import (
     ControllerDB,
     EndpointQuery,
     attempt_is_terminal,
 )
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
     JOB_DETAIL_PROJECTION,
@@ -29,65 +30,71 @@ from iris.cluster.controller.schema import (
     WORKER_DETAIL_PROJECTION,
     EndpointRow,
 )
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler
-from iris.cluster.controller.stores import ControllerStore
+
+# =============================================================================
+# Test Helpers
+# =============================================================================
+from iris.cluster.controller.stores import (
+    ControllerStore,
+    WorkerResourceUsage,
+)
 from iris.cluster.controller.transitions import (
+    MAX_REPLICAS_PER_JOB,
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
-    MAX_REPLICAS_PER_JOB,
     PruneResult,
     TaskUpdate,
 )
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
-from iris.rpc import logging_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
 
 from .conftest import (
     building_counts as _building_counts,
+)
+from .conftest import (
     check_task_can_be_scheduled,
     check_task_is_finished,
     dispatch_task,
     fail_worker,
     healthy_active_workers,
     make_job_request,
-    make_test_entrypoint as _make_test_entrypoint,
     make_worker_metadata,
-    query_job as _query_job,
-    query_task as _query_task,
-    query_tasks_for_job as _query_tasks_for_job,
-    query_worker as _query_worker,
     register_worker,
-    schedulable_tasks as _schedulable_tasks,
     submit_job,
     transition_task,
     worker_running_tasks,
 )
+from .conftest import (
+    make_test_entrypoint as _make_test_entrypoint,
+)
+from .conftest import (
+    query_attempt as _query_attempt,
+)
+from .conftest import (
+    query_job as _query_job,
+)
+from .conftest import (
+    query_task as _query_task,
+)
+from .conftest import (
+    query_tasks_for_job as _query_tasks_for_job,
+)
+from .conftest import (
+    query_worker as _query_worker,
+)
+from .conftest import (
+    schedulable_tasks as _schedulable_tasks,
+)
 
-# =============================================================================
-# Test Helpers
-# =============================================================================
+_ZERO_USAGE = WorkerResourceUsage(0, 0, 0, 0)
 
 
-def _queued_dispatch(
-    state: ControllerTransitions, worker_id: WorkerId
-) -> tuple[list[job_pb2.RunTaskRequest], list[str]]:
-    rows = state._db.fetchall(
-        "SELECT kind, payload_proto, task_id FROM dispatch_queue WHERE worker_id = ? ORDER BY id ASC",
-        (str(worker_id),),
-    )
-    tasks_to_run: list[job_pb2.RunTaskRequest] = []
-    tasks_to_kill: list[str] = []
-    for row in rows:
-        if str(row["kind"]) == "run" and row["payload_proto"] is not None:
-            req = job_pb2.RunTaskRequest()
-            req.ParseFromString(bytes(row["payload_proto"]))
-            tasks_to_run.append(req)
-        elif row["task_id"] is not None:
-            tasks_to_kill.append(str(row["task_id"]))
-    return tasks_to_run, tasks_to_kill
+def _usage_for_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerResourceUsage:
+    """Derived per-worker usage (replaces the old ``workers.committed_*`` cache)."""
+    with state._db.read_snapshot() as snap:
+        return state._store.attempts.resource_usage_by_worker(snap).get(worker_id, _ZERO_USAGE)
 
 
 def _endpoints(state: ControllerTransitions, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:
@@ -118,8 +125,11 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
                     is_coscheduled=job.has_coscheduling,
                     coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
                 )
+    with state._db.read_snapshot() as snap:
+        usage = state._store.attempts.resource_usage_by_worker(snap)
+    snapshots = [worker_snapshot_from_row(w, usage.get(w.worker_id)) for w in workers]
     return scheduler.create_scheduling_context(
-        workers,
+        snapshots,
         building_counts=_building_counts(state),
         pending_tasks=task_ids,
         jobs=jobs,
@@ -258,12 +268,11 @@ def test_job_cancellation_kills_all_tasks(harness):
         assert harness.query_task(task.task_id).state == job_pb2.TASK_STATE_KILLED
 
 
-def test_cancel_job_releases_committed_worker_resources(harness):
-    """cancel_job must decommit resources on workers that had active tasks.
-
-    Regression: cancel_job marked tasks KILLED without calling _decommit_worker_resources.
-    apply_task_updates then skipped the update (task already finished), so committed resources
-    were never released, permanently blocking scheduling on those workers.
+def test_cancel_job_holds_resources_until_heartbeat_finalization(harness):
+    """Verify ``cancel_job`` is a producer transition: the attempt's
+    ``finished_at_ms`` stays NULL so the worker keeps owning its slice in
+    the scheduler's derived usage view until the heartbeat path stamps the
+    timestamp.
     """
     w1 = harness.add_worker("w1")
     w2 = harness.add_worker("w2")
@@ -272,20 +281,55 @@ def test_cancel_job_releases_committed_worker_resources(harness):
     harness.dispatch(tasks[0], w1)
     harness.dispatch(tasks[1], w2)
 
-    assert _query_worker(harness.state, w1).committed_cpu_millicores == 1000
-    assert _query_worker(harness.state, w1).committed_mem == 1024**3
-    assert _query_worker(harness.state, w2).committed_cpu_millicores == 1000
+    assert _usage_for_worker(harness.state, w1).cpu_millicores == 1000
+    assert _usage_for_worker(harness.state, w1).memory_bytes == 1024**3
+    assert _usage_for_worker(harness.state, w2).cpu_millicores == 1000
 
     with harness.state._store.transaction() as cur:
         harness.state.cancel_job(cur, JobName.root("test-user", "j1"), reason="User cancelled")
 
-    assert _query_worker(harness.state, w1).committed_cpu_millicores == 0, "w1 leaked committed_cpu_millicores"
-    assert _query_worker(harness.state, w1).committed_mem == 0, "w1 leaked committed_mem"
-    assert _query_worker(harness.state, w2).committed_cpu_millicores == 0, "w2 leaked committed_cpu_millicores"
-    assert _query_worker(harness.state, w2).committed_mem == 0, "w2 leaked committed_mem"
+    # Producer-side cancel: usage stays held — finished_at_ms is still NULL.
+    assert _usage_for_worker(harness.state, w1).cpu_millicores == 1000
+    assert _usage_for_worker(harness.state, w2).cpu_millicores == 1000
 
+    # Tasks transition to KILLED, removing them from the running-task view.
     assert len(worker_running_tasks(harness.state, w1)) == 0
     assert len(worker_running_tasks(harness.state, w2)) == 0
+
+
+def test_cancel_job_rolls_attempt_state_without_finalizing(harness):
+    """Verify ``cancel_job`` rolls the in-flight attempt's reporting state to
+    KILLED so dashboards don't see a "killed but still RUNNING" row, while
+    leaving ``finished_at_ms`` NULL so the scheduler retains capacity for
+    the worker until heartbeat finalization.
+    """
+    from iris.cluster.controller.db import attempt_is_terminal
+
+    w1 = harness.add_worker("w1")
+    w2 = harness.add_worker("w2")
+    tasks = harness.submit("j1", replicas=2)
+
+    harness.dispatch(tasks[0], w1)
+    harness.dispatch(tasks[1], w2)
+
+    attempt_ids = {t.task_id: harness.query_task(t.task_id).current_attempt_id for t in tasks}
+    assert all(aid >= 0 for aid in attempt_ids.values())
+    for t in tasks:
+        att = _query_attempt(harness.state, t.task_id, attempt_ids[t.task_id])
+        assert att is not None
+        assert not attempt_is_terminal(att.state)
+        assert att.finished_at is None
+
+    with harness.state._store.transaction() as cur:
+        harness.state.cancel_job(cur, JobName.root("test-user", "j1"), reason="User cancelled")
+
+    for t in tasks:
+        att = _query_attempt(harness.state, t.task_id, attempt_ids[t.task_id])
+        assert att is not None
+        assert attempt_is_terminal(att.state), f"orphan attempt left active for task {t.task_id} (state={att.state})"
+        # Producer-side cancel does not stamp finished_at_ms — the heartbeat
+        # path owns that write so the scheduler keeps capacity held.
+        assert att.finished_at is None
 
 
 def test_cancel_job_preserves_kill_worker_mapping_after_clearing_tasks(harness):
@@ -740,7 +784,6 @@ def test_endpoint_survives_building_state(state):
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task.task_id,
@@ -770,7 +813,6 @@ def test_endpoint_survives_building_state(state):
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task.task_id,
@@ -1087,12 +1129,16 @@ def test_coscheduled_task_failure_kills_siblings(state):
         assert task.task_id in txn.tasks_to_kill
 
 
-def test_coscheduled_cascade_releases_worker_resources(state):
-    """Coscheduled sibling cascade must free committed resources on surviving workers.
+def test_coscheduled_cascade_holds_sibling_resources_until_heartbeat(state):
+    """Coscheduled sibling cascade keeps siblings' chips reserved until their
+    heartbeats finalize them.
 
-    Regression test: previously, _cascade_coscheduled_failure marked siblings
-    terminal but never called _cleanup_task_resources, leaking committed_cpu_millicores/mem
-    on workers and permanently blocking future scheduling.
+    Under the new derived-usage contract, ``_terminate_coscheduled_siblings``
+    runs as a producer (``finalize_attempt=False``) — it transitions the
+    siblings' tasks to WORKER_FAILED but leaves their attempts unfinished so
+    the worker's chips stay accounted for. Only the originating task's worker
+    (w0) gets capacity back, because that release came from the heartbeat
+    that delivered the FAILED state in the first place.
     """
 
     for i in range(4):
@@ -1116,28 +1162,31 @@ def test_coscheduled_cascade_releases_worker_resources(state):
 
     # Verify resources are committed before failure
     for i in range(4):
-        w = _query_worker(state, WorkerId(f"w{i}"))
-        assert w.committed_cpu_millicores == 2000
+        usage = _usage_for_worker(state, WorkerId(f"w{i}"))
+        assert usage.cpu_millicores == 2000
         assert len(worker_running_tasks(state, WorkerId(f"w{i}"))) == 1
 
-    # Fail task-0 terminally → cascade kills siblings on w1, w2, w3
+    # Fail task-0 terminally → cascade marks siblings WORKER_FAILED but leaves
+    # their attempts unfinished (producer path, no finished_at_ms stamp).
     transition_task(state, tasks[0].task_id, job_pb2.TASK_STATE_FAILED, error="OOM")
 
-    # All surviving workers (w1..w3) must have resources fully released
-    for i in range(1, 4):
-        w = _query_worker(state, WorkerId(f"w{i}"))
-        assert w.committed_cpu_millicores == 0, f"w{i} has leaked committed_cpu_millicores={w.committed_cpu_millicores}"
-        assert w.committed_mem == 0, f"w{i} has leaked committed_mem={w.committed_mem}"
-        assert len(worker_running_tasks(state, WorkerId(f"w{i}"))) == 0
+    # The trigger worker's attempt is finalized by the heartbeat that
+    # delivered FAILED.
+    assert _usage_for_worker(state, WorkerId("w0")).cpu_millicores == 0
 
-    # w0 should also be clean (task-0 was the trigger, cleaned up by _on_task_state_changed)
-    w0 = _query_worker(state, WorkerId("w0"))
-    assert w0.committed_cpu_millicores == 0
-    assert len(worker_running_tasks(state, WorkerId("w0"))) == 0
+    # Sibling workers still hold their chips until their own terminal
+    # heartbeats arrive (or worker-failure synthesis stamps finished_at_ms).
+    for i in range(1, 4):
+        usage = _usage_for_worker(state, WorkerId(f"w{i}"))
+        assert (
+            usage.cpu_millicores == 2000
+        ), f"w{i} sibling must keep its reservation until terminal heartbeat: usage={usage}"
+        assert usage.memory_bytes == 1024**3
 
 
 def test_coscheduled_task_worker_failure_kills_siblings(state):
-    """WORKER_FAILED also triggers sibling kill when retries exhausted."""
+    """WORKER_FAILED triggers sibling kill when retries exhausted; bounces them
+    to PENDING when retries remain."""
 
     for i in range(4):
         meta = make_worker_metadata()
@@ -1161,19 +1210,25 @@ def test_coscheduled_task_worker_failure_kills_siblings(state):
     for i, task in enumerate(tasks):
         dispatch_task(state, task, WorkerId(f"w{i}"))
 
-    # First WORKER_FAILED is retriable (retries remaining)
+    # First WORKER_FAILED is retriable (retries remaining). Task-0 returns to
+    # PENDING and its slice siblings get bounced too so the job can re-cosched.
     transition_task(state, tasks[0].task_id, job_pb2.TASK_STATE_WORKER_FAILED, error="Worker crashed (first)")
 
-    # Task-0 is retriable, siblings still running
     assert _query_task(state, tasks[0].task_id).preemption_count == 1
     assert check_task_can_be_scheduled(_query_task(state, tasks[0].task_id))
+    # Siblings bounced to PENDING with their preemption budget untouched.
     for task in tasks[1:]:
-        assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
+        sib = _query_task(state, task.task_id)
+        assert sib.state == job_pb2.TASK_STATE_PENDING
+        assert sib.preemption_count == 0
 
-    # Re-dispatch task-0
-    dispatch_task(state, tasks[0], WorkerId("w0"))
+    # Re-dispatch the whole slice atomically (mimicking re-coscheduling).
+    for i, task in enumerate(tasks):
+        refreshed = _query_task(state, task.task_id)
+        if refreshed.state == job_pb2.TASK_STATE_PENDING:
+            dispatch_task(state, refreshed, WorkerId(f"w{i}"))
 
-    # Second WORKER_FAILED exhausts retries - now terminal
+    # Second WORKER_FAILED on task-0 exhausts retries → terminal; siblings die.
     txn = transition_task(state, tasks[0].task_id, job_pb2.TASK_STATE_WORKER_FAILED, error="Worker crashed (second)")
 
     assert _query_task(state, tasks[0].task_id).state == job_pb2.TASK_STATE_WORKER_FAILED
@@ -1250,8 +1305,11 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(state):
     assert len(txn.tasks_to_kill) == 0
 
 
-def test_coscheduled_retriable_failure_does_not_kill_siblings(state):
-    """When a coscheduled task fails but has retries remaining, siblings are NOT killed."""
+def test_coscheduled_retriable_failure_bounces_siblings_to_pending(state):
+    """A retriable failure of one coscheduled task bounces all siblings to
+    PENDING so the job re-coschedules atomically. Only the preempted task
+    uses its retry budget; sibling preemption and failure counts are
+    unchanged."""
 
     for i in range(4):
         meta = make_worker_metadata()
@@ -1277,17 +1335,125 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(state):
     # Fail task-0 (first failure, has retry remaining)
     txn = transition_task(state, tasks[0].task_id, job_pb2.TASK_STATE_FAILED, error="OOM")
 
-    # Task-0 failed but is retriable, requeued to PENDING
-    assert tasks[0].state == job_pb2.TASK_STATE_PENDING
-    assert check_task_can_be_scheduled(tasks[0])  # Can retry
-    assert not check_task_is_finished(tasks[0])  # Not terminal
+    # Task-0 retried to PENDING and bears the failure_count.
+    failed = _query_task(state, tasks[0].task_id)
+    assert failed.state == job_pb2.TASK_STATE_PENDING
+    assert failed.failure_count == 1
+    assert check_task_can_be_scheduled(failed)
+    assert not check_task_is_finished(failed)
 
-    # Siblings should still be running (no cascade for retriable failures)
+    # Siblings bounced to PENDING with their counters preserved, so they don't
+    # forfeit retries for someone else's failure.
     for task in tasks[1:]:
-        assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
+        sib = _query_task(state, task.task_id)
+        assert sib.state == job_pb2.TASK_STATE_PENDING
+        assert sib.failure_count == 0
+        assert sib.preemption_count == 0
+        assert task.task_id in txn.tasks_to_kill
 
-    # No tasks marked for kill
-    assert len(txn.tasks_to_kill) == 0
+    # Under the new derived-usage contract, sibling resources stay held by
+    # their unfinished attempts until heartbeats arrive. The producer-side
+    # requeue path only flips task.state to PENDING; capacity is released by
+    # the heartbeat that subsequently reports KILLED.
+    for i in range(1, 4):
+        usage = _usage_for_worker(state, WorkerId(f"w{i}"))
+        assert usage.cpu_millicores == 1000
+
+
+def test_coscheduled_worker_failure_bounces_siblings(state):
+    """Reaper-driven worker death (fail_workers path) must also clear siblings
+    on surviving slice workers so the bounced task doesn't end up on a
+    different slice from the rest of its job."""
+
+    for i in range(4):
+        meta = make_worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=4,
+        environment=job_pb2.EnvironmentConfig(),
+        max_retries_preemption=2,
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    tasks = submit_job(state, "j-w", req)
+
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    fail_worker(state, WorkerId("w0"), "host disappeared")
+
+    # Task-0 retried to PENDING with one preemption charge; siblings bounced
+    # to PENDING but kept their full preemption budget.
+    failed = _query_task(state, tasks[0].task_id)
+    assert failed.state == job_pb2.TASK_STATE_PENDING
+    assert failed.preemption_count == 1
+    for task in tasks[1:]:
+        sib = _query_task(state, task.task_id)
+        assert sib.state == job_pb2.TASK_STATE_PENDING
+        assert sib.preemption_count == 0
+
+    # Surviving workers' chips remain held by unfinished sibling attempts
+    # under the new derived-usage contract. They are released when each
+    # sibling's terminal heartbeat (or worker-failure synthesis) finalizes
+    # the attempt. The bounced sibling tasks are already back to PENDING so
+    # the job can re-coschedule once those heartbeats land.
+    for i in range(1, 4):
+        usage = _usage_for_worker(state, WorkerId(f"w{i}"))
+        assert usage.cpu_millicores == 1000
+
+
+def test_coscheduled_bounced_job_recoschedules_to_single_slice(state):
+    """End-to-end: after a transient failure bounces a coscheduled slice,
+    the next scheduling pass must place all tasks on a single tpu-name
+    group, not split across the freed slice and a parallel one."""
+
+    # Two slices: tpu-a (workers 0-3) and tpu-b (workers 4-7).
+    for i in range(8):
+        meta = make_worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a" if i < 4 else "tpu-b"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i % 4
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="recosched",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=4,
+        environment=job_pb2.EnvironmentConfig(),
+        max_retries_failure=1,
+        max_task_failures=4,
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    tasks = submit_job(state, "j-rc", req)
+
+    # Initial dispatch: place all 4 tasks on tpu-a (workers 0-3).
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    # Transient failure on task-0 bounces the whole slice to PENDING.
+    transition_task(state, tasks[0].task_id, job_pb2.TASK_STATE_FAILED, error="transient")
+
+    # All four tasks are now PENDING and the scheduler must re-place them on
+    # ONE group, even though tpu-b has 4 idle workers and tpu-a has 4 freshly
+    # freed ones (either group is valid; what matters is that the assignment
+    # is single-slice).
+    scheduler = Scheduler()
+    ctx = _build_scheduling_context(scheduler, state)
+    result = scheduler.find_assignments(ctx)
+
+    assignments = {tid: wid for tid, wid in result.assignments}
+    assert set(assignments.keys()) == {
+        t.task_id for t in tasks
+    }, f"expected all 4 tasks scheduled, got {assignments.keys()}"
+    chosen_tpu_names = {
+        ctx.capacities[wid].attributes[WellKnownAttribute.TPU_NAME].value for wid in assignments.values()
+    }
+    assert len(chosen_tpu_names) == 1, f"job split across slices: {chosen_tpu_names}"
 
 
 # =============================================================================
@@ -1327,7 +1493,6 @@ def test_stale_attempt_ignored(state):
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task.task_id,
@@ -1375,7 +1540,6 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
                 cur,
                 HeartbeatApplyRequest(
                     worker_id=worker_id,
-                    worker_resource_snapshot=None,
                     updates=[TaskUpdate(task_id=task.task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
                 ),
             )
@@ -1390,7 +1554,7 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
 
 def test_log_service_direct_push(state, log_service):
     """Log entries pushed via LogService are queryable."""
-    from iris.cluster.log_store import task_log_key
+    from iris.cluster.log_store_helpers import task_log_key
     from iris.cluster.types import TaskAttempt
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
@@ -1416,7 +1580,7 @@ def test_log_service_direct_push(state, log_service):
 def test_log_service_accumulates_pushes(state, log_service):
     """Multiple pushes accumulate logs in the service."""
 
-    from iris.cluster.log_store import task_log_key
+    from iris.cluster.log_store_helpers import task_log_key
     from iris.cluster.types import TaskAttempt
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
@@ -2659,16 +2823,15 @@ def test_holder_tasks_consume_zero_resources(state):
     holder_tasks = _query_tasks_for_job(state, holder_job_id)
     assert len(holder_tasks) == 1
 
-    worker_before = _query_worker(state, wid)
-    gpus_before = worker_before.total_gpu_count - worker_before.committed_gpu
+    gpu_used_before = _usage_for_worker(state, wid).gpu_count
 
     # Assign holder task
     with state._store.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)])
 
-    # Worker's available GPUs should NOT decrease (zero resources)
-    worker_after = _query_worker(state, wid)
-    assert worker_after.total_gpu_count - worker_after.committed_gpu == gpus_before
+    # Holder tasks have zero res_device_json so they contribute 0 GPUs to
+    # the derived usage, even after assignment.
+    assert _usage_for_worker(state, wid).gpu_count == gpu_used_before
 
     # But the task should be tracked in running_tasks
     assert holder_tasks[0].task_id in worker_running_tasks(state, wid)
@@ -2692,17 +2855,16 @@ def test_holder_task_cleanup_releases_no_resources(state):
     with state._store.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)])
 
-    worker_before = _query_worker(state, wid)
-    gpus_before = worker_before.total_gpu_count - worker_before.committed_gpu
+    gpu_used_before = _usage_for_worker(state, wid).gpu_count
+    assert gpu_used_before == 0, "holder must not contribute to derived usage"
 
     # Kill the holder task via parent job cancellation
     parent_job_id = JobName.root("test-user", "j1")
     with state._store.transaction() as cur:
         state.cancel_job(cur, parent_job_id, reason="test")
 
-    # Worker GPUs should be unchanged (nothing to release)
-    worker_after = _query_worker(state, wid)
-    assert worker_after.total_gpu_count - worker_after.committed_gpu == gpus_before
+    # Worker GPUs should still be unchanged (holder never contributed).
+    assert _usage_for_worker(state, wid).gpu_count == gpu_used_before
 
 
 def test_holder_tasks_excluded_from_building_counts(state):
@@ -3062,7 +3224,6 @@ def test_prune_old_terminal_jobs(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        profile_retention=Duration.from_seconds(86400),
     )
 
     assert result.jobs_deleted == 1
@@ -3074,18 +3235,51 @@ def test_prune_old_terminal_jobs(state):
     assert _query_task(state, old_tasks[0].task_id) is None
 
 
-def test_prune_old_inactive_workers(state):
-    """Inactive workers with stale heartbeats are pruned; active workers are kept."""
+def test_prune_evicts_status_text_cache(state):
+    """prune_old_data evicts _status_text entries for pruned jobs; other tasks are unaffected."""
+    wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
-    # Register two workers: one healthy, one that we'll make inactive
+    old_tasks = submit_job(state, "old-job", make_job_request("old-job"))
+    dispatch_task(state, old_tasks[0], wid)
+    transition_task(state, old_tasks[0].task_id, job_pb2.TASK_STATE_SUCCEEDED)
+
+    kept_tasks = submit_job(state, "kept-job", make_job_request("kept-job"))
+    dispatch_task(state, kept_tasks[0], wid)
+    transition_task(state, kept_tasks[0].task_id, job_pb2.TASK_STATE_SUCCEEDED)
+
+    old_job_id = JobName.root("test-user", "old-job")
+    state._db.execute(
+        "UPDATE jobs SET finished_at_ms = 1000 WHERE job_id = ?",
+        (old_job_id.to_wire(),),
+    )
+
+    state.record_task_status_text(old_tasks[0].task_id, "old detail", "old summary")
+    state.record_task_status_text(kept_tasks[0].task_id, "kept detail", "kept summary")
+
+    state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+    )
+
+    assert state._store.tasks.get_status_text_detail(old_tasks[0].task_id.to_wire()) == ""
+    assert state._store.tasks.get_status_text_summary(old_tasks[0].task_id.to_wire()) == ""
+    assert state._store.tasks.get_status_text_detail(kept_tasks[0].task_id.to_wire()) == "kept detail"
+    assert state._store.tasks.get_status_text_summary(kept_tasks[0].task_id.to_wire()) == "kept summary"
+
+
+def test_prune_old_inactive_workers(state):
+    """Inactive workers with stale heartbeats are pruned; active workers are kept.
+
+    Liveness state lives in :class:`WorkerHealthTracker` rather than the
+    SQLite ``workers`` row, so the test mutates the tracker directly to age
+    out the stale worker.
+    """
     active_wid = register_worker(state, "active-w", "host:8080", make_worker_metadata())
     stale_wid = register_worker(state, "stale-w", "host:8081", make_worker_metadata())
 
-    # Mark the stale worker as unhealthy with an old heartbeat
-    state._db.execute(
-        "UPDATE workers SET healthy = 0, last_heartbeat_ms = ? WHERE worker_id = ?",
-        (1000, str(stale_wid)),
-    )
+    # Mark the stale worker as unhealthy with an old heartbeat in the tracker.
+    state._store.health.set_health_for_test(stale_wid, healthy=False)
+    state._store.health.set_last_heartbeat_for_test(stale_wid, last_heartbeat_ms=1000)
 
     assert _query_worker(state, active_wid) is not None
     assert _query_worker(state, stale_wid) is not None
@@ -3093,7 +3287,6 @@ def test_prune_old_inactive_workers(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        profile_retention=Duration.from_seconds(86400),
     )
 
     assert result.workers_deleted == 1
@@ -3121,7 +3314,6 @@ def test_prune_noop_when_nothing_old(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        profile_retention=Duration.from_seconds(86400),
     )
 
     assert result == PruneResult()
@@ -3129,20 +3321,16 @@ def test_prune_noop_when_nothing_old(state):
 
 
 def test_dispatch_propagates_task_image(state):
-    """task_image set on the LaunchJobRequest is copied into the dispatched RunTaskRequest."""
-    wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    """task_image set on the LaunchJobRequest is copied into the per-job RunTaskRequest template."""
+    register_worker(state, "w1", "host:8080", make_worker_metadata())
 
     req = make_job_request("img-job", task_image="custom/swetrace:dev")
     tasks = submit_job(state, "img-job", req)
-    with state._store.transaction() as cur:
-        result = state.queue_assignments(
-            cur,
-            [Assignment(task_id=tasks[0].task_id, worker_id=wid)],
-            direct_dispatch=True,
-        )
-    assert len(result.start_requests) == 1
-    _, _, run_request = result.start_requests[0]
-    assert run_request.task_image == "custom/swetrace:dev"
+    job_id = tasks[0].job_id
+    with state._store.read_snapshot() as snap:
+        template = state.run_request_template(snap, job_id)
+    assert template is not None
+    assert template.task_image == "custom/swetrace:dev"
 
 
 def test_prune_old_data_short_circuits_when_nothing_prunable(state):
@@ -3155,7 +3343,6 @@ def test_prune_old_data_short_circuits_when_nothing_prunable(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        profile_retention=Duration.from_seconds(86400),
     )
 
     assert result == PruneResult()
@@ -3234,69 +3421,82 @@ def test_drain_pending_creates_attempt_rows(state):
     assert int(row["state"]) == job_pb2.TASK_STATE_ASSIGNED
 
 
-def test_drain_skips_already_assigned(state):
-    """Already ASSIGNED tasks appear in running_tasks, not tasks_to_run."""
+def _count_pending(state: ControllerTransitions) -> int:
+    with state._db.snapshot() as q:
+        row = q.fetchone("SELECT COUNT(*) AS c FROM tasks WHERE state = ?", (job_pb2.TASK_STATE_PENDING,))
+    return int(row["c"])
+
+
+def test_drain_redrives_assigned_until_executing(state):
+    """ASSIGNED+null-worker rows are redriven each cycle so a missed pod-apply
+    is recovered, and they are also in running_tasks so the same-cycle poll
+    transitions them out of ASSIGNED. Once the task reaches BUILDING/RUNNING,
+    it leaves tasks_to_run but stays in running_tasks."""
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
 
-    # First drain promotes to ASSIGNED.
+    # First drain: PENDING -> ASSIGNED, dispatched and polled.
     with state._store.transaction() as cur:
         batch1 = state.drain_for_direct_provider(cur)
     assert len(batch1.tasks_to_run) == 1
+    assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
 
-    # Second drain: no new tasks to run, but task appears in running_tasks.
+    # Second drain (e.g. previous _apply_pod failed or controller crashed):
+    # row is still ASSIGNED, redriven in tasks_to_run with same attempt_id.
     with state._store.transaction() as cur:
         batch2 = state.drain_for_direct_provider(cur)
-    assert len(batch2.tasks_to_run) == 0
-    assert len(batch2.running_tasks) == 1
-    assert batch2.running_tasks[0].task_id == task_id
-    assert batch2.running_tasks[0].attempt_id == 0
+    assert len(batch2.tasks_to_run) == 1
+    assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch2.tasks_to_run[0].attempt_id == 0
+    assert [(e.task_id, e.attempt_id) for e in batch2.running_tasks] == [(task_id, 0)]
+
+    # Once the task reaches RUNNING it leaves tasks_to_run; running_tasks still
+    # contains it so the next poll observes terminal transitions.
+    with state._store.transaction() as cur:
+        state.apply_direct_provider_updates(
+            cur, [TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)]
+        )
+    with state._store.transaction() as cur:
+        batch3 = state.drain_for_direct_provider(cur)
+    assert len(batch3.tasks_to_run) == 0
+    assert len(batch3.running_tasks) == 1
+    assert batch3.running_tasks[0].task_id == task_id
 
 
 def test_drain_caps_promotions_per_cycle(state):
-    """Promotions are capped by max_promotions per drain call."""
+    """``max_promotions`` caps how many PENDING rows are promoted per cycle.
+    Redrives of already-ASSIGNED rows do not count against the cap."""
     _submit_job_direct(state, "/user/big-job", replicas=200)
+    assert _count_pending(state) == 200
 
     with state._store.transaction() as cur:
         batch1 = state.drain_for_direct_provider(cur, max_promotions=128)
+    # All 128 dispatched are freshly promoted (no prior ASSIGNED rows).
     assert len(batch1.tasks_to_run) == 128
+    assert _count_pending(state) == 72
 
-    # Remaining tasks promoted with another budget.
+    # Second drain: 72 newly promoted, 128 redriven.
     with state._store.transaction() as cur:
         batch2 = state.drain_for_direct_provider(cur, max_promotions=128)
-    assert len(batch2.tasks_to_run) == 72
+    assert len(batch2.tasks_to_run) == 200
+    assert _count_pending(state) == 0
 
 
 def test_drain_max_promotions_limits_batch(state):
-    """max_promotions caps the number of tasks promoted per cycle."""
+    """``max_promotions`` is a per-cycle PENDING-promotion budget, not a cap
+    on total dispatch (which also includes ASSIGNED redrives)."""
     _submit_job_direct(state, "/user/cap-job", replicas=250)
 
     with state._store.transaction() as cur:
         batch1 = state.drain_for_direct_provider(cur, max_promotions=50)
     assert len(batch1.tasks_to_run) == 50
+    assert _count_pending(state) == 200
 
-    # Remaining tasks still available with a fresh budget.
+    # 50 newly promoted + 50 prior ASSIGNED redriven.
     with state._store.transaction() as cur:
         batch2 = state.drain_for_direct_provider(cur, max_promotions=50)
-    assert len(batch2.tasks_to_run) == 50
-
-
-def test_drain_kill_queue(state):
-    """Buffered kill entries are drained and deleted."""
-    task_ids = _submit_job_direct(state, "/user/job1")
-    task_id = task_ids[0]
-
-    with state._store.transaction() as cur:
-        state.buffer_direct_kill(cur, task_id.to_wire())
-
-    with state._store.transaction() as cur:
-        batch = state.drain_for_direct_provider(cur)
-    assert task_id.to_wire() in batch.tasks_to_kill
-
-    # Second drain should be empty (kills were consumed).
-    with state._store.transaction() as cur:
-        batch2 = state.drain_for_direct_provider(cur)
-    assert len(batch2.tasks_to_kill) == 0
+    assert len(batch2.tasks_to_run) == 100
+    assert _count_pending(state) == 150
 
 
 def test_apply_running(state):
@@ -3444,20 +3644,6 @@ def test_apply_worker_failed(state):
     assert task.preemption_count == 1
 
 
-def test_buffer_direct_kill(state):
-    """buffer_direct_kill inserts a NULL-worker_id kill entry in dispatch_queue."""
-    with state._store.transaction() as cur:
-        state.buffer_direct_kill(cur, "/user/job1:task-0")
-
-    row = state._db.fetchone(
-        "SELECT worker_id, kind, task_id FROM dispatch_queue WHERE task_id = ?",
-        ("/user/job1:task-0",),
-    )
-    assert row is not None
-    assert row["worker_id"] is None
-    assert row["kind"] == "kill"
-
-
 def test_cancel_job_kills_direct_provider_tasks(state):
     """cancel_job includes NULL-worker_id (direct-provider) tasks in tasks_to_kill."""
     task_ids = _submit_job_direct(state, "/user/job1", replicas=2)
@@ -3483,15 +3669,13 @@ def test_kill_non_terminal_direct_provider_tasks(state):
 
 
 def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harness):
-    """Finalizing a reservation-holder task must not decommit a co-tenant's resources.
+    """Finalizing a reservation-holder task must not affect a co-tenant's
+    derived usage.
 
-    Regression: ``_kill_non_terminal_tasks`` passed ``resources`` into
-    ``_terminate_task`` unconditionally. Reservation-holder tasks never commit
-    on assignment, so decommitting them on termination
-    subtracts chips that were never added — on a worker co-tenanted by a real
-    task, this floored ``committed_*`` below the co-tenant's true reservation,
-    letting the scheduler double-book the VM (seen in prod: two v5p-8 jobs on
-    the same 4-chip VM, with the second crashing on ``/dev/vfio/0 busy``).
+    Under the new derived-usage contract, holder jobs are excluded from
+    ``resource_usage_by_worker`` (the query has
+    ``j.is_reservation_holder = 0``), so terminating a holder task on a
+    co-tenanted worker cannot move the co-tenant's reservation accounting.
     """
     from iris.cluster.controller.transitions import _kill_non_terminal_tasks
 
@@ -3500,9 +3684,8 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
     real_tasks = harness.submit("real-job", replicas=1)
     harness.dispatch(real_tasks[0], worker_id)
 
-    baseline_cpu = _query_worker(harness.state, worker_id).committed_cpu_millicores
-    baseline_mem = _query_worker(harness.state, worker_id).committed_mem
-    assert baseline_cpu > 0
+    baseline_usage = _usage_for_worker(harness.state, worker_id)
+    assert baseline_usage.cpu_millicores > 0
 
     holder_tasks = harness.submit("holder-job", replicas=1)
     holder_job_id = JobName.root("test-user", "holder-job")
@@ -3512,9 +3695,8 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
     )
     dispatch_task(harness.state, holder_tasks[0], worker_id)
 
-    # Holder did not consume capacity.
-    assert _query_worker(harness.state, worker_id).committed_cpu_millicores == baseline_cpu
-    assert _query_worker(harness.state, worker_id).committed_mem == baseline_mem
+    # Holder did not consume capacity (it's excluded from the derived map).
+    assert _usage_for_worker(harness.state, worker_id) == baseline_usage
 
     # Exercise the exact finalization path: _finalize_terminal_job cascades to
     # the holder sub-job via _kill_non_terminal_tasks. cancel_job has its own
@@ -3531,13 +3713,10 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
             0,
         )
 
-    # Holder's termination must not touch the co-tenant's committed counters.
+    # Holder's termination must not touch the co-tenant's derived usage.
     assert (
-        _query_worker(harness.state, worker_id).committed_cpu_millicores == baseline_cpu
-    ), "holder finalization leaked committed_cpu_millicores onto co-tenant's reservation"
-    assert (
-        _query_worker(harness.state, worker_id).committed_mem == baseline_mem
-    ), "holder finalization leaked committed_mem onto co-tenant's reservation"
+        _usage_for_worker(harness.state, worker_id) == baseline_usage
+    ), "holder finalization leaked into the co-tenant's derived usage"
 
 
 def test_max_failures_kills_direct_provider_tasks(state):
