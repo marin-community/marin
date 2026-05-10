@@ -298,15 +298,65 @@ The compiler prompt should add a fourth diagnosis case alongside `rubric_drift /
 
 This is the §1.8.5 "Step 6 judge calibration" idea collapsed into the existing data structure — same effect, no new plumbing.
 
-#### 1.9.4 Synthesis & re-judging
+#### 1.9.4 Synthesis & re-judging — hierarchical decision rule
 
-The synthesizer (`e9_dart_iter_synthesize.py`) needs to:
-1. Cluster `spec_example_additions` across the 3 compilers by `description` similarity (or by user_query similarity).
-2. Adopt examples where ≥2 compilers proposed similar examples (majority rule, mirroring §1.7).
-3. Append to `spec.metadata.examples` (never modify or delete existing entries — authorial intent preserved).
-4. Optionally update referenced anchors' `example_refs` to point at new example indices.
+Adding a third edit type increases the risk of compiler fragmentation across types (1 says examples, 1 says rubric, 1 says spec → all singletons → nothing adopted, statement stuck). The §1.7 majority-vote rule needs a hierarchical extension to handle this cleanly.
 
-The judging scripts already pull examples via `get_examples()` from `metadata.examples` — no plumbing change needed. The new examples flow through to the judge prompt automatically.
+**Three levels, applied in order**:
+
+**Level 1 — Diagnosis vote** (extends the §1.7 rule with `response_interpretation_disagreement` as a new option):
+
+Compute majority over diagnoses ∈ {`rubric_drift`, `spec_ambiguity`, `both`, `response_interpretation_disagreement`, `irreducible`}. Return one of:
+- consensus (all N agree)
+- plurality (⌈N/2⌉+1 agree)
+- split (no majority — full escalation, no edits adopted)
+
+**Level 2 — Recommendation type follows deterministically from operative diagnosis**:
+
+| operative diagnosis | adopted edit types | rejected edit types (queued for human review, NOT silently dropped) |
+|---|---|---|
+| `rubric_drift` | rubric_edits only | spec_edits, example_additions |
+| `spec_ambiguity` | spec_edits only (escalate to authors before deploy) | rubric_edits, example_additions |
+| `both` | rubric_edits + example_additions | spec_edits (high-stakes; require human signoff) |
+| `response_interpretation_disagreement` | example_additions only | rubric_edits, spec_edits |
+| `irreducible` | none | all (full escalation) |
+| split | none | all (full escalation) |
+
+**Level 3 — Within allowed edit types, per-instance majority** (mirrors §1.7 §1.7 directly):
+
+- `rubric_edits`: cluster by `anchor`. Adopt where ≥2 compilers proposed an edit AND no pair has `opposite_direction`. Pick text by Gemini > Claude > GPT priority.
+- `spec_edits`: cluster by `old_phrase[:80]` similarity (60% overlap heuristic). Same rule.
+- `spec_example_additions`: cluster by `user_query` similarity (60% overlap heuristic). Adopt where ≥2 compilers proposed similar examples. Pick text by Gemini > Claude > GPT priority. Append to `spec.metadata.examples` (never modify or delete existing entries — authorial intent preserved).
+
+**Worked example — "1 compiler suggests examples, others don't"** (the case that motivated this rule):
+
+Suppose on `no_topic_off_limits`:
+- Compiler A diagnoses `response_interpretation_disagreement`, proposes 1 example_addition.
+- Compiler B diagnoses `rubric_drift`, proposes 1 rubric_edit on anchor 2.
+- Compiler C diagnoses `rubric_drift`, proposes 1 rubric_edit on anchor 2.
+
+Level 1: vote = {rubric_drift: 2, response_interpretation_disagreement: 1} → plurality `rubric_drift`.
+Level 2: adopted edit type = rubric_edits only. Compiler A's example proposal is **rejected from automatic adoption but written to escalation queue with full reasoning**.
+Level 3: per-instance vote on rubric_edits — anchor 2 has 2 votes (B and C) → adopted with priority text.
+
+Final: rubric anchor 2 edit applied; example proposal queued for human review with note "minority compiler proposed example for response-interpretation pattern."
+
+**The user's worry "we'd be stuck" is resolved**: the minority's proposal isn't lost; it's surfaced to humans with full evidence. If the human disagrees with the majority (e.g., reads the postmortem and decides the response-interpretation diagnosis is right), they can override.
+
+**Why this rule is stable**:
+- Diagnosis vote is settled BEFORE per-instance edit voting — eliminates the cross-type singleton problem.
+- Per-instance voting within the chosen type is the same well-tested §1.7 rule.
+- Minority proposals are never silently dropped — always queued for human review.
+- The worst case (3-way diagnosis split with 1 vote each per category) cleanly escalates to humans rather than producing an arbitrary winner.
+
+**Implementation in `e9_dart_iter_synthesize.py`**:
+1. Compute Level 1 majority.
+2. Look up Level 2 admissible edit types from operative diagnosis.
+3. For each admissible type, run Level 3 per-instance vote.
+4. Write adopted edits to `rubric_v{N+1}.json`, `spec_v{N+1}.txt`, `spec_examples_v{N+1}.jsonl` as appropriate.
+5. Write rejected proposals (along with which level rejected them and why) to `dart_iteration/{sid}/escalation_log.json`.
+
+The judging scripts already pull examples via `get_examples()` from `metadata.examples` — no plumbing change needed if we hand them an updated spec file. The new examples flow through to the judge prompt automatically.
 
 #### 1.9.5 Validation experiment (proposed Run 5 scope)
 
