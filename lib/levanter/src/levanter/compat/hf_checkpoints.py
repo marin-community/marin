@@ -1313,6 +1313,9 @@ def _is_retryable_hf_exception(exc: Exception) -> bool:
         if isinstance(chained_exc, OSError) and _looks_like_wrapped_hf_rate_limit(chained_exc):
             return True
 
+        if _looks_like_wrapped_gcs_transient(chained_exc):
+            return True
+
     return False
 
 
@@ -1329,6 +1332,26 @@ def _looks_like_wrapped_hf_rate_limit(exc: OSError) -> bool:
     message = str(exc)
     lower_message = message.lower()
     return "429" in message or "too many requests" in lower_message or "rate limit" in lower_message
+
+
+def _looks_like_wrapped_gcs_transient(exc: BaseException) -> bool:
+    message = str(exc)
+    lower_message = message.lower()
+    if isinstance(exc, TypeError) and "json object must be str, bytes or bytearray, not nonetype" in lower_message:
+        return True
+
+    if not isinstance(exc, OSError):
+        return False
+
+    if "gs://" not in message:
+        return False
+
+    return (
+        "can't load tokenizer" in lower_message
+        or "can't load the configuration" in lower_message
+        or "failed to resolve" in lower_message
+        or "timed out" in lower_message
+    )
 
 
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:

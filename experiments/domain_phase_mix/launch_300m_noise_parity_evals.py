@@ -37,7 +37,6 @@ from marin.execution.remote import remote
 from marin.rl.placement import marin_prefix_for_region
 
 from experiments.domain_phase_mix.launch_300m_gsm8k_humaneval_evals import (
-    DEFAULT_EXPECTED_300M_STEP,
     _candidate_records,
     _exact_hf_checkpoint,
     _read_csv,
@@ -70,6 +69,16 @@ RESULTS_JSON = "results.json"
 RESULTS_CSV = "300m_noise_parity_eval_results.csv"
 STATE_OUTPUT_CSV = "300m_noise_parity_eval_state.csv"
 NOISE_PANELS = {"fixed_seed_noise_300m_6b", "variable_subset_noise_300m_6b"}
+PROPORTIONAL_NOISE_PANELS = {
+    "proportional_variable_subset_noise_60m_1p2b",
+    "proportional_variable_subset_noise_300m_6b",
+}
+PROPORTIONAL_PERTURBATION_PANELS = {
+    "proportional_perturbation_60m_1p2b",
+    "proportional_perturbation_300m_6b",
+    "proportional_baseline_anchor_60m_1p2b",
+    "proportional_baseline_anchor_300m_6b",
+}
 EXECUTOR_STATUS_FILE = ".executor_status"
 STATUS_SUCCESS = "SUCCESS"
 EVAL_OUTPUT_RE = re.compile(r"/lmeval_debug_(?P<eval_key>noiseparity300m_.+)-[0-9a-f]{6}/\.executor_status$")
@@ -80,6 +89,7 @@ TASKS_BY_ALIAS = {
     "mmlu_pro_5shot": MMLU_PRO_5_SHOT,
     "arc_easy": EvalTaskConfig("arc_easy", 10),
     "piqa": EvalTaskConfig("piqa", 10),
+    "sciq_0shot": EvalTaskConfig("sciq", 0, task_alias="sciq_0shot"),
     "hellaswag_0shot": EvalTaskConfig("hellaswag", 0, task_alias="hellaswag_0shot"),
 }
 TASK_ALIASES = tuple(TASKS_BY_ALIAS)
@@ -230,7 +240,8 @@ def _metric_coverage_by_root() -> dict[str, set[str]]:
 
 
 def _noise_candidates() -> list[Any]:
-    return [candidate for candidate in _candidate_records() if candidate.panel in NOISE_PANELS]
+    allowed_panels = NOISE_PANELS | PROPORTIONAL_NOISE_PANELS | PROPORTIONAL_PERTURBATION_PANELS
+    return [candidate for candidate in _candidate_records() if candidate.panel in allowed_panels]
 
 
 def _launch_decision(
@@ -260,7 +271,7 @@ def build_state_rows(
     coverage = _metric_coverage_by_root()
     rows: list[NoiseParityEvalSpec] = []
     for idx, candidate in enumerate(_noise_candidates()):
-        latest_hf_checkpoint = _exact_hf_checkpoint(candidate.checkpoint_root, DEFAULT_EXPECTED_300M_STEP)
+        latest_hf_checkpoint = _exact_hf_checkpoint(candidate.checkpoint_root, candidate.expected_checkpoint_step)
         has_exact_hf_checkpoint = bool(latest_hf_checkpoint)
         existing_tasks = sorted(coverage.get(candidate.checkpoint_root, set()))
         missing_tasks = [alias for alias in task_aliases if alias not in existing_tasks]
@@ -280,10 +291,10 @@ def build_state_rows(
                 source_experiment=candidate.source_experiment,
                 cohort=candidate.cohort,
                 checkpoint_root=candidate.checkpoint_root,
-                expected_checkpoint_step=DEFAULT_EXPECTED_300M_STEP,
+                expected_checkpoint_step=candidate.expected_checkpoint_step,
                 hf_checkpoint_count=int(has_exact_hf_checkpoint),
                 hf_checkpoint_latest=latest_hf_checkpoint,
-                hf_checkpoint_latest_step=DEFAULT_EXPECTED_300M_STEP if has_exact_hf_checkpoint else -1,
+                hf_checkpoint_latest_step=candidate.expected_checkpoint_step if has_exact_hf_checkpoint else -1,
                 has_exact_hf_checkpoint=has_exact_hf_checkpoint,
                 existing_tasks=";".join(existing_tasks),
                 missing_task_count=len(missing_tasks),

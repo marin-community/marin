@@ -36,6 +36,19 @@ from experiments.domain_phase_mix.launch_baseline_scaling_cell import (
     baseline_scaling_source_experiment,
     build_baseline_scaling_run_spec,
 )
+from experiments.domain_phase_mix.launch_proportional_perturbation_scale_transfer import (
+    BASE_NAME_PREFIX as PROPORTIONAL_PERTURBATION_BASE_NAME_PREFIX,
+)
+from experiments.domain_phase_mix.launch_proportional_perturbation_scale_transfer import (
+    SCALES as PROPORTIONAL_PERTURBATION_SCALES,
+)
+from experiments.domain_phase_mix.launch_proportional_perturbation_scale_transfer import (
+    build_run_specs_for_scale as build_proportional_perturbation_run_specs_for_scale,
+)
+from experiments.domain_phase_mix.launch_proportional_variable_subset_noise_baseline import (
+    build_run_specs as build_proportional_variable_subset_noise_run_specs,
+)
+from experiments.domain_phase_mix.launch_proportional_variable_subset_noise_baseline import family_for_scale
 from experiments.domain_phase_mix.launch_single_phase_average_fit_swarm_60m_1p2b import (
     NAME as SINGLE_PHASE_EXPOSURE_AVERAGE_SOURCE_EXPERIMENT,
 )
@@ -227,6 +240,38 @@ FAMILY_METADATA = {
         family="run00097_300m_6b_variable_subset",
         scale="300m_6b",
         launcher_module="experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_variable_subset_study",
+        resubmit_scope="family",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
+    "proportional_variable_subset_noise_60m_1p2b": FamilyMetadata(
+        family="proportional_variable_subset_noise_60m_1p2b",
+        scale="60m_1p2b",
+        launcher_module="experiments.domain_phase_mix.launch_proportional_variable_subset_noise_baseline",
+        resubmit_scope="family",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
+    "proportional_variable_subset_noise_300m_6b": FamilyMetadata(
+        family="proportional_variable_subset_noise_300m_6b",
+        scale="300m_6b",
+        launcher_module="experiments.domain_phase_mix.launch_proportional_variable_subset_noise_baseline",
+        resubmit_scope="family",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
+    "proportional_perturbation_60m_1p2b": FamilyMetadata(
+        family="proportional_perturbation_60m_1p2b",
+        scale="60m_1p2b",
+        launcher_module="experiments.domain_phase_mix.launch_proportional_perturbation_scale_transfer",
+        resubmit_scope="family",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
+    "proportional_perturbation_300m_6b": FamilyMetadata(
+        family="proportional_perturbation_300m_6b",
+        scale="300m_6b",
+        launcher_module="experiments.domain_phase_mix.launch_proportional_perturbation_scale_transfer",
         resubmit_scope="family",
         objective_metric=OBJECTIVE_METRIC,
         resubmit_supported=True,
@@ -1095,6 +1140,195 @@ def _load_run00097_variable_subset_rows() -> tuple[pd.DataFrame, list[dict[str, 
     return pd.DataFrame(rows), all_attempts
 
 
+def _proportional_variable_subset_noise_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    specs = build_proportional_variable_subset_noise_run_specs()
+    specs_by_family: dict[str, list[Any]] = {}
+    for spec in specs:
+        specs_by_family.setdefault(family_for_scale(spec.scale), []).append(spec)
+
+    rows: list[dict[str, Any]] = []
+    all_attempts: list[dict[str, Any]] = []
+    for family, family_specs in sorted(specs_by_family.items()):
+        metadata = FAMILY_METADATA[family]
+        run_ids_by_name = {spec.run_name: spec.run_id for spec in family_specs}
+        source_experiment = family_specs[0].source_experiment
+        attempts_by_run_name = _scan_checkpoint_attempts_for_run_names(
+            family=family,
+            source_experiment=source_experiment,
+            run_ids_by_name=run_ids_by_name,
+            objective_metric=metadata.objective_metric,
+        )
+        for spec in family_specs:
+            attempts = attempts_by_run_name[spec.run_name]
+            all_attempts.extend(attempts)
+            canonical = _canonical_attempt(attempts)
+            analysis_attempt = _analysis_attempt(attempts, num_train_steps=spec.num_train_steps)
+            rows.append(
+                {
+                    "registry_id": f"{family}:{spec.run_name}",
+                    "family": family,
+                    "scale": metadata.scale,
+                    "source_experiment": spec.source_experiment,
+                    "source_name_prefix": spec.source_experiment,
+                    "run_id": spec.run_id,
+                    "run_name": spec.run_name,
+                    "wandb_run_id": None if analysis_attempt is None else analysis_attempt.get("wandb_run_id"),
+                    "checkpoint_root": None if analysis_attempt is None else analysis_attempt.get("checkpoint_root"),
+                    "objective_metric": metadata.objective_metric,
+                    "objective_metric_value": (
+                        None if analysis_attempt is None else analysis_attempt.get("objective_metric_value")
+                    ),
+                    "canonical_attempt_root": None if canonical is None else canonical.get("attempt_root"),
+                    "attempt_count": len(attempts),
+                    "successful_attempt_count": sum(
+                        1 for attempt in attempts if attempt["executor_status"] == "SUCCESS"
+                    ),
+                    "launcher_module": metadata.launcher_module,
+                    "resubmit_supported": metadata.resubmit_supported,
+                    "resubmit_scope": metadata.resubmit_scope,
+                    "resubmit_selector": f"--scales {spec.scale}",
+                    "resubmit_hint": (
+                        f"--scales {spec.scale} --tpu-type v5p-8 --tpu-region us-east5 "
+                        "--tpu-zone us-east5-a --max-concurrent 10"
+                    ),
+                    "logical_status": (
+                        "planned" if canonical is None else _normalize_logical_status(str(canonical["executor_status"]))
+                    ),
+                    "source_status": None if canonical is None else canonical.get("executor_status"),
+                    "experiment_budget": spec.experiment_budget,
+                    "target_budget": spec.target_budget,
+                    "target_budget_multiplier": spec.target_budget_multiplier,
+                    "num_train_steps": spec.num_train_steps,
+                    "target_final_checkpoint_step": _target_final_checkpoint_step(spec.num_train_steps),
+                    "batch_size": spec.batch_size,
+                    "seq_len": spec.seq_len,
+                    "model_family": spec.model_family,
+                    "trainer_seed": spec.trainer_seed,
+                    "data_seed": spec.data_seed,
+                    "simulated_epoch_subset_seed": spec.simulated_epoch_subset_seed,
+                    "cohort": spec.cohort,
+                    "study_panel": "proportional_variable_subset_noise",
+                    "study_cohort": spec.cohort,
+                    "row_kind": "noise_variable_subset_proportional",
+                    "noise_subset_mode": "variable",
+                    "noise_anchor_run_name": spec.noise_anchor_run_name,
+                    "noise_trainer_seed": spec.trainer_seed,
+                    "noise_data_seed": spec.data_seed,
+                    "noise_simulated_epoch_subset_seed": spec.simulated_epoch_subset_seed,
+                    **_flatten_phase_weights(spec.phase_weights),
+                }
+            )
+    return pd.DataFrame(rows), all_attempts
+
+
+def _proportional_perturbation_family_for_scale(scale: ScalingStudyScale) -> str:
+    if scale == ScalingStudyScale.REGMIX_60M_1P2B:
+        return "proportional_perturbation_60m_1p2b"
+    if scale == ScalingStudyScale.REGMIX_300M_6B:
+        return "proportional_perturbation_300m_6b"
+    raise ValueError(f"Unsupported proportional perturbation scale: {scale.value}")
+
+
+def _proportional_perturbation_source_experiment(scale: ScalingStudyScale) -> str:
+    return f"{PROPORTIONAL_PERTURBATION_BASE_NAME_PREFIX}_{scale.value}"
+
+
+def _proportional_perturbation_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    rows: list[dict[str, Any]] = []
+    all_attempts: list[dict[str, Any]] = []
+    for scale in PROPORTIONAL_PERTURBATION_SCALES:
+        family = _proportional_perturbation_family_for_scale(scale)
+        metadata = FAMILY_METADATA[family]
+        source_experiment = _proportional_perturbation_source_experiment(scale)
+        specs = build_proportional_perturbation_run_specs_for_scale(scale)
+        run_ids_by_name = {spec.run_name: spec.run_id for spec in specs}
+        attempts_by_run_name = _scan_checkpoint_attempts_for_run_names(
+            family=family,
+            source_experiment=source_experiment,
+            run_ids_by_name=run_ids_by_name,
+            objective_metric=metadata.objective_metric,
+        )
+        for spec in specs:
+            attempts = attempts_by_run_name[spec.run_name]
+            all_attempts.extend(attempts)
+            canonical = _canonical_attempt(attempts)
+            analysis_attempt = _analysis_attempt(attempts, num_train_steps=spec.num_train_steps)
+            rows.append(
+                {
+                    "registry_id": f"{family}:{spec.run_name}",
+                    "family": family,
+                    "scale": metadata.scale,
+                    "source_experiment": source_experiment,
+                    "source_name_prefix": source_experiment,
+                    "run_id": spec.run_id,
+                    "run_name": spec.run_name,
+                    "wandb_run_id": None if analysis_attempt is None else analysis_attempt.get("wandb_run_id"),
+                    "checkpoint_root": None if analysis_attempt is None else analysis_attempt.get("checkpoint_root"),
+                    "objective_metric": metadata.objective_metric,
+                    "objective_metric_value": (
+                        None if analysis_attempt is None else analysis_attempt.get("objective_metric_value")
+                    ),
+                    "canonical_attempt_root": None if canonical is None else canonical.get("attempt_root"),
+                    "attempt_count": len(attempts),
+                    "successful_attempt_count": sum(
+                        1 for attempt in attempts if attempt["executor_status"] == "SUCCESS"
+                    ),
+                    "launcher_module": metadata.launcher_module,
+                    "resubmit_supported": metadata.resubmit_supported,
+                    "resubmit_scope": metadata.resubmit_scope,
+                    "resubmit_selector": f"--scales {scale.value}",
+                    "resubmit_hint": (
+                        f"--scales {scale.value} --tpu-type v5p-8 --tpu-region us-east5 "
+                        "--tpu-zone us-east5-a --perplexity-only --max-concurrent 256"
+                    ),
+                    "logical_status": (
+                        "planned" if canonical is None else _normalize_logical_status(str(canonical["executor_status"]))
+                    ),
+                    "source_status": None if canonical is None else canonical.get("executor_status"),
+                    "experiment_budget": spec.experiment_budget,
+                    "target_budget": spec.target_budget,
+                    "target_budget_multiplier": spec.target_budget_multiplier,
+                    "num_train_steps": spec.num_train_steps,
+                    "target_final_checkpoint_step": spec.target_final_checkpoint_step,
+                    "model_family": spec.model_family,
+                    "trainer_seed": spec.trainer_seed,
+                    "data_seed": spec.data_seed,
+                    "simulated_epoch_subset_seed": spec.simulated_epoch_subset_seed,
+                    "cohort": spec.cohort,
+                    "study_panel": "proportional_perturbation_scale_transfer",
+                    "study_cohort": spec.cohort,
+                    "row_kind": "proportional_perturbation",
+                    "source_run_id": spec.source_run_id,
+                    "source_run_name": spec.source_run_name,
+                    "source_two_phase_experiment": spec.source_two_phase_experiment,
+                    "candidate_run_id": spec.candidate_run_id,
+                    "candidate_run_name": spec.candidate_run_name,
+                    "candidate_source_experiment": spec.candidate_source_experiment,
+                    "intervention_index": spec.intervention_index,
+                    "intervention_id": spec.intervention_id,
+                    "intervention_type": spec.intervention_type,
+                    "target_unit": spec.target_unit,
+                    "target_domain": spec.target_domain,
+                    "target_family": spec.target_family,
+                    "quality_high_domain": spec.quality_high_domain,
+                    "quality_low_domain": spec.quality_low_domain,
+                    "bump_epsilon": spec.bump_epsilon,
+                    "quality_swap_fraction": spec.quality_swap_fraction,
+                    "quality_swap_mass": spec.quality_swap_mass,
+                    "renormalizer": spec.renormalizer,
+                    "donor_pool": spec.donor_pool,
+                    "phase_mode": spec.phase_mode,
+                    "tv_distance": spec.tv_distance,
+                    "target_mass_before": spec.target_mass_before,
+                    "target_mass_after": spec.target_mass_after,
+                    "donor_mass_before": spec.donor_mass_before,
+                    "donor_mass_after": spec.donor_mass_after,
+                    **_flatten_phase_weights(spec.phase_weights),
+                }
+            )
+    return pd.DataFrame(rows), all_attempts
+
+
 def _family_rows_from_attempt_scan(
     *,
     family: str,
@@ -1943,6 +2177,12 @@ def build_registry(
     run00097_variable_subset_frame, run00097_variable_subset_attempts = _load_run00097_variable_subset_rows()
     logical_frames.append(run00097_variable_subset_frame)
     attempts.extend(run00097_variable_subset_attempts)
+    proportional_noise_frame, proportional_noise_attempts = _proportional_variable_subset_noise_rows()
+    logical_frames.append(proportional_noise_frame)
+    attempts.extend(proportional_noise_attempts)
+    proportional_perturbation_frame, proportional_perturbation_attempts = _proportional_perturbation_rows()
+    logical_frames.append(proportional_perturbation_frame)
+    attempts.extend(proportional_perturbation_attempts)
     qsplit300m_supplemental_frame, qsplit300m_supplemental_attempts = _load_qsplit300m_supplemental_rows()
     logical_frames.append(qsplit300m_supplemental_frame)
     attempts.extend(qsplit300m_supplemental_attempts)

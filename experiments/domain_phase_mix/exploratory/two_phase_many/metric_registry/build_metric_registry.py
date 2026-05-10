@@ -14,11 +14,11 @@ wide tables are views over the long fact table, not the source of truth.
 from __future__ import annotations
 
 import argparse
+import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import json
 from pathlib import Path
-import re
 from typing import Any
 
 import fsspec
@@ -69,6 +69,10 @@ SINGLE_PHASE_GRP_NO_L2_FAMILY = "single_phase_grp_no_l2_60m_1p2b"
 SINGLE_PHASE_FAMILIES = {
     SINGLE_PHASE_EXPOSURE_AVERAGE_FAMILY,
     SINGLE_PHASE_GRP_NO_L2_FAMILY,
+}
+PROPORTIONAL_PERTURBATION_FAMILIES = {
+    "proportional_perturbation_60m_1p2b",
+    "proportional_perturbation_300m_6b",
 }
 STRONG_TIER_COHORT_BY_PATH = {
     ScalingStudyPath.QSPLIT_REPRESENTATIVE12.value: "representative12",
@@ -130,13 +134,62 @@ LOCAL_COLLECTED_EVAL_CSVS = (
         120,
         "local_collected_downstream_eval",
     ),
+    (
+        "local_ppert_gsm8k_humaneval_completion",
+        SCRIPT_DIR / "proportional_perturbation_scale_transfer" / "ppert_gsm8k_humaneval_eval_results.csv",
+        "mixed",
+        "proportional_perturbation_scale_transfer_stage1",
+        130,
+        "local_collected_downstream_eval",
+    ),
+    (
+        "local_ppert_english_lite_completion",
+        SCRIPT_DIR / "proportional_perturbation_scale_transfer" / "ppert_english_lite_eval_results.csv",
+        "mixed",
+        "proportional_perturbation_scale_transfer_stage1",
+        132,
+        "local_collected_downstream_eval",
+    ),
+    (
+        "local_ppert_generative_smooth_proxy_completion",
+        SCRIPT_DIR / "proportional_perturbation_scale_transfer" / "ppert_generative_smooth_proxy_eval_results.csv",
+        "mixed",
+        "proportional_perturbation_scale_transfer_stage1",
+        134,
+        "local_collected_downstream_eval",
+    ),
+    (
+        "local_ppert_mcq_smooth_proxy_completion",
+        SCRIPT_DIR / "proportional_perturbation_scale_transfer" / "ppert_mcq_smooth_proxy_eval_results.csv",
+        "mixed",
+        "proportional_perturbation_scale_transfer_stage1",
+        136,
+        "local_collected_downstream_eval",
+    ),
+    (
+        "local_ppert_noise_parity_completion",
+        SCRIPT_DIR / "proportional_perturbation_scale_transfer" / "ppert_noise_parity_eval_results.csv",
+        "mixed",
+        "proportional_perturbation_scale_transfer_stage1",
+        138,
+        "local_collected_downstream_eval",
+    ),
+    (
+        "local_ppert_agentic_coding_bpb_completion",
+        SCRIPT_DIR / "proportional_perturbation_scale_transfer" / "ppert_agentic_coding_bpb_results.csv",
+        "mixed",
+        "proportional_perturbation_scale_transfer_stage1",
+        140,
+        "local_collected_downstream_eval",
+    ),
 )
 
-METRIC_PREFIXES = ("eval/", "lm_eval/")
+METRIC_PREFIXES = ("eval/", "lm_eval/", "teacher_forced/", "mcq_smooth/")
 AMBIGUOUS_METRIC_PREFIXES = ("lm_eval/averages/",)
 WEIGHT_PREFIXES = ("phase_0_", "phase_1_")
 KNOWN_ID_COLUMNS = (
     "registry_run_key",
+    "family",
     "scale",
     "cohort",
     "source_cohort",
@@ -173,6 +226,27 @@ KNOWN_ID_COLUMNS = (
     "source_100m_bpb",
     "source_100m_rank",
     "rank_shift",
+    "row_kind",
+    "study_cohort",
+    "intervention_index",
+    "intervention_id",
+    "intervention_type",
+    "target_unit",
+    "target_domain",
+    "target_family",
+    "quality_high_domain",
+    "quality_low_domain",
+    "bump_epsilon",
+    "quality_swap_fraction",
+    "quality_swap_mass",
+    "renormalizer",
+    "donor_pool",
+    "phase_mode",
+    "tv_distance",
+    "target_mass_before",
+    "target_mass_after",
+    "donor_mass_before",
+    "donor_mass_after",
     "has_objective_metric_value",
     "has_checkpoint_root",
     "has_checkpoint_backed_objective",
@@ -186,6 +260,7 @@ KNOWN_ID_COLUMNS = (
 RUN_FIRST_VALUE_COLUMNS = (
     "run_id",
     "run_name",
+    "family",
     "scale",
     "cohort",
     "source_cohort",
@@ -220,6 +295,27 @@ RUN_FIRST_VALUE_COLUMNS = (
     "source_100m_bpb",
     "source_100m_rank",
     "rank_shift",
+    "row_kind",
+    "study_cohort",
+    "intervention_index",
+    "intervention_id",
+    "intervention_type",
+    "target_unit",
+    "target_domain",
+    "target_family",
+    "quality_high_domain",
+    "quality_low_domain",
+    "bump_epsilon",
+    "quality_swap_fraction",
+    "quality_swap_mass",
+    "renormalizer",
+    "donor_pool",
+    "phase_mode",
+    "tv_distance",
+    "target_mass_before",
+    "target_mass_after",
+    "donor_mass_before",
+    "donor_mass_after",
     "has_objective_metric_value",
     "has_checkpoint_root",
     "has_checkpoint_backed_objective",
@@ -251,6 +347,27 @@ class SourceFrame:
 
 def canonicalize_metric_key(metric_key: str) -> dict[str, Any]:
     """Return canonical metric metadata for a raw metric column."""
+    if metric_key.startswith("mcq_smooth/"):
+        rest = metric_key.removeprefix("mcq_smooth/")
+        task_key, metric_name = rest.rsplit("/", 1)
+        match = FEWSHOT_TASK_RE.match(task_key)
+        if match is None:
+            task = task_key
+            num_fewshot = pd.NA
+            canonical = metric_key
+        else:
+            task = match.group("task")
+            num_fewshot = int(match.group("num_fewshot"))
+            canonical = f"mcq_smooth/{task}_{num_fewshot}shot/{metric_name}"
+        return {
+            "suite": "mcq_smooth",
+            "task": task,
+            "num_fewshot": num_fewshot,
+            "metric": metric_name,
+            "canonical_metric_key": canonical,
+            "higher_is_better": _higher_is_better(metric_name),
+        }
+
     if metric_key.startswith("lm_eval/"):
         rest = metric_key.removeprefix("lm_eval/")
         task_key, metric_name = rest.rsplit("/", 1)
@@ -269,6 +386,20 @@ def canonicalize_metric_key(metric_key: str) -> dict[str, Any]:
             "num_fewshot": num_fewshot,
             "metric": metric_name,
             "canonical_metric_key": canonical,
+            "higher_is_better": _higher_is_better(metric_name),
+        }
+
+    if metric_key.startswith("teacher_forced/"):
+        rest = metric_key.removeprefix("teacher_forced/")
+        parts = rest.split("/")
+        metric_name = parts[-1]
+        task = "/".join(parts[:-1]) if len(parts) > 1 else "global"
+        return {
+            "suite": "teacher_forced",
+            "task": task,
+            "num_fewshot": pd.NA,
+            "metric": metric_name,
+            "canonical_metric_key": metric_key,
             "higher_is_better": _higher_is_better(metric_name),
         }
 
@@ -291,7 +422,7 @@ def canonicalize_metric_key(metric_key: str) -> dict[str, Any]:
 
 def _higher_is_better(metric_name: str) -> bool:
     lower = metric_name.lower()
-    if any(token in lower for token in ("bpb", "loss", "perplexity")):
+    if any(token in lower for token in ("bpb", "loss", "perplexity", "nll")):
         return False
     if any(token in lower for token in ("acc", "logprob", "prob", "f1", "exact_match")):
         return True
@@ -460,6 +591,7 @@ def _source_frames(*, include_gcs: bool) -> list[SourceFrame]:
 
     sources.extend(_strong_tier_source_frames())
     sources.extend(_single_phase_exposure_average_source_frames())
+    sources.extend(_run_registry_checkpoint_source_frames(PROPORTIONAL_PERTURBATION_FAMILIES))
 
     if not include_gcs:
         return sources
@@ -691,6 +823,34 @@ def _single_phase_exposure_average_source_frames() -> list[SourceFrame]:
     return sources
 
 
+def _run_registry_checkpoint_source_frames(families: set[str]) -> list[SourceFrame]:
+    if not RUN_REGISTRY_LOGICAL_RUNS_CSV.exists():
+        return []
+
+    logical_runs = pd.read_csv(RUN_REGISTRY_LOGICAL_RUNS_CSV, low_memory=False)
+    frame = logical_runs.loc[logical_runs["family"].isin(families)].copy()
+    if frame.empty:
+        return []
+
+    frame["status"] = frame["logical_status"].fillna("planned")
+    frame = _hydrate_checkpoint_eval_metrics(frame)
+    sources: list[SourceFrame] = []
+    for (family, scale), group in frame.groupby(["family", "scale"], sort=True):
+        default_cohort = str(group["cohort"].dropna().iloc[0]) if group["cohort"].notna().any() else str(family)
+        sources.append(
+            SourceFrame(
+                source_name=f"run_registry_{family}",
+                source_uri=str(RUN_REGISTRY_LOGICAL_RUNS_CSV),
+                source_kind="run_registry_checkpoint_metrics",
+                scale=str(scale),
+                default_cohort=default_cohort,
+                source_priority=95,
+                frame=group.reset_index(drop=True),
+            )
+        )
+    return sources
+
+
 def _wandb_run_id_from_checkpoint_root(checkpoint_root: object) -> str | None:
     if not isinstance(checkpoint_root, str) or checkpoint_root.strip() == "":
         return None
@@ -762,6 +922,18 @@ def _normalized_cohort(source: SourceFrame) -> pd.Series:
     return normalized
 
 
+def _source_scale_series(source: SourceFrame) -> pd.Series:
+    frame = _normalized_source_frame(source)
+    if source.scale != "mixed":
+        return pd.Series([source.scale] * len(frame), index=frame.index)
+    if "scale" not in frame.columns:
+        raise ValueError(f"{source.source_name} is a mixed-scale source but has no scale column")
+    scale = frame["scale"].astype(str)
+    if scale.isna().any() or scale.str.strip().eq("").any():
+        raise ValueError(f"{source.source_name} has blank scale values")
+    return scale
+
+
 def _run_key(scale: str, cohort: pd.Series, source_experiment: pd.Series, run_name: pd.Series) -> pd.Series:
     normalized_source = source_experiment.fillna("<missing_source_experiment>").astype(str)
     return scale + ":" + cohort.astype(str) + ":" + normalized_source + ":" + run_name.astype(str)
@@ -790,13 +962,14 @@ def _runs_from_source(source: SourceFrame) -> pd.DataFrame:
         raise ValueError(f"{source.source_name} is missing run_name")
     source_cohort = _source_cohort_series(source)
     cohort = _normalized_cohort(source)
+    scale = _source_scale_series(source)
     rows = source_frame.copy()
-    rows["scale"] = source.scale
+    rows["scale"] = scale
     rows["cohort"] = cohort
     rows["source_cohort"] = source_cohort
     if "source_experiment" not in rows.columns:
         rows["source_experiment"] = pd.NA
-    rows["registry_run_key"] = _run_key(source.scale, cohort, rows["source_experiment"], rows["run_name"])
+    rows["registry_run_key"] = _run_key(scale, cohort, rows["source_experiment"], rows["run_name"])
     rows["source_name"] = source.source_name
     rows["source_priority"] = source.source_priority
 
@@ -815,13 +988,14 @@ def _metrics_from_source(source: SourceFrame) -> pd.DataFrame:
         return pd.DataFrame()
     source_cohort = _source_cohort_series(source)
     cohort = _normalized_cohort(source)
+    scale = _source_scale_series(source)
     frame = source_frame.copy()
-    frame["scale"] = source.scale
+    frame["scale"] = scale
     frame["cohort"] = cohort
     frame["source_cohort"] = source_cohort
     if "source_experiment" not in frame.columns:
         frame["source_experiment"] = pd.NA
-    frame["registry_run_key"] = _run_key(source.scale, cohort, frame["source_experiment"], frame["run_name"])
+    frame["registry_run_key"] = _run_key(scale, cohort, frame["source_experiment"], frame["run_name"])
 
     id_columns = [column for column in KNOWN_ID_COLUMNS if column in frame.columns]
     melted = frame.melt(

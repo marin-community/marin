@@ -39,7 +39,11 @@ NOISE_TRAINER_SEED_RE = re.compile(r"trainer_seed_(?P<trainer_seed>\d+)")
 NOISE_SIMULATED_EPOCH_SUBSET_SEED = 97
 FIXED_SUBSET_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset"
 VARIABLE_SUBSET_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset"
+PROPORTIONAL_VARIABLE_SUBSET_SOURCE_EXPERIMENT = (
+    "pinlin_calvin_xu/data_mixture/ngd3dm2_proportional_variable_subset_noise_300m_6b"
+)
 NOISE_SOURCE_RUN_ID = 97
+PROPORTIONAL_NOISE_ANCHOR_RUN_NAME = "baseline_proportional"
 REQUIRED_PROVENANCE_COLUMNS = (
     "registry_run_key",
     "run_name",
@@ -159,6 +163,7 @@ def _id_columns(frame: pd.DataFrame) -> list[str]:
         "row_kind",
         "is_qsplit240_core",
         "noise_subset_mode",
+        "noise_anchor_run_name",
         "noise_source_run_name",
         "noise_trainer_seed",
         "noise_data_seed",
@@ -242,11 +247,13 @@ def _parsed_noise_trainer_seed(run_name: object) -> int | None:
 
 def _with_noise_seed_metadata(noise: pd.DataFrame, *, subset_mode: str) -> pd.DataFrame:
     out = noise.copy()
-    if subset_mode not in {"fixed_run00097", "variable"}:
+    if subset_mode not in {"fixed_run00097", "variable", "proportional_variable"}:
         raise ValueError(f"Unknown noise subset mode: {subset_mode}")
-    source_experiment = (
-        FIXED_SUBSET_SOURCE_EXPERIMENT if subset_mode == "fixed_run00097" else VARIABLE_SUBSET_SOURCE_EXPERIMENT
-    )
+    source_experiment = {
+        "fixed_run00097": FIXED_SUBSET_SOURCE_EXPERIMENT,
+        "variable": VARIABLE_SUBSET_SOURCE_EXPERIMENT,
+        "proportional_variable": PROPORTIONAL_VARIABLE_SUBSET_SOURCE_EXPERIMENT,
+    }[subset_mode]
     out["scale"] = out.get("scale", "300m_6b")
     out["cohort"] = out.get("cohort", "seed_sweep")
     out["source_cohort"] = out.get("source_cohort", pd.Series(pd.NA, index=out.index)).fillna("seed_sweep")
@@ -266,9 +273,16 @@ def _with_noise_seed_metadata(noise: pd.DataFrame, *, subset_mode: str) -> pd.Da
         + out["run_name"].astype(str)
     )
     out["registry_run_key"] = registry_keys.fillna(synthesized_keys)
-    out["row_kind"] = f"noise_{'fixed_subset' if subset_mode == 'fixed_run00097' else 'variable_subset'}"
+    out["row_kind"] = {
+        "fixed_run00097": "noise_fixed_subset",
+        "variable": "noise_variable_subset",
+        "proportional_variable": "noise_variable_subset_proportional",
+    }[subset_mode]
     out["noise_subset_mode"] = subset_mode
-    out["noise_source_run_name"] = NOISE_SOURCE_RUN_NAME
+    out["noise_anchor_run_name"] = (
+        PROPORTIONAL_NOISE_ANCHOR_RUN_NAME if subset_mode == "proportional_variable" else NOISE_SOURCE_RUN_NAME
+    )
+    out["noise_source_run_name"] = out["noise_anchor_run_name"]
     parsed_trainer_seeds = pd.to_numeric(out["run_name"].map(_parsed_noise_trainer_seed), errors="coerce")
     out["noise_trainer_seed"] = parsed_trainer_seeds.astype("Int64")
     out["noise_data_seed"] = pd.NA
@@ -350,9 +364,28 @@ def main() -> None:
         )
         variable_noise["is_qsplit240_core"] = False
 
+    proportional_noise = _load_noise_frame(_default_extra_results_csvs(), noise_subset_mode="proportional")
+    if len(proportional_noise) not in {0, 10}:
+        raise ValueError(
+            f"Expected 0 or 10 300M proportional variable-subset noise rows, found {len(proportional_noise)}"
+        )
+    if proportional_noise.empty:
+        proportional_noise = fixed_noise.iloc[0:0].copy()
+        proportional_noise["row_kind"] = pd.Series(dtype="object")
+        proportional_noise["noise_subset_mode"] = pd.Series(dtype="object")
+        proportional_noise["noise_anchor_run_name"] = pd.Series(dtype="object")
+    else:
+        proportional_noise = _with_noise_seed_metadata(
+            proportional_noise,
+            subset_mode="proportional_variable",
+        )
+        proportional_noise["is_qsplit240_core"] = False
+
     noise_frames = [fixed_noise]
     if not variable_noise.empty:
         noise_frames.append(variable_noise)
+    if not proportional_noise.empty:
+        noise_frames.append(proportional_noise)
     noise_with_metadata = pd.concat(noise_frames, ignore_index=True, sort=False)
     with_noise = pd.concat([signal, noise_with_metadata], ignore_index=True, sort=False)
     _validate_required_metadata(signal, label="300M signal matrix", required_columns=REQUIRED_PROVENANCE_COLUMNS)
@@ -365,6 +398,12 @@ def main() -> None:
         _validate_required_metadata(
             variable_noise,
             label="300M variable-subset noise matrix",
+            required_columns=(*REQUIRED_PROVENANCE_COLUMNS, *REQUIRED_NOISE_PROVENANCE_COLUMNS),
+        )
+    if not proportional_noise.empty:
+        _validate_required_metadata(
+            proportional_noise,
+            label="300M proportional variable-subset noise matrix",
             required_columns=(*REQUIRED_PROVENANCE_COLUMNS, *REQUIRED_NOISE_PROVENANCE_COLUMNS),
         )
     _validate_required_metadata(with_noise, label="300M matrix with noise", required_columns=REQUIRED_PROVENANCE_COLUMNS)
@@ -387,12 +426,29 @@ def main() -> None:
             if variable_noise.empty
             else _write_matrix(variable_noise, args.output_dir / "noise_baseline_run00097_variable_subset_300m.csv")
         ),
+        "proportional_variable_subset_noise_baseline": (
+            {"rows": 0, "path": str(args.output_dir / "noise_baseline_proportional_variable_subset_300m.csv")}
+            if proportional_noise.empty
+            else _write_matrix(
+                proportional_noise,
+                args.output_dir / "noise_baseline_proportional_variable_subset_300m.csv",
+            )
+        ),
+        "with_proportional_noise": (
+            {"rows": 0, "path": str(args.output_dir / "raw_metric_matrix_300m_with_proportional_noise.csv")}
+            if proportional_noise.empty
+            else _write_matrix(
+                pd.concat([signal, proportional_noise], ignore_index=True, sort=False),
+                args.output_dir / "raw_metric_matrix_300m_with_proportional_noise.csv",
+            )
+        ),
         "noise_seed_rows": (
             noise_with_metadata[
                 [
                     "run_name",
                     "row_kind",
                     "noise_subset_mode",
+                    "noise_anchor_run_name",
                     "noise_source_run_name",
                     "noise_trainer_seed",
                     "noise_data_seed",
@@ -407,6 +463,7 @@ def main() -> None:
         "noise_row_counts": {
             "fixed_subset": len(fixed_noise),
             "variable_subset": len(variable_noise),
+            "proportional_variable_subset": len(proportional_noise),
             "total": len(noise_with_metadata),
         },
         "qsplit240_core_rows": len(qsplit_core),
@@ -415,6 +472,15 @@ def main() -> None:
     if variable_noise.empty:
         (args.output_dir / "noise_baseline_run00097_variable_subset_300m.csv").write_text(
             fixed_noise.iloc[0:0].to_csv(index=False),
+            encoding="utf-8",
+        )
+    if proportional_noise.empty:
+        (args.output_dir / "noise_baseline_proportional_variable_subset_300m.csv").write_text(
+            fixed_noise.iloc[0:0].to_csv(index=False),
+            encoding="utf-8",
+        )
+        (args.output_dir / "raw_metric_matrix_300m_with_proportional_noise.csv").write_text(
+            signal.iloc[0:0].to_csv(index=False),
             encoding="utf-8",
         )
     safe_outputs = _json_safe(outputs)

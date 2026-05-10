@@ -80,6 +80,7 @@ DEFAULT_EXPECTED_300M_STEP = 22887
 RESULTS_CSV = "300m_gsm8k_humaneval_eval_results.csv"
 STATE_OUTPUT_CSV = "300m_gsm8k_humaneval_eval_state.csv"
 PANEL_FILTER_ENV = "MARIN_300M_CANDIDATE_PANELS"
+EXTRA_CANDIDATES_ENV = "MARIN_EXTRA_EVAL_CANDIDATES_CSVS"
 EXECUTOR_STATUS_FILE = ".executor_status"
 STATUS_SUCCESS = "SUCCESS"
 EVAL_OUTPUT_RE = re.compile(r"/(?P<eval_key>gsmhe300m_.+)-[0-9a-f]{6}/\.executor_status$")
@@ -404,6 +405,47 @@ def _registry_extra_candidates(
     return candidates
 
 
+def _extra_candidate_records(coverage: dict[str, dict[str, bool]]) -> list[EvalCandidate]:
+    paths = [path.strip() for path in os.environ.get(EXTRA_CANDIDATES_ENV, "").split(",") if path.strip()]
+    candidates: list[EvalCandidate] = []
+    for path in paths:
+        frame = _read_csv(path)
+        required = {
+            "panel",
+            "run_name",
+            "registry_key",
+            "source_experiment",
+            "cohort",
+            "checkpoint_root",
+            "expected_checkpoint_step",
+        }
+        missing = sorted(required - set(frame.columns))
+        if missing:
+            raise ValueError(f"Extra eval candidates {path} missing columns: {missing}")
+        for _, row in frame.iterrows():
+            root = _string_value(row.get("checkpoint_root")).rstrip("/")
+            if not root:
+                continue
+            expected_step = pd.to_numeric(pd.Series([row.get("expected_checkpoint_step")]), errors="coerce").iloc[0]
+            if pd.isna(expected_step):
+                raise ValueError(f"Extra eval candidate has missing expected checkpoint step:\n{row.to_string()}")
+            covered = coverage.get(root, {})
+            candidates.append(
+                EvalCandidate(
+                    panel=_string_value(row.get("panel")),
+                    run_name=_string_value(row.get("run_name")),
+                    registry_key=_string_value(row.get("registry_key")),
+                    source_experiment=_string_value(row.get("source_experiment")),
+                    cohort=_string_value(row.get("cohort")),
+                    checkpoint_root=root,
+                    expected_checkpoint_step=int(expected_step),
+                    has_gsm8k_metric=covered.get("gsm8k", False),
+                    has_humaneval_metric=covered.get("humaneval", False),
+                )
+            )
+    return candidates
+
+
 def _candidate_records() -> list[EvalCandidate]:
     coverage = _metric_coverage_by_root(
         [
@@ -415,12 +457,15 @@ def _candidate_records() -> list[EvalCandidate]:
     )
     # Prefer explicit noise panels over metric-registry rows. The fixed-subset
     # rows can also appear in metrics_wide, but downstream noise accounting needs
-    # their panel identity preserved.
+    # their panel identity preserved. Extra candidate CSVs are explicit
+    # experiment panels and should likewise override generic metric-registry
+    # aliases for the same checkpoint root.
     candidates = _fixed_seed_noise_candidates(coverage)
     candidates.extend(_variable_subset_noise_candidates(coverage))
-    candidates.extend(_metric_registry_candidates(coverage))
+    candidates.extend(_extra_candidate_records(coverage))
     roots = {candidate.checkpoint_root for candidate in candidates}
     candidates.extend(_registry_extra_candidates(coverage, roots))
+    candidates.extend(_metric_registry_candidates(coverage))
 
     by_root: dict[str, EvalCandidate] = {}
     for candidate in candidates:

@@ -45,3 +45,8 @@ Current plots:
   It reads cached subset-curve CSVs from `two_phase_many/`, writes normalized
   points under `img/`, and renders both a 12-panel metric grid and an
   interactive metric picker for deciding the final F9 paper figure.
+- `phase_shift_mixture_scale_interaction.py`: Marimo notebook summarizing the
+  evidence for smooth phase-shift-like mixture-scale interaction. It uses the
+  corrected `analysis_dataset/nd_scale_runs.csv` table to show 60M→100M rank
+  drift, domain exposure correlations with scale speed, baseline scaling
+  trajectories, and representative-12 budget-multiplier continuation.

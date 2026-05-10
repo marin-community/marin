@@ -1,10 +1,10 @@
 {
-  "attempt_count": 514,
+  "attempt_count": 654,
   "live_jobs_by_state": {
     "skipped": 15
   },
   "live_watch_count": 15,
-  "logical_run_count": 950,
+  "logical_run_count": 1090,
   "logical_runs_by_family": {
     "baseline_scaling_cells": 6,
     "grp_no_l2_metric_objective_raw_optima": 2,
@@ -13,9 +13,14 @@
     "grp_penalty_raw_optima_520m_10p4b": 1,
     "grp_power_family_penalty_no_l2_subset_optima": 9,
     "olmix_loglinear_subset_optima": 9,
+    "proportional_perturbation_300m_6b": 55,
+    "proportional_perturbation_60m_1p2b": 55,
+    "proportional_variable_subset_noise_300m_6b": 10,
+    "proportional_variable_subset_noise_60m_1p2b": 10,
     "qsplit240_300m_6b": 241,
     "regmix_raw_subset_optima": 9,
     "run00097_300m_6b_fixed_subset": 10,
+    "run00097_300m_6b_variable_subset": 10,
     "single_phase_exposure_average_60m_1p2b": 242,
     "single_phase_grp_no_l2_60m_1p2b": 1,
     "stratified_300m_6b": 1,
@@ -26,10 +31,10 @@
     "two_phase_many_60m_export": 294
   },
   "logical_runs_by_status": {
-    "completed": 937,
-    "failed": 6,
+    "completed": 1066,
+    "failed": 8,
     "planned": 2,
-    "running": 5
+    "running": 14
   },
   "qsplit240_300m_active_recovery_runs": [],
   "qsplit240_300m_incomplete_runs": [

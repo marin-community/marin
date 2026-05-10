@@ -57,6 +57,7 @@ DEFAULT_EXTRA_RESULTS_CSVS = (
     / "300m_mcq_smooth_proxy_completion"
     / "300m_mcq_smooth_proxy_eval_results_variable_subset_noise.csv",
     SCRIPT_DIR / "metric_registry" / "300m_noise_parity_completion" / "300m_noise_parity_eval_results.csv",
+    SCRIPT_DIR / "metric_registry" / "300m_noise_parity_completion" / "300m_noise_sciq0_backfill_eval_results.csv",
     SCRIPT_DIR
     / "metric_registry"
     / "300m_noise_parity_completion"
@@ -76,6 +77,9 @@ RUN00097_300M_VARIABLE_SUBSET_CHECKPOINT_PREFIX = (
 RUN00097_300M_FIXED_SUBSET_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset"
 RUN00097_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT = (
     "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset"
+)
+PROPORTIONAL_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT = (
+    "pinlin_calvin_xu/data_mixture/ngd3dm2_proportional_variable_subset_noise_300m_6b"
 )
 
 METRIC_PREFIXES = ("eval/", "lm_eval/", "teacher_forced/", "mcq_smooth/")
@@ -475,8 +479,12 @@ def _noise_frame_from_metric_registry(source_experiment: str) -> pd.DataFrame:
 
 
 def _select_noise_frame(noise_subset_mode: str) -> tuple[str, pd.DataFrame]:
-    if noise_subset_mode not in {"auto", "fixed", "variable"}:
+    if noise_subset_mode not in {"auto", "fixed", "variable", "proportional"}:
         raise ValueError(f"Unknown noise subset mode: {noise_subset_mode}")
+
+    if noise_subset_mode == "proportional":
+        proportional = _noise_frame_from_metric_registry(PROPORTIONAL_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT)
+        return "proportional", proportional
 
     variable = _noise_frame_from_metric_registry(RUN00097_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT)
     if variable.empty:
@@ -497,8 +505,11 @@ def _select_noise_frame(noise_subset_mode: str) -> tuple[str, pd.DataFrame]:
 
 def _load_noise_frame(extra_results: list[str], *, noise_subset_mode: str) -> pd.DataFrame:
     resolved_mode, noise = _select_noise_frame(noise_subset_mode)
-    if len(noise) != 10:
+    if len(noise) != 10 and not (resolved_mode == "proportional" and len(noise) == 0):
         raise ValueError(f"Expected 10 {resolved_mode} noise rows, found {len(noise)}")
+    if resolved_mode == "proportional" and noise.empty:
+        noise.attrs["noise_subset_mode"] = resolved_mode
+        return noise.reset_index(drop=True)
     noise = _ensure_noise_checkpoint_roots(noise, noise_subset_mode=resolved_mode)
     for path in extra_results:
         noise = _overlay_metrics(noise, _read_csv(path), key_column="checkpoint_root")

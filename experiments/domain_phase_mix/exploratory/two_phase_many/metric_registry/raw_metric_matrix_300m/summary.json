@@ -51,7 +51,7 @@
     "rows": 242
   },
   "fixed_subset_noise_baseline": {
-    "columns": 1246,
+    "columns": 1249,
     "domains": [
       "dolma3_arxiv",
       "dolma3_cc/art_and_design_high",
@@ -94,8 +94,8 @@
       "dolmino_synth_thinking"
     ],
     "exposure_average_weight_columns": 39,
-    "id_columns": 20,
-    "metric_columns": 1109,
+    "id_columns": 21,
+    "metric_columns": 1111,
     "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/raw_metric_matrix_300m/noise_baseline_run00097_fixed_subset_300m.csv",
     "phase0_weight_columns": 39,
     "phase1_weight_columns": 39,
@@ -108,6 +108,7 @@
       "data_seed": null,
       "is_qsplit240_core": false,
       "registry_run_key": "300m_6b:signal:pinlin_calvin_xu/data_mixture/ngd3dm2_stratified_300m_6b:baseline_stratified",
+      "row_kind": null,
       "run_id": 3.0,
       "run_name": "baseline_stratified",
       "scale": "300m_6b",
@@ -120,6 +121,7 @@
   ],
   "noise_row_counts": {
     "fixed_subset": 10,
+    "proportional_variable_subset": 0,
     "total": 20,
     "variable_subset": 10
   },
@@ -127,6 +129,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset/regmix300m_6b_trainer_seed_10000-487d6b",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": 97,
       "noise_source_run_name": "run_00097",
@@ -140,6 +143,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset/regmix300m_6b_trainer_seed_10001-3751fe",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": 97,
       "noise_source_run_name": "run_00097",
@@ -153,6 +157,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset/regmix300m_6b_trainer_seed_10002-779efd",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": 97,
       "noise_source_run_name": "run_00097",
@@ -166,6 +171,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset/regmix300m_6b_trainer_seed_10003-39517e",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": 97,
       "noise_source_run_name": "run_00097",
@@ -179,6 +185,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset/regmix300m_6b_trainer_seed_10004-df7f8e",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": 97,
       "noise_source_run_name": "run_00097",
@@ -192,6 +199,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset/regmix300m_6b_trainer_seed_10005-94ca10",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": 97,
       "noise_source_run_name": "run_00097",
@@ -205,6 +213,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset/regmix300m_6b_trainer_seed_10006-f7f47a",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": 97,
       "noise_source_run_name": "run_00097",
@@ -218,6 +227,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset/regmix300m_6b_trainer_seed_10007-247f53",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": 97,
       "noise_source_run_name": "run_00097",
@@ -231,6 +241,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset/regmix300m_6b_trainer_seed_10008-c5cf32",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": 97,
       "noise_source_run_name": "run_00097",
@@ -244,6 +255,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_fixed_subset/regmix300m_6b_trainer_seed_10009-91a9fe",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": 97,
       "noise_source_run_name": "run_00097",
@@ -257,6 +269,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset/regmix300m_6b_variable_subset_trainer_seed_10000-32bc14",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": null,
       "noise_source_run_name": "run_00097",
@@ -270,6 +283,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset/regmix300m_6b_variable_subset_trainer_seed_10001-4c0443",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": null,
       "noise_source_run_name": "run_00097",
@@ -283,6 +297,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset/regmix300m_6b_variable_subset_trainer_seed_10002-b67608",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": null,
       "noise_source_run_name": "run_00097",
@@ -296,6 +311,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset/regmix300m_6b_variable_subset_trainer_seed_10003-d5b27b",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": null,
       "noise_source_run_name": "run_00097",
@@ -309,6 +325,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset/regmix300m_6b_variable_subset_trainer_seed_10004-fb2c22",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": null,
       "noise_source_run_name": "run_00097",
@@ -322,6 +339,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset/regmix300m_6b_variable_subset_trainer_seed_10005-cbcb1e",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": null,
       "noise_source_run_name": "run_00097",
@@ -335,6 +353,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset/regmix300m_6b_variable_subset_trainer_seed_10006-bbfbc1",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": null,
       "noise_source_run_name": "run_00097",
@@ -348,6 +367,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset/regmix300m_6b_variable_subset_trainer_seed_10007-98f96c",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": null,
       "noise_source_run_name": "run_00097",
@@ -361,6 +381,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset/regmix300m_6b_variable_subset_trainer_seed_10008-614831",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": null,
       "noise_source_run_name": "run_00097",
@@ -374,6 +395,7 @@
     {
       "checkpoint_root": "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_300m_6b_variable_subset/regmix300m_6b_variable_subset_trainer_seed_10009-35262d",
       "data_seed": null,
+      "noise_anchor_run_name": "run_00097",
       "noise_data_seed": null,
       "noise_simulated_epoch_subset_seed": null,
       "noise_source_run_name": "run_00097",
@@ -385,9 +407,13 @@
       "trainer_seed": 10009.0
     }
   ],
+  "proportional_variable_subset_noise_baseline": {
+    "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/raw_metric_matrix_300m/noise_baseline_proportional_variable_subset_300m.csv",
+    "rows": 0
+  },
   "qsplit240_core_rows": 240,
   "variable_subset_noise_baseline": {
-    "columns": 1246,
+    "columns": 1249,
     "domains": [
       "dolma3_arxiv",
       "dolma3_cc/art_and_design_high",
@@ -430,15 +456,15 @@
       "dolmino_synth_thinking"
     ],
     "exposure_average_weight_columns": 39,
-    "id_columns": 20,
-    "metric_columns": 1109,
+    "id_columns": 21,
+    "metric_columns": 1111,
     "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/raw_metric_matrix_300m/noise_baseline_run00097_variable_subset_300m.csv",
     "phase0_weight_columns": 39,
     "phase1_weight_columns": 39,
     "rows": 10
   },
   "with_noise": {
-    "columns": 1248,
+    "columns": 1249,
     "domains": [
       "dolma3_arxiv",
       "dolma3_cc/art_and_design_high",
@@ -481,11 +507,15 @@
       "dolmino_synth_thinking"
     ],
     "exposure_average_weight_columns": 39,
-    "id_columns": 20,
+    "id_columns": 21,
     "metric_columns": 1111,
     "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/raw_metric_matrix_300m/raw_metric_matrix_300m_with_noise.csv",
     "phase0_weight_columns": 39,
     "phase1_weight_columns": 39,
     "rows": 262
+  },
+  "with_proportional_noise": {
+    "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/raw_metric_matrix_300m/raw_metric_matrix_300m_with_proportional_noise.csv",
+    "rows": 0
   }
 }

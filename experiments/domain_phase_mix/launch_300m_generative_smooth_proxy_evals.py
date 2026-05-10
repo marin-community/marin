@@ -15,16 +15,17 @@ we can estimate smooth loss-style proxies for the same signal/noise population.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass, fields
 import json
 import logging
 import math
 import os
-from pathlib import Path
 import sys
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
 from typing import Any
 
 import fsspec
+import pandas as pd
 from fray.cluster import ResourceConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
@@ -35,10 +36,8 @@ from marin.execution.executor import (
     this_output_path,
 )
 from marin.execution.remote import remote
-import pandas as pd
 
 from experiments.domain_phase_mix.launch_300m_gsm8k_humaneval_evals import (
-    DEFAULT_EXPECTED_300M_STEP,
     DEFAULT_MAX_CONCURRENT,
     DEFAULT_TPU_REGION,
     DEFAULT_TPU_TYPE,
@@ -218,10 +217,10 @@ def build_state_rows(
                 source_experiment=candidate.source_experiment,
                 cohort=candidate.cohort,
                 checkpoint_root=candidate.checkpoint_root,
-                expected_checkpoint_step=DEFAULT_EXPECTED_300M_STEP,
+                expected_checkpoint_step=candidate.expected_checkpoint_step,
                 hf_checkpoint_count=1 if has_exact_hf_checkpoint else 0,
                 hf_checkpoint_latest=exact_hf_checkpoint,
-                hf_checkpoint_latest_step=DEFAULT_EXPECTED_300M_STEP if has_exact_hf_checkpoint else -1,
+                hf_checkpoint_latest_step=candidate.expected_checkpoint_step if has_exact_hf_checkpoint else -1,
                 has_exact_hf_checkpoint=has_exact_hf_checkpoint,
                 checkpoint_region=checkpoint_region,
                 is_region_local=is_region_local,
@@ -407,10 +406,10 @@ def score_teacher_forced_smooth_proxies(config: SmoothProxyScoreConfig) -> None:
 
     import jax
     import jmp
+    import levanter.tracker
     from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
     from levanter.eval_harness import _LmEvalHarnessWorker
     from levanter.models.lm_model import LmHeadModel
-    import levanter.tracker
     from levanter.tracker import NoopConfig
     from levanter.trainer import TrainerConfig
     from levanter.utils.tree_utils import inference_mode

@@ -1,0 +1,12 @@
+variant,stage,start_id,objective,chosen_rank,success,message
+dsp_phase_benefit_penalty_nnls,coarse,0,0.010498037799112485,,,
+dsp_phase_benefit_penalty_nnls,coarse,1,0.011232283691813887,,,
+dsp_phase_benefit_penalty_nnls,coarse,2,0.010825045480603243,,,
+dsp_phase_benefit_penalty_nnls,coarse,3,0.011266539454153115,,,
+dsp_phase_benefit_penalty_nnls,coarse,4,0.014231055944141527,,,
+dsp_phase_benefit_penalty_nnls,coarse,5,0.011189989729337968,,,
+dsp_phase_benefit_penalty_nnls,coarse,6,0.010853355578638273,,,
+dsp_phase_benefit_penalty_nnls,coarse,7,0.011763681974907193,,,
+dsp_phase_benefit_penalty_nnls,refine,0,0.007816731092270669,0.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_phase_benefit_penalty_nnls,refine,2,0.007790289089604665,1.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_phase_benefit_penalty_nnls,refine,6,0.007664317974793392,2.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH

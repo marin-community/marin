@@ -9,12 +9,12 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from datetime import UTC, datetime
 import hashlib
 import json
-from pathlib import Path
 import shutil
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_PACKET_NAME = "collaborator_scaling_data_packet_20260430"
@@ -50,6 +50,7 @@ Smoke commands from the packet root:
 python standalone_code/load_packet.py
 python standalone_code/fit_mct_lrq.py --output-dir outputs/mct_lrq_demo
 python standalone_code/grp_no_l2_exact.py --mode fit-best --output-dir outputs/grp_no_l2_exact
+python standalone_code/dsp_exact.py fit --output-dir outputs/dsp_canonical_300m
 ```
 
 `fit_mct_lrq.py` is a compact, readable implementation of the MCT-LRQ family:
@@ -67,6 +68,29 @@ full nonlinear retuning procedure:
 
 ```bash
 python standalone_code/grp_no_l2_exact.py --mode retune --method Powell --coarse-top-k 3
+```
+
+`dsp_exact.py` is a standalone implementation of the DSP domain saturation-penalty family. It removes
+GRP family partitions, retention, and quality-pair structure; each domain gets its own saturation rate
+and overexposure threshold. The canonical form is:
+
+```text
+e0_i = c0_i w0_i
+e1_i = c1_i w1_i
+z_i  = e0_i + e1_i
+r_i  = e1_i / (z_i + eps)
+
+L(w) = b0
+     - sum_i a_i (1 + gamma r_i) (1 - exp(-rho_i z_i))
+     + sum_i p_i softplus(log(1 + z_i) - tau_i)^2
+```
+
+For fixed nonlinear parameters, `dsp_exact.py` solves the linear head with NNLS and tunes the nonlinear
+parameters with deterministic starts plus bounded L-BFGS-B:
+
+```bash
+python standalone_code/dsp_exact.py fit --variant canonical --output-dir outputs/dsp_canonical_300m
+python standalone_code/dsp_exact.py fit --variant effective_exposure --output-dir outputs/dsp_effective_300m
 ```
 """
 
@@ -821,6 +845,7 @@ def _packet_copy_specs() -> list[CopySpec]:
             Path("data/grp_no_l2/grp_power_family_penalty_no_l2_retune_best.csv"),
         ),
         CopySpec(Path("standalone_code/grp_no_l2_exact.py"), Path("standalone_code/grp_no_l2_exact.py")),
+        CopySpec(Path("standalone_code/dsp_exact.py"), Path("standalone_code/dsp_exact.py")),
     ]
 
 
@@ -873,6 +898,9 @@ law. The included scripts do not depend on this branch or the broader Marin repo
 - `standalone_code/load_packet.py`: validates the shipped CSV/NPZ files and reconstructs phase weights.
 - `standalone_code/grp_no_l2_exact.py`: exact standalone port of the repo's GRP power-family-penalty
   no-L2 path, including nonlinear retuning.
+- `standalone_code/dsp_exact.py`: standalone DSP domain saturation-penalty implementation. This is the
+  current reduced-bias domain-level family with no GRP family partitions, retention term, or quality-pair
+  scalar discount.
 - `standalone_code/fit_mct_lrq.py`: compact MCT-LRQ-style joint mixture/scale law using only packet CSVs.
 - `standalone_code/requirements.txt`: minimal Python package requirements.
 
@@ -882,6 +910,7 @@ Run from the packet root:
 python standalone_code/load_packet.py
 python standalone_code/grp_no_l2_exact.py --mode fit-best --output-dir outputs/grp_no_l2_exact
 python standalone_code/grp_no_l2_exact.py --mode retune --method Powell --coarse-top-k 3
+python standalone_code/dsp_exact.py fit --output-dir outputs/dsp_canonical_300m
 python standalone_code/fit_mct_lrq.py --output-dir outputs/mct_lrq_demo
 ```
 

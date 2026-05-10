@@ -12,11 +12,12 @@
     "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/300m_mcq_smooth_proxy_completion/300m_mcq_smooth_proxy_eval_results.csv",
     "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/300m_mcq_smooth_proxy_completion/300m_mcq_smooth_proxy_eval_results_variable_subset_noise.csv",
     "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/300m_noise_parity_completion/300m_noise_parity_eval_results.csv",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/300m_noise_parity_completion/300m_noise_sciq0_backfill_eval_results.csv",
     "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/300m_noise_parity_completion/300m_noise_parity_eval_results_variable_subset_mmlupro_only.csv",
     "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/300m_agentic_coding_bpb/300m_agentic_coding_bpb_results.csv"
   ],
   "keep_drop_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/eval_signal_to_noise_all_metrics_300m_current_keep_drop.csv",
-  "n_metrics": 1080,
+  "n_metrics": 1082,
   "noise_rows": 10,
   "noise_subset_mode": "variable",
   "shared_metric_count": 1111,
@@ -24,7 +25,7 @@
   "task_recommendation_counts": {
     "downweight": 89,
     "keep": 12,
-    "report_only": 48
+    "report_only": 49
   },
   "task_summary_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/eval_signal_to_noise_all_metrics_300m_current_task_summary.csv",
   "top_metrics": [

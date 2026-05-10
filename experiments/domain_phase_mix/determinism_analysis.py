@@ -9,17 +9,17 @@ import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from io import BytesIO
 from dataclasses import dataclass
+from io import BytesIO
 from typing import Any
 
 import fsspec
 import numpy as np
 import pandas as pd
-
-from experiments.domain_phase_mix.mmlu_sl_verb_rerun_common import resolve_unique_checkpoint_root
-from experiments.defaults import _truncate_wandb_name
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
+
+from experiments.defaults import _truncate_wandb_name
+from experiments.domain_phase_mix.mmlu_sl_verb_rerun_common import resolve_unique_checkpoint_root
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,27 @@ PRESERVED_MANIFEST_METADATA_KEYS = (
     "source_100m_bpb",
     "source_100m_rank",
     "rank_shift",
+    "intervention_index",
+    "intervention_id",
+    "intervention_type",
+    "target_unit",
+    "target_domain",
+    "target_family",
+    "quality_high_domain",
+    "quality_low_domain",
+    "bump_epsilon",
+    "quality_swap_fraction",
+    "quality_swap_mass",
+    "renormalizer",
+    "donor_pool",
+    "phase_mode",
+    "tv_distance",
+    "target_mass_before",
+    "target_mass_after",
+    "donor_mass_before",
+    "donor_mass_after",
+    "scale",
+    "scale_display_label",
 )
 CHECKPOINT_EVAL_METRICS_PATH = "checkpoints/eval_metrics.jsonl"
 

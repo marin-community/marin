@@ -1,0 +1,68 @@
+variant,stage,start_id,objective,chosen_rank,success,message
+dsp_no_phase_penalty_nnls,coarse,0,0.01637684081590573,,,
+dsp_no_phase_penalty_nnls,coarse,1,0.016134468768404384,,,
+dsp_no_phase_penalty_nnls,coarse,2,0.016074059396051506,,,
+dsp_no_phase_penalty_nnls,coarse,3,0.015993096851142002,,,
+dsp_no_phase_penalty_nnls,coarse,4,0.01608671532847845,,,
+dsp_no_phase_penalty_nnls,coarse,5,0.016059837820837607,,,
+dsp_no_phase_penalty_nnls,coarse,6,0.01622392997398933,,,
+dsp_no_phase_penalty_nnls,coarse,7,0.01616572361612199,,,
+dsp_no_phase_penalty_nnls,refine,3,0.015993068260935644,0.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_no_phase_penalty_nnls,refine,5,0.016059798829975987,1.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_no_phase_penalty_nnls,refine,2,0.016074026331150713,2.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_phase_benefit_penalty_nnls,coarse,0,0.013753067567770432,,,
+dsp_phase_benefit_penalty_nnls,coarse,1,0.013811856184952767,,,
+dsp_phase_benefit_penalty_nnls,coarse,2,0.012845456547889008,,,
+dsp_phase_benefit_penalty_nnls,coarse,3,0.011631332715643245,,,
+dsp_phase_benefit_penalty_nnls,coarse,4,0.011843678188091596,,,
+dsp_phase_benefit_penalty_nnls,coarse,5,0.011363725111742528,,,
+dsp_phase_benefit_penalty_nnls,coarse,6,0.01157557045327727,,,
+dsp_phase_benefit_penalty_nnls,coarse,7,0.014708169109876355,,,
+dsp_phase_benefit_penalty_nnls,refine,5,0.0069417472885877065,0.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_phase_benefit_penalty_nnls,refine,6,0.00661487443979103,1.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_phase_benefit_penalty_nnls,refine,3,0.006628599033226416,2.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_effective_exposure_penalty_nnls,coarse,0,0.018060046154129296,,,
+dsp_effective_exposure_penalty_nnls,coarse,1,0.01706777064137764,,,
+dsp_effective_exposure_penalty_nnls,coarse,2,0.016074059396051506,,,
+dsp_effective_exposure_penalty_nnls,coarse,3,0.014081312704272085,,,
+dsp_effective_exposure_penalty_nnls,coarse,4,0.009617445499974045,,,
+dsp_effective_exposure_penalty_nnls,coarse,5,0.013711450836046716,,,
+dsp_effective_exposure_penalty_nnls,coarse,6,0.014648906051070274,,,
+dsp_effective_exposure_penalty_nnls,coarse,7,0.01734477942964931,,,
+dsp_effective_exposure_penalty_nnls,refine,4,0.0059945628064114595,0.0,False,ABNORMAL:
+dsp_effective_exposure_penalty_nnls,refine,5,0.006381987011116698,1.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_effective_exposure_penalty_nnls,refine,3,0.00622234997908708,2.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_effective_exposure_penalty_nnls,basin_hopping_diagnostic,-1,0.0060942605356248195,-1.0,True,['requested number of basinhopping iterations completed successfully']
+dsp_phase_benefit_penalty_signed,coarse,0,0.013179344891210294,,,
+dsp_phase_benefit_penalty_signed,coarse,1,0.013407496605080404,,,
+dsp_phase_benefit_penalty_signed,coarse,2,0.012019168387589518,,,
+dsp_phase_benefit_penalty_signed,coarse,3,0.00987589225204798,,,
+dsp_phase_benefit_penalty_signed,coarse,4,0.01031978338149428,,,
+dsp_phase_benefit_penalty_signed,coarse,5,0.009779086640840285,,,
+dsp_phase_benefit_penalty_signed,coarse,6,0.01002997077988528,,,
+dsp_phase_benefit_penalty_signed,coarse,7,0.013657281539012273,,,
+dsp_phase_benefit_penalty_signed,refine,5,0.006763368688394199,0.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_phase_benefit_penalty_signed,refine,3,0.007038793447210577,1.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_phase_benefit_penalty_signed,refine,6,0.00705792532376846,2.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_phase_benefit_no_penalty_nnls,coarse,0,0.018125762447245244,,,
+dsp_phase_benefit_no_penalty_nnls,coarse,1,0.017717556306400647,,,
+dsp_phase_benefit_no_penalty_nnls,coarse,2,0.016406550699804876,,,
+dsp_phase_benefit_no_penalty_nnls,coarse,3,0.015100229608584356,,,
+dsp_phase_benefit_no_penalty_nnls,coarse,4,0.017263330440363198,,,
+dsp_phase_benefit_no_penalty_nnls,coarse,5,0.01439578617625199,,,
+dsp_phase_benefit_no_penalty_nnls,coarse,6,0.015405210139267118,,,
+dsp_phase_benefit_no_penalty_nnls,coarse,7,0.014965810354815652,,,
+dsp_phase_benefit_no_penalty_nnls,refine,5,0.012864828625739925,0.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_phase_benefit_no_penalty_nnls,refine,7,0.013287529815868039,1.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_phase_benefit_no_penalty_nnls,refine,3,0.013010666650322016,2.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_effective_exposure_no_penalty_nnls,coarse,0,0.01947650389689059,,,
+dsp_effective_exposure_no_penalty_nnls,coarse,1,0.01966637976896442,,,
+dsp_effective_exposure_no_penalty_nnls,coarse,2,0.018945107346921522,,,
+dsp_effective_exposure_no_penalty_nnls,coarse,3,0.018007112588067493,,,
+dsp_effective_exposure_no_penalty_nnls,coarse,4,0.017999246392585152,,,
+dsp_effective_exposure_no_penalty_nnls,coarse,5,0.016075454755749712,,,
+dsp_effective_exposure_no_penalty_nnls,coarse,6,0.01676635859018452,,,
+dsp_effective_exposure_no_penalty_nnls,coarse,7,0.016085785490230303,,,
+dsp_effective_exposure_no_penalty_nnls,refine,5,0.013540872188451314,0.0,False,ABNORMAL:
+dsp_effective_exposure_no_penalty_nnls,refine,7,0.013976424406654185,1.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH
+dsp_effective_exposure_no_penalty_nnls,refine,6,0.014265829162849228,2.0,True,CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH

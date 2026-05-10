@@ -38,7 +38,6 @@ from experiments.domain_phase_mix.agentic_coding_eval_dataset import (
     agentic_eval_slices,
 )
 from experiments.domain_phase_mix.launch_300m_gsm8k_humaneval_evals import (
-    DEFAULT_EXPECTED_300M_STEP,
     DEFAULT_MAX_CONCURRENT,
     DEFAULT_TPU_REGION,
     DEFAULT_TPU_TYPE,
@@ -75,6 +74,12 @@ ALLOWED_PANELS = {
     "signal_300m_6b",
     "fixed_seed_noise_300m_6b",
     "variable_subset_noise_300m_6b",
+    "proportional_variable_subset_noise_60m_1p2b",
+    "proportional_variable_subset_noise_300m_6b",
+    "proportional_perturbation_60m_1p2b",
+    "proportional_perturbation_300m_6b",
+    "proportional_baseline_anchor_60m_1p2b",
+    "proportional_baseline_anchor_300m_6b",
 }
 SIGNAL_SOURCE_EXPERIMENTS = {
     "pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240_300m_6b",
@@ -230,10 +235,10 @@ def build_state_rows(
                 source_experiment=candidate.source_experiment,
                 cohort=candidate.cohort,
                 checkpoint_root=candidate.checkpoint_root,
-                expected_checkpoint_step=DEFAULT_EXPECTED_300M_STEP,
+                expected_checkpoint_step=candidate.expected_checkpoint_step,
                 hf_checkpoint_count=1 if has_exact_hf_checkpoint else 0,
                 hf_checkpoint_latest=exact_hf_checkpoint,
-                hf_checkpoint_latest_step=DEFAULT_EXPECTED_300M_STEP if has_exact_hf_checkpoint else -1,
+                hf_checkpoint_latest_step=candidate.expected_checkpoint_step if has_exact_hf_checkpoint else -1,
                 has_exact_hf_checkpoint=has_exact_hf_checkpoint,
                 uses_east5_checkpoint=uses_east5_checkpoint,
                 has_existing_results=has_existing_results,
