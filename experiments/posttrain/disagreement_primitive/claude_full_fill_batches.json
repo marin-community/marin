@@ -1,0 +1,18 @@
+{
+  "submitted_at_iso": "2026-05-10T06:28:22.020622+00:00",
+  "job_dir": "results/raw/e9_dart_claude_full_fill/2026-05-10T06-28-22",
+  "batches": {
+    "variant_A": {
+      "batch_id": "msgbatch_01H5vi7PXdh1wUyNJ6Gvqde7",
+      "name": "claude_full_fill_variant_A",
+      "n_requests": 2758,
+      "submitted_at": 1778394503.648297
+    },
+    "rubric_plus_spec": {
+      "batch_id": "msgbatch_01DD1Xs2GAA9hpaP2E7dHyyP",
+      "name": "claude_full_fill_rubric_plus_spec",
+      "n_requests": 2758,
+      "submitted_at": 1778394505.8979814
+    }
+  }
+}
