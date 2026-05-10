@@ -44,3 +44,37 @@
   - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/threshold_gate_joint_law_20260507/REPORT.md`
   - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/threshold_gate_joint_law_20260507/csv/canonical_residual_threshold_summary.csv`
   - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/threshold_gate_joint_law_20260507/plots/canonical_residual_threshold_pred_actual.html`
+
+### 2026-05-10 - Domain-Aware Scaling Synergy Sprint
+
+- Hypothesis: The first- and second-order terms from `Domain-Aware Scaling Laws Uncover Data Synergy` may explain residual mixture/scale interactions better than threshold gates.
+- Paper adaptation:
+  - First-order term `z_k = u_k log(u_k D)` becomes `u_k log(D/D0)` after anchoring at fixed mixture and `D0`.
+  - The paper's gamma identifiability constraint is implemented by centered share features, so the global data-scaling term remains separate.
+  - Second-order terms use centered source-group pairwise soft-min features:
+    `softmin_tau(log(1 + u_a D), log(1 + u_b D)) - softmin_tau(log(1 + u_a D0), log(1 + u_b D0))`.
+- Command:
+  ```bash
+  .venv/bin/python experiments/domain_phase_mix/exploratory/two_phase_many/run_domain_aware_synergy_joint_law_sprint_20260510.py
+  ```
+- Variants tested:
+  - First-order domain heads with power and exact log-D scale factors.
+  - First-order current-source and canonical-family heads.
+  - Current-source entropy scale feature.
+  - Current-source second-order soft-min features with `tau=0.1` and `tau=1`.
+  - Combined first-order, entropy, and second-order current-source features.
+- Result:
+  - Canonical residual diagnostic was negative. The unchanged canonical `mct_lrq69_drop_no_barrier` remained best with score `0.04431`.
+  - Best paper-style residual correction was `canon_resid_paper_first_order_domain_log` with score `0.04519`.
+  - The correction slightly improved the tiny 900M diagnostic and fixed-340M-all RMSE, but worsened seed7 holdout, fixed-340M holdout, and random supplement RMSE.
+  - Full local anchored ablations were more positive: `paper_full_current_source_power_tau0.1` improved local selection score from `0.15191` to `0.13193`, but this local model is not the exact canonical MCT implementation.
+- Interpretation:
+  - Paper-style features are structurally meaningful but do not currently justify replacing or extending the canonical law.
+  - In this single-target setting, first-order domain synergy collapses to per-domain/per-group data-scaling heads; this is only weakly identifiable without more independent scale rows.
+  - Second-order co-occurrence is too flexible at the domain level; source-group soft-min terms are the only plausible version to keep exploring.
+  - If this direction is revisited, use constrained current-source entropy/first-order corrections in the exact canonical implementation and require raw-optimum diagnostics.
+- Artifacts:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/run_domain_aware_synergy_joint_law_sprint_20260510.py`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/domain_aware_synergy_joint_law_20260510/REPORT.md`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/domain_aware_synergy_joint_law_20260510/csv/canonical_residual_synergy_summary.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/domain_aware_synergy_joint_law_20260510/plots/canonical_residual_domain_aware_synergy_pred_actual.html`
