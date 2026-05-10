@@ -8,6 +8,7 @@ VM group management, and state tracking - not on implementation details.
 """
 
 import logging
+from pathlib import Path
 
 import pytest
 from iris.cluster.controller.autoscaler.scaling_group import (
@@ -16,6 +17,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     SliceState,
     _zones_from_config,
 )
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -416,15 +418,20 @@ class TestScalingGroupDemandTracking:
 class TestScalingGroupIdleTracking:
     """Tests for per-slice idle tracking and scale-down eligibility."""
 
-    def test_slice_eligible_when_never_active(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """Fresh slice (no activity tracked) is eligible for scaledown."""
+    def test_slice_not_eligible_until_workers_observed_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """Slice with quiet_since=None (no idle observation yet) is not eligible.
+
+        Under the new model, eligibility requires an active→idle transition to
+        have been observed; a never-observed slice stays alive until the next
+        autoscaler tick stamps quiet_since.
+        """
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(60_000))
         _tracked_scale_up(group)
         slice_id = next(iter(group.slice_handles())).slice_id
 
-        # Never had activity tracked -> eligible
-        assert group.is_slice_eligible_for_scaledown(slice_id, Timestamp.from_ms(1000))
+        # Never had activity observed -> not eligible.
+        assert not group.is_slice_eligible_for_scaledown(slice_id, Timestamp.from_ms(1000))
 
     def test_slice_not_eligible_when_recently_active(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Recently active slice is not eligible for scaledown."""
@@ -448,20 +455,18 @@ class TestScalingGroupIdleTracking:
         assert not group.is_slice_eligible_for_scaledown("slice-001", Timestamp.from_ms(30_000))
 
     def test_slice_eligible_after_idle_threshold(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """Slice is eligible after idle_threshold of inactivity."""
+        """Slice is eligible after idle_threshold has elapsed since the workers went idle."""
         discovered = [make_fake_slice_handle("slice-001", all_ready=True)]
         platform = make_mock_platform(slices_to_discover=discovered)
         group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(60_000))
         group.reconcile()
+        _mark_discovered_ready(group, discovered)
 
-        handle = group.get_slice("slice-001")
-        worker_id = _get_worker_id(handle)
+        worker_id = _get_worker_id(group.get_slice("slice-001"))
 
-        # Mark slice as active at t=1000 via update_slice_activity
-        vm_status_map = {
-            worker_id: WorkerStatus(worker_id=worker_id, running_task_ids=frozenset({"task-1"})),
-        }
-        group.update_slice_activity(vm_status_map, Timestamp.from_ms(1000))
+        # First tick observes the workers idle at t=1000 -> stamps quiet_since.
+        idle_map = {worker_id: WorkerStatus(worker_id=worker_id, running_task_ids=frozenset())}
+        group.update_slice_activity(idle_map, Timestamp.from_ms(1000))
 
         # After threshold (61s > 60s) -> eligible
         assert group.is_slice_eligible_for_scaledown("slice-001", Timestamp.from_ms(61_001))
@@ -477,31 +482,31 @@ class TestScalingGroupIdleTracking:
         group.reconcile()
         _mark_discovered_ready(group, discovered)
 
-        # Get worker IDs from the handles
-        slice_001 = group.get_slice("slice-001")
-        slice_002 = group.get_slice("slice-002")
-        wid_001 = _get_worker_id(slice_001)
-        wid_002 = _get_worker_id(slice_002)
+        wid_001 = _get_worker_id(group.get_slice("slice-001"))
+        wid_002 = _get_worker_id(group.get_slice("slice-002"))
 
-        # Mark slice-001 as active at t=1000 (will be idle longer)
-        vm_status_map_001 = {
-            wid_001: WorkerStatus(worker_id=wid_001, running_task_ids=frozenset({"task-1"})),
-        }
-        group.update_slice_activity(vm_status_map_001, Timestamp.from_ms(1000))
-
-        # Mark slice-002 as active at t=5000 (more recently active)
-        vm_status_map_002 = {
+        # slice-001 transitions to idle at t=1000 (longer dwell time below).
+        only_001_idle = {
+            wid_001: WorkerStatus(worker_id=wid_001, running_task_ids=frozenset()),
             wid_002: WorkerStatus(worker_id=wid_002, running_task_ids=frozenset({"task-2"})),
         }
-        group.update_slice_activity(vm_status_map_002, Timestamp.from_ms(5000))
+        group.update_slice_activity(only_001_idle, Timestamp.from_ms(1000))
 
-        # At timestamp 10000, slice-001 has been idle longer (9s vs 5s)
+        # slice-002 transitions to idle at t=5000.
+        both_idle = {
+            wid_001: WorkerStatus(worker_id=wid_001, running_task_ids=frozenset()),
+            wid_002: WorkerStatus(worker_id=wid_002, running_task_ids=frozenset()),
+        }
+        group.update_slice_activity(both_idle, Timestamp.from_ms(5000))
+
+        # At t=10_000 both have crossed the 1s threshold; slice-001 has been
+        # idle longer (9s vs 5s).
         idle_slices = group.get_idle_slices(Timestamp.from_ms(10_000))
         assert len(idle_slices) == 2
-        assert idle_slices[0].handle.slice_id == "slice-001"  # Longest idle first
+        assert idle_slices[0].handle.slice_id == "slice-001"
 
     def test_update_slice_activity_tracks_active_slices(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """update_slice_activity updates timestamp only for slices with active workers."""
+        """Active slice stays alive; idle slice becomes eligible after threshold."""
         discovered = [
             make_fake_slice_handle("slice-001", all_ready=True),
             make_fake_slice_handle("slice-002", all_ready=True),
@@ -512,24 +517,52 @@ class TestScalingGroupIdleTracking:
         ready_ts = Timestamp.from_ms(1000)
         _mark_discovered_ready(group, discovered, timestamp=ready_ts)
 
-        slice_001 = group.get_slice("slice-001")
-        slice_002 = group.get_slice("slice-002")
-        wid_001 = _get_worker_id(slice_001)
-        wid_002 = _get_worker_id(slice_002)
+        wid_001 = _get_worker_id(group.get_slice("slice-001"))
+        wid_002 = _get_worker_id(group.get_slice("slice-002"))
 
-        # slice-001 has running tasks, slice-002 is idle
+        # slice-001 has running tasks, slice-002 has none.
         vm_status_map = {
             wid_001: WorkerStatus(worker_id=wid_001, running_task_ids=frozenset({"task-1"})),
             wid_002: WorkerStatus(worker_id=wid_002, running_task_ids=frozenset()),
         }
 
-        check_ts = Timestamp.from_ms(5000)
-        group.update_slice_activity(vm_status_map, check_ts)
+        # First observation at t=1500: stamps quiet_since on slice-002 only.
+        group.update_slice_activity(vm_status_map, Timestamp.from_ms(1500))
 
-        # Observable behavior: slice-001 should not be eligible for scaledown (recently active)
-        # slice-002 is eligible because idle_threshold (1000ms) has passed since ready_ts (1000ms)
+        # At t=3000, slice-002 has been quiet for 1500ms (> 1000ms threshold)
+        # while slice-001 stays active.
+        check_ts = Timestamp.from_ms(3000)
         assert not group.is_slice_eligible_for_scaledown("slice-001", check_ts)
         assert group.is_slice_eligible_for_scaledown("slice-002", check_ts)
+
+    def test_continuous_activity_keeps_quiet_since_none(self, unbounded_config: config_pb2.ScaleGroupConfig, tmp_path):
+        """Regression: a continuously-active slice never accrues quiet time.
+
+        The previous implementation persisted ``last_active_ms`` to the DB on a
+        threshold the per-tick mutation defeated; we observed live slices with
+        a multi-hour-stale DB row even though their workers had running tasks.
+        Under the transition model an active slice keeps ``quiet_since=None``
+        through arbitrarily many ticks and is never eligible for scale-down.
+        """
+        db = ControllerDB(db_dir=Path(tmp_path))
+        discovered = [make_fake_slice_handle("slice-001", all_ready=True)]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(60_000), db=db)
+        group.reconcile()
+        ready_ts = Timestamp.from_ms(1_000_000)
+        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
+
+        wid = _get_worker_id(group.get_slice("slice-001"))
+        active_map = {wid: WorkerStatus(worker_id=wid, running_task_ids=frozenset({"task-1"}))}
+
+        # 20 ticks of continuous activity at production cadence (10s apart).
+        for tick in range(1, 21):
+            ts = Timestamp.from_ms(ready_ts.epoch_ms() + tick * 10_000)
+            group.update_slice_activity(active_map, ts)
+            assert not group.is_slice_eligible_for_scaledown("slice-001", ts)
+
+        with group._slices_lock:
+            assert group._slices["slice-001"].quiet_since is None
 
     def test_scale_down_if_idle_terminates_eligible_slice(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """scale_down_if_idle terminates an eligible idle slice."""
@@ -547,20 +580,14 @@ class TestScalingGroupIdleTracking:
         wid_001 = _get_worker_id(slice_001)
         wid_002 = _get_worker_id(slice_002)
 
-        # Mark both slices as active at t=0 (they'll be idle for 10s, exceeding 1s threshold)
-        vm_status_map_active = {
-            wid_001: WorkerStatus(worker_id=wid_001, running_task_ids=frozenset({"task-1"})),
-            wid_002: WorkerStatus(worker_id=wid_002, running_task_ids=frozenset({"task-2"})),
-        }
-        group.update_slice_activity(vm_status_map_active, Timestamp.from_ms(0))
-
-        # At t=10_000, workers are now idle
         vm_status_map_idle = {
             wid_001: WorkerStatus(worker_id=wid_001, running_task_ids=frozenset()),
             wid_002: WorkerStatus(worker_id=wid_002, running_task_ids=frozenset()),
         }
+        # First idle observation at t=0 stamps quiet_since on both slices.
+        group.update_slice_activity(vm_status_map_idle, Timestamp.from_ms(0))
 
-        # Target capacity = 1, but we have 2 ready slices
+        # At t=10_000 they have been quiet 10s — well past the 1s threshold.
         scaled_down = group.scale_down_if_idle(
             vm_status_map_idle, target_capacity=1, timestamp=Timestamp.from_ms(10_000)
         )
@@ -620,17 +647,13 @@ def test_scale_down_no_misleading_rate_limit_log(unbounded_config: config_pb2.Sc
     wid_001 = _get_worker_id(discovered[0])
     wid_002 = _get_worker_id(discovered[1])
 
-    # Mark both active at t=0, then idle at t=1000 (well past idle_threshold)
-    active_map = {
-        wid_001: WorkerStatus(worker_id=wid_001, running_task_ids=frozenset({"task-1"})),
-        wid_002: WorkerStatus(worker_id=wid_002, running_task_ids=frozenset({"task-2"})),
-    }
-    group.update_slice_activity(active_map, Timestamp.from_ms(0))
-
     idle_map = {
         wid_001: WorkerStatus(worker_id=wid_001, running_task_ids=frozenset()),
         wid_002: WorkerStatus(worker_id=wid_002, running_task_ids=frozenset()),
     }
+    # First idle observation at t=0 stamps quiet_since; by t=1000 both
+    # have been quiet 1s, past the 100ms threshold.
+    group.update_slice_activity(idle_map, Timestamp.from_ms(0))
 
     ts = Timestamp.from_ms(1000)
 
@@ -1271,12 +1294,11 @@ class TestMultiVmSliceIdleScaleDown:
         wids = [w.worker_id for w in workers]
         assert len(wids) == 4
 
-        # Mark all workers as active at t=0
-        active_map = {wid: WorkerStatus(worker_id=wid, running_task_ids=frozenset({"task"})) for wid in wids}
-        group.update_slice_activity(active_map, Timestamp.from_ms(0))
-
-        # At t=10_000 (past threshold), all workers now idle
+        # First idle observation at t=0 stamps quiet_since on the slice.
         idle_map = {wid: WorkerStatus(worker_id=wid, running_task_ids=frozenset()) for wid in wids}
+        group.update_slice_activity(idle_map, Timestamp.from_ms(0))
+
+        # At t=10_000 (past 1s threshold), the slice scales down.
         scaled_down = group.scale_down_if_idle(idle_map, target_capacity=0, timestamp=Timestamp.from_ms(10_000))
 
         assert len(scaled_down) == 1
@@ -1295,11 +1317,9 @@ class TestMultiVmSliceIdleScaleDown:
         workers = handle.describe().workers
         wids = [w.worker_id for w in workers]
 
-        # Mark all active initially
-        active_map = {wid: WorkerStatus(worker_id=wid, running_task_ids=frozenset({"task"})) for wid in wids}
-        group.update_slice_activity(active_map, Timestamp.from_ms(0))
-
-        # 3 workers idle, 1 still has tasks
+        # 3 workers idle, 1 still has tasks. update_slice_activity inside
+        # scale_down_if_idle observes ANY active worker → quiet_since=None,
+        # so the slice is never eligible.
         mixed_map = {}
         for i, wid in enumerate(wids):
             tasks = frozenset({"task-running"}) if i == 0 else frozenset()
@@ -1311,7 +1331,7 @@ class TestMultiVmSliceIdleScaleDown:
         assert group.slice_count() == 1
 
     def test_multi_vm_slice_activity_updates_when_any_worker_busy(self):
-        """update_slice_activity stamps last_active when ANY worker in the slice is busy."""
+        """update_slice_activity treats the slice as active when ANY worker is busy."""
         config = _make_multi_vm_config(num_vms=4)
         discovered = [_make_multi_vm_slice_handle("slice-001", num_vms=4)]
         platform = make_mock_platform(slices_to_discover=discovered)
@@ -1351,20 +1371,17 @@ class TestMultiVmSliceIdleScaleDown:
         wids_1 = [w.worker_id for w in h1.describe().workers]
         wids_2 = [w.worker_id for w in h2.describe().workers]
 
-        # Mark both slices active initially
-        all_active = {}
-        for wid in wids_1 + wids_2:
-            all_active[wid] = WorkerStatus(worker_id=wid, running_task_ids=frozenset({"task"}))
-        group.update_slice_activity(all_active, Timestamp.from_ms(0))
-
-        # At t=10_000: slice-001 all idle, slice-002 still has work on one VM
+        # First observation at t=0: slice-001 all idle (stamps quiet_since=0),
+        # slice-002 has work on one VM (stays active, quiet_since=None).
         vm_map = {}
         for wid in wids_1:
             vm_map[wid] = WorkerStatus(worker_id=wid, running_task_ids=frozenset())
         for i, wid in enumerate(wids_2):
             tasks = frozenset({"running"}) if i == 0 else frozenset()
             vm_map[wid] = WorkerStatus(worker_id=wid, running_task_ids=tasks)
+        group.update_slice_activity(vm_map, Timestamp.from_ms(0))
 
+        # At t=10_000 (past 1s threshold), slice-001 has been quiet 10s.
         scaled_down = group.scale_down_if_idle(vm_map, target_capacity=1, timestamp=Timestamp.from_ms(10_000))
 
         assert len(scaled_down) == 1
@@ -1415,11 +1432,11 @@ class TestSliceStateToProtoIdleFields:
             handle=handle,
             lifecycle=SliceLifecycleState.READY,
             worker_ids=["10.0.0.1"],
-            last_active=Timestamp.from_ms(1000),
+            quiet_since=Timestamp.from_ms(1000),
         )
 
-        # With a threshold of 1s and last_active at 1s ago, idle should be True
-        # (since Timestamp.now() will be >> 2000ms)
+        # With a 1ms threshold and quiet_since 1s ago (Timestamp.now() >> 2000ms),
+        # the slice should be idle.
         proto = slice_state_to_proto(state, idle_threshold=Duration.from_ms(1))
         assert proto.idle is True
         assert proto.last_active.epoch_ms == 1000
@@ -1432,9 +1449,23 @@ class TestSliceStateToProtoIdleFields:
             handle=handle,
             lifecycle=SliceLifecycleState.READY,
             worker_ids=["10.0.0.1"],
-            last_active=Timestamp.from_ms(1000),
+            quiet_since=Timestamp.from_ms(1000),
         )
         proto = slice_state_to_proto(state, idle_threshold=None)
+        assert proto.idle is False
+
+    def test_idle_false_when_currently_active(self):
+        """quiet_since=None means currently active — never idle."""
+        from iris.cluster.controller.autoscaler.scaling_group import slice_state_to_proto
+
+        handle = make_fake_slice_handle("s1", scale_group="g1", created_at_ms=1000)
+        state = SliceState(
+            handle=handle,
+            lifecycle=SliceLifecycleState.READY,
+            worker_ids=["10.0.0.1"],
+            quiet_since=None,
+        )
+        proto = slice_state_to_proto(state, idle_threshold=Duration.from_ms(1))
         assert proto.idle is False
 
     def test_idle_false_for_non_ready_slices(self):
@@ -1445,7 +1476,7 @@ class TestSliceStateToProtoIdleFields:
             handle=handle,
             lifecycle=SliceLifecycleState.BOOTING,
             worker_ids=[],
-            last_active=Timestamp.from_ms(0),
+            quiet_since=None,
         )
         proto = slice_state_to_proto(state, idle_threshold=Duration.from_ms(1))
         assert proto.idle is False

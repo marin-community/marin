@@ -10,14 +10,18 @@ from marin.execution.executor import (
     InputName,
     OutputName,
     VersionedValue,
+    compute_output_path,
     ensure_versioned,
     executor_main,
     get_executor_step,
+    materialize,
     output_path_of,
     resolve_executor_step,
+    resolve_local_placeholders,
     this_output_path,
     unwrap_versioned_value,
     versioned,
+    walk_config,
 )
 from marin.execution.executor_step_status import (
     STATUS_DEP_FAILED,

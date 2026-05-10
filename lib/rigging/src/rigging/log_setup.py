@@ -59,8 +59,14 @@ class LevelPrefixFormatter(logging.Formatter):
     Produces lines like: I20260306 12:44:05 iris.worker starting up
     """
 
+    # Bind the prefix table to the class so the formatter survives
+    # interpreter shutdown, when Python clears module globals to None.
+    # Late log emissions (e.g. tqdm.__del__ via tqdm_loggable) used to
+    # crash with AttributeError on the module-global lookup. See #5578.
+    _prefix_table = _LEVEL_PREFIX
+
     def format(self, record: logging.LogRecord) -> str:
-        record.levelprefix = _LEVEL_PREFIX.get(record.levelname, "?")
+        record.levelprefix = self._prefix_table.get(record.levelname, "?")
         return super().format(record)
 
 

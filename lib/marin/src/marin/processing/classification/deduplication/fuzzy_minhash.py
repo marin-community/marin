@@ -137,7 +137,9 @@ def compute_minhash_attrs(
         num_perms: Number of MinHash permutations. Must be divisible by
             ``num_bands``.
         num_bands: Number of LSH bands.
-        ngram_size: Word n-gram size for shingling.
+        ngram_size: Character n-gram size for shingling. Applied to text
+            after dupekit's CleanText (lowercase, strip punctuation,
+            collapse whitespace).
         seed: MinHash seed.
         worker_resources: Per-worker resource request. Sized similarly to the
             old ``dedup_fuzzy_document``: dupekit's Rust MinHash pipeline uses

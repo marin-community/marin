@@ -5,9 +5,14 @@
 
 Reads raw files (JSONL, Parquet, etc.) discovered recursively under a single
 input directory, transforms each record into the standard schema (``id``,
-``text``, plus all original columns), deduplicates by content, sorts by ``id``
-within each partition, and writes Parquet output with
-``part-{shard}-of-{total}`` naming.
+``text``, ``partition_id``, plus all original columns), deduplicates by
+content, sorts by ``id`` within each partition, and writes Parquet output
+with ``part-{shard}-of-{total}`` naming.
+
+``partition_id`` (int) is stamped at write time and equals the row's output
+shard index. The shard count itself lives on the artifact
+(``NormalizedData.num_partitions``) — downstream stages use the column as the
+``group_by`` key for global shuffles and the field for filename construction.
 
 All discovered files are merged into a single output: main records land in
 ``<output_path>/outputs/main/`` and (when dedup is enabled) duplicates land in
@@ -32,6 +37,7 @@ from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_fi
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import ThreadedBatchWriter
 
+from marin.datakit import partition_filename
 from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
@@ -69,12 +75,19 @@ class NormalizedData(BaseModel):
     Attributes:
         main_output_dir: Directory containing the main output Parquet files.
         dup_output_dir: Directory containing the duplicate side output Parquet files.
+        num_partitions: Number of output shards. Matches the ``-of-NNNNN``
+            suffix in filenames and the ``partition_id`` column's value range
+            (``0 <= partition_id < num_partitions``). Downstream shufflers
+            need this to construct co-partitioned filenames without globbing.
+            ``None`` on legacy ``v1`` artifacts that pre-date the field;
+            always populated on ``v2``+ writes.
         counters: Aggregated zephyr counters.
     """
 
-    version: str = "v1"
+    version: str = "v2"
     main_output_dir: str
     dup_output_dir: str
+    num_partitions: int | None = None
     counters: dict[str, int]
 
 
@@ -260,8 +273,9 @@ def _make_split_writer(
         shard: ShardInfo,
     ) -> Iterator[dict[str, dict[str, Any]]]:
         # NOTE: we could add support for split_existing - but we intentionally don't
-        main_path = f"{output_dir}/outputs/main/part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet"
-        dup_path = f"{output_dir}/outputs/dups/part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet"
+        filename = partition_filename(shard.shard_idx, shard.total_shards)
+        main_path = f"{output_dir}/outputs/main/{filename}"
+        dup_path = f"{output_dir}/outputs/dups/{filename}"
 
         # Results are populated by each writer thread. Safe to read only after
         # the ThreadedBatchWriter context exits (which joins the thread).
@@ -278,6 +292,9 @@ def _make_split_writer(
             ThreadedBatchWriter(write_to(dup_path, "dup")) as dup_writer,
         ):
             for item in records:
+                # Stamp partition_id at the writer so it reflects the actual
+                # output shard, not anything inferred upstream of group_by.
+                item.data["partition_id"] = shard.shard_idx
                 if isinstance(item, MainOutput):
                     counters.increment("normalize/unique_records_out")
                     main_writer.submit(item.data)
@@ -444,6 +461,7 @@ def normalize_to_parquet(
     return NormalizedData(
         main_output_dir=os.path.join(output_path, "outputs/main"),
         dup_output_dir=os.path.join(output_path, "outputs/dups"),
+        num_partitions=num_shards,
         counters=counters_dict,
     )
 
@@ -463,6 +481,7 @@ def normalize_step(
     relative_input_path: str | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
+    version: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
 
@@ -485,6 +504,14 @@ def normalize_step(
             ``zephyr.readers.load_file``.
         dedup_mode: How to deduplicate records within each output shard.
             Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
+        version: Opt-in cache-invalidation knob. When set (e.g. ``"v2"``),
+            the value is included in ``hash_attrs`` so the step's ``hash_id``
+            differs from any prior cached run. Use this when you need
+            ``partition_id``-aware downstream consumers and are willing to
+            recompute. Default ``None`` keeps cache identity with pre-v2
+            step specs — ``normalize_to_parquet`` itself always stamps
+            ``partition_id``, so existing caches stay hits but new runs still
+            produce v2 output.
     """
     if relative_input_path:
         # ``os.path.join`` collapses redundant separators when ``download.output_path``
@@ -494,6 +521,20 @@ def normalize_step(
         resolved_input = os.path.join(download.output_path, relative_input_path)
     else:
         resolved_input = download.output_path
+
+    hash_attrs: dict[str, Any] = {
+        "text_field": text_field,
+        "id_field": id_field,
+        "target_partition_bytes": target_partition_bytes,
+        "max_whitespace_run_chars": max_whitespace_run_chars,
+        "relative_input_path": relative_input_path,
+        "file_extensions": file_extensions,
+        "dedup_mode": dedup_mode,
+    }
+    # Only include the version key when the caller explicitly opts in, so
+    # default callers preserve their existing hash_id and cache hits.
+    if version is not None:
+        hash_attrs["version"] = version
 
     return StepSpec(
         name=name,
@@ -510,15 +551,7 @@ def normalize_step(
             dedup_mode=dedup_mode,
         ),
         deps=[download],
-        hash_attrs={
-            "text_field": text_field,
-            "id_field": id_field,
-            "target_partition_bytes": target_partition_bytes,
-            "max_whitespace_run_chars": max_whitespace_run_chars,
-            "relative_input_path": relative_input_path,
-            "file_extensions": file_extensions,
-            "dedup_mode": dedup_mode,
-        },
+        hash_attrs=hash_attrs,
         output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
     )

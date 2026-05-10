@@ -1,52 +1,122 @@
 name: "Dupekit - Release Wheels"
 
+# Triggers mirror marin-release-libs-wheels.yaml: schedule for nightlies, tag
+# push for stables, workflow_dispatch for manual cuts, pull_request for build
+# smoke. There is intentionally no `push: branches: [main]` trigger - that is
+# what previously caused the auto-pin chore PR to recursively re-trigger this
+# workflow on every merge.
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Build mode"
+        type: choice
+        options: [nightly, stable, manual]
+        default: manual
+      version:
+        description: "Version (required for stable mode, e.g. 0.1.7)"
+        type: string
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC daily nightly
   push:
-    branches: [main]
     tags:
       - "dupekit-v*"
   pull_request:
+    paths:
+      - "rust/dupekit/**"
+      - ".github/workflows/dupekit-release-wheels.yaml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false  # don't kill an in-flight publish
 
 permissions:
-  contents: write  # for creating releases
-  pull-requests: write  # for create-pull-request
+  contents: read
 
 jobs:
-  changes:
+  resolve:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
     outputs:
-      should_run: ${{ steps.filter.outputs.relevant }}
+      mode: ${{ steps.pick.outputs.mode }}
+      version: ${{ steps.resolved.outputs.version }}
+      skip: ${{ steps.stale.outputs.skip || 'false' }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590  # v3
-        id: filter
         with:
-          filters: |
-            relevant:
-              - 'rust/dupekit/**'
-              - 'scripts/rust_package.py'
-              - '.github/workflows/dupekit-release-wheels.yaml'
+          # Need recent history (~last day) for the stale-nightly check below.
+          # 50 commits is far more than a typical day's churn but cheap to
+          # fetch; falls back gracefully on quieter days.
+          fetch-depth: 50
 
-  # Linux wheels (x86_64 + aarch64) cross-compiled via zig on ubuntu.
-  # macOS wheels (x86_64 + arm64) built natively on macos-14.
+      # Skip the nightly when the package hasn't changed in the last day.
+      # Only applies to scheduled runs - manual dispatch and tag pushes always
+      # build, since the human triggering them has a reason to.
+      - id: stale
+        if: github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          # 25h not 24h: small buffer so a cron that drifts a few minutes late
+          # still sees yesterday's commits.
+          changes=$(git log --since='25 hours ago' --format=%H -- rust/dupekit/ .github/workflows/dupekit-release-wheels.yaml)
+          if [[ -z "$changes" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::no dupekit changes in the last 25h, skipping nightly"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "dupekit changes since yesterday:"
+            echo "$changes"
+          fi
+
+      # Hoist user-supplied inputs into env so they reach the shell as
+      # variables, not as `${{ ... }}` template substitutions. Per GitHub's
+      # actions hardening guide, free-form inputs interpolated into a shell
+      # script are an injection vector even when the trigger requires write
+      # access.
+      - id: pick
+        if: steps.stale.outputs.skip != 'true'
+        env:
+          INPUT_MODE: ${{ github.event.inputs.mode }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/dupekit-v* ]]; then
+            echo "mode=stable" >> "$GITHUB_OUTPUT"
+            echo "input_version=${GITHUB_REF_NAME#dupekit-v}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            echo "mode=nightly" >> "$GITHUB_OUTPUT"
+            echo "input_version=" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "mode=${INPUT_MODE}" >> "$GITHUB_OUTPUT"
+            echo "input_version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=manual" >> "$GITHUB_OUTPUT"
+            echo "input_version=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Resolve the version exactly once for the whole workflow run. Matrix
+      # legs and the publish job all consume this output, so wheels and the
+      # sdist agree on a single value.
+      - id: resolved
+        if: steps.stale.outputs.skip != 'true'
+        env:
+          MODE: ${{ steps.pick.outputs.mode }}
+          INPUT_VERSION: ${{ steps.pick.outputs.input_version }}
+        run: |
+          python rust/dupekit/build_package.py \
+            --mode "$MODE" \
+            --version "$INPUT_VERSION" \
+            --resolve-only
+
   build:
-    needs: changes
-    if: needs.changes.outputs.should_run == 'true'
+    needs: resolve
+    if: needs.resolve.outputs.skip != 'true'
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
-            targets: linux
+            target: linux
           - os: macos-14
-            targets: macos
+            target: macos
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -54,88 +124,50 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Build wheels
-        run: python scripts/rust_package.py --skip-publish --targets ${{ matrix.targets }}
+        run: |
+          python rust/dupekit/build_package.py \
+            --mode "${{ needs.resolve.outputs.mode }}" \
+            --version "${{ needs.resolve.outputs.version }}" \
+            --build "${{ matrix.target }}"
 
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
           path: dist/*
 
-  release:
-    if: needs.changes.outputs.should_run == 'true' && github.ref == 'refs/heads/main'
-    needs: [changes, build]
+  publish:
+    # Manual mode produces local-version identifiers (`X.Y.Z+<sha>`) which PyPI
+    # rejects, so it's a build-only smoke regardless of how it was triggered.
+    # Stale nightly skip is propagated from the resolve job.
+    if: |
+      github.event_name != 'pull_request'
+      && needs.resolve.outputs.mode != 'manual'
+      && needs.resolve.outputs.skip != 'true'
+    needs: [resolve, build]
     runs-on: ubuntu-latest
+    environment: pypi-publish
+    permissions:
+      id-token: write   # for trusted publishing
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
 
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      # Branch setup must happen BEFORE rust_package.py so the wheel-pin
-      # modifications land on the PR branch's tree, not get clobbered by a
-      # later checkout. Resetting to $GITHUB_SHA gives rust_package a clean
-      # baseline to write on top of, regardless of what the existing PR
-      # branch contained.
-      - name: Set up release branch
-        env:
-          BRANCH: auto/update-dupekit-wheels
+      # Build sdist into the same dist/ directory the wheels were downloaded
+      # into so gh-action-pypi-publish uploads everything as one release.
+      - name: Build sdist
         run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin "$BRANCH" --depth=1 2>/dev/null || true
-          if git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null; then
-            git checkout -B "$BRANCH" "refs/remotes/origin/$BRANCH"
-            git checkout "$GITHUB_SHA" -- .
-          else
-            git checkout -B "$BRANCH"
-          fi
+          python rust/dupekit/build_package.py \
+            --mode "${{ needs.resolve.outputs.mode }}" \
+            --version "${{ needs.resolve.outputs.version }}" \
+            --build sdist
 
-      - name: Publish release and update pyproject
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python scripts/rust_package.py --skip-build
-
-      - name: Open or update PR
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: auto/update-dupekit-wheels
-          TITLE: "chore: update dupekit wheels"
-          COMMIT_MESSAGE: "chore: pin dupekit wheels to ${{ github.sha }}"
-          DESIRED_LABELS: "agent-generated"
-        run: |
-          set -euo pipefail
-
-          BODY="Auto-generated: updates pyproject.toml to pin dupekit wheels from commit ${{ github.sha }}."
-          echo "$BODY" > pr_body.md
-          BODY_FILE=pr_body.md
-
-          git add -A
-          if git diff --cached --quiet; then
-            echo "pr_created=false" >>"$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git commit -m "$COMMIT_MESSAGE"
-          git push --force-with-lease origin "$BRANCH"
-
-          PR_URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // ""')
-          if [[ -z "$PR_URL" ]]; then
-            gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$BODY_FILE" >/dev/null
-            PR_URL=$(gh pr view "$BRANCH" --json url --jq .url)
-          else
-            gh pr edit "$PR_URL" --title "$TITLE" --body-file "$BODY_FILE" >/dev/null
-          fi
-
-          CURRENT_LABELS=$(gh pr view "$PR_URL" --json labels --jq '[.labels[].name] | join(" ")')
-          for label in $DESIRED_LABELS; do
-            case " $CURRENT_LABELS " in *" $label "*) ;; *) gh pr edit "$PR_URL" --add-label "$label" >/dev/null ;; esac
-          done
-          for label in $CURRENT_LABELS; do
-            case " $DESIRED_LABELS " in *" $label "*) ;; *) gh pr edit "$PR_URL" --remove-label "$label" >/dev/null ;; esac
-          done
-
-          echo "pr_url=$PR_URL" >>"$GITHUB_OUTPUT"
-          echo "pr_created=true" >>"$GITHUB_OUTPUT"
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.12.4
+        with:
+          packages-dir: dist/

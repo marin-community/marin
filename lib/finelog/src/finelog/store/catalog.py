@@ -9,13 +9,18 @@ Two tables in ``{data_dir}/_finelog_registry.duckdb``:
   ``RegisterTable`` mutates one row here. On finelog startup the table is
   read out and ``LogNamespace`` instances are rehydrated from the rows.
 
-* ``segments`` — one row per locally-tracked parquet file. Each
+* ``segments`` — one row per parquet segment in the table, regardless
+  of whether its bytes currently live on local disk, in the remote
+  bucket, or both (``location`` discriminates). Each
   :class:`DiskLogNamespace` writes here in lockstep with its in-memory
   ``_local_segments`` deque (insert on flush finalize, swap atomically on
-  compaction, delete on eviction). Aggregating this table answers every
-  shape-of-the-data query (row counts, seq ranges, byte totals,
-  per-namespace segment counts) without touching parquet — finelog's
-  catalog, in the Iceberg/ClickHouse-parts sense.
+  compaction, ``location`` flip on upload / eviction). Compaction drops
+  input rows immediately; the remote-sync loop reconciles the bucket
+  with the catalog and ``fs.rm``s any remote file that has no row.
+  Aggregating this table answers every shape-of-the-data query (row
+  counts, seq ranges, byte totals, per-namespace segment counts) without
+  touching parquet — finelog's catalog, in the Iceberg/ClickHouse-parts
+  sense.
 
 The DB is intentionally separate from the per-namespace Parquet directories:
 catalog metadata never lives in two places, so a row count or schema change
@@ -32,7 +37,8 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 import duckdb
@@ -45,6 +51,21 @@ logger = logging.getLogger(__name__)
 CATALOG_DB_FILENAME = "_finelog_registry.duckdb"
 
 
+class SegmentLocation(StrEnum):
+    """Where a segment's bytes currently live.
+
+    Every catalog row is part of the table; ``location`` says whether the
+    bytes are reachable from local disk, the remote bucket, or both. The
+    sync loop reconciles remote with catalog; eviction flips ``BOTH`` →
+    ``REMOTE`` rather than dropping the row, so a durable archive cannot
+    be confused with an orphan compaction input.
+    """
+
+    LOCAL = "LOCAL"
+    REMOTE = "REMOTE"
+    BOTH = "BOTH"
+
+
 @dataclass(frozen=True)
 class SegmentRow:
     """One persisted row in the segments catalog table.
@@ -55,10 +76,6 @@ class SegmentRow:
     column statistics for the namespace's declared ``Schema.key_column``.
     They are ``None`` for namespaces whose schema has no ``key_column``,
     or for empty segments where no statistics exist.
-    ``copied_at_ms`` is the wall-clock millisecond when the copy worker
-    reported a successful upload; ``None`` while the upload is still
-    pending. Eviction is gated on this so a fresh L1 cannot be deleted
-    before its remote copy is durable.
     """
 
     namespace: str
@@ -69,9 +86,9 @@ class SegmentRow:
     row_count: int
     byte_size: int
     created_at_ms: int
+    location: SegmentLocation = SegmentLocation.LOCAL
     min_key_value: str | None = None
     max_key_value: str | None = None
-    copied_at_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -163,13 +180,19 @@ class Catalog:
 
     _SEGMENT_COLUMNS = (
         "namespace, path, level, min_seq, max_seq, row_count, byte_size, "
-        "created_at_ms, min_key_value, max_key_value, copied_at_ms"
+        "created_at_ms, min_key_value, max_key_value, location"
     )
 
-    def list_segments(self, namespace: str) -> list[SegmentRow]:
+    def list_segments(self, namespace: str, *, min_level: int = 0) -> list[SegmentRow]:
+        """Segment rows for ``namespace`` with ``level >= min_level``, ordered by ``min_seq``."""
         rows = self._conn.execute(
-            f"SELECT {self._SEGMENT_COLUMNS} FROM segments WHERE namespace = ? ORDER BY min_seq",
-            [namespace],
+            f"""
+            SELECT {self._SEGMENT_COLUMNS}
+            FROM segments
+            WHERE namespace = ? AND level >= ?
+            ORDER BY min_seq
+            """,
+            [namespace, min_level],
         ).fetchall()
         return [self._row_from_tuple(r) for r in rows]
 
@@ -186,7 +209,7 @@ class Catalog:
             created_at_ms=r[7],
             min_key_value=r[8],
             max_key_value=r[9],
-            copied_at_ms=r[10],
+            location=SegmentLocation(r[10]),
         )
 
     def upsert_segment(self, segment: SegmentRow) -> None:
@@ -195,7 +218,7 @@ class Catalog:
             """
             INSERT INTO segments
                 (namespace, path, level, min_seq, max_seq, row_count, byte_size, created_at_ms,
-                 min_key_value, max_key_value, copied_at_ms)
+                 min_key_value, max_key_value, location)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (namespace, path) DO UPDATE SET
                 level = excluded.level,
@@ -206,7 +229,7 @@ class Catalog:
                 created_at_ms = excluded.created_at_ms,
                 min_key_value = excluded.min_key_value,
                 max_key_value = excluded.max_key_value,
-                copied_at_ms = excluded.copied_at_ms
+                location = excluded.location
             """,
             [
                 segment.namespace,
@@ -219,7 +242,7 @@ class Catalog:
                 segment.created_at_ms,
                 segment.min_key_value,
                 segment.max_key_value,
-                segment.copied_at_ms,
+                segment.location.value,
             ],
         )
 
@@ -248,32 +271,6 @@ class Catalog:
         """Drop one segment row. Idempotent."""
         self._conn.execute("DELETE FROM segments WHERE namespace = ? AND path = ?", [namespace, path])
 
-    def reconcile_segments(self, namespace: str, segments: Sequence[SegmentRow]) -> None:
-        """Replace this namespace's segment rows wholesale (startup recovery).
-
-        Parquet files on disk are authoritative across crashes; on every
-        ``DiskLogNamespace`` boot we discover the on-disk segment set and
-        push it through this method so the catalog matches reality. The
-        prior rows' ``copied_at_ms`` stamps are carried forward for
-        unchanged paths so a successfully-uploaded segment doesn't lose
-        its eviction-eligible flag across a restart.
-        """
-        with transactional(self._conn):
-            prior_copied = {
-                row[0]: row[1]
-                for row in self._conn.execute(
-                    "SELECT path, copied_at_ms FROM segments WHERE namespace = ?",
-                    [namespace],
-                ).fetchall()
-            }
-            self._conn.execute("DELETE FROM segments WHERE namespace = ?", [namespace])
-            for seg in segments:
-                if seg.copied_at_ms is None:
-                    stamp = prior_copied.get(seg.path)
-                    if stamp is not None:
-                        seg = replace(seg, copied_at_ms=stamp)
-                self.upsert_segment(seg)
-
     def aggregate_namespace_stats(self, namespace: str) -> NamespaceStats:
         """Single-namespace aggregate over the segments table."""
         row = self._conn.execute(
@@ -299,41 +296,19 @@ class Catalog:
             segment_count=int(row[4]),
         )
 
-    def mark_copied(self, namespace: str, path: str, copied_at_ms: int) -> None:
-        """Record successful remote upload of one segment."""
+    def set_location(self, namespace: str, path: str, location: SegmentLocation) -> None:
+        """Update one segment's ``location`` (after upload completes / eviction)."""
         self._conn.execute(
-            "UPDATE segments SET copied_at_ms = ? WHERE namespace = ? AND path = ?",
-            [copied_at_ms, namespace, path],
+            "UPDATE segments SET location = ? WHERE namespace = ? AND path = ?",
+            [location.value, namespace, path],
         )
-
-    def list_pending_copies(self) -> list[SegmentRow]:
-        """All L>=1 rows whose remote upload has not yet completed.
-
-        Ordered by ``min_seq`` so we drain oldest-first across the whole
-        store. This is the copy worker's only view into the catalog.
-        """
-        rows = self._conn.execute(
-            f"""
-            SELECT {self._SEGMENT_COLUMNS}
-            FROM segments
-            WHERE level >= 1
-              AND copied_at_ms IS NULL
-            ORDER BY namespace, min_seq
-            """
-        ).fetchall()
-        return [self._row_from_tuple(r) for r in rows]
 
     def select_eviction_candidate(self, namespace: str) -> SegmentRow | None:
         """Pick the oldest evictable segment in ``namespace``.
 
-        Eligibility:
-
-        * ``level >= 1`` — L0 is local-only and transient, so it's never
-          evicted.
-        * ``copied_at_ms IS NOT NULL`` — a freshly compacted segment
-          becomes evictable only after the upload worker confirms the
-          remote copy is durable.
-
+        Eligibility: ``level >= 1`` (L0 is local-only and transient, so
+        never evicted) and ``location = 'BOTH'`` (a compaction output
+        becomes evictable only once the remote copy is durable).
         Returns the ``SegmentRow`` with the smallest ``min_seq``, or
         ``None`` when no eligible segment exists.
         """
@@ -343,11 +318,11 @@ class Catalog:
             FROM segments
             WHERE namespace = ?
               AND level >= 1
-              AND copied_at_ms IS NOT NULL
+              AND location = ?
             ORDER BY min_seq ASC
             LIMIT 1
             """,
-            [namespace],
+            [namespace, SegmentLocation.BOTH.value],
         ).fetchone()
         if row is None:
             return None

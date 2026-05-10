@@ -10,7 +10,15 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
     CANARY_ACCELERATOR   tpu | gpu
     CANARY_BATCH_SIZE    per-device batch size
     CANARY_CACHE_COPY_MAX_WORKERS gpu-only cache-copy worker cap
+    CANARY_GPU_TYPE      gpu-only accelerator type, e.g. H100, GH200, B200
+    CANARY_GPU_COUNT     gpu-only accelerator count per replica
+    CANARY_GPU_REPLICAS  gpu-only replica count
+    CANARY_PROFILER_ENABLED true | false
+    CANARY_PROFILER_NUM_STEPS profiler duration in steps
+    CANARY_PROFILER_START_STEP profiler start step
+    CANARY_STEPS         explicit training step count; overrides CANARY_TARGET_TOKENS
     CANARY_TARGET_TOKENS total training tokens
+    CANARY_TRACKER       wandb | json_logger
     RUN_ID               unique run identifier
 """
 
@@ -22,6 +30,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.data.text import BlockShuffleConfig, TextLmDatasetFormat
 from levanter.optim import AdamConfig
+from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize.data_configs import lm_data_config
@@ -57,6 +66,13 @@ def _env_int(key: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def _env_bool(key: str, default: bool) -> bool:
+    raw = os.environ.get(key, "")
+    if not raw:
+        return default
+    return raw.lower() in ("1", "true")
+
+
 def _build_step_from_env() -> ExecutorStep:
     accelerator = os.environ.get("CANARY_ACCELERATOR", "tpu")
     if accelerator not in ("tpu", "gpu"):
@@ -80,10 +96,13 @@ def _build_step_from_env() -> ExecutorStep:
         wandb_group = "canary-ferry-moe"
         wandb_tags = ["canary", "ferry", "grug", "moe"]
     else:
-        multi_host = os.environ.get("CANARY_MULTI_HOST", "").lower() in ("1", "true")
         batch_size = _env_int("CANARY_BATCH_SIZE", 32)
         cache_copy_max_workers = _env_int("CANARY_CACHE_COPY_MAX_WORKERS", 12)
         target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len * 50)
+        gpu_type = os.environ.get("CANARY_GPU_TYPE", "H100")
+        gpu_count = _env_int("CANARY_GPU_COUNT", 8)
+        gpu_replicas = _env_int("CANARY_GPU_REPLICAS", 1)
+
         # SlimPajama-6B with block-shuffle — small dataset, re-tokenized on first run.
         tokenize_step = default_tokenize(
             name="slimpajama-6b-cw",
@@ -104,24 +123,41 @@ def _build_step_from_env() -> ExecutorStep:
             training_set=tokenize_step,
             shuffle=BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel"),
         )
-        if multi_host:
-            name = "canary-ferry-cw-multihost"
-            resources = ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="256g", disk="256g", replicas=2)
-            wandb_group = "canary-ferry-moe-gpu-multihost"
-            wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", "multihost"]
-        else:
-            name = "canary-ferry-cw"
-            resources = ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="256g", disk="256g")
-            wandb_group = "canary-ferry-moe-gpu"
-            wandb_tags = ["canary", "ferry", "grug", "moe", "gpu"]
+        resources = ResourceConfig.with_gpu(
+            gpu_type,
+            count=gpu_count,
+            cpu=32,
+            ram="256g",
+            disk="256g",
+            replicas=gpu_replicas,
+        )
+        name = f"canary-ferry-cw-{gpu_type.lower()}x{gpu_count}-r{gpu_replicas}"
+        wandb_group = f"canary-ferry-moe-gpu-{gpu_type.lower()}-r{gpu_replicas}"
+        wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", gpu_type.lower()]
         eval_config = None
 
-    num_steps = target_tokens // (batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len)
+    num_steps = _env_int("CANARY_STEPS", target_tokens // (batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len))
     if num_steps <= 0:
         raise ValueError(
-            f"CANARY_TARGET_TOKENS={target_tokens} too small for batch_size={batch_size} "
-            f"x seq_len={GRUG_MOE_TRIAL_MODEL.max_seq_len} -- would produce 0 steps"
+            f"CANARY_STEPS={num_steps} invalid; set CANARY_STEPS or CANARY_TARGET_TOKENS high enough for "
+            f"batch_size={batch_size} x seq_len={GRUG_MOE_TRIAL_MODEL.max_seq_len}"
         )
+    if os.environ.get("CANARY_TRACKER", "wandb").lower() == "json_logger":
+        tracker = JsonLoggerConfig(logger_name=os.environ.get("CANARY_JSON_LOGGER", "canary_ferry.metrics"))
+    else:
+        tracker = WandbConfig(
+            entity=os.environ.get("WANDB_ENTITY") or None,
+            project=os.environ.get("WANDB_PROJECT", "marin"),
+            tags=wandb_tags,
+            group=wandb_group,
+            mode=os.environ.get("CANARY_WANDB_MODE") or os.environ.get("WANDB_MODE") or None,
+            name=None,
+            replicate_path=this_output_path(),
+        )
+
+    profiler_enabled = _env_bool("CANARY_PROFILER_ENABLED", True)
+    profiler_start_step = _env_int("CANARY_PROFILER_START_STEP", 5)
+    profiler_num_steps = _env_int("CANARY_PROFILER_NUM_STEPS", 25)
 
     return ExecutorStep(
         name=f"{name}-{run_id}",
@@ -136,17 +172,15 @@ def _build_step_from_env() -> ExecutorStep:
             batch_size=versioned(batch_size),
             seed=versioned(0),
             mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-            tracker=WandbConfig(
-                project="marin",
-                tags=wandb_tags,
-                group=wandb_group,
-                name=None,
-                replicate_path=this_output_path(),
-            ),
+            tracker=tracker,
             optimizer=versioned(CANARY_OPTIMIZER),
             grug_trainer=versioned(CANARY_TRAINER),
             eval=versioned(eval_config) if eval_config is not None else None,
-            profiler=ProfilerConfig(enabled=True),
+            profiler=ProfilerConfig(
+                enabled=profiler_enabled,
+                start_step=profiler_start_step,
+                num_steps=profiler_num_steps,
+            ),
         ),
     )
 

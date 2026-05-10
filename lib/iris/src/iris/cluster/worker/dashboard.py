@@ -41,26 +41,21 @@ class WorkerDashboard:
         rpc_wsgi_app = WorkerServiceWSGIApplication(service=self._service, compressions=IRIS_RPC_COMPRESSIONS)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
+        # Vue Router handles client-side routing, so every SPA path serves the same shell.
         routes = [
             Route("/health", self._health),
             Route("/", self._dashboard),
             favicon_route(),
-            Route("/task/{task_id:path}", self._task_detail_page),
-            Route("/status", self._status_page),
+            Route("/task/{task_id:path}", self._dashboard),
+            Route("/status", self._dashboard),
             static_files_mount(),
             Mount(rpc_wsgi_app.path, app=rpc_app),
         ]
         return Starlette(routes=routes)
-
-    def _status_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("worker"))
 
     def _health(self, _request: Request) -> JSONResponse:
         """Simple health check endpoint for bootstrap and load balancers."""
         return JSONResponse({"status": "healthy"})
 
     def _dashboard(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("worker"))
-
-    def _task_detail_page(self, request: Request) -> HTMLResponse:
         return HTMLResponse(html_shell("worker"))

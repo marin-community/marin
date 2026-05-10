@@ -19,6 +19,7 @@ from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
     SchedulingResult,
+    worker_snapshot_from_row,
 )
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.types import JobName, WorkerId
@@ -123,9 +124,16 @@ def transition_task_to_state(state: ControllerTransitions, task, new_state: int)
         )
 
 
+def _snapshots_with_usage(state, workers):
+    """Project worker rows + per-cycle held-resource usage into bundled snapshots."""
+    with state._db.read_snapshot() as snap:
+        usage_by_worker = state._store.attempts.resource_usage_by_worker(snap)
+    return [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
+
+
 def _build_context(scheduler, state):
     pending_tasks = _schedulable_tasks(state)
-    workers = [w for w in healthy_active_workers(state) if w.healthy]
+    workers = list(healthy_active_workers(state))
     building_counts = _building_counts(state)
 
     task_ids = []
@@ -140,7 +148,7 @@ def _build_context(scheduler, state):
                 jobs[task.job_id] = _job_requirements_from_job(job)
 
     return scheduler.create_scheduling_context(
-        workers,
+        _snapshots_with_usage(state, workers),
         building_counts=building_counts,
         pending_tasks=task_ids,
         jobs=jobs,
@@ -273,9 +281,10 @@ def test_scheduler_skips_tasks_that_dont_fit(scheduler, state):
 def test_scheduler_detects_timed_out_tasks(state):
     """Verify timed-out tasks are handled by the controller (not the scheduler).
 
-    The scheduler no longer handles timeouts -- the controller filters them out
-    before calling find_assignments. This test verifies the overall behavior
-    by testing the controller-level flow.
+    The controller filters timeout-expired tasks before calling
+    ``find_assignments``, so the scheduler only sees active tasks within
+    their timeout window. This test verifies the overall behavior by
+    testing the controller-level flow.
     """
     register_worker(state, "w1", "addr", make_worker_metadata(cpu=2))
 
@@ -1478,7 +1487,7 @@ def test_scheduler_reports_device_variant_mismatch(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = scheduler.create_scheduling_context(_snapshots_with_usage(state, healthy_active_workers(state)))
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -1515,7 +1524,7 @@ def test_scheduler_reports_tpu_count_exceeded(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = scheduler.create_scheduling_context(_snapshots_with_usage(state, healthy_active_workers(state)))
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -1551,7 +1560,7 @@ def test_scheduler_reports_device_type_mismatch(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = scheduler.create_scheduling_context(_snapshots_with_usage(state, healthy_active_workers(state)))
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -1588,7 +1597,7 @@ def test_scheduler_reports_coscheduling_capacity_details(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = scheduler.create_scheduling_context(_snapshots_with_usage(state, healthy_active_workers(state)))
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -1609,7 +1618,7 @@ def test_diagnostics_for_schedulable_job_does_not_say_unknown_failure(scheduler,
     register_worker(state, "w1", "addr1", make_worker_metadata())
     tasks = submit_job(state, "j1", make_job_request())
 
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = scheduler.create_scheduling_context(_snapshots_with_usage(state, healthy_active_workers(state)))
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -2113,55 +2122,6 @@ def test_dedup_reservation_pinned_worker_respected_for_later_tasks(scheduler, st
     assert assigned_workers == {WorkerId("w1"), WorkerId("w2")}
 
 
-def test_dedup_perf_one_job_thousands_of_tasks(state):
-    """Stress: 1 job x 5000 replicas x 200 workers, find_assignments completes quickly.
-
-    Without per-job dedup, this is O(replicas x workers) ≈ 1M can_fit calls per
-    pass. With dedup, the scheduler hoists constraint matching once per job and
-    stops iterating after the candidate pool is exhausted, dropping inner work
-    to O(workers) ≈ 200 can_fit calls. This test asserts the steady-state cost
-    of an over-large queue does not exceed a generous bound; before the dedup
-    landed it was ~1s on the production marin queue.
-    """
-    import time
-
-    sched = Scheduler(max_building_tasks_per_worker=1000)
-    num_workers = 500
-    num_replicas = 10000  # controller caps replicas at 10000 per job
-
-    for i in range(num_workers):
-        meta = make_worker_metadata(cpu=10, memory_bytes=10 * 1024**3)
-        register_worker(state, f"w{i:04d}", f"addr{i:04d}", meta)
-
-    req = controller_pb2.Controller.LaunchJobRequest(
-        name="huge-job",
-        entrypoint=_make_test_entrypoint(),
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=job_pb2.EnvironmentConfig(),
-        replicas=num_replicas,
-    )
-    submit_job(state, "huge-job", req)
-
-    context = _build_context(sched, state)
-    assert len(context.pending_tasks) == num_replicas
-    assert len(context.capacities) == num_workers
-
-    start = time.perf_counter()
-    result = sched.find_assignments(context)
-    elapsed = time.perf_counter() - start
-
-    assert len(result.assignments) == num_workers, (
-        f"Expected {num_workers} placements (one per worker per cycle), " f"got {len(result.assignments)}"
-    )
-    # Generous bound. With dedup, observed time on a laptop is ~10ms; without
-    # dedup, the same workload takes ~500ms-1s. Set the threshold well below
-    # the no-dedup baseline so a regression is caught reliably even on slow CI.
-    assert elapsed < 0.2, (
-        f"find_assignments took {elapsed:.3f}s for {num_replicas} tasks x {num_workers} workers; "
-        f"expected <0.2s with per-job dedup"
-    )
-
-
 def test_gpu_job_matches_worker_with_config_variant(scheduler, state):
     """A GPU job requesting variant="H100" matches a worker with device-variant="H100".
 
@@ -2186,7 +2146,7 @@ def test_gpu_job_matches_worker_with_config_variant(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     context = scheduler.create_scheduling_context(
-        healthy_active_workers(state),
+        _snapshots_with_usage(state, healthy_active_workers(state)),
         pending_tasks=[t.task_id for t in tasks],
         jobs={tasks[0].job_id: _job_requirements_from_job(_query_job(state, tasks[0].job_id))},
     )

@@ -206,7 +206,7 @@ harbor = [
 ]
 
 dedup = [
-    "dupekit",
+    "marin-dupekit",
 ]
 
 math = ["pylatexenc", "sympy"]

@@ -48,17 +48,16 @@ def load_autoscaler_checkpoint(db: ControllerDB) -> AutoscalerCheckpoint:
             },
         )
         slice_rows = snapshot.raw(
-            "SELECT slice_id, scale_group, lifecycle, worker_ids, "
-            "created_at_ms, last_active_ms, error_message "
-            "FROM slices",
+            "SELECT slice_id, scale_group, lifecycle, worker_ids, " "created_at_ms, error_message " "FROM slices",
             decoders={
                 "worker_ids": _decode_json_list,
                 "created_at_ms": decode_timestamp_ms,
-                "last_active_ms": decode_timestamp_ms,
             },
         )
+        # Failed workers have their DB row deleted (WorkerStore.remove), so
+        # surviving rows with a slice are by definition the live tracked set.
         tracked_rows = snapshot.raw(
-            "SELECT worker_id, slice_id, scale_group, address FROM workers WHERE slice_id != '' AND active = 1",
+            "SELECT worker_id, slice_id, scale_group, address FROM workers WHERE slice_id != ''",
         )
 
     slices_by_group: dict[str, list[SliceSnapshot]] = {}
@@ -70,7 +69,6 @@ def load_autoscaler_checkpoint(db: ControllerDB) -> AutoscalerCheckpoint:
                 lifecycle=row.lifecycle,
                 worker_ids=row.worker_ids,
                 created_at_ms=row.created_at_ms.epoch_ms(),
-                last_active_ms=row.last_active_ms.epoch_ms(),
                 error_message=row.error_message,
             )
         )

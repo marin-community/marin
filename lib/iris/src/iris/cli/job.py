@@ -52,7 +52,6 @@ from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
 from iris.rpc.proto_utils import (
     PRIORITY_BAND_NAMES,
-    format_resources,
     job_state_friendly,
     priority_band_value,
     task_state_friendly,
@@ -1008,7 +1007,6 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
         click.echo("No jobs found.")
         return
 
-    # Build table rows
     rows: list[list[str]] = []
     has_reasons = False
 
@@ -1016,23 +1014,19 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
         job_id = j.job_id
         state_name = job_state_friendly(j.state)
         submitted = timestamp_from_proto(j.submitted_at).as_formatted_date() if j.submitted_at.epoch_ms else "-"
-        resources = format_resources(j.resources) if j.HasField("resources") else "-"
 
-        # Show error for failed jobs, pending_reason for pending/unschedulable
         reason = j.error or j.pending_reason or ""
         if reason:
             has_reasons = True
-            # Truncate long reasons
             reason = (reason[:60] + "...") if len(reason) > 63 else reason
 
-        rows.append([job_id, state_name, resources, submitted, reason])
+        rows.append([job_id, state_name, submitted, reason])
 
-    # Build headers - only include REASON column if there are any reasons
     if has_reasons:
-        headers = ["JOB ID", "STATE", "RESOURCES", "SUBMITTED", "REASON"]
+        headers = ["JOB ID", "STATE", "SUBMITTED", "REASON"]
     else:
-        headers = ["JOB ID", "STATE", "RESOURCES", "SUBMITTED"]
-        rows = [row[:4] for row in rows]
+        headers = ["JOB ID", "STATE", "SUBMITTED"]
+        rows = [row[:3] for row in rows]
 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
 

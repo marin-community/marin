@@ -76,6 +76,7 @@ class GrugRunConfig:
     model: GrugModelConfig
     data: LmDataConfig
     resources: ResourceConfig
+    output_path: str = ""
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)

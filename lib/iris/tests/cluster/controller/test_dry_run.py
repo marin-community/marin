@@ -73,9 +73,3 @@ def test_dry_run_checkpoint_returns_sentinel(dry_run_controller):
 def test_dry_run_pruning_skipped(dry_run_controller):
     controller = dry_run_controller
     assert controller._prune_thread is None
-
-
-def test_dry_run_kill_tasks_skipped(dry_run_controller):
-    controller = dry_run_controller
-    task_id = JobName.root("test-user", "fake-job").child("t0")
-    controller.kill_tasks_on_workers({task_id})

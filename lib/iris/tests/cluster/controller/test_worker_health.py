@@ -8,7 +8,11 @@ Exercises the two independent termination paths:
 - Build failures (monotonic counter, independent of pings)
 """
 
+from pathlib import Path
+
 import pytest
+from iris.cluster.controller.db import ControllerDB, healthy_active_workers_with_attributes
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import WorkerId
 
@@ -96,3 +100,32 @@ def test_snapshot_reports_both_counters(tracker: WorkerHealthTracker) -> None:
     for _ in range(2):
         tracker.build_failed(wid)
     assert tracker.snapshot() == {wid: (3, 2)}
+
+
+def test_controller_store_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
+    """A fresh ControllerStore must mark every persisted worker healthy on boot.
+
+    Without this seed (regression target), a controller restart hides every
+    pre-existing worker from ``healthy_active_workers_with_attributes`` until
+    the next ping cycle — the scheduler then makes no assignments.
+    """
+    db = ControllerDB(db_dir=tmp_path)
+    try:
+        with db.transaction() as cur:
+            cur.execute("INSERT INTO workers (worker_id, address) VALUES (?, ?)", ("w-seed-1", "10.0.0.1:8080"))
+            cur.execute("INSERT INTO workers (worker_id, address) VALUES (?, ?)", ("w-seed-2", "10.0.0.2:8080"))
+
+        store = ControllerStore(db)
+
+        liveness_one = store.health.liveness(WorkerId("w-seed-1"))
+        liveness_two = store.health.liveness(WorkerId("w-seed-2"))
+        assert liveness_one.healthy and liveness_one.active
+        assert liveness_two.healthy and liveness_two.active
+        assert liveness_one.last_heartbeat_ms > 0
+        assert liveness_two.last_heartbeat_ms > 0
+
+        schedulable = healthy_active_workers_with_attributes(db, store.health)
+        ids = {str(w.worker_id) for w in schedulable}
+        assert ids == {"w-seed-1", "w-seed-2"}
+    finally:
+        db.close()

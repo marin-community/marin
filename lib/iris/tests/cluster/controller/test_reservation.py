@@ -35,9 +35,8 @@ from iris.cluster.controller.controller import (
     _worker_matches_reservation_entry,
     job_requirements_from_job,
 )
-from iris.cluster.controller.db import task_row_can_be_scheduled
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
-from iris.cluster.controller.schema import WorkerRow
+from iris.cluster.controller.db import SchedulableWorker, task_row_can_be_scheduled
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext, worker_snapshot_from_row
 from iris.cluster.controller.transitions import (
     RESERVATION_HOLDER_JOB_NAME,
     Assignment,
@@ -134,8 +133,7 @@ def _make_worker(
     worker_id: str,
     metadata: job_pb2.WorkerMetadata | None = None,
     attributes: dict[str, AttributeValue] | None = None,
-    healthy: bool = True,
-) -> WorkerRow:
+) -> SchedulableWorker:
     meta = metadata or _cpu_metadata()
     # Workers always have device attributes from config (Stage 3).
     # Merge explicit attributes on top of the device-derived defaults.
@@ -148,17 +146,9 @@ def _make_worker(
     total_mem = meta.memory_bytes
     total_gpu = meta.gpu_count
     total_tpu = 1 if meta.tpu_name else 0
-    return WorkerRow(
+    return SchedulableWorker(
         worker_id=WorkerId(worker_id),
         address=f"{worker_id}:8080",
-        healthy=healthy,
-        active=True,
-        consecutive_failures=0,
-        last_heartbeat=Timestamp.now(),
-        committed_cpu_millicores=0,
-        committed_mem=0,
-        committed_gpu=0,
-        committed_tpu=0,
         total_cpu_millicores=total_cpu,
         total_memory_bytes=total_mem,
         total_gpu_count=total_gpu,
@@ -166,10 +156,6 @@ def _make_worker(
         device_type=dt,
         device_variant=dv,
         attributes=default_attrs,
-        available_cpu_millicores=total_cpu,
-        available_memory=total_mem,
-        available_gpus=total_gpu,
-        available_tpus=total_tpu,
     )
 
 
@@ -455,7 +441,7 @@ def test_claim_idempotent(ctrl):
 
 
 def test_cleanup_removes_dead_worker_claims(ctrl):
-    """Claims for workers no longer in state are removed."""
+    """Claims referencing workers absent from controller state are pruned."""
     w1 = _register_worker(ctrl.state, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
@@ -569,13 +555,18 @@ def test_gate_satisfied_for_jobs_without_reservation(ctrl):
 # =============================================================================
 
 
+def _make_snapshot(worker_id: str, **kwargs):
+    """Project a freshly-built SchedulableWorker into the bundled WorkerSnapshot."""
+    return worker_snapshot_from_row(_make_worker(worker_id, **kwargs))
+
+
 def test_taint_injection_adds_attribute_to_claimed_workers():
     """Claimed workers get the reservation-job attribute set to the job ID."""
-    w1 = _make_worker("w1")
-    w2 = _make_worker("w2")
+    s1 = _make_snapshot("w1")
+    s2 = _make_snapshot("w2")
     claims = {WorkerId("w1"): ReservationClaim(job_id="job-a", entry_idx=0)}
 
-    result = _inject_reservation_taints([w1, w2], claims)
+    result = _inject_reservation_taints([s1, s2], claims)
 
     # w1 should have the taint
     tainted = [w for w in result if w.worker_id == WorkerId("w1")]
@@ -586,11 +577,11 @@ def test_taint_injection_adds_attribute_to_claimed_workers():
 
 def test_taint_injection_unclaimed_workers_no_attribute():
     """Unclaimed workers do not get the reservation-job attribute."""
-    w1 = _make_worker("w1")
-    w2 = _make_worker("w2")
+    s1 = _make_snapshot("w1")
+    s2 = _make_snapshot("w2")
     claims = {WorkerId("w1"): ReservationClaim(job_id="job-a", entry_idx=0)}
 
-    result = _inject_reservation_taints([w1, w2], claims)
+    result = _inject_reservation_taints([s1, s2], claims)
 
     unclaimed = [w for w in result if w.worker_id == WorkerId("w2")]
     assert len(unclaimed) == 1
@@ -599,13 +590,13 @@ def test_taint_injection_unclaimed_workers_no_attribute():
 
 def test_taint_injection_claimed_workers_first():
     """Claimed workers appear before unclaimed workers in the returned list."""
-    w1 = _make_worker("w1")
-    w2 = _make_worker("w2")
-    w3 = _make_worker("w3")
+    s1 = _make_snapshot("w1")
+    s2 = _make_snapshot("w2")
+    s3 = _make_snapshot("w3")
     # Only w2 is claimed
     claims = {WorkerId("w2"): ReservationClaim(job_id="job-a", entry_idx=0)}
 
-    result = _inject_reservation_taints([w1, w2, w3], claims)
+    result = _inject_reservation_taints([s1, s2, s3], claims)
 
     assert result[0].worker_id == WorkerId("w2")
     unclaimed_ids = [w.worker_id for w in result[1:]]
@@ -614,26 +605,25 @@ def test_taint_injection_claimed_workers_first():
 
 def test_taint_injection_no_claims_returns_original_list():
     """When there are no claims, the original list is returned unchanged."""
-    w1 = _make_worker("w1")
-    w2 = _make_worker("w2")
+    s1 = _make_snapshot("w1")
+    s2 = _make_snapshot("w2")
 
-    result = _inject_reservation_taints([w1, w2], {})
+    result = _inject_reservation_taints([s1, s2], {})
 
-    assert result == [w1, w2] or result == [w1, w2]
     # With no claims, the function returns the input list directly
     assert result[0].worker_id == WorkerId("w1")
     assert result[1].worker_id == WorkerId("w2")
 
 
 def test_taint_injection_does_not_mutate_original():
-    """The original worker objects are not mutated."""
-    w1 = _make_worker("w1")
-    original_attrs = dict(w1.attributes)
+    """The original snapshots are not mutated."""
+    s1 = _make_snapshot("w1")
+    original_attrs = dict(s1.attributes)
     claims = {WorkerId("w1"): ReservationClaim(job_id="job-a", entry_idx=0)}
 
-    _inject_reservation_taints([w1], claims)
+    _inject_reservation_taints([s1], claims)
 
-    assert w1.attributes == original_attrs
+    assert s1.attributes == original_attrs
 
 
 # =============================================================================
@@ -746,13 +736,14 @@ def test_taint_constraint_preserves_existing_constraints():
 
 
 def _build_context_with_workers(
-    workers: list[WorkerRow],
+    workers: list[SchedulableWorker],
     pending_tasks: list[JobName],
     jobs: dict[JobName, JobRequirements],
 ) -> SchedulingContext:
     scheduler = Scheduler()
+    snapshots = [worker_snapshot_from_row(w) for w in workers]
     return scheduler.create_scheduling_context(
-        workers,
+        snapshots,
         pending_tasks=pending_tasks,
         jobs=jobs,
     )
@@ -925,6 +916,7 @@ def test_region_constraint_injected_from_claimed_workers(ctrl):
         jid.to_wire(),
         ctrl.reservation_claims,
         ctrl._db,
+        ctrl.state._store.health,
         [],
     )
 
@@ -948,6 +940,7 @@ def test_region_constraint_not_injected_when_already_present(ctrl):
         jid.to_wire(),
         ctrl.reservation_claims,
         ctrl._db,
+        ctrl.state._store.health,
         [existing],
     )
 
@@ -967,6 +960,7 @@ def test_region_constraint_not_injected_when_no_region_attr(ctrl):
         jid.to_wire(),
         ctrl.reservation_claims,
         ctrl._db,
+        ctrl.state._store.health,
         [],
     )
 
@@ -990,6 +984,7 @@ def test_region_constraint_multiple_regions(ctrl):
         jid.to_wire(),
         ctrl.reservation_claims,
         ctrl._db,
+        ctrl.state._store.health,
         [],
     )
 
@@ -1013,6 +1008,7 @@ def test_no_injection_for_non_reservation_job(ctrl):
         "/test-user/unrelated-job",
         ctrl.reservation_claims,
         ctrl._db,
+        ctrl.state._store.health,
         [],
     )
 

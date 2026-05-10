@@ -25,6 +25,7 @@ from rigging.timing import Duration, Timestamp
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.log_store_helpers import task_log_key
 from iris.cluster.runtime.types import (
     ContainerConfig,
@@ -58,6 +59,7 @@ logger = logging.getLogger(__name__)
 
 # Trailing stderr lines scanned for TPU bad-node signatures on non-zero exit.
 _TPU_STDERR_TAIL_LINES = 200
+
 
 # Signal numbers for interpreting exit codes > 128
 _SIGNAL_NAMES = {
@@ -698,16 +700,17 @@ class TaskAttempt:
         )
         env = dict(iris_env)
 
-        # Expose the worker's region so child jobs can inherit a region
-        # constraint (e.g. when the parent holds a reservation).
-        from iris.cluster.constraints import WellKnownAttribute
+        env.update(self._task_env)
+        env.update(dict(self.request.environment.env_vars))
 
+        # Surface the worker's region so in-task code (e.g. the Marin
+        # executor) and IrisClient.submit_job's parent->child region
+        # inheritance can read it via get_job_info().worker_region.
+        # Set last: this is a physical fact about the worker, not a
+        # user-configurable preference, so task/user env_vars cannot spoof it.
         region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
         if region_attr and region_attr.string_value:
             env["IRIS_WORKER_REGION"] = region_attr.string_value
-
-        env.update(self._task_env)
-        env.update(dict(self.request.environment.env_vars))
 
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint

@@ -61,16 +61,21 @@ jobs:
           chmod 600 ~/.ssh/google_compute_engine
           chmod 644 ~/.ssh/google_compute_engine.pub
 
+      # If you change the iris flags below, also update the matching tier
+      # entry in scripts/datakit/submit_perf_run.py (TIERS["3"]) so the
+      # zephyr-perf skill's treatment job stays comparable to this baseline.
       - name: Submit datakit nemotron ferry
         id: submit
         shell: bash -l {0}
         run: |
-          # TODO: drop --memory=4G and --no-preemptible once the tokenize
-          # job is fixed.
+          set -euo pipefail
+          # TODO: drop --memory=4G/--enable-extra-resources and --no-preemptible
+          # once the tokenize job is fixed.
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
             --region=europe-west4 \
             --memory=4G --disk=5G --cpu=1 --extra=cpu \
+            --enable-extra-resources \
             --no-preemptible \
             --priority production \
             -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
@@ -81,6 +86,10 @@ jobs:
             -e HF_TOKEN "$HF_TOKEN" \
             -e FERRY_TEST_MAX_FILES "1000" \
             -- python -m experiments.ferries.datakit_nemotron_ferry)
+          if [ -z "$JOB_ID" ]; then
+            echo "iris job run produced no job id" >&2
+            exit 1
+          fi
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"
         env:
@@ -95,6 +104,26 @@ jobs:
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
             --github-output
+
+      - name: Capture perf report
+        if: success()
+        shell: bash -l {0}
+        run: |
+          uv run python scripts/datakit/collect_perf_metrics.py \
+            --job-id "${{ steps.submit.outputs.job_id }}" \
+            --iris-config "${{ env.IRIS_CONFIG }}" \
+            --status "$FERRY_STATUS_PATH" \
+            --report-name tier3 \
+            --out perf-report.json \
+            --gcs-prefix gs://marin-us-central1/infra/datakit/ferry_perf
+
+      - name: Upload perf report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: datakit-tier3-perf-report
+          path: perf-report.json
+          retention-days: 90
 
       - name: Capture failure diagnostics
         if: failure() || cancelled()

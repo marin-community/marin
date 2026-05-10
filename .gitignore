@@ -35,6 +35,9 @@ __pycache__/
 # C extensions
 *.so
 
+# pypa/gh-action-pypi-publish caches its Docker action manifest here.
+.github/.tmp/
+
 # Distribution / packaging
 .Python
 build/

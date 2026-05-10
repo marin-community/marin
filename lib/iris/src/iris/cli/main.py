@@ -18,6 +18,7 @@ from iris.cli.token_store import cluster_name_from_url, load_any_token, load_tok
 from iris.rpc import config_pb2, job_pb2
 from iris.rpc import controller_pb2 as _controller_pb2
 from iris.rpc.auth import AuthTokenInjector, GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
@@ -124,7 +125,13 @@ def rpc_client(
 ) -> ControllerServiceClientSync:
     """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``."""
     interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
-    return ControllerServiceClientSync(address, timeout_ms=timeout_ms, interceptors=interceptors)
+    return ControllerServiceClientSync(
+        address,
+        timeout_ms=timeout_ms,
+        interceptors=interceptors,
+        accept_compression=IRIS_RPC_COMPRESSIONS,
+        send_compression=None,
+    )
 
 
 def require_controller_url(ctx: click.Context) -> str:

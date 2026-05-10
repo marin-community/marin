@@ -194,14 +194,16 @@ def external_sort_merge(
             yield from chunk
 
     run_iters = [_read_run(p) for p in run_paths]
+    # All run files live under spill_dir; resolve once for batch cleanup so
+    # the finally block doesn't re-run url_to_fs per file.
+    fs_run_paths = [f"{spill_dir}/run-{i:04d}.spill" for i in range(len(run_paths))]
     try:
         yield from heapq.merge(*run_iters, key=merge_key)
     finally:
-        for path in run_paths:
+        if fs_run_paths:
             try:
-                rm_fs, rm_path = url_to_fs(path)
-                rm_fs.rm(rm_path)
+                spill_fs.rm(fs_run_paths)
             except Exception:
                 # Spill files live under a per-shard temp dir that the worker
-                # eventually wipes; log so a leaked file is at least traceable.
-                logger.warning("Failed to delete external-sort run file %s", path, exc_info=True)
+                # eventually wipes; log so leaked files are at least traceable.
+                logger.warning("Failed to delete external-sort run files under %s", spill_dir, exc_info=True)

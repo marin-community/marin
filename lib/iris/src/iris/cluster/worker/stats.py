@@ -10,7 +10,10 @@ Two namespaces:
 - ``iris.task`` — one row per attempt resource update. Replaces the
   controller's ``task_resource_history`` table.
 
-Both schemas use ``ts`` (TIMESTAMP_MS) as the ordering key. They are
+The ``iris.profile`` schema lives in ``iris.cluster.runtime.profile`` next to
+the capture machinery — see ``IrisProfile`` and ``PROFILE_NAMESPACE`` there.
+
+All schemas use a datetime column as the segment key. They are
 registered eagerly in ``Worker.start()`` via
 ``LogClient.get_table(<namespace>, <dataclass>)`` so schema mismatches surface
 on first ping rather than silently dropping rows.

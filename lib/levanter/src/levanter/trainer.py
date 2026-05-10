@@ -175,9 +175,8 @@ def _unify_model_and_model_init(model: Optional[M], model_init: Optional[Callabl
         if model_init is not None:
             raise ValueError("only one of model and model_init should be specified")
 
-        if model is not None:
-            # we can't just use `lambda: model` because JAX jit can't see captures, but it can see jax partials
-            model_init = jax.tree_util.Partial(lambda m: m, model)
+        # we can't just use `lambda: model` because JAX jit can't see captures, but it can see jax partials
+        model_init = jax.tree_util.Partial(lambda m: m, model)
     elif model_init is None:
         raise ValueError("one of model and model_init must be specified")
 

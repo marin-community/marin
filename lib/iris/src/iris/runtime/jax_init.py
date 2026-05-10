@@ -4,7 +4,7 @@
 """JAX distributed initialization via Iris endpoint registry.
 
 Task 0 registers its coordinator address; tasks 1..N-1 poll for it.
-Single-task jobs initialize explicitly as a one-process distributed runtime.
+Single-task jobs skip distributed init entirely — JAX defaults suffice.
 
 JAX is imported at call time — iris does not depend on jax.
 """
@@ -19,7 +19,7 @@ from rigging.timing import Duration, ExponentialBackoff
 
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
-from iris.cluster.client.job_info import JobInfo, get_job_info
+from iris.cluster.client.job_info import get_job_info
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +57,6 @@ def _log_jax_bootstrap_inputs(job_info, *, port: int, endpoint_name: str) -> Non
         port,
         env_snapshot or "none",
     )
-
-
-def _scoped_endpoint_name(job_info: JobInfo, endpoint_name: str) -> str:
-    """Scope the coordinator endpoint to this Iris job within the root namespace."""
-    normalized_endpoint_name = endpoint_name.strip("/")
-    return f"{normalized_endpoint_name}_{job_info.job_id.to_safe_token()}"
 
 
 def _poll_for_coordinator(
@@ -115,9 +109,13 @@ def initialize_jax(
     Iris endpoint registry, and tasks 1..N-1 poll until they discover it. All
     tasks then call jax.distributed.initialize with the coordinator address.
 
-    For single-task Iris jobs, initialization uses a one-process coordinator
-    so JAX subsystems that require distributed initialization, such as async
-    checkpointing, can still start consistently. Jobs outside Iris are skipped.
+    For single-task jobs (or when not running inside an Iris job),
+    initialization is skipped — JAX works correctly without distributed
+    init when there is only one process.
+
+    On TPU, JAX handles coordinator discovery via the TPU runtime, so this
+    function calls ``jax.distributed.initialize()`` with no arguments and
+    returns — the TPU runtime supplies all necessary addresses automatically.
 
     Args:
         port: Coordinator port. Overridden by IRIS_PORT_jax if allocated.
@@ -129,13 +127,21 @@ def initialize_jax(
     """
     import jax
 
-    job_info = get_job_info()
-    if job_info is None:
-        _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
+    # TPU has its own coordinator discovery via the TPU runtime, so avoid the
+    # Iris endpoint dance. We still call JAX distributed initialization to
+    # create the host-side distributed client used by Levanter multihost
+    # utilities. levanter.distributed delegates here when running under Iris
+    # (see lib/levanter/src/levanter/distributed.py initialize_distributed),
+    # so this is the single init site on the Iris+TPU path.
+    if os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get("JAX_PLATFORMS", "") == "tpu":
+        logger.info("TPU detected; initializing JAX distributed via TPU runtime autodiscovery")
+        jax.distributed.initialize()
         return
 
-    scoped_endpoint_name = _scoped_endpoint_name(job_info, endpoint_name)
-    _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=scoped_endpoint_name)
+    job_info = get_job_info()
+    _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
+    if job_info is None:
+        return
 
     if job_info.num_tasks <= 1:
         bound_port = job_info.ports.get("jax", port)
@@ -154,11 +160,11 @@ def initialize_jax(
         # all processes connect, so registering after would deadlock.
         # JAX's internal gRPC retry handles the brief window between
         # endpoint registration and the coordinator starting to listen.
-        endpoint_id = ctx.registry.register(scoped_endpoint_name, coordinator)
+        endpoint_id = ctx.registry.register(endpoint_name, coordinator)
         # Best-effort cleanup: if the process crashes, the controller's
         # cascade delete on task cleanup handles endpoint removal.
         atexit.register(ctx.registry.unregister, endpoint_id)
         jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
     else:
-        coordinator = _poll_for_coordinator(ctx.resolver, scoped_endpoint_name, poll_timeout, poll_interval)
+        coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
         jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
