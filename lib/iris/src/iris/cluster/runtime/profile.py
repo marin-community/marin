@@ -319,11 +319,6 @@ def _run_memray_profile(pid: str, duration_seconds: int, memory_config: job_pb2.
             Path(output_path).unlink(missing_ok=True)
 
 
-def is_system_target(target: str) -> bool:
-    """Return True if the target refers to the local process rather than a task."""
-    return target == SYSTEM_PROCESS_TARGET
-
-
 def parse_profile_target(target: str) -> TaskAttempt:
     """Parse a task target string into a TaskAttempt.
 
@@ -361,7 +356,7 @@ def build_profile_row(
     duration_seconds: int,
     profile_type: job_pb2.ProfileType,
     profile_data: bytes,
-    trigger: str = ProfileTrigger.ON_DEMAND.value,
+    trigger: ProfileTrigger = ProfileTrigger.ON_DEMAND,
 ) -> IrisProfile:
     """Construct one ``IrisProfile`` row from a completed capture.
 
@@ -383,7 +378,7 @@ def build_profile_row(
             duration_seconds=duration_seconds,
             type=ProfileType.CPU.value,
             format=cpu_spec.py_spy_format,
-            trigger=ProfileTrigger(trigger).value,
+            trigger=trigger.value,
             rate_hz=cpu_spec.rate_hz,
             native=cpu_spec.native,
             profile_data=profile_data,
@@ -399,7 +394,7 @@ def build_profile_row(
             duration_seconds=duration_seconds,
             type=ProfileType.MEMORY.value,
             format=fmt.value,
-            trigger=ProfileTrigger(trigger).value,
+            trigger=trigger.value,
             leaks=memory_spec.leaks,
             profile_data=profile_data,
         )
@@ -412,7 +407,7 @@ def build_profile_row(
             duration_seconds=duration_seconds,
             type=ProfileType.THREAD.value,
             format=ProfileFormat.RAW.value,
-            trigger=ProfileTrigger(trigger).value,
+            trigger=trigger.value,
             locals_dump=bool(profile_type.threads.locals),
             profile_data=profile_data,
         )

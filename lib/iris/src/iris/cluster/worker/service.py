@@ -12,7 +12,7 @@ from connectrpc.request import RequestContext
 from rigging.timing import Timer
 
 from iris.cluster.process_status import get_process_status as _get_process_status
-from iris.cluster.runtime.profile import is_system_target, parse_profile_target
+from iris.cluster.runtime.profile import ProfileTrigger
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import rpc_error_handler
@@ -39,10 +39,9 @@ class TaskProvider(Protocol):
     def capture_and_log_profile(
         self,
         *,
-        source: str,
-        attempt_id: int | None,
+        target: str,
         request: job_pb2.ProfileTaskRequest,
-        trigger: str,
+        trigger: ProfileTrigger,
     ) -> bytes: ...
     def exec_in_container(
         self, task_id: str, command: list[str], timeout_seconds: int = 60
@@ -125,22 +124,10 @@ class WorkerServiceImpl:
             try:
                 if not request.HasField("profile_type"):
                     raise ValueError("profile_type is required")
-
-                if is_system_target(request.target):
-                    data = self._provider.capture_and_log_profile(
-                        source=request.target,
-                        attempt_id=None,
-                        request=request,
-                        trigger="on_demand",
-                    )
-                    return job_pb2.ProfileTaskResponse(profile_data=data)
-
-                target = parse_profile_target(request.target)
                 data = self._provider.capture_and_log_profile(
-                    source=request.target,
-                    attempt_id=target.attempt_id,
+                    target=request.target,
                     request=request,
-                    trigger="on_demand",
+                    trigger=ProfileTrigger.ON_DEMAND,
                 )
                 return job_pb2.ProfileTaskResponse(profile_data=data)
             except Exception as e:

@@ -90,12 +90,10 @@ async function downloadProfile(row: ProfileHistoryRow) {
     if (!resp.ok) throw new Error(`Query: ${resp.status} ${resp.statusText}`)
     const payload = await resp.json() as QueryResponse
     if (!payload.arrowIpc) return
-    interface FetchRow { profile_data?: string; type?: string; format?: string }
+    interface FetchRow { profile_data?: Uint8Array; type?: string; format?: string }
     const fetched = decodeArrowIpc(payload.arrowIpc).rows as FetchRow[]
     if (!fetched.length || !fetched[0].profile_data) return
-    const bin = atob(fetched[0].profile_data)
-    const bytes = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    const bytes = fetched[0].profile_data
     const ext = profileExtension(fetched[0].format)
     const ts = row.captured_at.replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+/, '')
     const label = props.downloadLabel || defaultLabel(props.source)

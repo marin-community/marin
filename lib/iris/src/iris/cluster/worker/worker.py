@@ -22,6 +22,7 @@ from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.profile import (
     PROFILE_NAMESPACE,
     IrisProfile,
+    ProfileTrigger,
     build_profile_row,
     parse_profile_target,
     profile_local_process,
@@ -1089,16 +1090,17 @@ class Worker:
             if stop_event.is_set():
                 break
             limiter.mark_run()
-            for attempt in [a for a in self._tasks.values() if a.status == job_pb2.TASK_STATE_RUNNING]:
+            with self._lock:
+                running = [a for a in self._tasks.values() if a.status == job_pb2.TASK_STATE_RUNNING]
+            for attempt in running:
                 if stop_event.is_set():
                     break
-                source = f"{attempt.task_id.to_wire()}:{attempt.attempt_id}"
+                target = TaskAttemptId(task_id=attempt.task_id, attempt_id=attempt.attempt_id).to_wire()
                 try:
                     self.capture_and_log_profile(
-                        source=source,
-                        attempt_id=attempt.attempt_id,
+                        target=target,
                         request=cpu_request,
-                        trigger="periodic",
+                        trigger=ProfileTrigger.PERIODIC,
                     )
                 except Exception:
                     logger.exception(
@@ -1110,52 +1112,58 @@ class Worker:
     def capture_and_log_profile(
         self,
         *,
-        source: str,
-        attempt_id: int | None,
+        target: str,
         request: job_pb2.ProfileTaskRequest,
-        trigger: str,
+        trigger: ProfileTrigger,
     ) -> bytes:
-        """Profile ``source`` and write one ``IrisProfile`` row; returns the captured bytes.
+        """Profile ``target`` and write one ``IrisProfile`` row; returns the captured bytes.
 
-        - ``source == "/system/process"``: profile this worker process. The row's
-          ``source`` is rewritten to ``"/system/worker/<id>"``.
-        - Otherwise: ``source`` is a task wire target; the matching attempt must
-          be ``RUNNING`` or a ``RuntimeError`` is raised.
+        ``target`` is one of:
+          - ``"/system/process"``: this worker process. The row's ``source`` is
+            rewritten to ``"/system/worker/<id>"``.
+          - ``"/job/.../task/N"``: bare task wire. Falls back to the most recent
+            attempt for that task.
+          - ``"/job/.../task/N:<attempt_id>"``: a specific attempt.
+
+        For task targets the resolved attempt must be ``RUNNING``.
         """
         duration = request.duration_seconds or self._profile_duration_seconds
         assert self._worker_id, "worker_id required before capturing profiles"
 
-        if source == "/system/process":
+        if target == "/system/process":
             data = profile_local_process(duration, request.profile_type)
             row_source = f"/system/worker/{self._worker_id}"
             row_attempt_id: int | None = None
         else:
-            target = parse_profile_target(source)
-            task_id_wire = target.task_id.to_wire()
-            resolved_attempt_id = target.attempt_id if target.attempt_id is not None else attempt_id
+            parsed = parse_profile_target(target)
+            task_id_wire = parsed.task_id.to_wire()
+            resolved_attempt_id = parsed.attempt_id
             if resolved_attempt_id is None:
-                raise RuntimeError(f"profile target missing attempt_id: {source}")
+                current = self._get_current_attempt(task_id_wire)
+                if current is None:
+                    raise RuntimeError(f"no attempts for task {task_id_wire}")
+                resolved_attempt_id = current.attempt_id
             attempt = self._tasks.get((task_id_wire, resolved_attempt_id))
             if attempt is None or attempt.status != job_pb2.TASK_STATE_RUNNING:
                 raise RuntimeError("attempt no longer running")
             data = attempt.profile(duration, request.profile_type)
-            row_source = source
+            row_source = task_id_wire
             row_attempt_id = resolved_attempt_id
 
-        if self._profile_table is not None:
-            self._profile_table.write(
-                [
-                    build_profile_row(
-                        source=row_source,
-                        attempt_id=row_attempt_id,
-                        vm_id=self._worker_id,
-                        duration_seconds=duration,
-                        profile_type=request.profile_type,
-                        profile_data=data,
-                        trigger=trigger,
-                    )
-                ]
-            )
+        assert self._profile_table is not None, "profile_table must be initialized before capture"
+        self._profile_table.write(
+            [
+                build_profile_row(
+                    source=row_source,
+                    attempt_id=row_attempt_id,
+                    vm_id=self._worker_id,
+                    duration_seconds=duration,
+                    profile_type=request.profile_type,
+                    profile_data=data,
+                    trigger=trigger,
+                )
+            ]
+        )
         return data
 
     def exec_in_container(

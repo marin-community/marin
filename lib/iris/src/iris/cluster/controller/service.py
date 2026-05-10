@@ -1941,7 +1941,7 @@ class ControllerServiceImpl:
         """Dashboard-facing on-demand profile dispatch.
 
         Behaviour by target:
-          /system/controller
+          /system/controller (also /system/process — CLI default)
             - Capture this controller process via profile_local_process,
               write one IrisProfile row (source='/system/controller',
               vm_id='controller-self', attempt_id=None, trigger='on_demand'),
@@ -1961,8 +1961,9 @@ class ControllerServiceImpl:
         if not request.HasField("profile_type"):
             raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
 
-        # /system/controller: capture this controller process itself
-        if request.target == "/system/controller":
+        # /system/controller (or its alias /system/process from the CLI): capture
+        # this controller process itself.
+        if request.target in ("/system/controller", "/system/process"):
             try:
                 duration = request.duration_seconds or 10
                 data = profile_local_process(duration, request.profile_type)
