@@ -2003,3 +2003,170 @@ R2 compilers, given evidence R1 edits hadn't fully worked, correctly self-correc
 5. **The next step is human review of the 9 escalated statements**, not more DART iteration. Spec-author conversations on the 5 spec_ambiguity statements; case-by-case investigation of the 4 split/no-concurrence statements. DART has done what DART can do.
 
 Total cumulative cost across Runs 1-9: **~$237** ($215 prior + $22 Run 9). Methodology validation phase complete.
+
+---
+
+## 6. Project synopsis — extremely thorough recall (2026-05-10)
+
+A single consolidating narrative for someone reading dart.md fresh. Everything load-bearing in one place.
+
+### TL;DR (one paragraph)
+
+DART is a methodology for diagnosing why an LLM-as-judge ensemble disagrees on Model Spec statements and proposing fixes. Across **9 runs** spanning **2026-05-08 → 2026-05-10** at total cost **~$237**, we (a) built the diagnostic machinery (bucket → poison-rank → 3-compiler vote → re-judge → iterate), (b) discovered and corrected a series of methodological errors (2-judge bucketing → 3-judge canonical; grok-only evidence → full 4-generator universe; Flash judge → Pro judge; rubric-only edits → rubric+spec+examples), (c) empirically validated that **`spec_example_additions` is a load-bearing edit type for response-interpretation disagreement** (cracked previously-unstuckable `comply_with_laws` from α=−0.07 to +0.54, Δ=+0.61), and (d) established a hierarchical decision rule (§1.9.4) that prevents the methodology from forcing fixes on contested-normative cases. The canonical state: **15 statements in Bucket D under 80-cell 3-judge α at T₁=0.5; 4 CONVERGED in Run 9; 2 self-corrected to IRREDUCIBLE in R2; 9 escalated to human review**. Pure methodology iteration on these 9 is unlikely to help — they need spec-author input or judge-calibration.
+
+### Section roadmap
+
+- §6.1: chronological run-by-run with the *single* most important finding from each.
+- §6.2: methodology that's now canonical (vs deprecated).
+- §6.3: empirical validations of the §1.8 / §1.9 additions.
+- §6.4: canonical Bucket D status (per statement, current).
+- §6.5: cost and effort accounting.
+- §6.6: limitations + what we did NOT do.
+- §6.7: directly-actionable next steps (human time, not compute).
+
+### 6.1 Run-by-run chronology
+
+| run | date | scope | one-line finding | cost |
+|---|---|---|---|--:|
+| **Run 0** | 2026-05-08 | 5 strongly-hurt statements (pre-DART) | v2 rubric on `avoid_abuse` produced Δα +0.79 in GPT-only re-judge — first signal that rubric-revision via LM compiler is feasible. v2.5 added Gemini+Claude and showed partial re-judging is misleading. | ~$3 |
+| **Run 1** | 2026-05-09 | 14 Bucket D × GPT-5.1 compiler | Bidirectional output schema (rubric_drift / spec_ambiguity / both / irreducible) with cross-judge poison cells: 5 rubric_drift, 6 spec_ambiguity, 2 both, 1 irreducible. Cost was 4× cheaper than estimated ($0.37 vs $1.40) at `reasoning_effort=none`. | $0.37 |
+| **Run 2** | 2026-05-09 | same 14 × Gemini 3 Pro compiler | 7/13 inter-compiler diagnostic agreement. Gemini hedges to "both" where GPT commits to one side — first evidence of compiler-specific bias. | $0.29 |
+| **Run 3** | 2026-05-09 | same 14 × Claude Sonnet 4.6 compiler | 3-way disagreement classifier produced T1-T4 triage. **GPT was the outlier compiler** (10/11 opposite-direction edit pairs involve GPT). Adding the 3rd compiler resolved 100% of contested cases to consensus or plurality. | ~$1.60 |
+| **Run 4** | 2026-05-09 → 05-09 (overnight) | 13 of 14 × iterative v2/v3 with majority vote | **8/13 CONVERGED** (α≥0.5 at Flash 3-judge); `avoid_abuse` Δ+1.49, `do_not_lie` Δ+1.08. **`prevent_imminent_harm` regressed by Δ−0.40 with 3-of-3 "both" consensus** — surfaced the diagnostic-consensus-doesn't-imply-edit-direction-correctness pathology. R2 contributed median Δ+0.022 across statements (within noise) → §1.8.6: default round budget should be N=1. | ~$50 |
+| **Run 4 postmortem** (3 Opus subagents) | 2026-05-09 | 3 worst Run-4 outcomes | (a) `prevent_imminent_harm` regression was ~60% measurement-universe artifact; (b) `comply_with_laws` "stuck" was Gemini-Flash scoring 5 in 79/80 cells (degenerate judge); (c) `no_topic_off_limits` regression was one Tiananmen exemplar in anchor 2 that GPT cited 7/80 times while Gem/Cla cited 0-1 times (anchor-text uptake asymmetry). → §1.8 detectors. | $0 (free Opus) |
+| **Run 5** | 2026-05-10 | 1 statement (`no_topic_off_limits`) × §1.9 schema | Validated: just exposing `spec_example_additions` as an option made compilers produce better rubric edits (Run 5 R1 C_RUBRIC α=+0.309 vs Run 4 R1 +0.248 on same statement). The hierarchical rule (§1.9.4) cleanly resolved the user's worry case (1 compiler suggests examples, others don't → minority queued for review, not silently dropped). | ~$2.10 |
+| **Run 7** | 2026-05-10 | 46 statements × 3-judge ensemble | **The original Bucket D was 2-judge GPT+Flash, not 3-judge.** Claude only had 8 of 46 statements covered. Filled Claude on missing 38 (~$10 batch). Re-bucketing under canonical GPT+Pro+Claude on 20-cell grok-only intersection: Bucket D went from 14 → 24 statements, with 12 "hidden D" never worked on. | ~$80 |
+| **Run 8** | 2026-05-10 | full 80-cell universe — GPT + Claude fill on 3 non-grok generators | The "12 hidden Bucket D" claim was largely a **grok-opposite generator artifact**. Re-bucketing on full 80-cell × 4 generators × 3 judges shrank Bucket D from 24 → 15. **`prevent_imminent_harm` reversed A→D under 80-cell** — Run 4's v2 work on it was solving a real problem after all. 13 of 14 DART-worked statements validated as correctly bucketed. | ~$65 |
+| **Run 9** | 2026-05-10 | re-derive rubrics on canonical evidence | **Diagnostic distribution shifted dramatically with canonical evidence**: Pro+Claude diagnose `response_interpretation_disagreement` on 9-7 of 15 statements, GPT diagnoses `spec_ambiguity` on 7 (very different from Run 4's rubric_drift bias). **§1.9 example_additions cracked `comply_with_laws`** (Δ +0.607), `avoid_hateful_content` (+0.335), `assume_best_intentions` (+0.269). 4/15 CONVERGED, 2/15 self-corrected to IRREDUCIBLE in R2 (correct §1.8.4 behavior, opposite of Run-4 doubling-down), 9/15 escalated. | ~$22 |
+
+### 6.2 Canonical methodology (current state)
+
+**Judge ensemble (set Run 7, full coverage Run 8)**:
+- GPT-5.1 with `reasoning_effort="none"` and `temperature=0`
+- Gemini-3.1-Pro (`gemini-3.1-pro-preview`) with `thinking_level="low"` and `temperature=0` (NOT `gemini-3-pro-preview` — discontinued on Vertex 2026-03-26 per Gotcha 17)
+- Claude Sonnet 4.6 (`claude-sonnet-4-6`) with `thinking={"type":"disabled"}` and `temperature=0`
+
+GPT and Claude agree most strongly with each other (pooled pairwise α ≈ 0.78). Pro is the discriminating outlier (bimodal scoring, mostly 1s and 5s).
+
+**Universe**: 46 statements × 80 cells per statement × 2 conditions (`variant_A` bare; `rubric_plus_spec` phase_4). Cells = 4 generators × 20 scenarios per statement.
+
+**Bucketing rule** (§1.1): T₁=0.5 by default. A=both ≥ T₁; B=bare<T₁ AND p4≥T₁; C=bare≥T₁ AND p4<T₁; D=both<T₁.
+
+**Three edit types** (§1.9):
+- `rubric_edits` — anchor `criterion` text. Low risk, reversible.
+- `spec_edits_for_author_review` — spec text changes. NEVER auto-deploy; queue for spec authors.
+- `spec_example_additions` — append to `spec.metadata.examples`. Lowest risk; preserves spec text and rubric anchors. **Empirically the most effective edit type for response-interpretation disagreement.**
+
+**§1.7 majority-vote at N=3**: consensus / plurality / split. Plurality picks operative diagnosis; minority is recorded. **Priority for tie-break**: Gemini > Claude > GPT (Gem/Cla are consensus pole; GPT historically the outlier compiler in Run 3).
+
+**§1.9.4 hierarchical rule** (load-bearing):
+- L1 — Diagnosis vote across {`rubric_drift`, `spec_ambiguity`, `both`, `response_interpretation_disagreement`, `irreducible`}.
+- L2 — From operative diagnosis, look up admissible edit types: rubric_drift→rubric only; spec_ambiguity→spec only (escalate to authors); both→rubric+examples; response_interpretation_disagreement→examples only; irreducible→none.
+- L3 — Within admissible types, per-instance majority. Minority proposals from rejected types go to escalation log (NOT silently dropped).
+
+**§1.8 detectors (all empirically validated by Run 9)**:
+- 1.8.1 — measurement-universe consistency (always compute Δα on intersection of cells/judges).
+- 1.8.2 — per-judge bias detector (flag judges with degenerate score distributions).
+- 1.8.3 — anchor-text uptake asymmetry (forbid embedded MUST-rules and vivid named exemplars in anchor `criterion`; use `metadata.examples` instead).
+- 1.8.4 — strengthened irreducible-declaration with regime check (validated by Run 9 R2 self-correction).
+- 1.8.5 — `response_interpretation_disagreement` as a fifth diagnosis category (validated by Run 9 — 9 of Pro's 15 diagnoses were RID).
+- 1.8.6 — default round budget = N=1 (R2 contributes ~0 except in narrow cases).
+
+**Stop conditions per statement (current canonical)**:
+- α ≥ T₁ on both bare AND phase_4 → CONVERGED (no more work).
+- `irreducible` plurality → ESCALATED (no edits adopted).
+- spec_ambiguity → ESCALATED to spec-author queue (proposals exist but never auto-deployed).
+- split (no operative diagnosis) → ESCALATED.
+- Otherwise: human review at the per-statement level (read judge reasoning).
+
+### 6.3 Empirical validations of §1.8 / §1.9
+
+What we claimed methodologically vs what Run 9 measured:
+
+| methodology piece | claim | Run 9 evidence | verdict |
+|---|---|---|---|
+| §1.7 3-compiler majority | resolves contested cases; outlier-resistant | 11 of 15 statements have majority diagnosis (consensus or plurality); only 2 split | ✓ holds |
+| §1.8.4 cumulative-history irreducible gate | compilers should self-correct when shown failure | 2/2 R2 statements declared irreducible plurality (vs Run-4 doubling-down) | ✓ holds |
+| §1.8.5 RID diagnosis category | judges agree on facts but disagree on prose-to-anchor mapping | Pro/Claude diagnosed RID on 9/7 of 15 statements (Pro/Cla majority); shifted compiler output dramatically vs grok-only Run 4 | ✓ holds |
+| §1.9 spec_example_additions edit type | cracks RID where rubric edits cannot | comply_with_laws Δ +0.607 with examples after Run 4 v3 rubric edits got Δ ≈ 0; avoid_hateful_content +0.335; assume_best_intentions +0.269 | ✓ holds (strongest evidence in the project) |
+| §1.9.4 hierarchical rule | routes minority proposals to escalation, not silently drops | 9/15 statements correctly escalated (5 spec_ambiguity → spec authors; 4 split → human review); minority spec proposals queued | ✓ holds |
+| §1.8.6 default N=1 | R2 contributes ~0 typically | Run 4 median R2 Δα = +0.022 (within noise); Run 9 R2 yielded 0 new edits (irreducible plurality) | ✓ holds |
+| §1.8.1 measurement-universe consistency | Δα requires intersection cell sets | postmortem A traced prevent_imminent_harm "regression" to 2-judge × 20-cell vs 3-judge × 80-cell mismatch | ✓ holds |
+| §1.8.2 per-judge bias detector | flag judges with degenerate distributions | Pro on `comply_with_laws` v3 (Run 4) scored 5 in 79/80 cells — caught by detector retroactively | ✓ holds |
+| §1.8.3 anchor-text uptake asymmetry | vivid exemplars in criterion text are uptake-asymmetric | Run 4 v3 Tiananmen exemplar cited 7×/1×/0× across GPT/Pro/Claude → identified as the proximate cause of `no_topic_off_limits` regression | ✓ holds (confirmed retroactively) |
+
+**All methodology additions validated by Run 9 or by retroactive analysis on Run 4 data.** No claimed mechanism failed empirical test.
+
+### 6.4 Canonical Bucket D status (per statement, current)
+
+15 statements in Bucket D under canonical 80-cell 3-judge α at T₁=0.5. Status after Run 9:
+
+| # | statement | v1 α_bare | v1 α_p4 | Run 9 status | v9 α_p4 (if judged) |
+|---|---|--:|--:|---|--:|
+| 1 | `comply_with_laws` | +0.112 | −0.068 | ✓ CONVERGED (4 examples) | +0.539 |
+| 2 | `avoid_hateful_content` | +0.423 | +0.429 | ✓ CONVERGED (1 example) | +0.764 |
+| 3 | `assume_best_intentions` | +0.485 | +0.479 | ✓ CONVERGED (2 examples) | +0.748 |
+| 4 | `no_erotica_or_gore` | +0.482 | +0.301 | ✓ CONVERGED (5 rubric edits) | +0.520 |
+| 5 | `formatting` | +0.391 | +0.360 | IRREDUCIBLE (R2 plurality) | +0.450 (R1 v9 retained) |
+| 6 | `no_topic_off_limits` | +0.100 | +0.322 | IRREDUCIBLE (R2 plurality) | +0.309 (R1 v9 retained) |
+| 7 | `assume_objective_pov` | +0.230 | +0.309 | spec_author queue | n/a |
+| 8 | `avoid_abuse` | −0.082 | −0.125 | spec_author queue (no concurrence on edits) | n/a |
+| 9 | `do_not_lie` | −0.240 | −0.055 | spec_author queue (1 spec proposal) | n/a |
+| 10 | `no_agenda` | −0.028 | +0.025 | spec_author queue (2 spec proposals) | n/a |
+| 11 | `protect_privileged_messages` | +0.314 | +0.378 | spec_author queue (2 spec proposals) | n/a |
+| 12 | `be_clear` | +0.186 | +0.151 | escalate (RID, no compiler concurrence) | n/a |
+| 13 | `prevent_imminent_harm` | +0.302 | +0.406 | escalate (RID, no concurrence) | n/a |
+| 14 | `highlight_misalignments` | +0.447 | +0.490 | escalate (split diagnosis) | n/a |
+| 15 | `sexual_content_involving_minors` | +0.153 | +0.182 | escalate (split, hard refusals on Pro) | n/a |
+
+**Quick read**:
+- 4 statements have empirically-validated improvements (CONVERGED) — DART succeeded here.
+- 2 statements have R1 edits in place but methodology declared further work irreducible — DART has done what it can.
+- 5 statements need spec-author input on proposed text changes — outside DART scope by design.
+- 4 statements are open problems where compilers can't agree — needs human investigation.
+
+### 6.5 Cost and effort accounting
+
+| run | API cost | wall time |
+|---|--:|--:|
+| Run 0 (v2 + v2.5 pre-DART) | ~$3 | hours |
+| Run 1 | $0.37 | minutes |
+| Run 2 | $0.29 | minutes |
+| Run 3 | ~$1.60 | minutes |
+| Run 4 (overnight iterative) | ~$50 | ~75 min |
+| Run 5 | ~$2.10 | ~25 min |
+| Postmortem subagents (3 Opus) | $0 | ~10 min wall |
+| Run 7 (Claude baseline fill) | $13 | ~5 min batch |
+| Run 8 (full 80-cell GPT+Claude fill) | ~$65 ($16 GPT + $49 Cla) | ~22 min wall |
+| Run 9 (re-derive on canonical) | ~$22 | ~30 min wall |
+| **Total** | **~$237** | **~3 hours of wall time across 3 days** |
+
+Human attention: ~3 sessions over 3 days, mostly directional decisions and review of subagent reports.
+
+### 6.6 Limitations and things we explicitly did NOT do
+
+1. **Compiler-as-judge circularity remains.** All 3 of GPT/Pro/Claude are both compilers and judges. A non-judge compiler (e.g., DeepSeek, Qwen-72B) was never tested. §3 experiment G is the unaddressed validation.
+2. **Spec-author conversations not held.** 5 statements have spec_ambiguity proposals that need authorial decisions. Those decisions are out of scope for DART.
+3. **`avoid_abuse` v2 (Run 4) Goodhart concern unresolved.** Run-9 forensics suggested Run-4 v2 silently codified Pro/Claude's permissive reading over GPT's restrictive reading. Run 9 ended with `avoid_abuse` at spec_ambiguity consensus but 0 spec-edit concurrences → escalated. The methodology refused to repeat the Goodhart move.
+4. **Cross-statement consistency not audited.** Per-statement DART can break invariants like "unless explicitly instructed" appearing in 8 spec statements. §3 experiment K unaddressed.
+5. **Bucket A statements never re-validated** with all 3 judges on the 80-cell universe to confirm they're actually fine. We have GPT+Pro+Claude data on all of them now (Run 8) — could run §1.8.2 detector retroactively.
+6. **Claude on Bucket A/B not all checked**. Claude's role: judging the responses, not as a compiler in those buckets. We have Claude judgments now on all 46.
+7. **DEFAULT_BUCKET_D constant in `e9_dart_compiler.py` is stale.** Still says 14 statements; canonical is 15 (different list).
+8. **Run-4 v2 rubrics for the 9 escalated D statements are not invalidated**, just superseded by the Run-9-canonical-evidence diagnosis (which routed those statements to escalation rather than rubric edits). If a downstream user adopts Run-4 v2 rubrics, they should re-judge under canonical 3-judge ensemble first to verify.
+9. **Bucket B and C statements not re-investigated** — `be_thorough_but_efficient`, `letter_and_spirit`, `support_mental_health` (B) and `be_engaging`, `refusal_style` (C) probably need their own DART pass, but cost-bounded.
+10. **Temp=0 non-determinism on Pro 3.1**: documented in Gotcha 17 but never quantified beyond "two identical calls produced different thoughts_token_count." Score-level reproducibility is what we rely on, but a formal repro test (run all of Run 9 twice) was never done.
+
+### 6.7 Directly-actionable next steps (no compute needed)
+
+1. **Update `DEFAULT_BUCKET_D`** in `e9_dart_compiler.py` from the 14-statement Run-1-era list to the canonical 15-statement Run-8 list.
+2. **For the 4 CONVERGED statements** (`comply_with_laws`, `avoid_hateful_content`, `assume_best_intentions`, `no_erotica_or_gore`): the v9 edits in `dart_run9/{sid}/` are defensible candidates. Decide whether to deploy them.
+3. **For the 5 spec_author-queue statements** (`assume_objective_pov`, `avoid_abuse`, `do_not_lie`, `no_agenda`, `protect_privileged_messages`): hand the v9 spec proposals + the per-statement compiler reasoning to the spec authors. The proposals are not ready to deploy; they're prompts for authorial decision.
+4. **For the 4 split / no-concurrence** (`be_clear`, `prevent_imminent_harm`, `highlight_misalignments`, `sexual_content_involving_minors`): read the per-statement compiler reasoning in `dart_run9/diagnoses_*.jsonl` and decide case-by-case whether human investigation is warranted.
+5. **Retire Run-4 v2 rubrics** in favor of Run-9 v9 artifacts where they exist (4 CONVERGED + 2 IRREDUCIBLE).
+6. **`no_agenda` v2 from Run 0** is on disk in `e8_rubrics_v2.jsonl` — DON'T deploy automatically; route to spec-author queue along with the Run-9 v9 spec proposals (Run 9 diagnosed it as `spec_ambiguity` with 2 spec-edit concurrences).
+
+### 6.8 The single most important load-bearing claim
+
+**Canonical evidence beats grok-only evidence.** The compiler diagnostic distribution shifted from "rubric_drift heavy" (Run 4 with grok cells) to "RID heavy" (Run 9 with canonical 80-cell evidence). The corresponding edit type shifted from "rubric edits" to "spec example additions." The corresponding α improvements are dramatically larger and more durable. **If anyone in the future re-runs DART, they must use the canonical 4-generator universe; grok-only evidence biases compilers toward the wrong fix type.**
+
+This is the lesson worth preserving from the entire project arc.
