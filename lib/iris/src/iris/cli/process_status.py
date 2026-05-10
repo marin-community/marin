@@ -99,6 +99,7 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
         while True:
             req = logging_pb2.FetchLogsRequest(
                 source=source,
+                match_scope=logging_pb2.MATCH_SCOPE_EXACT,
                 max_lines=max_lines if first else 100,
                 tail=first,
                 min_level=level,

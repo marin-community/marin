@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import threading
 import time
@@ -58,7 +59,7 @@ from finelog.store.schema import (
     Schema,
     schema_to_arrow,
 )
-from finelog.types import REGEX_META_RE, LogReadResult, parse_attempt_id, str_to_log_level
+from finelog.types import LogReadResult, parse_attempt_id, str_to_log_level
 
 logger = logging.getLogger(__name__)
 
@@ -415,6 +416,7 @@ class LogNamespaceProtocol(Protocol):
         self,
         key: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_UNSPECIFIED,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -721,6 +723,7 @@ class DiskLogNamespace:
         self,
         key: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_UNSPECIFIED,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -729,23 +732,7 @@ class DiskLogNamespace:
         min_level: str = "",
     ) -> LogReadResult:
         min_level_enum = str_to_log_level(min_level)
-        is_pattern = bool(REGEX_META_RE.search(key))
-
-        if not is_pattern:
-            where_parts = ["key = $key", "seq > $cursor"]
-            params: dict = {"key": key, "cursor": cursor}
-            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-            return self._execute_read(
-                where_parts,
-                params,
-                max_lines,
-                tail,
-                cursor,
-                include_key_in_select=False,
-                exact_key=key,
-            )
-
-        where_parts, params = _regex_query(key, cursor)
+        where_parts, params, include_key_in_select, exact_key = _scope_query(key, cursor, match_scope)
         _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
         return self._execute_read(
             where_parts,
@@ -753,7 +740,8 @@ class DiskLogNamespace:
             max_lines,
             tail,
             cursor,
-            include_key_in_select=True,
+            include_key_in_select=include_key_in_select,
+            exact_key=exact_key,
         )
 
     def close(self) -> None:
@@ -1582,6 +1570,7 @@ class MemoryLogNamespace:
         self,
         key: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_UNSPECIFIED,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -1590,19 +1579,8 @@ class MemoryLogNamespace:
         min_level: str = "",
     ) -> LogReadResult:
         min_level_enum = str_to_log_level(min_level)
-        is_pattern = bool(REGEX_META_RE.search(key))
-
-        if not is_pattern:
-            where_parts = ["key = $key", "seq > $cursor"]
-            params: dict = {"key": key, "cursor": cursor}
-            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-            include_key_in_select = False
-            exact_key: str | None = key
-        else:
-            where_parts, params = _regex_query(key, cursor)
-            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-            include_key_in_select = True
-            exact_key = None
+        where_parts, params, include_key_in_select, exact_key = _scope_query(key, cursor, match_scope)
+        _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
 
         # Insertion lock alone suffices; rwlock unneeded because there are
         # no files to unlink.
@@ -1748,30 +1726,67 @@ def _cap_segments(segments: list[LocalSegment]) -> list[LocalSegment]:
     return capped
 
 
+# Characters that hint a regex was passed where PREFIX was intended; used
+# only for a friendlier error if a caller forgets to set match_scope=REGEX.
+_REGEX_HINT_RE = re.compile(r"[.*+?\[\](){}^$|\\]")
+
+
 def _regex_literal_prefix(pattern: str) -> str:
-    match = REGEX_META_RE.search(pattern)
+    match = _REGEX_HINT_RE.search(pattern)
     if match is None:
         return pattern
     return pattern[: match.start()]
 
 
-def _regex_query(pattern: str, cursor: int) -> tuple[list[str], dict]:
-    literal_prefix = _regex_literal_prefix(pattern)
-    suffix = pattern[len(literal_prefix) :]
-    is_pure_prefix = suffix in (".*", "")
+def _scope_query(
+    source: str,
+    cursor: int,
+    match_scope: int,
+) -> tuple[list[str], dict, bool, str | None]:
+    """Build the WHERE clause for a FetchLogs query.
 
-    where_parts = ["seq > $cursor"]
-    params: dict = {"cursor": cursor}
+    Returns ``(where_parts, params, include_key_in_select, exact_key)``.
 
-    if literal_prefix:
-        where_parts.append("prefix(key, $prefix_lo)")
-        params["prefix_lo"] = literal_prefix
+    UNSPECIFIED is treated as EXACT — old clients get safe literal-key reads
+    instead of silently being dispatched to regex on metacharacter content.
+    """
+    if match_scope in (logging_pb2.MATCH_SCOPE_UNSPECIFIED, logging_pb2.MATCH_SCOPE_EXACT):
+        where_parts = ["key = $key", "seq > $cursor"]
+        params: dict = {"key": source, "cursor": cursor}
+        return where_parts, params, False, source
 
-    if not is_pure_prefix:
-        where_parts.append("regexp_matches(key, $key_pattern)")
-        params["key_pattern"] = pattern
+    if match_scope == logging_pb2.MATCH_SCOPE_PREFIX:
+        # `prefix(key, $p)` is DuckDB's literal-prefix predicate. It's pushed
+        # into Parquet row-group min/max stats the same way an `=` is, so
+        # PREFIX reads keep the pruning of EXACT.
+        where_parts = ["seq > $cursor"]
+        params = {"cursor": cursor}
+        if source:
+            where_parts.append("prefix(key, $prefix)")
+            params["prefix"] = source
+        return where_parts, params, True, None
 
-    return where_parts, params
+    if match_scope == logging_pb2.MATCH_SCOPE_REGEX:
+        # Pull off any leading literal prefix to keep row-group pruning even
+        # for regex queries. `prefix(key, $p)` is monotone, so it remains
+        # correct as long as the regex requires that prefix to match.
+        literal_prefix = _regex_literal_prefix(source)
+        suffix = source[len(literal_prefix) :]
+        # `^literal$`, `^literal`, `^literal.*` all reduce to the literal prefix
+        # alone; we still need regexp_matches for any other suffix.
+        is_pure_prefix = suffix in (".*", "")
+
+        where_parts = ["seq > $cursor"]
+        params = {"cursor": cursor}
+        if literal_prefix:
+            where_parts.append("prefix(key, $prefix_lo)")
+            params["prefix_lo"] = literal_prefix
+        if not is_pure_prefix:
+            where_parts.append("regexp_matches(key, $key_pattern)")
+            params["key_pattern"] = source
+        return where_parts, params, True, None
+
+    raise ValueError(f"unknown match_scope: {match_scope}")
 
 
 def _add_common_filters(

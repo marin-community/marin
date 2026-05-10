@@ -502,10 +502,11 @@ class IrisBabysitter:
         attempt_id: int = -1,
         tail: bool = True,
     ) -> dict[str, Any]:
-        source = _log_source(target, attempt_id)
+        source, match_scope = _log_source(target, attempt_id)
         response = self.logs.fetch_logs(
             logging_pb2.FetchLogsRequest(
                 source=source,
+                match_scope=match_scope,
                 since_ms=since_ms,
                 cursor=cursor,
                 max_lines=max_lines,
@@ -716,9 +717,9 @@ def _normalize_state_filter(state: str) -> str:
     return normalized
 
 
-def _log_source(target: str, attempt_id: int) -> str:
+def _log_source(target: str, attempt_id: int) -> tuple[str, "logging_pb2.MatchScope"]:
     if target.startswith("/system/"):
-        return target
+        return target, logging_pb2.MATCH_SCOPE_EXACT
     return build_log_source(JobName.from_wire(target), attempt_id)
 
 

@@ -15,7 +15,6 @@ autouse fixture.
 import fcntl
 import logging
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -262,7 +261,10 @@ class IrisTestCluster:
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         """Fetch log lines for a task."""
         task_id = job.job_id.task(task_index).to_wire()
-        request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        request = logging_pb2.FetchLogsRequest(
+            source=f"{task_id}:",
+            match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
+        )
         response = self.log_client.fetch_logs(request)
         return [f"{e.source}: {e.data}" for e in response.entries]
 

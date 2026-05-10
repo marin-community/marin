@@ -166,9 +166,10 @@ class Task:
         Returns:
             List of TaskLogEntry objects from the task
         """
-        source = build_log_source(self._task_name)
+        source, match_scope = build_log_source(self._task_name)
         response = self._client._cluster_client.fetch_logs(
             source,
+            match_scope=match_scope,
             since_ms=start.epoch_ms() if start else 0,
             max_lines=max_lines,
         )
@@ -829,10 +830,10 @@ class IrisClient:
     ) -> list[TaskLogEntry]:
         """Fetch logs for a task or job.
 
-        Builds a regex source pattern from the target:
-        - Task + all attempts: /user/job/0:.*
-        - Task + specific attempt: /user/job/0:<attempt_id>  (exact match)
-        - Job (all tasks): /user/job/.*
+        Builds a literal source + match scope from the target:
+        - Task + all attempts:     prefix /user/job/0:
+        - Task + specific attempt: exact  /user/job/0:<attempt_id>
+        - Job (all tasks):         prefix /user/job/
 
         Args:
             target: Task ID or Job ID
@@ -846,9 +847,10 @@ class IrisClient:
         Returns:
             List of TaskLogEntry objects, sorted by timestamp
         """
-        source = build_log_source(target, attempt_id)
+        source, match_scope = build_log_source(target, attempt_id)
         response = self._cluster_client.fetch_logs(
             source,
+            match_scope=match_scope,
             since_ms=start.epoch_ms() if start else 0,
             max_lines=max_lines,
             substring=substring,

@@ -7,7 +7,6 @@ Tests verify dashboard functionality through the Connect RPC endpoints.
 The dashboard serves a web UI that fetches data via RPC calls.
 """
 
-import re
 from unittest.mock import Mock
 
 import pytest
@@ -928,7 +927,7 @@ def test_fetch_logs_for_missing_task_returns_empty_entries(client):
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
         "/finelog.logging.LogService/FetchLogs",
-        json={"source": re.escape(task_id) + ":.*"},
+        json={"source": f"{task_id}:", "match_scope": "MATCH_SCOPE_PREFIX"},
         headers={"Content-Type": "application/json"},
     )
     assert resp.status_code == 200
@@ -941,7 +940,7 @@ def test_fetch_logs_backward_compat_proxy(client):
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
         "/iris.cluster.ControllerService/FetchLogs",
-        json={"source": re.escape(task_id) + ":.*"},
+        json={"source": f"{task_id}:", "match_scope": "MATCH_SCOPE_PREFIX"},
         headers={"Content-Type": "application/json"},
     )
     assert resp.status_code == 200
@@ -954,7 +953,10 @@ def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     from finelog.rpc import logging_pb2
 
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
-    req = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+    req = logging_pb2.FetchLogsRequest(
+        source=f"{task_id}:",
+        match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
+    )
     resp = client.post(
         "/iris.cluster.ControllerService/FetchLogs",
         content=req.SerializeToString(),
@@ -971,7 +973,7 @@ def test_fetch_logs_legacy_iris_logging_path(client):
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
         "/iris.logging.LogService/FetchLogs",
-        json={"source": re.escape(task_id) + ":.*"},
+        json={"source": f"{task_id}:", "match_scope": "MATCH_SCOPE_PREFIX"},
         headers={"Content-Type": "application/json"},
     )
     assert resp.status_code == 200

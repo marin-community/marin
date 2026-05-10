@@ -166,10 +166,11 @@ def _gather(
     for task in tasks_resp.tasks:
         try:
             # Fetch all attempts for this task, taking only the last `tail` lines.
-            source = build_log_source(JobName.from_wire(task.task_id))
+            source, match_scope = build_log_source(JobName.from_wire(task.task_id))
             log_resp = log_client.fetch_logs(
                 logging_pb2.FetchLogsRequest(
                     source=source,
+                    match_scope=match_scope,
                     max_lines=tail,
                     tail=True,
                 )

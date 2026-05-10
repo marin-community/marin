@@ -69,6 +69,7 @@ class LogServiceImpl:
         max_lines = request.max_lines if request.max_lines > 0 else 1000
         result = self._log_store.get_logs(
             request.source,
+            match_scope=request.match_scope,
             since_ms=request.since_ms,
             cursor=request.cursor,
             substring_filter=request.substring,

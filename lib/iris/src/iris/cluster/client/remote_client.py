@@ -267,7 +267,7 @@ class RemoteClusterClient:
         """
         deadline = Deadline.from_seconds(timeout)
         terminal_status: job_pb2.JobStatus | None = None
-        source = build_log_source(job_id)
+        source, match_scope = build_log_source(job_id)
         cursor: int = 0
         backoff = ExponentialBackoff(
             initial=MIN_STATE_POLL_INTERVAL,
@@ -286,7 +286,13 @@ class RemoteClusterClient:
             state_name = job_pb2.JobState.Name(state)
 
             try:
-                log_response = self.fetch_logs(source, since_ms=since_ms, cursor=cursor, min_level=min_level)
+                log_response = self.fetch_logs(
+                    source,
+                    match_scope=match_scope,
+                    since_ms=since_ms,
+                    cursor=cursor,
+                    min_level=min_level,
+                )
             except Exception as e:
                 msg = format_connect_error(e) if isinstance(e, ConnectError) else str(e)
                 logger.warning("Failed to fetch logs for %s, will retry: %s", job_id, msg)
@@ -450,6 +456,7 @@ class RemoteClusterClient:
         self,
         source: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_UNSPECIFIED,
         since_ms: int = 0,
         cursor: int = 0,
         max_lines: int = 0,
@@ -459,6 +466,7 @@ class RemoteClusterClient:
     ) -> logging_pb2.FetchLogsResponse:
         request = logging_pb2.FetchLogsRequest(
             source=source,
+            match_scope=match_scope,
             since_ms=since_ms,
             cursor=cursor,
             max_lines=max_lines,

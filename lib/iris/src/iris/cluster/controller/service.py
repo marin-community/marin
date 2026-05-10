@@ -1885,28 +1885,32 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.GetTaskLogsRequest,
         ctx: RequestContext,
     ) -> controller_pb2.Controller.GetTaskLogsResponse:
-        """DEPRECATED: use FetchLogs with regex patterns instead. Scheduled for removal 2026-05-01.
+        """DEPRECATED: use FetchLogs directly. Scheduled for removal 2026-05-01.
 
         Forwards to fetch_logs internally, wrapping the response in the legacy format.
         """
         job_name = JobName.from_wire(request.id)
 
-        # Build the regex source pattern from the legacy request fields
+        # Build the literal source + match scope from the legacy request fields.
+        match_scope = logging_pb2.MATCH_SCOPE_PREFIX
         if job_name.is_task:
-            source = build_log_source(job_name, request.attempt_id)
+            source, match_scope = build_log_source(job_name, request.attempt_id)
         elif request.include_children:
-            source = build_log_source(job_name)
+            source, match_scope = build_log_source(job_name)
         else:
             # Direct tasks only: match keys like /user/job/0:attempt but not
             # /user/job/child-job/0:attempt. Use \d+ to restrict to numeric
-            # task indices, pushing the filter into DuckDB.
+            # task indices, pushing the filter into DuckDB. This is the only
+            # case that genuinely needs regex semantics.
             escaped_wire = re.escape(job_name.to_wire())
             source = f"{escaped_wire}/\\d+:.*"
+            match_scope = logging_pb2.MATCH_SCOPE_REGEX
 
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
 
         fetch_request = logging_pb2.FetchLogsRequest(
             source=source,
+            match_scope=match_scope,
             since_ms=request.since_ms,
             cursor=request.cursor,
             substring=request.substring,

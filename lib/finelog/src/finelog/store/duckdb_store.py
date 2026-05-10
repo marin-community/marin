@@ -25,6 +25,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.ipc as paipc
 
+from finelog.rpc import logging_pb2
 from finelog.store.catalog import Catalog, NamespaceStats
 from finelog.store.compactor import CompactionConfig
 from finelog.store.layout_migration import LOG_NAMESPACE_DIR
@@ -543,6 +544,7 @@ class DuckDBLogStore:
         self,
         key: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_UNSPECIFIED,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -552,6 +554,7 @@ class DuckDBLogStore:
     ) -> LogReadResult:
         return self._namespaces[LOG_NAMESPACE_NAME].get_logs(
             key,
+            match_scope=match_scope,
             since_ms=since_ms,
             cursor=cursor,
             substring_filter=substring_filter,
