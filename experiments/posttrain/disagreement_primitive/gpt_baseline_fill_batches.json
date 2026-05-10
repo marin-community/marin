@@ -1,0 +1,21 @@
+{
+  "submitted_at_iso": "2026-05-10T05:48:41.622451+00:00",
+  "job_dir": "results/raw/e9_dart_gpt_baseline_fill/2026-05-10T05-48-41",
+  "batches": {
+    "variant_A": {
+      "batch_id": "batch_6a001c3e0a54819096c24f0738b9be39",
+      "input_file_id": "file-2tnaLMUycz4Ai7fFuGpZot",
+      "input_file": "results/raw/e9_dart_gpt_baseline_fill/2026-05-10T05-48-41/input_variant_A.jsonl",
+      "n_requests": 2758,
+      "submitted_at": 1778392126.645463
+    },
+    "rubric_plus_spec": {
+      "batch_id": "batch_6a001c4326448190898dcc2a0de34dfc",
+      "input_file_id": "file-Ht4oG7sFiE2kPHRukrSE9i",
+      "input_file": "results/raw/e9_dart_gpt_baseline_fill/2026-05-10T05-48-41/input_rubric_plus_spec.jsonl",
+      "n_requests": 2758,
+      "submitted_at": 1778392131.279916
+    }
+  },
+  "custom_id_map_path": "results/raw/e9_dart_gpt_baseline_fill/2026-05-10T05-48-41/custom_id_map.json"
+}
