@@ -192,6 +192,16 @@ CHECKPOINT_TIME_INTERVAL = timedelta(hours=1)
 WARMUP_NUM_TRAIN_STEPS = 100
 WARMUP_EVALS_PER_RUN = 3
 
+# Number of times to repeat the full mixture. With EPOCHS > 1, the trainer
+# drives EPOCHS * single_epoch steps. Levanter's MixtureDataset has three
+# stop strategies: FIRST_STOP (end when any component is exhausted), ALL_STOP
+# (end when all are), and the default RESTART (cycle exhausted components
+# indefinitely). We rely on RESTART so a component whose slice runs out is
+# sampled cyclically while training continues. Optimizer hparams are anchored
+# at single-epoch T -- LR/beta2/decay don't change with EPOCHS; only the
+# LR-schedule fractions stretch over the run.
+EPOCHS = 1
+
 WANDB_PROJECT = "marin"
 
 _EXPECTED_VOCAB_SIZE_WARNING = f"Tokenizer {TOKENIZER!r} not found in _KNOWN_VOCAB_SIZES"
@@ -355,12 +365,18 @@ def _full_num_train_steps(mix: MixConfig) -> int:
 def _num_train_steps(mix: MixConfig) -> int:
     if _warmup_mode():
         return WARMUP_NUM_TRAIN_STEPS
-    return _full_num_train_steps(mix)
+    return EPOCHS * _full_num_train_steps(mix)
 
 
-def _full_target_tokens(mix: MixConfig) -> int:
-    """Tokens consumed in a full (non-warmup) run; feeds the heuristic's T."""
-    return _full_num_train_steps(mix) * BATCH_SIZE * _model_seq_len()
+def _full_target_tokens(mix: MixConfig, *, per_epoch: bool) -> int:
+    """Tokens consumed during training.
+
+    ``per_epoch=True`` returns one epoch's worth (used to anchor the optimizer
+    heuristic). ``per_epoch=False`` returns the full run total
+    (``EPOCHS * one_epoch``), used for logging/tags.
+    """
+    one_epoch = _full_num_train_steps(mix) * BATCH_SIZE * _model_seq_len()
+    return one_epoch if per_epoch else EPOCHS * one_epoch
 
 
 def _steps_per_eval(num_train_steps: int) -> int:
@@ -384,8 +400,8 @@ def _build_data_mixture(mix: MixConfig):
 
 
 def _build_optimizer(mix: MixConfig) -> AdamHConfig:
-    """Per-mix AdamH config — heuristic-scaled to this mix's full token count."""
-    return DNA_SCALING_HEURISTIC.build_optimizer_config(BATCH_SIZE, _full_target_tokens(mix))
+    """Per-mix AdamH config — anchored at single-epoch T (epoch-invariant)."""
+    return DNA_SCALING_HEURISTIC.build_optimizer_config(BATCH_SIZE, _full_target_tokens(mix, per_epoch=True))
 
 
 def _eval_harness_config() -> LmEvalHarnessConfig:
@@ -407,11 +423,12 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
     num_train_steps = _num_train_steps(mix)
     steps_per_eval = _steps_per_eval(num_train_steps)
     optimizer = _build_optimizer(mix)
-    target_tokens = _full_target_tokens(mix)
+    target_tokens = _full_target_tokens(mix, per_epoch=False)
     num_params = _num_params()
     params_label = _format_params(num_params)
     warmup_suffix = "-warmup" if _warmup_mode() else ""
-    run_name = f"dna-bolinas-mix-{VERSION}-p{params_label}{warmup_suffix}-i{index}-{mix.name}"
+    epochs_suffix = f"-e{EPOCHS}" if EPOCHS > 1 else ""
+    run_name = f"dna-bolinas-mix-{VERSION}-p{params_label}{warmup_suffix}{epochs_suffix}-i{index}-{mix.name}"
     tags = [
         "sweep",
         "dna",
@@ -508,12 +525,14 @@ def _print_preview(selected: tuple[MixConfig, ...]) -> None:
     print()
     for mix in selected:
         full_steps = _full_num_train_steps(mix)
-        target_tokens = _full_target_tokens(mix)
+        opt_tokens = _full_target_tokens(mix, per_epoch=True)
+        total_tokens = _full_target_tokens(mix, per_epoch=False)
         opt = _build_optimizer(mix)
         print(
             f"Mix {mix.name}: active=[{','.join(mix.active_regions)}]  "
-            f"full_steps={full_steps}  tokens={target_tokens:.3e} "
-            f"(~{target_tokens / num_params:.1f} tok/param)"
+            f"epoch_steps={full_steps}  total_steps={EPOCHS * full_steps} (EPOCHS={EPOCHS})  "
+            f"opt_T={opt_tokens:.3e}  total_T={total_tokens:.3e} "
+            f"(~{opt_tokens / num_params:.1f} tok/param/epoch)"
         )
         for field, value in (
             ("lr", opt.learning_rate),
