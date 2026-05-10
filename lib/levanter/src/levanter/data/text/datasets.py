@@ -787,9 +787,18 @@ class LmDataConfig:
                 if name in self.max_train_batches:
                     num_sequences = self.max_train_batches[name] * initial_batch_size
                     len_dataset = len(ds.as_sync_dataset())
-                    assert (
-                        num_sequences <= len_dataset
-                    ), f"Max sequences for {name} ({num_sequences}) is greater than the dataset size ({len_dataset})"
+                    if num_sequences > len_dataset:
+                        logger.info(
+                            "max_train_batches for %s requests %d sequences > dataset size %d; "
+                            "clamping slice to dataset size and relying on stop_strategy=%r "
+                            "to cycle (~%.2fx).",
+                            name,
+                            num_sequences,
+                            len_dataset,
+                            self.stop_strategy,
+                            num_sequences / len_dataset,
+                        )
+                        num_sequences = len_dataset
                     datasets[name] = ds.slice_dataset(end_index=num_sequences)
 
         return datasets

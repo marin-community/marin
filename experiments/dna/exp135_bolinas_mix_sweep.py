@@ -12,13 +12,19 @@ sweep via ``CompletedAdamHHeuristic``. Hparams are recomputed per-mix because
 each mix trains on a different total token count: region-only mixes
 (``cds_only`` / ``upstream_only`` / ``downstream_only``) train on the full
 per-region dataset (``MAX_TRAIN_EXAMPLES_PER_REGION``), while the uniform mix
-caps each active component at ``UNIFORM_MAX_EXAMPLES_PER_COMPONENT``.
+caps each active component at ``UNIFORM_MAX_EXAMPLES_PER_COMPONENT``
+(upstream's full size, ~68.3M).
 
-Region-only mixes consume the full per-region dataset (the size of the smallest
-component, ``downstream``, is also the uniform-mix per-component cap, so
-``downstream_only`` and uniform-per-region see the same token budget).
-Tokenization names use the ``-5149`` suffix to create fresh cache keys for the
-post-issue-5149 fix (https://github.com/marin-community/marin/issues/5149).
+For the uniform mix, downstream (~20.5M) is smaller than the per-component
+cap, so its slice is clamped to the dataset size and the mixture cycles via
+Levanter's ``RESTART_STRATEGY`` (each downstream sequence repeats ~3.33x).
+Cycling reuses the same Feistel-permuted underlying examples but with
+different per-block within-block ordering, so repeated examples are
+reinterleaved across cycles. The optimizer's target T counts all drawn tokens
+including repeats, so the LR schedule is sized for the actual number of
+gradient updates. Tokenization names use the ``-5149`` suffix to create fresh
+cache keys for the post-issue-5149 fix
+(https://github.com/marin-community/marin/issues/5149).
 
 Validation adds 6 metrics on top of the existing 3: each region tokenized with
 functional (uppercase-only) and nonfunctional (lowercase-only) masks per
@@ -68,10 +74,13 @@ VERSION = "v0.9"
 TOKENIZER = "bolinas-dna/tokenizer-char-bos"
 DNA_BASE_SEQ_LEN = 255  # bp (256 - 1 for BOS)
 
-# Uniform mix: cap each active component at the size of the smallest training
-# component (``downstream``, ~20.5M) for one effective epoch per active region.
+# Uniform mix: cap each active component at upstream's full dataset size
+# (~68.3M). cds (~244M) is sliced to ~68.3M unique examples; upstream gets one
+# full epoch; downstream (~20.5M) cycles ~3.33x via Levanter's
+# ``RESTART_STRATEGY``. The optimizer's target T tracks the total drawn-token
+# count (~52.4B) so the LR schedule matches the actual gradient trajectory.
 # See https://github.com/Open-Athena/bolinas-dna/issues/109.
-UNIFORM_MAX_EXAMPLES_PER_COMPONENT = 20_501_856
+UNIFORM_MAX_EXAMPLES_PER_COMPONENT = 68_286_166
 
 # Region-only mixes train on the full per-region dataset; values are the
 # training-example counts of each per-region dataset, so the cap is exactly
