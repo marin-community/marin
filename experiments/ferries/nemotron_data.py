@@ -29,11 +29,12 @@ from experiments.pretraining_datasets.nemotron import nemotron_mix, tokenize_nem
 MAX_WORKERS = 42
 CACHE_COPY_MAX_WORKERS = 42
 # Defaults bake in disk=5g (tokenize) / disk=10g (normalize) per worker pod,
-# which evicts large splits mid-pipeline as ephemeral storage fills with cache
-# / writer staging / external-sort spills. Bump to 32g; nodes have ~7 TiB
-# ephemeral storage so headroom is plentiful.
-TOKENIZE_WORKER_RESOURCES = ResourceConfig(ram="10g", disk="32g")
-NORMALIZE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="32g")
+# which evicts large splits mid-pipeline as ephemeral storage fills. iris
+# treats ``disk="0"`` as "no ephemeral-storage limit on the pod" (k8s only
+# applies node-level pressure). Cluster nodes have ~7 TiB ephemeral storage,
+# so this is the simplest fix.
+TOKENIZE_WORKER_RESOURCES = ResourceConfig(ram="64g", disk="0")
+NORMALIZE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="0")
 
 # DCLM components consumed by the Nemotron canary mix. Each entry mirrors the
 # ``simple._dl(...)`` download wiring, plus the raw text column used by the HF
