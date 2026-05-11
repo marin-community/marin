@@ -3,7 +3,7 @@
 
 import pytest
 from levanter.data.text import HfDatasetSourceConfig
-from marin.evaluation.perplexity_gap import _to_dataset_component, raw_text_dataset
+from marin.evaluation.perplexity_gap import _to_dataset_component, raw_text_dataset, supervised_text_dataset
 from marin.processing.tokenize import HfDatasetSpec
 
 from experiments.evals.long_tail_ppl import (
@@ -45,6 +45,16 @@ def test_hf_backed_raw_dataset_preserves_requested_split():
     assert component.format.text_key == "body"
     assert isinstance(component.source, HfDatasetSourceConfig)
     assert component.source.splits == ["test"]
+
+
+def test_supervised_text_dataset_sets_target_only_format_keys():
+    dataset = supervised_text_dataset("gs://example-bucket/eval.jsonl", input_key="prompt", target_key="completion")
+
+    component = _to_dataset_component(dataset)
+
+    assert component.format.input_key == "prompt"
+    assert component.format.target_key == "completion"
+    assert component.format.text_key == "text"
 
 
 def test_file_backed_raw_dataset_rejects_non_validation_split():

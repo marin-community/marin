@@ -78,11 +78,15 @@ class ModelScoreReportBuilder:
     def add_document(self, *, document: RawTextDocument, per_byte_loss: np.ndarray) -> None:
         self.register_dataset(document.dataset_name, document.tags)
 
-        num_bytes = len(per_byte_loss)
+        total_doc_bytes = len(per_byte_loss)
+        score_start, score_end = document.score_span(total_doc_bytes)
+        score_start = min(score_start, total_doc_bytes)
+        score_end = min(score_end, total_doc_bytes)
+        num_bytes = max(0, score_end - score_start)
         if num_bytes <= 0:
             return
 
-        total_loss = float(per_byte_loss.sum())
+        total_loss = float(per_byte_loss[score_start:score_end].sum())
         self.dataset_stats[document.dataset_name].add(loss=total_loss, num_bytes=num_bytes)
 
         prefix = np.concatenate(([0.0], np.cumsum(per_byte_loss, dtype=np.float64)))
@@ -94,11 +98,13 @@ class ModelScoreReportBuilder:
 
             byte_start = byte_offsets[match.start()]
             byte_end = byte_offsets[match.end()]
-            if byte_end <= byte_start:
+            overlap_start = max(byte_start, score_start)
+            overlap_end = min(byte_end, score_end)
+            if overlap_end <= overlap_start:
                 continue
 
-            segment_loss = float(prefix[byte_end] - prefix[byte_start])
-            segment_bytes = int(byte_end - byte_start)
+            segment_loss = float(prefix[overlap_end] - prefix[overlap_start])
+            segment_bytes = int(overlap_end - overlap_start)
             self.bucket_stats[bucket_for_segment(segment)].add(loss=segment_loss, num_bytes=segment_bytes)
 
     def build_summary(self) -> dict[str, Any]:
@@ -228,7 +234,11 @@ def compare_scored_documents(
     for key in sorted(docs_a_by_key):
         scored_a = docs_a_by_key[key]
         scored_b = docs_b_by_key[key]
-        if scored_a.document.text != scored_b.document.text or scored_a.document.tags != scored_b.document.tags:
+        if (
+            scored_a.document.text != scored_b.document.text
+            or scored_a.document.tags != scored_b.document.tags
+            or scored_a.document.score_span() != scored_b.document.score_span()
+        ):
             raise ValueError(f"Document metadata mismatch for scored document {key}.")
         report.add_document(
             document=scored_a.document,
@@ -247,6 +257,8 @@ def _scored_documents_table(scored_documents: Sequence[ScoredDocument]) -> pa.Ta
         "shard_name": [doc.document.shard_name for doc in scored_documents],
         "row_index": [doc.document.row_index for doc in scored_documents],
         "text": [doc.document.text for doc in scored_documents],
+        "score_byte_start": [doc.document.score_span(doc.tokenized.num_bytes)[0] for doc in scored_documents],
+        "score_byte_end": [doc.document.score_span(doc.tokenized.num_bytes)[1] for doc in scored_documents],
         "token_ids": [doc.tokenized.token_ids.tolist() for doc in scored_documents],
         "per_byte_loss": [doc.per_byte_loss.tolist() for doc in scored_documents],
         "token_byte_starts": [doc.tokenized.byte_starts.tolist() for doc in scored_documents],
@@ -260,6 +272,8 @@ def _scored_documents_table(scored_documents: Sequence[ScoredDocument]) -> pa.Ta
             ("shard_name", pa.string()),
             ("row_index", pa.int64()),
             ("text", pa.string()),
+            ("score_byte_start", pa.int32()),
+            ("score_byte_end", pa.int32()),
             ("token_ids", pa.list_(pa.int32())),
             ("per_byte_loss", pa.list_(pa.float64())),
             ("token_byte_starts", pa.list_(pa.int32())),
@@ -277,6 +291,8 @@ def _scored_document_from_row(row: dict[str, Any]) -> ScoredDocument:
         shard_name=row["shard_name"],
         row_index=int(row["row_index"]),
         text=row["text"],
+        score_byte_start=int(row.get("score_byte_start", 0)),
+        score_byte_end=int(row["score_byte_end"]) if row.get("score_byte_end") is not None else None,
     )
     token_byte_starts = np.asarray(row["token_byte_starts"], dtype=np.int32)
     token_byte_ends = np.asarray(row["token_byte_ends"], dtype=np.int32)

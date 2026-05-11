@@ -45,6 +45,16 @@ class RawTextDocument:
     shard_name: str
     row_index: int
     text: str
+    score_byte_start: int = 0
+    score_byte_end: int | None = None
+
+    def score_span(self, num_bytes: int | None = None) -> tuple[int, int]:
+        end = self.score_byte_end
+        if end is None:
+            if num_bytes is None:
+                num_bytes = len(self.text.encode("utf-8"))
+            end = num_bytes
+        return max(0, int(self.score_byte_start)), max(0, int(end))
 
 
 @dataclass(frozen=True)
@@ -180,9 +190,13 @@ class GapReportBuilder:
     ) -> None:
         self.register_dataset(document.dataset_name, document.tags)
 
-        num_bytes = len(per_byte_loss_a)
-        loss_a = float(per_byte_loss_a.sum())
-        loss_b = float(per_byte_loss_b.sum())
+        total_doc_bytes = len(per_byte_loss_a)
+        score_start, score_end = document.score_span(total_doc_bytes)
+        score_start = min(score_start, total_doc_bytes)
+        score_end = min(score_end, total_doc_bytes)
+        num_bytes = max(0, score_end - score_start)
+        loss_a = float(per_byte_loss_a[score_start:score_end].sum())
+        loss_b = float(per_byte_loss_b[score_start:score_end].sum())
         self.dataset_stats[document.dataset_name].add(loss_a=loss_a, loss_b=loss_b, num_bytes=num_bytes)
 
         delta_bits = (loss_a - loss_b) * LOG2E
@@ -208,12 +222,14 @@ class GapReportBuilder:
 
             byte_start = byte_offsets[match.start()]
             byte_end = byte_offsets[match.end()]
-            if byte_end <= byte_start:
+            overlap_start = max(byte_start, score_start)
+            overlap_end = min(byte_end, score_end)
+            if overlap_end <= overlap_start:
                 continue
 
-            segment_loss_a = float(prefix_a[byte_end] - prefix_a[byte_start])
-            segment_loss_b = float(prefix_b[byte_end] - prefix_b[byte_start])
-            segment_bytes = int(byte_end - byte_start)
+            segment_loss_a = float(prefix_a[overlap_end] - prefix_a[overlap_start])
+            segment_loss_b = float(prefix_b[overlap_end] - prefix_b[overlap_start])
+            segment_bytes = int(overlap_end - overlap_start)
             segment_delta_bits = (segment_loss_a - segment_loss_b) * LOG2E
             bucket = bucket_for_segment(segment)
             visible = render_visible(segment)
@@ -298,6 +314,8 @@ class GapReportBuilder:
             "shard": document.shard_name,
             "row_index": int(document.row_index),
             "bytes": int(num_bytes),
+            "score_byte_start": int(score_start),
+            "score_byte_end": int(score_end),
             "model_a_bpb": model_a_bpb,
             "model_b_bpb": model_b_bpb,
             "gap_bpb": gap_bpb,
@@ -441,6 +459,8 @@ def iter_raw_text_documents(
             tags=tags,
             source=source,
             text_key=component.format.text_key,
+            input_key=component.format.input_key,
+            target_key=component.format.target_key,
             max_docs=max_docs_per_dataset,
             max_doc_bytes=max_doc_bytes,
         )
@@ -452,6 +472,8 @@ def _iter_dataset_documents(
     tags: tuple[str, ...],
     source: ShardedDataSource[dict],
     text_key: str,
+    input_key: str | None,
+    target_key: str | None,
     max_docs: int | None,
     max_doc_bytes: int | None,
 ) -> Iterator[RawTextDocument]:
@@ -460,15 +482,42 @@ def _iter_dataset_documents(
         for row_index, record in enumerate(source.open_shard(shard_name)):
             if max_docs is not None and emitted >= max_docs:
                 return
-            if text_key not in record:
-                raise ValueError(f"Dataset {dataset_name} record is missing text field {text_key!r}.")
-            text = record[text_key]
-            if not isinstance(text, str):
-                raise ValueError(f"Dataset {dataset_name} text field {text_key!r} is not a string.")
+            score_byte_start = 0
+            score_byte_end: int | None = None
+            if input_key is not None or target_key is not None:
+                if input_key is None or target_key is None:
+                    raise ValueError(f"Dataset {dataset_name} must set both input_key and target_key.")
+                if input_key not in record:
+                    raise ValueError(f"Dataset {dataset_name} record is missing input field {input_key!r}.")
+                if target_key not in record:
+                    raise ValueError(f"Dataset {dataset_name} record is missing target field {target_key!r}.")
+                input_text = record[input_key]
+                target_text = record[target_key]
+                if not isinstance(input_text, str) or not isinstance(target_text, str):
+                    raise ValueError(
+                        f"Dataset {dataset_name} supervised fields {input_key!r}/{target_key!r} must be strings."
+                    )
+                text = input_text + target_text
+                score_byte_start = len(input_text.encode("utf-8"))
+                score_byte_end = len(text.encode("utf-8"))
+                if score_byte_end <= score_byte_start:
+                    continue
+            else:
+                if text_key not in record:
+                    raise ValueError(f"Dataset {dataset_name} record is missing text field {text_key!r}.")
+                text = record[text_key]
+                if not isinstance(text, str):
+                    raise ValueError(f"Dataset {dataset_name} text field {text_key!r} is not a string.")
             if not text:
                 continue
             if max_doc_bytes is not None:
                 text = _truncate_text_to_byte_limit(text, max_doc_bytes)
+                truncated_bytes = len(text.encode("utf-8"))
+                score_byte_start = min(score_byte_start, truncated_bytes)
+                if score_byte_end is not None:
+                    score_byte_end = min(score_byte_end, truncated_bytes)
+                    if score_byte_end <= score_byte_start:
+                        continue
             emitted += 1
             yield RawTextDocument(
                 dataset_name=dataset_name,
@@ -476,6 +525,8 @@ def _iter_dataset_documents(
                 shard_name=shard_name,
                 row_index=row_index,
                 text=text,
+                score_byte_start=score_byte_start,
+                score_byte_end=score_byte_end,
             )
 
 
