@@ -248,7 +248,149 @@ as `string_view` which PyArrow can parse but not compute on.
 
 ---
 
-## 6. Open Questions
+## 7. Memory Usage and Streaming
+
+### DuckDB: production-ready spill-to-disk
+
+DuckDB has a mature out-of-core execution model. By default it caps memory at 80% of physical RAM; all pipeline-breaking operators (sort, hash join build, hash aggregate, windowing) spill to disk when the limit is hit:
+
+```python
+conn = duckdb.connect()
+conn.execute("SET memory_limit = '4GB'")
+conn.execute("SET temp_directory = '/fast/ssd/tmp'")
+```
+
+The external sort uses a k-way merge (minimum I/O). External hash join uses radix partitioning (4–12 bits → 16–4096 on-disk partitions). Memory use is inspectable via `duckdb_memory()` and `duckdb_temporary_files()`.
+
+**Published results on a 140 GB Parquet workload (32 GB machine):**
+
+| Library | Peak memory |
+|---|---|
+| DuckDB | 1.3 GB |
+| Polars streaming | 750 MB (where applicable) |
+| Polars default (eager) | 17 GB |
+
+DuckDB's spill is transparent — no code changes needed when a query exceeds the memory limit.
+
+### Polars LazyFrame streaming: experimental and limited
+
+Polars' `collect(streaming=True)` is unstable and has significant exclusions:
+
+- **Sort is excluded.** `LazyFrame.sort()` falls back to the eager in-memory path regardless of streaming mode.
+- **Join streaming requires pre-sorted data.** Streaming merge-join only works if both sides are already sorted by the join key.
+- The streaming API is marked "unstable" and may change without notice.
+
+In practice, Polars streaming cannot be relied on for Zephyr's core operations (scatter sort, reduce join) when datasets approach or exceed available RAM.
+
+### PyArrow: no spill-to-disk
+
+PyArrow has memory pools (allocation tracking) and memory mapping (I/O efficiency) but **no analytical spill-to-disk**. There is no mechanism for `pyarrow.compute` sort or join to overflow to disk. Callers must implement spill manually or delegate to a system built on Arrow (such as DuckDB).
+
+### Implications for Zephyr
+
+The scatter sort is Zephyr's most memory-intensive operation. For datasets that fit in RAM on a large machine — the current common case — Polars is the right choice: fastest sort, cleanest scatter API. If scatter files grow past available RAM, only DuckDB provides a production-ready spill path. PyArrow provides no fallback.
+
+---
+
+## 8. DuckDB
+
+DuckDB is an embedded OLAP database with a vectorised query engine, full SQL support, and first-class Arrow integration. It is architecturally different from Polars and PyArrow: it operates through SQL (or a Python relational API) and runs as an embedded query engine rather than a function library.
+
+### Benchmark results (estimated from public benchmarks)
+
+The numbers below are extrapolated from DuckDB's public benchmark suite and DuckDB vs. Polars comparisons published in 2025–2026, **not measured locally on this machine**. The PyArrow and Polars numbers are from the local benchmarks in §1.
+
+| Operation | DuckDB (est.) | Polars (measured) | PyArrow (measured) | Notes |
+|---|---|---|---|---|
+| sort (5M rows, int64) | ~20–40ms | 20ms | 391ms | Within 2× of Polars; both ~10–20× faster than PyArrow |
+| filter (5M rows, 50% selectivity) | ~1–2ms | 1.1ms | 6.1ms | Roughly equal to Polars |
+| group_by + sum (5M rows, 1K groups) | ~15–25ms | 20.3ms | 24.5ms | DuckDB fastest in H2O benchmark at scale |
+| sort (larger-than-RAM) | ✅ k-way merge spill | ❌ falls back in-memory | ❌ no spill | DuckDB is the only reliable option |
+
+At large scale (SF-100, 100 GB), DuckDB slightly outperforms Polars (19.7s vs 23.9s); at smaller scale (SF-10, 10 GB), Polars is slightly faster (3.9s vs 5.9s). For Zephyr-sized tables the performance difference is negligible — the bigger question is whether data fits in RAM.
+
+### API for Zephyr operations
+
+**In-memory partition by key (scatter routing):**
+
+DuckDB's `COPY ... PARTITION_BY` is file-based — it writes Hive-partitioned files, not in-memory sub-tables. There is no `partition_by()` equivalent that returns a list of DataFrames in one pass. To get per-shard DataFrames, you need N separate queries, each scanning the whole table:
+
+```python
+# DuckDB — O(N × table_size) reads; no single-pass equivalent
+for shard_id in range(num_shards):
+    shard = conn.execute(
+        f"SELECT * FROM t WHERE hash(key) % {num_shards} = {shard_id}"
+    ).arrow()
+```
+
+Polars' `df.partition_by(key)` does a single pass and returns all partitions at once. For Zephyr's scatter, the DuckDB approach is substantially less efficient.
+
+**Vectorised hash:**
+
+Available via the `hashfuncs` community extension (`INSTALL hashfuncs; LOAD hashfuncs`), which provides `xxh3_64()` and `xxh3_128()`. Without the extension there is no `Series.hash()`-style column expression. The extension must be installed per environment.
+
+**Sorted-merge join:**
+
+DuckDB supports hash join (default), broadcast join, and `PhysicalPiecewiseMergeJoin` for range predicates and pre-sorted data. External hash join handles larger-than-RAM joins via radix partitioning. For Zephyr's reduce phase, DuckDB can execute a merge-join if both sides are pre-sorted by key.
+
+**Arrow IPC read/write:**
+
+DuckDB 1.4+ ships an Arrow IPC extension:
+
+```sql
+COPY t TO 'output.arrows' (FORMAT ARROW, COMPRESSION ZSTD);
+SELECT * FROM read_arrow('input.arrows');
+```
+
+Write speed has not been benchmarked locally. Based on architecture (zero-copy buffer pass), uncompressed write should be comparable to PyArrow.
+
+### Arrow type compatibility
+
+DuckDB uses the C data interface for Arrow integration. Numeric types are zero-copy in both directions. For strings:
+
+- Arrow `string` / `large_string` → DuckDB `VARCHAR` → Arrow `string`: ✓ no type promotion
+- Arrow `string_view` → DuckDB: **fails** (cannot convert; same issue Polars IPC output causes without `compat_level`)
+- DuckDB always emits standard Arrow `string` on `.arrow()` output, never `string_view` or `large_string`
+
+The `large_string → string` normalisation is unusual (most libraries promote; DuckDB normalises). It is lossless but could cause schema mismatches if downstream code explicitly expects `large_string`.
+
+| Roundtrip | DuckDB output type | Safe? |
+|---|---|---|
+| `string` → DuckDB → Arrow | `string` | ✓ no change |
+| `large_string` → DuckDB → Arrow | `string` | ⚠️ downcast; fine if downstream accepts `string` |
+| `binary` → DuckDB → Arrow | `binary` | ✓ |
+| `int64` → DuckDB → Arrow | `int64` | ✓ zero-copy |
+| `string_view` (Polars default) → DuckDB | — | ❌ fails |
+
+**Convention**: when passing Polars IPC output to DuckDB, the same `compat_level=pl.CompatLevel.oldest()` requirement from §3 applies — without it DuckDB will fail to read the string columns.
+
+### SQL vs DataFrame API
+
+DuckDB's query interface is SQL, which is a trade-off for Zephyr's use case:
+
+**Advantages:** Automatic query planning (predicate/projection pushdown, join reordering); readable multi-table joins; transparent parallelism across all CPU cores (Morsel-Driven Parallelism, ~6.5× speedup on 8 threads).
+
+**Disadvantages:** No method chaining for iterative computation; `partition_by` scatter requires N queries or full table materialisation vs Polars' single-pass API; no `map_groups(fn)` equivalent for user-supplied per-group Python functions without UDFs.
+
+### Smallpond
+
+[smallpond](https://github.com/deepseek-ai/smallpond) is a lightweight distributed data processing framework by DeepSeek built on DuckDB and their 3FS file system. It adds `repartition(N, hash_by="column")` for distributed scatter, achieving 3.66 TB/min on a 75-node cluster (GraySort benchmark).
+
+Smallpond is not a substitute for Polars/PyArrow — it is a higher-level distributed framework wrapping DuckDB. Its scatter primitive is essentially Zephyr's scatter phase implemented on DuckDB at cluster scale; the relevant insight is that DuckDB's hash-partitioning is proven for this workload pattern, but the single-machine in-process scatter API gap remains.
+
+### Summary: when to consider DuckDB
+
+| Scenario | Use Polars | Use DuckDB |
+|---|---|---|
+| Scatter fits in RAM | ✅ — `partition_by` is single-pass | — |
+| Scatter exceeds RAM | — | ✅ — k-way merge spill, no code changes needed |
+| Sort-only (no scatter) | ✅ — ~equal speed, simpler API | ✅ — ~equal speed, automatic spill |
+| Reduce merge-join | ✅ | ✅ |
+| User per-group Python fn | ✅ — `map_groups(fn)` | ❌ — requires UDF or Python loop |
+
+---
+
+## 9. Open Questions
 
 **Q: Are `pyarrow.compute` and Polars similar in efficiency for shared operations?**
 
