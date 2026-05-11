@@ -2208,10 +2208,7 @@ class Controller:
                 if template is None:
                     # Reservation-holder task or a job that disappeared mid-tick.
                     continue
-                req = job_pb2.RunTaskRequest()
-                req.CopyFrom(template)
-                req.task_id = row.task_id.to_wire()
-                req.attempt_id = row.attempt_id
+                req = ControllerTransitions.stamp_attempt_onto_template(template, row.task_id, row.attempt_id)
                 starts[row.worker_id].append(req)
                 attempt_by_worker_task[(row.worker_id, row.task_id.to_wire())] = row.attempt_id
             # ASSIGNED rows go into ``expected`` too so PollTasks reports
