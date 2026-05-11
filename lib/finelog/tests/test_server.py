@@ -110,6 +110,38 @@ def test_push_then_fetch_round_trip(tmp_path: Path):
         svc.close()
 
 
+def test_fetch_logs_wire_unspecified_reads_as_prefix(tmp_path: Path):
+    """RPC clients that omit ``match_scope`` (wire-level UNSPECIFIED) must
+    read path-style: ``/job/<job>/<task>`` should pick up every attempt.
+    The in-process Python default is EXACT, so the server boundary maps
+    UNSPECIFIED → PREFIX before delegating.
+    """
+    svc = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
+    try:
+        app = build_log_server_asgi(svc)
+        with TestClient(app) as client:
+            for attempt in range(2):
+                client.post(
+                    "/finelog.logging.LogService/PushLogs",
+                    json={
+                        "key": f"/job/test/0:{attempt}",
+                        "entries": [{"source": "stdout", "data": f"a{attempt}", "timestamp": {"epoch_ms": attempt + 1}}],
+                    },
+                    headers={"Content-Type": "application/json"},
+                )
+            # No match_scope field on the wire (proto-default 0 == UNSPECIFIED).
+            # Server must read this as PREFIX so we see both attempts.
+            resp = client.post(
+                "/finelog.logging.LogService/FetchLogs",
+                json={"source": "/job/test/0:"},
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 200
+            assert sorted(e["data"] for e in resp.json().get("entries", [])) == ["a0", "a1"]
+    finally:
+        svc.close()
+
+
 def test_query_concurrency_cap_enforced_by_interceptor(tmp_path: Path):
     log_service = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
     stats_service = StatsServiceImpl(log_store=log_service.log_store)

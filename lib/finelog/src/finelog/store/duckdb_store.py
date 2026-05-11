@@ -544,7 +544,7 @@ class DuckDBLogStore:
         self,
         key: str,
         *,
-        match_scope: int = logging_pb2.MATCH_SCOPE_UNSPECIFIED,
+        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",

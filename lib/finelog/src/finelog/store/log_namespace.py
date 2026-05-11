@@ -416,7 +416,7 @@ class LogNamespaceProtocol(Protocol):
         self,
         key: str,
         *,
-        match_scope: int = logging_pb2.MATCH_SCOPE_UNSPECIFIED,
+        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -723,7 +723,7 @@ class DiskLogNamespace:
         self,
         key: str,
         *,
-        match_scope: int = logging_pb2.MATCH_SCOPE_UNSPECIFIED,
+        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -1570,7 +1570,7 @@ class MemoryLogNamespace:
         self,
         key: str,
         *,
-        match_scope: int = logging_pb2.MATCH_SCOPE_UNSPECIFIED,
+        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -1747,25 +1747,27 @@ def _scope_query(
 
     Returns ``(where_parts, params, include_key_in_select, exact_key)``.
 
-    UNSPECIFIED is treated as PREFIX — old callers that pass a path-style
-    key without a scope (e.g. ``/job/<job>/<task>``) read every entry under
-    that path. Use MATCH_SCOPE_EXACT explicitly when only the literal key
-    should match.
+    The in-process Python default is ``MATCH_SCOPE_EXACT``; the RPC server
+    boundary maps wire-level ``MATCH_SCOPE_UNSPECIFIED`` to ``PREFIX`` before
+    invoking ``get_logs``. Either of those resolves to one of the four
+    branches below — ``UNSPECIFIED`` never reaches the query layer.
     """
     if match_scope == logging_pb2.MATCH_SCOPE_EXACT:
         where_parts = ["key = $key", "seq > $cursor"]
         params: dict = {"key": source, "cursor": cursor}
         return where_parts, params, False, source
 
-    if match_scope in (logging_pb2.MATCH_SCOPE_UNSPECIFIED, logging_pb2.MATCH_SCOPE_PREFIX):
+    if match_scope == logging_pb2.MATCH_SCOPE_PREFIX:
+        if not source:
+            # Empty prefix would match every key in the store. Reads with no
+            # source are almost always a caller bug (omitted/defaulted field);
+            # fail fast instead of returning the first page of every stream.
+            raise ValueError("FetchLogs source is required for MATCH_SCOPE_PREFIX")
         # `prefix(key, $p)` is DuckDB's literal-prefix predicate. It's pushed
         # into Parquet row-group min/max stats the same way an `=` is, so
         # PREFIX reads keep the pruning of EXACT.
-        where_parts = ["seq > $cursor"]
-        params = {"cursor": cursor}
-        if source:
-            where_parts.append("prefix(key, $prefix)")
-            params["prefix"] = source
+        where_parts = ["seq > $cursor", "prefix(key, $prefix)"]
+        params = {"cursor": cursor, "prefix": source}
         return where_parts, params, True, None
 
     if match_scope == logging_pb2.MATCH_SCOPE_REGEX:
