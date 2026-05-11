@@ -12,7 +12,8 @@ Auth tables live on a separate ``auth_metadata`` because they are stored
 in the attached ``auth.sqlite3`` database, not the main controller DB.
 """
 
-from typing import Any
+import threading
+from typing import Any, ClassVar
 
 from rigging.timing import Timestamp
 from sqlalchemy import (
@@ -106,6 +107,61 @@ class BoolIntType(TypeDecorator):
         if value is None:
             return None
         return bool(int(value))
+
+
+class CachedProto(TypeDecorator):
+    """Bytes-keyed LRU memo for protobuf blob columns.
+
+    Round-trip: ``message.SerializeToString()`` on the way in,
+    ``message_cls.FromString(bytes)`` on the way out. Two rows whose
+    blobs decode to identical bytes share the same Python object via a
+    process-wide cache — preserving today's ``ProtoCache`` invariant
+    (``schema.py``'s singleton in lines 34-66).
+
+    The cache is global across every ``CachedProto`` instance regardless
+    of ``message_cls``: a single dict, a single lock, a single eviction
+    policy. When the cache reaches ``_MAX_SIZE`` entries we drop the
+    oldest 25% in one batch (``_MAX_SIZE // 4``) — exact match to
+    today's behaviour.
+    """
+
+    impl = LargeBinary
+    cache_ok = True
+
+    _MAX_SIZE: ClassVar[int] = 8192
+    _global_cache: ClassVar[dict[bytes, Any]] = {}
+    _global_lock: ClassVar[threading.Lock] = threading.Lock()
+
+    def __init__(self, message_cls: type) -> None:
+        super().__init__()
+        self._message_cls = message_cls
+
+    def process_bind_param(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        return value.SerializeToString()
+
+    def process_result_value(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        raw = bytes(value)
+        with self._global_lock:
+            hit = self._global_cache.get(raw)
+            if hit is not None:
+                return hit
+        decoded = self._message_cls.FromString(raw)
+        with self._global_lock:
+            # Re-check under the lock to avoid two threads inserting different
+            # decoded objects for the same bytes (preserving is-identity).
+            existing = self._global_cache.get(raw)
+            if existing is not None:
+                return existing
+            if len(self._global_cache) >= self._MAX_SIZE:
+                evict_count = self._MAX_SIZE // 4
+                for stale_key in list(self._global_cache.keys())[:evict_count]:
+                    del self._global_cache[stale_key]
+            self._global_cache[raw] = decoded
+        return decoded
 
 
 metadata = MetaData()
