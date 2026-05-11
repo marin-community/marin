@@ -103,6 +103,7 @@ def generate_id(text: str) -> str:
 def _make_normalize_fn(
     text_field: str,
     id_field: str,
+    drop_fields: tuple[str, ...] = (),
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Return a record-level transform function.
 
@@ -110,11 +111,16 @@ def _make_normalize_fn(
     1. Extracts ``text`` from *text_field*.
     2. Generates a deterministic ``id`` via xxh3_128.
     3. If *id_field* exists in the record, preserves it as ``source_id``.
-    4. Keeps all other columns.
+    4. Keeps all other columns except those named in *drop_fields*.
+
+    *drop_fields* is useful when a source carries nested-dict metadata
+    (e.g. proof-pile-2's ``meta``) whose schema isn't stable across shards
+    and breaks PyArrow's null-widening downstream.
 
     Records with missing or blank text must be filtered out before calling
     the returned function.
     """
+    drop_set = set(drop_fields)
 
     def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
         # --- text ---
@@ -126,11 +132,13 @@ def _make_normalize_fn(
         # --- build output ---
         out: dict[str, Any] = {}
 
-        # Copy all original columns except the ones we're replacing
+        # Copy all original columns except the ones we're replacing or dropping
         for k, v in record.items():
             if k == id_field:
                 continue
             if k == text_field and text_field != "text":
+                continue
+            if k in drop_set:
                 continue
             out[k] = v
 
@@ -315,9 +323,10 @@ def _build_pipeline(
     id_field: str | None,
     dedup_mode: DedupMode,
     max_whitespace_run_chars: int,
+    drop_fields: tuple[str, ...] = (),
 ) -> Dataset:
     """Build the Zephyr pipeline that normalizes *files* into *output_dir*."""
-    normalize_record = _make_normalize_fn(text_field, id_field)
+    normalize_record = _make_normalize_fn(text_field, id_field, drop_fields)
 
     def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
         """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
@@ -371,6 +380,7 @@ def normalize_to_parquet(
     max_workers: int | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
+    drop_fields: tuple[str, ...] = (),
 ) -> NormalizedData:
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
@@ -441,6 +451,7 @@ def normalize_to_parquet(
         id_field,
         dedup_mode,
         max_whitespace_run_chars,
+        drop_fields=drop_fields,
     )
     ctx_kwargs: dict = {"name": "normalize", "resources": resources}
     if max_workers is not None:
@@ -482,6 +493,7 @@ def normalize_step(
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     version: str | None = None,
+    drop_fields: tuple[str, ...] = (),
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
 
@@ -531,6 +543,10 @@ def normalize_step(
         "file_extensions": file_extensions,
         "dedup_mode": dedup_mode,
     }
+    # Only include drop_fields in hash when non-empty so the default-callers'
+    # hash_id stays identical to pre-drop_fields step specs (cache identity).
+    if drop_fields:
+        hash_attrs["drop_fields"] = drop_fields
     # Only include the version key when the caller explicitly opts in, so
     # default callers preserve their existing hash_id and cache hits.
     if version is not None:
@@ -549,6 +565,7 @@ def normalize_step(
             max_workers=max_workers,
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
+            drop_fields=drop_fields,
         ),
         deps=[download],
         hash_attrs=hash_attrs,

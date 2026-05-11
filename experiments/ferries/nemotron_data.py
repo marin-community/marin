@@ -48,6 +48,7 @@ DCLM_COMPONENTS = [
         "download_override_path": "raw/starcoderdata-720c8c",
         "text_field": "content",
         "file_extensions": (".parquet",),
+        "drop_fields": (),
     },
     {
         "name": "proofpile_2",
@@ -57,6 +58,11 @@ DCLM_COMPONENTS = [
         "text_field": "text",
         # HF proof-pile-2 ships as compressed JSONL, not Parquet.
         "file_extensions": (".jsonl.zst",),
+        # ``meta`` is a nested dict whose optional int fields (e.g.
+        # ``max_stars_count``) are null in some shards and typed in others;
+        # PyArrow's null-vs-typed schema widening blows up the reduce stage
+        # (``pyarrow.lib.ArrowInvalid: Invalid null value``).
+        "drop_fields": ("meta",),
     },
 ]
 
@@ -118,6 +124,7 @@ def main() -> None:
             text_field=component["text_field"],
             id_field="id",
             file_extensions=component["file_extensions"],
+            drop_fields=component["drop_fields"],
             max_workers=MAX_WORKERS,
             worker_resources=NORMALIZE_WORKER_RESOURCES,
             version="v2",
