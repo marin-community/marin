@@ -121,6 +121,7 @@ def profile_ctx(
     host_profile: bool = False,
     host_profile_basename: str = "host_profile",
     host_profile_topn: int = 0,
+    profiler_options: jax.profiler.ProfileOptions | None = None,
 ):
     """Context manager for JAX profiling traces.
 
@@ -151,7 +152,12 @@ def profile_ctx(
         pass
 
     if device_profile:
-        jax.profiler.start_trace(path, create_perfetto_link=_create_perfetto_link, create_perfetto_trace=True)
+        jax.profiler.start_trace(
+            path,
+            create_perfetto_link=_create_perfetto_link,
+            create_perfetto_trace=True,
+            profiler_options=profiler_options,
+        )
 
     event = None
     pr = None
