@@ -68,13 +68,14 @@ from iris.cluster.controller.schema import (
     JOB_ROW_PROJECTION,
     TASK_DETAIL_PROJECTION,
     TASK_ROW_PROJECTION,
-    WORKER_DETAIL_PROJECTION,
+    WORKER_ROSTER_PROJECTION,
     AttemptRow,
     EndpointRow,
     JobDetailRow,
     JobRow,
     TaskDetailRow,
     WorkerDetailRow,
+    WorkerRosterRow,
     tasks_with_attempts,
 )
 from iris.cluster.controller.stores import AddEndpointOutcome, ControllerStore
@@ -447,6 +448,31 @@ def _worker_metadata_to_proto(worker: WorkerDetailRow) -> job_pb2.WorkerMetadata
     return md
 
 
+def _roster_metadata_to_proto(row: WorkerRosterRow) -> job_pb2.WorkerMetadata:
+    """Reconstruct WorkerMetadata for a slim roster row.
+
+    Populates only the fields surfaced in the fleet table and the
+    ``bug_report`` worker block: hostname, cpu/memory, gpu/tpu identity, the
+    decoded ``device`` proto (cached by ``proto_from_json``'s ``lru_cache``),
+    and the ``zone`` attribute fetched in the page-scoped batch query.
+    """
+    md = job_pb2.WorkerMetadata(
+        hostname=row.md_hostname,
+        cpu_count=row.md_cpu_count,
+        memory_bytes=row.md_memory_bytes,
+        tpu_name=row.md_tpu_name,
+        gpu_count=row.md_gpu_count,
+        gpu_name=row.md_gpu_name,
+        gpu_memory_mb=row.md_gpu_memory_mb,
+        gce_zone=row.md_gce_zone,
+    )
+    if row.md_device_json and row.md_device_json != "{}":
+        md.device.CopyFrom(proto_from_json(row.md_device_json, job_pb2.DeviceConfig))
+    if row.zone:
+        md.attributes["zone"].string_value = row.zone
+    return md
+
+
 def _decode_attribute_value(row: Any) -> tuple[str, str | int | float]:
     """Decode a worker_attributes row into a (key, value) pair."""
     vtype = str(row["value_type"])
@@ -620,36 +646,113 @@ def _job_status_counts(summary: TaskJobSummary | None, job_id: JobName) -> dict[
     }
 
 
-def _filter_and_sort_workers(
-    workers: list[WorkerDetailRow],
-    liveness_by_id: dict[WorkerId, WorkerLiveness],
-    query: controller_pb2.Controller.WorkerQuery,
-) -> list[WorkerDetailRow]:
-    """Apply the ``WorkerQuery`` contains filter and sort the cached roster.
+@dataclass(frozen=True, slots=True)
+class _WorkerPage:
+    rows: list[WorkerRosterRow]
+    total_count: int
 
-    Filtering and sorting happen in Python against the cached worker roster
-    rather than in SQL: the roster is bounded by cluster size (low thousands)
-    and already cached on the controller, so the marginal cost of a re-scan
-    per request is much smaller than reissuing the SELECT + worker_attributes
-    fan-out.
+
+def _worker_contains_clause(needle: str) -> tuple[str, tuple[str, str]]:
+    """SQL fragment + params for a case-insensitive ``contains`` filter."""
+    pattern = f"%{needle.lower()}%"
+    return ("(LOWER(w.worker_id) LIKE ? OR LOWER(w.address) LIKE ?)", (pattern, pattern))
+
+
+# ``device_type == ''`` is the CPU-baseline marker; under ascending sort we keep
+# CPU workers grouped first the same way the previous Python sort did. The
+# value is a tuple of column expressions; the same ASC/DESC direction is
+# appended to every column so the secondary sort flips with the primary.
+_WORKER_SORT_FIELD_TO_SQL: dict[int, tuple[str, ...]] = {
+    controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID: ("w.worker_id",),
+    controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE: ("w.device_type", "w.worker_id"),
+}
+
+
+def _query_workers_page(
+    store: ControllerStore,
+    query: controller_pb2.Controller.WorkerQuery,
+    liveness_by_id: dict[WorkerId, WorkerLiveness],
+) -> _WorkerPage:
+    """Resolve a single ``ListWorkers`` page in two indexed SQL queries.
+
+    ``last_heartbeat`` lives in the in-memory health tracker, not the DB, so
+    sorting by it still happens in Python — but only over a single ``worker_id``
+    column (no roster-wide ``SELECT *``).  Worker-id and device-type sorts run
+    entirely in SQL via ``ORDER BY ... LIMIT/OFFSET``.  Either path emits at
+    most one roster SELECT and one ``zone``-attribute SELECT keyed on the page.
     """
     needle = query.contains.lower() if query.contains else ""
+    where_parts: list[str] = []
+    where_params: list[object] = []
     if needle:
-        workers = [
-            w for w in workers if needle in str(w.worker_id).lower() or (w.address and needle in w.address.lower())
-        ]
+        clause, params = _worker_contains_clause(needle)
+        where_parts.append(clause)
+        where_params.extend(params)
+    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
     sort_field = query.sort_field or controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID
     descending = query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC
-    if sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT:
-        workers = sorted(workers, key=lambda w: liveness_by_id[w.worker_id].last_heartbeat_ms, reverse=descending)
-    elif sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE:
-        # CPU workers persist with ``device_type == ""``; under ascending sort
-        # they group first (treating CPU as the no-accelerator baseline).
-        workers = sorted(workers, key=lambda w: (w.device_type, str(w.worker_id)), reverse=descending)
-    else:
-        workers = sorted(workers, key=lambda w: str(w.worker_id), reverse=descending)
-    return workers
+    direction = "DESC" if descending else "ASC"
+
+    offset = max(query.offset, 0)
+    limit = max(query.limit, 0)
+    if limit > MAX_LIST_WORKERS_LIMIT:
+        limit = MAX_LIST_WORKERS_LIMIT
+
+    with store.read_snapshot() as q:
+        count_row = q.fetchone(f"SELECT COUNT(*) FROM workers w {where_sql}", tuple(where_params))
+        total_count = int(count_row[0]) if count_row is not None else 0
+
+        if sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT:
+            id_rows = q.fetchall(f"SELECT w.worker_id FROM workers w {where_sql}", tuple(where_params))
+            ordered_ids = [WorkerId(str(r["worker_id"])) for r in id_rows]
+            # In-memory secondary key on worker_id keeps the ordering stable for
+            # workers that share a heartbeat (e.g. never-seen workers all at 0).
+            ordered_ids.sort(
+                key=lambda wid: (
+                    (liveness_by_id.get(wid) or WorkerLiveness()).last_heartbeat_ms,
+                    str(wid),
+                ),
+                reverse=descending,
+            )
+            page_ids = ordered_ids[offset : offset + limit] if limit > 0 else ordered_ids[offset:]
+            if not page_ids:
+                return _WorkerPage(rows=[], total_count=total_count)
+            placeholders = ",".join("?" for _ in page_ids)
+            rows = q.fetchall(
+                f"SELECT {WORKER_ROSTER_PROJECTION.select_clause()} "
+                f"FROM workers w WHERE w.worker_id IN ({placeholders})",
+                tuple(str(wid) for wid in page_ids),
+            )
+            roster_by_id = {row.worker_id: row for row in WORKER_ROSTER_PROJECTION.decode(rows)}
+            roster = [roster_by_id[wid] for wid in page_ids if wid in roster_by_id]
+        else:
+            order_cols = _WORKER_SORT_FIELD_TO_SQL.get(sort_field, ("w.worker_id",))
+            order_expr = ", ".join(f"{col} {direction}" for col in order_cols)
+            select_sql = (
+                f"SELECT {WORKER_ROSTER_PROJECTION.select_clause()} " f"FROM workers w {where_sql} ORDER BY {order_expr}"
+            )
+            select_params = list(where_params)
+            if limit > 0:
+                select_sql += " LIMIT ? OFFSET ?"
+                select_params.extend([limit, offset])
+            elif offset:
+                select_sql += " LIMIT -1 OFFSET ?"
+                select_params.append(offset)
+            rows = q.fetchall(select_sql, tuple(select_params))
+            roster = WORKER_ROSTER_PROJECTION.decode(rows)
+
+        if roster:
+            placeholders = ",".join("?" for _ in roster)
+            zone_rows = q.fetchall(
+                "SELECT worker_id, str_value FROM worker_attributes "
+                f"WHERE key = 'zone' AND value_type = 'str' AND worker_id IN ({placeholders})",
+                tuple(str(r.worker_id) for r in roster),
+            )
+            zone_by_id = {str(r["worker_id"]): str(r["str_value"]) for r in zone_rows if r["str_value"] is not None}
+            roster = [dataclasses.replace(r, zone=zone_by_id.get(str(r.worker_id), "")) for r in roster]
+
+    return _WorkerPage(rows=roster, total_count=total_count)
 
 
 def _resolve_state_filter(state_filter: str) -> tuple[int, ...] | None:
@@ -842,26 +945,13 @@ def _task_summaries_for_jobs(q: QuerySnapshot, job_ids: set[JobName]) -> dict[Jo
     return summaries
 
 
-def _worker_roster(store: ControllerStore) -> list[WorkerDetailRow]:
+def _all_worker_ids(store: ControllerStore) -> list[WorkerId]:
+    """Return every known worker_id. Used by autoscaler status to filter the
+    set of VMs reported by the provider down to the ones the controller has
+    a registration row for — no metadata is needed for that join."""
     with store.read_snapshot() as q:
-        decoded = WORKER_DETAIL_PROJECTION.decode(
-            q.fetchall(f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} FROM workers w")
-        )
-        if not decoded:
-            return []
-        worker_ids = tuple(str(w.worker_id) for w in decoded)
-        placeholders = ",".join("?" for _ in worker_ids)
-        attr_rows = q.fetchall(
-            f"SELECT worker_id, key, value_type, str_value, int_value, float_value "
-            f"FROM worker_attributes WHERE worker_id IN ({placeholders})",
-            worker_ids,
-        )
-        attrs_by_worker: dict[str, dict[str, str | int | float]] = {}
-        for row in attr_rows:
-            wid = str(row["worker_id"])
-            key, value = _decode_attribute_value(row)
-            attrs_by_worker.setdefault(wid, {})[key] = value
-    return [dataclasses.replace(w, attributes=attrs_by_worker.get(str(w.worker_id), {})) for w in decoded]
+        rows = q.fetchall("SELECT worker_id FROM workers w")
+    return [WorkerId(str(r["worker_id"])) for r in rows]
 
 
 def _live_user_stats(db: ControllerDB) -> list[UserStats]:
@@ -1655,41 +1745,38 @@ class ControllerServiceImpl:
         if request.HasField("query"):
             query.CopyFrom(request.query)
 
-        workers_all = _worker_roster(self._store)
-        liveness_by_id = self._store.health.liveness_many(w.worker_id for w in workers_all)
-        filtered = _filter_and_sort_workers(workers_all, liveness_by_id, query)
-        total_count = len(filtered)
+        # The heartbeat sort path needs liveness for the full filtered set;
+        # other paths only need it for the page. ``health.all()`` is a snapshot
+        # of an in-memory dict, so paying for it unconditionally is cheaper than
+        # branching to ``liveness_many`` after the SQL hit.
+        liveness_by_id = self._store.health.all()
+        page = _query_workers_page(self._store, query, liveness_by_id)
 
         offset = max(query.offset, 0)
         limit = max(query.limit, 0)
         if limit > MAX_LIST_WORKERS_LIMIT:
             limit = MAX_LIST_WORKERS_LIMIT
-        if limit > 0:
-            page_rows = filtered[offset : offset + limit]
-            has_more = offset + limit < total_count
-        else:
-            page_rows = filtered[offset:] if offset else filtered
-            has_more = False
+        has_more = limit > 0 and offset + limit < page.total_count
 
-        running = running_tasks_by_worker(self._db, {w.worker_id for w in page_rows}) if page_rows else {}
+        running = running_tasks_by_worker(self._db, {r.worker_id for r in page.rows}) if page.rows else {}
         workers = []
-        for worker in page_rows:
-            liveness = liveness_by_id[worker.worker_id]
+        for row in page.rows:
+            liveness = liveness_by_id.get(row.worker_id) or WorkerLiveness()
             workers.append(
                 controller_pb2.Controller.WorkerHealthStatus(
-                    worker_id=worker.worker_id,
+                    worker_id=row.worker_id,
                     healthy=liveness.healthy,
                     consecutive_failures=liveness.consecutive_failures,
                     last_heartbeat=timestamp_to_proto(Timestamp.from_ms(liveness.last_heartbeat_ms)),
-                    running_job_ids=[task_id.to_wire() for task_id in running.get(worker.worker_id, set())],
-                    address=worker.address,
-                    metadata=_worker_metadata_to_proto(worker),
+                    running_job_ids=[task_id.to_wire() for task_id in running.get(row.worker_id, set())],
+                    address=row.address,
+                    metadata=_roster_metadata_to_proto(row),
                     status_message=worker_status_message(liveness),
                 )
             )
         return controller_pb2.Controller.ListWorkersResponse(
             workers=workers,
-            total_count=total_count,
+            total_count=page.total_count,
             has_more=has_more,
         )
 
@@ -1827,9 +1914,9 @@ class ControllerServiceImpl:
 
         status = autoscaler.get_status()
 
-        workers = _worker_roster(self._store)
-        liveness_by_id = self._store.health.liveness_many(w.worker_id for w in workers)
-        worker_id_to_health: dict[str, bool] = {str(w.worker_id): liveness_by_id[w.worker_id].healthy for w in workers}
+        worker_ids = _all_worker_ids(self._store)
+        liveness_by_id = self._store.health.liveness_many(worker_ids)
+        worker_id_to_health: dict[str, bool] = {str(wid): liveness_by_id[wid].healthy for wid in worker_ids}
 
         # The vm_ids appearing in the autoscaler status are the only candidates
         # for the running-task lookup; restrict to those known to be in the

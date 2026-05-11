@@ -1313,6 +1313,144 @@ def test_list_workers_filter_by_contains(service, state):
     assert by_substring.total_count == 4
 
 
+@pytest.mark.parametrize(
+    "sort_field,direction,expected_prefix_order",
+    [
+        # Default sort is by worker_id ascending: alpha order, cpu before gpu.
+        (
+            controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID,
+            controller_pb2.Controller.SORT_DIRECTION_ASC,
+            ["cpu", "cpu", "gpu", "gpu"],
+        ),
+        # Descending worker_id swaps the groups.
+        (
+            controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID,
+            controller_pb2.Controller.SORT_DIRECTION_DESC,
+            ["gpu", "gpu", "cpu", "cpu"],
+        ),
+        # CPU workers persist with device_type="", so they group before "gpu"
+        # under ascending device-type sort.
+        (
+            controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE,
+            controller_pb2.Controller.SORT_DIRECTION_ASC,
+            ["cpu", "cpu", "gpu", "gpu"],
+        ),
+        (
+            controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE,
+            controller_pb2.Controller.SORT_DIRECTION_DESC,
+            ["gpu", "gpu", "cpu", "cpu"],
+        ),
+    ],
+)
+def test_list_workers_sort_field(service, state, sort_field, direction, expected_prefix_order):
+    """ORDER BY in SQL produces the same shape as the old in-Python sort."""
+    _register_workers_for_query(service, state, count_cpu=2, count_gpu=2)
+
+    response = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(sort_field=sort_field, sort_direction=direction),
+        ),
+        None,
+    )
+    actual = [w.worker_id.split("-", 1)[0] for w in response.workers]
+    assert actual == expected_prefix_order
+
+
+def test_list_workers_sort_by_heartbeat_orders_by_health_tracker(service, state):
+    """Heartbeat sort uses the in-memory health tracker, not the DB.
+
+    Liveness is per-worker in ``WorkerHealthTracker``; for the SQL path to
+    cooperate with that we sort worker_ids in Python before fetching the page.
+    """
+    _register_workers_for_query(service, state, count_cpu=3, count_gpu=0)
+
+    # Stamp ascending heartbeats so the ordering is deterministic; the worker
+    # with the highest heartbeat is the "freshest" and should land last under
+    # ascending sort, first under descending.
+    workers = ["cpu-worker-00", "cpu-worker-01", "cpu-worker-02"]
+    for i, wid in enumerate(workers):
+        state._store.health.set_last_heartbeat_for_test(WorkerId(wid), 1000 + i * 1000)
+
+    asc = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(
+                sort_field=controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT,
+                sort_direction=controller_pb2.Controller.SORT_DIRECTION_ASC,
+            ),
+        ),
+        None,
+    )
+    assert [w.worker_id for w in asc.workers] == workers
+
+    desc = service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(
+                sort_field=controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT,
+                sort_direction=controller_pb2.Controller.SORT_DIRECTION_DESC,
+            ),
+        ),
+        None,
+    )
+    assert [w.worker_id for w in desc.workers] == list(reversed(workers))
+
+
+def test_list_workers_populates_fleet_metadata(service, state):
+    """The slim roster row surfaces every field the dashboard table reads.
+
+    Specifically: cpu_count, memory_bytes, tpu_name, gpu_count/name/memory,
+    the ``zone`` attribute (single batched per-page lookup), and the decoded
+    ``device`` proto. Dashboard/bug-report breaks if any of these go missing.
+    """
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
+
+    state._db.ensure_user("system:worker", Timestamp.now(), role="worker")
+    token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
+    try:
+        gpu_meta = make_worker_metadata(gpu_count=4, gpu_name="h100")
+        gpu_meta.gpu_memory_mb = 80 * 1024
+        gpu_meta.attributes["zone"].string_value = "us-central2-b"
+        gpu_meta.gce_zone = "us-central2-b"
+        service.register(
+            controller_pb2.Controller.RegisterRequest(
+                address="gpu-host:8080",
+                metadata=gpu_meta,
+                worker_id="gpu-worker-00",
+            ),
+            None,
+        )
+
+        tpu_meta = make_worker_metadata(tpu_name="v5litepod-16")
+        tpu_meta.attributes["zone"].string_value = "europe-west4-a"
+        service.register(
+            controller_pb2.Controller.RegisterRequest(
+                address="tpu-host:8080",
+                metadata=tpu_meta,
+                worker_id="tpu-worker-00",
+            ),
+            None,
+        )
+    finally:
+        _verified_identity.reset(token)
+
+    response = service.list_workers(controller_pb2.Controller.ListWorkersRequest(), None)
+    by_id = {w.worker_id: w for w in response.workers}
+
+    gpu = by_id["gpu-worker-00"]
+    assert gpu.metadata.gpu_count == 4
+    assert gpu.metadata.gpu_name == "h100"
+    assert gpu.metadata.gpu_memory_mb == 80 * 1024
+    assert gpu.metadata.gce_zone == "us-central2-b"
+    assert gpu.metadata.device.HasField("gpu")
+    assert gpu.metadata.device.gpu.variant == "h100"
+    assert gpu.metadata.attributes["zone"].string_value == "us-central2-b"
+
+    tpu = by_id["tpu-worker-00"]
+    assert tpu.metadata.tpu_name == "v5litepod-16"
+    assert tpu.metadata.device.HasField("tpu")
+    assert tpu.metadata.device.tpu.variant == "v5litepod-16"
+    assert tpu.metadata.attributes["zone"].string_value == "europe-west4-a"
+
+
 # =============================================================================
 # Constraint Injection Tests
 # =============================================================================

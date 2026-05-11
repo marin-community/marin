@@ -1055,11 +1055,18 @@ def test_coscheduling_failure_reason_insufficient_group(client, state):
 # =============================================================================
 
 
-def test_worker_attributes_in_list_workers(client, state):
-    """ListWorkers RPC returns worker attributes in metadata."""
+def test_list_workers_metadata_contract(client, state):
+    """ListWorkers only surfaces the fields the fleet table renders.
+
+    The slim roster intentionally drops the full ``worker_attributes`` payload
+    (those belong on ``GetWorkerStatus`` for the worker detail page). Only
+    ``zone`` is propagated — it's the single attribute the dashboard reads
+    when rendering the fleet table.
+    """
     meta = make_worker_metadata()
     meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(job_pb2.AttributeValue(string_value="v5litepod-16"))
     meta.attributes[WellKnownAttribute.TPU_WORKER_ID].CopyFrom(job_pb2.AttributeValue(int_value=0))
+    meta.attributes["zone"].CopyFrom(job_pb2.AttributeValue(string_value="us-central2-b"))
     register_worker(state, "tpu-worker", "h1:8080", meta)
 
     resp = rpc_post(client, "ListWorkers")
@@ -1067,6 +1074,22 @@ def test_worker_attributes_in_list_workers(client, state):
     assert len(workers) == 1
 
     attrs = workers[0].get("metadata", {}).get("attributes", {})
+    assert attrs.get("zone", {}).get("stringValue") == "us-central2-b"
+    # Full attribute fanout is the responsibility of GetWorkerStatus now.
+    assert "tpu-name" not in attrs
+    assert "tpu-worker-id" not in attrs
+
+
+def test_get_worker_status_returns_full_attributes(client, state):
+    """GetWorkerStatus keeps the full worker_attributes payload that
+    ``ListWorkers`` no longer carries."""
+    meta = make_worker_metadata()
+    meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(job_pb2.AttributeValue(string_value="v5litepod-16"))
+    meta.attributes[WellKnownAttribute.TPU_WORKER_ID].CopyFrom(job_pb2.AttributeValue(int_value=0))
+    register_worker(state, "tpu-worker", "h1:8080", meta)
+
+    resp = rpc_post(client, "GetWorkerStatus", {"id": "tpu-worker"})
+    attrs = resp.get("worker", {}).get("metadata", {}).get("attributes", {})
     assert attrs["tpu-name"]["stringValue"] == "v5litepod-16"
     assert int(attrs["tpu-worker-id"]["intValue"]) == 0
 

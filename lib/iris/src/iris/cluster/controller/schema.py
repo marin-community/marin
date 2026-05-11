@@ -1281,6 +1281,33 @@ class WorkerRow:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkerRosterRow:
+    """Slim worker row for the fleet listing.
+
+    Carries only the columns ``ListWorkers`` renders (table cells in
+    ``FleetTab.vue`` and the worker block in ``bug_report``).  ``zone`` is
+    surfaced as a dedicated field rather than via the generic ``attributes``
+    dict — the dashboard only ever reads the ``zone`` attribute, so we fetch
+    it as a single per-page batched query instead of fanning out into
+    ``worker_attributes`` for every row.
+    """
+
+    worker_id: WorkerId
+    address: str
+    device_type: str
+    md_hostname: str
+    md_cpu_count: int
+    md_memory_bytes: int
+    md_tpu_name: str
+    md_gpu_count: int
+    md_gpu_name: str
+    md_gpu_memory_mb: int
+    md_gce_zone: str
+    md_device_json: str
+    zone: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class WorkerDetailRow:
     """Full worker detail — superset of WorkerRow, adds metadata scalar columns."""
 
@@ -1597,6 +1624,26 @@ WORKER_DETAIL_PROJECTION = WORKERS.projection(
     "md_device_json",
     extra_fields=(ExtraField("attributes", dict, default_factory=dict),),
     row_cls=WorkerDetailRow,
+)
+
+# Slim worker projection for ListWorkers. The fleet table reads only these
+# columns; the wider WORKER_DETAIL_PROJECTION (24 columns including JSON proto
+# blobs) was the dominant cost of the old roster scan.
+WORKER_ROSTER_PROJECTION = WORKERS.projection(
+    "worker_id",
+    "address",
+    "device_type",
+    "md_hostname",
+    "md_cpu_count",
+    "md_memory_bytes",
+    "md_tpu_name",
+    "md_gpu_count",
+    "md_gpu_name",
+    "md_gpu_memory_mb",
+    "md_gce_zone",
+    "md_device_json",
+    extra_fields=(ExtraField("zone", str, default=""),),
+    row_cls=WorkerRosterRow,
 )
 
 # Task attempt row.
