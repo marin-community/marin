@@ -82,7 +82,7 @@ from levanter.data import batched
 from levanter.data.loader import stack_batches
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
+from levanter.utils.jax_utils import broadcast_one_to_all, parameter_count, use_cpu_device
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
 
@@ -339,34 +339,19 @@ class _LmEvalHarnessWorker:
 
     def _receive_message(self):
         stop_message = jnp.array(_Message.STOP)
-        message = broadcast_shard(stop_message, PartitionSpec())
+        message = broadcast_one_to_all(stop_message)
         return message.item()
 
     def _receive_payload(self):
-        payload = broadcast_shard(
-            self._dummy_batch,
-            hax.partitioning.infer_resource_partitions(
-                self._dummy_batch,
-                resource_mapping=self.axis_resources,
-            ),
-        )
-        return payload
+        return broadcast_one_to_all(self._dummy_batch)
 
     def _send_message(self, message):
         assert jax.process_index() == 0
-        out = broadcast_shard(jnp.array(message), PartitionSpec())
-        return out
+        return broadcast_one_to_all(jnp.array(message))
 
     def _send_payload(self, payload):
         assert jax.process_index() == 0
-        out = broadcast_shard(
-            payload,
-            hax.partitioning.infer_resource_partitions(
-                payload,
-                resource_mapping=self.axis_resources,
-            ),
-        )
-        return out
+        return broadcast_one_to_all(payload)
 
     def process_loglikelihood(self, packed_request):
         out = self._jit_loglikelihood(self.model, packed_request)
@@ -624,16 +609,15 @@ class LevanterHarnessLM(TemplateLM):
             # Handle profiler start/stop based on step
             self._handle_profiler_step()
 
-            batch = hax.shard(batch, self.axis_resources)
-
+            # Sharding onto the training mesh from process 0 alone isn't valid
+            # on multi-host (devices outside the local 4 aren't addressable).
+            # dispatch_loglikelihood broadcasts to all hosts and the jit'd
+            # process_loglikelihood handles input placement on entry.
             segments_this_batch = get_segment_ids_from_batch(
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
 
             padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
-            batch = jax.device_put(batch)
-
-            batch = jax.device_put(batch)
 
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
 
