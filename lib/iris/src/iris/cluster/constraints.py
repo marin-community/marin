@@ -41,6 +41,21 @@ class WellKnownAttribute(StrEnum):
     TPU_VM_COUNT = "tpu-vm-count"
     GPU_VARIANT = "gpu-variant"
     GPU_COUNT = "gpu-count"
+    # Worker reconcile protocol mode. Values: ``ProtocolMode`` members.
+    # Drives the controller dispatch loop: reconcile-via-poll workers skip
+    # StartTasks materialization (the worker fetches per-attempt specs
+    # itself via GetTaskAttemptInfo).
+    PROTOCOL_MODE = "protocol-mode"
+
+
+class ProtocolMode(StrEnum):
+    """Worker reconcile protocol modes (value of ``WellKnownAttribute.PROTOCOL_MODE``)."""
+
+    # Legacy: controller pushes RunTaskRequest via StartTasks RPC.
+    START_STOP = "start_stop"
+    # Reconcile-only: worker fetches per-attempt specs via GetTaskAttemptInfo
+    # in response to PollTasks expected_tasks. Controller skips StartTasks.
+    RECONCILE_VIA_POLL = "reconcile_via_poll"
 
 
 # ---------------------------------------------------------------------------

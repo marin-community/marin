@@ -6,6 +6,7 @@
 import logging
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter, 
 
 from iris.chaos import chaos
 from iris.cluster.bundle import BundleStore
+from iris.cluster.constraints import ProtocolMode, WellKnownAttribute
 from iris.cluster.log_store_helpers import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.profile import (
@@ -92,6 +94,12 @@ class WorkerConfig:
     capacity_type: int = 0
     storage_prefix: str = ""
     auth_token: str = ""
+    # When True, the worker runs in reconcile-via-poll mode: it rejects
+    # inbound StartTasks RPCs and fetches per-attempt RunTaskRequest specs
+    # itself via GetTaskAttemptInfo in response to PollTasks expected_tasks.
+    # The controller learns the mode from the ``protocol-mode`` worker
+    # attribute and skips StartTasks materialization for these workers.
+    reconcile_via_poll: bool = False
 
 
 def worker_config_from_proto(
@@ -152,6 +160,12 @@ class Worker:
     # catches up with the task it just assigned.
     _RECENT_SUBMISSION_GRACE_SECONDS = 30.0
 
+    # Capacity of the per-worker ``(task_id, attempt_id) -> RunTaskRequest``
+    # cache used by reconcile-via-poll mode. The pair is immutable once
+    # written upstream so entries never need invalidation; we evict LRU on
+    # capacity to bound memory.
+    _SPEC_CACHE_CAPACITY = 256
+
     def __init__(
         self,
         config: WorkerConfig,
@@ -204,6 +218,15 @@ class Worker:
                 worker_attributes=config.worker_attributes,
             )
 
+        # Advertise the reconcile protocol mode so the controller's dispatch
+        # loop knows whether to send StartTasks for this worker. Stamped
+        # into the WorkerMetadata.attributes free-form map (no proto change
+        # required) and persisted into the ``worker_attributes`` table at
+        # registration. Always set so legacy and reconcile-only workers are
+        # equally identifiable in queries.
+        protocol_mode = ProtocolMode.RECONCILE_VIA_POLL if config.reconcile_via_poll else ProtocolMode.START_STOP
+        self._worker_metadata.attributes[WellKnownAttribute.PROTOCOL_MODE].string_value = str(protocol_mode)
+
         # Task state: maps (task_id, attempt_id) -> TaskAttempt.
         # Preserves all attempts so logs for historical attempts remain accessible.
         self._tasks: dict[tuple[str, int], TaskAttempt] = {}
@@ -212,6 +235,10 @@ class Worker:
         # eligible for "unexpected, kill" if the controller hasn't yet
         # listed it in expected_tasks. See _RECENT_SUBMISSION_GRACE_SECONDS.
         self._recent_submissions: dict[tuple[str, int], float] = {}
+        # Per-attempt RunTaskRequest cache for reconcile-via-poll mode.
+        # Entries are immutable (the (task_id, attempt_id) pair is final
+        # once written upstream); LRU eviction on capacity.
+        self._spec_cache: OrderedDict[tuple[str, int], job_pb2.RunTaskRequest] = OrderedDict()
         self._lock = threading.Lock()
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
@@ -871,19 +898,25 @@ class Worker:
     def _reconcile_expected_tasks(
         self,
         expected_entries,
-    ) -> tuple[list[job_pb2.WorkerTaskStatus], list[tuple[str, int]]]:
+    ) -> tuple[list[job_pb2.WorkerTaskStatus], list[tuple[str, int]], list[tuple[str, int]]]:
         """Build status entries for expected tasks; collect non-terminal local tasks
-        not in the expected set as targets to kill.
+        not in the expected set as targets to kill; collect expected keys with
+        no local record as fetch candidates.
 
         Caller must hold ``self._lock``.
 
         Freshly-submitted tasks (``self._recent_submissions``) are protected
         from reconciliation kills via the grace window, which covers the
         StartTasks → PollTasks race where the controller polls before its
-        internal view catches up with a task it just assigned.
+        internal view catches up with a task it just assigned. Fetch
+        candidates are also filtered by the grace window so a task we just
+        submitted (via ``submit_task``) is not re-fetched on the very next
+        poll.
         """
         tasks: list[job_pb2.WorkerTaskStatus] = []
         expected_keys: set[tuple[str, int]] = set()
+        missing_keys: list[tuple[str, int]] = []
+        recent_keys = self._prune_and_get_recent_submission_keys()
         for expected_entry in expected_entries:
             task_id = expected_entry.task_id
             expected_attempt_id = expected_entry.attempt_id
@@ -891,15 +924,22 @@ class Worker:
             expected_keys.add(key)
             task = self._tasks.get(key)
             if task is None:
-                tasks.append(self._missing_task_status(task_id, expected_attempt_id))
+                # Legacy mode: missing local entry means lost state, reported
+                # as WORKER_FAILED so the controller bounces the attempt.
+                # Reconcile-via-poll mode: the worker fetches the spec
+                # itself; ``handle_poll_tasks`` consumes ``missing_keys``.
+                if self._config.reconcile_via_poll and key not in recent_keys:
+                    missing_keys.append(key)
+                else:
+                    tasks.append(self._missing_task_status(task_id, expected_attempt_id))
             else:
                 tasks.append(self._encode_task_status(task, task_id))
-        expected_keys |= self._prune_and_get_recent_submission_keys()
+        expected_keys |= recent_keys
         tasks_to_kill: list[tuple[str, int]] = []
         for key, task in self._tasks.items():
             if key not in expected_keys and task.status not in self._TERMINAL_STATES:
                 tasks_to_kill.append(key)
-        return tasks, tasks_to_kill
+        return tasks, tasks_to_kill, missing_keys
 
     def _collect_resource_metrics(self) -> job_pb2.WorkerResourceSnapshot:
         """Collect host metrics with running-task and process aggregates filled in."""
@@ -957,7 +997,20 @@ class Worker:
         table.write([stat])
 
     def handle_start_tasks(self, request: worker_pb2.Worker.StartTasksRequest) -> worker_pb2.Worker.StartTasksResponse:
-        """Start task attempts on this worker. Returns per-task ack."""
+        """Start task attempts on this worker. Returns per-task ack.
+
+        In reconcile-via-poll mode the worker fetches per-attempt specs
+        itself via PollTasks + GetTaskAttemptInfo; pushed StartTasks
+        payloads would race with that fetch path, so they are rejected
+        outright with a uniform error per task.
+        """
+        if self._config.reconcile_via_poll:
+            err = "this worker runs in reconcile-via-poll mode; use GetTaskAttemptInfo instead"
+            acks = [
+                worker_pb2.Worker.TaskAck(task_id=run_req.task_id, accepted=False, error=err)
+                for run_req in request.tasks
+            ]
+            return worker_pb2.Worker.StartTasksResponse(acks=acks)
         acks = []
         for run_req in request.tasks:
             try:
@@ -984,16 +1037,84 @@ class Worker:
     def handle_poll_tasks(self, request: worker_pb2.Worker.PollTasksRequest) -> worker_pb2.Worker.PollTasksResponse:
         """Report status of expected tasks and kill unexpected tasks.
 
-        Freshly-submitted tasks (via StartTasks) are protected from the
-        StartTasks → PollTasks race by the recent-submission grace window
-        applied in _reconcile_expected_tasks.
+        Freshly-submitted tasks (via StartTasks or via the reconcile-via-poll
+        fetch path) are protected from the dispatch → PollTasks race by the
+        recent-submission grace window applied in _reconcile_expected_tasks.
+
+        In reconcile-via-poll mode this method also fetches per-attempt
+        ``RunTaskRequest`` specs for expected keys with no local record and
+        submits them. The kill path is unchanged.
         """
         with self._lock:
-            tasks, tasks_to_kill = self._reconcile_expected_tasks(request.expected_tasks)
+            tasks, tasks_to_kill, missing_keys = self._reconcile_expected_tasks(request.expected_tasks)
         for task_id, attempt_id in tasks_to_kill:
             logger.warning("PollTasks: killing task %s attempt %d (unexpected)", task_id, attempt_id)
             self._kill_task_attempt(task_id, attempt_id, async_kill=True)
+        for task_id, attempt_id in missing_keys:
+            try:
+                run_req = self._fetch_attempt_info(task_id, attempt_id)
+            except Exception as exc:
+                # Spec fetch failures are transient; the next PollTasks will
+                # re-list the expected key and we'll retry. The missing entry
+                # is intentionally not turned into a synthetic WORKER_FAILED
+                # so the controller doesn't bounce the attempt off-worker
+                # mid-fetch.
+                logger.warning(
+                    "PollTasks: GetTaskAttemptInfo failed for %s attempt %d: %s",
+                    task_id,
+                    attempt_id,
+                    exc,
+                )
+                continue
+            self._record_attempt_spec(task_id, attempt_id, run_req)
+            try:
+                self.submit_task(run_req)
+                logger.info("PollTasks: submitted task %s attempt %d via reconcile fetch", task_id, attempt_id)
+            except Exception as exc:
+                logger.warning(
+                    "PollTasks: submit_task failed for %s attempt %d after fetch: %s",
+                    task_id,
+                    attempt_id,
+                    exc,
+                )
         return worker_pb2.Worker.PollTasksResponse(tasks=tasks)
+
+    def _fetch_attempt_info(self, task_id: str, attempt_id: int) -> job_pb2.RunTaskRequest:
+        """Return the cached or freshly-fetched ``RunTaskRequest`` for an attempt.
+
+        Used by reconcile-via-poll mode. ``(task_id, attempt_id)`` is
+        immutable once written upstream, so the local LRU never needs
+        invalidation.
+        """
+        key = (task_id, attempt_id)
+        cached = self._spec_cache.get(key)
+        if cached is not None:
+            self._spec_cache.move_to_end(key)
+            return cached
+        assert (
+            self._controller_client is not None
+        ), "controller client must be initialized before reconcile-via-poll fetches"
+        run_req = self._controller_client.get_task_attempt_info(
+            controller_pb2.Controller.GetTaskAttemptInfoRequest(
+                task_id=task_id,
+                attempt_id=attempt_id,
+            )
+        )
+        self._record_attempt_spec(task_id, attempt_id, run_req)
+        return run_req
+
+    def _record_attempt_spec(self, task_id: str, attempt_id: int, run_req: job_pb2.RunTaskRequest) -> None:
+        """Insert a fetched ``RunTaskRequest`` into the per-attempt LRU.
+
+        Split out from ``_fetch_attempt_info`` so the eventual wire-up only
+        replaces the ``NotImplementedError`` path with a fetch+record. Also
+        exposed for tests that bypass the stub via monkeypatch.
+        """
+        key = (task_id, attempt_id)
+        self._spec_cache[key] = run_req
+        self._spec_cache.move_to_end(key)
+        while len(self._spec_cache) > self._SPEC_CACHE_CAPACITY:
+            self._spec_cache.popitem(last=False)
 
     def _kill_task_attempt(
         self,
