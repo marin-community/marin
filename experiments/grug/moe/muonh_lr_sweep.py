@@ -55,8 +55,14 @@ _DEFAULT_GRID: tuple[tuple[int, float, float, float], ...] = (
     (512, 2.19e17, 4.0, 2.0),
 )
 
+# Phase 1 warmup ablation: same 11 cells but with warmup=0.0 (vs the v16
+# heuristic default 0.1). Distinct run id prefix `muonh-lr-nowarm-...` so
+# the cached outputs from the baseline-warmup grid are not reused.
+_NOWARMUP_GRID: tuple[tuple[int, float, float, float], ...] = _DEFAULT_GRID
+
 _BASELINE_TARGET_STEPS: int = 2**14
 _GROUP: str = "muonh-lr-sweep"
+_GROUP_NOWARMUP: str = "muonh-lr-sweep-nowarmup"
 
 
 def _format_budget(budget: float) -> str:
@@ -69,7 +75,15 @@ def _format_mult(value: float) -> str:
     return f"{value:.3g}".replace(".", "p")
 
 
-def _format_run_id(hidden_dim: int, budget: float, muonh_mult: float, adam_mult: float, run_suffix: str = "") -> str:
+def _format_run_id(
+    hidden_dim: int,
+    budget: float,
+    muonh_mult: float,
+    adam_mult: float,
+    run_suffix: str = "",
+    *,
+    nowarmup: bool = False,
+) -> str:
     budget_label = _format_budget(budget)
     normalized_suffix = run_suffix.strip()
     if normalized_suffix and not normalized_suffix.replace("-", "").replace("_", "").isalnum():
@@ -77,19 +91,23 @@ def _format_run_id(hidden_dim: int, budget: float, muonh_mult: float, adam_mult:
     suffix = f"{normalized_suffix}-" if normalized_suffix else ""
     muonh_label = _format_mult(muonh_mult)
     adam_label = _format_mult(adam_mult)
-    return f"muonh-lr-{suffix}d{hidden_dim}-{budget_label}-muonh{muonh_label}x-adam{adam_label}x"
+    nowarm_label = "nowarm-" if nowarmup else ""
+    return f"muonh-lr-{nowarm_label}{suffix}d{hidden_dim}-{budget_label}-muonh{muonh_label}x-adam{adam_label}x"
 
 
 def _muonh_optimizer_from_baseline(
     base_optimizer: GrugMoeAdamHConfig,
     muonh_mult: float,
     adam_mult: float,
+    *,
+    warmup_override: float | None = None,
 ) -> GrugMoeMuonHConfig:
+    warmup = warmup_override if warmup_override is not None else base_optimizer.warmup
     return GrugMoeMuonHConfig(
         learning_rate=base_optimizer.learning_rate * muonh_mult,
         adam_lr=base_optimizer.adam_lr * adam_mult,
         min_lr_ratio=base_optimizer.min_lr_ratio,
-        warmup=base_optimizer.warmup,
+        warmup=warmup,
         beta1=base_optimizer.beta1,
         beta2=base_optimizer.beta2,
         epsilon=base_optimizer.epsilon,
@@ -105,16 +123,28 @@ def _build_step(
     muonh_mult: float,
     adam_mult: float,
     run_suffix: str = "",
+    *,
+    nowarmup: bool = False,
 ) -> ExecutorStep:
     model, base_optimizer, batch_size, num_steps = build_from_heuristic(
         budget=budget,
         hidden_dim=hidden_dim,
         target_steps=_BASELINE_TARGET_STEPS,
     )
-    optimizer = _muonh_optimizer_from_baseline(base_optimizer, muonh_mult=muonh_mult, adam_mult=adam_mult)
+    optimizer = _muonh_optimizer_from_baseline(
+        base_optimizer,
+        muonh_mult=muonh_mult,
+        adam_mult=adam_mult,
+        warmup_override=0.0 if nowarmup else None,
+    )
 
     run_id = _format_run_id(
-        hidden_dim=hidden_dim, budget=budget, muonh_mult=muonh_mult, adam_mult=adam_mult, run_suffix=run_suffix
+        hidden_dim=hidden_dim,
+        budget=budget,
+        muonh_mult=muonh_mult,
+        adam_mult=adam_mult,
+        run_suffix=run_suffix,
+        nowarmup=nowarmup,
     )
     step_name = f"grug/muonh_lr_sweep/{run_id}"
 
@@ -140,8 +170,9 @@ def _build_step(
                     f"d{hidden_dim}",
                     f"muonh{_format_mult(muonh_mult)}x",
                     f"adam{_format_mult(adam_mult)}x",
+                    *(["nowarmup"] if nowarmup else []),
                 ],
-                group=_GROUP,
+                group=_GROUP_NOWARMUP if nowarmup else _GROUP,
                 name=None,
             ),
             optimizer=versioned(optimizer),
@@ -165,30 +196,45 @@ def _build_step(
     )
 
 
-def _select_points(spec: str) -> list[tuple[int, float, float, float]]:
+def _select_points(spec: str, variant: str) -> list[tuple[int, float, float, float]]:
+    grid = _NOWARMUP_GRID if variant == "nowarmup" else _DEFAULT_GRID
     if spec == "all":
-        return list(_DEFAULT_GRID)
+        return list(grid)
     try:
         idx = int(spec)
     except ValueError as exc:
         raise ValueError(f"MUONH_LR_SWEEP_INDEX must be 'all' or an int, got {spec!r}") from exc
-    if not 0 <= idx < len(_DEFAULT_GRID):
-        raise IndexError(f"MUONH_LR_SWEEP_INDEX={idx} out of range [0, {len(_DEFAULT_GRID)})")
-    return [_DEFAULT_GRID[idx]]
+    if not 0 <= idx < len(grid):
+        raise IndexError(f"MUONH_LR_SWEEP_INDEX={idx} out of range [0, {len(grid)})")
+    return [grid[idx]]
 
 
-def _build_steps(spec: str, run_suffix: str = "") -> list[ExecutorStep]:
+def _build_steps(spec: str, variant: str, run_suffix: str = "") -> list[ExecutorStep]:
+    nowarmup = variant == "nowarmup"
     return [
-        _build_step(hidden_dim=hd, budget=b, muonh_mult=mm, adam_mult=am, run_suffix=run_suffix)
-        for hd, b, mm, am in _select_points(spec)
+        _build_step(
+            hidden_dim=hd,
+            budget=b,
+            muonh_mult=mm,
+            adam_mult=am,
+            run_suffix=run_suffix,
+            nowarmup=nowarmup,
+        )
+        for hd, b, mm, am in _select_points(spec, variant)
     ]
 
 
 if __name__ == "__main__":
     spec = os.environ.get("MUONH_LR_SWEEP_INDEX", "all")
+    variant = os.environ.get("MUONH_LR_SWEEP_VARIANT", "baseline")
+    if variant not in {"baseline", "nowarmup"}:
+        raise ValueError(f"MUONH_LR_SWEEP_VARIANT must be 'baseline' or 'nowarmup', got {variant!r}")
     run_suffix = os.environ.get("MUONH_LR_SWEEP_RUN_SUFFIX", "")
-    steps = _build_steps(spec, run_suffix=run_suffix)
+    steps = _build_steps(spec, variant=variant, run_suffix=run_suffix)
     executor_main(
         steps=steps,
-        description=f"MoE MuonH LR sweep (spec={spec!r}, {len(steps)} step(s), run_suffix={run_suffix!r}).",
+        description=(
+            f"MoE MuonH LR sweep (variant={variant!r}, spec={spec!r}, "
+            f"{len(steps)} step(s), run_suffix={run_suffix!r})."
+        ),
     )
