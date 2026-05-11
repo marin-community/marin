@@ -61,10 +61,12 @@ _DEFAULT_GRID: tuple[tuple[int, float, float, float], ...] = (
 _NOWARMUP_GRID: tuple[tuple[int, float, float, float], ...] = _DEFAULT_GRID
 
 # Phase 3 d1024 LR sweep at the current MuonH:Adam ratio (13/3, i.e. the
-# v16 heuristic). Both multipliers move together. The 1.0x cell is the
-# existing baseline-adam-mask d1024 run from #5596 and is skipped here.
+# v16 heuristic), with warmup=0.0. Both multipliers move together.
+# The existing baseline-adam-mask d1024 (from #5596, warmup=0.1) is NOT
+# a substitute for the warmup=0.0 1.0x cell, so the 1.0x is included.
 _PHASE3_GRID: tuple[tuple[int, float, float, float], ...] = (
     (1024, 9.00e18, 0.5, 0.5),
+    (1024, 9.00e18, 1.0, 1.0),
     (1024, 9.00e18, 2.0, 2.0),
     (1024, 9.00e18, 4.0, 4.0),
 )
@@ -229,7 +231,8 @@ def _select_points(spec: str, variant: str) -> list[tuple[int, float, float, flo
 
 
 def _build_steps(spec: str, variant: str, run_suffix: str = "") -> list[ExecutorStep]:
-    nowarmup = variant == "nowarmup"
+    # Variants that drop the warmup phase entirely (LR jumps to peak at step 0).
+    nowarmup = variant in {"nowarmup", "phase3"}
     return [
         _build_step(
             hidden_dim=hd,
