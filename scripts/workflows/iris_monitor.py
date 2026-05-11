@@ -10,15 +10,23 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import click
+from google.protobuf import json_format
+from iris.cli.main import create_client_token_provider, resolve_cluster_name
+from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token
+from iris.client import IrisClient
+from iris.cluster.config import IrisConfig
 from iris.cluster.providers.k8s.tasks import _sanitize_label_value
-from iris.cluster.types import is_job_finished
+from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.types import JobName, is_job_finished
 from iris.rpc import job_pb2
+from iris.rpc.auth import StaticTokenProvider, TokenProvider
 from rigging.redaction import redact_value
 
 _REPO_ROOT = Path(__file__).parents[2]
@@ -74,27 +82,70 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
-def _job_tree(
-    job_id: str,
+def _token_provider_for_url(controller_url: str) -> TokenProvider | None:
+    credential = load_token(cluster_name_from_url(controller_url))
+    if credential is None:
+        credential = load_any_token()
+    if credential is None:
+        return None
+    return StaticTokenProvider(credential.token)
+
+
+@contextmanager
+def _open_iris_client(
     *,
     iris_config: Path | None,
     repo_root: Path,
     controller_url: str | None = None,
-) -> list[dict]:
-    cmd = [
-        *iris_command(repo_root),
-        *_iris_flags(iris_config, controller_url),
-        "job",
-        "list",
-        "--json",
-        "--prefix",
-        job_id,
-    ]
-    result = _run(cmd)
-    if result.returncode != 0:
-        raise RuntimeError(f"iris job list failed (exit {result.returncode}): {result.stderr.strip()}")
+) -> Iterator[IrisClient]:
+    if controller_url is not None:
+        with IrisClient.remote(
+            controller_url,
+            workspace=repo_root,
+            token_provider=_token_provider_for_url(controller_url),
+        ) as client:
+            yield client
+        return
 
-    return json.loads(result.stdout)
+    if iris_config is None:
+        raise click.ClickException("No controller specified. Pass --iris-config or --controller-url.")
+
+    config = IrisConfig.load(iris_config)
+    token_provider = None
+    cluster_name = resolve_cluster_name(config.proto, None, None)
+    if config.proto.HasField("auth"):
+        token_provider = create_client_token_provider(config.proto.auth, cluster_name=cluster_name)
+
+    if config.proto.controller.WhichOneof("controller") == "local":
+        cluster = LocalCluster(config.proto)
+        try:
+            with IrisClient.remote(cluster.start(), workspace=repo_root, token_provider=token_provider) as client:
+                yield client
+        finally:
+            cluster.close()
+        return
+
+    bundle = config.provider_bundle()
+    controller_address = config.controller_address() or bundle.controller.discover_controller(config.proto.controller)
+    with bundle.controller.tunnel(address=controller_address) as tunnel_url:
+        with IrisClient.remote(tunnel_url, workspace=repo_root, token_provider=token_provider) as client:
+            yield client
+
+
+def _job_tree(
+    job_id: str,
+    *,
+    client: IrisClient,
+) -> list[job_pb2.JobStatus]:
+    return client.list_jobs(prefix=JobName.from_wire(job_id))
+
+
+def _status_from_job(job: job_pb2.JobStatus) -> IrisJobStatus:
+    return IrisJobStatus(
+        job_id=job.job_id,
+        state=job_pb2.JobState.Name(job.state),
+        error=job.error or None,
+    )
 
 
 def job_status(
@@ -104,19 +155,20 @@ def job_status(
     repo_root: Path,
     controller_url: str | None = None,
 ) -> IrisJobStatus:
-    for row in _job_tree(job_id, iris_config=iris_config, repo_root=repo_root, controller_url=controller_url):
-        if row.get("job_id") == job_id:
-            return IrisJobStatus(job_id=job_id, state=row["state"], error=row.get("error") or None)
+    with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
+        for job in _job_tree(job_id, client=client):
+            if job.job_id == job_id:
+                return _status_from_job(job)
 
-    raise LookupError(f"Job not found in iris job list output: {job_id!r}")
-
-
-def _is_finished_job_state(state: str) -> bool:
-    return is_job_finished(job_pb2.JobState.Value(state))
+    raise LookupError(f"Job not found in Iris job list: {job_id!r}")
 
 
-def _child_has_started(row: dict) -> bool:
-    state = job_pb2.JobState.Value(str(row.get("state")))
+def _is_finished_job_state(state: int) -> bool:
+    return is_job_finished(state)
+
+
+def _child_has_started(job: job_pb2.JobStatus) -> bool:
+    state = job.state
     return state == job_pb2.JOB_STATE_RUNNING or (is_job_finished(state) and state != job_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
@@ -131,47 +183,47 @@ def wait_for_job(
 ) -> IrisJobStatus:
     """Poll until the job reaches a terminal state. Raises TimeoutError if `timeout` elapses."""
     start = time.monotonic()
-    while True:
-        status = job_status(job_id, iris_config=iris_config, repo_root=repo_root, controller_url=controller_url)
-        if _is_finished_job_state(status.state):
-            return status
-        if timeout is not None and (time.monotonic() - start) >= timeout:
-            raise TimeoutError(f"Timed out waiting for job {job_id!r} after {timeout}s")
-        time.sleep(poll_interval)
+    with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
+        while True:
+            for job in _job_tree(job_id, client=client):
+                if job.job_id == job_id:
+                    status = _status_from_job(job)
+                    if _is_finished_job_state(job.state):
+                        return status
+                    if timeout is not None and (time.monotonic() - start) >= timeout:
+                        raise TimeoutError(f"Timed out waiting for job {job_id!r} after {timeout}s")
+                    time.sleep(poll_interval)
+                    break
+            else:
+                raise LookupError(f"Job not found in Iris job list: {job_id!r}")
 
 
-def _relevant_child_job(parent_job_id: str, rows: list[dict]) -> tuple[dict, dict | None]:
-    parent = next((row for row in rows if row.get("job_id") == parent_job_id), None)
+def _relevant_child_job(
+    parent_job_id: str,
+    jobs: list[job_pb2.JobStatus],
+) -> tuple[job_pb2.JobStatus, job_pb2.JobStatus | None]:
+    parent = next((job for job in jobs if job.job_id == parent_job_id), None)
     if parent is None:
-        raise LookupError(f"Job not found in iris job list output: {parent_job_id!r}")
+        raise LookupError(f"Job not found in Iris job list: {parent_job_id!r}")
 
     prefix = parent_job_id.rstrip("/") + "/"
-    children = [row for row in rows if str(row.get("job_id", "")).startswith(prefix)]
-    active_children = [row for row in children if not _is_finished_job_state(str(row["state"]))]
+    children = [job for job in jobs if job.job_id.startswith(prefix)]
+    active_children = [job for job in children if not _is_finished_job_state(job.state)]
     return parent, (active_children or children or [None])[0]
 
 
-def _format_job_for_wait(label: str, row: dict | None) -> str:
-    if row is None:
-        return f"{label} job_id=(none) {label} state=(none)"
+def _format_job_for_wait(label: str, job: job_pb2.JobStatus | None) -> str:
+    if job is None:
+        return f"{label}=null"
 
-    parts = [
-        f"{label} job_id={row.get('job_id')}",
-        f"{label} state={row.get('state')}",
-    ]
-    for name in ("submitted_at", "started_at", "failure_count", "preemption_count", "pending_reason", "error"):
-        if row.get(name):
-            value = row[name]
-            if isinstance(value, dict | list):
-                value = json.dumps(value, sort_keys=True, separators=(",", ":"))
-            parts.append(f"{label} {name}={value}")
-    return " ".join(parts)
+    row = json_format.MessageToDict(job, preserving_proto_field_name=True)
+    return f"{label}={json.dumps(row, sort_keys=True, separators=(',', ':'))}"
 
 
 def _child_wait_message(
     phase: str,
-    parent: dict,
-    child: dict | None,
+    parent: job_pb2.JobStatus,
+    child: job_pb2.JobStatus | None,
     *,
     elapsed: float,
     timeout: float | None,
@@ -192,25 +244,49 @@ def wait_for_child_job(
     run_timeout: float | None,
     repo_root: Path,
     controller_url: str | None = None,
-    list_job_rows: Callable[[], list[dict]] | None = None,
+    list_jobs: Callable[[], list[job_pb2.JobStatus]] | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> IrisJobStatus:
     """Poll a parent job with separate child queue/start and runtime timeouts."""
-    if list_job_rows is None:
+    if list_jobs is not None:
+        return _wait_for_child_job(
+            job_id,
+            poll_interval=poll_interval,
+            queue_timeout=queue_timeout,
+            run_timeout=run_timeout,
+            list_jobs=list_jobs,
+            clock=clock,
+        )
 
-        def list_job_rows() -> list[dict]:
-            return _job_tree(job_id, iris_config=iris_config, repo_root=repo_root, controller_url=controller_url)
+    with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
+        return _wait_for_child_job(
+            job_id,
+            poll_interval=poll_interval,
+            queue_timeout=queue_timeout,
+            run_timeout=run_timeout,
+            list_jobs=lambda: _job_tree(job_id, client=client),
+            clock=clock,
+        )
+
+
+def _wait_for_child_job(
+    job_id: str,
+    *,
+    poll_interval: float,
+    queue_timeout: float | None,
+    run_timeout: float | None,
+    list_jobs: Callable[[], list[job_pb2.JobStatus]],
+    clock: Callable[[], float],
+) -> IrisJobStatus:
 
     queue_started = clock()
     run_started: float | None = None
     while True:
         now = clock()
-        parent, child = _relevant_child_job(job_id, list_job_rows())
+        parent, child = _relevant_child_job(job_id, list_jobs())
 
-        if _is_finished_job_state(str(parent["state"])):
-            return IrisJobStatus(
-                job_id=str(parent["job_id"]), state=str(parent["state"]), error=parent.get("error") or None
-            )
+        if _is_finished_job_state(parent.state):
+            return _status_from_job(parent)
 
         if child is None or not _child_has_started(child):
             if run_started is not None:

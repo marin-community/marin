@@ -4,6 +4,7 @@
 import json
 
 import pytest
+from iris.rpc import job_pb2
 from rigging.redaction import REDACTED_VALUE
 
 from scripts.workflows import iris_monitor
@@ -32,13 +33,13 @@ def _job(
     *,
     failure_count: int = 0,
     preemption_count: int = 0,
-) -> dict:
-    return {
-        "job_id": job_id,
-        "state": state,
-        "failure_count": failure_count,
-        "preemption_count": preemption_count,
-    }
+) -> job_pb2.JobStatus:
+    return job_pb2.JobStatus(
+        job_id=job_id,
+        state=job_pb2.JobState.Value(state),
+        failure_count=failure_count,
+        preemption_count=preemption_count,
+    )
 
 
 def test_settled_coreweave_controller_requires_exactly_one_ready_pod() -> None:
@@ -86,7 +87,7 @@ def test_wait_for_child_job_uses_runtime_timeout_after_child_start() -> None:
         queue_timeout=5000,
         run_timeout=60,
         repo_root=iris_monitor._REPO_ROOT,
-        list_job_rows=lambda: next(polls),
+        list_jobs=lambda: next(polls),
         clock=lambda: next(monotonic),
     )
 
@@ -125,7 +126,7 @@ def test_wait_for_child_job_resets_timeouts_after_preemption() -> None:
         queue_timeout=50,
         run_timeout=50,
         repo_root=iris_monitor._REPO_ROOT,
-        list_job_rows=lambda: next(polls),
+        list_jobs=lambda: next(polls),
         clock=lambda: next(monotonic),
     )
 
@@ -145,7 +146,7 @@ def test_wait_for_child_job_reports_queue_timeout() -> None:
             queue_timeout=3000,
             run_timeout=60,
             repo_root=iris_monitor._REPO_ROOT,
-            list_job_rows=lambda: [
+            list_jobs=lambda: [
                 _job(parent_id, "JOB_STATE_RUNNING", failure_count=2),
                 _job(child_id, "JOB_STATE_PENDING", preemption_count=1),
             ],
@@ -153,10 +154,12 @@ def test_wait_for_child_job_reports_queue_timeout() -> None:
         )
 
     message = str(exc.value)
-    assert "parent state=JOB_STATE_RUNNING" in message
-    assert "child state=JOB_STATE_PENDING" in message
-    assert "parent failure_count=2" in message
-    assert "child preemption_count=1" in message
+    assert "parent=" in message
+    assert "child=" in message
+    assert '"state":"JOB_STATE_RUNNING"' in message
+    assert '"state":"JOB_STATE_PENDING"' in message
+    assert '"failure_count":2' in message
+    assert '"preemption_count":1' in message
 
 
 def test_wait_for_child_job_reports_runtime_timeout() -> None:
@@ -185,14 +188,14 @@ def test_wait_for_child_job_reports_runtime_timeout() -> None:
             queue_timeout=3000,
             run_timeout=60,
             repo_root=iris_monitor._REPO_ROOT,
-            list_job_rows=lambda: next(polls),
+            list_jobs=lambda: next(polls),
             clock=lambda: next(monotonic),
         )
 
     message = str(exc.value)
     assert "phase=child-running" in message
-    assert "child state=JOB_STATE_RUNNING" in message
-    assert "child preemption_count=1" in message
+    assert '"state":"JOB_STATE_RUNNING"' in message
+    assert '"preemption_count":1' in message
 
 
 def test_redact_pod_doc_redacts_env_values_and_preserves_context():
