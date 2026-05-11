@@ -18,7 +18,7 @@ permissions:
 jobs:
   canary-ferry:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     concurrency:
       group: canary-ferry
       cancel-in-progress: true
@@ -30,6 +30,8 @@ jobs:
       CANARY_MIN_STEPS: "400"
       CANARY_MAX_LOSS: "8.0"
       CANARY_MAX_WALL_CLOCK: "7200"
+      CANARY_QUEUE_START_TIMEOUT: "12600"
+      CANARY_RUN_TIMEOUT: "7800"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/examples/marin.yaml
@@ -105,7 +107,8 @@ jobs:
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
-            --timeout 14100 \
+            --queue-timeout "${{ env.CANARY_QUEUE_START_TIMEOUT }}" \
+            --run-timeout "${{ env.CANARY_RUN_TIMEOUT }}" \
             --github-output
 
       - name: Validate canary metrics
