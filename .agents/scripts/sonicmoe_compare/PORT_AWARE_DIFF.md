@@ -88,8 +88,9 @@ variant and is not the faithful Sonic source-shape port.
 3. **Varlen-K**: Sonic supports `is_varlen_K`. The current Pallas comparison
    covers fixed top-k only.
 4. **Compiler stack**: Sonic lowers through Triton directly. Pallas lowers
-   through JAX/Pallas/Triton custom calls, so launch/codegen overhead is still
-   part of the comparison.
+   through JAX/Pallas/Triton custom calls. Host-side JAX dispatch is material
+   for standalone one-kernel microbenchmarks, but a compiled JAX executable can
+   amortize many Pallas kernel launches; see the launch-overhead check below.
 
 ## PTX Check, 2026-05-11
 
@@ -130,8 +131,58 @@ substantially more integer address arithmetic. The load pattern is:
 
 So the remaining isolated gather/sum gap is no longer explained by gross PTX
 size. The more concrete PTX-level gap is scalarization / duplicated address and
-load work in the Pallas lowering, plus any residual custom-call/runtime launch
-tax outside the kernel body.
+load work in the Pallas lowering. Host-dispatch overhead can dominate
+standalone JAX microbenchmarks, but the compiled-executable launch check below
+suggests it should not be the fundamental limit inside a real JIT-compiled
+training step.
+
+## Launch Overhead Check, 2026-05-11
+
+Benchmark script:
+[`sonicmoe_launch_overhead_bench.py`](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/.agents/scripts/sonicmoe_launch_overhead_bench.py).
+
+Jobs:
+
+- `/dlwh/sonicmoe-launch-overhead-20260511-123049`: Triton, Torch, JAX/XLA,
+  and JAX/Pallas host-loop measurements.
+- `/dlwh/sonicmoe-launch-overhead-compiled-20260511-123736`: Pallas calls
+  chained inside one compiled JAX executable.
+
+Shape: one float32 input/output element on one GH200. Each record reports the
+median steady per-launch wall time at `launches=1000`; Triton/Torch also report
+CUDA event timing for the batched enqueue case. JAX records are wall-time only.
+
+| Path | Mode | Median per launch |
+|---|---|---:|
+| Triton tiny kernel | host loop, synchronize once | `6.06 us` wall / `6.04 us` CUDA event |
+| Torch tiny add | host loop, synchronize once | `5.76 us` wall / `5.75 us` CUDA event |
+| Triton tiny kernel | synchronize after each launch | `11.62 us` wall |
+| Torch tiny add | synchronize after each launch | `12.60 us` wall |
+| JAX/XLA tiny add | host loop, synchronize once | `48.98 us` wall |
+| JAX/Pallas tiny kernel | host loop, synchronize once | `44.92 us` wall |
+| JAX/XLA tiny add | synchronize after each call | `56.33 us` wall |
+| JAX/Pallas tiny kernel | synchronize after each call | `55.08 us` wall |
+| JAX/Pallas tiny kernel | 1000 chained Pallas calls in one compiled executable | `1.17 us` wall |
+
+Interpretation:
+
+- Direct Triton/Torch launch cadence on this GH200 is roughly `6 us` when
+  launches are batched and roughly `12 us` with a host synchronize after each
+  launch.
+- A Python loop around a jitted JAX/Pallas one-kernel function costs roughly
+  `45-55 us` per call. That is a dispatch benchmark, not a pure GPU-launch
+  benchmark.
+- When 1000 Pallas calls are chained inside a single compiled JAX executable,
+  the effective cost drops to roughly `1.2 us` per call. This is best read as
+  XLA executable/command-buffer cadence rather than raw `cudaLaunchKernel`
+  latency, but it is the relevant lower-bound for kernels embedded in a
+  training-step JIT.
+- Therefore, host-dispatch overhead can explain bad standalone JAX
+  one-kernel microbenchmarks, but it is unlikely to be the fundamental limit for
+  the Grug MoE path inside a compiled training step. Continue looking at the
+  kernel body and codegen differences first: scalarized reverse-position loads,
+  duplicated weight/source loads, integer address arithmetic, and the backward
+  token path.
 
 ## Reading The Next IR/PTX Report
 
