@@ -15,6 +15,9 @@ __all__ = [
     "AdamHConfig",
     "LionConfig",
     "OptimizerConfig",
+    # dion
+    "DionConfig",
+    "ScaleByDionState",
     # kron
     "KronConfig",
     # mars
@@ -46,6 +49,7 @@ from .adam_mini import MiniConfig, ScaleByMiniState
 from .adopt import AdoptConfig, ScaleByAdoptState
 from .cautious import CautiousConfig
 from .config import AdamConfig, LionConfig, OptimizerConfig
+from .dion import DionConfig, ScaleByDionState
 from .adamh import AdamHConfig
 from .kron import KronConfig
 from .mars import MarsConfig, ScaleByMarsState
