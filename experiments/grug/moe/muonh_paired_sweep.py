@@ -24,16 +24,15 @@ cadence match the AdamH baseline. Optimizer routing:
 * AdamH for the lm head / ``output_proj`` matrix.
 * Adam for leaves that the AdamH baseline routes to Adam.
 
-Set ``MUONH_PAIRED_GATE`` to control which scales run:
+Gate and run-suffix are pinned in module-level constants at the bottom
+of this file (``_GATE`` and ``_RUN_SUFFIX``); edit them directly to
+change scope. Submit with no env vars:
 
-    MUONH_PAIRED_GATE=1     # default: d512, d768 (gate 1 only)
-    MUONH_PAIRED_GATE=2     # d1024, d1280 (gate 2 only)
-    MUONH_PAIRED_GATE=both  # all four scales
-
-Set ``MUONH_PAIRED_RUN_SUFFIX`` to append a unique suffix for relaunches.
+    .venv/bin/iris --config lib/iris/examples/marin.yaml job run \\
+      --no-wait --reserve v5p-8 \\
+      -e WANDB_API_KEY "$WANDB_API_KEY" \\
+      -- python -m experiments.grug.moe.muonh_paired_sweep
 """
-
-import os
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
@@ -154,11 +153,15 @@ def _build_steps(gate: str, run_suffix: str = "") -> list[ExecutorStep]:
     return [_build_step(hidden_dim=hidden_dim, budget=budget, run_suffix=run_suffix) for hidden_dim, budget in points]
 
 
+# Sweep scope is pinned here (no env-var indirection). Edit and resubmit
+# rather than relying on the launch command.
+_GATE: str = "1"  # "1" | "2" | "both"
+_RUN_SUFFIX: str = "split-v4"
+
+
 if __name__ == "__main__":
-    gate = os.environ.get("MUONH_PAIRED_GATE", "1")
-    run_suffix = os.environ.get("MUONH_PAIRED_RUN_SUFFIX", "")
-    steps = _build_steps(gate, run_suffix=run_suffix)
+    steps = _build_steps(_GATE, run_suffix=_RUN_SUFFIX)
     executor_main(
         steps=steps,
-        description=f"MoE MuonH paired-experts sweep (gate={gate}, run_suffix={run_suffix!r}).",
+        description=f"MoE MuonH paired-experts sweep (gate={_GATE}, run_suffix={_RUN_SUFFIX!r}).",
     )
