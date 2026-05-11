@@ -80,6 +80,14 @@ class GrugMoeAdamHConfig(OptimizerConfig):
             path_lower = path_str.lower()
             if "token_embed" in path_lower:
                 return "adam"
+            # Route every GatedNorm instance (per-block ``attn_gated_norm`` and
+            # ``mlp_gated_norm``; model-level ``embed_gated_norm`` and
+            # ``final_gated_norm``) to plain Adam at ``adam_lr``. This is the
+            # symmetric "down" routing for GatedNorm matrices; the corresponding
+            # "up" routing (all four -> adamh) lives on the
+            # ``moe_attn_gated_norm_to_adamh`` branch.
+            if "gated_norm" in path_lower:
+                return "adam"
             if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
                 return "adam"
             if ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
