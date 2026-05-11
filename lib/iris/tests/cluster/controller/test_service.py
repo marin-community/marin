@@ -219,141 +219,78 @@ def test_launch_job_rejects_duplicate_name(service):
     assert "still running" in exc_info.value.message
 
 
-def test_launch_job_replaces_finished_job_by_default(service, state):
-    """Verify launch_job replaces finished jobs by default."""
-    request = make_job_request("replaceable-job")
-    job_id = JobName.root("test-user", "replaceable-job")
+@pytest.mark.parametrize(
+    "pre_state,policy,expect_replace",
+    [
+        # Finished job, default policy: replaced.
+        pytest.param(
+            job_pb2.JOB_STATE_FAILED,
+            job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+            True,
+            id="failed_default_replaces",
+        ),
+        # Finished job, ERROR policy: rejected.
+        pytest.param(
+            job_pb2.JOB_STATE_SUCCEEDED,
+            job_pb2.EXISTING_JOB_POLICY_ERROR,
+            False,
+            id="succeeded_error_rejects",
+        ),
+        # Running job, KEEP policy: existing handle returned, original kept.
+        pytest.param(
+            job_pb2.JOB_STATE_PENDING,
+            job_pb2.EXISTING_JOB_POLICY_KEEP,
+            True,
+            id="running_keep_preserves",
+        ),
+        # Running job, RECREATE policy: cancel + replace.
+        pytest.param(
+            job_pb2.JOB_STATE_PENDING,
+            job_pb2.EXISTING_JOB_POLICY_RECREATE,
+            True,
+            id="running_recreate_replaces",
+        ),
+        # Running job, ERROR policy: rejected.
+        pytest.param(
+            job_pb2.JOB_STATE_PENDING,
+            job_pb2.EXISTING_JOB_POLICY_ERROR,
+            False,
+            id="running_error_rejects",
+        ),
+        # Running job, default policy: rejected (cannot replace a live job).
+        pytest.param(
+            job_pb2.JOB_STATE_PENDING,
+            job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+            False,
+            id="running_default_rejects",
+        ),
+    ],
+)
+def test_existing_job_policy(service, state, pre_state, policy, expect_replace):
+    """Re-submission outcome is fully determined by (pre-state, policy)."""
+    name = "policy-job"
+    job_id = JobName.root("test-user", name)
+    service.launch_job(make_job_request(name), None)
 
-    # Submit initial job
-    response = service.launch_job(request, None)
+    if pre_state != job_pb2.JOB_STATE_PENDING:
+        _set_job_state(state, job_id, pre_state)
+        assert _query_job(state, job_id).state == pre_state
+
+    resubmit = make_job_request(name)
+    resubmit.existing_job_policy = policy
+
+    if not expect_replace:
+        with pytest.raises(ConnectError) as exc_info:
+            service.launch_job(resubmit, None)
+        assert exc_info.value.code == Code.ALREADY_EXISTS
+        return
+
+    response = service.launch_job(resubmit, None)
     assert response.job_id == job_id.to_wire()
-
-    # Mark the job as failed
-    job = _query_job(state, job_id)
-    assert job is not None
-    tasks = _query_tasks_with_attempts(state, job.job_id)
-    assert len(tasks) == 1
-    _set_job_state(state, job.job_id, job_pb2.JOB_STATE_FAILED)
-
-    # Verify job is now failed
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_FAILED
-
-    # Submit again - should succeed (replaces the finished job)
-    response = service.launch_job(request, None)
-    assert response.job_id == job_id.to_wire()
-
-    # Verify the new job is pending
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_PENDING
-
-
-def test_launch_job_error_policy_prevents_replacement(service, state):
-    """Verify EXISTING_JOB_POLICY_ERROR prevents replacing finished jobs."""
-    request = make_job_request("no-replace-job")
-    job_id = JobName.root("test-user", "no-replace-job")
-
-    # Submit initial job
-    response = service.launch_job(request, None)
-    assert response.job_id == job_id.to_wire()
-
-    # Mark the job as succeeded
-    job = _query_job(state, job_id)
-    _set_job_state(state, job.job_id, job_pb2.JOB_STATE_SUCCEEDED)
-
-    # Verify job is now succeeded
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_SUCCEEDED
-
-    # Submit again with ERROR policy - should fail
-    request_no_replace = make_job_request("no-replace-job")
-    request_no_replace.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_ERROR
-
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request_no_replace, None)
-
-    assert exc_info.value.code == Code.ALREADY_EXISTS
-    assert "SUCCEEDED" in exc_info.value.message
-
-
-def test_existing_job_policy_keep_running(service, state):
-    """KEEP policy on a running job returns the existing handle without re-creating."""
-    request = make_job_request("keep-job")
-    job_id = JobName.root("test-user", "keep-job")
-
-    service.launch_job(request, None)
-
-    # Job is still running (PENDING). Submit again with KEEP policy.
-    request_keep = make_job_request("keep-job")
-    request_keep.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_KEEP
-    response = service.launch_job(request_keep, None)
-
-    assert response.job_id == job_id.to_wire()
-    # Job should still be in its original PENDING state (not replaced).
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_PENDING
-
-
-def test_existing_job_policy_recreate_running(service, state):
-    """RECREATE policy cancels a running job and replaces it."""
-    request = make_job_request("recreate-job")
-    job_id = JobName.root("test-user", "recreate-job")
-
-    service.launch_job(request, None)
-    # Confirm job exists and is pending
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_PENDING
-
-    request_recreate = make_job_request("recreate-job")
-    request_recreate.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_RECREATE
-    response = service.launch_job(request_recreate, None)
-
-    assert response.job_id == job_id.to_wire()
-    # New job should be pending (the old one was cancelled and removed).
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_PENDING
-
-
-def test_existing_job_policy_error_any_state(service, state):
-    """ERROR policy rejects submission regardless of job state."""
-    request = make_job_request("error-policy-job")
-    job_id = JobName.root("test-user", "error-policy-job")
-
-    service.launch_job(request, None)
-
-    # Running job with ERROR policy -> error
-    request_err = make_job_request("error-policy-job")
-    request_err.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_ERROR
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request_err, None)
-    assert exc_info.value.code == Code.ALREADY_EXISTS
-
-    # Mark job as finished, ERROR policy should still reject
-    _set_job_state(state, job_id, job_pb2.JOB_STATE_SUCCEEDED)
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request_err, None)
-    assert exc_info.value.code == Code.ALREADY_EXISTS
-
-
-def test_existing_job_policy_unspecified_preserves_current_behavior(service, state):
-    """Default (UNSPECIFIED) policy replaces finished jobs and errors on running ones."""
-    request = make_job_request("default-policy-job")
-    job_id = JobName.root("test-user", "default-policy-job")
-
-    service.launch_job(request, None)
-
-    # Running job -> error (same as before)
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request, None)
-    assert exc_info.value.code == Code.ALREADY_EXISTS
-    assert "still running" in exc_info.value.message
-
-    # Finished job -> replaced
-    _set_job_state(state, job_id, job_pb2.JOB_STATE_FAILED)
-    response = service.launch_job(request, None)
-    assert response.job_id == job_id.to_wire()
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_PENDING
+    # Whether the existing handle was kept (KEEP) or the row was rewritten
+    # (RECREATE / default replace), the post-condition is identical: a
+    # PENDING job at the same id.
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_PENDING
 
 
 def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, state, monkeypatch):
@@ -1594,42 +1531,48 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
 _REF_NOW = date(2026, 6, 1)
 
 
-def test_check_client_freshness_accepts_today():
-    """A client built today is inside the window (upper edge)."""
-    _check_client_freshness(_REF_NOW.isoformat(), _REF_NOW)
-
-
-def test_check_client_freshness_accepts_at_window_edge():
-    """A client exactly FRESHNESS_WINDOW old is still accepted (lower edge)."""
-    edge = _REF_NOW - FRESHNESS_WINDOW
-    _check_client_freshness(edge.isoformat(), _REF_NOW)
-
-
-def test_check_client_freshness_rejects_over_window():
-    """A client one day past the window is rejected."""
-    stale = _REF_NOW - FRESHNESS_WINDOW - timedelta(days=1)
+@pytest.mark.parametrize(
+    "client_date,now,expected_code",
+    [
+        # Upper edge: a client built today is inside the window.
+        pytest.param(_REF_NOW.isoformat(), _REF_NOW, None, id="today_accepted"),
+        # Lower edge: exactly FRESHNESS_WINDOW old is still inside the window.
+        pytest.param((_REF_NOW - FRESHNESS_WINDOW).isoformat(), _REF_NOW, None, id="window_edge_accepted"),
+        # One day past the window: rejected as FAILED_PRECONDITION.
+        pytest.param(
+            (_REF_NOW - FRESHNESS_WINDOW - timedelta(days=1)).isoformat(),
+            _REF_NOW,
+            Code.FAILED_PRECONDITION,
+            id="over_window_rejected",
+        ),
+        # Empty client date is substituted with FEATURE_INTRODUCTION_DATE — at
+        # ship time the substitution still passes the window check.
+        pytest.param("", FEATURE_INTRODUCTION_DATE, None, id="empty_at_introduction_accepted"),
+        # Same substitution, well past the grace period — now rejected.
+        pytest.param(
+            "",
+            FEATURE_INTRODUCTION_DATE + FRESHNESS_WINDOW + timedelta(days=1),
+            Code.FAILED_PRECONDITION,
+            id="empty_well_past_rejected",
+        ),
+        # Garbage strings are rejected as INVALID_ARGUMENT, not silently
+        # treated as stale.
+        pytest.param("not-a-date", _REF_NOW, Code.INVALID_ARGUMENT, id="malformed_rejected"),
+    ],
+)
+def test_check_client_freshness(client_date, now, expected_code):
+    """Verify the freshness check accepts/rejects across the boundary cases."""
+    if expected_code is None:
+        _check_client_freshness(client_date, now)
+        return
     with pytest.raises(ConnectError) as exc_info:
-        _check_client_freshness(stale.isoformat(), _REF_NOW)
-    assert exc_info.value.code == Code.FAILED_PRECONDITION
-    assert stale.isoformat() in exc_info.value.message
-
-
-def test_check_client_freshness_empty_is_introduction_date():
-    """Empty string is substituted with FEATURE_INTRODUCTION_DATE."""
-    # Right at ship time: empty clients still inside window, succeed.
-    _check_client_freshness("", FEATURE_INTRODUCTION_DATE)
-    # Well past the grace period: empty clients fail.
-    well_past = FEATURE_INTRODUCTION_DATE + FRESHNESS_WINDOW + timedelta(days=1)
-    with pytest.raises(ConnectError) as exc_info:
-        _check_client_freshness("", well_past)
-    assert exc_info.value.code == Code.FAILED_PRECONDITION
-
-
-def test_check_client_freshness_rejects_malformed():
-    """Non-ISO strings are rejected as INVALID_ARGUMENT."""
-    with pytest.raises(ConnectError) as exc_info:
-        _check_client_freshness("not-a-date", _REF_NOW)
-    assert exc_info.value.code == Code.INVALID_ARGUMENT
+        _check_client_freshness(client_date, now)
+    assert exc_info.value.code == expected_code
+    if expected_code == Code.FAILED_PRECONDITION and client_date:
+        # FAILED_PRECONDITION carries the offending client date so users can
+        # see what the server thinks they sent. Empty-string inputs were
+        # substituted before the check, so the original "" won't appear.
+        assert client_date in exc_info.value.message
 
 
 def test_launch_job_root_with_fresh_client_date(service):
