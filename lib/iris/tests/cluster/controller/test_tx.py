@@ -8,6 +8,10 @@ registered via ``Tx.register`` fire while the write lock is still held,
 so a second thread cannot observe the SQL-committed-but-cache-not-yet-
 updated window. This matches today's ``ControllerDB.transaction()``
 behavior at ``db.py:476``.
+
+The pragma tests verify the split-engine design: the write engine has
+no ``query_only`` pin, the read engine has ``query_only=ON`` pinned at
+connect time (mirrors today's ``_init_read_pool``).
 """
 
 import sqlite3
@@ -17,7 +21,8 @@ from pathlib import Path
 
 import pytest
 from iris.cluster.controller.db_v2 import (
-    _make_engine,
+    _make_read_engine,
+    _make_write_engine,
     read_snapshot,
     write_transaction,
 )
@@ -32,8 +37,15 @@ def db_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def engine(db_path: Path):
-    eng = _make_engine(db_path, auth_db_path=None)
+def write_engine(db_path: Path):
+    eng = _make_write_engine(db_path, auth_db_path=None)
+    yield eng
+    eng.dispose()
+
+
+@pytest.fixture
+def read_engine(db_path: Path):
+    eng = _make_read_engine(db_path, auth_db_path=None)
     yield eng
     eng.dispose()
 
@@ -43,48 +55,48 @@ def write_lock() -> threading.RLock:
     return threading.RLock()
 
 
-def _create_kv_table(engine) -> None:
-    with engine.connect() as conn:
+def _create_kv_table(write_engine) -> None:
+    with write_engine.connect() as conn:
         conn.execute(text("CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT)"))
 
 
-def test_write_hook_fires_on_commit(engine, write_lock):
-    _create_kv_table(engine)
+def test_write_hook_fires_on_commit(write_engine, read_engine, write_lock):
+    _create_kv_table(write_engine)
     calls: list[int] = []
 
-    with write_transaction(engine, write_lock) as tx:
+    with write_transaction(write_engine, write_lock) as tx:
         tx.execute(text("INSERT INTO kv VALUES ('a', '1')"))
         tx.register(lambda: calls.append(1))
 
     assert calls == [1]
 
-    with read_snapshot(engine) as tx:
+    with read_snapshot(read_engine) as tx:
         rows = tx.execute(text("SELECT k, v FROM kv")).all()
     assert rows == [("a", "1")]
 
 
-def test_write_hook_skipped_on_rollback(engine, write_lock):
-    _create_kv_table(engine)
+def test_write_hook_skipped_on_rollback(write_engine, read_engine, write_lock):
+    _create_kv_table(write_engine)
     calls: list[int] = []
 
     class Boom(Exception):
         pass
 
     with pytest.raises(Boom):
-        with write_transaction(engine, write_lock) as tx:
+        with write_transaction(write_engine, write_lock) as tx:
             tx.execute(text("INSERT INTO kv VALUES ('a', '1')"))
             tx.register(lambda: calls.append(1))
             raise Boom
 
     assert calls == []
-    with read_snapshot(engine) as tx:
+    with read_snapshot(read_engine) as tx:
         rows = tx.execute(text("SELECT k, v FROM kv")).all()
     assert rows == []
 
 
-def test_hook_runs_under_write_lock(engine, write_lock):
+def test_hook_runs_under_write_lock(write_engine, write_lock):
     """The atomicity-critical test: lock is held while hooks run."""
-    _create_kv_table(engine)
+    _create_kv_table(write_engine)
     hook_entered = threading.Event()
     hook_release = threading.Event()
     b_attempt_done = threading.Event()
@@ -96,7 +108,7 @@ def test_hook_runs_under_write_lock(engine, write_lock):
         assert hook_release.wait(timeout=5.0)
 
     def thread_a() -> None:
-        with write_transaction(engine, write_lock) as tx:
+        with write_transaction(write_engine, write_lock) as tx:
             tx.execute(text("INSERT INTO kv VALUES ('a', '1')"))
             tx.register(slow_hook)
 
@@ -133,9 +145,9 @@ def test_hook_runs_under_write_lock(engine, write_lock):
     assert b_result["blocking_after_hook"] is True
 
 
-def test_read_snapshot_does_not_block_writes(engine, write_lock):
-    _create_kv_table(engine)
-    with write_transaction(engine, write_lock) as tx:
+def test_read_snapshot_does_not_block_writes(write_engine, read_engine, write_lock):
+    _create_kv_table(write_engine)
+    with write_transaction(write_engine, write_lock) as tx:
         tx.execute(text("INSERT INTO kv VALUES ('seed', '0')"))
 
     reader_in_snapshot = threading.Event()
@@ -144,7 +156,7 @@ def test_read_snapshot_does_not_block_writes(engine, write_lock):
     writer_elapsed: dict[str, float] = {}
 
     def reader() -> None:
-        with read_snapshot(engine) as tx:
+        with read_snapshot(read_engine) as tx:
             tx.execute(text("SELECT 1")).all()
             reader_in_snapshot.set()
             assert reader_release.wait(timeout=5.0)
@@ -153,7 +165,7 @@ def test_read_snapshot_does_not_block_writes(engine, write_lock):
         # Wait until the reader is inside its snapshot before writing.
         assert reader_in_snapshot.wait(timeout=5.0)
         t0 = time.monotonic()
-        with write_transaction(engine, write_lock) as tx:
+        with write_transaction(write_engine, write_lock) as tx:
             tx.execute(text("INSERT INTO kv VALUES ('w', '1')"))
         writer_elapsed["s"] = time.monotonic() - t0
         writer_done.set()
@@ -173,22 +185,36 @@ def test_read_snapshot_does_not_block_writes(engine, write_lock):
     assert writer_elapsed["s"] < 1.0
 
 
-def test_pragma_journal_mode_wal(engine):
-    with read_snapshot(engine) as tx:
+def test_pragma_journal_mode_wal(read_engine):
+    with read_snapshot(read_engine) as tx:
         mode = tx.execute(text("PRAGMA journal_mode")).scalar()
     assert mode == "wal"
 
 
-def test_pragma_foreign_keys_on(engine):
-    with read_snapshot(engine) as tx:
+def test_pragma_foreign_keys_on(read_engine):
+    with read_snapshot(read_engine) as tx:
         fk = tx.execute(text("PRAGMA foreign_keys")).scalar()
     assert fk == 1
 
 
-def test_pragma_busy_timeout(engine):
-    with read_snapshot(engine) as tx:
+def test_pragma_busy_timeout(read_engine):
+    with read_snapshot(read_engine) as tx:
         bt = tx.execute(text("PRAGMA busy_timeout")).scalar()
     assert bt == 5000
+
+
+def test_read_engine_pins_query_only(read_engine):
+    """Read engine has ``PRAGMA query_only = ON`` pinned at connect time."""
+    with read_snapshot(read_engine) as tx:
+        qo = tx.execute(text("PRAGMA query_only")).scalar()
+    assert qo == 1
+
+
+def test_write_engine_does_not_pin_query_only(write_engine, write_lock):
+    """Write engine must not have ``query_only`` set — writes need to mutate."""
+    with write_transaction(write_engine, write_lock) as tx:
+        qo = tx.execute(text("PRAGMA query_only")).scalar()
+    assert qo == 0
 
 
 def test_attach_auth_db(tmp_path: Path):
@@ -200,39 +226,39 @@ def test_attach_auth_db(tmp_path: Path):
         raw.commit()
 
     db_path = tmp_path / "controller.sqlite3"
-    engine = _make_engine(db_path, auth_db_path=auth_path)
+    read_engine = _make_read_engine(db_path, auth_db_path=auth_path)
     try:
-        with read_snapshot(engine) as tx:
+        with read_snapshot(read_engine) as tx:
             names = [row[0] for row in tx.execute(text("SELECT name FROM auth.sqlite_master WHERE type='table'")).all()]
             assert "secrets" in names
             row = tx.execute(text("SELECT k FROM auth.secrets")).all()
             assert row == [("hi",)]
     finally:
-        engine.dispose()
+        read_engine.dispose()
 
 
-def test_executemany_inserts_many(engine, write_lock):
-    _create_kv_table(engine)
+def test_executemany_inserts_many(write_engine, read_engine, write_lock):
+    _create_kv_table(write_engine)
     rows = [{"k": f"k{i}", "v": str(i)} for i in range(10)]
-    with write_transaction(engine, write_lock) as tx:
+    with write_transaction(write_engine, write_lock) as tx:
         tx.executemany(text("INSERT INTO kv (k, v) VALUES (:k, :v)"), rows)
 
-    with read_snapshot(engine) as tx:
+    with read_snapshot(read_engine) as tx:
         count = tx.execute(text("SELECT COUNT(*) FROM kv")).scalar()
     assert count == 10
 
 
-def test_read_snapshot_rejects_writes(engine, write_lock):
-    _create_kv_table(engine)
+def test_read_snapshot_rejects_writes(write_engine, read_engine, write_lock):
+    _create_kv_table(write_engine)
     with pytest.raises(OperationalError):
-        with read_snapshot(engine) as tx:
+        with read_snapshot(read_engine) as tx:
             tx.execute(text("INSERT INTO kv VALUES ('a', '1')"))
 
 
-def test_tx_register_accumulates_in_order(engine, write_lock):
-    _create_kv_table(engine)
+def test_tx_register_accumulates_in_order(write_engine, write_lock):
+    _create_kv_table(write_engine)
     calls: list[str] = []
-    with write_transaction(engine, write_lock) as tx:
+    with write_transaction(write_engine, write_lock) as tx:
         tx.execute(text("INSERT INTO kv VALUES ('a', '1')"))
         tx.register(lambda: calls.append("first"))
         tx.register(lambda: calls.append("second"))

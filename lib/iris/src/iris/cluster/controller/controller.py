@@ -41,6 +41,7 @@ from iris.cluster.constraints import (
 from iris.cluster.constraints import (
     region_constraint as make_region_constraint,
 )
+from iris.cluster.controller import db_v2
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -74,6 +75,7 @@ from iris.cluster.controller.db import (
     timed_out_executing_tasks,
 )
 from iris.cluster.controller.provider import TaskProvider
+from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
@@ -85,7 +87,6 @@ from iris.cluster.controller.scheduler import (
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
     JOB_CONFIG_JOIN,
-    JOB_RESERVATION_PROJECTION,
     JOB_SCHEDULING_PROJECTION,
     TASK_DETAIL_PROJECTION,
     TASK_ROW_PROJECTION,
@@ -422,15 +423,8 @@ def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> l
     reads. Filters via ``jobs.has_reservation`` (no scan of ``job_config``)
     and joins ``job_config`` solely to pull ``reservation_json``.
     """
-    placeholders = ",".join("?" for _ in states)
-    with queries.read_snapshot() as snapshot:
-        rows = snapshot._fetchall(
-            f"SELECT {JOB_RESERVATION_PROJECTION.select_clause()} "
-            f"FROM jobs j {JOB_CONFIG_JOIN} "
-            f"WHERE j.state IN ({placeholders}) AND j.has_reservation = 1",
-            list(states),
-        )
-    return JOB_RESERVATION_PROJECTION.decode(rows)
+    with db_v2.read_snapshot(queries.sa_read_engine) as tx:
+        return reads_scheduler.jobs_with_reservations(tx, states)
 
 
 def _get_running_tasks_with_band_and_value(

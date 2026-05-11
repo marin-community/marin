@@ -19,8 +19,10 @@ from typing import Any
 
 import fsspec.core
 from rigging.timing import Deadline, Duration, Timestamp
+from sqlalchemy import Engine
 
 from iris.cluster.constraints import AttributeValue
+from iris.cluster.controller.db_v2 import _make_read_engine, _make_write_engine
 from iris.cluster.controller.schema import (
     TASK_DETAIL_PROJECTION,
     WORKER_ROW_PROJECTION,
@@ -331,6 +333,17 @@ class ControllerDB:
         self._read_pool: queue.Queue[sqlite3.Connection] = queue.Queue()
         self._init_read_pool()
         logger.info("Read pool initialized in %.2fs", time.monotonic() - t0)
+
+        # SA Core engines for the v2 data layer. Coexist with ``_conn`` and
+        # ``_read_pool`` during the staged migration. Split into a write
+        # engine (pool size 1, no query_only) and a read engine (pool size
+        # 32+4, ``PRAGMA query_only = ON`` pinned at connect time). Mirrors
+        # today's ``_init_read_pool`` so the SA read path doesn't pay a
+        # per-call pragma round-trip.
+        t0 = time.monotonic()
+        self._sa_write_engine: Engine = _make_write_engine(self._db_path, self._auth_db_path)
+        self._sa_read_engine: Engine = _make_read_engine(self._db_path, self._auth_db_path)
+        logger.info("SA engines initialized in %.2fs", time.monotonic() - t0)
         # Lazily populated cache of worker attributes, keyed by worker_id.
         # Eliminates the per-cycle attribute SQL query from the scheduling hot path.
         self._attr_cache: dict[WorkerId, dict[str, AttributeValue]] | None = None
@@ -397,6 +410,16 @@ class ControllerDB:
             self._read_pool.put(conn)
 
     @property
+    def sa_read_engine(self) -> Engine:
+        """SA Core read engine for the v2 data layer."""
+        return self._sa_read_engine
+
+    @property
+    def sa_write_engine(self) -> Engine:
+        """SA Core write engine for the v2 data layer."""
+        return self._sa_write_engine
+
+    @property
     def db_dir(self) -> Path:
         return self._db_dir
 
@@ -457,6 +480,8 @@ class ControllerDB:
                 self._read_pool.get(timeout=1).close()
             except queue.Empty:
                 break
+        self._sa_write_engine.dispose()
+        self._sa_read_engine.dispose()
 
     @contextmanager
     def transaction(self):
@@ -752,6 +777,12 @@ class ControllerDB:
             self._configure(self._conn)
             self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
             self._init_read_pool()
+            # Dispose the old SA pools (still pointed at the previous file)
+            # and rebuild against the freshly-installed DB.
+            self._sa_write_engine.dispose()
+            self._sa_read_engine.dispose()
+            self._sa_write_engine = _make_write_engine(self._db_path, self._auth_db_path)
+            self._sa_read_engine = _make_read_engine(self._db_path, self._auth_db_path)
         self.apply_migrations()
         for hook in self._reopen_hooks:
             hook()
