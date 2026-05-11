@@ -218,6 +218,15 @@ message Controller {
     repeated iris.job.TaskStatus tasks = 1;
   }
 
+  // --- Per-attempt task spec lookup (worker reconcile) ---
+  // Workers in the reconcile-only protocol fetch the RunTaskRequest for an
+  // attempt they learn about via PollTasks. (task_id, attempt_id) is immutable
+  // once written so the controller serves this from an in-process LRU cache.
+  message GetTaskAttemptInfoRequest {
+    string task_id = 1;
+    int32 attempt_id = 2;
+  }
+
   // --- Exec in Container (proxied to worker) ---
   message ExecInContainerRequest {
     string task_id = 1;             // Task whose container to exec into
@@ -601,6 +610,12 @@ service ControllerService {
   // Task operations
   rpc GetTaskStatus(Controller.GetTaskStatusRequest) returns (Controller.GetTaskStatusResponse);
   rpc ListTasks(Controller.ListTasksRequest) returns (Controller.ListTasksResponse);
+  // Returns the cached RunTaskRequest for a given (task_id, attempt_id).
+  // Used by reconcile-only workers to fetch per-attempt specs after learning
+  // about them from PollTasks. Returns NOT_FOUND if no row exists for the
+  // pair, or FAILED_PRECONDITION if the task's current_attempt_id has moved
+  // past the requested attempt_id (stale fetch).
+  rpc GetTaskAttemptInfo(Controller.GetTaskAttemptInfoRequest) returns (iris.job.RunTaskRequest);
 
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);

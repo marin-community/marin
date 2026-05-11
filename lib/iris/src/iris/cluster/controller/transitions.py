@@ -803,6 +803,25 @@ class ControllerTransitions:
         self._health = health or WorkerHealthTracker()
         self._run_template_cache: _LRUCache[str, job_pb2.RunTaskRequest] = _LRUCache(RUN_REQUEST_TEMPLATE_CACHE_SIZE)
 
+    @staticmethod
+    def stamp_attempt_onto_template(
+        template: job_pb2.RunTaskRequest,
+        task_id: JobName,
+        attempt_id: int,
+    ) -> job_pb2.RunTaskRequest:
+        """Materialize a per-attempt ``RunTaskRequest`` from a per-job template.
+
+        Equivalent to the ``CopyFrom + stamp`` block in the dispatch loop
+        (``controller.py:_reconcile_worker_batch``). Lifted here so both the
+        dispatcher and ``ControllerServiceImpl.get_task_attempt_info`` build
+        identical wire payloads.
+        """
+        req = job_pb2.RunTaskRequest()
+        req.CopyFrom(template)
+        req.task_id = task_id.to_wire()
+        req.attempt_id = attempt_id
+        return req
+
     def run_request_template(
         self,
         snap: QuerySnapshot | TransactionCursor,
