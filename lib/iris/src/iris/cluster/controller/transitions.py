@@ -2158,12 +2158,7 @@ class ControllerTransitions:
         state = self._store.jobs.get_state(cur, job_id)
         if state is None:
             return False
-        if state not in (
-            job_pb2.JOB_STATE_SUCCEEDED,
-            job_pb2.JOB_STATE_FAILED,
-            job_pb2.JOB_STATE_KILLED,
-            job_pb2.JOB_STATE_UNSCHEDULABLE,
-        ):
+        if state not in TERMINAL_JOB_STATES:
             return False
         self._store.jobs.delete(cur, job_id)
         log_event("job_removed", job_id.to_wire(), state=state)

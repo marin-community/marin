@@ -16,6 +16,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.server import LogServiceImpl
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
+from iris.cluster.controller import service as service_module
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
@@ -32,7 +33,7 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 from tests.cluster.conftest import fake_log_client_from_service
 
@@ -351,6 +352,104 @@ def test_existing_job_policy_unspecified_preserves_current_behavior(service, sta
     assert response.job_id == job_id.to_wire()
     job = _query_job(state, job_id)
     assert job.state == job_pb2.JOB_STATE_PENDING
+
+
+def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, state, monkeypatch):
+    """Production regression (/larry/iris-run-job-20260511-024915).
+
+    A parent job spawned a child training task that was preempted by a higher-
+    priority tenant. The producer transition (`preempt_task`) marked the task
+    terminal but left the attempt with ``worker_id != NULL, finished_at_ms =
+    NULL``: the worker still owned the container and the heartbeat hadn't
+    landed the finalization yet. The parent's retry resubmitted the child with
+    ``EXISTING_JOB_POLICY_KEEP``; the old service.py raised
+    ``FAILED_PRECONDITION`` immediately because the unfinished attempt blocked
+    ``remove_finished_job``. After the fix, the resubmit must block on drain
+    and succeed once the finalizing heartbeat arrives.
+    """
+    # Tighten the drain timeout so the test fails fast on regression instead
+    # of waiting the production 30s.
+    monkeypatch.setattr(service_module, "_JOB_REPLACEMENT_DRAIN_TIMEOUT", Duration.from_seconds(5))
+
+    child_name = "/test-user/parent/child"
+    service.launch_job(make_job_request("parent"), None)
+    service.launch_job(make_job_request(child_name), None)
+    child_job = JobName.from_string(child_name)
+
+    # Dispatch the child task to a worker, then preempt it with no retry
+    # budget. ``preempt_task`` marks the task terminal (PREEMPTED) but leaves
+    # the attempt unfinalized — exactly the production state.
+    worker = WorkerId("preempting-worker")
+    _register_worker(state, worker)
+    child_task = _query_tasks_with_attempts(state, child_job)[0]
+    _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
+    with state._store.transaction() as cur:
+        state.preempt_task(cur, child_task.task_id, reason="evicted by prod tenant")
+
+    # Sanity: child is terminal but its attempt still holds the worker.
+    with state._store.read_snapshot() as snap:
+        assert state._store.jobs.has_unfinished_worker_attempts(snap, child_job)
+
+    # Re-submit the child with KEEP. The unfinished attempt should make the
+    # service block in the drain wait rather than raise FAILED_PRECONDITION.
+    request = make_job_request(child_name)
+    request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_KEEP
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(service.launch_job, request, None)
+        # Confirm the call is blocked on drain (didn't immediately raise).
+        with pytest.raises(concurrent.futures.TimeoutError):
+            fut.result(timeout=0.3)
+
+        # Synthesize the finalizing heartbeat that the production worker would
+        # have eventually sent. mark_finished stamps finished_at_ms, which
+        # releases the predicate ``_wait_until_job_drained`` polls.
+        child_task_after_preempt = _query_tasks_with_attempts(state, child_job)[0]
+        with state._store.transaction() as cur:
+            state._store.attempts.mark_finished(
+                cur,
+                child_task_after_preempt.task_id,
+                child_task_after_preempt.current_attempt_id,
+                job_pb2.TASK_STATE_PREEMPTED,
+                finished_at_ms=int(time.time() * 1000),
+                error="finalized after preemption",
+            )
+
+        # The blocked launch should now wake up and succeed within one backoff
+        # cycle (max 1s per ExponentialBackoff config).
+        response = fut.result(timeout=4.0)
+
+    assert response.job_id == child_job.to_wire()
+    # New child is pending (the old PREEMPTED row was replaced).
+    new_job = _query_job(state, child_job)
+    assert new_job is not None
+    assert new_job.state == job_pb2.JOB_STATE_PENDING
+
+
+def test_existing_job_policy_keep_drain_times_out_when_no_heartbeat(service, state, monkeypatch):
+    """If a replaced job's worker-bound attempts never finalize, launch_job
+    raises DEADLINE_EXCEEDED instead of hanging or silently destroying the
+    attempt rows the heartbeat path needs."""
+    monkeypatch.setattr(service_module, "_JOB_REPLACEMENT_DRAIN_TIMEOUT", Duration.from_seconds(1))
+
+    child_name = "/test-user/parent/child"
+    service.launch_job(make_job_request("parent"), None)
+    service.launch_job(make_job_request(child_name), None)
+    child_job = JobName.from_string(child_name)
+
+    worker = WorkerId("stuck-worker")
+    _register_worker(state, worker)
+    child_task = _query_tasks_with_attempts(state, child_job)[0]
+    _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
+    with state._store.transaction() as cur:
+        state.preempt_task(cur, child_task.task_id, reason="evicted, worker stuck")
+
+    request = make_job_request(child_name)
+    request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_KEEP
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+    assert exc_info.value.code == Code.DEADLINE_EXCEEDED
 
 
 def test_launch_job_rejects_empty_name(service, state):

@@ -140,10 +140,12 @@ DEFAULT_MAX_TOTAL_LINES = 100000
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
 
 # Time the launch RPC blocks waiting for a replaced job's worker-bound attempts
-# to finalize before deleting them. Normal worker shutdown is well under one
-# minute; the bound is finite so a stuck finalization surfaces as
-# DEADLINE_EXCEEDED rather than hanging launches forever.
-_JOB_REPLACEMENT_DRAIN_TIMEOUT = Duration.from_minutes(10)
+# to finalize before deleting them. One worker poll cycle is ~5s; 30s gives the
+# heartbeat path several cycles to stamp ``finished_at_ms`` for a producer-
+# terminated attempt (the common case is post-preemption cleanup where the
+# worker is busy serving another tenant but will report back within one cycle).
+# Stuck finalization surfaces as DEADLINE_EXCEEDED rather than hanging launches.
+_JOB_REPLACEMENT_DRAIN_TIMEOUT = Duration.from_seconds(30)
 
 # A root LaunchJob submission is rejected if its client_revision_date is more
 # than FRESHNESS_WINDOW older than today. Clients get exactly this long to
@@ -1058,20 +1060,21 @@ class ControllerServiceImpl:
         except TimeoutError as exc:
             raise ConnectError(Code.DEADLINE_EXCEEDED, str(exc)) from exc
 
-    def _remove_finished_job_safely(self, cur, job_id: JobName) -> None:
-        """``remove_finished_job`` gated on no unfinished worker-bound attempts.
+    def _replace_finished_job(self, cur, job_id: JobName) -> bool:
+        """Attempt to replace a terminal job; signal whether a drain is needed.
 
         CASCADE-deleting a job's tasks while its attempts are still worker-
         bound destroys the rows the heartbeat path needs to find when it
-        stamps ``finished_at_ms``. Every replacement / prune / admin-delete
-        path goes through here so that contract is uniform.
+        stamps ``finished_at_ms``. Returns ``True`` when the caller must wait
+        for worker-bound attempts to finalize before retrying (the job rows
+        are left in place), ``False`` when removal completed in this
+        transaction. Every replacement path in ``launch_job`` funnels through
+        here so the contract is uniform.
         """
         if self._store.jobs.has_unfinished_worker_attempts(cur, job_id):
-            raise ConnectError(
-                Code.FAILED_PRECONDITION,
-                f"Refusing to remove job {job_id}: worker-bound attempts have not finalized",
-            )
+            return True
         self._transitions.remove_finished_job(cur, job_id)
+        return False
 
     def launch_job(
         self,
@@ -1175,8 +1178,11 @@ class ControllerServiceImpl:
                 elif policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
                     if not is_job_finished(existing_state):
                         return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
-                    # Job finished, replace it (KEEP only preserves running jobs)
-                    self._remove_finished_job_safely(cur, job_id)
+                    # Job finished, replace it (KEEP only preserves running jobs).
+                    # If worker-bound attempts haven't finalized yet (e.g. the
+                    # task is terminal at the job level but its attempt is still
+                    # pending a heartbeat), defer to the drain wait below.
+                    needs_drain = needs_drain or self._replace_finished_job(cur, job_id)
                 elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
                     if not is_job_finished(existing_state):
                         self._transitions.cancel_job(cur, job_id, "Replaced by new submission")
@@ -1188,7 +1194,7 @@ class ControllerServiceImpl:
                         # still racing to land.
                         needs_drain = True
                     else:
-                        self._remove_finished_job_safely(cur, job_id)
+                        needs_drain = needs_drain or self._replace_finished_job(cur, job_id)
                 elif is_job_finished(existing_state):
                     # Default/UNSPECIFIED: replace finished jobs
                     logger.info(
@@ -1196,7 +1202,7 @@ class ControllerServiceImpl:
                         job_id,
                         job_pb2.JobState.Name(existing_state),
                     )
-                    self._remove_finished_job_safely(cur, job_id)
+                    needs_drain = needs_drain or self._replace_finished_job(cur, job_id)
                 else:
                     raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
 
@@ -1207,7 +1213,11 @@ class ControllerServiceImpl:
             self._controller.wake()
             self._wait_until_job_drained(job_id, _JOB_REPLACEMENT_DRAIN_TIMEOUT)
             with self._store.transaction() as cur:
-                self._remove_finished_job_safely(cur, job_id)
+                # The drain guarantees ``has_unfinished_worker_attempts`` is
+                # false; ``remove_finished_job`` is a no-op against
+                # already-empty rows, so a tight race with a re-latch is
+                # benign.
+                self._transitions.remove_finished_job(cur, job_id)
 
         # Handle bundle_blob: upload to bundle store, then replace blob
         # with the resulting GCS path (preserving all other fields).
